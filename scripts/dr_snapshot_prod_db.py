@@ -28,7 +28,7 @@ sequence).
 Authorization
 -------------
 This script connects to the production database (read-only -- pg_dump is
-SELECT-only by definition). Per AIstock cross-tool protocol, the FIRST
+SELECT-only by definition). Per the AIstock development standard, the FIRST
 prod snapshot run requires explicit user authorization. Subsequent runs
 under the nightly cron + the same target dir are pre-authorized.
 
@@ -57,8 +57,10 @@ import json
 import os
 import subprocess
 import sys
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Sequence
+from typing import Iterator, Sequence
 
 ENV_FILE = Path("F:/Dev/AIstock/.env")
 # Canonical snapshot directory. Per Codex Lane A r3 review (drawer
@@ -194,15 +196,15 @@ def copy_dump_out(plan: SnapshotPlan) -> None:
     run(cmd)
 
 
-def cleanup_in_container(plan: SnapshotPlan, keep_temp: bool) -> None:
+def cleanup_in_container(plan: SnapshotPlan, keep_temp: bool) -> bool:
     if keep_temp:
-        return
+        return True
     cmd = ["docker", "exec", plan.container, "rm", "-f", plan.in_container_path]
-    run(cmd, check=False)  # cleanup failure is non-fatal
+    return run(cmd, check=False).returncode == 0  # non-fatal, but visible in receipt
 
 
 def validate_dump(plan: SnapshotPlan) -> dict[str, object]:
-    """Run pg_restore --list against the produced dump and return summary."""
+    """Check TOC structure, not compressed payload integrity or restorability."""
     if not plan.target_path.exists():
         raise SystemExit(f"FATAL: dump not found at {plan.target_path} after docker cp")
     size = plan.target_path.stat().st_size
@@ -229,7 +231,25 @@ def validate_dump(plan: SnapshotPlan) -> dict[str, object]:
         "table_data_entries": len(table_lines),
         "snapshot_date": plan.snapshot_date.isoformat(),
         "is_permanent": plan.is_permanent,
+        "validation_scope": "toc_structure_only",
+        "toc_checked": True,
+        "archive_payload_verified": False,
+        "restore_exercised": False,
     }
+
+
+@contextmanager
+def measure_stage(name: str, stages: dict[str, dict[str, object]]) -> Iterator[None]:
+    """Emit bounded progress even if a later stage fails; never log credentials."""
+    start = time.perf_counter()
+    status = "failed"
+    print("DR_STAGE " + json.dumps({"stage": name, "status": "started"}), flush=True)
+    try:
+        yield
+        status = "completed"
+    finally:
+        stages[name] = {"status": status, "duration_seconds": round(time.perf_counter() - start, 3)}
+        print("DR_STAGE " + json.dumps({"stage": name, **stages[name]}), flush=True)
 
 
 def render_dry_run(plan: SnapshotPlan) -> str:
@@ -283,16 +303,31 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     print(f"DR snapshot starting -> {plan.target_path}")
+    start = time.perf_counter()
+    stages: dict[str, dict[str, object]] = {}
+    summary: dict[str, object] = {}
     try:
-        execute_pg_dump_inside_container(plan)
-        copy_dump_out(plan)
-        summary = validate_dump(plan)
+        with measure_stage("pg_dump", stages):
+            execute_pg_dump_inside_container(plan)
+        with measure_stage("copy", stages):
+            copy_dump_out(plan)
+        with measure_stage("toc", stages):
+            summary = validate_dump(plan)
     finally:
-        cleanup_in_container(plan, keep_temp=args.keep_temp)
-
-    print(json.dumps(summary, indent=2))
-    print("\nIf this is the FIRST prod snapshot of the day, please post a")
-    print("[INFO] cross-tool drawer recording the dump_path + dump_bytes.")
+        try:
+            with measure_stage("cleanup", stages):
+                cleanup_ok = cleanup_in_container(plan, keep_temp=args.keep_temp)
+            if cleanup_ok is False:
+                stages["cleanup"]["status"] = "warning"
+        finally:
+            receipt = {**summary, "schema_version": "aistock_dr_snapshot_receipt_v1",
+                       "dump_path": str(plan.target_path), "snapshot_date": plan.snapshot_date.isoformat(),
+                       "validation_scope": "toc_structure_only", "toc_checked": bool(summary.get("toc_checked")),
+                       "status": "completed" if summary and all(s["status"] != "failed" for s in stages.values()) else "failed",
+                       "stages": stages, "wall_seconds": round(time.perf_counter() - start, 3),
+                       "dump_format": DUMP_FORMAT, "dump_compress": DUMP_COMPRESS,
+                       "keep_temp": args.keep_temp, "archive_payload_verified": False, "restore_exercised": False}
+            print("DR_SNAPSHOT_RECEIPT " + json.dumps(receipt), flush=True)
     return 0
 
 

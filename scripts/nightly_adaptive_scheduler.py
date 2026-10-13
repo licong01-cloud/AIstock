@@ -187,8 +187,12 @@ def build_nightly_execution_plan(
         raise ValueError("unmapped executable code in Nightly change window: " + ", ".join(unmatched_code))
 
     plans = issue_flow._plans_by_key()
+    operational_plans = {key for key, plan in plans.items() if plan.get("execution_scope") == "operations"}
+    operational_sessions = {str(plans[key].get("nox_session") or "") for key in operational_plans}
     retry_context = retry_context or {}
     retry_sessions = unique_values([str(item) for item in retry_context.get("failed_sessions") or []])
+    operational_retry_sessions = [session for session in retry_sessions if session in operational_sessions]
+    retry_sessions = [session for session in retry_sessions if session not in operational_sessions]
     plan_keys = [] if full_run or not normalized else list(BASELINE_NIGHTLY_PLAN_KEYS)
     if full_run:
         plan_keys.extend(
@@ -208,6 +212,8 @@ def build_nightly_execution_plan(
     selected_sessions: list[str] = []
     nightly_plan_keys: list[str] = []
     for key in unique_values(plan_keys):
+        if key in operational_plans:
+            continue
         plan = plans.get(key) or {}
         if not full_run and plan.get("execution_scope") == "pr":
             replacement_key = str(plan.get("nightly_replacement_plan") or "").strip()
@@ -250,6 +256,15 @@ def build_nightly_execution_plan(
             selected_plan_keys.append(retry_plan_key)
         if session not in selected_sessions:
             selected_sessions.append(session)
+    # Run the full coverage producer before its non-coverage shared slices.
+    producer = "validation_center_backend"
+    consumers = {"validation_workflow_automation", "data_sync_autonomy_backend",
+                 "validation_module_registry_l0", "validation_catalog_integrity"}
+    if producer in selected_sessions:
+        consumer_positions = [index for index, session in enumerate(selected_sessions) if session in consumers]
+        if consumer_positions and min(consumer_positions) < selected_sessions.index(producer):
+            selected_sessions.remove(producer)
+            selected_sessions.insert(min(consumer_positions), producer)
     change_scoped_files = unique_values(
         [
             *[str(path) for path in retry_context.get("change_scoped_files") or []],
@@ -261,6 +276,14 @@ def build_nightly_execution_plan(
         for session in selected_sessions
         if session in CHANGE_FILE_ONLY_SESSIONS and change_scoped_files
     }
+    session_budgets: dict[str, int] = {}
+    for key in selected_plan_keys:
+        plan = plans[key]
+        budget = plan.get("max_duration_seconds")
+        if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+            raise ValueError(f"Nightly plan requires a positive integer max_duration_seconds: {key}")
+        session = str(plan["nox_session"])
+        session_budgets[session] = max(budget, session_budgets.get(session, 0))
     return {
         "schema_version": "aistock_nightly_execution_plan_v1",
         "watermark": watermark,
@@ -269,6 +292,8 @@ def build_nightly_execution_plan(
         "changed_files_count": len(normalized),
         "full_run": full_run,
         "excluded_change_file_only_plans": sorted(CHANGE_FILE_ONLY_PLAN_KEYS) if full_run else [],
+        "excluded_operational_plans": sorted(operational_plans),
+        "excluded_operational_retry_sessions": operational_retry_sessions,
         "excluded_pr_only_plans": (
             sorted(key for key, plan in plans.items() if plan.get("execution_scope") == "pr") if full_run else []
         ),
@@ -278,6 +303,7 @@ def build_nightly_execution_plan(
         "retry_source_head": retry_context.get("source_head"),
         "retry_recovery_kind": retry_context.get("recovery_kind"),
         "session_positional_args": session_positional_args,
+        "session_timeout_seconds": session_budgets,
         "impacted_modules": selection.get("impacted_modules") or [],
         "unmatched_code_files": unmatched_code,
         "advance_change_window_on_durable_receipt": True,

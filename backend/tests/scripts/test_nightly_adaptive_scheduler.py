@@ -546,7 +546,11 @@ def test_nightly_full_run_excludes_changed_file_only_plans() -> None:
     assert "hmm_risk_pr_slice" in plan["excluded_pr_only_plans"]
     assert "hmm_risk_pr_slice" not in plan["selected_sessions"]
     assert "hmm_risk_backend" in plan["selected_sessions"]
-    assert plan["selected_sessions"]
+    assert "dr_validate" not in plan["selected_sessions"]
+    assert plan["selected_sessions"].index("validation_center_backend") < plan["selected_sessions"].index("validation_workflow_automation")
+    retry = scheduler.build_nightly_execution_plan([], retry_context={"failed_sessions": ["dr_validate"]})
+    assert retry["selected_sessions"] == []
+    assert retry["excluded_operational_retry_sessions"] == ["dr_validate"]
 
 
 def test_nightly_replaces_hmm_pr_slice_with_full_coverage_plan() -> None:
@@ -559,6 +563,8 @@ def test_nightly_replaces_hmm_pr_slice_with_full_coverage_plan() -> None:
     assert "hmm_risk_pr_slice" not in plan["selected_sessions"]
     assert "hmm_risk_backend" in plan["selected_plan_keys"]
     assert "hmm_risk_backend" in plan["selected_sessions"]
+    assert plan["session_timeout_seconds"]["hmm_risk_backend"] == 1800
+    assert set(plan["session_timeout_seconds"]) == set(plan["selected_sessions"])
 
 
 def test_nightly_fails_closed_for_invalid_pr_only_replacement(monkeypatch) -> None:

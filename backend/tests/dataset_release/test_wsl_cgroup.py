@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from itertools import count
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -131,6 +132,7 @@ class FakeChild:
 
 def _resource_kwargs(tmp_path: Path, *, available: int = 20 * GIB):
     return {
+        "monotonic": lambda counter=count(): float(next(counter)),
         "telemetry_path": tmp_path / "wsl-resource.json",
         "memory_high_bytes": 0,
         "memory_max_bytes": 0,
@@ -200,7 +202,7 @@ def test_guardian_exits_nonzero_on_stale_heartbeat_without_killing_child(tmp_pat
 
 def test_guardian_returns_child_status_when_heartbeat_and_pipe_remain_healthy(tmp_path: Path, monkeypatch) -> None:
     now = datetime(2026, 8, 11, tzinfo=timezone.utc)
-    counters = iter([1, 2, 3])
+    counters = iter([1, 2, 3, 4])
     child_env = {}
     monkeypatch.setenv("SECRET_TOKEN", "must-not-reach-wsl-child")
     monkeypatch.setenv("TDX_DB_PASSWORD", "must-not-reach-build-child")
@@ -236,14 +238,15 @@ def test_guardian_returns_child_status_when_heartbeat_and_pipe_remain_healthy(tm
 
 def test_guardian_loss_exits_for_systemd_control_group_fail_stop(tmp_path: Path) -> None:
     now = datetime(2026, 8, 11, tzinfo=timezone.utc)
-    pipes = iter([True, False])
+    pipes = iter([True, True, False])
+    counters = count(1)
     guardian = WslResourceGuardian(
         attempt_id="attempt",
         fence=2,
         heartbeat_path=tmp_path / "heartbeat.json",
         ttl_seconds=15,
         command=["worker"],
-        heartbeat_loader=lambda _path: GuardianHeartbeat("attempt", 2, 1, now),
+        heartbeat_loader=lambda _path: GuardianHeartbeat("attempt", 2, next(counters), now),
         pipe_probe=lambda: next(pipes),
         popen_factory=lambda *_args, **_kwargs: FakeChild([None]),
         now=lambda: now,
@@ -256,6 +259,7 @@ def test_guardian_loss_exits_for_systemd_control_group_fail_stop(tmp_path: Path)
 def test_guardian_records_low_wsl_available_without_blocking_child(tmp_path: Path) -> None:
     now = datetime(2026, 8, 11, tzinfo=timezone.utc)
     started = False
+    counters = count(1)
 
     def popen(*_args, **_kwargs):
         nonlocal started
@@ -268,7 +272,7 @@ def test_guardian_records_low_wsl_available_without_blocking_child(tmp_path: Pat
         heartbeat_path=tmp_path / "heartbeat.json",
         ttl_seconds=15,
         command=["worker"],
-        heartbeat_loader=lambda _path: GuardianHeartbeat("attempt", 2, 1, now),
+        heartbeat_loader=lambda _path: GuardianHeartbeat("attempt", 2, next(counters), now),
         pipe_probe=lambda: True,
         popen_factory=popen,
         now=lambda: now,
@@ -294,3 +298,72 @@ def test_guardian_cli_has_no_independent_ttl_default() -> None:
                 "worker",
             ]
         )
+
+
+@pytest.mark.parametrize("host_offset_seconds", [8, -60, 86400])
+def test_guardian_accepts_counter_progress_despite_wall_clock_skew(
+    tmp_path: Path, host_offset_seconds: int,
+) -> None:
+    guest_now = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    counters = iter([1, 2, 3, 4])
+    guardian = WslResourceGuardian(
+        attempt_id="attempt", fence=2,
+        heartbeat_path=tmp_path / "heartbeat.json", ttl_seconds=15,
+        command=["worker"],
+        heartbeat_loader=lambda _path: GuardianHeartbeat(
+            "attempt", 2, next(counters),
+            guest_now + timedelta(seconds=host_offset_seconds),
+        ),
+        pipe_probe=lambda: True,
+        popen_factory=lambda *_args, **_kwargs: FakeChild([0]),
+        now=lambda: guest_now, sleep=lambda _seconds: None,
+        **_resource_kwargs(tmp_path),
+    )
+    assert guardian.run() == 0
+
+
+@pytest.mark.parametrize("counters", [[1, 2, 1], [1, 2, *([2] * 20)]])
+def test_guardian_rejects_counter_rollback_or_stall_after_startup(
+    tmp_path: Path, counters: list[int], capsys,
+) -> None:
+    now = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    sequence = iter(counters)
+    child = FakeChild([None] * 30)
+    guardian = WslResourceGuardian(
+        attempt_id="attempt", fence=2,
+        heartbeat_path=tmp_path / "heartbeat.json", ttl_seconds=3,
+        command=["worker"],
+        heartbeat_loader=lambda _path: GuardianHeartbeat("attempt", 2, next(sequence), now),
+        pipe_probe=lambda: True,
+        popen_factory=lambda *_args, **_kwargs: child,
+        now=lambda: now, sleep=lambda _seconds: None,
+        **_resource_kwargs(tmp_path),
+    )
+    assert guardian.run() == 73
+    assert "WSL_GUARDIAN_OWNER_LOST" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("closed_pipe", [False, True])
+def test_guardian_requires_live_progress_before_starting_child(
+    tmp_path: Path, closed_pipe: bool, capsys,
+) -> None:
+    started = False
+
+    def popen(*_args, **_kwargs):
+        nonlocal started
+        started = True
+        return FakeChild([0])
+
+    now = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    guardian = WslResourceGuardian(
+        attempt_id="attempt", fence=2,
+        heartbeat_path=tmp_path / "heartbeat.json", ttl_seconds=3,
+        command=["worker"],
+        heartbeat_loader=lambda _path: GuardianHeartbeat("attempt", 2, 1, now),
+        pipe_probe=lambda: not closed_pipe, popen_factory=popen,
+        now=lambda: now, sleep=lambda _seconds: None,
+        **_resource_kwargs(tmp_path),
+    )
+    assert guardian.run() == 72
+    assert started is False
+    assert "WSL_GUARDIAN_STARTUP_FAILED" in capsys.readouterr().err

@@ -1634,6 +1634,7 @@ plans:
     level: L2
     command_key: nox_dr_validate
     nox_session: dr_validate
+    execution_scope: operations
     enabled: true
     requires_backend: false
     requires_frontend: false
