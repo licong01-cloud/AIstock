@@ -357,6 +357,16 @@ def test_nightly_execution_plan_uses_catalog_and_deduplicates_sessions() -> None
     assert plan["session_positional_args"]["l0"] == ["backend/services/simulation_runtime/ops.py"]
 
 
+def test_nightly_mcp_producer_precedes_only_already_selected_consumers() -> None:
+    consumers = ["research_mcp_contract", "mcp_gateway_phase6_resource_monitor"]
+    producer = "mcp_gateway_manifest_quality"
+    for failed in (consumers, [*consumers, producer]):
+        sessions = scheduler.build_nightly_execution_plan([], retry_context={"failed_sessions": failed})["selected_sessions"]
+        assert set(sessions) == set(failed)
+        if producer in sessions:
+            assert all(sessions.index(producer) < sessions.index(consumer) for consumer in consumers)
+
+
 @pytest.mark.parametrize("name", ["client", "client_bj_code", "dial", "manage", "pagination", "pagination_test", "web/server"])
 def test_nightly_tdx_go_root_and_nested_sources_have_owned_plans(name: str) -> None:
     path = f"tdx-api-main/{name}.go"

@@ -4,6 +4,7 @@ from contextlib import contextmanager, suppress
 from fnmatch import fnmatchcase
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -176,14 +177,7 @@ def _nightly_shared_pytest_args(session_name: str, args: tuple[str, ...]) -> tup
     """
     consumers = {"validation_workflow_automation", "data_sync_autonomy_backend",
                  "validation_module_registry_l0", "validation_catalog_integrity"}
-    if session_name not in consumers or not _nightly_session_completed("validation_center_backend"):
-        return args
-    combined = [*args, *os.environ.get("PYTEST_ADDOPTS", "").split()]
-    if any(arg.startswith(("--cov", "--ignore", "--deselect", "-k", "-m")) for arg in combined):
-        return args
-    if any(not arg.startswith("backend/tests/") and arg not in {"-q", "-p", "no:cacheprovider"}
-           for arg in args):
-        return args  # Unknown selection/option syntax is never an equivalence proof.
+    producer = "validation_center_backend"
     shared = {
         "backend/tests/scripts/test_ci_failure_issue_summary.py",
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
@@ -193,13 +187,38 @@ def _nightly_shared_pytest_args(session_name: str, args: tuple[str, ...]) -> tup
         "backend/tests/test_validation_module_ownership.py",
         "backend/tests/test_validation_catalog_integrity.py",
     }
+    if session_name not in consumers:
+        if session_name not in {"research_mcp_contract", "mcp_gateway_phase6_resource_monitor"}:
+            return args
+        producer = "mcp_gateway_manifest_quality"
+        shared = {"backend/tests/mcp", "tests/mcp/test_mcp_gateway_cli.py"}
+    if not _nightly_session_completed(producer):
+        return args
+    try:
+        addopts = shlex.split(os.environ.get("PYTEST_ADDOPTS", ""))
+    except ValueError:
+        return args
+    # Accept only execution-neutral options and the known observational plugin.
+    # Collect-only/last-failed, coverage, unknown selectors/plugins keep full work.
+    for tokens, allow_targets in ((args, True), (addopts, False)):
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "-p":
+                index += 1
+                if index >= len(tokens) or tokens[index] not in {"no:cacheprovider", "scripts.ci_plan_coverage"}:
+                    return args
+            elif token not in {"-q", "-x", "--exitfirst", "--strict-markers", "--strict-config", "--disable-warnings"}:
+                if not allow_targets or not token.startswith(("backend/tests/", "tests/mcp")) or not (ROOT / token).exists():
+                    return args
+            index += 1
     removed = [arg for arg in args if arg in shared]
     if not removed:
         return args
     remaining = tuple(arg for arg in args if arg not in shared)
     # Never call pytest with only flags: that would collect the entire repo.
-    has_target = any(arg.startswith("backend/tests/") for arg in remaining)
-    print(f"nightly_pytest_reuse producer=validation_center_backend consumer={session_name} targets={len(removed)}")
+    has_target = any(arg.startswith(("backend/tests/", "tests/mcp")) for arg in remaining)
+    print(f"nightly_pytest_reuse producer={producer} consumer={session_name} targets={len(removed)}")
     return remaining if has_target else None
 
 

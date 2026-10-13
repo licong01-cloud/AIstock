@@ -50,6 +50,60 @@ def test_shared_pytest_reuse_is_successful_same_nightly_and_coverage_safe(monkey
         assert "backend/tests/missing_test.py" in result
 
 
+@pytest.mark.parametrize("session,target", [
+    ("research_mcp_contract", "backend/tests/mcp"),
+    ("mcp_gateway_phase6_resource_monitor", "tests/mcp/test_mcp_gateway_cli.py"),
+])
+@pytest.mark.parametrize("nightly,completed,addopts,reused", [
+    ("1", "mcp_gateway_manifest_quality", "-x -p scripts.ci_plan_coverage", True),
+    ("0", "mcp_gateway_manifest_quality", "", False),
+    ("1", "", "", False),
+    ("1", "validation_center_backend", "", False),
+    ("1", "mcp_gateway_manifest_quality", "--lf", False),
+    ("1", "mcp_gateway_manifest_quality", "--collect-only", False),
+    ("1", "mcp_gateway_manifest_quality", "--cov=backend.mcp", False),
+    ("1", "mcp_gateway_manifest_quality", "--deselect=some_test", False),
+    ("1", "mcp_gateway_manifest_quality", "-p", False),
+    ("1", "mcp_gateway_manifest_quality", "'unterminated", False),
+])
+def test_mcp_pytest_reuses_only_unfiltered_same_nightly_success(monkeypatch, session, target, nightly, completed, addopts, reused):
+    monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, nightly)
+    monkeypatch.setenv(noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV, completed)
+    monkeypatch.setenv("PYTEST_ADDOPTS", addopts)
+    args = (target, "-q", "-p", "no:cacheprovider")
+    assert noxfile._nightly_shared_pytest_args(session, args) == (None if reused else args)
+
+
+@pytest.mark.parametrize("addopts", ["--lf", "--collect-only", "--unknown-plugin-selection", "-p selecting_plugin"])
+def test_center_reuse_does_not_assume_unknown_addopts_are_full_execution(monkeypatch, addopts):
+    monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1")
+    monkeypatch.setenv(noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV, "validation_center_backend")
+    monkeypatch.setenv("PYTEST_ADDOPTS", addopts)
+    args = ("backend/tests/scripts/test_ci_failure_issue_summary.py", "-q")
+    assert noxfile._nightly_shared_pytest_args("validation_workflow_automation", args) == args
+
+
+@pytest.mark.parametrize("completed,pytest_count", [("mcp_gateway_manifest_quality", 0), ("", 1)])
+def test_mcp_reuse_preserves_non_pytest_plan_steps(monkeypatch, completed, pytest_count):
+    monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1")
+    monkeypatch.setenv(noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV, completed)
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-x -p scripts.ci_plan_coverage")
+    monkeypatch.setattr(noxfile, "_env", lambda *_args: {})
+    class Session:
+        def run(self, *args, **kwargs):
+            self.calls.append(args)
+    for name in ("research_mcp_contract", "mcp_gateway_phase6_resource_monitor"):
+        session = Session()
+        session.name, session.calls = name, []
+        getattr(noxfile, name)(session)
+        assert sum("pytest" in args for args in session.calls) == pytest_count
+        assert any("compileall" in args for args in session.calls)
+        if name == "mcp_gateway_phase6_resource_monitor":
+            assert any("--startup-summary" in args for args in session.calls)
+            assert any("--self-check" in args for args in session.calls)
+            assert any("scripts/aistock_mcp_gateway_doctor.py" in args for args in session.calls)
+
+
 def test_l0_scan_paths_use_explicit_scope_without_git(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(noxfile.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("git should not run"))
 
