@@ -178,6 +178,11 @@ def test_render_issue_markdown_contains_actionable_sections() -> None:
     assert "promote-ci-issue --issue <issue-number> --create-registry-worktree --apply" in markdown
     assert "assert 200 == 409" in markdown
     assert "production_ddl_gate" in markdown
+    assert "## Local Registry Intake" in markdown
+    assert "awaiting_local_registry_intake" in markdown
+    assert "local_pipeline_intake" in markdown
+    assert "unclaimed_until_explicit_owner_ack" in markdown
+    assert "repair_module: `paper_v2`" in markdown
 
 
 def test_context_pack_is_agent_neutral_and_compact() -> None:
@@ -192,6 +197,23 @@ def test_context_pack_is_agent_neutral_and_compact() -> None:
     assert context_pack["token_budget"]["full_logs_included"] is False
     assert context_pack["github_issue_url"] == "https://github.com/licong01-cloud/AIstock/issues/197"
     assert "promote-ci-issue --issue 197 --create-registry-worktree --apply" in markdown
+
+
+def test_deferred_promotion_keeps_local_intake_visible_without_allocating(monkeypatch):
+    from scripts import aistock_issue_workflow as workflow
+
+    payload = _ci_summary([summary.parse_job_log(CI_LOG, job_name="Backend tests (paper_v2_backend)")])
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", lambda **_: {
+        "classification_recommendation": "real_regression_candidate", "summary": payload})
+    monkeypatch.setattr(workflow, "_github_actions_registry_pr_capability", lambda: {"allowed": False, "reason": "disabled"})
+    monkeypatch.setattr(workflow, "build_submit_bug_plan", lambda **_: pytest.fail("must not allocate before registry capability"))
+    result = workflow.build_promote_ci_issue_plan(issue_number=197, apply=True, create_registry_worktree=True)
+    assert result["workflow_gate"] == "deferred_registry_pr_capability"
+    compact = workflow._compact_promote_ci_issue(result)
+    assert compact["registry_pr_capability"] == {"allowed": False, "reason": "disabled"}
+    assert compact["local_intake"]["status"] == "awaiting_local_registry_intake"
+    assert compact["local_intake"]["repair_module"] == "paper_v2"
+    assert "--issue 197 --create-registry-worktree --apply" in compact["local_intake"]["next_command"]
 
 
 def test_cli_log_file_outputs_json_and_markdown(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1526,12 +1548,15 @@ def test_nightly_workflow_skips_issue_write_when_payload_is_absent() -> None:
     assert "fs.unlinkSync(singleIssueNumberPath)" in script
     assert "existing.body = updateParams.body" in script
     assert "payloads.length === 1 ? payload.dedupe.legacy_nightly_marker : null" in script
-    assert "promotedBugLink" in script
     assert "existingBugDraft" in script
     assert "promotion_status: promotedBugLink ? 'already_linked' : 'pending'" in script
     assert "issueRecords.find((item) => item.promotion_status === 'pending')" in script
     assert "github-issue-number.txt" in script
     assert "github-issue-numbers.json" in script
+    assert "awaiting_local_registry_intake" in script
+    assert "registered_not_fixed" in script
+    assert "core.summary.addTable" in script
+    assert "core.warning" in script
 
 
 def test_nightly_workflow_promotes_actionable_issue_to_bug_draft() -> None:
@@ -1542,19 +1567,16 @@ def test_nightly_workflow_promotes_actionable_issue_to_bug_draft() -> None:
     step = next(step for step in steps if step.get("name") == "Promote Nightly failure issue to BUG draft")
     run = step["run"]
 
-    assert "github-issue-number.txt" in run
-    assert "promote-ci-issue" in run
-    assert "--summary-json tmp/validation/nightly_failure_issue/summary.json" in run
-    assert "--create-registry-worktree" in run
-    assert "--apply" in run
-    assert "--output tmp/validation/nightly_failure_issue/bug-promotion-full.json" in run
-    assert '"gh", "issue", "edit"' in run
-    assert "--body-file" in run
-    assert "bug-promotion-status.txt" in run
-    assert "gh pr create" in run
-    assert "REGISTRY_PR_STATUS" in run
-    assert "PROMOTION_WORKFLOW_GATE" in run
-    assert "deferred_registry_pr_capability" in run
+    for contract in (
+        "github-issue-number.txt", "promote-ci-issue",
+        "--summary-json tmp/validation/nightly_failure_issue/summary.json",
+        "--create-registry-worktree", "--apply",
+        "--output tmp/validation/nightly_failure_issue/bug-promotion-full.json",
+        '"gh", "issue", "edit"', "--body-file", "bug-promotion-status.txt", "gh pr create",
+        "REGISTRY_PR_STATUS", "PROMOTION_WORKFLOW_GATE", "deferred_registry_pr_capability",
+        "::warning::Nightly BUG registration deferred", "GITHUB_STEP_SUMMARY",
+    ):
+        assert contract in run
     assert "deferred_multi_issue_promotion" not in run
     assert "no_unlinked_nightly_issue_pending" in run
     assert "workflow_gate=manual_registry_pr_required" in run
