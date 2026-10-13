@@ -33,6 +33,18 @@
       "timestamp": "2026-10-13T06:09:52Z"
     },
     {
+      "action": "review_ci_execution_coverage",
+      "actor": "Codex",
+      "note": "The pre-existing two scheduler tests were outside every selected CI plan. Both tests, their retry-attempt identity assertions and QE ownership were preserved and relocated into backend/tests/unified_engine/test_qe_evolution_scheduler.py, already covered by existing QE CI globs. Only stale GPU-return/config-persistence fixtures were corrected. No pipeline, plan, catalog or workflow relaxation. Revalidated 47 claim/queue/dispatch cases and both scheduler contracts after syncing latest main; persistent scheduler source SHA256 remains 77f09371a2f6adb091efebd82d8808b126f7dd61cb3b2b9a40e894af34be5cf7.",
+      "timestamp": "2026-10-13T06:34:35Z"
+    },
+    {
+      "action": "authorized_original_batch_pause_readback",
+      "actor": "Codex",
+      "note": "All 12 TCN Loops completed before the single authorized POST /api/v1/quantevolver/evolution/tasks/qe_20261013_024708_2cff/stop. API success, paused=true, loops_cancelled=[], process_killed=false and error=null for all ten already-failed Loops. Readback: original paused with 14 completed (12 TCN + 2 previously finished duplicate LGBM) and 10 failed, no active Loop. Independent exact retry qe_20261013_112346_00a6 remains running: 2 completed, Loops3/4 running, 8 pending. Completed results/failed records retained, no experiment deletion or backend/service control. The two original duplicate LGBM results are excluded from new non-duplicate research counts.",
+      "timestamp": "2026-10-13T06:34:35Z"
+    },
+    {
       "action": "code_review_race_and_compatibility",
       "actor": "Codex",
       "note": "Review 2: covered failed/cancelled/canceled/completed/running/processing/unknown/null states, empty dispatch with running children, state changes during SQL claim and capacity wait, and 100 unchanged wakes remaining read-only. 47 focused cases passed. Broad related matrix found an existing explicit-retry fixture mismatch, reproduced with origin/main source; only its three-value GPU contract and config persistence fake were aligned, preserving identity assertions. Exact retry identity test passed. qe_read_backend: 701 passed/1 skipped. L0, guardrail and ownership passed; module registry 8 passed. DESIGN-COMPLIANCE-001: complete fix, no silent success, no business parameter drift, no new approval/gate.",
