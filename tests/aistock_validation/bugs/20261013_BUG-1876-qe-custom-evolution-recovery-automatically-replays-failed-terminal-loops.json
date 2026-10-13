@@ -70,7 +70,6 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/quantevolver/qe_evolution_service.py",
-      "backend/tests/test_qe_evolution_scheduler.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
       "backend/tests/unified_engine/test_qe_evolution_scheduler.py",
       "tests/aistock_validation/bugs/20261013_BUG-1876-qe-custom-evolution-recovery-automatically-replays-failed-terminal-loops.json"
@@ -78,7 +77,6 @@
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/qe_evolution_service.py",
-      "backend/tests/test_qe_evolution_scheduler.py",
       "backend/tests/unified_engine/test_qe_config_truth.py",
       "backend/tests/unified_engine/test_qe_evolution_scheduler.py",
       "tests/aistock_validation/bugs/20261013_BUG-1876-qe-custom-evolution-recovery-automatically-replays-failed-terminal-loops.json"
@@ -163,8 +161,8 @@
   },
   "first_seen_at": "2026-10-13T05:39:04.864782Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cecb72ab028896e8a0dce1ce9c02e5b915420239",
+  "fixed_at": "2026-10-13T07:37:08Z",
   "github_issue_number": 5991,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5991",
   "last_seen_at": "2026-10-13T05:39:04.864782Z",
@@ -172,6 +170,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6006",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -197,6 +196,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -208,7 +208,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1876",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "64fe2250ffc79c90",
+    "recorded_at": "2026-10-13T07:39:20.530018Z",
+    "runtime_contract_digest": "b414f9f777e478c96fdd76de907651c2f81ec051674a48027b49f6079bc9af7f",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f261dd30d02e1248eea080802449fabfd5134cf8",
+    "source_merge_commit": "cecb72ab028896e8a0dce1ce9c02e5b915420239",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6006",
+    "validation_evidence": [
+      "GitHub CI verdict run 38363158899 at f261dd30d02e1248eea080802449fabfd5134cf8 -> passed",
+      "rtk pytest backend/tests/unified_engine/test_qe_config_truth.py backend/tests/unified_engine/test_qe_evolution_scheduler.py -q --maxfail=1 -> passed (194 passed, 38 optional-dependency skipped, final source HEAD)"
+    ],
+    "validation_evidence_digest": "6b6579c1148ee74e1d19994dfa86d61adb426d466f50bc75d84ae7b69b58f19f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.custom_evolution"
   ],
@@ -217,6 +239,10 @@
     "fingerprint": "789a93b6355902b8ec9bdb77",
     "source_event_id": "FE-20261013-789a93b63559"
   },
+  "validation_evidence": [
+    "GitHub CI verdict run 38363158899 at f261dd30d02e1248eea080802449fabfd5134cf8 -> passed",
+    "rtk pytest backend/tests/unified_engine/test_qe_config_truth.py backend/tests/unified_engine/test_qe_evolution_scheduler.py -q --maxfail=1 -> passed (194 passed, 38 optional-dependency skipped, final source HEAD)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
