@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_mature_build_runner.py",
     "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "tests/aistock_validation/bugs/20261013_BUG-1872-monthly-native-build-validates-a-different-attempt-id-from-its-supervise.json"
   ],
   "assigned_agent": null,
@@ -28,12 +29,20 @@
   ],
   "expected": "Formal native-month validation binds the exact supervised BUILD identity and current fence, including retained materializations, without re-export or permissive receipt acceptance.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261013_BUG-1872-monthly-native-build-validates-a-different-attempt-id-from-its-supervise.json",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml"
+    ],
     "added_files": [],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261013_BUG-1872-monthly-native-build-validates-a-different-attempt-id-from-its-supervise.json",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
-      "backend/tests/dataset_release/test_monthly_mature_build_runner.py"
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_mature_build_runner.py",
@@ -108,14 +117,30 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_evidence": [
+    "Round1 RED-to-GREEN: normal BUILD and retained-export retry both reproduce the attempt namespace mismatch; two targeted tests passed after binding invocation to the unchanged supervisor operation-build ID/current fence.",
+    "Round2 fail-closed: five real validator cases still reject wrong run/attempt/fence/release/staging; retained minute bytes/mtime and native-bin reuse regression remain unchanged.",
+    "Round3: 56 runner/native-month/consumer/supervised tests passed; read-only fresh AIstock-CI process validated the actual attempt265 production WSL QE/HMM smoke with the canonical expected identity and retained materialization259 lease. No live-worker acceptance is claimed before user restart.",
+    "Scope expansion: include the runtime target catalog solely to list this existing monthly worker runner in required_source_globs; it is already in source_globs, and the same user-owned backend restart/process probe remains mandatory.",
+    "DESIGN-COMPLIANCE-001: complete minimal fix; no silent success or relaxed identity checks; no model, population, data, threshold, month-validation or export semantics changes; no new gate or approval. Production DB/dependencies/profile/process-control noop."
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh AIstock-CI process: two RED regressions became GREEN, five wrong-identity cases remain rejected, and 56 related tests passed.",
+      "Fresh read-only actual attempt265 production smoke validation PASS: current fence265 matches controller lease; retained materialization259 and release digest c932544d6eceb808e358b549de08efcf66c902f438817aef91f0bbab019faeb3 remain unchanged; database/candidate/profile writes and runtime actions false.",
+      "Fresh AIstock-CI process validated actual attempt265 production WSL smoke against controller execution265 and retained materialization259 lease -> PASS; no DB/candidate/profile/runtime writes; new runner tests RED 2 to GREEN 2 and 5 wrong identities remain rejected"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
