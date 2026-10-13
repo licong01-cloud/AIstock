@@ -185,17 +185,18 @@
     "database_daily_adapter": "implemented_locally_with_shared_core_and_immutable_registration_pending_merge",
     "database_readiness_contract": "shared_refresh_audit_reused_and_verified_readonly_for_2026_10_12",
     "quote_policy_reuse_ref": "backend/services/dataset_release/sw_l2_quote_policy.py",
-    "formal_review": "three_source_review_rounds_passed_runtime_and_real_database_generation_not_accepted",
+    "formal_review": "three_source_review_rounds_and_delivery_rereview_passed; planned_prefix_and_immutable_read_identity_findings_fixed; runtime_and_real_database_generation_not_accepted",
     "full_requirement_complete": false,
     "remaining_business_blockers": [
       "Actual file-free DB preflight rejects conflicting repeated sector fact 801012.SI/2026-07-01/sw2_pct_change: 002086.SZ PIT membership moved but stock-level sector_data contains old-industry quote",
       "Actual DEV registration, production generation and consumer/API/UI readback have not run; test substitutes are not business acceptance",
       "Shared data-ready callback is outside this HMM-only source scope and remains unwired",
-      "Canonical workflow has no target-owned business-smoke semantic contract for existing hmm-training daily-coefficients job readback"
+      "BUG-1862 source is not yet loaded in backend-main; the prior user restart does not prove this source revision or a qualifying database_daily COMPLETED job"
     ],
     "local_validation": [
       "RED: 3 direct mixed-source regression tests failed on original source",
-      "GREEN: direct daily/input/precompute/file-extension matrix -> 129 passed, 1 skipped; existing unauthorized DEV write integration not run",
+      "Prior HEAD 41e6476e: direct daily/input/precompute/file-extension matrix -> 130 passed, 1 skipped; existing unauthorized DEV write integration not run; final delivery HEAD receipts must be regenerated",
+      "Delivery rereview RED: planned prefix, repeated asset read identity and concurrent read identity tests all failed before the fix; GREEN: these 3 tests and 5 invalid original-read-boundary cases passed after the HMM-only fix",
       "Ruff check and py_compile -> passed",
       "fresh-process backend service/router imports -> passed",
       "Windows/WSL fresh-process file-worker source boundary -> passed",
@@ -203,7 +204,8 @@
       "nox validation_module_registry_l0 -> 8 passed, 14/14 mapped",
       "Scope remains HMM source, HMM CLI, HMM direct tests, design state and own BUG JSON; actual changed-file ownership will be regenerated before finish",
       "F2 source/design status distinguishes approved design, source verification and pending real-input/runtime acceptance",
-      "git diff --check -> passed"
+      "git diff --check -> passed",
+      "Workflow-owner PR #6009 merged: canonical target-owned daily job semantic probe registration blocker resolved; this does not substitute for a real COMPLETED and REGISTERED_READBACK job"
     ],
     "database_write": false,
     "dataset_write": false,

@@ -918,6 +918,33 @@ class HMMTrainingService:
                 as_of_trade_date=as_of,
                 effective_trade_date=effective,
             )
+            from .hmm_data_source.daily_input import DailyInputError
+
+            original_identity = existing_status["input_identity"]
+            if not isinstance(original_identity, dict) or (
+                {k: v for k, v in original_identity.items() if k != "read_cutoff_at"}
+                != {k: v for k, v in input_identity.items() if k != "read_cutoff_at"}
+            ):
+                raise DailyInputError("hmm_daily_input_identity_changed", "existing asset has another input identity")
+            try:
+                original_cutoff = datetime.fromisoformat(original_identity["read_cutoff_at"])
+                current_cutoff = datetime.fromisoformat(input_identity["read_cutoff_at"])
+                if original_cutoff.utcoffset() is None or current_cutoff.utcoffset() is None:
+                    raise ValueError("timezone required")
+                original_day = original_cutoff.astimezone(timezone(timedelta(hours=8))).date()
+                if not as_of <= original_day <= effective or original_cutoff > current_cutoff:
+                    raise ValueError("invalid original read boundary")
+                for status in input_identity["completion_statuses"].values():
+                    if datetime.fromisoformat(status["refreshed_at"]) > original_cutoff:
+                        raise ValueError("completion after original read")
+            except (KeyError, ValueError, TypeError) as exc:
+                raise DailyInputError(
+                    "hmm_daily_input_identity_changed", "existing asset read cutoff is not valid"
+                ) from exc
+            # Repeated requests with unchanged facts share an immutable asset.
+            # Freeze its original read identity BEFORE creating a durable job,
+            # rather than changing the plan or result during execution.
+            input_identity = original_identity
 
         return {
             "snapshot_id": snapshot_id,
@@ -931,7 +958,11 @@ class HMMTrainingService:
             "as_of_trade_date": as_of.isoformat(),
             "effective_trade_date": effective.isoformat(),
             "generation_mode": HMM_DAILY_COEFFICIENT_MODE,
-            "input_data_max_dates": completion_identity["max_dates"],
+            # The validated adapter proves each consumed prefix ends at as_of;
+            # physical table maxima remain diagnostic in database_completion.
+            "input_data_max_dates": {
+                key: as_of.isoformat() for key in ("sector_data", "sw_daily", "index_daily_000300")
+            },
             "database_completion": completion_identity,
             "config_json": config_row.get("config_json") or {},
             "output_filename": output_filename,
@@ -999,6 +1030,7 @@ class HMMTrainingService:
             "path": output_path,
             "artifact_sha256": self._file_sha256(output_path),
             "date_count": len(daily),
+            "input_identity": payload.get("input_identity"),
         }
 
     def preview_daily_coefficients(
@@ -1078,9 +1110,10 @@ class HMMTrainingService:
             )
             with open(plan["output_path"], encoding="utf-8") as handle:
                 previous = json.load(handle)
-            if {k: v for k, v in previous.get("input_identity", {}).items() if k != "read_cutoff_at"} != expected:
-                raise DailyInputError("hmm_daily_input_identity_changed", "existing asset has another input identity")
-            loaded["input_identity"] = previous["input_identity"]
+            if previous.get("input_identity") != plan["input_identity"]:
+                raise DailyInputError(
+                    "hmm_daily_input_identity_changed", "existing asset differs from the frozen durable read identity"
+                )
         params = {
             "source_mode": HMM_DATABASE_DAILY_SOURCE,
             "model_path": plan["model_path"],

@@ -446,6 +446,78 @@ def test_database_service_infers_publishes_and_recovers_registration_failure_wit
     assert len(payload["stock_sector_map"]) == 131
 
 
+def test_database_plan_reports_read_prefix_not_physical_maxima(generation_case, monkeypatch):
+    service, loaded, _, _ = generation_case
+    as_of = loaded["sector_dates"][-1]
+    diagnostic = {
+        key: (as_of + timedelta(days=1)).isoformat() for key in ("sector_data", "sw_daily", "index_daily_000300")
+    }
+    monkeypatch.setattr(service, "_database_daily_completion", lambda **kwargs: (as_of, {"max_dates": diagnostic}))
+    plan = service.preview_daily_coefficients("snapshot", signal_preset="preset_A")
+    assert plan["input_data_max_dates"] == {key: as_of.isoformat() for key in diagnostic}
+    assert plan["database_completion"]["max_dates"] == diagnostic
+
+
+def test_existing_database_asset_anchors_new_plan_to_original_read_identity(generation_case, monkeypatch):
+    from pathlib import Path
+
+    service, loaded, _, _ = generation_case
+    monkeypatch.setattr(service, "_register_database_daily_window", lambda *args: None)
+    first_plan = service.preview_daily_coefficients("snapshot", signal_preset="preset_A")
+    first_result = service._execute_daily_coefficient_plan(first_plan)
+    original = Path(first_plan["output_path"]).read_bytes()
+    cutoff = datetime.fromisoformat(loaded["input_identity"]["read_cutoff_at"])
+    loaded["input_identity"]["read_cutoff_at"] = (cutoff + timedelta(minutes=1)).isoformat()
+    second_plan = service.preview_daily_coefficients("snapshot", signal_preset="preset_A")
+    assert second_plan["daily_key"] == first_plan["daily_key"]
+    assert second_plan["input_identity"] == first_plan["input_identity"]
+    second_result = service._execute_daily_coefficient_plan(second_plan)
+    assert second_result["input_identity"] == second_plan["input_identity"]
+    assert second_result["artifact_sha256"] == first_result["artifact_sha256"]
+    assert second_result["status"] == "EXISTS"
+    assert Path(second_plan["output_path"]).read_bytes() == original
+
+
+def test_database_executor_rejects_concurrent_asset_with_different_read_cutoff(generation_case, monkeypatch):
+    service, loaded, _, _ = generation_case
+    monkeypatch.setattr(service, "_register_database_daily_window", lambda *args: None)
+    first_plan = service.preview_daily_coefficients("snapshot", signal_preset="preset_A")
+    cutoff = datetime.fromisoformat(loaded["input_identity"]["read_cutoff_at"])
+    loaded["input_identity"]["read_cutoff_at"] = (cutoff + timedelta(minutes=1)).isoformat()
+    concurrent_plan = service.preview_daily_coefficients("snapshot", signal_preset="preset_A")
+    assert concurrent_plan["daily_key"] == first_plan["daily_key"]
+    service._execute_daily_coefficient_plan(first_plan)
+    monkeypatch.setattr(service, "_register_database_daily_window", lambda *args: pytest.fail("registration forbidden"))
+    with pytest.raises(RuntimeError, match="hmm_daily_input_identity_changed"):
+        service._execute_daily_coefficient_plan(concurrent_plan)
+
+
+@pytest.mark.parametrize("boundary", ["missing", "invalid", "naive", "future", "before_asof"])
+def test_existing_database_asset_rejects_invalid_original_read_boundary(generation_case, monkeypatch, boundary):
+    from pathlib import Path
+
+    service, _, _, _ = generation_case
+    monkeypatch.setattr(service, "_register_database_daily_window", lambda *args: None)
+    plan = service.preview_daily_coefficients("snapshot", signal_preset="preset_A")
+    service._execute_daily_coefficient_plan(plan)
+    path = Path(plan["output_path"])
+    payload = json.loads(path.read_bytes())
+    cutoff = datetime.fromisoformat(payload["input_identity"]["read_cutoff_at"])
+    invalid = {
+        "invalid": "not-a-time",
+        "naive": cutoff.replace(tzinfo=None).isoformat(),
+        "future": (cutoff + timedelta(minutes=1)).isoformat(),
+        "before_asof": (cutoff - timedelta(days=2)).isoformat(),
+    }
+    if boundary == "missing":
+        del payload["input_identity"]["read_cutoff_at"]
+    else:
+        payload["input_identity"]["read_cutoff_at"] = invalid[boundary]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RuntimeError, match="hmm_daily_input_identity_changed"):
+        service.preview_daily_coefficients("snapshot", signal_preset="preset_A")
+
+
 @pytest.mark.parametrize(
     "drift", ["input", "model", "preset", "output_path", "generator", "durable_preset", "durable_key"]
 )
