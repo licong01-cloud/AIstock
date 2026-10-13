@@ -32,9 +32,12 @@ def reseal(value, field="input_hash"):
 
 
 @pytest.fixture
-def candidate(price_panel, completed, candidate_cache, tmp_path_factory, monkeypatch):
-    # Generate the unchanged synthetic comparison once, not once per mutation.
+def candidate(request, candidate_cache, tmp_path_factory, monkeypatch):
+    # Do not eagerly request the large price fixture on every mutation case.
+    # Its immutable reference and prepared wrapper are identical for this module.
     if not candidate_cache:
+        price_panel = request.getfixturevalue("price_panel")
+        completed = request.getfixturevalue("completed")
         directory = tmp_path_factory.mktemp("return_target_reference")
         original_path = directory / "original.json"
         write_once(original_path, price_panel)
@@ -52,20 +55,70 @@ def candidate(price_panel, completed, candidate_cache, tmp_path_factory, monkeyp
     first, acceptance = candidate_cache["first"], candidate_cache["acceptance"]
     directory = candidate_cache["directory"]
     monkeypatch.setattr(subject, "ORIGINAL_INPUT_HASH", original["input_hash"])
+    # pytest restores the original function-scoped fixture's patches after the
+    # first case. Rebind the same synthetic authority for every independent case.
+    monkeypatch.setattr(price, "REFERENCE_PINS", deepcopy(original["reference"]["pins"]))
+    monkeypatch.setattr(
+        price, "APPROVED_INPUT", {k: original["source"]["identity"].get(k) for k in price.APPROVED_INPUT}
+    )
+    monkeypatch.setattr(
+        price, "APPROVED_NUMERIC", {k: original["numeric_environment"][k] for k in ("python", "versions")}
+    )
+    for key in price.THREADS:
+        monkeypatch.setenv(key, "1")
     pins = {k: acceptance[k] for k in subject.REFERENCE_PINS if k != "prediction_sha256"}
     pins["prediction_sha256"] = first["prediction_sha256"]
-    monkeypatch.setattr(subject, "REFERENCE_PINS", pins)
-    bundle = subject.prepare_inputs(
-        original_input_path=directory / "original.json",
-        reference_acceptance_path=directory / "acceptance.json",
-        source_commit="c" * 40,
-    )
-    return bundle, original, acceptance
+    monkeypatch.setattr(subject, "REFERENCE_PINS", deepcopy(pins))
+    if "bundle" not in candidate_cache:
+        candidate_cache["bundle"] = subject.prepare_inputs(
+            original_input_path=directory / "original.json",
+            reference_acceptance_path=directory / "acceptance.json",
+            source_commit="c" * 40,
+        )
+    # Keep all real consumer validation in the tests. Only unchanged fixture
+    # preparation is shared; no case may mutate another case's starting payload.
+    return deepcopy((candidate_cache["bundle"], original, acceptance))
 
 
 @pytest.fixture(scope="module")
 def candidate_cache():
     return {}
+
+
+def test_cached_candidate_is_case_local_and_never_rebuilds_input(monkeypatch):
+    original = {
+        "input_hash": "a" * 64,
+        "reference": {"pins": {"reference": "b" * 64}},
+        "source": {"identity": {k: "fixture" for k in price.APPROVED_INPUT}},
+        "numeric_environment": {"python": "fixture", "versions": {"numpy": "fixture"}},
+    }
+    pins = {k: "c" * 64 for k in subject.REFERENCE_PINS}
+    cache = {
+        "original": original,
+        "directory": Path(__file__).parent,
+        "first": {"prediction_sha256": "d" * 64},
+        "acceptance": pins,
+        "bundle": {"mutable": [1]},
+    }
+
+    class Request:
+        def getfixturevalue(self, name):
+            pytest.fail(f"warm cache requested expensive fixture {name}")
+
+    monkeypatch.setattr(subject, "prepare_inputs", lambda **_: pytest.fail("warm cache repeated preflight"))
+    with pytest.MonkeyPatch.context() as patches:
+        first = candidate.__wrapped__(Request(), cache, None, patches)
+        assert subject.ORIGINAL_INPUT_HASH == original["input_hash"]
+        assert price.REFERENCE_PINS == original["reference"]["pins"]
+        first[0]["mutable"].append(2)
+        first[1]["source"]["identity"].clear()
+        first[2].clear()
+    with pytest.MonkeyPatch.context() as patches:
+        second = candidate.__wrapped__(Request(), cache, None, patches)
+        assert second[0] == {"mutable": [1]}
+        assert second[1] == original and second[2] == pins
+        assert subject.REFERENCE_PINS["prediction_sha256"] == "d" * 64
+        assert price.APPROVED_INPUT == original["source"]["identity"]
 
 
 def test_raw_decimal_target_and_original_training_population_are_exact(candidate):
