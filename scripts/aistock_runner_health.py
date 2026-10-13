@@ -7,7 +7,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -524,9 +524,87 @@ def _write_outputs(report: dict[str, Any], *, output_json: str | None, output_md
         path.write_text(render_markdown(report), encoding="utf-8")
 
 
+def scheduled_admission(
+    *, event: str, budget_minutes: int, source_head: str, run_id: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Local admission only: never query GitHub, cancel work, or certify validation.
+
+    Scheduled host work must fit entirely inside 00:00-07:00 UTC+8. Recheck
+    after acquiring a runner because queue latency can invalidate preflight.
+    An explicitly dispatched operation retains its existing authorization.
+    """
+    if event not in {"schedule", "workflow_dispatch"}:
+        raise ValueError("background admission accepts only schedule/workflow_dispatch")
+    if not 0 < budget_minutes <= 420:
+        raise ValueError("background budget must be between 1 and 420 minutes")
+    if len(source_head) != 40 or any(c not in "0123456789abcdef" for c in source_head):
+        raise ValueError("background source_head must be an exact lowercase commit SHA")
+    if not run_id.isdecimal():
+        raise ValueError("background run_id must be numeric")
+    observed = now if now is not None else datetime.now(timezone.utc)
+    if observed.tzinfo is None or observed.utcoffset() is None:
+        raise ValueError("background observation must include a timezone")
+    local = observed.astimezone(timezone(timedelta(hours=8)))
+    start = local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end = start + timedelta(hours=7)
+    remaining = max(0.0, (end - local).total_seconds())
+    manual = event == "workflow_dispatch"
+    admitted = manual or remaining >= budget_minutes * 60
+    reason = ("explicit_dispatch" if manual else "fits_overnight_window" if admitted
+              else "outside_overnight_window" if local >= end else "insufficient_window_budget")
+    return {
+        "schema_version": "scheduled_background_admission_v1",
+        "admitted": admitted,
+        "status": "admitted" if admitted else "deferred",
+        "reason": reason,
+        "event": event,
+        "source_head": source_head,
+        "run_id": run_id,
+        "workflow": os.environ.get("GITHUB_WORKFLOW", ""),
+        "job": os.environ.get("GITHUB_JOB", ""),
+        "observed_at": observed.astimezone(timezone.utc).isoformat(),
+        "local_observed_at": local.isoformat(),
+        "window_end": end.isoformat(),
+        "next_scheduled_window": (start + timedelta(days=1)).isoformat(),
+        "budget_minutes": budget_minutes,
+        "remaining_window_seconds": remaining,
+        "validation_status": "not_executed",
+        "advances_validation_watermark": False,
+        "recovery": "next scheduled run retains prior validation receipts; explicit dispatch remains available",
+    }
+
+
+def _emit_admission(receipt: dict[str, Any], output_json: str | None) -> None:
+    if output_json:
+        path = Path(output_json)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+    if os.environ.get("GITHUB_OUTPUT"):
+        with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as stream:
+            stream.write(f"background_admitted={str(receipt['admitted']).lower()}\n")
+    if os.environ.get("GITHUB_STEP_SUMMARY"):
+        with Path(os.environ["GITHUB_STEP_SUMMARY"]).open("a", encoding="utf-8") as stream:
+            stream.write(
+                f"\nBackground admission: **{receipt['status']}** ({receipt['reason']}); "
+                f"validation=not_executed, watermark unchanged.\n"
+                f"Source `{receipt['source_head']}`, budget {receipt['budget_minutes']} min, "
+                f"next window `{receipt['next_scheduled_window']}`.\n"
+            )
+    print(json.dumps(receipt, indent=2))
+    if not receipt["admitted"]:
+        print("::notice::Scheduled background work deferred to protect daytime PR capacity; not validated.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Check AIstock GitHub Actions self-hosted runner readiness.")
     sub = parser.add_subparsers(dest="command", required=True)
+    admission = sub.add_parser("scheduled-admission", help="Local overnight budget check; no GitHub access.")
+    admission.add_argument("--event", default=os.environ.get("GITHUB_EVENT_NAME", ""))
+    admission.add_argument("--budget-minutes", type=int, required=True)
+    admission.add_argument("--source-head", default=os.environ.get("GITHUB_SHA", ""))
+    admission.add_argument("--run-id", default=os.environ.get("GITHUB_RUN_ID", ""))
+    admission.add_argument("--output-json")
     doctor = sub.add_parser("doctor", help="Check runner availability for a workflow.")
     doctor.add_argument("--repo", default=DEFAULT_REPO)
     doctor.add_argument("--workflow", default=DEFAULT_WORKFLOW)
@@ -564,6 +642,17 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "scheduled-admission":
+        try:
+            receipt = scheduled_admission(
+                event=args.event, budget_minutes=args.budget_minutes,
+                source_head=args.source_head, run_id=args.run_id,
+            )
+        except ValueError as exc:
+            print(f"::error::Invalid background admission context: {exc}", file=sys.stderr)
+            return 2
+        _emit_admission(receipt, args.output_json)
+        return 0  # Admission completed; not a validation PASS receipt.
     token, token_source = resolve_github_token()
     if args.command == "cancel-stale-queued":
         receipt = cancel_stale_scheduled_runs(

@@ -83,6 +83,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
+      background_admitted: ${{ steps.background_window.outputs.background_admitted }}
       retry_run_id: ${{ steps.select_nightly_receipt.outputs.run_id }}
       retry_source_head: ${{ steps.select_nightly_receipt.outputs.head_sha }}
     permissions:
@@ -91,8 +92,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Admit scheduled work only within overnight budget
+        id: background_window
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/aistock_runner_health.py scheduled-admission --budget-minutes 180 --output-json tmp/validation/runner_health/background-admission.json
+
       - name: Finalize superseded scheduled Nightly queue entries
-        if: github.event_name == 'schedule'
+        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name == 'schedule')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -107,6 +115,7 @@ jobs:
             --output-json tmp/validation/runner_health/queue-reconciliation.json
 
       - name: Check self-hosted runner availability
+        if: steps.background_window.outputs.background_admitted == 'true'
         env:
           # Listing self-hosted runners requires repository Administration read permission.
           # If the default GITHUB_TOKEN is insufficient, configure this repository secret.
@@ -124,7 +133,7 @@ jobs:
             --output-md tmp/validation/runner_health/runner-health.md
 
       - name: Print runner health evidence
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         run: |
           cat tmp/validation/runner_health/runner-health.md || true
 
@@ -138,7 +147,7 @@ jobs:
 
       - name: Select prior durable Nightly L3 receipt
         id: select_nightly_receipt
-        if: github.event_name == 'schedule' || (inputs.run_nightly_l3 && !inputs.full_nightly_run)
+        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name == 'schedule' || (inputs.run_nightly_l3 && !inputs.full_nightly_run))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -189,7 +198,7 @@ jobs:
           echo "nightly_retry_source run_id=${selected_run_id} head=${selected_head}"
 
       - name: Upload selected Nightly L3 retry receipt
-        if: steps.select_nightly_receipt.outcome == 'success'
+        if: steps.background_window.outputs.background_admitted == 'true' && (steps.select_nightly_receipt.outcome == 'success')
         uses: actions/upload-artifact@v7
         with:
           name: nightly-l3-retry-source-${{ github.run_id }}
@@ -204,9 +213,11 @@ jobs:
     # Operations-only DR lane: it probes an already-running authorized target.
     # It is not PR CI, DEV validation, or permission to create/start a database.
     needs: runner-preflight
-    if: github.event_name != 'workflow_dispatch' || inputs.run_dr
+    if: needs.runner-preflight.outputs.background_admitted == 'true' && (github.event_name != 'workflow_dispatch' || inputs.run_dr)
     # self-hosted is mandatory because the DR job needs to read the local
     # production DB at 127.0.0.1:5432; GitHub-hosted runners cannot reach it.
+    outputs:
+      background_admitted: ${{ steps.background_window.outputs.background_admitted }}
     runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 60
     defaults:
@@ -217,7 +228,18 @@ jobs:
       DR_TARGET_DIR: 'E:/DEV backup/aistock_pg_snapshots'
       DR_PG_CONTAINER: 'timescaledb'
     steps:
+      - name: Recheck overnight admission after runner queue
+        id: background_window
+        timeout-minutes: 1
+        shell: powershell
+        run: |
+          python "F:/Dev/AIstock/scripts/aistock_runner_health.py" scheduled-admission `
+            --budget-minutes 75 `
+            --output-json "$env:RUNNER_TEMP/background-admission-$env:GITHUB_JOB.json"
+          if ($LASTEXITCODE -ne 0) { throw "background admission failed closed" }
+
       - name: Prepare local workspace (no GitHub checkout)
+        if: steps.background_window.outputs.background_admitted == 'true'
         timeout-minutes: 2
         run: |
           python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
@@ -228,6 +250,7 @@ jobs:
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       - name: Sanity - docker + target dir reachable
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
             Write-Host "::error::docker not on PATH on this self-hosted runner"
@@ -244,15 +267,17 @@ jobs:
           }
 
       - name: Run dr_snapshot_prod_db.py
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           conda run -n AIstock python scripts/dr_snapshot_prod_db.py --target-dir "$env:DR_TARGET_DIR" --container "$env:DR_PG_CONTAINER"
 
       - name: Run dr_cleanup_old_snapshots.py (apply)
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           conda run -n AIstock python scripts/dr_cleanup_old_snapshots.py --target-dir "$env:DR_TARGET_DIR" --apply
 
       - name: Capture DR snapshot metadata (no dump bytes)
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         run: |
           $date = Get-Date -Format yyyyMMdd
           New-Item -ItemType Directory -Force -Path "tmp/dr" | Out-Null
@@ -270,7 +295,7 @@ jobs:
           }
 
       - name: Print DR metadata (NOT the dump bytes)
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         run: |
           if (Test-Path -LiteralPath "tmp/dr") {
             $files = Get-ChildItem -LiteralPath "tmp/dr" -Recurse -File
@@ -282,7 +307,9 @@ jobs:
   dr-validate:
     name: DR validation (dump validity + schema diff + retention)
     needs: dr-snapshot
-    if: github.event_name != 'workflow_dispatch' || inputs.run_dr
+    if: needs.dr-snapshot.outputs.background_admitted == 'true' && (github.event_name != 'workflow_dispatch' || inputs.run_dr)
+    outputs:
+      background_admitted: ${{ steps.background_window.outputs.background_admitted }}
     runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 15
     defaults:
@@ -293,7 +320,18 @@ jobs:
       DR_BACKUP_DIR: 'E:/DEV backup/aistock_pg_snapshots'
       DR_PG_CONTAINER: 'timescaledb'
     steps:
+      - name: Recheck overnight admission after runner queue
+        id: background_window
+        timeout-minutes: 1
+        shell: powershell
+        run: |
+          python "F:/Dev/AIstock/scripts/aistock_runner_health.py" scheduled-admission `
+            --budget-minutes 15 `
+            --output-json "$env:RUNNER_TEMP/background-admission-$env:GITHUB_JOB.json"
+          if ($LASTEXITCODE -ne 0) { throw "background admission failed closed" }
+
       - name: Prepare local workspace (no GitHub checkout)
+        if: steps.background_window.outputs.background_admitted == 'true'
         timeout-minutes: 2
         run: |
           python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
@@ -304,11 +342,12 @@ jobs:
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       - name: nox -s dr_validate
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           conda run -n AIstock python -m nox -s dr_validate
 
       - name: Print DR validate evidence
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         run: |
           if (Test-Path -LiteralPath "tmp/dr") {
             $files = Get-ChildItem -LiteralPath "tmp/dr" -Recurse -File
@@ -323,14 +362,27 @@ jobs:
     # DR keeps its own verdict; full-summary still waits for and reports both
     # branches. A passing L3 job never asserts that DR passed.
     needs: [runner-preflight]
-    if: always() && needs.runner-preflight.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.run_nightly_l3)
+    if: needs.runner-preflight.outputs.background_admitted == 'true' && (always() && needs.runner-preflight.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.run_nightly_l3))
+    outputs:
+      background_admitted: ${{ steps.background_window.outputs.background_admitted }}
     runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 120
     defaults:
       run:
         shell: powershell
     steps:
+      - name: Recheck overnight admission after runner queue
+        id: background_window
+        timeout-minutes: 1
+        shell: powershell
+        run: |
+          python "F:/Dev/AIstock/scripts/aistock_runner_health.py" scheduled-admission `
+            --budget-minutes 180 `
+            --output-json "$env:RUNNER_TEMP/background-admission-$env:GITHUB_JOB.json"
+          if ($LASTEXITCODE -ne 0) { throw "background admission failed closed" }
+
       - name: Prepare local workspace (no GitHub checkout)
+        if: steps.background_window.outputs.background_admitted == 'true'
         timeout-minutes: 2
         run: |
           python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
@@ -344,6 +396,7 @@ jobs:
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       - name: Verify prebuilt AIstock-CI and frontend dependencies
+        if: steps.background_window.outputs.background_admitted == 'true'
         env:
           AISTOCK_CI_ENV_NAME: AIstock-CI
           AISTOCK_CI_TEST_TEMP_REQUIRED: '1'
@@ -367,13 +420,14 @@ jobs:
           }
 
       - name: Download selected Nightly L3 retry receipt
-        if: github.event_name == 'schedule' || !inputs.full_nightly_run
+        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name == 'schedule' || !inputs.full_nightly_run)
         uses: actions/download-artifact@v8
         with:
           name: nightly-l3-retry-source-${{ github.run_id }}
           path: tmp/validation/nightly_retry_receipt
 
       - name: Build receipt-watermark Nightly execution plan
+        if: steps.background_window.outputs.background_admitted == 'true'
         env:
           FULL_NIGHTLY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.full_nightly_run || false }}
           RETRY_SOURCE_RUN_ID: ${{ needs.runner-preflight.outputs.retry_run_id }}
@@ -424,6 +478,7 @@ jobs:
             @extraArgs
 
       - name: Run selected Nightly sessions once
+        if: steps.background_window.outputs.background_admitted == 'true'
         env:
           PAPER_V2_SKIP_REALTIME: '1'
           PAPER_V2_E2E_TRADE_DATE: '2026-06-02'
@@ -440,7 +495,7 @@ jobs:
             --total-timeout-seconds 6300
 
       - name: Print validation history manifest
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         run: |
           if (Test-Path -LiteralPath "tests/aistock_validation/history") {
             $files = Get-ChildItem -LiteralPath "tests/aistock_validation/history" -Recurse -File
@@ -450,7 +505,7 @@ jobs:
 
       - name: Upload Nightly L3 session results
         id: upload_nightly_l3
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
@@ -460,7 +515,7 @@ jobs:
           retention-days: 14
 
       - name: Retry Nightly L3 session results upload
-        if: always() && steps.upload_nightly_l3.outcome == 'failure'
+        if: always() && steps.background_window.outputs.background_admitted == 'true' && (steps.upload_nightly_l3.outcome == 'failure')
         uses: actions/upload-artifact@v7
         with:
           name: nightly-l3-results-${{ github.run_id }}
@@ -472,7 +527,9 @@ jobs:
   paper-v2-live:
     name: Paper v2 live catch-up (skip realtime by default)
     needs: nightly-l3
-    if: github.event_name != 'workflow_dispatch' || (inputs.run_nightly_l3 && inputs.run_paper_v2_live)
+    if: needs.nightly-l3.outputs.background_admitted == 'true' && (github.event_name != 'workflow_dispatch' || (inputs.run_nightly_l3 && inputs.run_paper_v2_live))
+    outputs:
+      background_admitted: ${{ steps.background_window.outputs.background_admitted }}
     runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 60
     defaults:
@@ -481,7 +538,18 @@ jobs:
     env:
       PAPER_V2_SKIP_REALTIME: '1'
     steps:
+      - name: Recheck overnight admission after runner queue
+        id: background_window
+        timeout-minutes: 1
+        shell: powershell
+        run: |
+          python "F:/Dev/AIstock/scripts/aistock_runner_health.py" scheduled-admission `
+            --budget-minutes 60 `
+            --output-json "$env:RUNNER_TEMP/background-admission-$env:GITHUB_JOB.json"
+          if ($LASTEXITCODE -ne 0) { throw "background admission failed closed" }
+
       - name: Prepare local workspace (no GitHub checkout)
+        if: steps.background_window.outputs.background_admitted == 'true'
         timeout-minutes: 2
         run: |
           python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
@@ -494,6 +562,7 @@ jobs:
             --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
 
       - name: Verify prebuilt AIstock-CI and isolated test storage
+        if: steps.background_window.outputs.background_admitted == 'true'
         env:
           AISTOCK_CI_ENV_NAME: AIstock-CI
           AISTOCK_CI_TEST_TEMP_REQUIRED: '1'
@@ -502,11 +571,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: nox -s paper_v2_live
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           conda run -n AIstock-CI python -m nox -s paper_v2_live
 
       - name: Print paper-v2 live evidence manifest
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         run: |
           if (Test-Path -LiteralPath "tmp/paper_v2") {
             $files = Get-ChildItem -LiteralPath "tmp/paper_v2" -Recurse -File
@@ -519,10 +589,12 @@ jobs:
     needs: runner-preflight
     # Scheduled refreshes are owned exclusively by code-intelligence-refresh.yml.
     # Keep this lane only for an explicit legacy/manual recovery dispatch.
-    if: github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence
+    if: github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence && needs.runner-preflight.outputs.background_admitted == 'true'
     concurrency:
       group: code-intelligence-refresh-main
       cancel-in-progress: true
+    outputs:
+      background_admitted: ${{ steps.background_window.outputs.background_admitted }}
     runs-on: [self-hosted, Windows, aistock-ci-security]
     timeout-minutes: 45
     permissions:
@@ -534,7 +606,18 @@ jobs:
       run:
         shell: powershell
     steps:
+      - name: Recheck overnight admission after runner queue
+        id: background_window
+        timeout-minutes: 1
+        shell: powershell
+        run: |
+          python "F:/Dev/AIstock/scripts/aistock_runner_health.py" scheduled-admission `
+            --budget-minutes 45 `
+            --output-json "$env:RUNNER_TEMP/background-admission-$env:GITHUB_JOB.json"
+          if ($LASTEXITCODE -ne 0) { throw "background admission failed closed" }
+
       - name: Prepare local workspace (no GitHub checkout)
+        if: steps.background_window.outputs.background_admitted == 'true'
         timeout-minutes: 2
         run: |
           python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
@@ -547,6 +630,7 @@ jobs:
 
       - name: Import persistent graph state
         id: graph_state_import
+        if: steps.background_window.outputs.background_admitted == 'true'
         continue-on-error: true
         run: |
           conda run -n AIstock python scripts/code_intelligence_adapter.py graph-state `
@@ -557,6 +641,7 @@ jobs:
 
       - name: Reconcile CodeGraph and Understand Anything
         id: graph_refresh
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -603,7 +688,7 @@ jobs:
           }
 
       - name: Report daily graph refresh status
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           $rows = @()
@@ -644,6 +729,7 @@ jobs:
           ) + $rows | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
 
       - name: Build CodeGraph freshness artifact
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -659,6 +745,7 @@ jobs:
           }
 
       - name: Build compact code intelligence refs for LLM advice
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -696,6 +783,7 @@ jobs:
             --output "$outDir/code-intelligence-summary.json" `
             --output-md "$outDir/code-intelligence-summary.md"
       - name: Build LLM triage quality smoke
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -705,6 +793,7 @@ jobs:
 
       - name: Build LLM test-plan advisor smoke
         id: nightly_llm_test_plan
+        if: steps.background_window.outputs.background_admitted == 'true'
         continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -728,6 +817,7 @@ jobs:
 
       - name: Build LLM nightly scheduler advice smoke
         id: nightly_llm_scheduler_advice
+        if: steps.background_window.outputs.background_admitted == 'true'
         continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -752,6 +842,7 @@ jobs:
 
       - name: Build LLM nightly discovery hypotheses
         id: nightly_discovery_hypotheses
+        if: steps.background_window.outputs.background_admitted == 'true'
         continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -781,6 +872,7 @@ jobs:
           }
 
       - name: Run selected readonly discovery plans
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path "$outDir/discovery-plans" | Out-Null
@@ -795,6 +887,7 @@ jobs:
             --output-dir "$outDir/discovery-plans"
 
       - name: Build Nightly BugCandidate draft queue
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path "$outDir/bug-candidates" | Out-Null
@@ -806,7 +899,7 @@ jobs:
             --output-dir "$outDir/bug-candidates"
 
       - name: Promote ready Nightly BugCandidates to Issue workflow
-        if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in)
+        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -837,6 +930,7 @@ jobs:
 
       - name: Build Nightly adaptive scheduler warning report
         id: nightly_llm_adaptive_scheduler
+        if: steps.background_window.outputs.background_admitted == 'true'
         continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -882,6 +976,7 @@ jobs:
           }
 
       - name: Build LLM prompt evaluation smoke
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -891,6 +986,7 @@ jobs:
             --output "$outDir/llm-prompt-evaluation.json"
 
       - name: Build LLM guarded rollout gate smoke
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -903,6 +999,7 @@ jobs:
 
       - name: Build Nightly LLM design drift audit
         id: nightly_llm_design_drift
+        if: steps.background_window.outputs.background_admitted == 'true'
         continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -922,6 +1019,7 @@ jobs:
 
       - name: Build Nightly LLM silent degradation audit
         id: nightly_llm_silent_degradation
+        if: steps.background_window.outputs.background_admitted == 'true'
         continue-on-error: true
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
@@ -941,7 +1039,7 @@ jobs:
 
       - name: Record advisory LLM step outcomes
         id: nightly_llm_outcomes
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         env:
           TEST_PLAN_OUTCOME: ${{ steps.nightly_llm_test_plan.outcome }}
           SCHEDULER_ADVICE_OUTCOME: ${{ steps.nightly_llm_scheduler_advice.outcome }}
@@ -975,6 +1073,7 @@ jobs:
           $outcomes | ConvertTo-Json -Depth 5 | Set-Content -Path "$outDir/llm-step-outcomes.json" -Encoding UTF8
 
       - name: Build Repo hygiene orphan audit
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -991,6 +1090,7 @@ jobs:
           }
 
       - name: Verify prebuilt environment for workflow validation
+        if: steps.background_window.outputs.background_admitted == 'true'
         env:
           AISTOCK_CI_ENV_NAME: AIstock-CI
           AISTOCK_CI_TEST_TEMP_REQUIRED: '1'
@@ -999,11 +1099,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate CI/Nightly issue workflow automation
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           conda run -n AIstock-CI python -m nox -s validation_workflow_automation
 
       - name: Print code intelligence graph summary manifest
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         run: |
           if (Test-Path -LiteralPath "tmp/validation/code-intelligence") {
             $files = Get-ChildItem -LiteralPath "tmp/validation/code-intelligence" -Recurse -File
@@ -1012,7 +1113,7 @@ jobs:
           }
 
       - name: Build code intelligence upload manifest
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -1043,7 +1144,7 @@ jobs:
           }
 
       - name: Upload code intelligence artifacts
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: code-intelligence-${{ github.run_id }}
@@ -1083,7 +1184,7 @@ jobs:
 
       - name: Download Nightly L3 session results
         id: download_nightly_l3
-        if: always() && needs.nightly-l3.result != 'skipped' && needs.nightly-l3.result != 'cancelled'
+        if: always() && needs.nightly-l3.outputs.background_admitted != 'false' && needs.nightly-l3.result != 'skipped' && needs.nightly-l3.result != 'cancelled'
         uses: actions/download-artifact@v8
         with:
           name: nightly-l3-results-${{ github.run_id }}
@@ -1130,12 +1231,12 @@ jobs:
         # omitted it -- a dr-validate failure would not surface in the
         # checked-in nightly summary md.
         env:
-          RUNNER_PREFLIGHT_RESULT: ${{ needs.runner-preflight.result }}
-          DR_RESULT: ${{ needs.dr-snapshot.result }}
-          DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
-          L3_RESULT: ${{ needs.nightly-l3.result }}
-          LIVE_RESULT: ${{ needs.paper-v2-live.result }}
-          CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.result }}
+          RUNNER_PREFLIGHT_RESULT: ${{ needs.runner-preflight.outputs.background_admitted == 'false' && 'deferred' || needs.runner-preflight.result }}
+          DR_RESULT: ${{ needs.dr-snapshot.outputs.background_admitted == 'false' && 'deferred' || needs.dr-snapshot.result }}
+          DR_VALIDATE_RESULT: ${{ needs.dr-validate.outputs.background_admitted == 'false' && 'deferred' || needs.dr-validate.result }}
+          L3_RESULT: ${{ needs.nightly-l3.outputs.background_admitted == 'false' && 'deferred' || needs.nightly-l3.result }}
+          LIVE_RESULT: ${{ needs.paper-v2-live.outputs.background_admitted == 'false' && 'deferred' || needs.paper-v2-live.result }}
+          CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.outputs.background_admitted == 'false' && 'deferred' || needs.code-intelligence-weekly.result }}
           RUN_DR_INPUT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_dr }}
           RUN_L3_INPUT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_nightly_l3 }}
           RUN_LIVE_INPUT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_paper_v2_live }}
@@ -1197,12 +1298,12 @@ jobs:
         if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
-          RUNNER_PREFLIGHT_RESULT: ${{ needs.runner-preflight.result }}
-          DR_RESULT: ${{ needs.dr-snapshot.result }}
-          DR_VALIDATE_RESULT: ${{ needs.dr-validate.result }}
-          L3_RESULT: ${{ needs.nightly-l3.result }}
-          LIVE_RESULT: ${{ needs.paper-v2-live.result }}
-          CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.result }}
+          RUNNER_PREFLIGHT_RESULT: ${{ needs.runner-preflight.outputs.background_admitted == 'false' && 'deferred' || needs.runner-preflight.result }}
+          DR_RESULT: ${{ needs.dr-snapshot.outputs.background_admitted == 'false' && 'deferred' || needs.dr-snapshot.result }}
+          DR_VALIDATE_RESULT: ${{ needs.dr-validate.outputs.background_admitted == 'false' && 'deferred' || needs.dr-validate.result }}
+          L3_RESULT: ${{ needs.nightly-l3.outputs.background_admitted == 'false' && 'deferred' || needs.nightly-l3.result }}
+          LIVE_RESULT: ${{ needs.paper-v2-live.outputs.background_admitted == 'false' && 'deferred' || needs.paper-v2-live.result }}
+          CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.outputs.background_admitted == 'false' && 'deferred' || needs.code-intelligence-weekly.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           LLM_TRIAGE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode || 'warning_only' }}
           LLM_AUTO_FILE_OPT_IN: ${{ github.event_name == 'workflow_dispatch' && inputs.llm_auto_file_opt_in || false }}
