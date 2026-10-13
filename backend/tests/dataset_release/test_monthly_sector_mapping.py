@@ -326,7 +326,9 @@ def test_unchanged_frozen_history_is_reused_without_historical_rescan(predecesso
     monkeypatch.setattr(subject, "materialize_history_files", unexpected)
     ControlStore.initialize(tmp_path / "control")
     cas = CASStore(tmp_path / "control")
-    factor = cas.put_json({"files": [{"relative_path": "sector_data.h5", "inherited_rows": 100, "month_rows": 10}]})
+    from backend.services.dataset_release.factor_materializer import FACTOR_H5_DATASETS
+    factor = cas.put_json({"files": [{"dataset": name, "inherited_rows": 100, "month_rows": 10}
+                                    for name in (*FACTOR_H5_DATASETS, "static_factors")]})
     prepare = {"prepare_receipt_ref": cas.put_json({"refs": {"factor_receipt": factor.as_dict()}}).as_dict()}
     saved = []
     resume = SimpleNamespace(path=tmp_path / "resume.json", get=lambda key: None,
@@ -353,6 +355,99 @@ def test_history_reuses_same_official_text_code_id_without_taxonomy_backcast(pre
     assert history.payload["effective_intervals"][0]["taxonomy_version"] == "SW2014"
     assert len(history.payload["entries"]) == 132
     assert len({item["l2_code_id"] for item in history.payload["entries"]}) == 131
+
+
+def test_native_factor_receipt_survives_real_history_repair_and_retry(predecessor, tmp_path, monkeypatch):
+    import pandas as pd
+    from backend.services.dataset_release import monthly_industry_history as subject, monthly_build_bridge
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.factor_materializer import FACTOR_H5_DATASETS
+    from backend.services.dataset_release.monthly_build_resume import _signature
+
+    mapping = load_predecessor_sector_mapping(predecessor)["code_map"]
+    current_id = mapping["entries"][0]["l2_code_id"]
+    row = {"canonical_symbol": "000001.SZ", "taxonomy_version": "SW2014", "published_l2_code": "801192.SI",
+           "effective_from": "2018-08-01", "effective_to": "2021-07-29", "known_from": None,
+           "knowledge_time_quality": "FIRST_PUBLICATION_UNVERIFIED", "source_sha256": "a" * 64, "source_row_sha256": "b" * 64}
+    history = subject.IndustryHistoryProjection.build([row], current_map=mapping, authority_sha256="c" * 64)
+    monkeypatch.setattr(subject, "load_frozen_history", lambda *args, **kwargs: history)
+    monkeypatch.setattr(monthly_build_bridge, "load_monthly_predecessor_prefix", lambda **kwargs: None)
+    root = tmp_path / "retained"
+    factor_root = root / "factor_bundle"
+    factor_root.mkdir(parents=True)
+    index = pd.MultiIndex.from_tuples([(pd.Timestamp("2018-08-01"), "000001.SZ"),
+                                      (pd.Timestamp("2026-09-01"), "000001.SZ")], names=["datetime", "instrument"])
+    for name in FACTOR_H5_DATASETS:
+        frame = pd.DataFrame({"untouched": [1., 2.]}, index=index)
+        if name == "sector_data":
+            frame = pd.DataFrame({"l2_code_id": [current_id]}, index=index[1:])
+        frame.to_hdf(factor_root / f"{name}.h5", key="data", format="table")
+    pd.DataFrame({"l2_code_id": [-1, current_id], "untouched": [1., 2.]}, index=index).to_parquet(factor_root / "static_factors.parquet")
+    entries = []
+    for name in (*FACTOR_H5_DATASETS, "static_factors"):
+        path = factor_root / f"{name}.{'parquet' if name == 'static_factors' else 'h5'}"
+        entries.append({"dataset": name, "inherited_rows": 0 if name == "sector_data" else 1, "month_rows": 1,
+                        "size": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                        "target_signature": list(_signature(path))})
+    original_factor = {"schema_version": "aistock_monthly_native_factor_materialization_v1", "files": entries}
+    (factor_root / "factor_checkpoint.json").write_bytes(canonical_json_bytes(original_factor) + b"\n")
+    original_bytes = {path.name: path.read_bytes() for path in factor_root.iterdir()}
+    ControlStore.initialize(tmp_path / "control")
+    cas = CASStore(tmp_path / "control")
+    prepare = {"prepare_receipt_ref": cas.put_json({"refs": {"factor_receipt": cas.put_json(original_factor).as_dict()}}).as_dict()}
+    record = {"binding": {}, "binding_digest": "d" * 64,
+              "files": {f"factor_bundle/{path.name}": list(_signature(path)) for path in factor_root.iterdir()},
+              "steps": {"prepare": cas.put_json(prepare).as_dict(), "dump": {"unchanged": True}, "finalize": {"unchanged": True}}}
+    resume = SimpleNamespace(root=root, path=tmp_path / "resume.json", record=record)
+    resume.get = lambda name: cas.get_json_bounded(resume.record["steps"][name], max_bytes=16 * 1024 * 1024) if name in resume.record["steps"] else None
+    context = SimpleNamespace(plan={}, checkpoint=lambda: None, progress=lambda value: None)
+    actual = subject.apply_retained_history(resume, context=context, compiled=SimpleNamespace(physical_plan={}),
+                                          prepare=prepare, cas=cas, profile=object())
+    nested = cas.get_json_bounded(actual["prepare_receipt_ref"], max_bytes=16 * 1024 * 1024)
+    repaired = cas.get_json_bounded(nested["refs"]["factor_receipt"], max_bytes=16 * 1024 * 1024)
+    by_name = subject.factor_file_receipts(repaired)
+    assert by_name["sector_data.h5"]["inherited_rows"] == 1
+    assert by_name["sector_data.h5"]["month_rows"] == 1
+    assert by_name["static_factors.parquet"]["sha256"] != entries[-1]["sha256"]
+    proof = resume.get("industry-history")
+    assert proof["status"] == "PASS" and proof["sector_row_count"] == 2
+    assert proof["database_write"] is False
+    scratch = root.parent / f".{root.name}.industry-history-{history.sha256}"
+    for name in ("sector_data.h5", "static_factors.parquet", "factor_checkpoint.json"):
+        assert (scratch / (name + ".before")).read_bytes() == original_bytes[name]
+    for name in FACTOR_H5_DATASETS:
+        if name != "sector_data":
+            assert (factor_root / f"{name}.h5").read_bytes() == original_bytes[f"{name}.h5"]
+    assert resume.record["steps"]["dump"] == record["steps"]["dump"]
+    signatures = {path.name: _signature(path) for path in factor_root.iterdir()}
+    assert subject.apply_retained_history(resume, context=context, compiled=SimpleNamespace(physical_plan={}),
+                                         prepare=actual, cas=cas, profile=object()) == actual
+    assert signatures == {path.name: _signature(path) for path in factor_root.iterdir()}
+
+    # Exercise the downstream BUILD proof binding using the actual repair receipt.
+    # External price/consumer QA is independent of this receipt-shape regression.
+    from backend.services.dataset_release import build_stage, candidate_consumer_smoke, monthly_legacy_validation
+    monkeypatch.setattr(monthly_build_bridge, "load_monthly_predecessor_prefix", lambda **kwargs: predecessor)
+    report = {"verified_output_files": {}, "physical_month_ranges": {}}
+    monkeypatch.setattr(monthly_legacy_validation, "validate_qlib_month", lambda **kwargs: report)
+    monkeypatch.setattr(monthly_legacy_validation, "validate_aggregate_month_receipt", lambda **kwargs: report)
+    monkeypatch.setattr(candidate_consumer_smoke, "validate_candidate_consumer_smoke_receipt", lambda *args, **kwargs: {})
+    monkeypatch.setattr(build_stage, "_prerequisite_json", lambda *args: {})
+    invocation = SimpleNamespace(cas=cas, staging_root=root, run_id="unit", attempt_id="unit", attempt_fence="unit",
+        release_id="unit", release_digest="e" * 64, staging_relative_path=root.name,
+        build_inputs={"monthly_legacy_predecessor": {}, "source_bundle_sha256": "f" * 64},
+        plan={"industry_history_projection_sha256": history.sha256},
+        profile=SimpleNamespace(profile="qe_hmm_full_v2", index_codes=(), stage_timeouts_seconds={"consumer": 600}))
+    def validate(factor):
+        return build_stage._validate_native_month(invocation,
+            pit=SimpleNamespace(cutoff=date(2026, 9, 30), spans_sha256="e" * 64), factor_receipt=factor,
+            index_receipt={}, daily_receipt={}, minute_receipt={}, ledger=SimpleNamespace(chunk=lambda value: None),
+            checkpoint=lambda: None)
+    assert validate(repaired)["validation_status"] == "PASS"
+    bad = {**repaired, "industry_history_projection_ref": cas.put_json({**proof, "sector_row_count": 99}).as_dict()}
+    with pytest.raises(build_stage.CandidateBuildStageError, match="row count"):
+        validate(bad)
 
 
 def test_history_extends_after_highest_shared_id_without_densifying_catalog(predecessor):
