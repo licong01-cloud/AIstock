@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Automatic full/incremental/retry Nightly respects the existing explicit automation prohibition, reports omitted plans without claiming pass, keeps allowed tests and unknown retry fail-closed, and leaves local/manual plan invocation unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1875-nightly-selects-explicitly-manual-only-plans-despite-allow-github-action.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
       "scripts/nightly_adaptive_scheduler.py",
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      "tests/aistock_validation/bugs/20261013_BUG-1875-nightly-selects-explicitly-manual-only-plans-despite-allow-github-action.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/nightly_adaptive_scheduler.py",
@@ -107,10 +113,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
