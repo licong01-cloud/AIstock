@@ -191,8 +191,8 @@
   },
   "first_seen_at": "2026-10-13T05:04:06.305247Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a533f2f6f4d7e04421d36352f6bc51e764cec40f",
+  "fixed_at": "2026-10-13T05:29:31Z",
   "github_issue_number": 5980,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5980",
   "last_seen_at": "2026-10-13T05:04:06.305247Z",
@@ -200,6 +200,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5984",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -251,6 +252,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -262,7 +264,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1873",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "6fdb0ce0d98f86fe",
+    "recorded_at": "2026-10-13T05:30:12.527623Z",
+    "runtime_contract_digest": "4778f8503704ce6adcfc5d5b771cc372c76ed165797ac47df356da2668039fe5",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c1941c18606d2822e141df4f5f57700e2aafca51",
+    "source_merge_commit": "a533f2f6f4d7e04421d36352f6bc51e764cec40f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5984",
+    "validation_evidence": [
+      "validation-receipt: id=c5e0551406588efc commit=c1941c18606d2822e141df4f5f57700e2aafca51 kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_replay_exclusion_cancels_only_side_effect_free_foreign_daily_run backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_closed_native_historical_executor_runs_real_broker_and_preserves_residual -q -p no:cacheprovider` result=`4 passed; initial 39-case matrix passed on f3e3c863426c485e7afe2ec5f4772fe83c97df7d`",
+      "validation-receipt: id=5bd281f1eb5e0654 commit=c1941c18606d2822e141df4f5f57700e2aafca51 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py` result=`passed; changed-file Ruff and diff check passed`"
+    ],
+    "validation_evidence_digest": "fd2cffdc9079418ff14d054ad3a4d8ec5de1da2d87e4cf52d6b87199b7f1034c"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -271,6 +295,10 @@
     "fingerprint": "cbd1d97bbe00da6bbec006a4",
     "source_event_id": "FE-20261013-cbd1d97bbe00"
   },
+  "validation_evidence": [
+    "validation-receipt: id=c5e0551406588efc commit=c1941c18606d2822e141df4f5f57700e2aafca51 kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_replay_exclusion_cancels_only_side_effect_free_foreign_daily_run backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_closed_native_historical_executor_runs_real_broker_and_preserves_residual -q -p no:cacheprovider` result=`4 passed; initial 39-case matrix passed on f3e3c863426c485e7afe2ec5f4772fe83c97df7d`",
+    "validation-receipt: id=5bd281f1eb5e0654 commit=c1941c18606d2822e141df4f5f57700e2aafca51 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py` result=`passed; changed-file Ruff and diff check passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
