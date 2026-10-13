@@ -40,12 +40,18 @@
   ],
   "expected": "Explicit LGBM num_threads overrides must reach task.model.kwargs only; defaults, seeds, dataset, time splits, portfolio and minute TWAP execution must remain unchanged, and unknown strategy keys must still fail closed.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1856-qe-lgbm-num-threads-override-is-misrouted-into-strategy-kwargs.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/config_composer.py",
-      "backend/tests/quantevolver/test_sector_risk_overlay_config.py"
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1856-qe-lgbm-num-threads-override-is-misrouted-into-strategy-kwargs.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/config_composer.py",
@@ -129,17 +135,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Isolated pytest process loaded tracked ConfigComposer source SHA256=0c050441fe292b0da961f3b437aa3ce6009e9a7f643a660f07e3a572e0d83485; rtk pytest backend/tests/quantevolver/test_sector_risk_overlay_config.py -q -k 'lgbm_num_threads or non_lgbm_strategy_semantics' -> 4 passed. Native LGBModel receives num_threads=12 only in task.model.kwargs; other executable configuration remains equal to the unchanged baseline, repeated requests do not mutate catalog/default kwargs, unknown strategy keys still raise, and non-LGB catalog strategy kwargs are preserved. No experiment, training, backtest, dataset write or service process control performed. The existing running backend is not claimed to have loaded this fix."
+      "Isolated pytest process loaded tracked ConfigComposer source SHA256=0c050441fe292b0da961f3b437aa3ce6009e9a7f643a660f07e3a572e0d83485; rtk pytest backend/tests/quantevolver/test_sector_risk_overlay_config.py -q -k 'lgbm_num_threads or non_lgbm_strategy_semantics' -> 4 passed. Native LGBModel receives num_threads=12 only in task.model.kwargs; other executable configuration remains equal to the unchanged baseline, repeated requests do not mutate catalog/default kwargs, unknown strategy keys still raise, and non-LGB catalog strategy kwargs are preserved. No experiment, training, backtest, dataset write or service process control performed. The existing running backend is not claimed to have loaded this fix.",
+      "Fresh isolated pytest loaded tracked ConfigComposer SHA256=0c050441fe292b0da961f3b437aa3ce6009e9a7f643a660f07e3a572e0d83485 at task HEAD 1307a7761d98712171726d1cdc3f2b7b08c6ab14; four exact LGBM/non-LGBM routing and executable YAML equality tests passed; no QE training, backtest or user-service process control."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
