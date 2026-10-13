@@ -493,3 +493,78 @@ def test_resolve_github_token_reports_gh_subprocess_failure(monkeypatch) -> None
 
     assert token is None
     assert source == "gh_auth_error:TimeoutExpired"
+
+
+@pytest.mark.parametrize("utc,budget,event,admitted", [
+    ("2026-10-12T19:07:00+00:00", 180, "schedule", True),
+    ("2026-10-12T21:00:00+00:00", 120, "schedule", True),
+    ("2026-10-12T21:00:01+00:00", 120, "schedule", False),
+    ("2026-10-13T01:13:43+00:00", 180, "schedule", False),
+    ("2026-10-12T15:59:59+00:00", 15, "schedule", False),
+    ("2026-10-13T01:13:43+00:00", 180, "workflow_dispatch", True),
+])
+def test_background_admission_boundaries(utc, budget, event, admitted):
+    receipt = health.scheduled_admission(
+        event=event, budget_minutes=budget, source_head="a" * 40,
+        run_id="123", now=datetime.fromisoformat(utc),
+    )
+    assert receipt["admitted"] is admitted
+    assert receipt["validation_status"] == "not_executed"
+    assert receipt["advances_validation_watermark"] is False
+    assert receipt["source_head"] == "a" * 40
+
+
+@pytest.mark.parametrize("field,value", [
+    ("event", "pull_request"), ("budget_minutes", 0),
+    ("budget_minutes", 421), ("source_head", "main"),
+    ("run_id", ""), ("now", datetime(2026, 10, 13)),
+])
+def test_background_admission_rejects_invalid_context(field, value):
+    kwargs = dict(event="schedule", budget_minutes=60, source_head="a" * 40,
+                  run_id="123", now=datetime(2026, 10, 13, tzinfo=timezone.utc))
+    kwargs[field] = value
+    with pytest.raises(ValueError):
+        health.scheduled_admission(**kwargs)
+
+
+def test_background_admission_cli_is_local_and_records_deferral(monkeypatch, tmp_path):
+    class Clock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 13, 1, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(health, "datetime", Clock)
+    monkeypatch.setattr(health, "resolve_github_token", lambda: pytest.fail("network/auth used"))
+    monkeypatch.setenv("GITHUB_SHA", "a" * 40)
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_OUTPUT", str(tmp_path / "outputs"))
+    monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(tmp_path / "summary"))
+    output = tmp_path / "receipt.json"
+    assert health.main(["scheduled-admission", "--event", "schedule",
+                        "--budget-minutes", "420", "--output-json", str(output)]) == 0
+    receipt = json.loads(output.read_text(encoding="utf-8"))
+    assert receipt["admitted"] is False
+    assert "background_admitted=false" in (tmp_path / "outputs").read_text()
+    assert "not_executed" in (tmp_path / "summary").read_text()
+
+
+def test_background_workflows_recheck_and_skip_every_heavy_step():
+    import yaml
+
+    root = Path(__file__).resolve().parents[3]
+    for filename in ("nightly.yml", "codeql.yml", "code-intelligence-refresh.yml"):
+        jobs = yaml.safe_load((root / ".github/workflows" / filename).read_text(encoding="utf-8"))["jobs"]
+        preflight = jobs.get("runner-preflight", jobs.get("security-runner-preflight"))
+        assert "background_admitted" in preflight["outputs"]
+        for job in jobs.values():
+            if not isinstance(job["runs-on"], list):
+                continue
+            steps = job["steps"]
+            assert steps[0]["id"] == "background_window"
+            assert f'--budget-minutes {job["timeout-minutes"]}' in steps[0]["run"] or filename == "nightly.yml"
+            assert "background_admitted == 'true'" in job["if"]
+            assert all("steps.background_window.outputs.background_admitted == 'true'" in step["if"]
+                       for step in steps[1:])
+    nightly = (root / ".github/workflows/nightly.yml").read_text(encoding="utf-8")
+    assert "needs.nightly-l3.outputs.background_admitted != 'false'" in nightly
+    assert "&& 'deferred' || needs.nightly-l3.result" in nightly
