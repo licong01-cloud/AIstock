@@ -19,7 +19,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1854",
-  "closed_at": null,
+  "closed_at": "2026-10-13T01:27:09.271764Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -223,10 +223,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1854\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1854",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "0df2b35ef18affb20682849374d0a6d43c3129278a7b6171d0c4d975ed76f1d3",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "b183d5e44d1371fb7ff75a782eda9aabe8c9b7fe",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-13T01:25:20.312533Z",
+      "mode": "read_only",
+      "observed_identity": "76a8661bef52b7fabe2476ecc8af5bedfef308e1",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c257c5c3c84362fee270145b661966549a3fb763b90297c73b98fe6959d813d5",
+      "receipt_sha256": "47aac3a4a866d4e91d935ce09a75554490d115661994a96bee15ad6ece21f577",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "81c6e39e250486bf6321a2e8ea94e2affabfeac7bf29f27cdeee73864370605d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -260,7 +282,7 @@
     ],
     "validation_evidence_digest": "8e3b767544ea6a226b57830ce87e124b4ec4acebaa5c78acb33c4e4732a87c80"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -273,7 +295,8 @@
     "validation-receipt: id=e264cbb1a6fb021e commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
     "validation-receipt: id=61c8c11f9545b232 commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
     "validation-receipt: id=484ed50c2e8b10ef commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_unified_v2.py::test_history_binding_uses_readonly_snapshot_and_never_changes_source backend/tests/dataset_release/test_monthly_build_resume.py::test_interrupted_history_commit_keeps_price_exports_and_finishes_without_writers -q` result=`5 passed`",
-    "validation-receipt: id=8b18f6e4d9ceeb79 commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py::test_history_extends_after_highest_shared_id_without_densifying_catalog -q` result=`1 passed`"
+    "validation-receipt: id=8b18f6e4d9ceeb79 commit=638c929c2360fc62a4fadd39e61220f4f79d8699 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py::test_history_extends_after_highest_shared_id_without_densifying_catalog -q` result=`1 passed`",
+    "Read-only post-restart verify passed; source merge b183d5e44 is included in observed runtime 76a8661be; formal industry-history API BOUND canonical 80c32cc24bde74381db9db80fc2fbadadaef22bdb072d259971a273f29883fe7"
   ],
   "verification_budget": {
     "budget": "standard",
