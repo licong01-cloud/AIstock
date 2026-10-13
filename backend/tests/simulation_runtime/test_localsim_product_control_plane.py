@@ -13,6 +13,7 @@ from backend.services.simulation_runtime.localsim_product_control import (
     LocalSimAccountCreateRequestV1,
     LocalSimBulkLifecycleRequestV1,
     LocalSimHistoricalSourceResolutionV1,
+    LocalSimHistoricalSourceAuthority,
     LocalSimProductControlPlaneService,
     LocalSimReplayCreateRequestV1,
     LocalSimSelectionLinkContextV1,
@@ -30,6 +31,31 @@ from backend.services.trading_core.errors import InvalidStateTransitionError
 
 NOW = datetime(2026, 8, 31, 5, 0, tzinfo=UTC)
 MANIFEST = "a" * 64
+
+
+def test_frozen_historical_range_can_resume_across_days_without_relaxing_create_or_current_day_guard() -> None:
+    days = (date(2026, 8, 27), date(2026, 8, 28), date(2026, 8, 31), date(2026, 9, 1))
+
+    class Calendar:
+        def list_trading_days(self, start, end):
+            return tuple(day for day in days if start <= day <= end)
+
+        def latest_trading_day_on_or_before(self, value):
+            return max(day for day in days if day <= value)
+
+    authority = LocalSimHistoricalSourceAuthority(
+        calendar=Calendar(), clock=lambda: datetime(2026, 9, 2, 0, 0, tzinfo=UTC),
+    )
+    kwargs = {"historical_source_id": "market.kline_minute_raw.v1",
+              "start_trade_date": days[0], "end_trade_date": days[1]}
+    with pytest.raises(InvalidStateTransitionError, match="latest completed"):
+        authority.resolve(**kwargs)
+    old = authority.resolve(**kwargs, require_latest_completed=False)
+    latest = authority.resolve(**{**kwargs, "end_trade_date": days[-1]})
+    assert old.trading_days == days[:2] and old.latest_completed_trade_date == days[-1]
+    assert old.historical_source_sha256 == latest.historical_source_sha256
+    with pytest.raises(InvalidStateTransitionError, match="current or future"):
+        authority.resolve(**{**kwargs, "end_trade_date": date(2026, 9, 2)}, require_latest_completed=False)
 
 
 class _Readiness:

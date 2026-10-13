@@ -246,7 +246,8 @@ class LocalSimHistoricalSourceResolutionV1:
 
 class LocalSimHistoricalSourceAuthorityProtocol(Protocol):
     def resolve(
-        self, *, historical_source_id: str, start_trade_date: date, end_trade_date: date
+        self, *, historical_source_id: str, start_trade_date: date, end_trade_date: date,
+        require_latest_completed: bool = True,
     ) -> LocalSimHistoricalSourceResolutionV1: ...
 
 
@@ -262,7 +263,8 @@ class LocalSimHistoricalSourceAuthority:
         self.clock = clock or (lambda: datetime.now(ZoneInfo("Asia/Shanghai")))
 
     def resolve(
-        self, *, historical_source_id: str, start_trade_date: date, end_trade_date: date
+        self, *, historical_source_id: str, start_trade_date: date, end_trade_date: date,
+        require_latest_completed: bool = True,
     ) -> LocalSimHistoricalSourceResolutionV1:
         source_id = str(historical_source_id or "").strip()
         if source_id != LOCALSIM_HISTORICAL_SOURCE_ID:
@@ -288,7 +290,7 @@ class LocalSimHistoricalSourceAuthority:
                 "LocalSIM historical source has no completed trading day",
                 context={"reason_code": "LOCALSIM_REPLAY_COMPLETED_DAY_UNAVAILABLE"},
             )
-        if end_trade_date != latest_completed:
+        if require_latest_completed and end_trade_date != latest_completed:
             raise InvalidStateTransitionError(
                 "LocalSIM catch-up replay must end at the latest completed trading day",
                 context={

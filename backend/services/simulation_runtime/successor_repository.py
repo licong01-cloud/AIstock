@@ -177,6 +177,11 @@ class LocalSimSuccessorRepositoryProtocol(Protocol):
         updated_at: datetime,
     ) -> LocalSimReplayJobV1: ...
 
+    def create_replay_catchup_successor(
+        self, *, replay_job_id: str, expected_version: int, release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding, successor_job: LocalSimReplayJobV1, updated_at: datetime,
+    ) -> LocalSimReplayJobV1: ...
+
     def create_replay_live_successor(
         self,
         *,
@@ -951,6 +956,72 @@ class LocalSimSuccessorRepository:
                     )
                 return self._select_replay(cur, replay_job_id, for_update=True)
 
+    def create_replay_catchup_successor(
+        self, *, replay_job_id: str, expected_version: int, release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding, successor_job: LocalSimReplayJobV1, updated_at: datetime,
+    ) -> LocalSimReplayJobV1:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                current = self._select_replay(cur, replay_job_id, for_update=True)
+                account = self._select_account(cur, current.simulation_account_id, for_update=True)
+                self._validate_native_ledger_scope(
+                    account=account, ledger_scope=self._select_ledger_scope(cur, current.simulation_account_id),
+                )
+                base_release = self._select_release(cur, current.release_id)
+                self._validate_replay_catchup_source(
+                    current=current, account=account, base_release=base_release,
+                    release=release, binding=binding, successor_job=successor_job,
+                )
+                cur.execute(
+                    """SELECT j.* FROM paper_v2.localsim_replay_job_v1 j
+                       JOIN strategy_pkg.strategy_runtime_release r ON r.release_id = j.release_id
+                       WHERE j.simulation_account_id = %s AND r.base_release_id = %s
+                         AND r.release_config_json->'metadata'->>'localsim_replay_predecessor_id' = %s
+                       LIMIT 2""",
+                    (current.simulation_account_id, current.release_id, current.replay_job_id),
+                )
+                children = cur.fetchall()
+                if len(children) > 1:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay catch-up lineage has multiple successors",
+                        context={"reason_code": "LOCALSIM_REPLAY_CATCHUP_LINEAGE_FORK"},
+                    )
+                if children:
+                    persisted = self._replay_from_row(children[0])
+                    self._validate_replay_catchup_source(
+                        current=current, account=account, base_release=base_release,
+                        release=self._select_release(cur, persisted.release_id),
+                        binding=self._select_binding(cur, persisted.binding_id), successor_job=persisted,
+                    )
+                    return persisted
+                if current.version != expected_version:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay catch-up predecessor CAS failed",
+                        context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+                    )
+                self._insert_release(cur, release)
+                self._insert_binding(cur, binding)
+                self._insert_replay(cur, successor_job)
+                cur.execute(
+                    """UPDATE paper_v2.localsim_replay_job_v1
+                       SET status = 'CAUGHT_UP', version = version + 1, updated_at = %s
+                       WHERE replay_job_id = %s AND version = %s""",
+                    (updated_at, replay_job_id, expected_version),
+                )
+                if cur.rowcount != 1:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay catch-up predecessor CAS failed",
+                        context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+                    )
+                persisted = self._select_replay(cur, successor_job.replay_job_id, for_update=True)
+                for expected, actual, name in (
+                    (release, self._select_release(cur, release.release_id), "release"),
+                    (binding, self._select_binding(cur, binding.binding_id), "binding"),
+                    (successor_job, persisted, "replay_job"),
+                ):
+                    self._require_same_identity(expected, actual, object_name=name)
+                return persisted
+
     def create_replay_live_successor(
         self,
         *,
@@ -1442,6 +1513,49 @@ class LocalSimSuccessorRepository:
             raise InvalidStateTransitionError(
                 "LocalSIM replay bundle identities are not exact",
                 context={"reason_code": "LOCALSIM_REPLAY_BUNDLE_IDENTITY_MISMATCH"},
+            )
+
+    @staticmethod
+    def _validate_replay_catchup_source(
+        *, current: LocalSimReplayJobV1, account: SimulationAccountV1,
+        base_release: StrategyRuntimeRelease, release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding, successor_job: LocalSimReplayJobV1,
+    ) -> None:
+        LocalSimSuccessorRepository._validate_new_account_binding(account=account, release=release, binding=binding)
+        LocalSimSuccessorRepository._validate_replay_bundle(
+            account=account, release=release, binding=binding, replay_job=successor_job,
+        )
+        product_fields = (
+            "package_id", "manifest_sha256", "runtime_profile_id", "runtime_profile_version_id",
+            "runtime_profile_sha256", "daily_strategy_profile_version_id", "execution_policy_version_id",
+            "execution_policy_sha256", "tail_policy_version_id", "tail_policy_sha256",
+        )
+        if (
+            account.status is not SimulationAccountStatus.ACTIVE
+            or current.status not in {LocalSimReplayStatus.CAUGHT_UP, LocalSimReplayStatus.READY_FOR_LIVE}
+            or current.completed_trade_date != current.end_trade_date
+            or current.next_trade_date is not None
+            or current.live_release_id is not None
+            or current.live_binding_id is not None
+            or successor_job.simulation_account_id != current.simulation_account_id
+            or successor_job.start_trade_date <= current.end_trade_date
+            or binding.effective_from != successor_job.start_trade_date
+            or release.effective_to != successor_job.end_trade_date
+            or release.base_release_id != current.release_id
+            or (release.release_config_json.get("metadata") or {}).get("localsim_replay_predecessor_id")
+            != current.replay_job_id
+            or (release.release_config_json.get("metadata") or {}).get("localsim_replay_range") != {
+                "start_trade_date": successor_job.start_trade_date.isoformat(),
+                "end_trade_date": successor_job.end_trade_date.isoformat(),
+            }
+            or successor_job.historical_source_id != current.historical_source_id
+            or successor_job.historical_source_sha256 != current.historical_source_sha256
+            or successor_job.day_engine_contract_id != current.day_engine_contract_id
+            or any(getattr(release, key) != getattr(base_release, key) for key in product_fields)
+        ):
+            raise InvalidStateTransitionError(
+                "LocalSIM replay catch-up successor must continue the same frozen account and product",
+                context={"reason_code": "LOCALSIM_REPLAY_CATCHUP_IDENTITY_MISMATCH"},
             )
 
     @staticmethod
@@ -2171,6 +2285,67 @@ class InMemoryLocalSimSuccessorRepository:
         updated = LocalSimReplayJobV1.model_validate(updated.model_dump())
         self.replay_jobs[replay_job_id] = updated
         return updated
+
+    def create_replay_catchup_successor(
+        self, *, replay_job_id: str, expected_version: int, release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding, successor_job: LocalSimReplayJobV1, updated_at: datetime,
+    ) -> LocalSimReplayJobV1:
+        current = self.get_replay_job(replay_job_id)
+        account = self.get_account(current.simulation_account_id)
+        LocalSimSuccessorRepository._validate_native_ledger_scope(
+            account=account, ledger_scope=self.get_ledger_scope(current.simulation_account_id),
+        )
+        LocalSimSuccessorRepository._validate_replay_catchup_source(
+            current=current, account=account, base_release=self.get_release(current.release_id),
+            release=release, binding=binding, successor_job=successor_job,
+        )
+        children = [
+            candidate for candidate in self.replay_jobs.values()
+            if candidate.simulation_account_id == current.simulation_account_id
+            and self.get_release(candidate.release_id).base_release_id == current.release_id
+            and (self.get_release(candidate.release_id).release_config_json.get("metadata") or {}).get(
+                "localsim_replay_predecessor_id"
+            ) == current.replay_job_id
+        ]
+        if len(children) > 1:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay catch-up lineage has multiple successors",
+                context={"reason_code": "LOCALSIM_REPLAY_CATCHUP_LINEAGE_FORK"},
+            )
+        if children:
+            child = children[0]
+            LocalSimSuccessorRepository._validate_replay_catchup_source(
+                current=current, account=account, base_release=self.get_release(current.release_id),
+                release=self.get_release(child.release_id), binding=self.get_binding(child.binding_id),
+                successor_job=child,
+            )
+            return child
+        if current.version != expected_version:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay catch-up predecessor CAS failed",
+                context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+            )
+        snapshot = deepcopy(self.__dict__)
+        try:
+            self._save_immutable(
+                values=self.releases, hash_index=self.release_hash_index,
+                object_id=release.release_id, object_hash=release.release_hash or "",
+                value=release, object_name="release",
+            )
+            self._save_immutable(
+                values=self.bindings, hash_index=self.binding_hash_index,
+                object_id=binding.binding_id, object_hash=binding.binding_hash or "",
+                value=binding, object_name="binding",
+            )
+            persisted = self.save_replay_job(successor_job)
+            self.transition_replay_job(
+                replay_job_id=current.replay_job_id, expected_version=current.version,
+                update={"status": LocalSimReplayStatus.CAUGHT_UP}, updated_at=updated_at,
+            )
+            return persisted
+        except Exception:
+            self.__dict__.update(snapshot)
+            raise
 
     def create_replay_live_successor(
         self,
