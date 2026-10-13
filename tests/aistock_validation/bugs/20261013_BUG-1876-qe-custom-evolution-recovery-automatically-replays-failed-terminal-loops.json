@@ -49,13 +49,20 @@
   ],
   "expected": "Automatic recovery dispatches only eligible pending work; terminal outcomes remain immutable unless explicitly retried; active remote work is adopted without duplicate execution; exact retry queue advances within node limits.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/test_qe_evolution_scheduler.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1876-qe-custom-evolution-recovery-automatically-replays-failed-terminal-loops.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/quantevolver/qe_evolution_service.py",
-      "backend/tests/unified_engine/test_qe_custom_evo_status.py",
-      "backend/tests/unified_engine/test_qe_evolution_service_unified_only.py"
+      "backend/tests/test_qe_evolution_scheduler.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1876-qe-custom-evolution-recovery-automatically-replays-failed-terminal-loops.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/qe_evolution_service.py",
@@ -156,16 +163,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [
-      "Fresh isolated pytest process loaded tracked qe_evolution_service.py SHA256=77f09371a2f6adb091efebd82d8808b126f7dd61cb3b2b9a40e894af34be5cf7. Targeted automatic-dispatch, terminal/active/unknown-state preservation, atomic concurrent-claim, capacity-wait and unchanged-wakeup contracts: 45 passed. Queued pending-to-failed transition contracts: 2 passed. No experiment, training, backtest, dataset write, production DDL/DML, dependency install or service control performed. The running backend has not loaded this source fix."
-    ],
-    "inference_basis": "planned_scope",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
+    "fresh_process_evidence": [
+      "Fresh isolated pytest process loaded tracked qe_evolution_service.py SHA256=77f09371a2f6adb091efebd82d8808b126f7dd61cb3b2b9a40e894af34be5cf7. Targeted automatic-dispatch, terminal/active/unknown-state preservation, atomic concurrent-claim, capacity-wait and unchanged-wakeup contracts: 45 passed. Queued pending-to-failed transition contracts: 2 passed. No experiment, training, backtest, dataset write, production DDL/DML, dependency install or service control performed. The running backend has not loaded this source fix.",
+      "Fresh isolated pytest process loaded persistent qe_evolution_service.py SHA256 77f09371a2f6adb091efebd82d8808b126f7dd61cb3b2b9a40e894af34be5cf7. 47 automatic-dispatch/queue/CAS regressions passed at source HEAD 41bc857 (same source hash as final code HEAD 14226be). No QE experiment, training, data write or service control. User backend restart remains pending."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
