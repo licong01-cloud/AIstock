@@ -3480,7 +3480,7 @@ class AdvisoryProgramService:
                 if execution_trade_date is not None:
                     exited = replace(exited, evidence_json={**exited.evidence_json, "reference_execution": {
                         "trade_date": execution_trade_date.isoformat(), "price": decision.exit_price,
-                        "price_basis": program.exit_price_basis, "is_reference_not_broker": True,
+                        "price_basis": program.exit_price_basis, "execution_evidence_level": "REFERENCE_HYPOTHETICAL",
                     }})
                 snapshots.append(exited)
                 decisions.append(

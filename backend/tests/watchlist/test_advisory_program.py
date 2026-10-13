@@ -509,8 +509,10 @@ def test_replay_uses_default_next_open_entry_basis_and_records_win_rate() -> Non
     episode = replay["episodes"][0]
     assert episode["entry_price_basis"] == PRICE_BASIS_NEXT_OPEN
     assert episode["effective_entry_date"] == "2026-06-02"
-    assert replay["summary"]["win_rate"] == 1.0
-    assert replay["summary"]["avg_return_bps"] == pytest.approx(1000.0)
+    assert episode["return_bps"] == pytest.approx(1000.0)  # holding mark, not a settled exit
+    assert replay["summary"]["win_rate"] is None
+    assert replay["summary"]["avg_return_bps"] is None
+    assert replay["summary"]["metric_evaluable_count"] == 0
 
 
 def test_replay_can_run_real_selection_service_when_fixture_candidates_are_absent() -> None:
@@ -554,7 +556,8 @@ def test_replay_can_run_real_selection_service_when_fixture_candidates_are_absen
     )
 
     assert len(replay["daily_reviews"]) == 2
-    assert replay["summary"]["win_rate"] == 1.0
+    assert replay["summary"]["win_rate"] is None
+    assert replay["summary"]["settled"]["gross"]["sample_count"] == 0
 
 
 def test_replay_hydrates_missing_active_market_marks_like_daily_review(monkeypatch) -> None:

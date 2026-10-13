@@ -83,6 +83,8 @@ P2 的真实参考组合净值、组合回撤/恢复、日期聚类置信区间�
 3. API/SQL 审核：直接测试发现 repository.list_programs 不接受 limit/offset，修复后仅重跑失败 node；实际只读 SQL 暴露跨 chunk 查询超时及 list-version 字段名错误，改为明确常量日期边界/MATERIALIZED 和 version_status，再验证通过。
 4. 最后口径审核：显式区分持仓原价差与五日复权价格回报、最新记录政策与历史入场绑定、名单配对数与真实替换；补齐两接口的费用参数与有限值校验，定向验证通过。同步流水线修复后，直接 API test 将真实响应交给新运行态语义验证器，已结算、显式费用及缺收盘行情 UNKNOWN 三类响应均通过；这只验证源码/接口合同兼容，不是运行后端已激活。未放宽冻结选股/执行政策或模块边界。
 
+PR #5941 首次完整模块 CI 中，watchlist 125 case 通过、4 case 失败：三条旧回放断言仍把 ACTIVE 浮盈计入已结算胜率，按 v2 口径修订并保留原入场价/生效日/持仓估值断言；另一个禁止下单源码检查被新增参考执行标签名触发，将标签统一为既有 `execution_evidence_level=REFERENCE_HYPOTHETICAL`，原禁止下单检查保留。新增测试修改范围仅 `backend/tests/watchlist/test_advisory_api.py`，已先在 BUG scope 和任务卡登记；未修改其它业务模块或公共流水线。修复后仅重跑这四个失败 node 与受影响的正式前向执行 node，完整模块再次交新 HEAD 的 CI。
+
 本地最终相关小矩阵 15 case 中首次 14 通过、1 个 API case 失败；失败点修复后定向重跑通过，再追加费用断言的两个直接 case 通过。没有为机械格式/文档修改重复运行完整套件。全套 advisory_historical_range_backend / watchlist_backend 仍交 CI/nightly，本节不声称全套已经通过。
 
 真实数据库验证使用显式只读事务、20 秒 statement_timeout，rollback 后关闭连接。DEV 的四查询及结算查询语法/schema 验证通过，DEV 无业务行情样本，不将其等同业务数据验证。生产只读业务验证通过：旧 multi 已结算 148 笔，旧 single 已结算 156 笔，后者未来退出 5 笔已排除；两个新包各 20 笔未实现估值，尚无已结算笔。四 Program 比较约 0.772 秒：五日成熟数分别 149、155、0、0，未成熟数 15、20、20、20；全四包无共同入场日期，应返回不可比较，不称缺数据或策略优劣。以上是任务源码的只读计算，不是运行后端已激活证明。
