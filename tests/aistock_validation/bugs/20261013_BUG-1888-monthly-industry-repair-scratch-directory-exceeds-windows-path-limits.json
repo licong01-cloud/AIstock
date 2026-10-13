@@ -1,6 +1,8 @@
 {
   "actual": "September durable operation dmr_63a313d97fd046a38d5a876265565014 attempt 266 failed at monthly_industry_history.materialize_history_files scratch.mkdir errno=22 after adding frozen independent quote and PIT-cohort source identity. The scratch name concatenates full candidate basename and two 64-character digests. Preserve completed day/minute/index and earlier industry outputs; shorten portable private scratch identity without dropping digest closure or atomic recovery. Inspect the subsequent consumer-smoke binding fence in the same affected repair path. No model, active profile, database, service, dependency or experiment changes.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_industry_history.py",
+    "backend/tests/dataset_release/test_monthly_sector_mapping.py",
     "tests/aistock_validation/bugs/20261013_BUG-1888-monthly-industry-repair-scratch-directory-exceeds-windows-path-limits.json"
   ],
   "assigned_agent": null,
@@ -22,7 +24,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Use a portable fixed-length scratch name bound to the full retained root, projection and context identities. Verify and recover valid legacy output receipts; preserve completed day/minute/index and unrelated factor files. Resume the existing durable operation after user-owned backend restart; no database or active profile writes.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -62,15 +64,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "fresh_process_evidence": [
+      "RED portable-name test failed before implementation. GREEN fresh Python process: 76 passed, 1 intentional skip across monthly sector mapping, mature BUILD retry/fence binding and supervised consumer smoke. Includes actual long-basename H5/Parquet repair, legacy scratch recovery, backup/publish/journal interruptions, ambiguous output rejection and byte-preserved unrelated inputs.",
+      "Review 1: compact directory uses canonical SHA256 of full root name and full projection/context digests; no identity truncation. Review 2: writer/recovery both accept only exact compact or trusted legacy paths, retained receipts and signatures remain verified, and interrupted publications retain original exports. Review 3: current main includes BUG-1872 supervised BUILD identity fix; targeted producer/consumer/fence tests pass without changing the reader contract. DESIGN-COMPLIANCE-001: no partial/fake success, no silent fallback, no business/window/threshold change, no additional approval gate. Dataset runtime acceptance remains pending separately."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": ["worker-scheduler"]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
