@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1879",
-  "closed_at": null,
+  "closed_at": "2026-10-13T06:36:36Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,15 +27,15 @@
   "expected": "PR executes explicit changed tests and controlled-runner smoke; unmatched source retains complete fallback, all local/Nightly coverage and thresholds unchanged; true uncovered changed tests remain blocked.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261013_BUG-1879-validation-center-pr-test-changes-unnecessarily-run-full-coverage-matrix.json",
       "backend/tests/test_noxfile_validation_env.py",
-      "noxfile.py"
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1879-validation-center-pr-test-changes-unnecessarily-run-full-coverage-matrix.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261013_BUG-1879-validation-center-pr-test-changes-unnecessarily-run-full-coverage-matrix.json",
       "backend/tests/test_noxfile_validation_env.py",
-      "noxfile.py"
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1879-validation-center-pr-test-changes-unnecessarily-run-full-coverage-matrix.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -103,8 +103,8 @@
   },
   "first_seen_at": "2026-10-13T06:19:43.826426Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e2129e7350385d5173256712484621c84d257aa5",
+  "fixed_at": "2026-10-13T06:36:36Z",
   "github_issue_number": 5995,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5995",
   "last_seen_at": "2026-10-13T06:19:43.826426Z",
@@ -112,6 +112,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5998",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -130,6 +131,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -139,7 +141,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1879",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9bafdaa7073bdbbc",
+    "recorded_at": "2026-10-13T06:37:28.691009Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a6d98b3857a1dcfc6d87a8f033231642ad70f6cb",
+    "source_merge_commit": "e2129e7350385d5173256712484621c84d257aa5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5998",
+    "validation_evidence": [
+      "python -m nox -s validation_catalog_integrity -> 8 passed, catalog_integrity state=passed findings=0"
+    ],
+    "validation_evidence_digest": "560c0dc3358191d4841b68624caf9a53cac6c5cf0f6df53f0a4b4ad8e73aeaf9"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -148,6 +171,9 @@
     "fingerprint": "c6520e84e62fc1ca960e8a64",
     "source_event_id": "FE-20261013-c6520e84e62f"
   },
+  "validation_evidence": [
+    "python -m nox -s validation_catalog_integrity -> 8 passed, catalog_integrity state=passed findings=0"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
