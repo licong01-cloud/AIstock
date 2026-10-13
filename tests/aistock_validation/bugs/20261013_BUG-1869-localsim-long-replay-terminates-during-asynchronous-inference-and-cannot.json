@@ -22,6 +22,32 @@
   ],
   "created_at": "2026-10-13T03:46:58.612191Z",
   "description": "11:43两个回放lsreplay_81ca085e8ec56e05与lsreplay_4c2e743bea7789e6均FAILED_TERMINAL且completed_trade_date=null；WSL推理进程仍计算。LocalSimHistoricalSourceAuthority.resolve及LifecycleOwner._advance存在跨日latest completed drift gate。",
+  "design_compliance_review": [
+    {
+      "evidence": "同账本版本化增量闭区间、真实PostgreSQL原子SQL/CAS/幂等、既有终态自动恢复以及自动PRE_OPEN切换均有直接证据。",
+      "item": "no_simplified_delivery",
+      "result": "pass"
+    },
+    {
+      "evidence": "无空结果假成功；真实模型失败、source/calendar漂移、错误activation日与identity冲突保留typed failure；timeout等待可观测。",
+      "item": "no_silent_error",
+      "result": "pass"
+    },
+    {
+      "evidence": "遵循既有设计§4.6.2/4.7与用户500万元/冻结两包/正式LocalSIM授权；不重训、不重置账本、不改真实费用。",
+      "item": "no_unapproved_semantic_drift",
+      "result": "pass"
+    },
+    {
+      "evidence": "owner自动恢复/增量追平/安全切换，零manual tick/mark-ready/activate API；保留既有用户backend restart所有权。",
+      "item": "no_unapproved_human_gate",
+      "result": "pass"
+    }
+  ],
+  "design_refs": [
+    "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md#46-control-plane-apiuimcp-contract",
+    "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md#47-historical-replay-and-live-transition-contract"
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -35,19 +61,30 @@
   ],
   "expected": "异步推理仍在运行时可重试，真实模型失败保持失败；已存在的精确超时终态可恢复。冻结区间跨日继续执行，在同账户账本补齐新增已完成日后，仅于安全PRE_OPEN窗口接续正式LocalSIM，不覆盖冻结回放身份或重复成交。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/localsim_control.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
       "backend/services/simulation_runtime/localsim_replay.py",
       "backend/services/simulation_runtime/localsim_replay_runtime.py",
-      "backend/services/simulation_runtime/localsim_product_control.py",
       "backend/services/simulation_runtime/successor_repository.py",
-      "backend/tests/simulation_runtime/test_localsim_replay_live_transition.py",
-      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
       "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
-      "backend/services/simulation_runtime/localsim_control.py",
-      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py"
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1869-localsim-long-replay-terminates-during-asynchronous-inference-and-cannot.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/services/simulation_runtime/localsim_control.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/services/simulation_runtime/localsim_replay.py",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py",
+      "backend/services/simulation_runtime/successor_repository.py",
+      "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1869-localsim-long-replay-terminates-during-asynchronous-inference-and-cannot.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/localsim_replay.py",
@@ -188,6 +225,12 @@
   "fixed_at": null,
   "github_issue_number": 5961,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5961",
+  "implementation_plan": [
+    "精确识别仍在计算的异步selection timeout为可重试，持久化有界原因字段；自动恢复旧版精确超时终态，保留真实失败。",
+    "历史源创建仍要求最新已完成日；已冻结区间的续跑只验证完成日、源与calendar身份，允许跨日。",
+    "等待PRE_OPEN期间补齐增量完成日，以现有原子create_replay_bundle生成闭区间successor，在同账户ledger持续推进。原任务及资金配置不改写，只有链末任务可执行/激活，取消不能复活旧任务。",
+    "直接合同及现有DEV数据库验证超时恢复、跨日推进、跨周末补齐、增量事务失败回滚、幂等与同账本资金不重置。"
+  ],
   "last_seen_at": "2026-10-13T03:46:58.612191Z",
   "module": "simulation_runtime",
   "non_goals": [
@@ -203,29 +246,65 @@
     "simulation_core_l2",
     "localsim_successor_core_dev_db"
   ],
+  "review_rounds": [
+    {
+      "finding": "保留明确timeout为可重试并恢复旧版精确终态，真实artifact失败不恢复；持久化有界reason字段。",
+      "round": 1,
+      "scope": "异步超时与恢复",
+      "status": "fixed"
+    },
+    {
+      "finding": "incremental closed release/binding的日期必须进入冻结metadata/hash；同parent只允许一个child，CAS/读回/整体rollback，不改账户/资金/ledger。",
+      "round": 2,
+      "scope": "SQL原子性、区间身份与分叉",
+      "status": "fixed"
+    },
+    {
+      "finding": "已冻结区间可跨日执行，补齐新增完成日；取消child不能复活parent；等待期间仍验证frozen source/calendar与activation日。",
+      "round": 3,
+      "scope": "跨日、取消及安全边界",
+      "status": "fixed"
+    }
+  ],
   "risk_area": "bug",
+  "root_cause": "selection后台线程600秒超时抛ArtifactGenerationFailedError，replay只将DataUnavailableError归为可重试；线程没有被取消但owner排除终态。真实首日两包约29分钟后生成SUCCEEDED权威分数，任务仍停在1月5日。冻结回放区间在每tick被要求等于漂移的最新完成日，且READY切换前未补齐新完成日。",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "独立pytest进程加载跟踪源码，25项直接合同测试通过，涵盖超时恢复/真实模型失败/跨日补齐/取消/安全窗口/冻结calendar/source/原子失败与幂等。",
       "新原子transaction在现有DEV PostgreSQL真实SQL验证1项通过，测试创建和失败写入全部rollback；没有新数据库、生产DDL/DML或用户后端进程控制。"
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
-    "database_readback_ref": "not_required"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_history": [
+    {
+      "at": "2026-10-13T03:52:14.971745+00:00",
+      "files": [
+        "backend/services/simulation_runtime/localsim_control.py",
+        "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py"
+      ],
+      "reason": "复用现有原子replay bundle，在同一个已授权新账户中生成冻结的增量历史release/binding/job；工厂需要可选effective_to，增加现有DEV PostgreSQL真实原子性和资金连续性验证。无需DDL，不修改已冻结原任务身份。"
+    }
+  ],
+  "scope_expansion_reason": "复用现有原子replay bundle，在同一个已授权新账户中生成冻结的增量历史release/binding/job；工厂需要可选effective_to，增加现有DEV PostgreSQL真实原子性和资金连续性验证。无需DDL，不修改已冻结原任务身份。",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
@@ -235,6 +314,13 @@
   "trigger_condition": {
     "fingerprint": "b5a87865eb900d2c02c83632",
     "source_event_id": "FE-20261013-b5a87865eb90"
+  },
+  "validation_results": {
+    "direct_contracts": "25 passed",
+    "new_existing_dev_atomic_gate": "1 passed; all fixture writes rolled back; no DDL",
+    "production_runtime_observation": "Both Jan5 artifacts SUCCEEDED at 12:01; original jobs still terminal until fixed runtime loads",
+    "quality": "ruff passed; l0 passed; git diff --check passed",
+    "required_dev_plan": "python -m nox -s localsim_successor_core_dev_db -> 2 passed"
   },
   "verification_budget": {
     "budget": "standard",
@@ -347,76 +433,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "scope_expansion_reason": "复用现有原子replay bundle，在同一个已授权新账户中生成冻结的增量历史release/binding/job；工厂需要可选effective_to，增加现有DEV PostgreSQL真实原子性和资金连续性验证。无需DDL，不修改已冻结原任务身份。",
-  "scope_expansion_history": [
-    {
-      "at": "2026-10-13T03:52:14.971745+00:00",
-      "files": [
-        "backend/services/simulation_runtime/localsim_control.py",
-        "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py"
-      ],
-      "reason": "复用现有原子replay bundle，在同一个已授权新账户中生成冻结的增量历史release/binding/job；工厂需要可选effective_to，增加现有DEV PostgreSQL真实原子性和资金连续性验证。无需DDL，不修改已冻结原任务身份。"
-    }
-  ],
-  "design_refs": [
-    "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md#46-control-plane-apiuimcp-contract",
-    "docs/architecture/localsim_legacy_retirement_and_layer_isolation_f2_detailed_design_20260830.md#47-historical-replay-and-live-transition-contract"
-  ],
-  "implementation_plan": [
-    "精确识别仍在计算的异步selection timeout为可重试，持久化有界原因字段；自动恢复旧版精确超时终态，保留真实失败。",
-    "历史源创建仍要求最新已完成日；已冻结区间的续跑只验证完成日、源与calendar身份，允许跨日。",
-    "等待PRE_OPEN期间补齐增量完成日，以现有原子create_replay_bundle生成闭区间successor，在同账户ledger持续推进。原任务及资金配置不改写，只有链末任务可执行/激活，取消不能复活旧任务。",
-    "直接合同及现有DEV数据库验证超时恢复、跨日推进、跨周末补齐、增量事务失败回滚、幂等与同账本资金不重置。"
-  ],
-  "root_cause": "selection后台线程600秒超时抛ArtifactGenerationFailedError，replay只将DataUnavailableError归为可重试；线程没有被取消但owner排除终态。真实首日两包约29分钟后生成SUCCEEDED权威分数，任务仍停在1月5日。冻结回放区间在每tick被要求等于漂移的最新完成日，且READY切换前未补齐新完成日。",
-  "review_rounds": [
-    {
-      "round": 1,
-      "scope": "异步超时与恢复",
-      "finding": "保留明确timeout为可重试并恢复旧版精确终态，真实artifact失败不恢复；持久化有界reason字段。",
-      "status": "fixed"
-    },
-    {
-      "round": 2,
-      "scope": "SQL原子性、区间身份与分叉",
-      "finding": "incremental closed release/binding的日期必须进入冻结metadata/hash；同parent只允许一个child，CAS/读回/整体rollback，不改账户/资金/ledger。",
-      "status": "fixed"
-    },
-    {
-      "round": 3,
-      "scope": "跨日、取消及安全边界",
-      "finding": "已冻结区间可跨日执行，补齐新增完成日；取消child不能复活parent；等待期间仍验证frozen source/calendar与activation日。",
-      "status": "fixed"
-    }
-  ],
-  "design_compliance_review": [
-    {
-      "item": "no_simplified_delivery",
-      "result": "pass",
-      "evidence": "同账本版本化增量闭区间、真实PostgreSQL原子SQL/CAS/幂等、既有终态自动恢复以及自动PRE_OPEN切换均有直接证据。"
-    },
-    {
-      "item": "no_silent_error",
-      "result": "pass",
-      "evidence": "无空结果假成功；真实模型失败、source/calendar漂移、错误activation日与identity冲突保留typed failure；timeout等待可观测。"
-    },
-    {
-      "item": "no_unapproved_semantic_drift",
-      "result": "pass",
-      "evidence": "遵循既有设计§4.6.2/4.7与用户500万元/冻结两包/正式LocalSIM授权；不重训、不重置账本、不改真实费用。"
-    },
-    {
-      "item": "no_unapproved_human_gate",
-      "result": "pass",
-      "evidence": "owner自动恢复/增量追平/安全切换，零manual tick/mark-ready/activate API；保留既有用户backend restart所有权。"
-    }
-  ],
-  "validation_results": {
-    "direct_contracts": "25 passed",
-    "new_existing_dev_atomic_gate": "1 passed; all fixture writes rolled back; no DDL",
-    "production_runtime_observation": "Both Jan5 artifacts SUCCEEDED at 12:01; original jobs still terminal until fixed runtime loads",
-    "required_dev_plan": "python -m nox -s localsim_successor_core_dev_db -> 2 passed",
-    "quality": "ruff passed; l0 passed; git diff --check passed"
   }
 }
