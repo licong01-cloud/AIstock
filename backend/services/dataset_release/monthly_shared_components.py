@@ -1068,6 +1068,7 @@ class FrozenMonthlySharedComponentBuilder:
             history_path = _write_json(sector_root / "industry_l2_history_authority.json", {
                 **history.payload, "projection_sha256": history.sha256,
                 "factor_projection_receipt_ref": history_ref,
+                "industry_context_contract": proof.get("industry_context_contract"),
             })
         quote_path = _write_json(
             sector_root / "sector_quote_availability.json", quote_payload
