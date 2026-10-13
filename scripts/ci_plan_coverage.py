@@ -7,6 +7,7 @@ import hashlib
 import json
 import math
 import os
+import re
 import sys
 import time
 import uuid
@@ -40,6 +41,24 @@ def _diagnostic_identity() -> dict[str, Any]:
             "execution_id": _metrics.get("execution_id")}
 
 
+def _diagnostic_text(value: Any) -> str:
+    """Redact before truncation; no credential files, network or resolver calls."""
+    text = str(value)
+    try:
+        from backend.infra.deepseek_config import redact_secret_text
+    except ImportError:
+        print("aistock_test_diagnostics status=details_suppressed reason=redactor_unavailable", file=sys.stderr)
+        return "<details suppressed: redactor unavailable>"
+    for name, secret in os.environ.items():
+        if len(secret) >= 4 and re.search(r"(?:API_KEY|TOKEN|PASSWORD|PASSWD|SECRET|PRIVATE_KEY)$", name, re.I):
+            text = text.replace(secret, "<redacted-env-value>")
+    text = redact_secret_text(text)
+    text = re.sub(r"-----BEGIN [A-Z ]*PRIVATE KEY-----.*?(?:-----END [A-Z ]*PRIVATE KEY-----|\Z)",
+                  "<redacted-private-key>", text, flags=re.S)
+    return re.sub(r"(?i)(\b(?:[A-Z0-9_]*(?:PASSWORD|PASSWD|API_KEY|TOKEN|SECRET|PRIVATE_KEY)|AUTHORIZATION)[\"']?\s*[:=]\s*)[^,\r\n]+",
+                  r"\1<redacted>", text)
+
+
 def _write_active_diagnostic(nodeid: str, state: str) -> None:
     if not _metrics or not os.environ.get(DIAGNOSTICS_ENV):
         return
@@ -47,7 +66,7 @@ def _write_active_diagnostic(nodeid: str, state: str) -> None:
         path = Path(os.environ[DIAGNOSTICS_ENV]).with_suffix(".active.json")
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps(dict(_diagnostic_identity(), nodeid=nodeid,
+        temporary.write_text(json.dumps(dict(_diagnostic_identity(), nodeid=_diagnostic_text(nodeid),
                                              state=state)), encoding="utf-8")
         temporary.replace(path)
     except OSError as exc:
@@ -69,15 +88,16 @@ def pytest_runtest_logreport(report: Any) -> None:
     if report.when == "call":
         _metrics["executed"][report.nodeid] += 1
     if float(report.duration) >= 1:
-        _metrics["slowest"].append({"nodeid": report.nodeid, "phase": report.when,
+        _metrics["slowest"].append({"nodeid": _diagnostic_text(report.nodeid), "phase": report.when,
                                     "seconds": round(float(report.duration), 6)})
         _metrics["slowest"] = sorted(_metrics["slowest"], key=lambda item: item["seconds"], reverse=True)[:10]
     if getattr(report, "failed", False) and os.environ.get(DIAGNOSTICS_ENV):
         try:
+            failure = _diagnostic_text(report.longrepr)
             _write_metrics(Path(os.environ[DIAGNOSTICS_ENV]), {
                 "schema_version": "aistock_test_failure_diagnostic_v1",
-                **_diagnostic_identity(), "nodeid": report.nodeid, "phase": report.when,
-                "failure": str(report.longrepr)[:8192], "failure_truncated": len(str(report.longrepr)) > 8192,
+                **_diagnostic_identity(), "nodeid": _diagnostic_text(report.nodeid), "phase": report.when,
+                "failure": failure[:8192], "failure_truncated": len(failure) > 8192,
             })
         except (OSError, ValueError, TypeError) as exc:
             print(f"aistock_test_diagnostics status=not_recorded reason={type(exc).__name__}", file=sys.stderr)
