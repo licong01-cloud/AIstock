@@ -1076,15 +1076,24 @@ def test_locate_last_green_run_finds_previous_success() -> None:
     assert locator["previous_success_run"]["run_id"] == "198"
 
 
-@pytest.mark.parametrize("fault", ["valid", "missing", "expired", "head", "transport"])
+@pytest.mark.parametrize("fault", ["valid", "missing", "expired", "head", "transport", "skipped"])
 def test_nightly_green_requires_exact_durable_l3_receipt(fault):
     artifact = dict(name="nightly-l3-results-198", expired=fault == "expired", size_in_bytes=1,
                     workflow_run=dict(id=198, head_sha=("b" if fault == "head" else "a") * 40))
-    def provider(*args, **kwargs):
+    def provider(args, **kwargs):
+        if "/jobs?" in args[-1]:
+            return dict(ok=True, stdout=json.dumps({"jobs": [
+                dict(name=name, conclusion="success", steps=[dict(name=step, conclusion="skipped" if fault == "skipped" else "success")])
+                for name, step in summary.NIGHTLY_EXECUTION_STEPS.items()]}))
         return dict(ok=fault != "transport", stdout=json.dumps(
             {"artifacts": [] if fault == "missing" else [artifact]}), stderr="")
+    required_jobs = summary.nightly_required_failure_jobs(dict(
+        nightly_statuses=dict(nightly_l3="success", paper_v2_live="failure"),
+        failed_jobs=[dict(job_name="AIstock Nightly status")]))
+    assert required_jobs == ["Paper v2 live catch-up (skip realtime by default)"]
     receipt = summary.nightly_success_receipt_eligibility(
-        repo="owner/repo", run_id="198", source_head="a" * 40, run_provider=provider)
+        repo="owner/repo", run_id="198", source_head="a" * 40, run_provider=provider,
+        required_job_names=required_jobs)
     assert receipt["eligible"] is (fault == "valid")
 
 

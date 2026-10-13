@@ -7079,6 +7079,7 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
             eligibility = ci_failure_summary.nightly_success_receipt_eligibility(
                 repo=GITHUB_REPO, run_id=candidate_id, source_head=str(item.get("headSha") or ""),
                 run_provider=lambda args, **kwargs: _run_command(args, cwd=REPO_ROOT, **kwargs),
+                required_job_names=ci_failure_summary.nightly_required_failure_jobs(summary),
             )
             if not eligibility["eligible"]:
                 if eligibility["reason"] == "receipt_index_unavailable":
