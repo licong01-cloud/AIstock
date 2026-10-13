@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1850",
-  "closed_at": null,
+  "closed_at": "2026-10-13T07:47:19.448586Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -292,10 +292,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1850-close-sync-20261012\\tmp\\issue_workflow\\BUG-1850\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1850",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8491091005d1a48e12842529dd81fd8f796930f3ad04fc92df4622c1e3a2add",
+      "contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+      "expected_identity": "de5c2d69cfa06c522ecffcd249de9538add68d4a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-13T07:45:57.898899Z",
+      "mode": "read_only",
+      "observed_identity": "4ebf1c04658f90f09fbbbecc2d882716f13d00a6",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8ecd33287325fafbefbd06af90d6ef9a13f37c66290a149b99d41b7de15b4d0f",
+      "receipt_sha256": "eee93de32875bb1bc8a18046f042c6ba1abe21883eec4df6d5d2e7946b93cd95",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0d30821a6fdc17296f979aee8c42f2fd91feb333d561ef8596969b9a7184b1cc",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -330,7 +352,7 @@
     ],
     "validation_evidence_digest": "35f430fd528d02e64ec384ecf3b9f3671fcae32fd1e828dadedd22f6dccc2978"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
