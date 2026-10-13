@@ -289,6 +289,8 @@ def test_runner_executes_mature_stages_in_order(
     stages: list[tuple[str, set[str]]] = []
 
     def run(invocation):  # type: ignore[no-untyped-def]
+        assert invocation.attempt_id == f"{_context().operation_id}-build"
+        assert invocation.attempt_fence == _context().attempt
         stages.append((invocation.stage, set(invocation.prerequisites)))
         value = {
             "schema_version": "dataset_release_build_stage_result_v1",
@@ -344,6 +346,9 @@ def test_completed_exports_survive_smoke_failure_across_fresh_runner(tmp_path, m
     calls = []
 
     def run(invocation):
+        if invocation.stage == "validate":
+            assert invocation.attempt_id == f"{context.operation_id}-build"
+            assert invocation.attempt_fence == 3
         calls.append(invocation.stage)
         value = {"schema_version": "dataset_release_build_stage_result_v1", "stage": invocation.stage, "status": "PASS"}
         if invocation.stage == "prepare":
@@ -382,6 +387,48 @@ def test_completed_exports_survive_smoke_failure_across_fresh_runner(tmp_path, m
     assert calls == ["prepare", "finalize-bins", "validate"]
     assert minute.read_bytes() == b"accurate"
     assert minute.stat().st_mtime_ns == signature.st_mtime_ns
+
+
+@pytest.mark.parametrize("field", ["run_id", "attempt_id", "attempt_fence", "release_digest", "staging_relative_path"])
+def test_shared_smoke_still_rejects_changed_execution_identity(tmp_path, field):
+    from backend.services.dataset_release.candidate_consumer_smoke import (
+        CandidateConsumerSmokeError,
+        run_candidate_consumer_smoke,
+        validate_candidate_consumer_smoke_receipt,
+    )
+    from backend.tests.dataset_release.test_candidate_consumer_smoke import _FakeD, _FakeQlib, _spec
+
+    spec = replace(_spec(tmp_path), run_id=_context().operation_id,
+                   attempt_id=f"{_context().operation_id}-build", attempt_fence=_context().attempt)
+    receipt = run_candidate_consumer_smoke(spec, checkpoint=lambda: None,
+                                         qlib_runtime=_FakeQlib(), data_api=_FakeD())
+    expected = dict(receipt["identity"])
+    validate_candidate_consumer_smoke_receipt(
+        receipt, profile=spec.profile, cutoff=spec.cutoff, expected_index_codes=spec.expected_index_codes,
+        require_production=False, expected_identity=expected,
+    )
+    receipt["identity"][field] = (
+        expected[field] + 1 if field == "attempt_fence" else
+        "b" * 64 if field == "release_digest" else f"{expected[field]}-other"
+    )
+    with pytest.raises(CandidateConsumerSmokeError, match="consumer smoke fence identity differs"):
+        validate_candidate_consumer_smoke_receipt(
+            receipt, profile=spec.profile, cutoff=spec.cutoff, expected_index_codes=spec.expected_index_codes,
+            require_production=False, expected_identity=expected,
+        )
+
+
+def test_formal_runner_uses_existing_monthly_worker_process_runtime_probe():
+    from scripts.aistock_issue_workflow import _load_runtime_target_catalog, _select_runtime_probe_route
+
+    root = Path(__file__).resolve().parents[3]
+    catalog = _load_runtime_target_catalog(root)
+    target, error = _select_runtime_probe_route(
+        catalog["targets"]["worker-scheduler"],
+        runtime_files=["backend/services/dataset_release/monthly_mature_build_runner.py"],
+    )
+    assert error is None
+    assert target["probe_mode"] == "monthly_release_worker_process"
 
 
 def test_retry_reuses_real_native_bin_and_never_calls_writer_again(tmp_path, monkeypatch):

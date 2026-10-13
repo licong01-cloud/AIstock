@@ -152,7 +152,9 @@ class MatureMonthlyPhysicalBuildRunner:
             physical_plan["preparation_predecessor_profile_sha256"] = predecessor.get("profile_sha256")
         common = {
             "run_id": context.operation_id,
-            "attempt_id": f"{context.operation_id}-attempt-{context.attempt}",
+            # Match the supervised BUILD receipt; the current fence, not the
+            # retained materialization directory, distinguishes retry ownership.
+            "attempt_id": f"{context.operation_id}-build",
             "attempt_fence": context.attempt,
             "pressure_rung": 0,
             "stage_timeout_seconds": self.profile.stage_timeouts_seconds["full_build"],

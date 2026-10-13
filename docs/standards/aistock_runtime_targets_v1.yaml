@@ -130,6 +130,7 @@ targets:
       - backend/services/dataset_release/monthly_*.py
       - backend/services/dataset_release/monthly_unified.py
       - backend/services/dataset_release/monthly_supervised_build.py
+      - backend/services/dataset_release/monthly_mature_build_runner.py
       - backend/services/dataset_release/monthly_frozen_source_audit.py
       - backend/services/dataset_release/candidate_consumer_smoke.py
       - backend/services/dataset_release/qlib_bounded_update.py
@@ -195,6 +196,7 @@ targets:
           - backend/services/dataset_release/monthly_*.py
           - backend/services/dataset_release/monthly_unified.py
           - backend/services/dataset_release/monthly_supervised_build.py
+          - backend/services/dataset_release/monthly_mature_build_runner.py
           - scripts/dataset_release_candidate_consumer_smoke.py
           - backend/services/dataset_release/monthly_frozen_source_audit.py
           - backend/services/dataset_release/monthly_construction_facts.py
@@ -217,6 +219,7 @@ targets:
           - backend/services/dataset_release/wsl_resource_guardian.py
           - backend/services/dataset_release/resource_supervisor.py
           - backend/services/dataset_release/monthly_industry_history.py
+          - backend/services/dataset_release/monthly_mature_build_runner.py
           - backend/services/dataset_release/artifact_ready_build_source.py
           - backend/services/dataset_release/monthly_unified.py
           - backend/services/dataset_release/monthly_supervised_build.py
