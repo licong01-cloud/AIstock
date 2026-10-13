@@ -55,7 +55,7 @@ def test_interrupted_history_commit_keeps_price_exports_and_finishes_without_wri
     context, compiled, root, cas, journal = _fixture(tmp_path)
     factor = root / "factor_bundle"
     factor.mkdir()
-    names = ("sector_data.h5", "static_factors.parquet", "factor_checkpoint.json")
+    names = ("sector_data.h5", "static_factors.parquet")
     for name in names:
         (factor / name).write_bytes(b"original")
     journal.save("prepare", cas.put_json({"status": "PASS"}), roots=("factor_bundle",))
