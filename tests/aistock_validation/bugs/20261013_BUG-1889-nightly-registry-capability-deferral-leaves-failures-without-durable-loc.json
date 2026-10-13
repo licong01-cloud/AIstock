@@ -6,6 +6,7 @@
     ".github/workflows/nightly.yml",
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
     "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
     "tests/aistock_validation/bugs/20261013_BUG-1889-nightly-registry-capability-deferral-leaves-failures-without-durable-loc.json"
   ],
   "assigned_agent": null,
