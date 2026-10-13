@@ -357,9 +357,12 @@ def test_history_reuses_same_official_text_code_id_without_taxonomy_backcast(pre
     assert len({item["l2_code_id"] for item in history.payload["entries"]}) == 131
 
 
-def test_native_factor_receipt_survives_real_history_repair_and_retry(predecessor, tmp_path, monkeypatch):
+@pytest.mark.parametrize("interruption", [None, "backup", "publish", "journal"])
+def test_native_factor_receipt_survives_real_history_repair_and_retry(predecessor, tmp_path, monkeypatch, interruption):
+    import json
+    from pathlib import Path
     import pandas as pd
-    from backend.services.dataset_release import monthly_industry_history as subject, monthly_build_bridge
+    from backend.services.dataset_release import monthly_industry_history as subject, monthly_build_bridge, monthly_build_resume
     from backend.services.dataset_release.cas_store import CASStore
     from backend.services.dataset_release.control_store import ControlStore
     from backend.services.dataset_release.factor_materializer import FACTOR_H5_DATASETS
@@ -391,7 +394,8 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
                         "size": path.stat().st_size, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                         "target_signature": list(_signature(path))})
     original_factor = {"schema_version": "aistock_monthly_native_factor_materialization_v1", "files": entries}
-    (factor_root / "factor_checkpoint.json").write_bytes(canonical_json_bytes(original_factor) + b"\n")
+    # Native monthly materialization seals its receipt in CAS, not a legacy
+    # factor_checkpoint.json in the physical bundle.
     original_bytes = {path.name: path.read_bytes() for path in factor_root.iterdir()}
     ControlStore.initialize(tmp_path / "control")
     cas = CASStore(tmp_path / "control")
@@ -402,8 +406,36 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
     resume = SimpleNamespace(root=root, path=tmp_path / "resume.json", record=record)
     resume.get = lambda name: cas.get_json_bounded(resume.record["steps"][name], max_bytes=16 * 1024 * 1024) if name in resume.record["steps"] else None
     context = SimpleNamespace(plan={}, checkpoint=lambda: None, progress=lambda value: None)
-    actual = subject.apply_retained_history(resume, context=context, compiled=SimpleNamespace(physical_plan={}),
-                                          prepare=prepare, cas=cas, profile=object())
+    def apply():
+        return subject.apply_retained_history(resume, context=context, compiled=SimpleNamespace(physical_plan={}),
+                                              prepare=prepare, cas=cas, profile=object())
+    if interruption is None:
+        actual = apply()
+    else:
+        rename = Path.rename
+        atomic = monthly_build_resume._atomic
+        def interrupted_rename(path, target):
+            result = rename(path, target)
+            name = "sector_data.h5.before" if interruption == "backup" else "sector_data.h5"
+            if Path(target).name == name:
+                raise OSError("simulated industry commit interruption")
+            return result
+        def interrupted_atomic(path, value):
+            atomic(path, value)
+            if path == resume.path:
+                raise OSError("simulated industry commit interruption")
+        with monkeypatch.context() as fault:
+            if interruption == "journal":
+                fault.setattr(monthly_build_resume, "_atomic", interrupted_atomic)
+            else:
+                fault.setattr(Path, "rename", interrupted_rename)
+            with pytest.raises(OSError, match="simulated industry commit interruption"):
+                apply()
+        if resume.path.exists():
+            resume.record = json.loads(resume.path.read_bytes())
+        resume.record = subject.recover_history_commit(root=root, journal=resume.path, record=resume.record,
+                                                       expected_projection=history.sha256)
+        actual = resume.get("prepare")
     nested = cas.get_json_bounded(actual["prepare_receipt_ref"], max_bytes=16 * 1024 * 1024)
     repaired = cas.get_json_bounded(nested["refs"]["factor_receipt"], max_bytes=16 * 1024 * 1024)
     by_name = subject.factor_file_receipts(repaired)
@@ -414,7 +446,11 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
     assert proof["status"] == "PASS" and proof["sector_row_count"] == 2
     assert proof["database_write"] is False
     scratch = root.parent / f".{root.name}.industry-history-{history.sha256}"
-    for name in ("sector_data.h5", "static_factors.parquet", "factor_checkpoint.json"):
+    assert not (factor_root / "factor_checkpoint.json").exists()
+    pending = json.loads((root.parent / f".{root.name}.industry-history-commit.json").read_bytes())
+    assert set(pending["files"]) == {"sector_data.h5", "static_factors.parquet"}
+    assert set(resume.record["files"]) == set(record["files"])
+    for name in ("sector_data.h5", "static_factors.parquet"):
         assert (scratch / (name + ".before")).read_bytes() == original_bytes[name]
     for name in FACTOR_H5_DATASETS:
         if name != "sector_data":
