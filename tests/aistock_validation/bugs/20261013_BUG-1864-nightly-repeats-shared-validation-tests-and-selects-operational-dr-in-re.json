@@ -31,15 +31,24 @@
   ],
   "expected": "Research L3 excludes operational DR and exact already-passed shared targets run once without weakening coverage or independent failure verdicts.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/tests/test_noxfile_validation_env.py",
       "noxfile.py",
       "scripts/nightly_adaptive_scheduler.py",
-      "tests/aistock_validation/catalog/test_plans.yaml",
-      "backend/tests/test_noxfile_validation_env.py",
-      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      "tests/aistock_validation/bugs/20261013_BUG-1864-nightly-repeats-shared-validation-tests-and-selects-operational-dr-in-re.json",
+      "tests/aistock_validation/catalog/test_plans.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1864-nightly-repeats-shared-validation-tests-and-selects-operational-dr-in-re.json",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "noxfile.py",
@@ -172,10 +181,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
