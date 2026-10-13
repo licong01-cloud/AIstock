@@ -27,12 +27,20 @@
   "evidence_uris": [],
   "expected": "按正式原生factor receipt和断点journal原子提交修复文件，不要求或创建无来源legacy checkpoint，崩溃恢复保持幂等，无重复行情导出",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1858-pit-factor-checkpoint.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_industry_history.py",
-      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1858-pit-factor-checkpoint.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_industry_history.py",
@@ -114,11 +122,15 @@
       "Fresh AIstock Python read the real September native eight-file receipt, retained journal and verified two-file projection: original signatures and reusable private output signatures match; legacy factor checkpoint absent; no database, candidate or runtime write",
       "Real H5/Parquet native repair and downstream BUILD proof tests pass with no legacy checkpoint, including interruption after original backup, first repaired publication and durable journal publication"
     ],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
