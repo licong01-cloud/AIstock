@@ -24,6 +24,9 @@ from .monthly_build_bridge import CompiledMonthlyBuild
 from .monthly_candidate_finalizer import SharedReleaseComponents
 from .monthly_consumer_layout import publish_consumer_layout
 from .monthly_worker import ProducerContext
+from .monthly_sector_quote_facts import (
+    QUOTE_FACTS_PATH, SectorQuoteFactsError, build_sector_quote_facts,
+)
 from .pit import FrozenPitSnapshot
 from .profile import DatasetProfile
 from .sealed_source_reader import CASSealedPartitionReader
@@ -1077,6 +1080,26 @@ class FrozenMonthlySharedComponentBuilder:
         else:
             market.to_parquet(market_path, index=False)
             sector_membership.to_parquet(membership_path, index=False)
+        from .monthly_legacy_prefix import _signature
+
+        quote_facts_path = root / QUOTE_FACTS_PATH
+        source_pin = {
+            "sha256": sector_sha, "size": sector_h5.stat().st_size,
+            "signature": list(_signature(sector_h5)),
+        }
+        if native:
+            source_pin = physical_authority["verified_output_files"]["factor_bundle/sector_data.h5"]
+        try:
+            quote_facts = build_sector_quote_facts(
+                source_path=sector_h5, target_path=quote_facts_path,
+                source_pin=source_pin, code_map=code_map, cutoff=cutoff,
+                chunk_rows=self.profile.resource_policy.validation_read_chunk_rows,
+                prefix=prefix,
+                month_range=(physical_authority.get("physical_month_ranges") or {}).get("sector_data"),
+                checkpoint=context.checkpoint, progress=context.progress,
+            )
+        except SectorQuoteFactsError as exc:
+            raise MonthlySharedComponentsError(str(exc)) from exc
         receipt = {
             "schema_version": SECTOR_CONTEXT_RECEIPT_SCHEMA,
             "source_dataset_manifest_sha256": base_manifest_sha,
@@ -1086,6 +1109,11 @@ class FrozenMonthlySharedComponentBuilder:
                 "byte_size": sector_h5.stat().st_size,
                 "used_l2_code_id_count": counts["used_l2_code_id_count"],
                 "used_l2_code_id_count_scope": "month_delta" if native else "release",
+            },
+            "sector_quote_facts": {
+                **quote_facts, "path": quote_facts_path.name,
+                "source_path": sector_h5.relative_to(root).as_posix(),
+                "classification_table_preserved": True,
             },
             "sector_code_map": {
                 "schema_version": RELEASE_SW_L2_CODE_MAP_SCHEMA,
@@ -1191,6 +1219,7 @@ class FrozenMonthlySharedComponentBuilder:
             base_manifest_path,
             code_map_path,
             quote_path,
+            quote_facts_path,
             market_path,
             membership_path,
             receipt_path,
@@ -1228,7 +1257,13 @@ class FrozenMonthlySharedComponentBuilder:
                 + len(sector_membership)
                 + len(market)
             ),
-            verified_output_files=consumer_layout.verified_output_files,
+            verified_output_files={
+                **consumer_layout.verified_output_files,
+                QUOTE_FACTS_PATH: {
+                    "sha256": quote_facts["sha256"], "size": quote_facts["byte_size"],
+                    "signature": list(_signature(quote_facts_path)),
+                },
+            },
         )
 
 

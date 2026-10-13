@@ -217,6 +217,54 @@ def _configure_direct_neighbor_targets(
     monkeypatch.setenv("AISTOCK_CI_CLASSIFIER_SUMMARY", str(summary))
 
 
+@pytest.mark.parametrize("case", ["test", "source", "unmapped", "mixed", "shared", "catalog", "local", "nightly"])
+def test_validation_center_pr_slice_keeps_changed_tests_and_full_fallback(monkeypatch, tmp_path, case):
+    direct = "backend/tests/test_validation_execution_runner.py"
+    extra = "backend/tests/test_validation_new_contract.py"
+    source = "backend/services/validation/execution_runner.py"
+    unknown = "backend/services/validation/new_contract.py"
+    changed = {"test": [direct], "source": [source], "unmapped": [unknown],
+               "mixed": [unknown, extra], "shared": ["noxfile.py", extra],
+               "catalog": ["tests/aistock_validation/catalog/test_plans.yaml", extra],
+               "local": [direct], "nightly": [direct]}[case]
+    _configure_direct_neighbor_targets(monkeypatch, tmp_path, changed_files=changed,
+        existing_paths=[direct, extra, source, unknown, "backend/tests/test_validation_center_runner_smoke.py"])
+    monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1" if case == "nightly" else "0")
+    if case == "local":
+        monkeypatch.delenv("AISTOCK_CI_CLASSIFIER_SUMMARY")
+    calls = []
+    class Session:
+        name = "validation_center_backend"
+        def run(self, *args, **kwargs):
+            calls.append(tuple(str(arg) for arg in args))
+    noxfile.validation_center_backend(Session())
+    invocation = next(args for args in calls if "pytest" in args)
+    assert direct in invocation
+    if case in {"test", "source"}:
+        assert "backend/tests/test_validation_center_api.py" not in invocation
+        assert "backend/tests/test_validation_center_runner_smoke.py" in invocation
+        assert not any(arg.startswith("--cov") for arg in invocation)
+        assert not any("coverage" in args for args in calls)
+    elif case in {"unmapped", "mixed", "shared", "catalog"}:
+        assert "backend/tests/test_validation_center_api.py" in invocation
+        if case in {"mixed", "shared", "catalog"}:
+            assert extra in invocation
+        if case == "mixed":
+            from scripts.ci_change_classifier import _selected_nox_test_targets
+            targets, error = _selected_nox_test_targets(
+                repo_root=Path(__file__).resolve().parents[2], sessions=["validation_center_backend"])
+            assert error is None
+            assert direct in targets["validation_center_backend"]
+            assert "direct-neighbor-glob:backend/tests/test_validation_*.py" in targets["validation_center_backend"]
+            assert "direct-neighbor-glob:backend/tests/test_noxfile_validation_env.py" in targets["validation_center_backend"]
+    else:
+        assert "backend/tests/test_validation_center_api.py" in invocation
+        assert "--cov=backend.services.validation" in invocation
+        coverage = next(args for args in calls if "coverage" in args)
+        assert coverage[coverage.index("--line-threshold") + 1] == "75"
+        assert coverage[coverage.index("--branch-threshold") + 1] == "55"
+
+
 def test_direct_neighbor_pr_targets_select_smoke_changed_test_source_neighbor_and_override(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

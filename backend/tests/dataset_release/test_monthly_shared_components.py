@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 import hashlib
+import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,11 @@ from backend.services.dataset_release.pit import freeze_pit_snapshot
 from backend.services.dataset_release.sector_enrichment import FrozenSectorEnricher
 from backend.services.dataset_release.shared_sector_context import (
     SECTOR_QUOTE_AVAILABILITY_SCHEMA,
+    build_release_sw_l2_code_map_payload, validate_release_sw_l2_code_map,
+)
+from backend.services.dataset_release.monthly_sector_quote_facts import (
+    QUOTE_FACTS_PATH, QUOTE_FACTS_SCHEMA, SectorQuoteFactsError,
+    build_sector_quote_facts,
 )
 
 
@@ -399,6 +405,9 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
             "sw2_pct_change": [0.1] * 5,
             "sw2_vol": [100.0] * 5,
             "sw2_amount": [1000.0] * 5,
+            "sw2_mf_net_amt": [10.0] * 5,
+            "sw2_mf_buy_elg_amt": [20.0] * 5,
+            "sw2_mf_sell_elg_amt": [30.0] * 5,
         },
         index=index,
     ).to_hdf(factor_root / "sector_data.h5", key="data", format="table")
@@ -558,6 +567,17 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
         "star100",
     }
     assert all(path.is_file() for path in result.required_files)
+    import json
+
+    sector_receipt = json.loads((staging / "components/sector_context_candidate_v1/component_receipt.json").read_bytes())
+    facts = sector_receipt["sector_quote_facts"]
+    facts_path = staging / "components/sector_context_candidate_v1" / facts["path"]
+    assert facts_path in result.required_files
+    assert facts["source_sha256"] == sector_receipt["sector_data"]["sha256"]
+    assert facts["mapping_authority"] == sector_receipt["sector_code_map"]["authority"]
+    assert facts["classification_table_preserved"] is True
+    assert facts["sha256"] == hashlib.sha256(facts_path.read_bytes()).hexdigest()
+    assert len(pd.read_hdf(facts_path, "data")) == 5
     assert (
         staging
         / "components/sector_context_candidate_v1/sector_membership_spans.parquet"
@@ -613,3 +633,188 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
             assert target.read_bytes() == original.read_bytes()
             assert target.stat().st_ino != (catalog / proofs[domain].record["component_root"] / relative).stat().st_ino
     assert not list(successor.rglob("prepared-component.json"))
+
+
+METRICS = ("sw2_pct_change", "sw2_vol", "sw2_amount", "sw2_mf_net_amt",
+           "sw2_mf_buy_elg_amt", "sw2_mf_sell_elg_amt")
+
+
+def _map():
+    payload = build_release_sw_l2_code_map_payload(
+        code_to_id={f"801{n:03d}.SI": n for n in range(131)},
+        member_backed_codes=tuple(f"801{n:03d}.SI" for n in range(131)),
+        authority_id="frozen-test-source", authority_sha256="a" * 64,
+    )
+    return payload, validate_release_sw_l2_code_map(payload)
+
+
+def _pin(path):
+    stat = path.stat()
+    return {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": stat.st_size,
+            "signature": [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns]}
+
+
+def _source(path, rows):
+    frame = pd.DataFrame(rows, columns=("datetime", "instrument", "l2_code_id", *METRICS))
+    frame["datetime"] = pd.to_datetime(frame["datetime"])
+    frame = frame.set_index(["datetime", "instrument"])
+    frame.to_hdf(path, key="data", format="table", data_columns=["datetime", "instrument"])
+    return frame
+
+
+def _build(source, target, **kwargs):
+    return build_sector_quote_facts(
+        source_path=source, target_path=target, source_pin=_pin(source),
+        code_map=_map()[1], cutoff=date(2026, 9, 30), chunk_rows=1, **kwargs,
+    )
+
+
+def test_bootstrap_separates_real_classification_from_shared_quote_facts(tmp_path):
+    source = tmp_path / "sector_data.h5"
+    nan = float("nan")
+    _source(source, [
+        ["2021-06-02", "000001.SZ", 156, nan, nan, nan, nan, nan, nan],
+        ["2021-07-30", "000001.SZ", 0, 1., 2., 3., 4., 5., 6.],
+        ["2021-07-30", "000002.SZ", 0, 1., 2., 3., 4., 5., 6.],
+        ["2026-09-01", "000001.SZ", 1, nan, nan, nan, 7., 8., 9.],
+        ["2026-09-01", "000002.SZ", 2, nan, nan, nan, nan, nan, nan],
+    ])
+    before = _pin(source)
+    target = tmp_path / "sector_quote_facts.h5"
+    receipt = _build(source, target)
+    actual = pd.read_hdf(target, "data")
+    assert actual.l2_code_id.tolist() == [0, 1]
+    assert actual.index.get_level_values("instrument").tolist() == ["801000.SI", "801001.SI"]
+    assert actual.iloc[1][list(METRICS[:3])].isna().all()
+    assert actual.iloc[1][list(METRICS[3:])].tolist() == [7., 8., 9.]
+    assert _pin(source) == before
+    assert receipt["schema_version"] == QUOTE_FACTS_SCHEMA
+    assert receipt["classification_only_rows"] == 1
+    assert receipt["row_count"] == 2
+    assert receipt["source_sha256"] == before["sha256"]
+    assert receipt["sha256"] == _pin(target)["sha256"]
+    assert receipt["mapping_authority"] == dict(_map()[1].mapping_authority)
+    assert receipt["historical_business_audit_performed"] is False
+    with pytest.raises(SectorQuoteFactsError, match="exists"):
+        _build(source, target)
+
+
+@pytest.mark.parametrize("change,message", [(99., "contradict"), (float("inf"), "finite")])
+def test_cross_chunk_conflicting_or_infinite_fact_never_succeeds(tmp_path, change, message):
+    source = tmp_path / "sector.h5"
+    _source(source, [["2026-09-01", "000001.SZ", 0, 1., 2., 3., 4., 5., 6.],
+                     ["2026-09-01", "000002.SZ", 0, change, 2., 3., 4., 5., 6.]])
+    with pytest.raises(SectorQuoteFactsError, match=message):
+        _build(source, tmp_path / "quotes.h5")
+
+
+def test_unknown_id_with_real_values_is_not_silently_filtered(tmp_path):
+    source = tmp_path / "sector.h5"
+    _source(source, [["2026-09-01", "000001.SZ", 156, 1., 2., 3., 4., 5., 6.]])
+    with pytest.raises(SectorQuoteFactsError, match="unknown"):
+        _build(source, tmp_path / "quotes.h5")
+
+
+def test_following_month_inherits_small_pinned_facts_and_reads_only_delta(tmp_path, monkeypatch):
+    prior = tmp_path / "august"
+    (prior / Path(QUOTE_FACTS_PATH).parent).mkdir(parents=True)
+    old_source = tmp_path / "old.h5"
+    _source(old_source, [["2026-08-31", "000001.SZ", 0, 1., 2., 3., 4., 5., 6.]])
+    old_facts = prior / QUOTE_FACTS_PATH
+    _build(old_source, old_facts)
+    map_path = old_facts.parent / "sector_code_map.json"
+    map_path.write_text(json.dumps(_map()[0]), encoding="utf-8")
+    components = {"sector_quote_facts": {"path": QUOTE_FACTS_PATH, **_pin(old_facts)},
+                  "sector_code_map": {"path": map_path.relative_to(prior).as_posix(), **_pin(map_path)}}
+    prefix = SimpleNamespace(root=prior, cutoff=date(2026, 8, 31),
+                             manifest={"components": {pin["path"].replace("/", "__"): pin for pin in components.values()}},
+                             manifest_sha256="b" * 64)
+    source = tmp_path / "new.h5"
+    _source(source, [["2026-08-31", "000001.SZ", 999, float("inf"), 2., 3., 4., 5., 6.],
+                     ["2026-09-01", "000001.SZ", 0, 7., 8., 9., 10., 11., 12.]])
+    original = pd.HDFStore.select
+    selected = []
+
+    def bounded(store, key, **kwargs):
+        if Path(store.filename) == source:
+            assert kwargs["start"] == 1 and kwargs["stop"] == 2
+            selected.append(kwargs)
+        return original(store, key, **kwargs)
+
+    monkeypatch.setattr(pd.HDFStore, "select", bounded)
+    target = tmp_path / "new_quotes.h5"
+    receipt = _build(source, target, prefix=prefix, month_range={"start_row": 1, "row_count": 1})
+    actual = pd.read_hdf(target, "data")
+    assert actual.sw2_pct_change.tolist() == [1., 7.]
+    assert selected and receipt["validation_scope"] == "month_delta"
+    assert receipt["source_rows_read"] == 1
+    assert receipt["inherited_row_count"] == 1
+    assert receipt["predecessor_manifest_sha256"] == prefix.manifest_sha256
+    assert _pin(old_facts)["sha256"] == components["sector_quote_facts"]["sha256"]
+    old_facts.write_bytes(b"drift")
+    with pytest.raises(SectorQuoteFactsError, match="pin"):
+        _build(source, tmp_path / "drifted.h5", prefix=prefix,
+               month_range={"start_row": 1, "row_count": 1})
+
+
+def test_source_signature_drift_is_rejected_before_projection(tmp_path):
+    source = tmp_path / "source.h5"
+    _source(source, [["2026-09-01", "000001.SZ", 0, 1., 2., 3., 4., 5., 6.]])
+    pin = _pin(source)
+    pin["signature"][-1] -= 1
+    with pytest.raises(SectorQuoteFactsError, match="source pin"):
+        build_sector_quote_facts(source_path=source, target_path=tmp_path / "out.h5",
+            source_pin=pin, code_map=_map()[1], cutoff=date(2026, 9, 30), chunk_rows=1)
+
+
+def test_shared_projection_works_with_unchanged_formal_file_only_reader(tmp_path):
+    from backend.tests.hmm_data_source.test_precompute_hmm_coefficients import _write_frozen_input_fixture
+    from scripts.precompute_hmm_coefficients import load_frozen_coefficient_inputs
+
+    bundle = _write_frozen_input_fixture(tmp_path, sector_id=0, code_map_entries=_map()[0]["entries"])
+    root = Path(bundle["dataset_root"])
+    source = root / "sector_data.h5"
+    old = pd.read_hdf(source, "data")
+    classification = old.iloc[:1].copy()
+    classification.index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2021-06-02"), "000001.SZ")], names=old.index.names)
+    classification["l2_code_id"] = 156
+    classification[list(METRICS)] = float("nan")
+    pd.concat([classification, old]).to_hdf(source, "data", mode="w", format="table", data_columns=True)
+    before = _pin(source)
+    bundle["files"]["sector_data_h5"]["sha256"] = before["sha256"]
+    with pytest.raises(ValueError, match="unmapped l2_code_id"):
+        load_frozen_coefficient_inputs(bundle, history_start=date(2021, 6, 2),
+            test_start=date(2026, 6, 1), backtest_end=date(2026, 6, 3))
+    output = root / "sector_quote_facts.h5"
+    code_map = validate_release_sw_l2_code_map(json.loads((root / "sector_code_map.json").read_bytes()), require_member_backed=False)
+    receipt = build_sector_quote_facts(source_path=source, target_path=output, source_pin=before,
+        code_map=code_map, cutoff=date(2026, 6, 3), chunk_rows=2)
+    bundle["files"]["sector_data_h5"] = {"relative_path": output.name, "sha256": receipt["sha256"]}
+    result = load_frozen_coefficient_inputs(bundle, history_start=date(2021, 6, 2),
+        test_start=date(2026, 6, 1), backtest_end=date(2026, 6, 3))
+    assert len(result["sector_data"]["801000.SI"]) == 3
+    assert result["stock_sector_maps_by_date"]["2026-06-01"] == {"000001.SZ": "801000.SI"}
+    assert _pin(source) == before
+
+
+def test_quote_projection_preserves_cancellation_and_observes_source_mutation(tmp_path):
+    import os
+
+    source = tmp_path / "source.h5"
+    _source(source, [["2026-09-01", "000001.SZ", 0, 1., 2., 3., 4., 5., 6.]])
+
+    def changed():
+        current = source.stat()
+        os.utime(source, ns=(current.st_atime_ns, current.st_mtime_ns + 1_000_000_000))
+
+    with pytest.raises(SectorQuoteFactsError, match="source changed"):
+        _build(source, tmp_path / "mutation.h5", checkpoint=changed)
+    assert not (tmp_path / "mutation.h5").exists()
+
+    def cancelled():
+        raise InterruptedError("operation cancelled")
+
+    with pytest.raises(InterruptedError, match="cancelled"):
+        _build(source, tmp_path / "cancel.h5", checkpoint=cancelled)
+    assert not (tmp_path / "cancel.h5").exists()

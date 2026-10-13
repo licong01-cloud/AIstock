@@ -36,7 +36,7 @@ FROZEN_HMM_INPUT_SCHEMA = "qe_hmm_frozen_input_v1"
 MARKET_VOLUME_DEFINITION = "sum_market_sw_daily_vol_all_rows_v1"
 _REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
 _REQUIRED_INPUTS = {
-    "sector_data_h5": "factor_bundle/sector_data.h5",
+    "sector_data_h5": "components/sector_context_candidate_v1/sector_quote_facts.h5",
     "index_daily_h5": "index_context/index_daily.h5",
     "sector_code_map_json": "components/sector_context_candidate_v1/sector_code_map.json",
     "market_context_parquet": "components/sector_context_candidate_v1/market_context.parquet",
