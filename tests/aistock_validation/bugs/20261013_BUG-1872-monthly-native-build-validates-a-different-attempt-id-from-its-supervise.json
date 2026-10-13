@@ -30,17 +30,17 @@
   "expected": "Formal native-month validation binds the exact supervised BUILD identity and current fence, including retained materializations, without re-export or permissive receipt acceptance.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261013_BUG-1872-monthly-native-build-validates-a-different-attempt-id-from-its-supervise.json",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261013_BUG-1872-monthly-native-build-validates-a-different-attempt-id-from-its-supervise.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261013_BUG-1872-monthly-native-build-validates-a-different-attempt-id-from-its-supervise.json",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261013_BUG-1872-monthly-native-build-validates-a-different-attempt-id-from-its-supervise.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -99,8 +99,8 @@
   },
   "first_seen_at": "2026-10-13T04:59:33.590214Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "caf53acd8ca4d80cec67a4ebd00bf59fdf03671b",
+  "fixed_at": "2026-10-13T05:16:03Z",
   "github_issue_number": 5979,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5979",
   "last_seen_at": "2026-10-13T04:59:33.590214Z",
@@ -108,6 +108,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5981",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -139,6 +140,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -150,7 +152,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1872",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2a47e4b4dff74bf9",
+    "recorded_at": "2026-10-13T05:16:46.298509Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "bc4c22a66bbe6024a9f002f84ab437e78fe165a8",
+    "source_merge_commit": "caf53acd8ca4d80cec67a4ebd00bf59fdf03671b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5981",
+    "validation_evidence": [
+      "validation-receipt: id=ea707e988f397f53 commit=bc4c22a66bbe6024a9f002f84ab437e78fe165a8 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed, four actual changed files, zero findings, zero ownership violations`",
+      "validation-receipt: id=b62ac7c9a1febefa commit=bc4c22a66bbe6024a9f002f84ab437e78fe165a8 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, four actual changed files, zero findings`"
+    ],
+    "validation_evidence_digest": "cb1972e2d38fbd5e5521dbbf1ed00fc13c9533f104ae29e220632ebb2d6d3b61"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -159,6 +183,10 @@
     "fingerprint": "bdaace7c116d50eb7248269f",
     "source_event_id": "FE-20261013-bdaace7c116d"
   },
+  "validation_evidence": [
+    "validation-receipt: id=ea707e988f397f53 commit=bc4c22a66bbe6024a9f002f84ab437e78fe165a8 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed, four actual changed files, zero findings, zero ownership violations`",
+    "validation-receipt: id=b62ac7c9a1febefa commit=bc4c22a66bbe6024a9f002f84ab437e78fe165a8 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, four actual changed files, zero findings`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
