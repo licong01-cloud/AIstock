@@ -50,7 +50,10 @@
     }
   ],
   "evidence_uris": [
-    "tmp/handoff/localsim_jan_replay_20261013_launch_receipt.json"
+    "tmp/handoff/localsim_jan_replay_20261013_launch_receipt.json",
+    "tmp/handoff/localsim_new_accounts_pause_dev_20261013.json",
+    "tmp/handoff/localsim_new_accounts_pause_20261013.json",
+    "tmp/handoff/localsim_replay_exclusion_dev_20261013.json"
   ],
   "expected": "Both 5m native accounts advance historical replay then activate at validated PRE_OPEN only.",
   "file_scope_contract": {
@@ -224,6 +227,12 @@
       "finding": "Error-free pending day could advance cursor; paused account could recover while suspended",
       "repair": "Advance only durable terminal day, include projected market residual; pause waits; exact window failures recover original cursor after source/calendar verification",
       "round": 3
+    },
+    {
+      "evidence": "4 direct tests passed; real existing DEV SQL cancellation/readback/idempotence passed, all fixtures rollback",
+      "finding": "Premature current-day pre-run failures remain in scheduler blockers after binding exclusion",
+      "repair": "Cancel only excluded daily runs with no execution plan and no broker-side-effect evidence, preserve original failure and audit reason; never cancel a run requiring reconciliation",
+      "round": 4
     }
   ],
   "risk_area": "bug",

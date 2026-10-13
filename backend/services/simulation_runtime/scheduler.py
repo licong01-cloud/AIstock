@@ -4166,12 +4166,15 @@ class SimulationLifecycleScheduler:
             active_on=trade_date,
             limit=limit,
         )
-        bindings = [
-            binding for binding in bindings
+        eligible_bindings = []
+        for binding in bindings:
             if self._localsim_replay_allows_binding(
                 binding=binding, explicit_release_id=release_id, trade_date=trade_date,
-            )
-        ]
+            ):
+                eligible_bindings.append(binding)
+            else:
+                self._cancel_unactivated_replay_daily_run(binding=binding, trade_date=trade_date)
+        bindings = eligible_bindings
         package_status_cache: dict[str, PackageStatus] = {}
         bindings, lifecycle_skips, blocked_binding_keys = self._partition_retired_package_bindings(
             bindings=bindings,
@@ -8620,6 +8623,29 @@ class SimulationLifecycleScheduler:
         if broker_backend is not None:
             return (SimulationLifecycleScheduler._normalized_backend(broker_backend),)
         return (SimulationBrokerBackend.LOCAL_SIM, SimulationBrokerBackend.MINIQMT_SIM)
+
+    def _cancel_unactivated_replay_daily_run(self, *, binding: SimulationReleaseBinding, trade_date: date) -> None:
+        run = self.repository.get_simulation_daily_run_by_key(
+            strategy_id=binding.strategy_id, binding_id=binding.binding_id, trade_date=trade_date,
+        )
+        if run is None or run.status is SimulationDailyRunStatus.CANCELLED:
+            return
+        if run.execution_plan_id is not None or self._run_has_broker_side_effect_evidence(run):
+            raise InvalidStateTransitionError(
+                "unactivated replay daily run has a plan or broker side effects",
+                context={"reason_code": "LOCALSIM_REPLAY_UNACTIVATED_RUN_REQUIRES_RECONCILIATION",
+                         "run_id": run.run_id, "binding_id": binding.binding_id},
+            )
+        self.repository.update_simulation_daily_run(
+            run.run_id, status=SimulationDailyRunStatus.CANCELLED,
+            payload_patch={
+                "last_stage": "CANCELLED", "localsim_replay_daily_run_exclusion": {
+                    "reason_code": "LOCALSIM_REPLAY_NOT_ACTIVATED", "broker_called": False,
+                    "original_status": run.status.value, "binding_id": binding.binding_id,
+                    "reason": "unauthorized daily roll-forward excluded; original replay and account retained",
+                },
+            },
+        )
 
     def _localsim_replay_allows_binding(
         self, *, binding: SimulationReleaseBinding, explicit_release_id: str | None, trade_date: date,

@@ -19580,3 +19580,29 @@ def test_closed_native_historical_executor_runs_real_broker_and_preserves_residu
     assert normal.total_bindings == 0
     assert len(scheduler.selection_service.calls) == before
     assert len(repo.bindings) == 2
+
+
+@pytest.mark.parametrize("has_plan,broker_called", [(False, False), (True, False), (False, True)])
+def test_replay_exclusion_cancels_only_side_effect_free_foreign_daily_run(has_plan, broker_called):
+    release, binding, _, repo = _release_and_bindings()
+    repo.save_simulation_daily_run(SimulationDailyRun(
+        run_id="simrun_replay_excluded", trade_date=TRADE_DATE, strategy_id=binding.strategy_id,
+        broker_backend=binding.broker_backend, package_id=release.package_id,
+        manifest_sha256=release.manifest_sha256, release_id=release.release_id,
+        release_hash=release.release_hash, binding_id=binding.binding_id, binding_hash=binding.binding_hash,
+        execution_plan_id="plan_exists" if has_plan else None,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        run_payload_json={"broker_called": broker_called, "submit_failure": {"reason": "original_pre_run_failure"}},
+    ))
+    scheduler = SimulationLifecycleScheduler(repository=repo)
+    if has_plan or broker_called:
+        with pytest.raises(InvalidStateTransitionError, match="plan or broker side effects"):
+            scheduler._cancel_unactivated_replay_daily_run(binding=binding, trade_date=TRADE_DATE)
+        assert repo.get_simulation_daily_run("simrun_replay_excluded").status is SimulationDailyRunStatus.FAILED_RETRYABLE
+    else:
+        scheduler._cancel_unactivated_replay_daily_run(binding=binding, trade_date=TRADE_DATE)
+        scheduler._cancel_unactivated_replay_daily_run(binding=binding, trade_date=TRADE_DATE)
+        run = repo.get_simulation_daily_run("simrun_replay_excluded")
+        assert run.status is SimulationDailyRunStatus.CANCELLED
+        assert run.run_payload_json["submit_failure"]["reason"] == "original_pre_run_failure"
+        assert run.run_payload_json["localsim_replay_daily_run_exclusion"]["broker_called"] is False
