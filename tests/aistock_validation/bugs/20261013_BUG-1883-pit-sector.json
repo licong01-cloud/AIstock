@@ -1,0 +1,384 @@
+{
+  "actual": "2026-07-01 cached pct=3.18 close=5656.58，而801012官方pct=3.61 close=2023.92；资金流重复旧行业；HMM daily正确fail-closed",
+  "allowed_write_scope": [
+    "backend/services/sw_industry_history_store.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/services/sector_data_builder.py",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/services/dataset_release/monthly_industry_history.py",
+    "backend/tests/test_sw_industry_history_store.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "backend/tests/services/test_sector_data_builder.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+    "tests/aistock_validation/bugs/20261013_BUG-1883-pit-sector.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1883",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-13T07:34:07.225957Z",
+  "description": "2026-07-01 cached pct=3.18 close=5656.58，而801012官方pct=3.61 close=2023.92；资金流重复旧行业；HMM daily正确fail-closed",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261013-b1c4a158a54f",
+      "timestamp": "2026-10-13T07:34:07.225957Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "历史事实不丢失；来源经济字段或PIT边界变化时原子标记受影响日期并定向重算；冻结industry_id和行业事实同时闭合；合法NA保留，不伪造历史可见时间",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/sw_industry_history_store.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/services/sector_data_builder.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/tests/test_sw_industry_history_store.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/services/test_sector_data_builder.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/sw_industry_history_store.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/services/sector_data_builder.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/services/dataset_release/monthly_industry_history.py",
+        "backend/tests/test_sw_industry_history_store.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/services/test_sector_data_builder.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center",
+        "platform.api",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/sw_industry_history_store.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/sector_data_builder.py",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_sector_data_materialization"
+        },
+        {
+          "file": "backend/ingestion/tdx_scheduler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_industry_history.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/test_sw_industry_history_store.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/test_tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/services/test_sector_data_builder.py",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_sector_data_materialization"
+        },
+        {
+          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/sw_industry_history_store.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/services/sector_data_builder.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/services/dataset_release/monthly_industry_history.py",
+        "backend/tests/test_sw_industry_history_store.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/services/test_sector_data_builder.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/sw_industry_history_store.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/services/sector_data_builder.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/tests/test_sw_industry_history_store.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/services/test_sector_data_builder.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/sw_industry_history_store.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/services/sector_data_builder.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/tests/test_sw_industry_history_store.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/services/test_sector_data_builder.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+    ]
+  },
+  "first_seen_at": "2026-10-13T07:34:07.225957Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6010,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6010",
+  "last_seen_at": "2026-10-13T07:34:07.225957Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": [
+      "backend-main",
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "PIT行业修订未失效派生sector事实及冻结文件行业身份不一致",
+  "trigger_condition": {
+    "fingerprint": "b1c4a158a54ffe73a190cbc2",
+    "source_event_id": "FE-20261013-b1c4a158a54f"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy",
+        "qlib_data"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend",
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy",
+          "qlib_data"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend",
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
