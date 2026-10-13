@@ -271,7 +271,7 @@
   "root_cause": "selection后台线程600秒超时抛ArtifactGenerationFailedError，replay只将DataUnavailableError归为可重试；线程没有被取消但owner排除终态。真实首日两包约29分钟后生成SUCCEEDED权威分数，任务仍停在1月5日。冻结回放区间在每tick被要求等于漂移的最新完成日，且READY切换前未补齐新完成日。",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "独立pytest进程加载跟踪源码，25项直接合同测试通过，涵盖超时恢复/真实模型失败/跨日补齐/取消/安全窗口/冻结calendar/source/原子失败与幂等。",
@@ -347,7 +347,8 @@
     "validation-receipt: id=0137dcb65187f929 commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py backend/tests/simulation_runtime/test_localsim_replay_live_transition.py backend/tests/simulation_runtime/test_localsim_product_control_plane.py -q -p no:cacheprovider` result=`passed (25 passed)`",
     "validation-receipt: id=1c88521a4fc167ad commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=nox plan=localsim_successor_core_dev_db status=passed command=`python -m nox -s localsim_successor_core_dev_db` result=`passed (2 passed)`",
     "validation-receipt: id=7f8a587921e27f38 commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=ruff plan=direct status=passed command=`rtk ruff check changed Python files` result=`passed`",
-    "validation-receipt: id=f469661ded04770f commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=f469661ded04770f commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "2026-10-13 post-restart readback: runtime 4ebf1c04658f90f09fbbbecc2d882716f13d00a6 contains source merge; target-owned scheduler verification scope is all local_sim, healthy thread, zero current-day blockers. Original simrun_bcd56e8b3eae017b and both historical Jan-05 runs simrun_9fbe2525127692a1 / simrun_014f7985c59bd019 are SUCCEEDED. Both original replay accounts are ACTIVE version 3, capital 5000000 each. Four replay-owned bindings are excluded from normal daily scheduling; two stale daily runs were canonically CANCELLED with no execution plan or broker effects and original errors retained. Unscoped platform-diagnostics remains DEGRADED due to these retained CANCELLED audit rows; full replay and live activation are not asserted. Exact evidence: F:/Dev/AIstock/tmp/handoff/localsim_new_accounts_resume_20261013.json and localsim_replay_stale_daily_cleanup_20261013.json."
   ],
   "validation_results": {
     "direct_contracts": "25 passed",
