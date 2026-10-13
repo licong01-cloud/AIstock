@@ -155,14 +155,52 @@ def _cleanup_validation_artifact_paths(*paths: Path) -> None:
 
 
 def _run_pytest(session: nox.Session, *args: str) -> None:
+    selected = _nightly_shared_pytest_args(str(getattr(session, "name", "")), args)
+    if selected is None:
+        return  # All explicit targets passed in the same coverage-enforcing producer.
     session.run(
         "python",
         "-m",
         "pytest",
-        *args,
+        *selected,
         env=_env({"AISTOCK_TEST_PLAN": str(getattr(session, "name", "not_recorded"))}),
         external=True,
     )
+
+
+def _nightly_shared_pytest_args(session_name: str, args: tuple[str, ...]) -> tuple[str, ...] | None:
+    """Only explicit shared non-coverage slices reuse the successful full producer.
+
+    Coverage invocations retain their full inputs; failed producers, PR/local
+    runs, filtered pytest selections and unknown consumers cannot suppress work.
+    """
+    consumers = {"validation_workflow_automation", "data_sync_autonomy_backend",
+                 "validation_module_registry_l0", "validation_catalog_integrity"}
+    if session_name not in consumers or not _nightly_session_completed("validation_center_backend"):
+        return args
+    combined = [*args, *os.environ.get("PYTEST_ADDOPTS", "").split()]
+    if any(arg.startswith(("--cov", "--ignore", "--deselect", "-k", "-m")) for arg in combined):
+        return args
+    if any(not arg.startswith("backend/tests/") and arg not in {"-q", "-p", "no:cacheprovider"}
+           for arg in args):
+        return args  # Unknown selection/option syntax is never an equivalence proof.
+    shared = {
+        "backend/tests/scripts/test_ci_failure_issue_summary.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        "backend/tests/test_validation_center_api.py",
+        "backend/tests/test_validation_execution_runner.py",
+        "backend/tests/test_validation_module_ownership.py",
+        "backend/tests/test_validation_catalog_integrity.py",
+    }
+    removed = [arg for arg in args if arg in shared]
+    if not removed:
+        return args
+    remaining = tuple(arg for arg in args if arg not in shared)
+    # Never call pytest with only flags: that would collect the entire repo.
+    has_target = any(arg.startswith("backend/tests/") for arg in remaining)
+    print(f"nightly_pytest_reuse producer=validation_center_backend consumer={session_name} targets={len(removed)}")
+    return remaining if has_target else None
 
 
 def _hosted_ci() -> bool:

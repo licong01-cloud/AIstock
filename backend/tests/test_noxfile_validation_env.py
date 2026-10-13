@@ -31,6 +31,25 @@ def test_budget_contract_is_not_nested_in_catalog_but_remains_in_nightly():
     assert budget in targets['validation_workflow_automation']
 
 
+@pytest.mark.parametrize("nightly,completed,args,reused", [
+    ("1", "validation_center_backend", (), True),
+    ("0", "validation_center_backend", (), False),
+    ("1", "", (), False),
+    ("1", "validation_center_backend", ("--cov=backend",), False),
+    ("1", "validation_center_backend", ("-k", "smoke"), False),
+    ("1", "validation_center_backend", ("backend/tests/missing_test.py",), False),
+    ("1", "validation_center_backend", ("unknown_test_root",), False),
+])
+def test_shared_pytest_reuse_is_successful_same_nightly_and_coverage_safe(monkeypatch, nightly, completed, args, reused):
+    monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, nightly)
+    monkeypatch.setenv(noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV, completed)
+    target = "backend/tests/scripts/test_ci_failure_issue_summary.py"
+    result = noxfile._nightly_shared_pytest_args("validation_workflow_automation", (target, "-q", *args))
+    assert (result is None) is reused
+    if args and "backend/tests/missing_test.py" in args:
+        assert "backend/tests/missing_test.py" in result
+
+
 def test_l0_scan_paths_use_explicit_scope_without_git(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(noxfile.subprocess, "run", lambda *_args, **_kwargs: pytest.fail("git should not run"))
 
