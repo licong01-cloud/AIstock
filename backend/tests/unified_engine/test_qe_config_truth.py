@@ -287,8 +287,10 @@ def _load_qrun_minute_module(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _stub_execution_algo_catalog(monkeypatch):
-    """Keep config-truth tests independent from the local DB catalog."""
+def _isolate_config_environment_and_catalog(monkeypatch):
+    """Legacy config contracts must not consume an external active profile."""
+
+    monkeypatch.delenv("AISTOCK_ACTIVE_DATASET_PROFILE_PATH", raising=False)
 
     monkeypatch.setattr(
         ConfigComposer,
@@ -1132,7 +1134,10 @@ def test_qe_execution_data_exclusion_rejects_partial_window_or_untyped_reason():
             )
 
 
-def test_qe_frozen_risk_policy_spec_requires_provider_uri():
+def test_qe_frozen_risk_policy_spec_requires_provider_uri(monkeypatch):
+    import backend.services.quantevolver.config_composer as composer_module
+
+    monkeypatch.setattr(composer_module, "QLIB_DATA_PATH_WSL", "")
     with pytest.raises(RuntimeError, match="reason_code=qe_frozen_build_spec_invalid"):
         ConfigComposer()._build_qe_frozen_risk_policy_spec(
             DATA_SPLIT,

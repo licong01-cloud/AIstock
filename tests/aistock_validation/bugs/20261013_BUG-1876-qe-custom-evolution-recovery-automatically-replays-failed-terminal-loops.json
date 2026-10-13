@@ -21,6 +21,12 @@
   "description": "Original failed Loops 2/4 became running with real node1 PIDs 2052052/2052045, duplicating successful independent retry Loops 1/2; retry Loops 3/4 are not_reserved and waiting for capacity.",
   "events": [
     {
+      "action": "review_ci_external_config_fixture_isolation",
+      "actor": "Codex",
+      "note": "Current-HEAD CI exposed eight existing config fixture failures when an active dataset profile/default provider is enabled. Reproduced missing-provider RED with QLIB_DATA_PATH_WSL set; isolated the legacy config tests from AISTOCK_ACTIVE_DATASET_PROFILE_PATH and explicitly cleared the provider constant only in the missing-provider test. Original assertions and production active-binding checks are unchanged. GREEN with contaminated external defaults: eight failed nodes passed; complete changed test files 194 passed/38 existing optional-dependency skips. No pipeline, dataset, production binding or experiment parameter changes.",
+      "timestamp": "2026-10-13T07:20:00Z"
+    },
+    {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20261013-789a93b63559",
