@@ -1,12 +1,51 @@
 from __future__ import annotations
 
 import json
+import importlib.util
+import sys
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlunsplit
 
 import pytest
 
-from scripts import ci_plan_coverage as coverage
+# Exercise an isolated plugin instance; never reset the CI/Nightly collector.
+_spec = importlib.util.spec_from_file_location("isolated_ci_coverage", Path(__file__).resolve().parents[3] / "scripts/ci_plan_coverage.py")
+coverage = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(coverage)
+_SYNTHETIC = "synthetic_environment_secret_with_long_suffix"
+
+
+@pytest.mark.parametrize("credential", [
+    "password={value!r}, Authorization: Bearer synthetic_bearer".format(value=_SYNTHETIC),
+    urlunsplit(("postgresql", "user:synthetic_password@localhost", "/db", "", "")),
+    _SYNTHETIC,
+    "-----BEGIN PRIVATE KEY-----\nsynthetic_private_material\n-----END PRIVATE KEY-----",
+    None,
+])
+def test_nightly_failure_diagnostic_is_written_before_session_finish(monkeypatch, tmp_path, credential):
+    path = tmp_path / "diagnostics.jsonl"
+    monkeypatch.setenv(coverage.METRICS_ENV, str(tmp_path / "metrics.jsonl"))
+    monkeypatch.setenv("AISTOCK_TEST_DIAGNOSTICS_RECEIPT", str(path))
+    monkeypatch.setenv("DIAGNOSTIC_PROBE_API_KEY", _SYNTHETIC)
+    unavailable = credential is None
+    if unavailable:
+        monkeypatch.setitem(sys.modules, "backend.infra.deepseek_config", None)
+        credential = _SYNTHETIC
+    coverage.pytest_sessionstart(None)
+    coverage.pytest_runtest_logstart("test_hmm.py::test_contract", None)
+    assert json.loads(path.with_suffix(".active.json").read_text())["state"] == "started"
+    report = SimpleNamespace(nodeid="test_hmm.py::test_contract", when="call", duration=1,
+                             failed=True, longrepr="AssertionError: " + ("." * 8150 if credential.startswith("synthetic_environment") else "") + credential)
+    coverage.pytest_runtest_logreport(report)
+    payload = json.loads(path.read_text())
+    assert ("redactor unavailable" if unavailable else "AssertionError") in payload["failure"]
+    assert payload["nodeid"] == ("<details suppressed: redactor unavailable>" if unavailable else report.nodeid)
+    assert "synthetic" not in payload["failure"] and len(payload["failure"]) <= 8192
+    coverage.pytest_runtest_logfinish(report.nodeid, None)
+    assert json.loads(path.with_suffix(".active.json").read_text())["state"] == "finished"
+    monkeypatch.setattr(coverage, "_write_metrics", lambda *args: (_ for _ in ()).throw(OSError()))
+    coverage.pytest_runtest_logreport(report)  # diagnostic failure cannot change pytest verdict
 
 
 def test_execution_metrics_record_real_runs_without_changing_coverage(monkeypatch, tmp_path):

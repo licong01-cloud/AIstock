@@ -41,9 +41,23 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: read
-      contents: none
+      contents: read
+    outputs:
+      background_admitted: ${{ steps.background_window.outputs.background_admitted }}
     steps:
+      - name: Admit scheduled work only within overnight budget
+        id: background_window
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          admission_script="${RUNNER_TEMP}/aistock-runner-health-${GITHUB_SHA}.py"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/aistock_runner_health.py?ref=${GITHUB_SHA}" --jq '.content' | base64 --decode > "${admission_script}"
+          python "${admission_script}" scheduled-admission --budget-minutes 45 --output-json "${RUNNER_TEMP}/background-admission-preflight.json"
+
       - name: Fail fast when the security runner is offline
+        if: steps.background_window.outputs.background_admitted == 'true'
         env:
           GH_TOKEN: ${{ secrets.AISTOCK_RUNNER_HEALTH_TOKEN || github.token }}
         shell: bash
@@ -59,6 +73,7 @@ jobs:
   refresh-after-main:
     name: Refresh and publish code intelligence graphs
     needs: security-runner-preflight
+    if: needs.security-runner-preflight.outputs.background_admitted == 'true'
     concurrency:
       group: code-intelligence-refresh-main
       cancel-in-progress: true
@@ -68,7 +83,18 @@ jobs:
       run:
         shell: powershell
     steps:
+      - name: Recheck overnight admission after runner queue
+        id: background_window
+        timeout-minutes: 1
+        shell: powershell
+        run: |
+          python "F:/Dev/AIstock/scripts/aistock_runner_health.py" scheduled-admission `
+            --budget-minutes 45 `
+            --output-json "$env:RUNNER_TEMP/background-admission-$env:GITHUB_JOB.json"
+          if ($LASTEXITCODE -ne 0) { throw "background admission failed closed" }
+
       - name: Prepare exact main workspace
+        if: steps.background_window.outputs.background_admitted == 'true'
         timeout-minutes: 3
         # LF only in this isolated checkout; preserve global Git and HTTP policy.
         env:
@@ -86,6 +112,7 @@ jobs:
 
       - name: Import persistent graph state
         id: graph_state_import
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -96,6 +123,7 @@ jobs:
             --output "$outDir/graph-state-import.json"
 
       - name: Sync CodeGraph incrementally
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           python scripts/code_intelligence_adapter.py codegraph-sync `
@@ -116,6 +144,7 @@ jobs:
 
       - name: Assess Understand Anything work without LLM
         id: ua_assessment
+        if: steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           python scripts/code_intelligence_adapter.py refresh-plan `
@@ -123,7 +152,7 @@ jobs:
             --output "$outDir/graph-refresh-plan.json"
 
       - name: Refresh and publish Understand Anything
-        if: github.event_name == 'workflow_dispatch' && inputs.run_paid_ua_refresh
+        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name == 'workflow_dispatch' && inputs.run_paid_ua_refresh)
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           python scripts/code_intelligence_adapter.py ua-refresh `
@@ -144,7 +173,7 @@ jobs:
           }
 
       - name: Report refresh status
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         run: |
           $outDir = "tmp/validation/code-intelligence/${{ github.run_id }}"
           $items = @(

@@ -30,9 +30,23 @@ jobs:
     timeout-minutes: 5
     permissions:
       actions: read
-      contents: none
+      contents: read
+    outputs:
+      background_admitted: ${{ steps.background_window.outputs.background_admitted }}
     steps:
+      - name: Admit scheduled work only within overnight budget
+        id: background_window
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          admission_script="${RUNNER_TEMP}/aistock-runner-health-${GITHUB_SHA}.py"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/aistock_runner_health.py?ref=${GITHUB_SHA}" --jq '.content' | base64 --decode > "${admission_script}"
+          python "${admission_script}" scheduled-admission --budget-minutes 75 --output-json "${RUNNER_TEMP}/background-admission-preflight.json"
+
       - name: Fail fast when the security runner is offline
+        if: steps.background_window.outputs.background_admitted == 'true'
         env:
           GH_TOKEN: ${{ secrets.AISTOCK_RUNNER_HEALTH_TOKEN || github.token }}
         shell: bash
@@ -48,6 +62,7 @@ jobs:
   codeql-nightly:
     name: CodeQL nightly full scan
     needs: security-runner-preflight
+    if: needs.security-runner-preflight.outputs.background_admitted == 'true'
     runs-on: [self-hosted, Windows, aistock-ci-security]
     timeout-minutes: 75
     env:
@@ -55,8 +70,19 @@ jobs:
       AISTOCK_CI_CODEQL_BUNDLE_SHA256: 504311cdee523aae41ae0ecc318f5d225ff051bbe9c50a94840d11cd35f2c38b
       AISTOCK_CI_CODEQL_BUNDLE_VERSION: 2.26.3
     steps:
+      - name: Recheck overnight admission after runner queue
+        id: background_window
+        timeout-minutes: 1
+        shell: powershell
+        run: |
+          python "F:/Dev/AIstock/scripts/aistock_runner_health.py" scheduled-admission `
+            --budget-minutes 75 `
+            --output-json "$env:RUNNER_TEMP/background-admission-$env:GITHUB_JOB.json"
+          if ($LASTEXITCODE -ne 0) { throw "background admission failed closed" }
+
       - name: Prepare exact local workspace (no remote actions)
         id: prepare
+        if: steps.background_window.outputs.background_admitted == 'true'
         shell: powershell
         env:
           EXPECTED_COMMIT: ${{ github.sha }}
@@ -97,6 +123,7 @@ jobs:
 
       - name: Verify prebuilt AIstock-CI environment
         id: environment
+        if: steps.background_window.outputs.background_admitted == 'true'
         shell: powershell
         env:
           AISTOCK_CI_ENV_NAME: AIstock-CI
@@ -104,6 +131,7 @@ jobs:
 
       - name: Run CodeQL CLI analysis
         id: codeql_analysis
+        if: steps.background_window.outputs.background_admitted == 'true'
         timeout-minutes: 60
         shell: powershell
         env:
@@ -154,7 +182,7 @@ jobs:
           }
 
       - name: Enforce CodeQL result
-        if: always()
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
         shell: powershell
         env:
           PREPARE_RESULT: ${{ steps.prepare.outcome }}

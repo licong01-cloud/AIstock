@@ -11,7 +11,7 @@ import time
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 DEFAULT_REPO = "licong01-cloud/AIstock"
 GITHUB_TRANSPORT_MARKERS = (
@@ -547,6 +547,91 @@ def _last_green_payload(summary: dict[str, Any], *, status: str, previous_succes
     }
 
 
+NIGHTLY_RESEARCH_WORKFLOW = "AIstock Nightly L3 + DR"
+MAX_NIGHTLY_RECEIPT_CANDIDATES = 5
+NIGHTLY_EXECUTION_STEPS = {
+    "Nightly L3 (paper_v2 + qe_archive + qe_read)": "Run selected Nightly sessions once",
+    "DR snapshot prod DB": "Run dr_snapshot_prod_db.py",
+    "DR validation (dump validity + schema diff + retention)": "nox -s dr_validate",
+    "Paper v2 live catch-up (skip realtime by default)": "nox -s paper_v2_live",
+    "Code intelligence daily graph refresh and summary": "Reconcile CodeGraph and Understand Anything",
+}
+
+
+def nightly_required_failure_jobs(summary: dict[str, Any]) -> list[str]:
+    """Consume structured stage failures as well as real Actions job names."""
+    names = {"runner_preflight": "Nightly L3 (paper_v2 + qe_archive + qe_read)",
+             "nightly_l3": "Nightly L3 (paper_v2 + qe_archive + qe_read)",
+             "dr_snapshot": "DR snapshot prod DB",
+             "dr_validate": "DR validation (dump validity + schema diff + retention)",
+             "code_intelligence": "Code intelligence daily graph refresh and summary",
+             "paper_v2_live": "Paper v2 live catch-up (skip realtime by default)"}
+    statuses = summary.get("nightly_statuses")
+    if isinstance(statuses, dict) and statuses:
+        return [names.get(key, key) for key, status in statuses.items() if status in NIGHTLY_FAILURE_STATUSES]
+    return [str(job.get("job_name") or "") for job in summary.get("failed_jobs") or [] if isinstance(job, dict)]
+
+
+def nightly_success_receipt_eligibility(
+    *, repo: str, run_id: str, source_head: str,
+    run_provider: Callable[..., dict[str, Any]] = _run,
+    required_job_names: Sequence[str] = (),
+) -> dict[str, Any]:
+    """A successful workflow envelope is not proof that L3 actually executed.
+
+    Read exact-run artifact/step indexes, never archives or whole history.
+    Real L3 receipts are source-bound; deferred/manual DR-only runs have none.
+    Errors/expiration mean unknown, not recovery, and never become PR gates.
+    """
+    def rejected(reason: str) -> dict[str, Any]:
+        return {"eligible": False, "reason": reason, "blocking_for_issue_workflow": False}
+    if not run_id.isdecimal() or len(source_head) != 40 or any(c not in "0123456789abcdef" for c in source_head):
+        return rejected("invalid_run_identity")
+    result = _github_read_with_transport_retry(
+        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=20"],
+        timeout=10, attempts=1, provider=run_provider,
+    )
+    if not result.get("ok"):
+        return rejected("receipt_index_unavailable")
+    try:
+        payload = json.loads(str(result.get("stdout") or "{}"))
+        artifacts = payload.get("artifacts")
+        if not isinstance(artifacts, list):
+            return rejected("invalid_receipt_index")
+        expected_name = f"nightly-l3-results-{run_id}"
+        for artifact in artifacts:
+            if not isinstance(artifact, dict) or artifact.get("name") != expected_name:
+                continue
+            identity = artifact.get("workflow_run") or {}
+            if not isinstance(identity, dict):
+                return rejected("invalid_artifact_identity")
+            if (artifact.get("expired") is False and int(artifact.get("size_in_bytes") or 0) > 0
+                    and str(identity.get("id")) == run_id and identity.get("head_sha") == source_head):
+                required = set(required_job_names) | {"Nightly L3 (paper_v2 + qe_archive + qe_read)"}
+                if not required.issubset(NIGHTLY_EXECUTION_STEPS):
+                    return rejected("unrecognized_failure_job_contract")
+                jobs_result = _github_read_with_transport_retry(
+                    ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"],
+                    timeout=10, attempts=1, provider=run_provider,
+                )
+                if not jobs_result.get("ok"):
+                    return rejected("receipt_index_unavailable")
+                jobs = json.loads(str(jobs_result.get("stdout") or "{}")).get("jobs")
+                if not isinstance(jobs, list):
+                    return rejected("invalid_execution_index")
+                executed = {job.get("name") for job in jobs if isinstance(job, dict)
+                            and job.get("conclusion") == "success"
+                            and any(isinstance(step, dict) and step.get("name") == NIGHTLY_EXECUTION_STEPS.get(job.get("name"))
+                                    and step.get("conclusion") == "success" for step in job.get("steps") or [])}
+                if not required.issubset(executed):
+                    return rejected("required_validation_step_not_executed")
+                return {"eligible": True, "reason": "source_bound_l3_receipt",
+                        "artifact_name": expected_name, "blocking_for_issue_workflow": False}
+        return rejected("no_live_source_bound_l3_receipt")
+    except (ValueError, TypeError, AttributeError):
+        return rejected("invalid_receipt_index")
+
+
 def locate_last_green_run(
     summary: dict[str, Any],
     *,
@@ -624,6 +709,7 @@ def locate_last_green_run(
     if not isinstance(runs, list):
         return _last_green_payload(summary, status="unavailable", warning="gh run list JSON root was not a list")
     current_number = _run_id_number(current_run_id)
+    receipt_checks = 0
     for run in runs:
         if not isinstance(run, dict):
             continue
@@ -638,6 +724,19 @@ def locate_last_green_run(
             continue
         if str(run.get("databaseId") or "") == current_run_id:
             continue
+        if workflow == NIGHTLY_RESEARCH_WORKFLOW:
+            if receipt_checks >= MAX_NIGHTLY_RECEIPT_CANDIDATES:
+                break
+            receipt_checks += 1
+            receipt = nightly_success_receipt_eligibility(
+                repo=repo, run_id=str(run.get("databaseId") or ""),
+                source_head=str(run.get("headSha") or ""), run_provider=run_provider,
+                required_job_names=nightly_required_failure_jobs(summary),
+            )
+            if not receipt["eligible"]:
+                if receipt["reason"] == "receipt_index_unavailable":
+                    return _last_green_payload(summary, status="unavailable", warning=receipt["reason"])
+                continue
         return _last_green_payload(summary, status="found", previous_success=run)
     return _last_green_payload(summary, status="not_found", warning="no previous successful run found in the last 50 branch runs")
 

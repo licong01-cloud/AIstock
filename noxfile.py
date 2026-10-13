@@ -4,6 +4,7 @@ from contextlib import contextmanager, suppress
 from fnmatch import fnmatchcase
 import json
 import os
+import shlex
 import socket
 import subprocess
 import sys
@@ -155,14 +156,70 @@ def _cleanup_validation_artifact_paths(*paths: Path) -> None:
 
 
 def _run_pytest(session: nox.Session, *args: str) -> None:
+    selected = _nightly_shared_pytest_args(str(getattr(session, "name", "")), args)
+    if selected is None:
+        return  # All explicit targets passed in the same coverage-enforcing producer.
     session.run(
         "python",
         "-m",
         "pytest",
-        *args,
+        *selected,
         env=_env({"AISTOCK_TEST_PLAN": str(getattr(session, "name", "not_recorded"))}),
         external=True,
     )
+
+
+def _nightly_shared_pytest_args(session_name: str, args: tuple[str, ...]) -> tuple[str, ...] | None:
+    """Only explicit shared non-coverage slices reuse the successful full producer.
+
+    Coverage invocations retain their full inputs; failed producers, PR/local
+    runs, filtered pytest selections and unknown consumers cannot suppress work.
+    """
+    consumers = {"validation_workflow_automation", "data_sync_autonomy_backend",
+                 "validation_module_registry_l0", "validation_catalog_integrity"}
+    producer = "validation_center_backend"
+    shared = {
+        "backend/tests/scripts/test_ci_failure_issue_summary.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+        "backend/tests/test_validation_center_api.py",
+        "backend/tests/test_validation_execution_runner.py",
+        "backend/tests/test_validation_module_ownership.py",
+        "backend/tests/test_validation_catalog_integrity.py",
+    }
+    if session_name not in consumers:
+        if session_name not in {"research_mcp_contract", "mcp_gateway_phase6_resource_monitor"}:
+            return args
+        producer = "mcp_gateway_manifest_quality"
+        shared = {"backend/tests/mcp", "tests/mcp/test_mcp_gateway_cli.py"}
+    if not _nightly_session_completed(producer):
+        return args
+    try:
+        addopts = shlex.split(os.environ.get("PYTEST_ADDOPTS", ""))
+    except ValueError:
+        return args
+    # Accept only execution-neutral options and the known observational plugin.
+    # Collect-only/last-failed, coverage, unknown selectors/plugins keep full work.
+    for tokens, allow_targets in ((args, True), (addopts, False)):
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            if token == "-p":
+                index += 1
+                if index >= len(tokens) or tokens[index] not in {"no:cacheprovider", "scripts.ci_plan_coverage"}:
+                    return args
+            elif token not in {"-q", "-x", "--exitfirst", "--strict-markers", "--strict-config", "--disable-warnings"}:
+                if not allow_targets or not token.startswith(("backend/tests/", "tests/mcp")) or not (ROOT / token).exists():
+                    return args
+            index += 1
+    removed = [arg for arg in args if arg in shared]
+    if not removed:
+        return args
+    remaining = tuple(arg for arg in args if arg not in shared)
+    # Never call pytest with only flags: that would collect the entire repo.
+    has_target = any(arg.startswith(("backend/tests/", "tests/mcp")) for arg in remaining)
+    print(f"nightly_pytest_reuse producer={producer} consumer={session_name} targets={len(removed)}")
+    return remaining if has_target else None
 
 
 def _hosted_ci() -> bool:
@@ -722,6 +779,8 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_build_resume.py",
         "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
         "backend/tests/dataset_release/test_monthly_supervised_build.py",
+        "backend/tests/dataset_release/test_wsl_cgroup.py",
+        "backend/tests/dataset_release/test_resource_supervisor.py",
         "backend/tests/dataset_release/test_daily_minute_materializer.py",
         "backend/tests/dataset_release/test_subprocess_runner.py",
         "backend/tests/dataset_release/test_monthly_component_preparation.py",

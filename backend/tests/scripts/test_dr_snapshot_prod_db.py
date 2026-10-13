@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import subprocess
 from pathlib import Path
 
@@ -51,6 +52,7 @@ def test_dry_run_uses_env_container_without_docker(monkeypatch, tmp_path: Path, 
     assert rc == 0
     assert "container         : timescaledb" in out
     assert str(tmp_path / "aistock_pg_20260603.dump") in out
+    assert "DR_STAGE " not in out and "DR_SNAPSHOT_RECEIPT " not in out
 
 
 def test_custom_format_pg_dump_does_not_use_parallel_jobs(monkeypatch, tmp_path: Path) -> None:
@@ -110,7 +112,11 @@ def test_validate_dump_streams_local_file_to_pg_restore(monkeypatch, tmp_path: P
     monkeypatch.setattr(snapshot.subprocess, "run", _fake_subprocess_run)
 
     if result == "valid":
-        assert snapshot.validate_dump(plan)["table_data_entries"] == 1
+        receipt = snapshot.validate_dump(plan)
+        assert receipt["table_data_entries"] == 1
+        assert receipt["validation_scope"] == "toc_structure_only"
+        assert receipt["toc_checked"] is True
+        assert receipt["archive_payload_verified"] is receipt["restore_exercised"] is False
     else:
         error = SystemExit if result == "empty" else subprocess.CalledProcessError
         with pytest.raises(error):
@@ -122,3 +128,37 @@ def test_validate_dump_streams_local_file_to_pg_restore(monkeypatch, tmp_path: P
             dump_path,
         )
     ]
+
+
+@pytest.mark.parametrize("failed_stage", [None, "pg_dump", "copy", "toc", "cleanup", "cleanup_warning"])
+def test_main_records_stage_timing_without_claiming_restore(monkeypatch, tmp_path, capsys, failed_stage):
+    monkeypatch.setattr(snapshot, "parse_env", lambda: _prod_cfg())
+    calls = []
+    def stage(name):
+        def execute(*args, **kwargs):
+            calls.append(name)
+            if name == failed_stage:
+                raise SystemExit("stage failed")
+            if name == "cleanup" and failed_stage == "cleanup_warning":
+                return False
+            return {"toc_checked": True, "archive_payload_verified": False, "restore_exercised": False}
+        return execute
+    for name, function in [("pg_dump", "execute_pg_dump_inside_container"), ("copy", "copy_dump_out"),
+                           ("toc", "validate_dump"), ("cleanup", "cleanup_in_container")]:
+        monkeypatch.setattr(snapshot, function, stage(name))
+    args = ["--target-dir", str(tmp_path), "--snapshot-date", "2026-10-13"]
+    failed = failed_stage is not None and failed_stage != "cleanup_warning"
+    if failed:
+        with pytest.raises(SystemExit, match="stage failed"):
+            snapshot.main(args)
+    else:
+        assert snapshot.main(args) == 0
+    output = capsys.readouterr().out.splitlines()
+    receipt = json.loads(next(line.removeprefix("DR_SNAPSHOT_RECEIPT ") for line in output
+                              if line.startswith("DR_SNAPSHOT_RECEIPT ")))
+    assert receipt["status"] == ("failed" if failed else "completed")
+    assert set(receipt["stages"]) == set(calls) and calls[-1] == "cleanup"
+    assert all(item["duration_seconds"] >= 0 for item in receipt["stages"].values())
+    expected = "failed" if failed else "warning" if failed_stage == "cleanup_warning" else "completed"
+    assert receipt["stages"]["cleanup" if failed_stage == "cleanup_warning" else failed_stage or "toc"]["status"] == expected
+    assert receipt["archive_payload_verified"] is receipt["restore_exercised"] is False

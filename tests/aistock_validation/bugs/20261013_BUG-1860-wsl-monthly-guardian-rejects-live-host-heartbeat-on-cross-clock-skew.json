@@ -1,0 +1,313 @@
+{
+  "actual": "Live worker falsely fails WSL readback with MainPID=0 after guardian returns 72.",
+  "allowed_write_scope": [
+    "noxfile.py",
+    "backend/services/dataset_release/wsl_resource_guardian.py",
+    "backend/tests/dataset_release/test_wsl_cgroup.py",
+    "tests/aistock_validation/bugs/20261013_BUG-1860-wsl-monthly-guardian-rejects-live-host-heartbeat-on-cross-clock-skew.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1860",
+  "closed_at": "2026-10-13T03:53:15.661905Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-13T03:14:23.924980Z",
+  "description": "September monthly BUILD attempt 263 rejects a live Windows heartbeat because guest UTC is 6.196..6.346 seconds behind host UTC, exceeding the guardian's five-second future timestamp tolerance. Liveness must use identity-bound counter progress and guardian-local monotonic TTL, not cross-host wall-clock subtraction. Completed day/minute/index exports and the committed industry repair remain retained.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261013-445c81c6e068",
+      "timestamp": "2026-10-13T03:14:23.924980Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Read-only frozen-file smoke runs despite clock skew; lost pipe, missing/wrong identity, counter rollback or stalled heartbeat still fail closed.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/wsl_resource_guardian.py",
+      "backend/tests/dataset_release/test_wsl_cgroup.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1860-wsl-monthly-guardian-rejects-live-host-heartbeat-on-cross-clock-skew.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/wsl_resource_guardian.py",
+      "backend/tests/dataset_release/test_wsl_cgroup.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1860-wsl-monthly-guardian-rejects-live-host-heartbeat-on-cross-clock-skew.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/wsl_resource_guardian.py",
+        "backend/tests/dataset_release/test_wsl_cgroup.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/wsl_resource_guardian.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_wsl_cgroup.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/wsl_resource_guardian.py",
+        "backend/tests/dataset_release/test_wsl_cgroup.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/wsl_resource_guardian.py",
+      "backend/tests/dataset_release/test_wsl_cgroup.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/wsl_resource_guardian.py",
+      "backend/tests/dataset_release/test_wsl_cgroup.py"
+    ]
+  },
+  "first_seen_at": "2026-10-13T03:14:23.924980Z",
+  "fix_branch": null,
+  "fix_commit": "fac808c28f0056275337743149d8d94d73f9732a",
+  "fixed_at": "2026-10-13T03:28:07Z",
+  "github_issue_number": 5945,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5945",
+  "last_seen_at": "2026-10-13T03:14:23.924980Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5951",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "Fresh Windows AIstock process launched the patched guardian in a fresh Ubuntu Python process against an actual Windows HeartbeatWriter and actual guest cgroup counters; returncode=0, telemetry counter=2, wrapper_pid=561619; no database, candidate or service-control access",
+      "Guardian source SHA256=5933006ee4456e01b7dd23884411faae6ecb4a99fc107f333bf19cbdd9d1d6a5; probe root X:/AIstock_dataset_candidates/data_repair_staging/BUG-1860-guardian-readonly-5ehc10h8; no system clock change"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1860\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1860",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "2455751040123107ca10eb79f3c9166c59f53c432817351f06eb14b57377ee44",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "fac808c28f0056275337743149d8d94d73f9732a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-13T03:52:41.114519Z",
+      "mode": "read_only",
+      "observed_identity": "fac808c28f0056275337743149d8d94d73f9732a",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2decd1a8f572d8c970a160b1f355c5ed249ff4bc04fefbb22cae6284f34a8664",
+      "receipt_sha256": "83092937fac464b9825639dbb44c7580c496c86c39562cc53f51da0f4fc2ad3c",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "82b8bc564e2bc73651d0008303a1bda09afdc04e82e1bcbb84587bf3247555f3",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1860",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "cbffdb6464f46139",
+    "recorded_at": "2026-10-13T03:28:41.775491Z",
+    "runtime_contract_digest": "154bf8c81a9b44d225b306ca6f5d44a2b6a028bb420b884cddcd7ebfb469388b",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ca693003cd0086dde221330e60b824172917bd94",
+    "source_merge_commit": "fac808c28f0056275337743149d8d94d73f9732a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5951",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_wsl_cgroup.py backend/tests/dataset_release/test_resource_supervisor.py backend/tests/dataset_release/test_monthly_supervised_build.py -q -> 45 passed",
+      "python -m nox -s l0 -- backend/services/dataset_release/wsl_resource_guardian.py backend/tests/dataset_release/test_wsl_cgroup.py noxfile.py tests/aistock_validation/bugs/20261013_BUG-1860-wsl-monthly-guardian-rejects-live-host-heartbeat-on-cross-clock-skew.json -> passed, 0 blocking",
+      "python -m nox -s validation_catalog_integrity -> passed, 8 tests and 0 findings",
+      "ruff check backend/services/dataset_release/wsl_resource_guardian.py backend/tests/dataset_release/test_wsl_cgroup.py noxfile.py -> passed"
+    ],
+    "validation_evidence_digest": "6da5279c3079052f5a30c67f678bef267308d602a5b36bc77a3d5ded6617d903"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "WSL monthly guardian rejects live host heartbeat on cross-clock skew",
+  "trigger_condition": {
+    "fingerprint": "445c81c6e068bc40689c77ae",
+    "source_event_id": "FE-20261013-445c81c6e068"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_wsl_cgroup.py backend/tests/dataset_release/test_resource_supervisor.py backend/tests/dataset_release/test_monthly_supervised_build.py -q -> 45 passed",
+    "python -m nox -s l0 -- backend/services/dataset_release/wsl_resource_guardian.py backend/tests/dataset_release/test_wsl_cgroup.py noxfile.py tests/aistock_validation/bugs/20261013_BUG-1860-wsl-monthly-guardian-rejects-live-host-heartbeat-on-cross-clock-skew.json -> passed, 0 blocking",
+    "python -m nox -s validation_catalog_integrity -> passed, 8 tests and 0 findings",
+    "ruff check backend/services/dataset_release/wsl_resource_guardian.py backend/tests/dataset_release/test_wsl_cgroup.py noxfile.py -> passed",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1860 --target worker-scheduler --expected-identity fac808c28f0056275337743149d8d94d73f9732a -> passed, read-only identity/business"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
