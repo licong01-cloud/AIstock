@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-10-13T03:41:16.453028Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "476feee50e32c2fddda4b77302fbd816998f2ff9",
+  "fixed_at": "2026-10-13T03:55:38Z",
   "github_issue_number": 5957,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5957",
   "last_seen_at": "2026-10-13T03:41:16.453028Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5963",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -135,6 +136,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -146,7 +148,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1866",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "facc460ed0fd6753",
+    "recorded_at": "2026-10-13T03:56:14.496097Z",
+    "runtime_contract_digest": "154bf8c81a9b44d225b306ca6f5d44a2b6a028bb420b884cddcd7ebfb469388b",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6709e16728c4a4d10c3d91994985f862414bd869",
+    "source_merge_commit": "476feee50e32c2fddda4b77302fbd816998f2ff9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5963",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_resource_supervisor.py backend/tests/dataset_release/test_wsl_cgroup.py backend/tests/dataset_release/test_monthly_supervised_build.py -q -> passed (57 cases)",
+      "python -m pytest backend/tests/dataset_release/test_resource_supervisor.py -q -k new_wsl_execution/invalid_identity -> passed (3 added/changed nodes)",
+      "python -m nox -s l0 -> passed",
+      "python -m nox -s validation_catalog_integrity -> passed (8 tests, zero findings)",
+      "rtk ruff check backend/services/dataset_release/resource_supervisor.py backend/tests/dataset_release/test_resource_supervisor.py noxfile.py -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "e1db56bc89b101276021ecfd1a649a06997d8ef86a0240985a7bad1a058dc423"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -155,6 +183,14 @@
     "fingerprint": "d693ebe301737df046fe495d",
     "source_event_id": "FE-20261013-d693ebe30173"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_resource_supervisor.py backend/tests/dataset_release/test_wsl_cgroup.py backend/tests/dataset_release/test_monthly_supervised_build.py -q -> passed (57 cases)",
+    "python -m pytest backend/tests/dataset_release/test_resource_supervisor.py -q -k new_wsl_execution/invalid_identity -> passed (3 added/changed nodes)",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_catalog_integrity -> passed (8 tests, zero findings)",
+    "rtk ruff check backend/services/dataset_release/resource_supervisor.py backend/tests/dataset_release/test_resource_supervisor.py noxfile.py -> passed",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
