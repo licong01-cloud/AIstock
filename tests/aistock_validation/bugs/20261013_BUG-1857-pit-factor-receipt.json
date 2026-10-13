@@ -5,6 +5,8 @@
     "backend/services/dataset_release/build_stage.py",
     "backend/tests/dataset_release/test_monthly_sector_mapping.py",
     "backend/tests/dataset_release/test_build_stage.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "tests/aistock_validation/bugs/20261013_BUG-1857-pit-factor-receipt.json"
   ],
   "assigned_agent": null,
@@ -143,9 +145,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh AIstock Python resolved all eight files from the real sealed factor receipt eda9451094fda234c178af5aeee995777a83f3563491926aea4a1dfaec4b8bbc using native dataset identities; no database connection, process control or candidate write",
+      "Real H5/Parquet fixture repair, preservation, idempotent retry and downstream BUILD industry proof validation passed"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
     "runtime_impact": "worker_scheduler",

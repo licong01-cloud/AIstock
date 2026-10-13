@@ -1298,13 +1298,13 @@ def _validate_native_month(
     history_ref = factor_receipt.get("industry_history_projection_ref")
     expected_history = invocation.plan.get("industry_history_projection_sha256")
     if expected_history is not None or history_ref is not None:
-        from .monthly_industry_history import IndustryHistoryProjection
+        from .monthly_industry_history import IndustryHistoryProjection, factor_file_receipts
         proof = invocation.cas.get_json_bounded(history_ref, max_bytes=16 * 1024 * 1024)
         projection = IndustryHistoryProjection.read(proof["projection"])
         if projection.sha256 != expected_history or proof.get("status") != "PASS" or proof.get("database_write") is not False:
             raise CandidateBuildStageError("industry repair was not verified against frozen authority")
-        sector_entries = [entry for entry in factor_receipt["files"] if entry["relative_path"] == "sector_data.h5"]
-        if len(sector_entries) != 1 or proof.get("sector_row_count") != sector_entries[0]["inherited_rows"] + sector_entries[0]["month_rows"]:
+        sector_entry = factor_file_receipts(factor_receipt)["sector_data.h5"]
+        if proof.get("sector_row_count") != sector_entry["inherited_rows"] + sector_entry["month_rows"]:
             raise CandidateBuildStageError("industry repair row count differs from physical factor tail")
     for report in reports.values():
         for path, pin in report["verified_output_files"].items():

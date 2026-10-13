@@ -1114,7 +1114,7 @@ def test_advisory_fixed5_offline_roles_are_exact_and_preserve_online_scope() -> 
         assert mixed["target_ids"] == ["backend-main"]
 
 
-@pytest.mark.parametrize("monthly", [True, False, "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "consumer-script"])
+@pytest.mark.parametrize("monthly", [True, False, "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "consumer-script", "monthly_industry_history.py", "history-with-build"])
 def test_release_sources_select_their_own_process_probe(monthly) -> None:
     catalog = workflow._load_runtime_target_catalog()
     target = catalog["targets"]["worker-scheduler"]
@@ -1130,6 +1130,9 @@ def test_release_sources_select_their_own_process_probe(monthly) -> None:
     ]
     if monthly == "consumer-script":
         monthly_sources = ["scripts/dataset_release_candidate_consumer_smoke.py"]
+    elif monthly == "history-with-build":
+        monthly_sources = ["backend/services/dataset_release/monthly_industry_history.py",
+                           "backend/services/dataset_release/build_stage.py"]
     elif isinstance(monthly, str):
         monthly_sources = [f"backend/services/dataset_release/{monthly}"]
 
