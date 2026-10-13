@@ -27,12 +27,20 @@
   "evidence_uris": [],
   "expected": "Read-only frozen-file smoke runs despite clock skew; lost pipe, missing/wrong identity, counter rollback or stalled heartbeat still fail closed.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/wsl_resource_guardian.py",
+      "backend/tests/dataset_release/test_wsl_cgroup.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1860-wsl-monthly-guardian-rejects-live-host-heartbeat-on-cross-clock-skew.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/wsl_resource_guardian.py",
-      "backend/tests/dataset_release/test_wsl_cgroup.py"
+      "backend/tests/dataset_release/test_wsl_cgroup.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1860-wsl-monthly-guardian-rejects-live-host-heartbeat-on-cross-clock-skew.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/wsl_resource_guardian.py",
@@ -114,11 +122,15 @@
       "Fresh Windows AIstock process launched the patched guardian in a fresh Ubuntu Python process against an actual Windows HeartbeatWriter and actual guest cgroup counters; returncode=0, telemetry counter=2, wrapper_pid=561619; no database, candidate or service-control access",
       "Guardian source SHA256=5933006ee4456e01b7dd23884411faae6ecb4a99fc107f333bf19cbdd9d1d6a5; probe root X:/AIstock_dataset_candidates/data_repair_staging/BUG-1860-guardian-readonly-5ehc10h8; no system clock change"
     ],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
