@@ -266,15 +266,18 @@ def build_nightly_execution_plan(
             selected_plan_keys.append(retry_plan_key)
         if session not in selected_sessions:
             selected_sessions.append(session)
-    # Run the full coverage producer before its non-coverage shared slices.
-    producer = "validation_center_backend"
-    consumers = {"validation_workflow_automation", "data_sync_autonomy_backend",
-                 "validation_module_registry_l0", "validation_catalog_integrity"}
-    if producer in selected_sessions:
-        consumer_positions = [index for index, session in enumerate(selected_sessions) if session in consumers]
-        if consumer_positions and min(consumer_positions) < selected_sessions.index(producer):
-            selected_sessions.remove(producer)
-            selected_sessions.insert(min(consumer_positions), producer)
+    # Order only already selected full producers; never add unrelated plans.
+    producers = {
+        "validation_center_backend": {"validation_workflow_automation", "data_sync_autonomy_backend",
+                                      "validation_module_registry_l0", "validation_catalog_integrity"},
+        "mcp_gateway_manifest_quality": {"research_mcp_contract", "mcp_gateway_phase6_resource_monitor"},
+    }
+    for producer, consumers in producers.items():
+        if producer in selected_sessions:
+            consumer_positions = [index for index, session in enumerate(selected_sessions) if session in consumers]
+            if consumer_positions and min(consumer_positions) < selected_sessions.index(producer):
+                selected_sessions.remove(producer)
+                selected_sessions.insert(min(consumer_positions), producer)
     change_scoped_files = unique_values(
         [
             *[str(path) for path in retry_context.get("change_scoped_files") or []],
