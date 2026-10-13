@@ -1,0 +1,328 @@
+{
+  "actual": "Original failed Loops 2/4 became running with real node1 PIDs 2052052/2052045, duplicating successful independent retry Loops 1/2; retry Loops 3/4 are not_reserved and waiting for capacity.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/tests/unified_engine/test_qe_custom_evo_status.py",
+    "backend/tests/unified_engine/test_qe_evolution_service_unified_only.py",
+    "backend/tests/unified_engine/test_qe_config_truth.py",
+    "backend/tests/test_qe_evolution_scheduler.py",
+    "backend/tests/unified_engine/test_qe_evolution_scheduler.py",
+    "tests/aistock_validation/bugs/20261013_BUG-1876-qe-custom-evolution-recovery-automatically-replays-failed-terminal-loops.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1876",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-13T05:39:04.864782Z",
+  "description": "Original failed Loops 2/4 became running with real node1 PIDs 2052052/2052045, duplicating successful independent retry Loops 1/2; retry Loops 3/4 are not_reserved and waiting for capacity.",
+  "events": [
+    {
+      "action": "review_ci_external_config_fixture_isolation",
+      "actor": "Codex",
+      "note": "Current-HEAD CI exposed eight existing config fixture failures when an active dataset profile/default provider is enabled. Reproduced missing-provider RED with QLIB_DATA_PATH_WSL set; isolated the legacy config tests from AISTOCK_ACTIVE_DATASET_PROFILE_PATH and explicitly cleared the provider constant only in the missing-provider test. Original assertions and production active-binding checks are unchanged. GREEN with contaminated external defaults: eight failed nodes passed; complete changed test files 194 passed/38 existing optional-dependency skips. No pipeline, dataset, production binding or experiment parameter changes.",
+      "timestamp": "2026-10-13T07:20:00Z"
+    },
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261013-789a93b63559",
+      "timestamp": "2026-10-13T05:39:04.864757Z"
+    },
+    {
+      "action": "code_review_terminal_claim_contract",
+      "actor": "Codex",
+      "note": "Review 1: automatic recovery selected every non-completed Loop; both queue reset and running claim SQL accepted failed/cancelled outcomes. Fixed selection to pending/missing and atomic SQL claims to pending only. Existing active work stays under scan_running_loops reconciliation; explicit retry_loop/resume_task/rerun APIs keep their authorized pending transition and attempt identity. No model/factor/seed/dataset/strategy/pool/capacity changes.",
+      "timestamp": "2026-10-13T06:09:52Z"
+    },
+    {
+      "action": "review_ci_execution_coverage",
+      "actor": "Codex",
+      "note": "The pre-existing two scheduler tests were outside every selected CI plan. Both tests, their retry-attempt identity assertions and QE ownership were preserved and relocated into backend/tests/unified_engine/test_qe_evolution_scheduler.py, already covered by existing QE CI globs. Only stale GPU-return/config-persistence fixtures were corrected. No pipeline, plan, catalog or workflow relaxation. Revalidated 47 claim/queue/dispatch cases and both scheduler contracts after syncing latest main; persistent scheduler source SHA256 remains 77f09371a2f6adb091efebd82d8808b126f7dd61cb3b2b9a40e894af34be5cf7.",
+      "timestamp": "2026-10-13T06:34:35Z"
+    },
+    {
+      "action": "authorized_original_batch_pause_readback",
+      "actor": "Codex",
+      "note": "All 12 TCN Loops completed before the single authorized POST /api/v1/quantevolver/evolution/tasks/qe_20261013_024708_2cff/stop. API success, paused=true, loops_cancelled=[], process_killed=false and error=null for all ten already-failed Loops. Readback: original paused with 14 completed (12 TCN + 2 previously finished duplicate LGBM) and 10 failed, no active Loop. Independent exact retry qe_20261013_112346_00a6 remains running: 2 completed, Loops3/4 running, 8 pending. Completed results/failed records retained, no experiment deletion or backend/service control. The two original duplicate LGBM results are excluded from new non-duplicate research counts.",
+      "timestamp": "2026-10-13T06:34:35Z"
+    },
+    {
+      "action": "code_review_race_and_compatibility",
+      "actor": "Codex",
+      "note": "Review 2: covered failed/cancelled/canceled/completed/running/processing/unknown/null states, empty dispatch with running children, state changes during SQL claim and capacity wait, and 100 unchanged wakes remaining read-only. 47 focused cases passed. Broad related matrix found an existing explicit-retry fixture mismatch, reproduced with origin/main source; only its three-value GPU contract and config persistence fake were aligned, preserving identity assertions. Exact retry identity test passed. qe_read_backend: 701 passed/1 skipped. L0, guardrail and ownership passed; module registry 8 passed. DESIGN-COMPLIANCE-001: complete fix, no silent success, no business parameter drift, no new approval/gate.",
+      "timestamp": "2026-10-13T06:09:52Z"
+    },
+    {
+      "action": "containment_authorized_pending_tcn_completion",
+      "actor": "user",
+      "note": "User explicitly authorized pausing only original task qe_20261013_024708_2cff after its final TCN Loop23 completes, retaining completed results and allowing independent LGBM task qe_20261013_112346_00a6 to continue. At last readback Loop23 is running; no stop, restart or cleanup has been executed.",
+      "timestamp": "2026-10-13T06:09:52Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_worktrees/qe-new-recipes-20h-20261013/tmp/handoff/new_recipe_20h/lgbm_retry_launch_receipt.json"
+  ],
+  "expected": "Automatic recovery dispatches only eligible pending work; terminal outcomes remain immutable unless explicitly retried; active remote work is adopted without duplicate execution; exact retry queue advances within node limits.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/test_qe_evolution_scheduler.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qe_evolution_scheduler.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1876-qe-custom-evolution-recovery-automatically-replays-failed-terminal-loops.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/test_qe_evolution_scheduler.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py",
+      "backend/tests/unified_engine/test_qe_evolution_scheduler.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1876-qe-custom-evolution-recovery-automatically-replays-failed-terminal-loops.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/tests/unified_engine/test_qe_custom_evo_status.py",
+        "backend/tests/unified_engine/test_qe_evolution_service_unified_only.py"
+      ],
+      "impacted_modules": [
+        "qe.core",
+        "qe.single_experiment",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/qe_evolution_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_custom_evo_status.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/tests/unified_engine/test_qe_evolution_service_unified_only.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/tests/unified_engine/test_qe_custom_evo_status.py",
+        "backend/tests/unified_engine/test_qe_evolution_service_unified_only.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_custom_evo_status.py",
+      "backend/tests/unified_engine/test_qe_evolution_service_unified_only.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/unified_engine/test_qe_custom_evo_status.py",
+      "backend/tests/unified_engine/test_qe_evolution_service_unified_only.py"
+    ]
+  },
+  "first_seen_at": "2026-10-13T05:39:04.864782Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5991,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5991",
+  "last_seen_at": "2026-10-13T05:39:04.864782Z",
+  "module": "qe.custom_evolution",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
+    "fresh_process_evidence": [
+      "Fresh isolated pytest process loaded tracked qe_evolution_service.py SHA256=77f09371a2f6adb091efebd82d8808b126f7dd61cb3b2b9a40e894af34be5cf7. Targeted automatic-dispatch, terminal/active/unknown-state preservation, atomic concurrent-claim, capacity-wait and unchanged-wakeup contracts: 45 passed. Queued pending-to-failed transition contracts: 2 passed. No experiment, training, backtest, dataset write, production DDL/DML, dependency install or service control performed. The running backend has not loaded this source fix.",
+      "Fresh isolated pytest process loaded persistent qe_evolution_service.py SHA256 77f09371a2f6adb091efebd82d8808b126f7dd61cb3b2b9a40e894af34be5cf7. 47 automatic-dispatch/queue/CAS regressions passed at source HEAD 41bc857 (same source hash as final code HEAD 14226be). No QE experiment, training, data write or service control. User backend restart remains pending."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe.custom_evolution"
+  ],
+  "title": "QE custom evolution recovery automatically replays failed terminal loops and blocks exact retry queue",
+  "trigger_condition": {
+    "fingerprint": "789a93b6355902b8ec9bdb77",
+    "source_event_id": "FE-20261013-789a93b63559"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe.custom_evolution",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe.custom_evolution",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
