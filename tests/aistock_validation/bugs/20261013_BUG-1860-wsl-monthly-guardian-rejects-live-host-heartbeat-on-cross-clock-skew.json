@@ -1,6 +1,7 @@
 {
   "actual": "Live worker falsely fails WSL readback with MainPID=0 after guardian returns 72.",
   "allowed_write_scope": [
+    "noxfile.py",
     "backend/services/dataset_release/wsl_resource_guardian.py",
     "backend/tests/dataset_release/test_wsl_cgroup.py",
     "tests/aistock_validation/bugs/20261013_BUG-1860-wsl-monthly-guardian-rejects-live-host-heartbeat-on-cross-clock-skew.json"
@@ -14,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-13T03:14:23.924980Z",
-  "description": "Live worker falsely fails WSL readback with MainPID=0 after guardian returns 72.",
+  "description": "September monthly BUILD attempt 263 rejects a live Windows heartbeat because guest UTC is 6.196..6.346 seconds behind host UTC, exceeding the guardian's five-second future timestamp tolerance. Liveness must use identity-bound counter progress and guardian-local monotonic TTL, not cross-host wall-clock subtraction. Completed day/minute/index exports and the committed industry repair remain retained.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -109,7 +110,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh Windows AIstock process launched the patched guardian in a fresh Ubuntu Python process against an actual Windows HeartbeatWriter and actual guest cgroup counters; returncode=0, telemetry counter=2, wrapper_pid=561619; no database, candidate or service-control access",
+      "Guardian source SHA256=5933006ee4456e01b7dd23884411faae6ecb4a99fc107f333bf19cbdd9d1d6a5; probe root X:/AIstock_dataset_candidates/data_repair_staging/BUG-1860-guardian-readonly-5ehc10h8; no system clock change"
+    ],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
