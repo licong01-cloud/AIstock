@@ -25,6 +25,12 @@
   ],
   "evidence_uris": [],
   "expected": "Guardian fix is verified against the current supervised monthly worker and API identity; standalone legacy worker sources retain their legacy probe.",
+  "review_evidence": [
+    "Round1: traced canonical BUG-1860 probe selection and live backend fac808c identity; exact guardian and shared supervisor were wrongly assigned to the obsolete heartbeat route.",
+    "Round2: moved only these two exact source paths, avoiding ambiguous dual-route matches; legacy build_stage route remains unchanged and tested.",
+    "Round3: 27 real catalog/process-probe regressions passed including two RED-to-GREEN cases, multiple-worker rejection and origin/identity checks; workflow-smoke and lint passed.",
+    "DESIGN-COMPLIANCE-001: full narrow fix, no swallowed error/fake success, no business or data semantics change, no new gate; DB/dependency/runtime actions noop."
+  ],
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
