@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "合法历史来源标识可保留并通过成员采集；行业身份冲突和无效代码仍精确失败；PIT策略人口不变",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/sw_industry_history_store.py",
+      "backend/tests/test_sw_industry_history_store.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1886-t.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/sw_industry_history_store.py",
-      "backend/tests/test_sw_industry_history_store.py"
+      "backend/tests/test_sw_industry_history_store.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1886-t.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/sw_industry_history_store.py",
@@ -91,8 +97,8 @@
   },
   "first_seen_at": "2026-10-13T16:00:27.522457Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3efe774a1a405faa8dafdab4c4de4fdf0cff8586",
+  "fixed_at": "2026-10-13T16:24:07Z",
   "github_issue_number": 6020,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6020",
   "last_seen_at": "2026-10-13T16:00:27.522457Z",
@@ -100,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6021",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -123,7 +130,9 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -133,7 +142,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1886",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2b430d78f6334c67",
+    "recorded_at": "2026-10-13T16:25:10.420088Z",
+    "runtime_contract_digest": "763968c548a5eaad0e18483ecce66065774694b5c70e63a8f4b65c632f001514",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c9b55dc583835621c203210177f892701a43355f",
+    "source_merge_commit": "3efe774a1a405faa8dafdab4c4de4fdf0cff8586",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6021",
+    "validation_evidence": [
+      "validation-receipt: id=43bf315ed746fdf7 commit=c9b55dc583835621c203210177f892701a43355f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=75c226b93ff23dc6 commit=c9b55dc583835621c203210177f892701a43355f kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_sw_industry_history_store.py backend/tests/services/test_sector_data_repair.py backend/tests/test_tushare_sync_engine.py -q` result=`passed 131 tests`"
+    ],
+    "validation_evidence_digest": "f36f36f69bee5cc63abf24655b0a7ad6184530cc718b44bb6893a7a9544ceaca"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -142,6 +173,10 @@
     "fingerprint": "5d0768c8822e2347ea27e3fb",
     "source_event_id": "FE-20261013-5d0768c8822e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=43bf315ed746fdf7 commit=c9b55dc583835621c203210177f892701a43355f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=75c226b93ff23dc6 commit=c9b55dc583835621c203210177f892701a43355f kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/test_sw_industry_history_store.py backend/tests/services/test_sector_data_repair.py backend/tests/test_tushare_sync_engine.py -q` result=`passed 131 tests`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
