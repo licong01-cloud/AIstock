@@ -973,6 +973,142 @@ def _validate_hmm_rotation_l2_overview(
     return "passed", None, facts
 
 
+def _validate_hmm_daily_coefficient_jobs(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Accept one pinned, completed, registered database-daily job; no IO.
+
+    Query identities are probe expectations, not API filters. Pre-PR only
+    checks contract registration; runtime acceptance requires the real job.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    fields = ("job_id", "config_id", "signal_preset", "as_of_trade_date", "effective_trade_date",
+              "daily_key", "model_sha256", "input_sha256", "artifact_sha256")
+    expected = {}
+    for field in fields:
+        values = query.get(field, [])
+        if len(values) != 1 or not values[0].strip():
+            return "failed", f"daily job probe requires exactly one non-empty {field}", {}
+        expected[field] = values[0]
+    for field in ("daily_key", "model_sha256", "input_sha256", "artifact_sha256"):
+        if re.fullmatch(r"[0-9a-f]{64}", expected[field]) is None:
+            return "failed", f"daily job probe {field} must be a lowercase SHA-256", {}
+    match = re.fullmatch(r"/api/v1/hmm-training/snapshots/([^/]+)/daily-coefficients/jobs", parsed.path)
+    if match is None:
+        return "failed", "daily job probe path must identify a snapshot", {}
+    expected["snapshot_id"] = urllib.parse.unquote(match[1])
+    if not isinstance(payload, list) or not payload or any(not isinstance(row, dict) for row in payload):
+        return "failed", "daily job readback must be a non-empty job list", {}
+    jobs = [row for row in payload if row.get("job_id") == expected["job_id"]]
+    if len(jobs) != 1:
+        return "failed", "daily job readback must contain exactly one requested job", {}
+    job = jobs[0]
+    facts = {"job_id": expected["job_id"], "snapshot_id": expected["snapshot_id"]}
+    if job.get("status") != "COMPLETED" or job.get("error_message") or job.get("error_context"):
+        return "failed", "daily job must be COMPLETED without errors", facts
+    plan, result = job.get("plan_json"), job.get("result_json")
+    if not isinstance(plan, dict) or not isinstance(result, dict):
+        return "failed", "daily job requires durable plan and result objects", facts
+    if plan.get("generation_available") is not True or result.get("registration_status") != "REGISTERED_READBACK":
+        return "failed", "daily job requires verified input and completed registration readback", facts
+    if result.get("status") not in ("GENERATED", "EXISTS") or job.get("result_status") != result["status"]:
+        return "failed", "daily job result status must agree with GENERATED or EXISTS", facts
+    for field in ("snapshot_id", "config_id", "signal_preset", "as_of_trade_date", "effective_trade_date"):
+        if any(obj.get(field) != expected[field] for obj in (job, plan, result)):
+            return "failed", f"daily job {field} does not match pinned identity", facts
+    if any(obj.get("generation_mode") != "daily_asof_prediction_v1" for obj in (job, plan, result)):
+        return "failed", "daily job requires daily_asof_prediction_v1 generation mode", facts
+    if any(obj.get("source_mode") != "database_daily" for obj in (plan, result)):
+        return "failed", "daily job requires database_daily without cross-source fallback", facts
+    for field in ("daily_key", "model_sha256"):
+        if plan.get(field) != expected[field]:
+            return "failed", f"daily job plan {field} does not match pinned identity", facts
+    same_assets = [row for row in payload if isinstance(row.get("plan_json"), dict)
+                   and row["plan_json"].get("daily_key") == expected["daily_key"]]
+    if len(same_assets) != 1 or any(row.get("snapshot_id") != expected["snapshot_id"] for row in payload):
+        return "failed", "daily job list has duplicate assets or mismatched snapshot ownership", facts
+    for field in ("parameter_sha256", "generator_sha256"):
+        if not isinstance(plan.get(field), str) or re.fullmatch(r"[0-9a-f]{64}", plan[field]) is None:
+            return "failed", f"daily job plan {field} must be a lowercase SHA-256", facts
+    identity = plan.get("input_identity")
+    if not isinstance(identity, dict) or identity != result.get("input_identity"):
+        return "failed", "daily job plan and result input identities must agree", facts
+    if identity.get("schema_version") != "hmm_database_daily_input_v1" or identity.get("source_mode") != "database_daily":
+        return "failed", "daily job requires database daily input identity schema", facts
+    if identity.get("input_sha256") != expected["input_sha256"]:
+        return "failed", "daily job input hash does not match pinned identity", facts
+    if identity.get("completion_authority") != "market.dataset_date_refresh_audit" or (
+        identity.get("knowledge_mode") != "forward_current_read_snapshot"
+        or identity.get("historical_as_known_verified") is not False
+    ):
+        return "failed", "daily job requires completion authority and honest forward-only knowledge mode", facts
+    statuses = identity.get("completion_statuses")
+    datasets = ("sector_data", "sw_daily", "index_daily")
+    if not isinstance(statuses, dict) or set(statuses) != set(datasets):
+        return "failed", "daily job input completion must cover every required dataset", facts
+    try:
+        dates = {}
+        for field in ("as_of_trade_date", "effective_trade_date"):
+            value = expected[field]
+            dates[field] = datetime.strptime(value, "%Y-%m-%d").date()
+            if dates[field].isoformat() != value or identity.get(field) != value:
+                raise ValueError("non-canonical or mismatched date")
+        cutoff = datetime.fromisoformat(identity.get("read_cutoff_at", ""))
+        completed = datetime.fromisoformat(job.get("completed_at", ""))
+        if cutoff.utcoffset() is None or completed.utcoffset() is None:
+            raise ValueError("timezone required")
+        read_date = cutoff.astimezone(timezone(timedelta(hours=8))).date()
+        if not dates["as_of_trade_date"] < dates["effective_trade_date"] or not (
+            dates["as_of_trade_date"] <= read_date <= dates["effective_trade_date"] and cutoff <= completed
+        ):
+            raise ValueError("invalid date/knowledge boundary")
+        if completed > datetime.now(timezone.utc):
+            raise ValueError("future completion")
+        for dataset in datasets:
+            status = statuses[dataset]
+            if not isinstance(status, dict) or (
+                status.get("dataset") != dataset or status.get("trade_date") != expected["as_of_trade_date"]
+                or status.get("status") != "success" or type(status.get("row_count")) is not int
+                or status["row_count"] <= 0
+            ):
+                raise ValueError("missing or unsuccessful dataset completion")
+            refreshed = datetime.fromisoformat(status.get("refreshed_at", ""))
+            if refreshed.utcoffset() is None or refreshed > cutoff:
+                raise ValueError("dataset completion after frozen read cutoff")
+    except (ValueError, TypeError):
+        return "failed", "daily job dates/read cutoff/completion must satisfy canonical as-of/effective boundaries", facts
+    key = {field: plan[field] for field in ("source_mode", "snapshot_id", "config_id", "model_sha256",
+                                          "parameter_sha256", "generator_sha256", "signal_preset")}
+    key.update(as_of=expected["as_of_trade_date"], effective=expected["effective_trade_date"],
+               input_identity={k: v for k, v in identity.items() if k != "read_cutoff_at"})
+    try:
+        encoded = (json.dumps(key, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
+    except (ValueError, TypeError):
+        return "failed", "daily job input identity must be finite canonical JSON", facts
+    if hashlib.sha256(encoded).hexdigest() != expected["daily_key"]:
+        return "failed", "daily job key does not bind model/parameters/generator/input/dates", facts
+    if any(obj.get("artifact_sha256") != expected["artifact_sha256"] for obj in (job, result)):
+        return "failed", "daily job artifact identity does not match pinned hash", facts
+    output = plan.get("output_path")
+    name = f"coefficients_{expected['signal_preset']}_{expected['effective_trade_date']}_{expected['effective_trade_date']}__daily_{expected['daily_key']}.json"
+    if not isinstance(output, str) or output.replace("\\", "/").rsplit("/", 1)[-1] != name or any(
+        obj.get("output_path") != output for obj in (job, result)
+    ):
+        return "failed", "daily job artifact path must agree with its immutable daily key", facts
+    for field in ("coefficient_bytes", "sector_count", "date_count"):
+        if type(result.get(field)) is not int or result[field] <= 0 or (field == "date_count" and result[field] != 1):
+            return "failed", f"daily job result {field} must be a valid positive count", facts
+    for obj in (job, plan, result):
+        maxima = obj.get("input_data_max_dates")
+        if not isinstance(maxima, dict) or any(
+            maxima.get(key) != expected["as_of_trade_date"] for key in ("sector_data", "sw_daily", "index_daily_000300")
+        ) or any(value != expected["as_of_trade_date"] for value in maxima.values()):
+            return "failed", "daily job input maxima must agree with its as-of boundary", facts
+    if result.get("requires_wsl") is not False:
+        return "failed", "database daily job must not require a frozen-file WSL worker", facts
+    facts.update(expected, registration_status=result["registration_status"], source_mode="database_daily")
+    return "passed", None, facts
+
+
 def _validate_hmm_workers(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
     """Read one explicitly identified worker; never infer a reload from controller health."""
     query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
