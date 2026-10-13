@@ -15,6 +15,20 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize("eligible", [False, True])
+def test_nightly_issue_supersession_requires_receipt_and_bounds_reads(monkeypatch, eligible):
+    rows = [dict(databaseId=n, headSha="a" * 40, status="completed", conclusion="success") for n in range(200, 180, -1)]
+    monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: dict(ok=True, stdout=json.dumps(rows)))
+    checks = []
+    def receipt(**kwargs):
+        checks.append(kwargs["run_id"])
+        return dict(eligible=eligible, reason="source_bound_l3_receipt" if eligible else "no_live_source_bound_l3_receipt")
+    monkeypatch.setattr(workflow.ci_failure_summary, "nightly_success_receipt_eligibility", receipt)
+    result = workflow._find_superseding_main_success(dict(workflow="AIstock Nightly L3 + DR", branch="main", run_id="100"))
+    assert (result is not None) is eligible
+    assert len(checks) == (1 if eligible else 5)
+
+
 @pytest.mark.parametrize('fault', ['wrapper', 'empty', 'count', 'missing', 'price', 'duplicate', 'shares', 'overflow'])
 def test_tdx_raw_smoke_rejects_corrupt_facts(fault):
     row = {'Time': '2026-09-10T11:21:00+08:00', 'Open': 12800, 'High': 12800,
