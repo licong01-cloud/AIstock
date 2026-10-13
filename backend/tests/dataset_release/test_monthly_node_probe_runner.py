@@ -36,6 +36,28 @@ from backend.services.dataset_release.monthly_unified import REQUIRED_CONSUMERS
 MANIFEST = "a" * 64
 
 
+def test_node_probe_imports_in_fresh_process_without_python311_utc():
+    root = Path(__file__).resolve().parents[3]
+    program = (
+        "import datetime; "
+        "delattr(datetime, 'UTC') if hasattr(datetime, 'UTC') else None; "
+        "from backend.services.dataset_release import monthly_node_probe, monthly_immutable_deploy; "
+        "from backend.services.dataset_release import monthly_unified, monthly_worker; "
+        "assert monthly_unified.UTC is datetime.timezone.utc; "
+        "assert monthly_worker.UTC is datetime.timezone.utc; print('PY310_IMPORT_PASS')"
+    )
+    result = subprocess.run([sys.executable, "-B", "-c", program], cwd=root,
+                            capture_output=True, timeout=30, check=True)
+    assert result.stdout.strip() == b"PY310_IMPORT_PASS"
+
+
+def test_hmm_node_role_uses_shared_quote_facts_not_stock_classification():
+    from backend.services.dataset_release.monthly_node_probe_runner import _path_role
+
+    assert _path_role("components/sector_context_candidate_v1/sector_quote_facts.h5", "hmm_file_only") == "sector_data_h5"
+    assert _path_role("components/factor_h5_static_candidate_v2/sector_data.h5", "hmm_file_only") is None
+
+
 def test_monthly_git_identity_detaches_from_supervisor_console_and_stdin(monkeypatch, tmp_path):
     from backend.services.dataset_release.monthly_node_tools import MonthlyNodeTools, _bundle
 

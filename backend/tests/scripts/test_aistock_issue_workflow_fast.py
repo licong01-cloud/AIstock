@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import subprocess
+import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -13,6 +14,31 @@ import pytest
 
 import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
+
+
+@pytest.mark.parametrize("error,attempts,success", [
+    ("error: fetching ref refs/remotes/origin/main failed: incorrect old value provided", 2, True),
+    (f"error: cannot lock ref 'refs/remotes/origin/main': is at {'a'*40} but expected {'b'*40}", 2, True),
+    ("error: fetching ref refs/remotes/origin/main failed: incorrect old value provided", 2, False),
+    ("fatal: Authentication failed", 1, False),
+    ("error: cannot lock ref 'refs/remotes/origin/main': Permission denied", 1, False),
+    ("error: fetching ref refs/heads/main failed: incorrect old value provided", 1, False),
+    ("fatal: early EOF", 2, True),
+])
+def test_fetch_retries_only_transport_or_exact_remote_ref_race(monkeypatch, error, attempts, success):
+    calls = []
+    def run(args, **kwargs):
+        calls.append(args)
+        return dict(ok=True, stdout="fetched") if len(calls) == 2 and success else dict(ok=False, stderr=error)
+    monkeypatch.setattr(workflow, "_run_command", run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _: None)
+    if success:
+        assert workflow._git_fetch_with_transport_retry(["origin", "main"]) == "fetched"
+    else:
+        with pytest.raises(workflow.WorkflowError) as failure:
+            workflow._git_fetch_with_transport_retry(["origin", "main"])
+        assert str(failure.value) == error
+    assert calls == [["git", "fetch", "origin", "main"]] * attempts
 
 
 @pytest.mark.parametrize("eligible", [False, True])
@@ -978,6 +1004,66 @@ def test_unknown_business_smoke_endpoint_remains_fail_closed() -> None:
     assert "no target-owned business-smoke semantic contract" in semantic["reason"]
 
 
+def _daily_job_probe():
+    identity = dict(schema_version="hmm_database_daily_input_v1", source_mode="database_daily",
+                    as_of_trade_date="2026-10-12", effective_trade_date="2026-10-13",
+                    read_cutoff_at="2026-10-13T00:00:00+08:00", input_sha256="a" * 64)
+    identity.update(completion_authority="market.dataset_date_refresh_audit", knowledge_mode="forward_current_read_snapshot",
+                    historical_as_known_verified=False, completion_statuses={name: dict(dataset=name, trade_date="2026-10-12",
+                    status="success", row_count=1, refreshed_at="2026-10-12T23:00:00+08:00")
+                    for name in ("sector_data", "sw_daily", "index_daily")})
+    common = dict(snapshot_id="snapshot-1", config_id="config-1", signal_preset="balanced",
+                  as_of_trade_date="2026-10-12", effective_trade_date="2026-10-13", generation_mode="daily_asof_prediction_v1")
+    plan = dict(common, source_mode="database_daily", model_sha256="b" * 64, parameter_sha256="c" * 64,
+                generator_sha256="d" * 64, input_identity=identity, generation_available=True)
+    # Golden writer fingerprint: canonical UTF-8 JSON with terminal newline.
+    plan["daily_key"] = "785ade97f7209b945737f6f46d487001c195073a5917b544fad56e3d80e3ff9c"
+    plan["output_path"] = f"F:/models/coefficients_balanced_2026-10-13_2026-10-13__daily_{plan['daily_key']}.json"
+    plan["input_data_max_dates"] = dict.fromkeys(("sector_data", "sw_daily", "index_daily_000300"), "2026-10-12")
+    common.update(output_path=plan["output_path"], input_data_max_dates=plan["input_data_max_dates"])
+    result = dict(common, source_mode="database_daily", input_identity=dict(identity), status="GENERATED",
+                  registration_status="REGISTERED_READBACK", artifact_sha256="e" * 64, coefficient_bytes=100,
+                  date_count=1, sector_count=131, requires_wsl=False)
+    row = dict(common, job_id="job-1", status="COMPLETED", result_status="GENERATED", plan_json=plan,
+               result_json=result, artifact_sha256="e" * 64, completed_at="2026-10-13T01:00:00+08:00")
+    query = dict(config_id="config-1", signal_preset="balanced", as_of_trade_date="2026-10-12", effective_trade_date="2026-10-13",
+                 daily_key=plan["daily_key"], model_sha256="b" * 64, job_id="job-1", input_sha256="a" * 64, artifact_sha256="e" * 64)
+    return row, query
+
+
+@pytest.mark.parametrize("target,value", [("valid", None), ("exists", None), ("empty", None), ("duplicate", None),
+    ("query.job_id", ""), ("query.job_id", ["job-1", "job-1"]), ("duplicate_asset", None), ("status", "RUNNING"), ("status", "FAILED"),
+    ("query.job_id", "other"), ("snapshot_id", "other"), ("signal_preset", "other"), ("plan_json.source_mode", "qe_frozen_file"),
+    ("plan_json.as_of_trade_date", "2026-10-13"), ("plan_json.effective_trade_date", "2026-10-12"),
+    ("plan_json.daily_key", "f" * 64), ("plan_json.model_sha256", "f" * 64), ("plan_json.input_identity.input_sha256", "f" * 64),
+    ("artifact_sha256", "f" * 64), ("result_json.registration_status", "PUBLISHED"),
+    ("result_json.input_identity.input_sha256", "f" * 64), ("result_json.coefficient_bytes", True), ("error_message", "failed"),
+    ("plan_json.input_identity.read_cutoff_at", "2026-10-14T00:00:00+08:00"), ("query.model_sha256", "b" * 12),
+    ("plan_json.parameter_sha256", "f" * 64), ("plan_json.generator_sha256", "f" * 64), ("result_json.status", []),
+    ("plan_json", None), ("query.as_of_trade_date", "2026-10-32"), ("plan_json.input_identity.read_cutoff_at", "2026-10-13T00:00:00"),
+    ("result_json.date_count", 2), ("input_data_max_dates", {}), ("plan_json.input_identity.schema_version", "wrong"),
+    ("plan_json.generation_available", False), ("result_json.output_path", "F:/other.json"),
+    ("result_json.generation_mode", "file_extension"), ("result_json.requires_wsl", True),
+    ("plan_json.input_identity.completion_statuses", {}), ("plan_json.input_identity.historical_as_known_verified", True),
+    ("completed_at", "2099-10-13T01:00:00+08:00")])
+def test_daily_coefficient_jobs_semantics(target, value):
+    row, query = _daily_job_probe()
+    if target == "exists":
+        row["result_status"] = row["result_json"]["status"] = "EXISTS"
+    elif target not in {"valid", "empty", "duplicate", "duplicate_asset"}:
+        parts = target.split(".")
+        obj = {**row, "query": query} if parts[0] == "query" else row
+        for part in parts[:-1]:
+            obj = obj[part]
+        obj[parts[-1]] = value
+    payload = [] if target == "empty" else [row, row] if target == "duplicate" else [row]
+    if target == "duplicate_asset":
+        payload.append({**row, "job_id": "job-2"})
+    semantic = _business_semantic("http://127.0.0.1:8001/api/v1/hmm-training/snapshots/snapshot-1/daily-coefficients/jobs?"
+                                 + urllib.parse.urlencode(query, doseq=True), payload, "f" * 64)
+    assert (semantic["contract_id"], semantic["verdict"]) == ("hmm_database_daily_coefficient_jobs", "passed" if target in {"valid", "exists"} else "failed")
+
+
 @pytest.mark.parametrize("kind,case,expected", [
     *((kind, "valid", "passed") for kind in ("worker", "risk", "records")), ("health", "valid", "failed"),
     *(("worker", case, "failed") for case in ("empty", "no_query", "stale", "future", "wrong_owner", "duplicate", "pid_bool")),
@@ -1391,6 +1477,7 @@ def test_runtime_catalog_validation_error_cannot_be_downgraded(invalid_runtime_c
 @pytest.mark.parametrize("path,registered", [
     ("/api/v1/audit-unregistered-contract", False),
     ("/api/v1/factor-metrics/results", True),
+    ("/api/v1/hmm-training/snapshots/snapshot-1/daily-coefficients/jobs", True),
     ("/api/v1/advisory/programs/advp_test/sector-entry-price?target_trade_date=2026-08-28&list_version_id=list-test", True),
 ])
 def test_runtime_preflight_checks_semantic_registration_without_http(path, registered) -> None:
@@ -1408,7 +1495,7 @@ def test_runtime_preflight_checks_semantic_registration_without_http(path, regis
     )
     semantic_errors = [error for error in contract["blocking"] if "semantic contract" in error]
     assert bool(semantic_errors) is not registered
-    assert contract["pre_pr_ready"] is registered
+    assert (contract["pre_pr_ready"], contract["runtime_impact"], contract["target_ids"]) == (registered, "backend", ["backend-main"])
 
 
 def test_bug_1549_active_contract_consumers_remain_backend_main() -> None:

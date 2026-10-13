@@ -287,8 +287,10 @@ def _load_qrun_minute_module(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _stub_execution_algo_catalog(monkeypatch):
-    """Keep config-truth tests independent from the local DB catalog."""
+def _isolate_config_environment_and_catalog(monkeypatch):
+    """Legacy config contracts must not consume an external active profile."""
+
+    monkeypatch.delenv("AISTOCK_ACTIVE_DATASET_PROFILE_PATH", raising=False)
 
     monkeypatch.setattr(
         ConfigComposer,
@@ -1132,7 +1134,10 @@ def test_qe_execution_data_exclusion_rejects_partial_window_or_untyped_reason():
             )
 
 
-def test_qe_frozen_risk_policy_spec_requires_provider_uri():
+def test_qe_frozen_risk_policy_spec_requires_provider_uri(monkeypatch):
+    import backend.services.quantevolver.config_composer as composer_module
+
+    monkeypatch.setattr(composer_module, "QLIB_DATA_PATH_WSL", "")
     with pytest.raises(RuntimeError, match="reason_code=qe_frozen_build_spec_invalid"):
         ConfigComposer()._build_qe_frozen_risk_policy_spec(
             DATA_SPLIT,
@@ -1567,8 +1572,20 @@ class _CustomEvoQueueCursor:
         self.sql = " ".join(str(sql).split())
         self.state["sql"].append(self.sql)
         self.state["params"].append(params)
+        self.rowcount = 1
+        if "RETURNING status" in self.sql and self.state.get("claim_race"):
+            # A terminal transition after the SELECT must defeat the SQL claim.
+            self.state["existing_loop"] = (self.state["claim_race"], "node-a")
+            self.state["transitioned"] = not (
+                "WHERE qe_evolution_loops.status = 'pending'" in self.sql
+                or "AND status = 'pending'" in self.sql
+            )
 
     def fetchone(self):
+        if self.sql.startswith("SELECT * FROM qe_evolution_tasks"):
+            return self.state["task"]
+        if self.sql.startswith("SELECT status FROM qe_evolution_tasks"):
+            return {"status": "running"}
         if self.sql.startswith("SELECT status, node_id FROM qe_evolution_loops"):
             return self.state.get("existing_loop")
         if self.sql.startswith("SELECT status FROM qe_evolution_loops"):
@@ -1577,6 +1594,13 @@ class _CustomEvoQueueCursor:
         if "RETURNING status" in self.sql and self.state.get("transitioned", True):
             return ("running",)
         return None
+
+    def fetchall(self):
+        statuses = self.state["statuses"]
+        if self.sql.startswith("SELECT loop_index, status"):
+            return [{"loop_index": index, "status": status} for index, status in statuses.items()]
+        counts = {status: list(statuses.values()).count(status) for status in set(statuses.values())}
+        return list(counts.items())
 
 
 class _CustomEvoQueueConn:
@@ -1659,15 +1683,6 @@ def test_retry_loop_queues_until_custom_evo_parallelism_before_executor_submit()
     submit_idx = source.index("result = await executor.submit")
 
     assert queue_idx < submit_idx
-
-
-def test_custom_evo_parallelism_queue_helper_marks_pending_then_running():
-    source = inspect.getsource(AutoEvolutionScheduler._mark_custom_evo_loop_running_when_slot_available)
-
-    assert "ELSE 'pending'" in source
-    assert "status = 'running'" in source
-    assert "wait_for_qe_reconciliation" in source
-    assert "await asyncio.sleep(poll_seconds)" not in source
 
 
 def test_custom_evo_parallelism_queue_helper_waits_then_runs(monkeypatch):
@@ -1785,6 +1800,7 @@ def test_custom_evo_parallelism_queue_helper_does_not_resubmit_active_loop(monke
         "enters": 0,
         "exits": 0,
         "transitioned": False,
+        "existing_loop": ("running", "node-a"),
     }
 
     def fake_enforce(cur, *, task, loop_index, target_node_id, loop_db_id):
@@ -1811,8 +1827,113 @@ def test_custom_evo_parallelism_queue_helper_does_not_resubmit_active_loop(monke
     )
 
     assert slot is None
-    assert any("RETURNING status" in sql for sql in state["sql"])
+    assert all(sql.startswith("SELECT ") for sql in state["sql"])
     assert not any("UPDATE qe_evolution_tasks SET status = 'running'" in sql for sql in state["sql"])
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled", "canceled", "completed", "running", "processing", "unknown", None])
+@pytest.mark.parametrize("available", [False, True])
+@pytest.mark.parametrize("insert_if_missing", [False, True])
+def test_custom_evo_queue_preserves_existing_outcomes(monkeypatch, status, available, insert_if_missing):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    state = {"sql": [], "params": [], "commits": 0, "enters": 0, "exits": 0, "existing_loop": (status, None)}
+    monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
+    monkeypatch.setattr(scheduler, "_enforce_custom_evo_node_parallelism_slot", lambda *args, **kwargs: {
+        "node_id": "node-a", "available": available, "active_count": int(not available), "limit": 1,
+    })
+
+    async def forbid_wait(*args, **kwargs):
+        pytest.fail("A non-pending Loop must not enter the capacity queue")
+
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", forbid_wait)
+    result = asyncio.run(scheduler._mark_custom_evo_loop_running_when_slot_available(
+        task=_custom_evo_task_for_parallelism(), loop_index=2, target_node_id="node-a",
+        loop_db_id="qe_parallel_task_Loop2", action_type="evolve", insert_if_missing=insert_if_missing,
+    ))
+    assert result is None
+    assert state["existing_loop"] == (status, None)
+    assert all(sql.startswith("SELECT ") for sql in state["sql"])
+
+
+@pytest.mark.parametrize("race", ["failed", "cancelled", "running"])
+@pytest.mark.parametrize("insert_if_missing", [False, True])
+def test_custom_evo_claim_loses_to_concurrent_transition(monkeypatch, race, insert_if_missing):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    state = {"sql": [], "params": [], "commits": 0, "enters": 0, "exits": 0,
+             "existing_loop": ("pending", "node-a"), "claim_race": race}
+    monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
+    monkeypatch.setattr(scheduler, "_enforce_custom_evo_node_parallelism_slot", lambda *args, **kwargs: {
+        "node_id": "node-a", "available": True,
+    })
+    assert asyncio.run(scheduler._mark_custom_evo_loop_running_when_slot_available(
+        task=_custom_evo_task_for_parallelism(), loop_index=2, target_node_id="node-a",
+        loop_db_id="qe_parallel_task_Loop2", action_type="retry", insert_if_missing=insert_if_missing,
+    )) is None
+    assert state["existing_loop"][0] == race
+    assert not any(sql.startswith("UPDATE qe_evolution_tasks") for sql in state["sql"])
+
+
+@pytest.mark.parametrize("insert_if_missing", [False, True])
+def test_custom_evo_queued_loop_stops_when_outcome_changes(monkeypatch, insert_if_missing):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    state = {"sql": [], "params": [], "commits": 0, "enters": 0, "exits": 0,
+             "existing_loop": ("pending", "node-a")}
+    monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
+    monkeypatch.setattr(scheduler, "_enforce_custom_evo_node_parallelism_slot", lambda *args, **kwargs: {
+        "node_id": "node-a", "available": False, "active_count": 1, "limit": 1,
+    })
+
+    async def finish_while_waiting(*args, **kwargs):
+        assert kwargs["timeout_seconds"] >= 60
+        state["existing_loop"] = ("failed", "node-a")
+        return 1
+
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", finish_while_waiting)
+    assert asyncio.run(scheduler._mark_custom_evo_loop_running_when_slot_available(
+        task=_custom_evo_task_for_parallelism(), loop_index=2, target_node_id="node-a",
+        loop_db_id="qe_parallel_task_Loop2", action_type="retry", insert_if_missing=insert_if_missing,
+    )) is None
+    assert state["existing_loop"][0] == "failed"
+    assert state["enters"] == state["exits"] == 2
+    assert all(sql.startswith("SELECT ") for sql in state["sql"])
+
+
+@pytest.mark.parametrize("statuses,expected", [
+    ({1: "completed", 2: "failed", 3: "cancelled", 4: "canceled", 5: "running", 6: "processing", 7: "pending", 8: None}, [7, 9]),
+    ({1: "running", 2: "processing"}, []),
+    ({1: "completed", 2: "failed"}, []),
+    ({1: "completed", 2: "completed"}, []),
+])
+def test_custom_evo_automatic_dispatch_preserves_outcomes(monkeypatch, statuses, expected):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    task = _custom_evo_task_for_parallelism(limit=2)
+    count = 9 if expected else len(statuses)
+    task["strategy_evo_config"]["loops"] = [{"loop_index": i, "node_id": "node-a"} for i in range(1, count + 1)]
+    state = {"sql": [], "params": [], "commits": 0, "enters": 0, "exits": 0, "task": task, "statuses": dict(statuses)}
+    monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
+    monkeypatch.setattr(scheduler, "_get_task_status", lambda _: "running")
+    submitted, waited = [], []
+
+    async def submit(task_id, index, **kwargs):
+        submitted.append(index)
+        state["statuses"][index] = "completed"
+        return f"{task_id}_Loop{index}"
+
+    async def wait(task_id, index, loop_id):
+        waited.append(index)
+
+    monkeypatch.setattr(scheduler, "submit_custom_evo_loop", submit)
+    monkeypatch.setattr(scheduler, "_wait_and_process_custom_evo_loop", wait)
+    asyncio.run(scheduler.submit_custom_evo_all_loops(task["task_id"]))
+    assert submitted == waited == expected
+    assert all(state["statuses"][i] == status for i, status in statuses.items() if i not in expected)
+    terminal_updates = [params[0] for sql, params in zip(state["sql"], state["params"])
+                        if sql.startswith("UPDATE qe_evolution_tasks SET status = %s")]
+    if any(status in {"running", "processing", None} for status in statuses.values()):
+        assert terminal_updates == []
+    else:
+        assert terminal_updates == ["completed" if set(statuses.values()) == {"completed"} else "failed"]
+    assert task["strategy_evo_config"]["node_parallelism"] == {"node-a": 2}
 
 
 def test_gpu_phase_waiter_releases_before_loop_terminal_after_lifecycle_event(monkeypatch):

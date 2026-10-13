@@ -3410,6 +3410,7 @@ _validate_advisory_entry_price_status = _runtime_semantics._validate_advisory_en
 _validate_advisory_returns = _runtime_semantics._validate_advisory_returns
 _validate_advisory_sector_entry_original_list = _runtime_semantics._validate_advisory_sector_entry_original_list
 _validate_hmm_rotation_l2_overview = _runtime_semantics._validate_hmm_rotation_l2_overview
+_validate_hmm_daily_coefficient_jobs = _runtime_semantics._validate_hmm_daily_coefficient_jobs
 _validate_hmm_workers = _runtime_semantics._validate_hmm_workers
 _validate_hmm_risk_l2_overview = _runtime_semantics._validate_hmm_risk_l2_overview
 _validate_research_pipeline_health = _runtime_semantics._validate_research_pipeline_health
@@ -3426,6 +3427,8 @@ _validate_monthly_release_ready = _runtime_semantics._validate_monthly_release_r
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/hmm-training/snapshots/[^/]+/daily-coefficients/jobs$"),
+     "hmm_database_daily_coefficient_jobs", _validate_hmm_daily_coefficient_jobs),
     (re.compile(r"^/api/kline-all/tdx$"), "tdx_raw_kline_facts", _validate_tdx_raw_kline),
     (re.compile(r"^/api/v1/hmm-evolution/workers$"), "hmm_worker_liveness", _validate_hmm_workers),
     (re.compile(r"^/api/v1/hmm-risk/risk-l2/overview$"), "hmm_risk_l2_overview", _validate_hmm_risk_l2_overview),
@@ -3598,6 +3601,7 @@ def _evaluate_business_smoke_semantics(
         "factor_lifecycle_detail",
         "factor_metrics_results",
         "hmm_rotation_l2_overview",
+        "hmm_database_daily_coefficient_jobs",
         "advisory_entry_price_status",
         "advisory_sector_entry_original_list",
         "advisory_returns_metrics_v2",
@@ -3986,7 +3990,7 @@ def _git_fetch_with_transport_retry(
     attempts: int = 2,
     timeout: int = 60,
 ) -> str:
-    """Retry only transport-class failures for an idempotent git fetch."""
+    """Bound transport/remote-ref CAS retries to this idempotent fetch only."""
 
     total = max(1, int(attempts))
     for index in range(total):
@@ -3994,7 +3998,12 @@ def _git_fetch_with_transport_retry(
         if result.get("ok"):
             return str(result.get("stdout") or "").strip()
         message = str(result.get("stderr") or result.get("stdout") or "git fetch failed")
-        if not _looks_like_github_transport_failure(message) or index + 1 >= total:
+        ref_race = re.search(
+            r"(?:fetching ref|cannot lock ref) ['\"]?refs/remotes/[^'\"\s:]+['\"]?(?: failed)?: "
+            r"(?:incorrect old value provided|is at [0-9a-f]+ but expected [0-9a-f]+)",
+            message,
+        ) is not None
+        if not (ref_race or _looks_like_github_transport_failure(message)) or index + 1 >= total:
             raise WorkflowError(message)
         time.sleep(0.5 * (index + 1))
     raise AssertionError("unreachable git fetch retry state")
