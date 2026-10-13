@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1876",
-  "closed_at": null,
+  "closed_at": "2026-10-13T08:01:10.259368Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -195,10 +195,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1876/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1876",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8491091005d1a48e12842529dd81fd8f796930f3ad04fc92df4622c1e3a2add",
+      "contract_digest": "b414f9f777e478c96fdd76de907651c2f81ec051674a48027b49f6079bc9af7f",
+      "expected_identity": "cecb72ab028896e8a0dce1ce9c02e5b915420239",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-13T07:57:13.161975Z",
+      "mode": "read_only",
+      "observed_identity": "cecb72ab028896e8a0dce1ce9c02e5b915420239",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "ec6ddc301761cdede1fb089edfc454d65a689220c393655fa9eef1f4b27f05b3",
+      "receipt_sha256": "afd1ccf6bf942e6ae6536feff1150d6efa244f46a7688a38ed23b3ea142a1887",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "970e12b3df6eb9e3254bb0f982c1f4dc69c41ceef601d0eff26c7fce385eb68c",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -230,7 +252,7 @@
     ],
     "validation_evidence_digest": "6b6579c1148ee74e1d19994dfa86d61adb426d466f50bc75d84ae7b69b58f19f"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qe.custom_evolution"
   ],
@@ -241,7 +263,8 @@
   },
   "validation_evidence": [
     "GitHub CI verdict run 38363158899 at f261dd30d02e1248eea080802449fabfd5134cf8 -> passed",
-    "rtk pytest backend/tests/unified_engine/test_qe_config_truth.py backend/tests/unified_engine/test_qe_evolution_scheduler.py -q --maxfail=1 -> passed (194 passed, 38 optional-dependency skipped, final source HEAD)"
+    "rtk pytest backend/tests/unified_engine/test_qe_config_truth.py backend/tests/unified_engine/test_qe_evolution_scheduler.py -q --maxfail=1 -> passed (194 passed, 38 optional-dependency skipped, final source HEAD)",
+    "post-restart-verify BUG-1876 backend-main identity cecb72ab028896e8a0dce1ce9c02e5b915420239 -> passed (health, identity and business smoke passed; no process control)"
   ],
   "verification_budget": {
     "budget": "standard",
