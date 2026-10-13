@@ -49,11 +49,17 @@ class _Connection:
     def __init__(self, cursor):
         self._cursor = cursor
         self.commits = 0
+        self.rollbacks = 0
+        self.autocommit = False
 
     def __enter__(self):
         return self
 
     def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.commits += 1
+        else:
+            self.rollbacks += 1
         return False
 
     def cursor(self):
@@ -74,23 +80,31 @@ def test_production_sector_rows_do_not_disappear_with_unpublished_quotes():
 def test_build_date_uses_dynamic_industry_mapping_without_persisted_identity(monkeypatch):
     cursor = _Cursor()
     connection = _Connection(cursor)
-    monkeypatch.setattr(module, "get_conn", lambda: connection)
+    def checkout(**kwargs):
+        assert kwargs == dict(autocommit=False, manage_transaction=True)
+        return connection
+
+    monkeypatch.setattr(module, "get_conn", checkout)
 
     rows = module.SectorDataBuilder().build_date(dt.date(2026, 7, 22))
 
     assert rows == 7
     assert connection.commits == 1
-    assert [sql for sql, _ in cursor.executed] == [
+    assert cursor.executed[0] == ("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", None)
+    assert cursor.executed[1] == ("LOCK TABLE market.sw_index_member IN SHARE MODE", None)
+    assert [sql for sql, _ in cursor.executed[2:5]] == [
         module._PREFLIGHT_DAY_SQL,
         module._DELETE_STALE_DAY_SQL,
         module._BUILD_DAY_SQL,
     ]
-    for _, params in cursor.executed:
+    for _, params in cursor.executed[2:5]:
         assert params == {
             "trade_date": dt.date(2026, 7, 22),
             "live_universe_key": module.DEFAULT_ST_PIT_UNIVERSE_KEY,
             "qe_universe_pattern": f"{module.IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX}%",
         }
+    assert "sector_dependency_revision" in cursor.executed[5][0]
+    assert cursor.executed[5][1] == (dt.date(2026, 7, 22), 7, dt.date(2026, 7, 22))
     assert "market.stock_universe_pit_spans" in module._BUILD_DAY_SQL
     assert "JOIN authoritative_universes USING (universe_key)" in module._BUILD_DAY_SQL
     assert "market.sw_index_member" in module._BUILD_DAY_SQL
@@ -113,13 +127,14 @@ def test_build_date_uses_dynamic_industry_mapping_without_persisted_identity(mon
 def test_build_date_fails_loudly_before_mutation(monkeypatch, preflight, message):
     cursor = _Cursor(preflight=preflight)
     connection = _Connection(cursor)
-    monkeypatch.setattr(module, "get_conn", lambda: connection)
+    monkeypatch.setattr(module, "get_conn", lambda **kwargs: connection)
 
     with pytest.raises(module.SectorDataBuildContractError, match=message):
         module.SectorDataBuilder().build_date(dt.date(2026, 7, 22))
 
     assert connection.commits == 0
-    assert [sql for sql, _ in cursor.executed] == [module._PREFLIGHT_DAY_SQL]
+    assert connection.rollbacks == 1
+    assert [sql for sql, _ in cursor.executed][2:] == [module._PREFLIGHT_DAY_SQL]
 
 
 def test_preflight_exempts_unpublished_l2_from_sw_daily_contract():
@@ -132,17 +147,35 @@ def test_preflight_exempts_unpublished_l2_from_sw_daily_contract():
     assert "pit.l2_code IN (SELECT index_code FROM unpublished_l2)" in sql
 
 
+def test_failed_insert_rolls_back_delete_without_clearing_revision(monkeypatch):
+    cursor = _Cursor()
+    connection = _Connection(cursor)
+    execute = cursor.execute
+
+    def fail_insert(sql, params):
+        if sql is module._BUILD_DAY_SQL:
+            raise RuntimeError("injected insert failure")
+        execute(sql, params)
+
+    monkeypatch.setattr(cursor, "execute", fail_insert)
+    monkeypatch.setattr(module, "get_conn", lambda **kwargs: connection)
+    with pytest.raises(RuntimeError, match="insert failure"):
+        module.SectorDataBuilder().build_date(dt.date(2026, 7, 1))
+    assert connection.rollbacks == 1 and connection.commits == 0
+    assert cursor.executed[-1][0] is module._DELETE_STALE_DAY_SQL
+
+
 def test_build_date_exempted_unpublished_l2_logs_warning_and_builds(monkeypatch, caplog):
     cursor = _Cursor(preflight=(0, 0, 0, 0, 0, 0, 16))
     connection = _Connection(cursor)
-    monkeypatch.setattr(module, "get_conn", lambda: connection)
+    monkeypatch.setattr(module, "get_conn", lambda **kwargs: connection)
 
     with caplog.at_level("WARNING", logger=module.logger.name):
         rows = module.SectorDataBuilder().build_date(dt.date(2026, 7, 22))
 
     assert rows == 7
     assert connection.commits == 1
-    assert [sql for sql, _ in cursor.executed] == [
+    assert [sql for sql, _ in cursor.executed[2:5]] == [
         module._PREFLIGHT_DAY_SQL,
         module._DELETE_STALE_DAY_SQL,
         module._BUILD_DAY_SQL,

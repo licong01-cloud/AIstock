@@ -60,8 +60,8 @@ def _key(row):
 def prepare_member_refresh(existing, incoming, code):
     """Validate a full Y+N refresh without inferring an end from absent rows.
 
-    Tushare membership out_date is an exclusive removal date (the succeeding
-    membership may start on that date). No returned/retained interval may overlap.
+    Dated membership out_date is inclusive, as in the shared PIT SQL readers.
+    No returned/retained interval may overlap, including a same-day handoff.
     """
     selected = {}
     for row in incoming:
@@ -93,7 +93,7 @@ def prepare_member_refresh(existing, incoming, code):
     for rows in by_symbol.values():
         rows.sort(key=lambda r: _day(r["in_date"]))
         for previous, current in zip(rows, rows[1:]):
-            if not previous.get("out_date") or _day(previous["out_date"]) > _day(current["in_date"]):
+            if not previous.get("out_date") or _day(previous["out_date"]) >= _day(current["in_date"]):
                 raise ValueError("SW membership interval overlap after refresh")
     return list(selected.values())
 
@@ -152,6 +152,9 @@ def store_member_refresh(conn, rows, write_projection):
             ],
         )
         count = write_projection(accepted)
+        from .sector_data_repair import mark_membership_revision
+
+        mark_membership_revision(conn, old, accepted)
         conn.commit()
         return count
     except Exception:

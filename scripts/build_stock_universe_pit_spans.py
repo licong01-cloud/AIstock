@@ -1703,6 +1703,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "samples": {"multi_span_instruments": sample_multi_span},
         }
         if not args.dry_run:
+            from backend.services.sector_data_repair import capture_sector_pit_spans, mark_pit_revision
+
+            previous_sector_pit = capture_sector_pit_spans(conn, args.universe_key)
             if write_mode == "incremental":
                 summary["write_delta"] = _write_incremental_extension(
                     conn,
@@ -1726,6 +1729,11 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                     "inserted_or_updated_spans": len(spans),
                     "inserted_events": len(events),
                 }
+            # Incremental persistence intentionally retains the historical prefix.
+            # Compare actual stored coverage, not a proposed full reconstruction
+            # whose historical changes were not applied in this transaction.
+            current_sector_pit = capture_sector_pit_spans(conn, args.universe_key)
+            mark_pit_revision(conn, previous_sector_pit, current_sector_pit)
             conn.commit()
             # Ingestion owns global data-stat refreshes. Calling the catalog-wide
             # refresh here makes a small PIT rebuild scan unrelated large tables

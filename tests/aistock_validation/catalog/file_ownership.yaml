@@ -1356,6 +1356,7 @@ rules:
       - backend/services/sector_data_builder.py
       - backend/services/sector_data_repair.py
       - scripts/build_sector_data_candidate.py
+      - scripts/repair_sw_sector_revision.py
       - scripts/create_sw_sector_tables.py
       - backend/db/migrations/sector_data_pit_identity_*.sql
       - backend/tests/services/test_sector_data_builder.py

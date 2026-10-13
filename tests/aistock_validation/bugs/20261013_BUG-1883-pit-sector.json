@@ -4,14 +4,16 @@
     "backend/services/sw_industry_history_store.py",
     "backend/services/tushare_sync_engine.py",
     "backend/services/sector_data_builder.py",
-    "backend/ingestion/tdx_scheduler.py",
-    "backend/services/dataset_release/monthly_industry_history.py",
     "backend/tests/test_sw_industry_history_store.py",
     "backend/tests/test_tushare_sync_engine.py",
     "backend/tests/services/test_sector_data_builder.py",
-    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-    "backend/tests/dataset_release/test_monthly_sector_mapping.py",
-    "tests/aistock_validation/bugs/20261013_BUG-1883-pit-sector.json"
+    "backend/services/sector_data_repair.py",
+    "backend/tests/services/test_sector_data_repair.py",
+    "scripts/repair_sw_sector_revision.py",
+    "tests/aistock_validation/bugs/20261013_BUG-1883-pit-sector.json",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "scripts/build_stock_universe_pit_spans.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1883",
@@ -29,196 +31,77 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261013-b1c4a158a54f",
       "timestamp": "2026-10-13T07:34:07.225957Z"
+    },
+    {
+      "action": "amend_scope",
+      "actor": "Codex",
+      "timestamp": "2026-10-13T07:45:37.718Z",
+      "note": "Separate worker/monthly follow-up from backend source transactions; add scoped shared repair helper and DEV operator. Production writes require exact authorization."
+    },
+    {
+      "action": "amend_scope",
+      "actor": "Codex",
+      "timestamp": "2026-10-13T08:29:33.554Z",
+      "note": "Map new shared operator to existing local_data ownership and include direct repair tests in the existing local_data CI lane; no ownership transfer."
+    },
+    {
+      "action": "amend_scope",
+      "actor": "Codex",
+      "timestamp": "2026-10-13T08:50:45.736Z",
+      "note": "Include cohort-geometry dependency invalidation in the existing PIT producer; no change to population rules. Use existing target-owned local_data_freshness semantic smoke, with separate exact DB source audit receipts."
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1883-dev-full-apply-20261013/repair_plan.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1883-production-final-plan-20261013/repair_plan.json"
+  ],
   "expected": "历史事实不丢失；来源经济字段或PIT边界变化时原子标记受影响日期并定向重算；冻结industry_id和行业事实同时闭合；合法NA保留，不伪造历史可见时间",
   "file_scope_contract": {
-    "added_files": [],
+    "added_files": [
+      "backend/services/sector_data_repair.py",
+      "backend/tests/services/test_sector_data_repair.py",
+      "scripts/repair_sw_sector_revision.py"
+    ],
     "changed_files": [
       "backend/services/sw_industry_history_store.py",
       "backend/services/tushare_sync_engine.py",
       "backend/services/sector_data_builder.py",
-      "backend/ingestion/tdx_scheduler.py",
-      "backend/services/dataset_release/monthly_industry_history.py",
       "backend/tests/test_sw_industry_history_store.py",
       "backend/tests/test_tushare_sync_engine.py",
       "backend/tests/services/test_sector_data_builder.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "scripts/build_stock_universe_pit_spans.py"
     ],
     "changed_files_source": "planned_intake",
-    "ownership": {
-      "changed_files": [
-        "backend/services/sw_industry_history_store.py",
-        "backend/services/tushare_sync_engine.py",
-        "backend/services/sector_data_builder.py",
-        "backend/ingestion/tdx_scheduler.py",
-        "backend/services/dataset_release/monthly_industry_history.py",
-        "backend/tests/test_sw_industry_history_store.py",
-        "backend/tests/test_tushare_sync_engine.py",
-        "backend/tests/services/test_sector_data_builder.py",
-        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-        "backend/tests/dataset_release/test_monthly_sector_mapping.py"
-      ],
-      "impacted_modules": [
-        "local_data",
-        "qlib_data",
-        "qe.core",
-        "paper_v2",
-        "selection_center",
-        "platform.api",
-        "platform.db"
-      ],
-      "matched_rules": [
-        {
-          "file": "backend/services/sw_industry_history_store.py",
-          "impact_modules": [
-            "qlib_data",
-            "qe.core",
-            "paper_v2",
-            "selection_center"
-          ],
-          "primary_module": "local_data",
-          "risk_level": "high",
-          "rule_id": "local_data_tushare_sync_engine"
-        },
-        {
-          "file": "backend/services/tushare_sync_engine.py",
-          "impact_modules": [
-            "qlib_data",
-            "qe.core",
-            "paper_v2",
-            "selection_center"
-          ],
-          "primary_module": "local_data",
-          "risk_level": "high",
-          "rule_id": "local_data_tushare_sync_engine"
-        },
-        {
-          "file": "backend/services/sector_data_builder.py",
-          "impact_modules": [],
-          "primary_module": "local_data",
-          "risk_level": "high",
-          "rule_id": "local_data_sector_data_materialization"
-        },
-        {
-          "file": "backend/ingestion/tdx_scheduler.py",
-          "impact_modules": [
-            "qlib_data",
-            "qe.core",
-            "paper_v2"
-          ],
-          "primary_module": "local_data",
-          "risk_level": "high",
-          "rule_id": "local_data_pipeline"
-        },
-        {
-          "file": "backend/services/dataset_release/monthly_industry_history.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/test_sw_industry_history_store.py",
-          "impact_modules": [
-            "qlib_data",
-            "qe.core",
-            "paper_v2",
-            "selection_center"
-          ],
-          "primary_module": "local_data",
-          "risk_level": "high",
-          "rule_id": "local_data_tushare_sync_engine"
-        },
-        {
-          "file": "backend/tests/test_tushare_sync_engine.py",
-          "impact_modules": [
-            "qlib_data",
-            "qe.core",
-            "paper_v2",
-            "selection_center"
-          ],
-          "primary_module": "local_data",
-          "risk_level": "high",
-          "rule_id": "local_data_tushare_sync_engine"
-        },
-        {
-          "file": "backend/tests/services/test_sector_data_builder.py",
-          "impact_modules": [],
-          "primary_module": "local_data",
-          "risk_level": "high",
-          "rule_id": "local_data_sector_data_materialization"
-        },
-        {
-          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-          "impact_modules": [
-            "platform.db",
-            "qe.core"
-          ],
-          "primary_module": "local_data",
-          "risk_level": "high",
-          "rule_id": "local_data_remaining_tests"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_monthly_sector_mapping.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        }
-      ],
-      "risk_levels": [
-        "high",
-        "critical"
-      ],
-      "suggested_scope": [
-        "backend/services/sw_industry_history_store.py",
-        "backend/services/tushare_sync_engine.py",
-        "backend/services/sector_data_builder.py",
-        "backend/ingestion/tdx_scheduler.py",
-        "backend/services/dataset_release/monthly_industry_history.py",
-        "backend/tests/test_sw_industry_history_store.py",
-        "backend/tests/test_tushare_sync_engine.py",
-        "backend/tests/services/test_sector_data_builder.py",
-        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-        "backend/tests/dataset_release/test_monthly_sector_mapping.py"
-      ],
-      "unmatched_files": []
-    },
     "planned_files": [
       "backend/services/sw_industry_history_store.py",
       "backend/services/tushare_sync_engine.py",
       "backend/services/sector_data_builder.py",
-      "backend/ingestion/tdx_scheduler.py",
-      "backend/services/dataset_release/monthly_industry_history.py",
       "backend/tests/test_sw_industry_history_store.py",
       "backend/tests/test_tushare_sync_engine.py",
       "backend/tests/services/test_sector_data_builder.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+      "backend/services/sector_data_repair.py",
+      "backend/tests/services/test_sector_data_repair.py",
+      "scripts/repair_sw_sector_revision.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "scripts/build_stock_universe_pit_spans.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/sw_industry_history_store.py",
       "backend/services/tushare_sync_engine.py",
       "backend/services/sector_data_builder.py",
-      "backend/ingestion/tdx_scheduler.py",
-      "backend/services/dataset_release/monthly_industry_history.py",
       "backend/tests/test_sw_industry_history_store.py",
       "backend/tests/test_tushare_sync_engine.py",
       "backend/tests/services/test_sector_data_builder.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+      "backend/services/sector_data_repair.py",
+      "backend/tests/services/test_sector_data_repair.py",
+      "scripts/repair_sw_sector_revision.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "scripts/build_stock_universe_pit_spans.py"
     ]
   },
   "first_seen_at": "2026-10-13T07:34:07.225957Z",
@@ -244,18 +127,24 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "runtime_impact": "backend",
+    "target_id": "backend-main",
     "target_ids": [
-      "backend-main",
-      "worker-scheduler"
+      "backend-main"
+    ],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "backend_restart_owner": "user",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/sector_data/status",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "provisional": false,
+    "fresh_process_evidence": [
+      "Fresh AIstock-CI process passed 143 core invariant tests plus the updated 11-test repair matrix and both ownership/catalog nox gates. Fresh existing DEV processes rebuilt 66 trading dates with zero field mismatch and unchanged source identities, then two repeat builds wrote zero rows. Backend runtime activation remains pending user restart; production SQL remains pending exact authorization."
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
