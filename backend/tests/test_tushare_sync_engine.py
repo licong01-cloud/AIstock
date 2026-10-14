@@ -34,6 +34,11 @@ class _NoopTargetRepository:
         return {"attempt_id": "test-attempt"}
 
 
+@pytest.fixture(autouse=True)
+def _isolate_sync_target_repository(monkeypatch):
+    monkeypatch.setattr(sync_engine, "DataSyncTargetRepository", _NoopTargetRepository)
+
+
 class _FakeCursor:
     def __init__(self, conn):
         self._conn = conn
@@ -630,7 +635,7 @@ def test_sync_by_date_skips_non_trading_days_for_stk_limit_and_margin_detail(mon
             engine,
             "_fetch_from_tushare",
             lambda spec, params: fetched.append((spec.name, params)) or [
-                {"trade_date": "20260525", "ts_code": "000001.SZ"}
+                {"trade_date": "20260525", "ts_code": "000001.SZ", "pre_close": 10.0}
             ],
         )
         monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, rows: len(rows))
@@ -639,7 +644,7 @@ def test_sync_by_date_skips_non_trading_days_for_stk_limit_and_margin_detail(mon
 
         result = engine._sync_by_date(
             conn,
-            DATASET_REGISTRY[dataset],
+            replace(DATASET_REGISTRY[dataset], min_expected_rows=None),
             dt.date(2026, 5, 23),
             dt.date(2026, 5, 25),
             uuid.uuid4(),
@@ -1449,7 +1454,8 @@ def test_min_expected_rows_marks_partial_day_low_coverage_by_date(monkeypatch):
 
     result, audit = _run_by_date_with_rows(monkeypatch, spec, 100)
 
-    assert result.failed_batches == 0
+    assert result.failed_batches == 1
+    assert not result.ok
     assert len(audit.success_calls) == 1
     call = audit.success_calls[0]
     assert call["quality_status"] == "low_coverage"
@@ -1489,7 +1495,7 @@ def test_margin_success_freezes_provider_response_denominator(monkeypatch, writt
     spec = replace(MARGIN_DETAIL, min_expected_rows=2)
     monkeypatch.setattr(TushareSyncEngine, "_iter_sync_dates", lambda *args: [dt.date(2026, 8, 21)])
     result, audit = _run_by_date_with_rows(monkeypatch, spec, 3, written_count=written_count)
-    assert result.failed_batches == 0
+    assert result.failed_batches == (0 if written_count == 3 else 1)
     call = audit.success_calls[0]
     assert call["expected_rows"] == 3
     assert call["coverage_ratio"] == pytest.approx(written_count / 3)

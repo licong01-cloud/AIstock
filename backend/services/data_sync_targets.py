@@ -10,7 +10,7 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import date, datetime, timezone
+from datetime import date, datetime, time, timezone
 from typing import Any
 from uuid import uuid4
 
@@ -23,6 +23,26 @@ ConnectionProvider = Callable[[], Any]
 TARGET_STATUSES = {"pending", "retry", "final_blocked", "reconciled"}
 ATTEMPT_STATUSES = {"started", "failed", "retry", "final_blocked", "reconciled"}
 JSON_COLUMNS = {"target_scope", "metadata", "context_json"}
+
+# A single publication policy for fetch, health expectations and retry windows.
+PUBLICATION_LAG_DAYS = {"margin_detail": 1, "etf_share_size": 1}
+PUBLICATION_READY_AT = {"margin_detail": time(19, 10), "etf_share_size": time(8, 30)}
+LATE_PUBLICATION_TAIL_DAYS = {"daily_basic": 5, "etf_share_size": 5, "margin_detail": 5}
+
+
+def publication_target_date(dataset, latest_trading, now_cn, previous_trading_day):
+    """Latest published date; callback supplies the real trading calendar."""
+    target = latest_trading
+    for _ in range(PUBLICATION_LAG_DAYS.get(dataset, 0)):
+        target = previous_trading_day(target)
+        if target is None:
+            raise ValueError("publication policy requires preceding trading calendar")
+    ready_at = PUBLICATION_READY_AT.get(dataset)
+    if ready_at and latest_trading == now_cn.date() and now_cn.time().replace(tzinfo=None) < ready_at:
+        target = previous_trading_day(target)
+        if target is None:
+            raise ValueError("publication policy requires preceding trading calendar")
+    return target
 
 
 @dataclass(frozen=True)
@@ -107,7 +127,12 @@ class DataSyncTargetRepository:
             "data_max_at",
             "metadata",
         ]
-        assignments = ", ".join(f"{column} = EXCLUDED.{column}" for column in update_columns)
+        assignments = ", ".join(
+            "metadata = data_sync_targets.metadata || EXCLUDED.metadata" if column == "metadata"
+            else "required_before = COALESCE(EXCLUDED.required_before, data_sync_targets.required_before)"
+            if column == "required_before" else f"{column} = EXCLUDED.{column}"
+            for column in update_columns
+        )
         sql = f"""
             INSERT INTO market.data_sync_targets ({", ".join(columns)})
             VALUES ({", ".join(["%s"] * len(columns))})
