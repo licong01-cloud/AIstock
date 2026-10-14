@@ -109,6 +109,7 @@ from .request_resolver import (
     HistoricalRangeAdmittedPackageResolver,
     HistoricalRangeProgramResolver,
 )
+from .inference_window import FrozenSequenceLengthReader
 from .requirement_planner import HistoricalRangeSourceRequirementPlanner
 from .runtime_factories import (
     HistoricalRangeR5BridgeRequestFactory,
@@ -509,6 +510,8 @@ _R5_MUTATION_ENV_KEYS = (
 )
 
 _R5_CODE_RELEASE_CLOSURE = (
+    "backend/services/advisory_historical_range/request_resolver.py",
+    "backend/services/advisory_historical_range/inference_window.py",
     "backend/services/advisory_historical_range/candidate_producer.py",
     "backend/services/advisory_historical_range/executor.py",
     "backend/services/advisory_historical_range/models.py",
@@ -613,7 +616,12 @@ def build_explicit_historical_range_r5_runtime_factory(
         planning = HistoricalRangePlanningService(
             program_resolver=HistoricalRangeProgramResolver(
                 package_resolver=HistoricalRangeAdmittedPackageResolver(
-                    package_reader=package_repository
+                    package_reader=package_repository,
+                    sequence_length_reader=FrozenSequenceLengthReader(
+                        asset_store=LocalPackageAssetStore(root=package_asset_root),
+                        repository_root=repository_root,
+                        temporary_root=Path("X:/AIstock_temp/advisory_inference_window"),
+                    ),
                 ),
                 program_reader=program_repository,
             ),
