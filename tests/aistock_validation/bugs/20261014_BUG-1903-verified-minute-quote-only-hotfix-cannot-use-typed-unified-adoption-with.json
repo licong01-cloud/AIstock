@@ -27,14 +27,22 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1903-verified-minute-quote-only-hotfix-cannot-use-typed-unified-adoption-with.json",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/services/dataset_release/monthly_quote_adoption.py"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_quote_adoption.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1903-verified-minute-quote-only-hotfix-cannot-use-typed-unified-adoption-with.json",
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/services/dataset_release/monthly_quote_adoption.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py",
@@ -127,11 +135,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "monthly_worker_process.supervision",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Isolated fresh Python process: typed quote-only adoption RED then 10 targeted tests GREEN; no database, process control or active profile writes.",
+      "WSL/node1 fresh-process Qlib: the three quote-only samples each return five finite close rows from the formal all catalog; PIT buy exclusions and component identities unchanged.",
+      "Fresh Python process loaded the persistent quote-only adoption validator and validated the actual immutable v15 -> quote1 candidate, three-node manifest/quotes/PIT proof and unchanged component identities; PASS, active unchanged, database_write=false"
+    ],
+    "health_ref": "monthly_worker_process.health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
