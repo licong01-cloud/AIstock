@@ -867,6 +867,71 @@ def _base_yaml(**kwargs):
     return ConfigComposer()._compose_conf_yaml(**params)
 
 
+@pytest.mark.parametrize("explicit_model", [False, True])
+@pytest.mark.parametrize(("device_type", "max_bin"), [("cpu", 63), ("gpu", 255)])
+def test_lgbm_explicit_device_and_bins_are_model_only(explicit_model, device_type, max_bin):
+    model_info = (
+        {"model_id": "__seed_LGBModel_conservative_v1__", "model_type": "LGBM"}
+        if explicit_model else None
+    )
+    strategy_info = {
+        "strategy_id": "score_weighted_topk_v2",
+        "source_code": "class ScoreWeightedTopkStrategyV2:\n    pass\n",
+        "portfolio_config": {"class": "ScoreWeightedTopkStrategyV2", "kwargs": {}},
+    }
+    common_params = {
+        "topk": 50, "learning_rate": 0.05, "num_threads": 12,
+        "random_seed": 42, "filter_suspended_on_signal": True,
+    }
+    baseline = _base_yaml(
+        model_info=model_info, strategy_info=strategy_info, custom_params=common_params,
+    )
+    expected = yaml.safe_load(baseline)
+    expected["task"]["model"]["kwargs"].update(device_type=device_type, max_bin=max_bin)
+
+    actual = yaml.safe_load(_base_yaml(
+        model_info=model_info,
+        strategy_info=strategy_info,
+        custom_params={**common_params, "device_type": device_type, "max_bin": max_bin},
+    ))
+
+    assert actual == expected
+    assert actual["task"]["model"]["class"] == "LGBModel"
+    strategy = actual["port_analysis_config"]["strategy"]
+    assert strategy["class"] == "SuspendFilterScoreWeightedTopkStrategyV2"
+    assert not {"device_type", "max_bin", "num_threads"} & strategy["kwargs"].keys()
+    assert _base_yaml(
+        model_info=model_info, strategy_info=strategy_info, custom_params=common_params,
+    ) == baseline
+
+
+def test_non_lgbm_custom_strategy_keeps_same_named_constructor_parameters():
+    strategy_params = {"device_type": "strategy_owned", "max_bin": 127, "num_threads": 3}
+    actual = yaml.safe_load(_base_yaml(
+        model_info={"model_type": "LINEAR"},
+        strategy_info={
+            "strategy_id": "database_custom",
+            "source_code": "class DatabaseCustomStrategy:\n    pass\n",
+            "portfolio_config": {"class": "DatabaseCustomStrategy", "kwargs": {}},
+        },
+        custom_params=strategy_params,
+    ))
+
+    assert actual["task"]["model"]["class"] == "LinearModel"
+    assert not strategy_params.keys() & actual["task"]["model"]["kwargs"].keys()
+    assert strategy_params.items() <= actual["port_analysis_config"]["strategy"]["kwargs"].items()
+
+
+@pytest.mark.parametrize(
+    ("model_info", "bad_key"),
+    [(None, "max_bni"), ({"model_type": "LINEAR"}, "device_type"),
+     ({"model_type": "LINEAR"}, "max_bin")],
+)
+def test_model_parameter_routing_preserves_strict_strategy_validation(model_info, bad_key):
+    with pytest.raises(ValueError, match=bad_key):
+        _base_yaml(model_info=model_info, custom_params={bad_key: 123})
+
+
 def _slice_yaml_between(yaml_text: str, start_marker: str, end_marker: str) -> str:
     start = yaml_text.index(start_marker)
     end = yaml_text.index(end_marker, start)

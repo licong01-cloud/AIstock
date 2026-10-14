@@ -4158,6 +4158,7 @@ class ConfigComposer:
         _LGB_HP_KEYS = {
             "learning_rate", "max_depth", "num_leaves", "lambda_l1", "lambda_l2",
             "colsample_bytree", "subsample", "n_estimators", "min_child_samples", "num_threads",
+            "device_type", "max_bin",
         }
         _XGB_HP_KEYS = {
             "n_estimators", "num_boost_round", "early_stopping_rounds",
@@ -4242,9 +4243,9 @@ class ConfigComposer:
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
             "_precomputed_hmm_coefficients_artifact_binding",
         } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _EFFICIENT_GATS_HP_KEYS | _REMOVED_GATS_RESOURCE_OPTIONS
-        # Preserve non-LGBM strategies that already own this constructor argument.
+        # Preserve non-LGBM strategies that already own these constructor arguments.
         if model_class != "LGBModel":
-            _NON_STRATEGY_PARAMS.discard("num_threads")
+            _NON_STRATEGY_PARAMS.difference_update({"num_threads", "device_type", "max_bin"})
 
         if custom_params:
             # ── 模型超参透传: 从 custom_params 中提取模型超参 → model_kwargs ──

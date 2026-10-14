@@ -14,13 +14,25 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-14T02:09:18.328990Z",
-  "description": "All six loops fail: strategy SuspendFilterScoreWeightedTopkStrategyV2 does not support device_type and max_bin; experiment_id is null.",
+  "description": "QE 配对任务 qe_20261014_025113_5ba2 的六个 Loop 在装配阶段失败，experiment_id 均为空。来源 LGBM 最终配置中的合法超参 device_type=cpu、max_bin=63 未纳入 Composer 模型参数路由集合，误入策略 kwargs；根因是参数分流，不是因子 PENDING、数据或缓存质量。修复仅原样透传模型参数，保持非 LGBM 策略同名参数、严格未知参数校验和原默认行为。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20261014-c046e02052ee",
       "timestamp": "2026-10-14T02:09:18.328957Z"
+    },
+    {
+      "action": "root_cause_and_red_green",
+      "actor": "Codex",
+      "note": "精确回归修复前在原策略参数拒绝处失败；补齐 LGBM device_type/max_bin 路由并保留非 LGBM 同名策略参数后通过。直接小矩阵 13 passed，包含完整 YAML 语义比较、隐式/显式 LGBM、默认请求无污染、种子、注册元数据和严格拒绝未知参数。未启动或重跑六个失败 Loop。",
+      "timestamp": "2026-10-14T02:16:54Z"
+    },
+    {
+      "action": "design_compliance_review_rounds",
+      "actor": "Codex",
+      "note": "两轮不同视角复审：第一轮核对生产根因及模型参数原样透传；第二轮核对非 LGBM 兼容性、完整配置语义与副作用。DESIGN-COMPLIANCE-001：①完整持久化修复，非占位；②保留未知策略参数 loud fail；③不修改模型默认值、因子、数据、窗口、种子或策略；④未新增审批或实验门禁。L0/changed-files/ownership/module registry/Ruff/py_compile/diff-check 通过，DDL/DML、依赖安装、服务控制均 noop。",
+      "timestamp": "2026-10-14T02:16:54Z"
     }
   ],
   "evidence_uris": [
@@ -28,12 +40,18 @@
   ],
   "expected": "Explicit LGBM device_type and max_bin are preserved in model kwargs only; existing strategy validation stays strict.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1892-qe-composer-routes-explicit-lgbm-device-type-and-max-bin-into-strategy-k.json",
       "backend/services/quantevolver/config_composer.py",
       "backend/tests/unified_engine/test_qe_config_truth.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1892-qe-composer-routes-explicit-lgbm-device-type-and-max-bin-into-strategy-k.json",
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/unified_engine/test_qe_config_truth.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/quantevolver/config_composer.py",
@@ -111,7 +129,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/unified_engine/test_qe_config_truth.py::test_lgbm_explicit_device_and_bins_are_model_only -q -x",
   "required_verification": [
     "l0",
     "qe_sector_risk_overlay_backend",
@@ -120,11 +138,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
+    "fresh_process_evidence": [
+      "Fresh isolated pytest process imported tracked config_composer.py SHA256=a1aac11bae4ada334dba7157317e2fd88d4482db99f4ffaf25f1bdcadafec9e1. Direct model/strategy routing and compatibility matrix: 13 passed. No experiment, training, database write, dataset mutation, dependency installation or service control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
