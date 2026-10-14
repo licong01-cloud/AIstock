@@ -31,6 +31,7 @@ from backend.services.strategy_package.selection_signal_preparation import (
 
 from .artifact_store import HistoricalRangeArtifactStore
 from .candidate_producer import HistoricalRangeCandidateProducer
+from .batch_inference_provider import AdvisoryBatchInferenceProvider
 from .catalog_postgres import PostgresHistoricalRangeSourceRevisionVerifier
 from .catalog_postgres import PostgresHistoricalRangeCatalogExecutor
 from .calendar_resolver import HistoricalRangeCalendarResolver
@@ -139,12 +140,17 @@ def build_historical_range_candidate_producer(
     package_repository = StrategyPackageRepository(
         conn_factory=historical_read_only_connection_factory(conn_factory)
     )
+    batch_provider = AdvisoryBatchInferenceProvider(
+        repo_root=repository_root, safe_artifact_roots=(task_runtime_root, package_asset_root),
+        temporary_root=Path("X:/AIstock_temp/advisory_inference_bridge"),
+    )
     signal_preparation = build_historical_strategy_package_signal_preparation(
         package_reader=package_repository,
         package_asset_store=LocalPackageAssetStore(root=package_asset_root),
         runtime_root=task_runtime_root,
         repository_root=repository_root,
         hmm_snapshot_provider=hmm_snapshot_provider,
+        wsl_inference_provider=batch_provider,
     )
     return HistoricalRangeCandidateProducer(
         signal_preparation=signal_preparation,
@@ -152,6 +158,7 @@ def build_historical_range_candidate_producer(
         providers=build_historical_range_read_only_providers(conn_factory=conn_factory),
         source_verifier=PostgresHistoricalRangeSourceRevisionVerifier(conn_factory=conn_factory),
         artifact_store=HistoricalRangeArtifactStore(root=candidate_artifact_root),
+        batch_inference_provider=batch_provider,
     )
 
 
@@ -507,6 +514,15 @@ _R5_CODE_RELEASE_CLOSURE = (
     "backend/services/advisory_historical_range/models.py",
     "backend/services/advisory_historical_range/repository.py",
     "backend/services/advisory_historical_range/semantics.py",
+    "backend/services/advisory_historical_range/selection_signal_kernel.py",
+    "backend/services/advisory_historical_range/batch_inference_provider.py",
+    "backend/services/advisory_historical_range/inference_inputs.py",
+    "backend/services/advisory_historical_range/inference_features.py",
+    "backend/services/advisory_historical_range/inference_session.py",
+    "backend/services/advisory_historical_range/factor_input_materialization.py",
+    "backend/services/advisory_historical_range/alpha158_batch.py",
+    "backend/inference_engine.py",
+    "scripts/strategy_package_live_inference.py",
     "backend/services/strategy_package/selection_computation.py",
     "backend/services/strategy_package/selection_signal_preparation.py",
 )
