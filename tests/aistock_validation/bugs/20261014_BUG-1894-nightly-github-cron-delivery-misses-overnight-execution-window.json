@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1894",
-  "closed_at": null,
+  "closed_at": "2026-10-14T03:42:36Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -41,23 +41,25 @@
       ".github/workflows/codeql.yml",
       ".github/workflows/nightly.yml",
       "backend/tests/scripts/test_aistock_runner_health.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       "scripts/aistock_runner_health.py",
+      "scripts/ci_workflow_policy_scan.py",
       "scripts/configure_aistock_github_runner.ps1",
       "tests/aistock_validation/bugs/20261014_BUG-1894-nightly-github-cron-delivery-misses-overnight-execution-window.json"
     ],
     "added_files": [],
     "changed_files": [
-      "scripts/ci_workflow_policy_scan.py",
-      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
       ".github/workflows/code-intelligence-refresh.yml",
       ".github/workflows/codeql.yml",
       ".github/workflows/nightly.yml",
       "backend/tests/scripts/test_aistock_runner_health.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
       "docs/standards/aistock_development_standard_v1.5_20260523.md",
       "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       "scripts/aistock_runner_health.py",
+      "scripts/ci_workflow_policy_scan.py",
       "scripts/configure_aistock_github_runner.ps1",
       "tests/aistock_validation/bugs/20261014_BUG-1894-nightly-github-cron-delivery-misses-overnight-execution-window.json"
     ],
@@ -199,8 +201,8 @@
   },
   "first_seen_at": "2026-10-14T03:12:02.287126Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0273eb428ede61845205d5b2c737ae4b202fa479",
+  "fixed_at": "2026-10-14T03:42:36Z",
   "github_issue_number": 6044,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6044",
   "last_seen_at": "2026-10-14T03:12:02.287126Z",
@@ -208,6 +210,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6046",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -225,6 +228,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -234,7 +238,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1894",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "351a4d17f1423532",
+    "recorded_at": "2026-10-14T03:43:22.471547Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "44b5bb7635fccf79bf7974153ecf84f81c2120dc",
+    "source_merge_commit": "0273eb428ede61845205d5b2c737ae4b202fa479",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6046",
+    "validation_evidence": [
+      "validation-receipt: id=97918132ff64d40c commit=44b5bb7635fccf79bf7974153ecf84f81c2120dc kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_aistock_runner_health.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q` result=`passed, 104 tests`",
+      "validation-receipt: id=a79fa43cb5e2490b commit=44b5bb7635fccf79bf7974153ecf84f81c2120dc kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only origin/main` result=`passed, blocking=0, 11/11 mapped`"
+    ],
+    "validation_evidence_digest": "3b17fe6eb0d480caae109b6dfde727bcd164f6a6d3e315976751d80525201d3c"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -243,6 +269,10 @@
     "fingerprint": "ab8f0ed626eae5cbae2e5abe",
     "source_event_id": "FE-20261014-ab8f0ed626ea"
   },
+  "validation_evidence": [
+    "validation-receipt: id=97918132ff64d40c commit=44b5bb7635fccf79bf7974153ecf84f81c2120dc kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_aistock_runner_health.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q` result=`passed, 104 tests`",
+    "validation-receipt: id=a79fa43cb5e2490b commit=44b5bb7635fccf79bf7974153ecf84f81c2120dc kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only origin/main` result=`passed, blocking=0, 11/11 mapped`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
