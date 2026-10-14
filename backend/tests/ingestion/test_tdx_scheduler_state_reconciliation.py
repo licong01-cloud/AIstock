@@ -33,6 +33,19 @@ BUG_1106_EXPECTED_INDEXES = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _deny_implicit_target_database(monkeypatch):
+    """Unit retry tests must never mutate targets through the default repository."""
+    class EmptyRepository:
+        def list_fillable_targets(self, **_kwargs):
+            return []
+
+        def __getattr__(self, name):
+            raise RuntimeError(f"unit test requires an explicit fake target repository: {name}")
+
+    monkeypatch.setattr(scheduler_module, "DataSyncTargetRepository", EmptyRepository)
+
+
 class _DailyBasicCursor:
     def __enter__(self) -> "_DailyBasicCursor":
         return self
@@ -315,7 +328,7 @@ def _go_audit_sweep_scheduler(job_rows, audit_max):
         if "FROM market.ingestion_jobs" in sql:
             return job_rows
         if "dataset_date_refresh_audit" in sql:
-            return [{"mx": audit_max}]
+            return [{"unproven_dates": 0 if audit_max is not None and audit_max >= params[1] else 1}]
         raise AssertionError(f"unexpected SQL: {sql[:80]}")
 
     scheduler._fetchall = _fetchall
@@ -1716,7 +1729,9 @@ def test_sector_incremental_replays_only_dirty_dates_even_if_max_is_current(monk
     scheduler._run_sector_data_build(uuid.uuid4(), None, "incremental", "unit", {"job_id": str(uuid.uuid4())})
     assert ("build", dirty) in calls
     if build_failure:
-        assert any("status='failed'" in call[1] for call in calls if call[0] == "execute")
+        final = next(call for call in calls if call[0] == "execute" and "SET status=%s" in call[1])
+        assert final[2][0] == "partial"
+        assert "source preflight failed" in final[2][1]
         assert not any("status='success'" in call[1] for call in calls if call[0] == "execute")
     else:
         audit = next(call[1] for call in calls if call[0] == "audit")
@@ -1970,7 +1985,7 @@ def test_freshness_target_persists_schedule_owner_retry_time_and_t_plus_one_dead
     result = SimpleNamespace(
         dataset="margin_detail",
         status="stale",
-        expected_date=dt.date(2026, 7, 14),
+        expected_date=dt.date(2026, 7, 13),
         failure_category="audit_stale",
         summary=lambda: {"status": "stale"},
     )
@@ -1983,7 +1998,7 @@ def test_freshness_target_persists_schedule_owner_retry_time_and_t_plus_one_dead
     assert record.next_retry_at == dt.datetime(2026, 7, 14, 11, 0, tzinfo=dt.timezone.utc)
     assert record.required_before == dt.datetime(2026, 7, 14, 15, 30, tzinfo=dt.timezone.utc)
     assert record.metadata["schedule_dataset"] == "margin_detail"
-    assert record.metadata["raw_expected_date"] == "2026-07-14"
+    assert record.metadata["raw_expected_date"] == "2026-07-13"
 
 
 def test_auto_retry_exhaustion_before_final_deadline_marks_retry_not_alert(monkeypatch):

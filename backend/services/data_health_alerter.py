@@ -20,7 +20,6 @@ Usage::
 """
 from __future__ import annotations
 
-import datetime as dt
 import json
 import logging
 import os
@@ -29,8 +28,6 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import psycopg2
-
-from ..db.pg_pool import get_conn as _pool_get_conn
 
 _logger = logging.getLogger(__name__)
 
@@ -136,8 +133,9 @@ def classify_retry_alert(
     dataset: str,
     retry_result: str,  # "recovered" | "exhausted"
     original_status: str = "",
+    attempt_count: Optional[int] = None,
 ) -> DataAlert:
-    """Classify a retry outcome into an alert."""
+    """Classify a retry outcome; attempt_count counts ledger events, not requests."""
     if retry_result == "recovered":
         return DataAlert(
             severity="info",
@@ -153,8 +151,10 @@ def classify_retry_alert(
             dataset=dataset,
             alert_type="retry_exhausted",
             title=f"{dataset} 重试耗尽仍失败",
-            message=f"数据集 {dataset} 经3次自动重试后仍未成功，需人工介入",
-            details={"retry_result": retry_result, "original_status": original_status},
+            message=(f"数据集 {dataset} 已有{attempt_count}条同步尝试记录，仍未成功，需检查失败原因"
+                     if attempt_count is not None else f"数据集 {dataset} 到达重试截止时间仍未成功，需检查失败原因"),
+            details={"retry_result": retry_result, "original_status": original_status,
+                     "attempt_count": attempt_count},
         )
 
 
@@ -205,8 +205,17 @@ class DataHealthAlerter:
 
     # -- DB operations --------------------------------------------------------
 
-    def _alert_exists_today(self, dataset: str, alert_type: str) -> bool:
+    def _alert_exists_today(self, dataset: str, alert_type: str, target_date: Optional[str] = None) -> bool:
         """Check if an alert for this dataset+type was already created today."""
+        if target_date:
+            with self._conn() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT 1 FROM market.data_alerts WHERE dataset=%s AND alert_type=%s "
+                        "AND details->>'target_date'=%s AND acknowledged=FALSE LIMIT 1",
+                        (dataset, alert_type, target_date),
+                    )
+                    return cur.fetchone() is not None
         with self._conn() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -220,7 +229,9 @@ class DataHealthAlerter:
 
     def _insert_alert(self, alert: DataAlert) -> Optional[str]:
         """Insert an alert row. Returns alert_id string or None on dedup."""
-        if self._alert_exists_today(alert.dataset, alert.alert_type):
+        target_date = alert.details.get("target_date")
+        if (self._alert_exists_today(alert.dataset, alert.alert_type, str(target_date)) if target_date
+                else self._alert_exists_today(alert.dataset, alert.alert_type)):
             _logger.debug("dedup: skip %s/%s (already alerted today)", alert.dataset, alert.alert_type)
             return None
 

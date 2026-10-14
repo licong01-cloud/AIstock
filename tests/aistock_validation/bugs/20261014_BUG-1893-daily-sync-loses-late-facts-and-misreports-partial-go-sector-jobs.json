@@ -1,0 +1,417 @@
+{
+  "actual": "2026-10-14只读复核：10-08三条真实日线缺失；ETF10-13少946行且规模净值收盘未追补；融资融券10-13已发布4456行但本地为空，重试时钟污染；Go40分钟超时后继续写入，日分钟审计滞后；466历史板块待重算中首日92归属缺失阻断每日新增；需修复共享日更、追补、审计告警及测试隔离，不修改业务模型。生产DML须精确DEV验证后另行授权。",
+  "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/services/audit_backed_data_health.py",
+    "backend/services/data_health_alerter.py",
+    "backend/services/data_sync_targets.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "backend/tests/ingestion/test_tdx_go_integrity.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "backend/tests/test_data_sync_targets.py",
+    "backend/tests/ingestion/test_daily_sync_recovery.py",
+    "scripts/repair_local_data_daily_sync.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "noxfile.py",
+    "tests/aistock_validation/bugs/20261014_BUG-1893-daily-sync-loses-late-facts-and-misreports-partial-go-sector-jobs.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1893",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-14T02:40:14.991866Z",
+  "description": "2026-10-14只读复核：10-08三条真实日线缺失；ETF10-13少946行且规模净值收盘未追补；融资融券10-13已发布4456行但本地为空，重试时钟污染；Go40分钟超时后继续写入，日分钟审计滞后；466历史板块待重算中首日92归属缺失阻断每日新增；需修复共享日更、追补、审计告警及测试隔离，不修改业务模型。生产DML须精确DEV验证后另行授权。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261014-04ee30c7be7b",
+      "timestamp": "2026-10-14T02:40:14.991866Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1893-dev-apply-20261014-v1/dev-receipt.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1893-production-plan-20261014-r3/production-readonly-plan.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1893-production-plan-20261014-r3/production-repair.sql",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1893-production-apply-20261014-r3/production-readback.json"
+  ],
+  "expected": "Publication-time-aware fetching, bounded late-fact retries, preservation of existing facts when provider returns NULL, honest Go/sector completion audits and database-isolated tests. Production apply, backend restart and readback remain separate required delivery steps; legacy historical PIT holes and conflicting raw facts must remain explicit, not silently waived.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1893-daily-sync-loses-late-facts-and-misreports-partial-go-sector-jobs.json",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/audit_backed_data_health.py",
+      "backend/services/data_health_alerter.py",
+      "backend/services/data_sync_targets.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
+      "scripts/repair_local_data_daily_sync.py"
+    ],
+    "added_files": [
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
+      "scripts/repair_local_data_daily_sync.py"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1893-daily-sync-loses-late-facts-and-misreports-partial-go-sector-jobs.json",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/audit_backed_data_health.py",
+      "backend/services/data_health_alerter.py",
+      "backend/services/data_sync_targets.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
+      "scripts/repair_local_data_daily_sync.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/services/audit_backed_data_health.py",
+        "backend/services/data_health_alerter.py",
+        "backend/services/data_sync_targets.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_data_sync_targets.py",
+        "backend/tests/ingestion/test_daily_sync_recovery.py",
+        "scripts/repair_local_data_daily_sync.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center",
+        "platform.db",
+        "scripts"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/ingestion/tdx_scheduler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/audit_backed_data_health.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/data_health_alerter.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/services/data_sync_targets.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        },
+        {
+          "file": "backend/tests/test_tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/test_data_sync_targets.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        },
+        {
+          "file": "backend/tests/ingestion/test_daily_sync_recovery.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        },
+        {
+          "file": "scripts/repair_local_data_daily_sync.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/services/audit_backed_data_health.py",
+        "backend/services/data_health_alerter.py",
+        "backend/services/data_sync_targets.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_data_sync_targets.py",
+        "backend/tests/ingestion/test_daily_sync_recovery.py",
+        "scripts/repair_local_data_daily_sync.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/services/audit_backed_data_health.py",
+      "backend/services/data_health_alerter.py",
+      "backend/services/data_sync_targets.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/test_data_sync_targets.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
+      "scripts/repair_local_data_daily_sync.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/services/audit_backed_data_health.py",
+      "backend/services/data_health_alerter.py",
+      "backend/services/data_sync_targets.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/test_data_sync_targets.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
+      "scripts/repair_local_data_daily_sync.py"
+    ]
+  },
+  "first_seen_at": "2026-10-14T02:40:14.991866Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6042,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6042",
+  "last_seen_at": "2026-10-14T02:40:14.991866Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/sector_data/status",
+    "fresh_process_evidence": [
+      "Fresh AIstock process: targeted regression validates publication clocks, exact late-date queues, current-sector priority with retained historical errors, isolated target repositories, asynchronous Go watcher and raw-day contract. Production runtime remains pending user restart.",
+      "Fresh existing DEV: official frozen source repairs/readbacks have zero remaining fillable rows and preserve existing finite values; exact production SQL executed successfully in DEV with database-name guard changed to DEV only. Production apply remains pending exact authorization.",
+      "Fresh AIstock process imported tracked persistent daily-sync fixes and passed publication/late-fact/Go/sector/isolation contracts; real read-only single-day SQL probe 0.28..0.36s; production backend not restarted",
+      "Existing DEV official source apply/readback and exact production SQL idempotent validation passed; production apply is pending exact authorization. Fresh Python process validated persisted daily-sync contracts; no service control.",
+      "2026-10-14 production exact SQL e5a7242496d06a425e58190f54dc116122bee17e9211f2b487b4517aec48395d independently authorized and applied: daily 3 inserts; ETF 4723 inserts,3747 row updates,11169 NULL fields filled; margin 4456 inserts. Readback has zero fillable rows and preserved existing nonnull facts. No other tables/profile/dataset/runtime written. Backend source activation remains pending.",
+      "Final related fresh-process regression: 311 passed,1 skipped. Review corrected scheduler-generated start dates bypassing bounded late-publication recovery; explicit user ranges remain exact. Alert attempt_count is explicitly ledger-event count, not network-request retry count. No runtime restart, Go producer repair, historical PIT repair or dataset export is claimed."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Daily sync loses late facts and misreports partial Go sector jobs",
+  "trigger_condition": {
+    "fingerprint": "04ee30c7be7b18410506f25b",
+    "source_event_id": "FE-20261014-04ee30c7be7b"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
