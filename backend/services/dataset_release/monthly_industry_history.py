@@ -487,7 +487,7 @@ def factor_file_receipts(receipt: Mapping[str, Any]) -> dict[str, Mapping[str, A
 def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
     """Amend factor receipts only; completed day/minute/index remain untouched."""
     import copy
-    from .monthly_build_resume import _atomic, MonthlyBuildResumeError
+    from .monthly_build_resume import _atomic, MonthlyBuildResumeError, load_sealed_build_json
     from .monthly_industry_facts import CONTRACT, FrozenIndustryContext, load_frozen_industry_quote_source, predecessor_context_matches
 
     projection = load_frozen_history(cas, context_plan=context.plan, build_inputs=compiled.physical_plan.get("build_inputs", {}))
@@ -509,8 +509,8 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
         # only sector/static context under new pins, never re-export prices.
     if resume.path is None:
         raise MonthlyBuildResumeError("industry repair needs a durable completed-export journal")
-    nested = copy.deepcopy(cas.get_json_bounded(prepare["prepare_receipt_ref"], max_bytes=16 * 1024 * 1024))
-    factor = copy.deepcopy(cas.get_json_bounded(nested["refs"]["factor_receipt"], max_bytes=16 * 1024 * 1024))
+    nested = copy.deepcopy(load_sealed_build_json(cas, prepare["prepare_receipt_ref"]))
+    factor = copy.deepcopy(load_sealed_build_json(cas, nested["refs"]["factor_receipt"]))
     entries = factor_file_receipts(factor)
     sector_entry = entries["sector_data.h5"]
     from .monthly_build_bridge import load_monthly_predecessor_prefix

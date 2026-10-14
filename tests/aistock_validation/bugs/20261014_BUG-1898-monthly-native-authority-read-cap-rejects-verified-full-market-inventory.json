@@ -5,8 +5,6 @@
     "backend/services/dataset_release/build_stage.py",
     "backend/services/dataset_release/monthly_build_resume.py",
     "backend/services/dataset_release/monthly_industry_history.py",
-    "backend/services/dataset_release/cas_store.py",
-    "backend/tests/dataset_release/test_cas_store.py",
     "backend/tests/dataset_release/test_monthly_shared_components.py",
     "backend/tests/dataset_release/test_monthly_build_resume.py",
     "tests/aistock_validation/bugs/20261014_BUG-1898-monthly-native-authority-read-cap-rejects-verified-full-market-inventory.json"
@@ -32,18 +30,26 @@
   "evidence_uris": [],
   "expected": "Valid complete sealed native receipts pass; corrupt/truncated/mismatched/unknown-size refs fail; same operation reuses completed exports.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/dataset_release/monthly_shared_components.py",
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1898-monthly-native-authority-read-cap-rejects-verified-full-market-inventory.json",
       "backend/services/dataset_release/build_stage.py",
       "backend/services/dataset_release/monthly_build_resume.py",
       "backend/services/dataset_release/monthly_industry_history.py",
-      "backend/services/dataset_release/cas_store.py",
-      "backend/tests/dataset_release/test_cas_store.py",
-      "backend/tests/dataset_release/test_monthly_shared_components.py",
-      "backend/tests/dataset_release/test_monthly_build_resume.py"
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1898-monthly-native-authority-read-cap-rejects-verified-full-market-inventory.json",
+      "backend/services/dataset_release/build_stage.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_shared_components.py",
@@ -211,16 +217,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "RED: missing load_sealed_build_json regression failed before fix. GREEN: large complete reference, path/size/truncation/content corruption and retained-price tests passed in fresh Python processes. Shared native builder accepted a >16MiB real CAS test inventory and retained all identity checks.",
+      "Read-only real artifact replay: CAS 7a86e23755179fdba6872ba466f0464a92564769e526ac3d0060ac938cbb5f8f, size26067538, 118132 verified output pins; qe_hmm_full_v2_20260930 month_delta and predecessor2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc. No database/candidate/profile/process writes.",
+      "Review1 fix-point and exact sealed size. Review2 downstream native receipt/recovery paths use same loader, hash-only small control caps remain. Review3 no price re-export, schema/identity/hash/corruption checks retained and source streaming bounds unchanged. DESIGN-COMPLIANCE-001 four checks passed for code; runtime/monthly delivery remains pending user restart, not claimed complete.",
+      "Fresh process read original sealed authority CAS7a86e237 118132 pins without DB/candidate/profile writes; same full ref bounds native reads, small controls unchanged"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main",
       "worker-scheduler"
     ]
   },

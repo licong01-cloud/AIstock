@@ -34,6 +34,41 @@ def _fixture(tmp_path):
     return context, compiled, root, cas, journal
 
 
+def test_sealed_build_receipt_is_bounded_by_complete_reference_not_control_json_cap(tmp_path):
+    from backend.services.dataset_release.monthly_build_resume import load_sealed_build_json
+    from backend.services.dataset_release.cas_store import CASStoreError, CASCorruptionError
+
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    payload = {"verified_output_files": {"inventory": "x" * (17 * 1024 * 1024)}}
+    reference = cas.put_json(payload)
+    assert load_sealed_build_json(cas, reference.as_dict()) == payload
+    with pytest.raises(CASStoreError, match="size is incomplete"):
+        load_sealed_build_json(cas, reference.sha256)
+    with pytest.raises(CASStoreError, match="non-canonical"):
+        load_sealed_build_json(cas, {**reference.as_dict(), "relative_path": "other.json"})
+    with pytest.raises(CASCorruptionError, match="size mismatch"):
+        load_sealed_build_json(cas, {**reference.as_dict(), "size": reference.size - 1})
+    path = cas.root / reference.relative_path
+    raw = path.read_bytes()
+    path.write_bytes(raw[:-1])
+    with pytest.raises(CASCorruptionError, match="size mismatch"):
+        load_sealed_build_json(cas, reference)
+    path.write_bytes(raw.replace(b"x", b"y", 1))
+    with pytest.raises(CASCorruptionError, match="readback mismatch"):
+        load_sealed_build_json(cas, reference)
+
+
+def test_completed_large_export_receipt_resumes_without_rewriting_price_files(tmp_path):
+    context, compiled, root, cas, journal = _fixture(tmp_path)
+    payload = {"verified_output_files": {"inventory": "x" * (17 * 1024 * 1024)}}
+    journal.save("qlib_dump_minute", cas.put_json(payload), roots=("daily_bin",))
+    path = root / "daily_bin/close.bin"
+    before = path.stat()
+    assert journal.get("qlib_dump_minute") == payload
+    assert path.stat().st_mtime_ns == before.st_mtime_ns
+    assert path.read_bytes() == b"accurate"
+
+
 def test_fresh_resume_keeps_exact_bytes_and_reuses_original_staging(tmp_path):
     context, compiled, root, cas, journal = _fixture(tmp_path)
     before = (root / "daily_bin/close.bin").stat()

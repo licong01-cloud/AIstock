@@ -18,6 +18,21 @@ class MonthlyBuildResumeError(RuntimeError):
     """A retained export cannot be matched to the exact current data inputs."""
 
 
+def load_sealed_build_json(cas: CASStore, reference: CASRef | Mapping[str, Any]) -> Any:
+    """Read producer-owned BUILD metadata using its sealed exact byte bound.
+
+    File inventories scale with the full provider catalog, not JSON control
+    message size. A complete canonical CAS reference supplies the actual bound;
+    neither disk size nor an unpinned digest can enlarge it. The bounded reader
+    still rejects changed bytes, growth, truncation and invalid JSON. SOURCE
+    stream chunk limits and small untrusted control-message caps are unchanged.
+    """
+    ref = cas.validate_reference_metadata(reference)
+    if ref.size <= 0:
+        raise MonthlyBuildResumeError("sealed BUILD receipt is empty")
+    return cas.get_json_bounded(ref, max_bytes=ref.size)
+
+
 def _plain(path: Path) -> None:
     current = Path(path.anchor)
     for part in path.parts[1:]:
@@ -183,7 +198,7 @@ class MonthlyBuildResume:
         if ref is None:
             return None
         self.context.checkpoint()
-        value = self.cas.get_json_bounded(ref, max_bytes=64 * 1024 * 1024)
+        value = load_sealed_build_json(self.cas, ref)
         if not isinstance(value, Mapping):
             raise MonthlyBuildResumeError("retained completion receipt is invalid")
         self.context.progress({"phase": "BUILD_REUSE_COMPLETED", "dataset": step})
