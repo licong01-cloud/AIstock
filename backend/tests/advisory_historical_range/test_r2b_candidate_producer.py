@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime
 
+import pytest
+
 from backend.services.advisory_historical_range.artifact_store import HistoricalRangeArtifactStore
 from backend.services.advisory_historical_range.candidate_producer import HistoricalRangeCandidateProducer
 from backend.services.advisory_historical_range.candidate_projector import _receipt_payload
@@ -38,6 +40,7 @@ from backend.services.strategy_package.selection_signal_preparation import (
     PreparedRawSelectionArtifactV2,
     StrategyPackageSignalPreparationResultV1,
 )
+from backend.services.trading_core.errors import ArtifactGenerationFailedError
 from backend.tests.advisory_historical_range.conftest import (
     date_plan,
     digest,
@@ -480,6 +483,18 @@ def test_candidate_producer_projects_all_stages_and_exact_cas_rerun(tmp_path) ->
     assert first.candidates[2].component_lineage_json["stage_exclusions"][0]["reason"] == "outside_selection_top_k"
     assert first.candidates[0].advisory_model_rank is None
     assert verifier.calls == 4
+
+
+@pytest.mark.parametrize("field,value", [("required_window", 80), ("window_start_date", "2026-03-01")])
+def test_sequence_window_mismatch_still_fails_without_publishing_candidates(tmp_path, field, value) -> None:  # noqa: ANN001
+    producer, request_payload, _verifier, program = _fixture(tmp_path)
+    context = producer._signal_preparation.result.raw.artifact.metadata["artifact_input_context"]
+    context[field] = value
+    with pytest.raises(ArtifactGenerationFailedError, match="window differs") as caught:
+        producer.produce(request_payload=request_payload, research_program_id=program.research_program_id,
+                         decision_trade_date=TRADE_DATE)
+    assert caught.value.context["reason_code"] == "ADVISORY_HR_SOURCE_REVISION_MISMATCH"
+    assert not list((tmp_path / "candidate-cas").glob("candidates/*.json"))
 
 
 def test_stage_receipt_identity_excludes_operational_time_and_local_paths() -> None:
