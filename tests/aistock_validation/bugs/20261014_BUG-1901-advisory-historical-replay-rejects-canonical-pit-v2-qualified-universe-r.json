@@ -105,8 +105,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
+    "fresh_process_evidence": [
+      "powershell -NoProfile -File X:/AIstock_temp/advisory-shared-kernel-replay-20261014-v2/check_native_receipts.ps1 -RepositoryRoot F:/Dev/AIstock_worktrees/BUG-1901-advisory-historical-replay-rejects-canonical-pit-20261014 -> PASS; fresh source import validates real frozen 2026-01-05 LSTM window279 and all four native receipts including qualified PIT identity/4913 rows; no training, prediction, database writes or service control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
