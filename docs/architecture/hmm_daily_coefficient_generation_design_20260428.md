@@ -1,8 +1,8 @@
 # HMM 数据库收盘日度预测与系数生成详细设计
 
-初始日期：2026-04-28；修订日期：2026-10-13；版本：v2.2；tier=F2。
+初始日期：2026-04-28；修订日期：2026-10-14；版本：v2.3；tier=F2。
 
-状态：双入口方向已获用户授权；BUG-1862任务分支已实现数据库adapter、共用零fit推理、不可变发布及既有登记接线，**尚未合入；真实数据库输入预检仍阻断，共享触发及真实任务/消费者验收未完成**。既有每日API/任务/旧UI保留，不以单元测试或旧接口代表完整能力。本设计展开父蓝图v2.85 §2.6/§4.6；QE冻结文件入口由`hmm_frozen_model_auto_extension_design_20261012.md`单独约束。
+状态：双入口方向已获用户授权；BUG-1862源码PR #6018已合入，数据库adapter、共用零fit推理、不可变发布及既有登记接线已有源码。BUG-1895修复数据库历史报价与系数资格混用后，**任务分支的真实只读手工延期预检通过；修复尚未合入，默认T→T+1、真实任务/登记/消费者及共享触发验收仍未完成**。既有每日API/任务/旧UI保留，不以单元测试、预检或旧接口代表完整能力。本设计展开父蓝图v2.85 §2.6/§4.6；QE冻结文件入口由`hmm_frozen_model_auto_extension_design_20261012.md`单独约束。
 
 ## 1. 背景与问题
 
@@ -13,9 +13,13 @@
 
 QE回测按同一冻结文件release产生合法历史窗口资产，不能借查询当前数据库补齐该回放。荐股/模拟盘未来日度模式则以数据库为明确主源：交易日T收盘后，待必需事实入库完整，只使用截至T且当时可得的数据，产生canonical下一交易日T+1的预测/系数。T+1不是自然日加一；长假/周末以正式交易日历决定。不暗中使用更早的系数冒充新日输出。
 
-已核验源码缺口：`_latest_completed_hmm_data_date()`只取三类表最大日期的最小值；`_execute_daily_coefficient_plan()`执行仍强制`qe_frozen_input_bundle`，造成“DB最新日期+旧文件输入”混用。不能把MAX(date)当完整性证明或用文件生成成功代报数据库新日推理。当前read-only `hmm_data_source/realtime_source.py`读取既有prediction，也不证明它已完成该推理adapter。
+BUG-1862修复前的源码缺口：`_latest_completed_hmm_data_date()`只取三类表最大日期的最小值；`_execute_daily_coefficient_plan()`执行仍强制`qe_frozen_input_bundle`，造成“DB最新日期+旧文件输入”混用。不能把MAX(date)当完整性证明或用文件生成成功代报数据库新日推理。read-only `hmm_data_source/realtime_source.py`读取既有prediction，也不单独证明数据库推理、登记与消费已完成。
 
-BUG-1862本地修复状态：日度规划复用`market.dataset_date_refresh_audit`及`DataRefreshAuditRepository.require_success()`，在只读repeatable-read事务中核对三类必需事实的完成记录；表最大日期仅作诊断，完成记录不代替模型所需逐键输入验证。默认生效日为正式日历中T之后的首个交易日，手工指定更晚交易日保留§4.8的兼容行为。显式数据库reader核验连续数值前缀、共享稀疏行业ID、PIT成员及既有发布区间，并与file adapter共用特征、滤波及系数核心。只有输入和模型均通过验证才返回`source_mode=database_daily / input_validation_status=VALIDATED / generation_available=true`；失败显式报错且不创建job。原快照metrics中的train/validation边界冻结原推断起点（原validation_start减3×365+30日），不按每日输出窗口重置状态；当前读取的成员事实不冒充历史as-known。日度任务冻结plan/输入/模型/参数/生成器身份，资产独立加锁、原子发布、登记事务回读；登记失败可恢复同一资产，不覆盖旧文件。文件CLI只接受历史`qe_frozen_file`，日度数据库入口不调用该CLI。**真实只读预检保持BLOCKED：此前801012.SI/2026-07-01发现002086.SZ的PIT归属变化但stock-level sector_data仍含旧行业报价；2026-10-13交付复验当前首个重复事实冲突为801012.SI/2023-01-30/sw2_pct_change。未修改或忽略共享事实、未生成实际日度资产、未写库；BUG保持OPEN，共享触发及运行验收仍待闭合。**
+BUG-1862已合入源码：日度规划复用`market.dataset_date_refresh_audit`及`DataRefreshAuditRepository.require_success()`，在只读repeatable-read事务中核对三类必需事实的完成记录；表最大日期仅作诊断，完成记录不代替模型所需逐键输入验证。默认生效日为正式日历中T之后的首个交易日，手工指定更晚交易日保留§4.8的兼容行为。显式数据库reader核验连续数值前缀、共享稀疏行业ID、PIT成员及既有发布区间，并与file adapter共用特征、滤波及系数核心。只有输入和模型均通过验证才返回`source_mode=database_daily / input_validation_status=VALIDATED / generation_available=true`；失败显式报错且不创建job。原快照metrics中的train/validation边界冻结原推断起点（原validation_start减3×365+30日），不按每日输出窗口重置状态；当前读取的成员事实不冒充历史as-known。日度任务冻结plan/输入/模型/参数/生成器身份，资产独立加锁、原子发布、登记事务回读；登记失败可恢复同一资产，不覆盖旧文件。文件CLI只接受历史`qe_frozen_file`，日度数据库入口不调用该CLI。
+
+2026-10-14输入复验：2023-01-26..2026-10-12的117,507个行业/日期键中，原重复报价冲突为0、歧义成员连接为0。新的首个阻断是801011.SI/2023-01-30：该行业不在冻结系数资格范围，却在数据库中具有真实历史行情；与同快照`market.sw_daily`逐值核对后，788个此类历史键均是正式源事实，不应删除。BUG-1895只修复HMM consumer：保留这些上下文、钉住正式源摘要，仍不为资格范围外行业产生系数，不修改共享发布policy或数据。
+
+BUG-1895任务分支使用Conda AIstock fresh process、只读repeatable-read事务执行真实preview，`as_of=2026-10-12 / effective=2026-10-14 / source_mode=database_daily / input_validation_status=VALIDATED / generation_available=true`；fit及文件worker设poison，未训练、创建job、写库或发布资产。**这只是既有手工更晚生效日的输入/模型预检通过，不是默认T→T+1、运行态源码加载或业务完成。**当前完成记录仅到10月12日；其下一交易日10月13日已早于读取日10月14日，默认模式仍须按原历史as-known纪律明确等待/拒绝，不能自动跳到更晚日期或将物理表MAX充作完成水位。BUG-1862与BUG-1895运行闭环均保持待验证。
 
 公共事实合同核验必须区分当前读取与历史当时可知：`observed_at`及`FIRST_PUBLICATION_UNVERIFIED`不能证明旧日as-known，但也不表示行情值缺失、不应自动阻断以当前确实可得的完整事实预测未来。已定位共享发布区间policy `dataset_release/sw_l2_quote_policy.py`，不另建HMM行业编号或发布规则。数据库模式仍须核对当前行业有效区间及同快照连续推断起点/检查点身份；旧快照没有保存该起点时不得由滚动短lookback猜测替代。由HMM执行模型所需窗口的业务验证，不要求数据窗口重导历史或替HMM验证模型。
 
@@ -41,8 +45,8 @@ BUG-1862本地修复状态：日度规划复用`market.dataset_date_refresh_audi
 | `effective_trade_date` | 系数实际用于选股/模拟盘的交易日，必须晚于 `as_of_trade_date`。 |
 | `generation_mode` | 固定为 `daily_asof_prediction_v1`。 |
 | `input_data_max_dates` | 仅作诊断水位，不能单独证明各日期/字段完整。 |
-| `source_mode` | 日度计划/登记固定为`database_daily`；QE文件计划/登记为`qe_frozen_file`，未知模式拒绝。已在任务分支接入，不代表已部署。 |
-| `input_identity` | 紧凑对象包含source_mode、as_of/effective日期、read_cutoff_at、原推断起点、canonical输入摘要、完成记录、mapping authority及quote policy摘要；calendar/发布区间内容在输入摘要中闭合。DB不伪造dataset manifest，训练身份不改写。 |
+| `source_mode` | 日度计划/登记固定为`database_daily`；QE文件计划/登记为`qe_frozen_file`，未知模式拒绝。源码合入、实际加载和业务运行分别验收。 |
+| `input_identity` | 紧凑对象包含source_mode、as_of/effective日期、read_cutoff_at、原推断起点、canonical输入摘要、完成记录、mapping authority及quote policy摘要；BUG-1895另钉住`official_quote_authority=market.sw_daily`、`official_quote_sha256`及被排除的真实报价上下文键数。calendar/发布区间/正式报价在输入摘要中闭合。DB不伪造dataset manifest，训练身份不改写。 |
 | `artifact_sha256` | 生成文件的 SHA256，用于追踪与审计。 |
 
 ## 4. 数据入口架构与PIT契约
@@ -57,6 +61,7 @@ BUG-1862本地修复状态：日度规划复用`market.dataset_date_refresh_audi
 8. 必须分别验证T与下一交易日，自动任务只使用`effective_trade_date=next_open_day(T)`。旧手工接口允许更晚交易日的兼容行为不被默默删除，但不能据此报告T+1验证成功。未来行情不足/日历缺失不改用更早输出；只返回明确状态，不关闭过滤或补默认regime。
 9. 每日系数为新增不可变产物；同身份/同内容才返回`EXISTS`，同名不匹配拒绝覆盖。正式发布和登记完成前不被Consumer读取；数据源晚修订形成新input identity/版本化文件，保留旧文件，不只改旧hash标签。
 10. 推理资格沿既有版本效果/适用合同；T必须晚于模型训练及semantic校准的已批准截止，未知训练/校准边界或不支持的输入合同拒绝推断，不能仅以snapshot状态COMPLETED放行。此项不新增效果阈值，旧历史资产不追认或删除。
+11. 区分数据库事实真实性与冻结系数资格：数据库历史三项报价`sw2_pct_change/sw2_vol/sw2_amount`逐键匹配同一只读事务的`market.sw_daily`；真实但不满足既有发布资格的历史上下文可以保留，不能因此进入`coefficient_sector_codes`。资格范围内必需字段缺失仍失败；正式源缺失、部分报价、重复、非有限、负数量或缓存/源不一致均typed fail closed。真实资金流仍独立保留。正式报价canonical排序并进入input hash，行顺序不影响身份；源修订不能被排除范围或摘要复用掩盖。该修复不改变QE冻结文件reader及§10的历史发布合同。
 
 ## 5. API 设计
 
@@ -83,7 +88,7 @@ GET  /api/v1/hmm-training/snapshots/{snapshot_id}/daily-coefficients/jobs
 
 说明：
 
-- `as_of_date`可省略；任务分支adapter据共享完成记录选T并逐键验证。当前真实数据冲突仍阻断，不从该默认行为推出可生成。
+- `as_of_date`可省略；adapter据共享完成记录选T并逐键验证。BUG-1895任务分支的手工延期preview已通过；默认T→T+1仍需新完成水位和日期因果验证，不从手工预检推出已生成。
 - `effective_trade_date` 可省略，后端自动选择 as-of 后的下一个交易日。
 - 现有`generate`/`jobs`使用`confirm_generate=true`，不再把旧文档的`confirm_text`写成有效API要求。自动模式沿已登记enabled policy，不为每个交易日再要求人工确认；该模式尚未正式接线。
 - 日度API/自动计划明确选择`database_daily`，文件extension明确选择`qe_frozen_file`；模式写入现有plan/登记元数据，不能按“哪处有数据”自动选择。数据库模式的一次性enabled配置保存在既有config_json，默认未启用，钉住snapshot/preset；已启用的QE文件policy不隐式启用日度模式。不新增表或环境变量开关。
@@ -187,11 +192,12 @@ coefficients_<preset>_<effective_trade_date>_<effective_trade_date>__daily_<dail
 
 ## 9. 验证方案
 
-以下区分源码直接矩阵与待执行的运行验收。任务分支已实际验证adapter同核心、零fit/无target、来源隔离、原前缀、稀疏编号、发布区间、身份漂移、不可变发布及登记失败恢复等直接测试；真实数据库只读预检为BLOCKED，不报生成/运行通过。下列实际job、DEV写入、共享触发与Consumer/API/UI仍为后续计划：
+以下区分源码直接矩阵与待执行的运行验收。已实际验证adapter同核心、零fit/无target、来源隔离、原前缀、稀疏编号、发布区间、身份漂移、不可变发布及登记失败恢复等直接测试；BUG-1895任务分支真实数据库手工延期只读preview通过，但不报默认T→T+1、生成/运行通过。下列实际job、DEV写入、共享触发与Consumer/API/UI仍为后续计划：
 
 - 同一合法输入的file/DB adapter在相同数值环境下共用核心并产生相同特征/状态/系数；DB缺数不切文件、QE缺数不查询DB，两个日期/身份不能混用。
 - DB有T但文件cutoff更早：日度模式只凭DB完整合同运行，文件模式仍只覆盖其release；未来target/下一交易日观察读取设poison并断言未访问。现有quote/moneyflow及正常停牌、历史证券alias/稀疏行业ID直接矩阵不降低。
 - 有状态模型验证连续前缀/检查点身份及长假T→T+1；仅MAX(date)到T而逐键缺失、部分入库、PIT错误、数值非有限、日历不足明确失败/等待，不偷用昨日结果。无状态版本不被额外要求HMM state。
+- 数据库真实历史报价须与同事务正式源匹配，资格范围外报价保留但不输出系数；源缺失、损坏、身份/数值漂移、future、重复明确失败，行顺序变换identity不变。当前事实读取不能冒充旧日as-known，手工延期不能代报默认T→T+1通过。
 - 持久任务验证重复触发、同身份重放、崩溃恢复、参数/输入漂移、不可变发布和登记readback；真实共享调度callback与旧训练tick poison隔离，不能只用mock reconcile冒称自动触发通过。
 - 小样本DEV只读输入及已批准的现有DEV事务回滚写入/回读分开验证；生产启用/写入需目标级授权。消费者真实读回来源、T、T+1、模型与资产hash；API/UI未实际跑不填通过，不控制用户服务。
 - 只跑changed-file直连矩阵、ownership/module/test plan、Ruff/py_compile/fresh import、必要L0/F2与CI，不重复历史模型/全部实验。首个真实自动任务、registered asset和无副作用消费smoke是闭环终点，不以单元/导入替代它们。
@@ -219,7 +225,7 @@ coefficients_<preset>_<effective_trade_date>_<effective_trade_date>__daily_<dail
 
 ## 11. Implementation Plan / 发布与回滚
 
-完整能力包仍包含HMM数据库adapter、既有数学核心复用、显式日期/source计划、共享触发/持久job、不可变发布与完成结果读回；不把未验收层次切成假完成阶段。BUG-1862仅修改HMM自身源码/CLI/直接测试及本设计状态，已在分支实施HMM链；公共调度接线及真实输入事实问题交对应owner，不修改共享事实或其他模块源码。不以HMM部分源码修复代报全部F-001～F-006验收完成。
+完整能力包仍包含HMM数据库adapter、既有数学核心复用、显式日期/source计划、共享触发/持久job、不可变发布与完成结果读回；不把未验收层次切成假完成阶段。BUG-1862源码已合入；BUG-1895仅修改HMM数据库reader、直接测试、BUG记录及本设计状态，修复真实历史事实与资格范围混用。公共调度接线及完成事实水位交对应owner，不修改共享事实或其他模块源码。不以HMM部分源码修复代报全部F-001～F-006验收完成。
 
 只读preview/手工任务不要求自动scheduler才能工作；自动数据延伸需一次性模式启用和真实接线，不要求每月人工迁移。第一次运行源码更新由用户加载；日后数据入库、正常job/结果登记不依赖环境变量或重启。停用只禁止新任务，保留历史资产/模型。故障保持明确状态，回滚按模型/任务/资产identity寻址，不覆盖旧版本、触发训练或控制服务。QE和日度模式分别验收，不把QE Composer通过称为荐股/模拟盘已采用。
 
@@ -236,8 +242,8 @@ coefficients_<preset>_<effective_trade_date>_<effective_trade_date>__daily_<dail
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | 本文§1/§4/§8；backend/services/hmm_training_service.py；scripts/precompute_hmm_coefficients.py | backend/tests/hmm_data_source/test_hmm_database_daily_input.py：DB/file同一实际核心、fit/file-worker poison及来源边界测试通过 | APPROVED_BY_USER_DESIGN_ONLY_SOURCE_IMPLEMENTED_PENDING_RUNTIME | 真实输入阻断；不声称已部署或自动触发 |
-| F-002 | 本文§3/§4；backend/services/hmm_data_source/daily_input.py | backend/tests/hmm_data_source/test_hmm_database_daily_input.py：完成记录、完整键/PIT/因果calendar反例通过；真实DB预检识别重复事实冲突 | APPROVED_BY_USER_DESIGN_ONLY_SOURCE_IMPLEMENTED_REAL_INPUT_BLOCKED | 最新首个冲突801012.SI/2023-01-30/sw2_pct_change；此前2026-07-01也曾发现PIT与股票级行业事实不一致 |
+| F-001 | 本文§1/§4/§8；backend/services/hmm_training_service.py；scripts/precompute_hmm_coefficients.py | backend/tests/hmm_data_source/test_hmm_database_daily_input.py：DB/file同一实际核心、fit/file-worker poison及来源边界测试通过 | APPROVED_BY_USER_DESIGN_ONLY_SOURCE_IMPLEMENTED_PENDING_RUNTIME | 手工延期preview通过不等于真实任务/默认T+1/共享触发 |
+| F-002 | 本文§3/§4；backend/services/hmm_data_source/daily_input.py | backend/tests/hmm_data_source/test_hmm_database_daily_input.py：正式行情同源、资格不扩大、缺失/损坏/漂移反例；真实DB手工延期preview通过 | APPROVED_BY_USER_DESIGN_ONLY_SOURCE_IMPLEMENTED_MANUAL_PREFLIGHT_PASS_PENDING_RUNTIME | BUG-1895尚未合入/加载；完成水位10月12日，默认10月13日生效已过去，历史as-known守卫保留 |
 | F-003 | 本文§4/§6/§10；scripts/precompute_hmm_coefficients.py；scripts/hmm_horizon_v2_train.py | backend/tests/hmm_data_source/test_hmm_database_daily_input.py：原快照起点、模型/参数/hash漂移、target-free feature矩阵通过 | APPROVED_BY_USER_DESIGN_ONLY_SOURCE_IMPLEMENTED_PENDING_RUNTIME | 不另建数据集、重编号或自动重训；不支持的20D schema显式拒绝而非替代 |
 | F-004 | 本文§5.1/§6；backend/services/hmm_training_service.py；backend/services/hmm_data_source/coefficient_extension.py | backend/tests/hmm_data_source/test_hmm_database_daily_input.py及test_hmm_daily_coefficients.py：immutable发布、job恢复、登记冲突/readback反例通过 | APPROVED_BY_USER_DESIGN_ONLY_SOURCE_IMPLEMENTED_PENDING_REAL_DB_WRITE_VALIDATION | 写入只在测试替身执行；真实DEV/生产登记均未执行 |
 | F-005 | 本文§5.1；backend/routers/hmm_training.py | 计划扩展backend/tests/hmm_data_source/test_coefficient_extension.py的真实共享callback/训练poison及持久job，不能只调用service | APPROVED_BY_USER_DESIGN_ONLY_PENDING_IMPLEMENTATION | 公共接线由owner协调，不能用mock代报 |
@@ -247,7 +253,7 @@ coefficients_<preset>_<effective_trade_date>_<effective_trade_date>__daily_<dail
 
 ## 14. Production gates / DESIGN-COMPLIANCE-001
 
-文档本身无运行影响；BUG-1862源码包实际属于`runtime_impact=backend / target_ids=[backend-main]`，合入后由用户加载源码再验收，不以文档分类降级。本次执行：production_ddl_gate=noop；production_dml_gate=noop；dependency gates=noop；database_write=false；dataset_write=false；training=false；process_control=false。
+文档本身无运行影响；BUG-1862及BUG-1895源码包实际属于`runtime_impact=backend / target_ids=[backend-main]`，源码合入后由用户加载再验收，不以文档分类降级。BUG-1895当前仅任务分支fresh-process预检通过，`post_restart_effective_gate=pending_user_restart`。本次执行：production_ddl_gate=noop；production_dml_gate=noop；dependency gates=noop；database_write=false；dataset_write=false；training=false；process_control=false。
 
 后续运行源码按实际changed files重新分类，不以文档runtime=none降级。数据库源只读；任务/登记写入与生产启用另按既有DEV先验和目标授权执行，不因本设计获批自动执行。所有后端启动、停止、重启归用户。
 
@@ -256,3 +262,5 @@ DESIGN-COMPLIANCE-001：完整输入→零fit推理→发布登记→真实读�
 ## 15. 修订记录
 
 2026-04-28：每日接口与异步任务设计，旧Paper/Selection交互保留。2026-09-19：历史冻结文件quote availability合同。2026-10-13 v2.0：更新为DB收盘T→T+1明确主入口、共享核心/就绪触发；修正旧confirm_text和最大日期/冻结文件混用表述，保留历史契约。2026-10-13 v2.1：BUG-1862分支接入HMM数据库推理及来源隔离，记录源码验证与真实数据/登记/触发验收差异，恢复手工更晚交易日兼容；模型及特征公式不变。2026-10-13 v2.2：复审修正计划实际读入水位与重复资产原读取身份；运行、真实输入和共享触发状态不提升。
+
+2026-10-14 v2.3：同步BUG-1862已合入状态及原数据冲突消失的只读结果；BUG-1895分离真实数据库历史行情与冻结系数资格，用同快照正式行情校验并钉住输入身份，不扩大系数范围。记录手工延期preview通过与默认T→T+1/实际job/登记/消费者仍待验收的差异；模型、文件历史合同及共享数据不变。

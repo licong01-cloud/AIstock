@@ -15,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-14T03:15:30.838363Z",
-  "description": "preview with effective date 2026-10-14 fails: hmm_database_daily_input_unavailable quote value outside publication authority 801011.SI/2023-01-30/sw2_pct_change.",
+  "description": "HMM database daily reader conflates frozen-release coefficient eligibility with physical historical quote availability. Authentic 801011.SI historical facts match market.sw_daily but are rejected before inference. Fix cross-checks quotes in the same read-only snapshot, pins official-source identity and preserves the original coefficient scope; missing/corrupted/mismatched facts still fail closed.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -27,13 +27,20 @@
   "evidence_uris": [],
   "expected": "Official historical facts are identity-bound and preserved without enabling coefficient output outside the approved publication scope; invalid, missing or mismatched quotes remain fail closed.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1895-hmm-database-daily-reader-rejects-authentic-historical-quotes-outside-fr.json",
       "backend/services/hmm_data_source/daily_input.py",
       "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
       "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1895-hmm-database-daily-reader-rejects-authentic-historical-quotes-outside-fr.json",
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+      "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_data_source/daily_input.py",
@@ -113,10 +120,14 @@
   "last_seen_at": "2026-10-14T03:15:30.838363Z",
   "module": "hmm",
   "non_goals": [
-    "Do not start, stop, or restart any user backend without explicit per-target approval."
+    "Do not start, stop, or restart any user backend without explicit per-target approval.",
+    "Do not change shared datasets, quote publication policy, model parameters, features, seeds or inference windows.",
+    "Do not create coefficient jobs, publish production assets, write databases, activate profiles or start training.",
+    "Do not modify QE, Selection, Advisory, Paper or workflow/CI code."
   ],
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
+  "production_dml_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "HMM readonly daily preview preset_A effective_trade_date=2026-10-14 snapshot=ecee7c40-6764-49ad-bc0f-1c6c6b390504",
@@ -127,11 +138,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-training/snapshots/ecee7c40-6764-49ad-bc0f-1c6c6b390504/daily-coefficients/jobs",
+    "fresh_process_evidence": [
+      "PYTHONPATH=<BUG-1895 own worktree> Conda AIstock python -B - -> PASS: database_daily readonly preview as_of=2026-10-12 effective=2026-10-14, official quote context 788 keys, GaussianHMM.fit/file worker poisoned; no job or DB write; not default T+1 or post-restart acceptance",
+      "PYTHONPATH=<BUG-1895 own worktree> C:/Users/lc999/miniconda3/envs/AIstock/python.exe -B - -> PASS: fresh imports backend.routers.hmm_training, backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_data_source.daily_input resolve only to the task worktree; no process control or dependency installation",
+      "PYTHONPATH=<BUG-1895 own worktree> Conda AIstock python -B - -> PASS: persistent daily_input and HMM training/risk/health routers loaded from task worktree; readonly preview VALIDATED; no fit, worker, job or DB write"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
