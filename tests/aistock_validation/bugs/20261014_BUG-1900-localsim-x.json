@@ -30,17 +30,17 @@
   "expected": "默认生产路径自动绑定已验证的本次独立 X workspace 和原址冻结资产，WSL 原生路径守卫通过，未知 worker 路径继续拒绝。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261014_BUG-1900-localsim-x.json",
       "backend/services/simulation_runtime/localsim_selection_inference.py",
       "backend/services/simulation_runtime/localsim_selection_probe.py",
-      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1900-localsim-x.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261014_BUG-1900-localsim-x.json",
       "backend/services/simulation_runtime/localsim_selection_inference.py",
       "backend/services/simulation_runtime/localsim_selection_probe.py",
-      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1900-localsim-x.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -96,8 +96,8 @@
   },
   "first_seen_at": "2026-10-14T07:40:10.883304Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5c5fc5684458582115a28ae5f4f5c8b1b08a0829",
+  "fixed_at": "2026-10-14T08:16:51Z",
   "github_issue_number": 6064,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6064",
   "last_seen_at": "2026-10-14T07:40:10.883304Z",
@@ -105,6 +105,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6066",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -132,6 +133,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -143,7 +145,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1900",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1250066e47546cc5",
+    "recorded_at": "2026-10-14T08:17:27.414441Z",
+    "runtime_contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f8bde8c61abb7568dea4b147cc13c8f1762428ea",
+    "source_merge_commit": "5c5fc5684458582115a28ae5f4f5c8b1b08a0829",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6066",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_selection_inference.py backend/services/simulation_runtime/localsim_selection_probe.py backend/tests/simulation_runtime/test_localsim_selection_inference.py tests/aistock_validation/bugs/20261014_BUG-1900-localsim-x.json -> passed, 0 quality findings and 0 blockers",
+      "python -m pytest backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/simulation_runtime/test_localsim_selection_inference.py -p no:cacheprovider -q -> 31 passed in 5.01s"
+    ],
+    "validation_evidence_digest": "cd5b8b825ddb849e7b69f53918fb338c2694bfcb661a9907b6f441b9a60efc75"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -152,6 +176,10 @@
     "fingerprint": "f0cbbdc69bddebe038bcd147",
     "source_event_id": "FE-20261014-f0cbbdc69bdd"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_selection_inference.py backend/services/simulation_runtime/localsim_selection_probe.py backend/tests/simulation_runtime/test_localsim_selection_inference.py tests/aistock_validation/bugs/20261014_BUG-1900-localsim-x.json -> passed, 0 quality findings and 0 blockers",
+    "python -m pytest backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/simulation_runtime/test_localsim_selection_inference.py -p no:cacheprovider -q -> 31 passed in 5.01s"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
