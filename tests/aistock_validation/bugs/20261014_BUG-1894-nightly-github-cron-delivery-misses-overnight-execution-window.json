@@ -34,18 +34,30 @@
   ],
   "expected": "准点触发，自动触发仍受夜间预算限制，重复及传输歧义可追溯，不把未执行报告为验证通过",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      ".github/workflows/code-intelligence-refresh.yml",
+      ".github/workflows/codeql.yml",
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_aistock_runner_health.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
       "scripts/aistock_runner_health.py",
       "scripts/configure_aistock_github_runner.ps1",
-      "backend/tests/scripts/test_aistock_runner_health.py",
-      ".github/workflows/nightly.yml",
-      ".github/workflows/codeql.yml",
-      ".github/workflows/code-intelligence-refresh.yml",
-      "docs/standards/aistock_development_standard_v1.5_20260523.md",
-      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      "tests/aistock_validation/bugs/20261014_BUG-1894-nightly-github-cron-delivery-misses-overnight-execution-window.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/code-intelligence-refresh.yml",
+      ".github/workflows/codeql.yml",
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_aistock_runner_health.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/aistock_runner_health.py",
+      "scripts/configure_aistock_github_runner.ps1",
+      "tests/aistock_validation/bugs/20261014_BUG-1894-nightly-github-cron-delivery-misses-overnight-execution-window.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_runner_health.py",
@@ -205,10 +217,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
