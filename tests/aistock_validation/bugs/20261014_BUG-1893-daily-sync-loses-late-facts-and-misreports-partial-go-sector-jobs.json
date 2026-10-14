@@ -18,7 +18,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1893",
-  "closed_at": null,
+  "closed_at": "2026-10-14T05:37:41.720112Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -43,32 +43,38 @@
   "expected": "Publication-time-aware fetching, bounded late-fact retries, preservation of existing facts when provider returns NULL, honest Go/sector completion audits and database-isolated tests. Production apply, backend restart and readback remain separate required delivery steps; legacy historical PIT holes and conflicting raw facts must remain explicit, not silently waived.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261014_BUG-1893-daily-sync-loses-late-facts-and-misreports-partial-go-sector-jobs.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/audit_backed_data_health.py",
       "backend/services/data_health_alerter.py",
       "backend/services/data_sync_targets.py",
       "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
+      "backend/tests/ingestion/test_tdx_go_integrity.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/ingestion/test_daily_sync_recovery.py",
-      "scripts/repair_local_data_daily_sync.py"
+      "noxfile.py",
+      "scripts/repair_local_data_daily_sync.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1893-daily-sync-loses-late-facts-and-misreports-partial-go-sector-jobs.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [
       "backend/tests/ingestion/test_daily_sync_recovery.py",
       "scripts/repair_local_data_daily_sync.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261014_BUG-1893-daily-sync-loses-late-facts-and-misreports-partial-go-sector-jobs.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/services/audit_backed_data_health.py",
       "backend/services/data_health_alerter.py",
       "backend/services/data_sync_targets.py",
       "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
+      "backend/tests/ingestion/test_tdx_go_integrity.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/ingestion/test_daily_sync_recovery.py",
-      "scripts/repair_local_data_daily_sync.py"
+      "noxfile.py",
+      "scripts/repair_local_data_daily_sync.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1893-daily-sync-loses-late-facts-and-misreports-partial-go-sector-jobs.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -247,8 +253,8 @@
   },
   "first_seen_at": "2026-10-14T02:40:14.991866Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "375a3576506d7bae01e316487833ffb2a5ae8396",
+  "fixed_at": "2026-10-14T05:12:23Z",
   "github_issue_number": 6042,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6042",
   "last_seen_at": "2026-10-14T02:40:14.991866Z",
@@ -256,6 +262,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6054",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -285,9 +292,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1893\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1893",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8491091005d1a48e12842529dd81fd8f796930f3ad04fc92df4622c1e3a2add",
+      "contract_digest": "abd5e2c46a394a023ff4cc2f367dbed2bd907307938c09489c2b1087d1e3faf0",
+      "expected_identity": "375a3576506d7bae01e316487833ffb2a5ae8396",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-14T05:32:01.465183Z",
+      "mode": "read_only",
+      "observed_identity": "375a3576506d7bae01e316487833ffb2a5ae8396",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8bca0467c401794b788db447d1120c7f3944889b90eb8c0ed84a343f306afa0d",
+      "receipt_sha256": "22922cc6d560f479624afb58f97a5ee02f87b4fd9526c8de068beddc4e6e06fb",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d7a04c169757b828dbe9c47a4047d5ca7758f5b0f632105f1ca8af9f93e738d5",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -297,7 +327,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1893",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0447c933fd7e3fa2",
+    "recorded_at": "2026-10-14T05:13:09.784314Z",
+    "runtime_contract_digest": "abd5e2c46a394a023ff4cc2f367dbed2bd907307938c09489c2b1087d1e3faf0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "26190a2d6af86be410ce8408b18a6ca25ab35c7b",
+    "source_merge_commit": "375a3576506d7bae01e316487833ffb2a5ae8396",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6054",
+    "validation_evidence": [
+      "validation-receipt: id=813fd73ebb8e1d0a commit=26190a2d6af86be410ce8408b18a6ca25ab35c7b kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv -- backend/ingestion/tdx_scheduler.py backend/services/data_health_alerter.py backend/tests/ingestion/test_daily_sync_recovery.py backend/tests/ingestion/test_tdx_go_integrity.py noxfile.py` result=`passed`",
+      "validation-receipt: id=47acbe0877397ad1 commit=26190a2d6af86be410ce8408b18a6ca25ab35c7b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity --no-venv` result=`passed both sessions`",
+      "validation-receipt: id=bf3e36a75b066c4e commit=26190a2d6af86be410ce8408b18a6ca25ab35c7b kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity --no-venv` result=`passed both sessions`",
+      "validation-receipt: id=6b3091c334933412 commit=26190a2d6af86be410ce8408b18a6ca25ab35c7b kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files --no-venv -- --changed-only` result=`passed mapped13 blocking0`",
+      "validation-receipt: id=f7384f93d7b4df28 commit=26190a2d6af86be410ce8408b18a6ca25ab35c7b kind=pytest plan=direct status=passed command=`pytest backend/tests/ingestion/test_tdx_go_integrity.py backend/tests/ingestion/test_daily_sync_recovery.py -q --tb=short --maxfail=1` result=`passed 42 in existing AIstock environment via RTK`"
+    ],
+    "validation_evidence_digest": "49a0738e405c1d276a021c216c36be7be8acecb8da39dfa30761ac2436afa4e1"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -306,6 +361,14 @@
     "fingerprint": "04ee30c7be7b18410506f25b",
     "source_event_id": "FE-20261014-04ee30c7be7b"
   },
+  "validation_evidence": [
+    "validation-receipt: id=813fd73ebb8e1d0a commit=26190a2d6af86be410ce8408b18a6ca25ab35c7b kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv -- backend/ingestion/tdx_scheduler.py backend/services/data_health_alerter.py backend/tests/ingestion/test_daily_sync_recovery.py backend/tests/ingestion/test_tdx_go_integrity.py noxfile.py` result=`passed`",
+    "validation-receipt: id=47acbe0877397ad1 commit=26190a2d6af86be410ce8408b18a6ca25ab35c7b kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity --no-venv` result=`passed both sessions`",
+    "validation-receipt: id=bf3e36a75b066c4e commit=26190a2d6af86be410ce8408b18a6ca25ab35c7b kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity --no-venv` result=`passed both sessions`",
+    "validation-receipt: id=6b3091c334933412 commit=26190a2d6af86be410ce8408b18a6ca25ab35c7b kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files --no-venv -- --changed-only` result=`passed mapped13 blocking0`",
+    "validation-receipt: id=f7384f93d7b4df28 commit=26190a2d6af86be410ce8408b18a6ca25ab35c7b kind=pytest plan=direct status=passed command=`pytest backend/tests/ingestion/test_tdx_go_integrity.py backend/tests/ingestion/test_daily_sync_recovery.py -q --tb=short --maxfail=1` result=`passed 42 in existing AIstock environment via RTK`",
+    "python -m nox -s data_sync_autonomy_backend -> passed 689, skipped 1 in source PR #6054 CI"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
