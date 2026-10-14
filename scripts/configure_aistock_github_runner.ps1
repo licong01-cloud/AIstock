@@ -45,6 +45,14 @@ function Resolve-BoundedPath {
   return $resolved
 }
 
+function Resolve-ScheduledDispatchOwnerSid {
+  param([Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$UserId)
+  if ($UserId -match '^S-\d-') {
+    return ([Security.Principal.SecurityIdentifier]$UserId).Value
+  }
+  return ([Security.Principal.NTAccount]$UserId).Translate([Security.Principal.SecurityIdentifier]).Value
+}
+
 # Separate infrastructure-only mode: no runner/service/DB lifecycle operations.
 if ($ScheduledDispatch) {
   if ($Start -or ($AuditOnly -and $Apply)) {
@@ -77,10 +85,11 @@ if ($ScheduledDispatch) {
   }
   if ($existing) {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $ownerSid = Resolve-ScheduledDispatchOwnerSid -UserId $existing.Principal.UserId
     $triggerTimes = @($existing.Triggers | ForEach-Object { ([datetime]$_.StartBoundary).ToString('HH:mm') })
     # Task Scheduler CIM enums are numeric: Disabled=1, Interactive=3, Limited=0, IgnoreNew=2.
     if ([int]$existing.State -eq 1 -or $existing.Actions[0].WorkingDirectory -ne $canonical -or
-        $existing.Principal.UserId -notin @($identity.Name, $identity.User.Value) -or
+        $ownerSid -ne $identity.User.Value -or
         [int]$existing.Principal.RunLevel -ne 0 -or -not $existing.Settings.Hidden -or
         -not $existing.Settings.StartWhenAvailable -or
         [int]$existing.Principal.LogonType -ne 3 -or $triggerTimes.Count -ne 3 -or
