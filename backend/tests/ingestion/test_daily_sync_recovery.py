@@ -47,6 +47,27 @@ def test_etf_completed_cursor_rechecks_bounded_tail():
     assert engine._late_recheck_dates[ETF_SHARE_SIZE.name] == [dt.date(2026, 9, 30)]
 
 
+@pytest.mark.parametrize("dataset", ["daily_basic", "etf_share_size", "margin_detail"])
+@pytest.mark.parametrize("explicit", [False, True])
+@pytest.mark.parametrize("trading_day", [False, True])
+def test_scheduled_late_recheck_is_not_bypassed_by_auto_start(dataset, explicit, trading_day):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    submitted = []
+    scheduler._tracker = SimpleNamespace(is_running=lambda _key: False)
+    scheduler._recent_dataset_submission_exists = lambda *_args: False
+    scheduler._is_trading_day = lambda _day: trading_day
+    scheduler._compute_auto_range = lambda _ds: (dt.date(2026, 10, 13), dt.date(2026, 10, 13))
+    scheduler._execute = lambda *_args: None
+    scheduler._submit_ingestion = lambda *args: submitted.append(args[-1])
+    options = {"start_date": "2026-09-30", "end_date": "2026-09-30"} if explicit else {}
+    scheduler._scheduled_ingestion_run("", dataset, "incremental", options)
+    if explicit:
+        assert submitted[0]["start_date"] == submitted[0]["end_date"] == "2026-09-30"
+    else:
+        assert "start_date" not in submitted[0]
+        assert submitted[0]["end_date"] == "2026-10-13"
+
+
 def test_freshness_target_is_not_lagged_twice(monkeypatch):
     scheduler = TDXScheduler.__new__(TDXScheduler)
     writes = []
@@ -203,7 +224,8 @@ def test_go_completion_audit_failure_is_failed_in_all_projections(monkeypatch):
     scheduler._record_refresh_audit_from_table_range = lambda **_kw: False
     scheduler._log_ingestion_run = lambda *a, **_kw: statuses.append(a[4])
     scheduler._update_ingestion_schedule = lambda *a, **kw: statuses.append(kw["last_status"])
-    response = lambda data: SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"code": 0, "data": data})
+    def response(data):
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"code": 0, "data": data})
     monkeypatch.setattr(scheduler_module.requests, "post", lambda *a, **kw: response({"task_id": "go-t"}))
     monkeypatch.setattr(scheduler_module.requests, "get", lambda *a, **kw: response({"status": "success"}))
     monkeypatch.setattr(scheduler_module.time, "sleep", lambda *_args: None)

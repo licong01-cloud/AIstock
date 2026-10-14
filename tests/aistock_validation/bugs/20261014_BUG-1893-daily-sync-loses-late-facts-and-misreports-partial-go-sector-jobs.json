@@ -11,6 +11,8 @@
     "backend/tests/test_data_sync_targets.py",
     "backend/tests/ingestion/test_daily_sync_recovery.py",
     "scripts/repair_local_data_daily_sync.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "noxfile.py",
     "tests/aistock_validation/bugs/20261014_BUG-1893-daily-sync-loses-late-facts-and-misreports-partial-go-sector-jobs.json"
   ],
   "assigned_agent": null,

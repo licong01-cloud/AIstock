@@ -50,6 +50,7 @@ from ..services.data_health_alerter import DataHealthAlerter, classify_retry_ale
 from ..services.data_sync_targets import (
     DataSyncAttemptRecord, DataSyncTargetRecord, DataSyncTargetRepository,
     PUBLICATION_LAG_DAYS, PUBLICATION_READY_AT, publication_target_date,
+    LATE_PUBLICATION_TAIL_DAYS,
 )
 from ..services.suspend_d_coverage import (
     SCHEMA_VERSION as SUSPEND_D_COVERAGE_SCHEMA_VERSION,
@@ -1649,7 +1650,7 @@ class TDXScheduler:
         if dataset != "news_realtime" and not skip_auto_range:
             today = dt.date.today()
             try:
-                if not self._is_trading_day(today):
+                if not self._is_trading_day(today) and dataset not in LATE_PUBLICATION_TAIL_DAYS:
                     # Check if the latest trading day has data
                     try:
                         start_d, end_d = self._compute_auto_range(dataset)
@@ -1680,7 +1681,13 @@ class TDXScheduler:
             try:
                 start_date, end_date = self._compute_auto_range(dataset)
                 if start_date is not None and end_date is not None:
-                    effective_options.setdefault("start_date", start_date.isoformat())
+                    # An automatically injected start date would bypass the
+                    # engine's bounded late-field tail and unresolved-date
+                    # queue. Explicit user/target windows remain exact.
+                    automatic_late = (mode == "incremental" and dataset in LATE_PUBLICATION_TAIL_DAYS
+                                      and not options.get("start_date") and not options.get("end_date"))
+                    if not automatic_late:
+                        effective_options.setdefault("start_date", start_date.isoformat())
                     effective_options.setdefault("end_date", end_date.isoformat())
                     _logger.info("auto-range %s: %s → %s", dataset, start_date, end_date)
                 elif start_date is None and end_date is None:

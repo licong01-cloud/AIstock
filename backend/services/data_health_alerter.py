@@ -20,7 +20,6 @@ Usage::
 """
 from __future__ import annotations
 
-import datetime as dt
 import json
 import logging
 import os
@@ -29,8 +28,6 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 import psycopg2
-
-from ..db.pg_pool import get_conn as _pool_get_conn
 
 _logger = logging.getLogger(__name__)
 
