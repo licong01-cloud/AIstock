@@ -1228,6 +1228,8 @@ class MonthlyReleaseService:
 
         normalized_evidence: list[dict[str, Any]] = []
         schemas: set[str] = set()
+        typed_evidence: dict[str, Mapping[str, Any]] = {}
+        from .monthly_quote_adoption import QUOTE_SCHEMAS, validate_quote_adoption
         for raw in evidence_refs:
             relative = str(raw.get("relative_path") or "")
             relative_path = Path(relative)
@@ -1266,6 +1268,9 @@ class MonthlyReleaseService:
             ):
                 raise MonthlyReleaseNotReady("HMM adoption evidence binds another manifest")
             schemas.add(schema)
+            if schema in QUOTE_SCHEMAS and schema in typed_evidence:
+                raise MonthlyReleaseConflict("adoption evidence schema is duplicated")
+            typed_evidence[schema] = value
             normalized_evidence.append(
                 {
                     "id": relative_path.as_posix(),
@@ -1278,7 +1283,16 @@ class MonthlyReleaseService:
             "qe_moneyflow_alias_coverage_receipt_v1",
             "hmm_risk_rotation_l2_input_bundle_v1",
         }
-        if not required_schemas.issubset(schemas):
+        quote_only = bool(QUOTE_SCHEMAS.intersection(schemas))
+        if quote_only:
+            try:
+                validate_quote_adoption(predecessor_root=Path(predecessor.candidate_root),
+                    predecessor_profile=_read_json(predecessor.path, label="quote predecessor profile"),
+                    candidate=candidate, profile=profile, manifest=manifest,
+                    evidence=typed_evidence, required_nodes=REQUIRED_NODES)
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
+                raise MonthlyReleaseNotReady(f"quote-only adoption proof failed: {exc}") from exc
+        elif not required_schemas.issubset(schemas):
             raise MonthlyReleaseNotReady("adoption evidence does not cover required release gates")
 
         semantic = {
@@ -1315,6 +1329,10 @@ class MonthlyReleaseService:
                     existing.get("product_profile") == product_profile
                     and existing.get("target_cutoff") == target_cutoff.isoformat()
                 ):
+                    if quote_only and existing.get("target_profile_sha256") == expected_predecessor:
+                        previous_state = self.store.read_state(str(existing["operation_id"]))
+                        if previous_state.get("status") == ReleaseState.ACTIVATED_VERIFIED.value:
+                            continue  # Exact activated predecessor, never a competing candidate.
                     raise MonthlyReleaseConflict("target cutoff is already bound to another operation")
 
             operation_id = f"dmr_{uuid.uuid4().hex}"
@@ -1377,7 +1395,8 @@ class MonthlyReleaseService:
                 "node_roots": actual_node_roots,
                 "target_roots": {"controller": str(candidate), **actual_node_roots},
                 "required_consumers": list(REQUIRED_CONSUMERS),
-                "actions": {component: ComponentAction.REUSE.value for component in COMPONENTS},
+                "actions": {component: (ComponentAction.SELECTIVE_REBUILD.value if quote_only and component == "minute"
+                                        else ComponentAction.REUSE.value) for component in COMPONENTS},
                 "adoption_ref": _content_ref(
                     root / "receipts" / "adoption.json", ref_id="receipts/adoption.json"
                 ),
