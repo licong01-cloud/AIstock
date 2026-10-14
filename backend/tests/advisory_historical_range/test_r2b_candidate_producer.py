@@ -148,7 +148,7 @@ class _Verifier:
         return catalog.source_revision_refs()
 
 
-def _fixture(tmp_path):  # noqa: ANN001, ANN202
+def _fixture(tmp_path, universe_key="shsz_st_pit_active_v1"):  # noqa: ANN001, ANN202
     spec = research_spec(package_id="pkg-r2b")
     runtime_config = {
         "runtime_profile": {
@@ -194,14 +194,14 @@ def _fixture(tmp_path):  # noqa: ANN001, ANN202
     )
     universe_parameters = {
         "trade_date": TRADE_DATE.isoformat(),
-        "universe_key": "shsz_st_pit_active_v1",
+        "universe_key": universe_key,
         "ensure": False,
     }
     universe_member = HistoricalRangeSourceRevisionMemberV1(
         requirement_id="pit-universe",
         source_role="pit_universe",
         dataset_id="market.stock_universe_pit",
-        partition_ref=f"shsz_st_pit_active_v1:{TRADE_DATE.isoformat()}",
+        partition_ref=f"{universe_key}:{TRADE_DATE.isoformat()}",
         decision_trade_date=TRADE_DATE,
         query_template_id="historical_pit_universe_existing_readonly",
         query_template_version="v1",
@@ -463,8 +463,15 @@ def _fixture(tmp_path):  # noqa: ANN001, ANN202
     return producer, request_payload, verifier, program
 
 
-def test_candidate_producer_projects_all_stages_and_exact_cas_rerun(tmp_path) -> None:  # noqa: ANN001
-    producer, request_payload, verifier, program = _fixture(tmp_path)
+@pytest.mark.parametrize("universe_key,universe_dataset_id", [
+    ("shsz_st_pit_active_v1", "market.stock_universe_pit"),
+    ("shsz_st_pit_active_v1", "market.stock_universe_pit:shsz_st_pit_active_v1"),
+    ("frozen_custom_pool_v2", "market.stock_universe_pit:frozen_custom_pool_v2"),
+])
+def test_candidate_producer_projects_all_stages_and_exact_cas_rerun(tmp_path, universe_key, universe_dataset_id) -> None:  # noqa: ANN001
+    producer, request_payload, verifier, program = _fixture(tmp_path, universe_key=universe_key)
+    universe_receipt = producer._signal_preparation.result.raw.source_read_receipts[0]
+    universe_receipt["dataset_id"] = universe_dataset_id
 
     first = producer.produce(
         request_payload=request_payload,
@@ -483,6 +490,27 @@ def test_candidate_producer_projects_all_stages_and_exact_cas_rerun(tmp_path) ->
     assert first.candidates[2].component_lineage_json["stage_exclusions"][0]["reason"] == "outside_selection_top_k"
     assert first.candidates[0].advisory_model_rank is None
     assert verifier.calls == 4
+    assert universe_receipt["dataset_id"] == universe_dataset_id
+
+
+@pytest.mark.parametrize("field,value", [
+    ("dataset_id", "market.stock_universe_pit:other_pool"),
+    ("dataset_id", "market.stock_universe_pit:shsz_st_pit_active_v1:other_pool"),
+    ("dataset_id", "other.stock_universe_pit:shsz_st_pit_active_v1"),
+    ("content_hash", "5" * 64),
+    ("row_count", 4999),
+    ("partition_ref", "2026-06-03"),
+])
+def test_universe_receipt_mismatch_fails_without_publishing_candidates(tmp_path, field, value) -> None:  # noqa: ANN001
+    producer, request_payload, _verifier, program = _fixture(tmp_path)
+    receipt = producer._signal_preparation.result.raw.source_read_receipts[0]
+    receipt["dataset_id"] = "market.stock_universe_pit:shsz_st_pit_active_v1"
+    receipt[field] = value
+    with pytest.raises(ArtifactGenerationFailedError, match="PIT universe receipts differ") as caught:
+        producer.produce(request_payload=request_payload, research_program_id=program.research_program_id,
+                         decision_trade_date=TRADE_DATE)
+    assert caught.value.context["reason_code"] == "ADVISORY_HR_SOURCE_REVISION_MISMATCH"
+    assert not list((tmp_path / "candidate-cas").glob("candidates/*.json"))
 
 
 @pytest.mark.parametrize("field,value", [("required_window", 80), ("window_start_date", "2026-03-01")])
