@@ -36,21 +36,19 @@
   "expected": "Quote catalog follows real frozen physical quote coverage independently of PIT buy eligibility; selection pools retain their exact spans.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261014_BUG-1902-minute-quote-catalog-clips-authentic-holding-quotes-to-pit-buy-eligibili.json",
       "backend/qlib_exporter/authoritative_bin_exporter.py",
-      "backend/tests/test_authoritative_bin_pit_universe.py",
+      "backend/qlib_exporter/quote_catalog.py",
       "backend/tests/test_qlib_export_stock_universe_filters.py",
-      "backend/qlib_exporter/quote_catalog.py"
+      "tests/aistock_validation/bugs/20261014_BUG-1902-minute-quote-catalog-clips-authentic-holding-quotes-to-pit-buy-eligibili.json"
     ],
     "added_files": [
       "backend/qlib_exporter/quote_catalog.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261014_BUG-1902-minute-quote-catalog-clips-authentic-holding-quotes-to-pit-buy-eligibili.json",
       "backend/qlib_exporter/authoritative_bin_exporter.py",
-      "backend/tests/test_authoritative_bin_pit_universe.py",
+      "backend/qlib_exporter/quote_catalog.py",
       "backend/tests/test_qlib_export_stock_universe_filters.py",
-      "backend/qlib_exporter/quote_catalog.py"
+      "tests/aistock_validation/bugs/20261014_BUG-1902-minute-quote-catalog-clips-authentic-holding-quotes-to-pit-buy-eligibili.json"
     ],
     "changed_files_source": "git_finish",
     "planned_files": [
@@ -91,7 +89,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/config",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "RED: native minute rewrite incorrectly queried PIT selection. GREEN: new process validates authentic quote catalog with unchanged bins and unchanged PIT stock pools; successor builder rejects source pin drift and active overwrite. Production backend restart remains user-owned and pending."
+      "RED: native minute rewrite incorrectly queried PIT selection. GREEN: new process validates authentic quote catalog with unchanged bins and unchanged PIT stock pools; successor builder rejects source pin drift and active overwrite. Production backend restart remains user-owned and pending.",
+      "Fresh Python loaded tracked quote catalog and immutable successor producer; 5144 physical quote boundaries validated; 125180 unchanged files reused by inode; database/profile/runtime writes zero. Backend restart pending user."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
