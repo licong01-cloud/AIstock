@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from datetime import date
+import hashlib
+import json
+import os
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -10,6 +14,9 @@ from backend.qlib_exporter import authoritative_bin_exporter as authoritative
 from backend.qlib_exporter import router as qlib_router
 from scripts import qlib_authoritative_bin_export as authoritative_cli
 from backend.qlib_exporter.db_reader import DBReader
+from backend.qlib_exporter.quote_catalog import CATALOG, META, QuoteCatalogError, build_minute_quote_catalog, repair_quote_catalog
+from backend.services.dataset_release.canonical import canonical_json_bytes
+from backend.services.dataset_release.release_successor import _manifest_identity
 
 
 class _DummyConn:
@@ -688,17 +695,11 @@ def test_rewrite_minute_all_txt_uses_physical_feature_bounds_instead_of_stale_me
     assert (instruments / "all.txt").read_text(encoding="utf-8") == (
         "000001.SZ\t2026-01-05 09:31:00\t2026-06-30 15:00:00\n"
     )
-    assert summary["range_authority"] == "physical_qlib_feature_bounds_v1"
-    assert summary["physical_range_summary"] == {
-        "range_authority": "physical_qlib_feature_bounds_v1",
-        "frequency": "1min",
-        "field": "close",
-        "calendar_rows": 4,
-        "feature_files": 1,
-        "feature_instruments": 1,
-        "feature_start_min": "2026-01-05",
-        "feature_end_max": "2026-06-30",
-    }
+    assert summary["range_authority"] == "finite_positive_close_boundaries_v1"
+    assert summary["mode"] == "physical_quote_catalog_v1"
+    assert summary["calendar_rows"] == 4
+    assert summary["feature_files"] == 1
+    assert summary["output_instruments"] == 1
 
 
 def test_physical_feature_range_rejects_bounds_past_calendar(tmp_path) -> None:
@@ -1060,3 +1061,160 @@ def test_backend_minute_finalize_passes_physical_range_root(tmp_path, monkeypatc
     assert summary == {"mode": "pit_universe_spans"}
     assert calls[0]["feature_frequency"] == "1min"
     assert calls[0]["allowed_bin_root"] == tmp_path
+
+def _quote_root(tmp_path, values, code="002305.sz"):
+    root = tmp_path / "quotes"
+    (root / "calendars").mkdir(parents=True)
+    feature = root / "features" / code
+    feature.mkdir(parents=True)
+    (root / "calendars/1min.txt").write_text(
+        "2026-01-05 09:31:00\n2026-01-05 09:32:00\n2026-01-05 09:33:00\n2026-01-05 09:34:00\n",
+        encoding="utf-8",
+    )
+    np.asarray([0, *values], dtype="<f4").tofile(feature / "close.1min.bin")
+    return root
+
+
+def test_catalog_keeps_internal_suspension_na_and_does_not_extend_empty_tail(tmp_path):
+    root = _quote_root(tmp_path, [2, np.nan, 3, np.nan])
+    before = (root / "features/002305.sz/close.1min.bin").read_bytes()
+    catalog = build_minute_quote_catalog(root)
+    assert catalog.ranges == {"002305.SZ": ("2026-01-05 09:31:00", "2026-01-05 09:33:00")}
+    assert catalog.receipt()["selection_eligibility_changed"] is False
+    assert before == (root / "features/002305.sz/close.1min.bin").read_bytes()
+
+
+@pytest.mark.parametrize("values", [[np.nan] * 4, [0, 2, 3, 4], [2, np.inf, 3, 4]])
+def test_no_fake_quotes_for_empty_or_invalid_files(tmp_path, values):
+    with pytest.raises(QuoteCatalogError):
+        build_minute_quote_catalog(_quote_root(tmp_path, values))
+
+
+def test_calendar_bounds_and_canonical_identity_are_checked(tmp_path):
+    root = _quote_root(tmp_path, [1, 2, 3, 4, 5])
+    with pytest.raises(QuoteCatalogError, match="bounds exceed calendar"):
+        build_minute_quote_catalog(root)
+
+
+def test_scope_selects_real_quote_not_outside_requested_window(tmp_path):
+    root = _quote_root(tmp_path, [1, 2, 3, np.nan])
+    result = build_minute_quote_catalog(root, start="2026-01-05 09:32:00", end="2026-01-05 09:34:00")
+    assert result.ranges["002305.SZ"] == ("2026-01-05 09:32:00", "2026-01-05 09:33:00")
+
+
+def test_linked_calendar_is_rejected_before_read(tmp_path, monkeypatch):
+    root = _quote_root(tmp_path, [1, 2, 3, 4])
+    original = Path.lstat
+    def linked(path):
+        result = original(path)
+        if path.name == "1min.txt":
+            from types import SimpleNamespace
+            return SimpleNamespace(st_mode=result.st_mode, st_file_attributes=0x400)
+        return result
+    monkeypatch.setattr(Path, "lstat", linked)
+    with pytest.raises(QuoteCatalogError, match="link/reparse"):
+        build_minute_quote_catalog(root)
+
+def _quote_successor_fixture(tmp_path):
+    baseline = tmp_path / "baseline"
+    minute = baseline / "components/minute_bin_candidate"
+    (minute / "calendars").mkdir(parents=True)
+    (minute / "instruments").mkdir()
+    (minute / "features/002305.sz").mkdir(parents=True)
+    (minute / "calendars/1min.txt").write_text(
+        "2025-04-29 15:00:00\n2026-01-05 09:31:00\n2026-08-31 15:00:00\n", encoding="utf-8"
+    )
+    (baseline / CATALOG).write_text("002305.SZ\t2025-04-29\t2025-04-29\n", encoding="utf-8")
+    (baseline / META).write_text('{"universe_key":"approved-pit"}\n', encoding="utf-8")
+    np.asarray([0, 2, 3, 4], dtype="<f4").tofile(minute / "features/002305.sz/close.1min.bin")
+    (baseline / "stock_pools").mkdir()
+    pool = baseline / "stock_pools/stock_universe.txt"
+    pool.write_text("002305.SZ\t2025-04-29\t2025-04-29\n", encoding="utf-8")
+    def pin(relative):
+        p = baseline / relative
+        return {"path": relative, "sha256": hashlib.sha256(p.read_bytes()).hexdigest(), "size": p.stat().st_size}
+    manifest = {
+        "deployment_snapshot_id": "original", "cutoff_trade_date": "2026-08-31",
+        "components": {"minute_provider_catalog": pin(CATALOG), "minute_meta_export": pin(META),
+                       "minute_calendar": pin("components/minute_bin_candidate/calendars/1min.txt"),
+                       "stock_pool": pin("stock_pools/stock_universe.txt")},
+    }
+    manifest["dataset_manifest_sha256"] = _manifest_identity(manifest)
+    (baseline / "qe_dataset_manifest.json").write_bytes(canonical_json_bytes(manifest) + b"\n")
+    (baseline / "direct_monthly_state.json").write_text('{"components":{},"validation":{},"status":"CANDIDATE_READY"}', encoding="utf-8")
+    profile = {
+        "generation": "old", "cutoff": "2026-08-31", "controller_paths": {"candidate_root": str(baseline)},
+        "node_bindings": {"wsl2-5080": {"candidate_root": "/old/wsl"}, "rdagent-node1": {"candidate_root": "/old/node"}},
+        "components": {"dataset_manifest_sha256": manifest["dataset_manifest_sha256"],
+                       "dataset_manifest_file_sha256": hashlib.sha256((baseline / "qe_dataset_manifest.json").read_bytes()).hexdigest(),
+                       "minute_pins": {"instruments_sha256": manifest["components"]["minute_provider_catalog"]["sha256"],
+                                       "meta_export_sha256": manifest["components"]["minute_meta_export"]["sha256"]}},
+    }
+    active = tmp_path / "active.json"
+    active.write_bytes(canonical_json_bytes(profile) + b"\n")
+    return baseline, active
+
+
+def test_catalog_only_successor_does_not_change_prices_or_pit_or_active(tmp_path):
+    baseline, active = _quote_successor_fixture(tmp_path)
+    before = {str(p.relative_to(baseline)): p.read_bytes() for p in baseline.rglob("*") if p.is_file()}
+    before_active = active.read_bytes()
+    candidate = tmp_path / "successor"
+    receipt = repair_quote_catalog(
+        baseline_profile=active, candidate_root=candidate, profile_output=tmp_path / "profile.json",
+        generation="new", revision="quotes1", node_roots={"wsl2-5080": "/new/wsl", "rdagent-node1": "/new/node"},
+    )
+    assert receipt["changed_symbol_count"] == 1
+    assert active.read_bytes() == before_active
+    assert before == {str(p.relative_to(baseline)): p.read_bytes() for p in baseline.rglob("*") if p.is_file()}
+    assert (candidate / CATALOG).read_text(encoding="utf-8").endswith("2026-08-31 15:00:00\n")
+    assert not os.path.samefile(baseline / CATALOG, candidate / CATALOG)
+    assert os.path.samefile(baseline / "stock_pools/stock_universe.txt", candidate / "stock_pools/stock_universe.txt")
+    price = "components/minute_bin_candidate/features/002305.sz/close.1min.bin"
+    assert os.path.samefile(baseline / price, candidate / price)
+    manifest = json.loads((candidate / "qe_dataset_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["dataset_manifest_sha256"] == _manifest_identity(manifest)
+    original = json.loads((baseline / "qe_dataset_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["components"]["stock_pool"] == original["components"]["stock_pool"]
+    with pytest.raises(ValueError, match="new sibling"):
+        repair_quote_catalog(baseline_profile=active, candidate_root=candidate, profile_output=tmp_path / "other.json",
+                             generation="new2", revision="quotes2", node_roots={})
+
+
+def test_predecessor_pin_drift_aborts_before_creating_successor(tmp_path):
+    baseline, active = _quote_successor_fixture(tmp_path)
+    (baseline / CATALOG).write_text("changed", encoding="utf-8")
+    candidate = tmp_path / "bad"
+    with pytest.raises(ValueError, match="pin differs"):
+        repair_quote_catalog(
+            baseline_profile=active, candidate_root=candidate, profile_output=tmp_path / "profile.json",
+            generation="new", revision="quotes1", node_roots={"wsl2-5080": "/new/wsl", "rdagent-node1": "/new/node"},
+        )
+    assert not candidate.exists()
+
+def test_minute_quote_rewrite_does_not_query_or_clip_to_buy_eligibility(tmp_path, monkeypatch):
+    from backend.qlib_exporter import authoritative_bin_exporter as exporter
+
+    root = tmp_path / "minute"
+    (root / "instruments").mkdir(parents=True)
+    (root / "calendars").mkdir()
+    feature = root / "features" / "002305.sz"
+    feature.mkdir(parents=True)
+    calendar = ["2025-04-29 15:00:00", "2026-01-05 09:31:00", "2026-08-31 15:00:00"]
+    (root / "calendars/1min.txt").write_text("\n".join(calendar) + "\n", encoding="utf-8")
+    (root / "instruments/all.txt").write_text(
+        "002305.SZ\t2025-04-29 15:00:00\t2025-04-29 15:00:00\n", encoding="utf-8"
+    )
+    np.asarray([0, 2.2, 2.3, np.nan], dtype="<f4").tofile(feature / "close.1min.bin")
+    monkeypatch.setattr(exporter, "_load_pit_spans_for_all_txt", lambda **_kwargs: pytest.fail("quote rewrite queried PIT selection"))
+    before = (feature / "close.1min.bin").read_bytes()
+    summary = exporter.rewrite_stock_all_txt_from_pit_spans(
+        bin_dir=root, start=date(2025, 4, 29),
+        end=date(2026, 8, 31), feature_frequency="1min", allowed_bin_root=tmp_path,
+    )
+    assert (root / "instruments/all.txt").read_text(encoding="utf-8") == (
+        "002305.SZ\t2025-04-29 15:00:00\t2026-01-05 09:31:00\n"
+    )
+    assert summary["mode"] == "physical_quote_catalog_v1"
+    assert (feature / "close.1min.bin").read_bytes() == before
+
