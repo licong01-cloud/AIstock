@@ -1,9 +1,10 @@
 name: AIstock Nightly L3 + DR
+run-name: ${{ github.event_name == 'repository_dispatch' && format('AIstock schedule nightly.yml {0}', github.event.client_payload.cycle_date) || github.workflow }}
 
 on:
-  schedule:
-    # 19:07 UTC = 03:07 China Standard Time (UTC+8) -- after market close + log rotation
-    - cron: '7 19 * * *'
+  repository_dispatch:
+    # Windows wall-clock trigger 03:07 UTC+8; still subject to overnight admission.
+    types: [aistock_nightly]
   workflow_dispatch:
     inputs:
       run_dr:
@@ -147,7 +148,7 @@ jobs:
 
       - name: Select prior durable Nightly L3 receipt
         id: select_nightly_receipt
-        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name == 'schedule' || (inputs.run_nightly_l3 && !inputs.full_nightly_run))
+        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name != 'workflow_dispatch' || (inputs.run_nightly_l3 && !inputs.full_nightly_run))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -157,7 +158,6 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --workflow nightly.yml \
             --branch main \
-            --event schedule \
             --status completed \
             --limit 10 \
             --json databaseId,headSha \
@@ -420,7 +420,7 @@ jobs:
           }
 
       - name: Download selected Nightly L3 retry receipt
-        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name == 'schedule' || !inputs.full_nightly_run)
+        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.full_nightly_run)
         uses: actions/download-artifact@v8
         with:
           name: nightly-l3-retry-source-${{ github.run_id }}
@@ -904,7 +904,7 @@ jobs:
             --output-dir "$outDir/bug-candidates"
 
       - name: Promote ready Nightly BugCandidates to Issue workflow
-        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in))
+        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name != 'workflow_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
