@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1895",
-  "closed_at": null,
+  "closed_at": "2026-10-14T17:25:29.209536Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -137,6 +137,46 @@
     "hmm_data_source_backend"
   ],
   "risk_area": "bug",
+  "runtime_business_acceptance": {
+    "active_profile_write": false,
+    "authorization": "User authorized the next legitimate T-to-T+1 zero-fit daily coefficient generation and BUG-1895 aftercare on 2026-10-15.",
+    "automatic_shared_scheduler_verified": false,
+    "consumer_admission_verified": false,
+    "dataset_write": false,
+    "dev_validation": {
+      "database": "aistock_dev",
+      "existing_qe_windows_preserved": true,
+      "file_write": false,
+      "fixture_is_production_coefficient": false,
+      "immutable_conflict": "fail_closed",
+      "mode": "transaction_rollback",
+      "rollback_verified": true,
+      "writer_and_job_readback": "passed"
+    },
+    "fits": 0,
+    "process_control": false,
+    "production": {
+      "artifact_bytes": 693092,
+      "artifact_sha256": "66602de8dc6c9aa0db6d9522df0da67db4b7e027e292c9c965c7ce2a957f6b06",
+      "as_of_trade_date": "2026-10-14",
+      "catalog_sector_count": 131,
+      "coefficient_filename": "coefficients_preset_A_2026-10-15_2026-10-15__daily_76f8741b4e613607d0b2b495a5500b34f20b5f33c349d8edcb4bc769adc549fa.json",
+      "coefficient_sector_count": 124,
+      "daily_key": "76f8741b4e613607d0b2b495a5500b34f20b5f33c349d8edcb4bc769adc549fa",
+      "database": "aistock",
+      "effective_trade_date": "2026-10-15",
+      "existing_qe_windows_preserved": true,
+      "finite_coefficient_readback": "passed",
+      "job_id": "9c97a277-9ab3-4373-9b9d-ff4b034dcf01",
+      "job_status": "COMPLETED",
+      "quote_unavailable_sector_count": 7,
+      "registration_status": "REGISTERED_READBACK",
+      "result_status": "GENERATED",
+      "unavailable_policy": "explicit_no_l2_overlay_v1",
+      "write_method": "POST /api/v1/hmm-training/snapshots/ecee7c40-6764-49ad-bc0f-1c6c6b390504/daily-coefficients/jobs"
+    },
+    "tail_read": false
+  },
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-training/snapshots/ecee7c40-6764-49ad-bc0f-1c6c6b390504/daily-coefficients/jobs?job_id=9c97a277-9ab3-4373-9b9d-ff4b034dcf01&config_id=fc0683a9-6ca0-4d55-b053-17c2360c3c40&signal_preset=preset_A&as_of_trade_date=2026-10-14&effective_trade_date=2026-10-15&daily_key=76f8741b4e613607d0b2b495a5500b34f20b5f33c349d8edcb4bc769adc549fa&model_sha256=7223c32648792443020cbc02e9ded3102e81d30330640e623d4c2ef0ddf8f665&input_sha256=26d75df000d49f6ebf559c31ad0be238dd64e0da7a68e76c2ce39545b4e48b49&artifact_sha256=66602de8dc6c9aa0db6d9522df0da67db4b7e027e292c9c965c7ce2a957f6b06",
@@ -149,56 +189,38 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-1895/post-restart-final.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1895",
+      "business_smoke_semantic": {
+        "contract_id": "hmm_database_daily_coefficient_jobs",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8491091005d1a48e12842529dd81fd8f796930f3ad04fc92df4622c1e3a2add",
+      "contract_digest": "16f15e5a40313a96f2c885cd90aee81cf1709e699560a1f7b3cd2238b3eade38",
+      "expected_identity": "442d6ac61efd9d9682b079f1a6a44a17dfb17b39",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-14T17:22:58.838144Z",
+      "mode": "read_only",
+      "observed_identity": "5c5fc5684458582115a28ae5f4f5c8b1b08a0829",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "233dfb75c10fe7ba6671ec0fd2c4043e773469cbc24017cb1f6713d2bfca3c9e",
+      "receipt_sha256": "3de085a69749828df9d7f4be40b4b2bd2f80110487d34a355abdd555b1d475d4",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "266458cc8efbf9301c73af149cf11d7aa896d7feb0fac3d5a21b225eeca42e25",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
     ]
-  },
-  "runtime_business_acceptance": {
-    "authorization": "User authorized the next legitimate T-to-T+1 zero-fit daily coefficient generation and BUG-1895 aftercare on 2026-10-15.",
-    "dev_validation": {
-      "database": "aistock_dev",
-      "mode": "transaction_rollback",
-      "writer_and_job_readback": "passed",
-      "immutable_conflict": "fail_closed",
-      "existing_qe_windows_preserved": true,
-      "rollback_verified": true,
-      "fixture_is_production_coefficient": false,
-      "file_write": false
-    },
-    "production": {
-      "database": "aistock",
-      "write_method": "POST /api/v1/hmm-training/snapshots/ecee7c40-6764-49ad-bc0f-1c6c6b390504/daily-coefficients/jobs",
-      "job_id": "9c97a277-9ab3-4373-9b9d-ff4b034dcf01",
-      "job_status": "COMPLETED",
-      "result_status": "GENERATED",
-      "registration_status": "REGISTERED_READBACK",
-      "as_of_trade_date": "2026-10-14",
-      "effective_trade_date": "2026-10-15",
-      "daily_key": "76f8741b4e613607d0b2b495a5500b34f20b5f33c349d8edcb4bc769adc549fa",
-      "artifact_sha256": "66602de8dc6c9aa0db6d9522df0da67db4b7e027e292c9c965c7ce2a957f6b06",
-      "artifact_bytes": 693092,
-      "coefficient_filename": "coefficients_preset_A_2026-10-15_2026-10-15__daily_76f8741b4e613607d0b2b495a5500b34f20b5f33c349d8edcb4bc769adc549fa.json",
-      "catalog_sector_count": 131,
-      "coefficient_sector_count": 124,
-      "quote_unavailable_sector_count": 7,
-      "unavailable_policy": "explicit_no_l2_overlay_v1",
-      "finite_coefficient_readback": "passed",
-      "existing_qe_windows_preserved": true
-    },
-    "fits": 0,
-    "tail_read": false,
-    "dataset_write": false,
-    "active_profile_write": false,
-    "process_control": false,
-    "automatic_shared_scheduler_verified": false,
-    "consumer_admission_verified": false
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -228,7 +250,7 @@
     ],
     "validation_evidence_digest": "97f67b5524098a20f5a20e3875219f51fc00f6e198df034f3001d2de111a3c93"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "hmm"
   ],
