@@ -1,6 +1,8 @@
 {
   "actual": "Nightly 38482982008 07:14 才创建，CodeGraph 38481114991 06:56，CodeQL 38486320226 07:47；重任务全部 skipped",
   "allowed_write_scope": [
+    "scripts/ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
     "scripts/aistock_runner_health.py",
     "scripts/configure_aistock_github_runner.ps1",
     "backend/tests/scripts/test_aistock_runner_health.py",
@@ -47,6 +49,8 @@
     ],
     "added_files": [],
     "changed_files": [
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
       ".github/workflows/code-intelligence-refresh.yml",
       ".github/workflows/codeql.yml",
       ".github/workflows/nightly.yml",
