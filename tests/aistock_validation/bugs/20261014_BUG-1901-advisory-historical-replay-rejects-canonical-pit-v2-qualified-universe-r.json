@@ -90,8 +90,8 @@
   },
   "first_seen_at": "2026-10-14T09:24:29.340185Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7aba9ddddf0b333b0cd80b89da5d79c23bc80f88",
+  "fixed_at": "2026-10-14T17:20:18Z",
   "github_issue_number": 6069,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6069",
   "last_seen_at": "2026-10-14T09:24:29.340185Z",
@@ -99,6 +99,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6070",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -123,6 +124,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -134,7 +136,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1901",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4208627d5f79259e",
+    "recorded_at": "2026-10-14T17:21:10.154098Z",
+    "runtime_contract_digest": "0733eddaf2395804c293a15848bcfddd045fc6c81141d0efa0fe5cc30dc1ad9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6af5b299fffe6d4a19e1bb34a8cec56f3ed08ca4",
+    "source_merge_commit": "7aba9ddddf0b333b0cd80b89da5d79c23bc80f88",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6070",
+    "validation_evidence": [
+      "validation-receipt: id=e8dacd89c46db103 commit=6af5b299fffe6d4a19e1bb34a8cec56f3ed08ca4 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/advisory_historical_range/test_r2b_candidate_producer.py backend/tests/advisory_historical_range/test_r2b_candidate_projector.py backend/tests/advisory_historical_range/test_selection_signal_kernel.py -q -p no:cacheprovider --basetemp=X:/AIstock_temp/advisory-shared-kernel-replay-20261014-v2/pytest-final` result=`passed, 19 tests`",
+      "validation-receipt: id=c9470a0a5e3648c7 commit=6af5b299fffe6d4a19e1bb34a8cec56f3ed08ca4 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv --no-install --envdir X:/AIstock_temp/advisory-shared-kernel-replay-20261014-v2/nox -- backend/services/advisory_historical_range/candidate_producer.py backend/tests/advisory_historical_range/test_r2b_candidate_producer.py tests/aistock_validation/bugs/20261014_BUG-1901-advisory-historical-replay-rejects-canonical-pit-v2-qualified-universe-r.json` result=`passed, 0 findings`",
+      "validation-receipt: id=58329599f93037a7 commit=6af5b299fffe6d4a19e1bb34a8cec56f3ed08ca4 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/advisory_historical_range/candidate_producer.py backend/tests/advisory_historical_range/test_r2b_candidate_producer.py --no-cache` result=`passed`",
+      "validation-receipt: id=2ca7f1be63de98c1 commit=6af5b299fffe6d4a19e1bb34a8cec56f3ed08ca4 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/advisory_historical_range/candidate_producer.py backend/tests/advisory_historical_range/test_r2b_candidate_producer.py` result=`passed`",
+      "validation-receipt: id=a25d53db0dc15173 commit=6af5b299fffe6d4a19e1bb34a8cec56f3ed08ca4 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "5c0345d18ce2655abb145dc8ebf2eeeac63e531cb101a70df6b51a5832ce88ab"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory"
   ],
@@ -143,6 +170,13 @@
     "fingerprint": "ac4bc692af044a2da02f63a4",
     "source_event_id": "FE-20261014-ac4bc692af04"
   },
+  "validation_evidence": [
+    "validation-receipt: id=e8dacd89c46db103 commit=6af5b299fffe6d4a19e1bb34a8cec56f3ed08ca4 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/advisory_historical_range/test_r2b_candidate_producer.py backend/tests/advisory_historical_range/test_r2b_candidate_projector.py backend/tests/advisory_historical_range/test_selection_signal_kernel.py -q -p no:cacheprovider --basetemp=X:/AIstock_temp/advisory-shared-kernel-replay-20261014-v2/pytest-final` result=`passed, 19 tests`",
+    "validation-receipt: id=c9470a0a5e3648c7 commit=6af5b299fffe6d4a19e1bb34a8cec56f3ed08ca4 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv --no-install --envdir X:/AIstock_temp/advisory-shared-kernel-replay-20261014-v2/nox -- backend/services/advisory_historical_range/candidate_producer.py backend/tests/advisory_historical_range/test_r2b_candidate_producer.py tests/aistock_validation/bugs/20261014_BUG-1901-advisory-historical-replay-rejects-canonical-pit-v2-qualified-universe-r.json` result=`passed, 0 findings`",
+    "validation-receipt: id=58329599f93037a7 commit=6af5b299fffe6d4a19e1bb34a8cec56f3ed08ca4 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/advisory_historical_range/candidate_producer.py backend/tests/advisory_historical_range/test_r2b_candidate_producer.py --no-cache` result=`passed`",
+    "validation-receipt: id=2ca7f1be63de98c1 commit=6af5b299fffe6d4a19e1bb34a8cec56f3ed08ca4 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/advisory_historical_range/candidate_producer.py backend/tests/advisory_historical_range/test_r2b_candidate_producer.py` result=`passed`",
+    "validation-receipt: id=a25d53db0dc15173 commit=6af5b299fffe6d4a19e1bb34a8cec56f3ed08ca4 kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
