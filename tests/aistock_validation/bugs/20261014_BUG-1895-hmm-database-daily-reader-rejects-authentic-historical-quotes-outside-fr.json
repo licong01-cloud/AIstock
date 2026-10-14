@@ -122,13 +122,13 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval.",
     "Do not change shared datasets, quote publication policy, model parameters, features, seeds or inference windows.",
-    "Do not create coefficient jobs, publish production assets, write databases, activate profiles or start training.",
+    "Source-fix phase did not create coefficient jobs, publish production assets or write databases. The separately user-authorized runtime acceptance executes one existing-snapshot zero-fit database_daily job through the formal API; no profile activation or training.",
     "Do not modify QE, Selection, Advisory, Paper or workflow/CI code."
   ],
   "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6049",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
-  "production_dml_gate": "noop",
+  "production_dml_gate": "applied",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "HMM readonly daily preview preset_A effective_trade_date=2026-10-14 snapshot=ecee7c40-6764-49ad-bc0f-1c6c6b390504",
@@ -139,7 +139,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-training/snapshots/ecee7c40-6764-49ad-bc0f-1c6c6b390504/daily-coefficients/jobs",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-training/snapshots/ecee7c40-6764-49ad-bc0f-1c6c6b390504/daily-coefficients/jobs?job_id=9c97a277-9ab3-4373-9b9d-ff4b034dcf01&config_id=fc0683a9-6ca0-4d55-b053-17c2360c3c40&signal_preset=preset_A&as_of_trade_date=2026-10-14&effective_trade_date=2026-10-15&daily_key=76f8741b4e613607d0b2b495a5500b34f20b5f33c349d8edcb4bc769adc549fa&model_sha256=7223c32648792443020cbc02e9ded3102e81d30330640e623d4c2ef0ddf8f665&input_sha256=26d75df000d49f6ebf559c31ad0be238dd64e0da7a68e76c2ce39545b4e48b49&artifact_sha256=66602de8dc6c9aa0db6d9522df0da67db4b7e027e292c9c965c7ce2a957f6b06",
     "fresh_process_evidence": [
       "PYTHONPATH=<BUG-1895 own worktree> Conda AIstock python -B - -> PASS: database_daily readonly preview as_of=2026-10-12 effective=2026-10-14, official quote context 788 keys, GaussianHMM.fit/file worker poisoned; no job or DB write; not default T+1 or post-restart acceptance",
       "PYTHONPATH=<BUG-1895 own worktree> C:/Users/lc999/miniconda3/envs/AIstock/python.exe -B - -> PASS: fresh imports backend.routers.hmm_training, backend.routers.hmm_risk, backend.routers.health and backend.services.hmm_data_source.daily_input resolve only to the task worktree; no process control or dependency installation",
@@ -159,6 +159,46 @@
     "target_ids": [
       "backend-main"
     ]
+  },
+  "runtime_business_acceptance": {
+    "authorization": "User authorized the next legitimate T-to-T+1 zero-fit daily coefficient generation and BUG-1895 aftercare on 2026-10-15.",
+    "dev_validation": {
+      "database": "aistock_dev",
+      "mode": "transaction_rollback",
+      "writer_and_job_readback": "passed",
+      "immutable_conflict": "fail_closed",
+      "existing_qe_windows_preserved": true,
+      "rollback_verified": true,
+      "fixture_is_production_coefficient": false,
+      "file_write": false
+    },
+    "production": {
+      "database": "aistock",
+      "write_method": "POST /api/v1/hmm-training/snapshots/ecee7c40-6764-49ad-bc0f-1c6c6b390504/daily-coefficients/jobs",
+      "job_id": "9c97a277-9ab3-4373-9b9d-ff4b034dcf01",
+      "job_status": "COMPLETED",
+      "result_status": "GENERATED",
+      "registration_status": "REGISTERED_READBACK",
+      "as_of_trade_date": "2026-10-14",
+      "effective_trade_date": "2026-10-15",
+      "daily_key": "76f8741b4e613607d0b2b495a5500b34f20b5f33c349d8edcb4bc769adc549fa",
+      "artifact_sha256": "66602de8dc6c9aa0db6d9522df0da67db4b7e027e292c9c965c7ce2a957f6b06",
+      "artifact_bytes": 693092,
+      "coefficient_filename": "coefficients_preset_A_2026-10-15_2026-10-15__daily_76f8741b4e613607d0b2b495a5500b34f20b5f33c349d8edcb4bc769adc549fa.json",
+      "catalog_sector_count": 131,
+      "coefficient_sector_count": 124,
+      "quote_unavailable_sector_count": 7,
+      "unavailable_policy": "explicit_no_l2_overlay_v1",
+      "finite_coefficient_readback": "passed",
+      "existing_qe_windows_preserved": true
+    },
+    "fits": 0,
+    "tail_read": false,
+    "dataset_write": false,
+    "active_profile_write": false,
+    "process_control": false,
+    "automatic_shared_scheduler_verified": false,
+    "consumer_admission_verified": false
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
