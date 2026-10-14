@@ -2,15 +2,8 @@
   "actual": "Stock eligibility truncation hides genuine quotes needed for existing holdings; monthly increment and validator reproduce the same clipping.",
   "allowed_write_scope": [
     "backend/qlib_exporter/authoritative_bin_exporter.py",
-    "backend/services/dataset_release/daily_minute_materializer.py",
-    "backend/services/dataset_release/qlib_bounded_update.py",
-    "backend/services/dataset_release/candidate_validator.py",
-    "backend/tests/test_authoritative_bin_pit_universe.py",
-    "backend/tests/dataset_release/test_daily_minute_materializer.py",
-    "backend/tests/dataset_release/test_qlib_bounded_update.py",
-    "backend/tests/dataset_release/test_candidate_validator.py",
+    "backend/tests/test_qlib_export_stock_universe_filters.py",
     "backend/qlib_exporter/quote_catalog.py",
-    "backend/tests/test_qlib_quote_catalog.py",
     "tests/aistock_validation/bugs/20261014_BUG-1902-minute-quote-catalog-clips-authentic-holding-quotes-to-pit-buy-eligibili.json"
   ],
   "assigned_agent": null,
@@ -22,13 +15,19 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-14T17:53:36.171411Z",
-  "description": "Stock eligibility truncation hides genuine quotes needed for existing holdings; monthly increment and validator reproduce the same clipping.",
+  "description": "Shared physical minute quote catalog and immutable catalog-only successor repair. Monthly worker call sites/validator are a separate follow-up BUG because backend-main and worker-scheduler require distinct runtime verification. PIT buy eligibility remains unchanged.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
       "actor": "issue_flow",
       "note": "Promoted from IC-20261014-e7fefa32be9f",
       "timestamp": "2026-10-14T17:53:36.171411Z"
+    },
+    {
+      "action": "scope_split_by_runtime_target",
+      "actor": "Codex",
+      "note": "BUG-1902 owns shared quote catalog/legacy exporter/candidate-only repair; monthly worker integration is a separate BUG. One shared successor, no process control.",
+      "timestamp": "2026-10-14T17:59:00.860Z"
     }
   ],
   "evidence_uris": [
@@ -36,191 +35,34 @@
   ],
   "expected": "Quote catalog follows real frozen physical quote coverage independently of PIT buy eligibility; selection pools retain their exact spans.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1902-minute-quote-catalog-clips-authentic-holding-quotes-to-pit-buy-eligibili.json",
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/tests/test_authoritative_bin_pit_universe.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "backend/qlib_exporter/quote_catalog.py"
+    ],
     "added_files": [
-      "backend/qlib_exporter/quote_catalog.py",
-      "backend/tests/test_qlib_quote_catalog.py"
+      "backend/qlib_exporter/quote_catalog.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1902-minute-quote-catalog-clips-authentic-holding-quotes-to-pit-buy-eligibili.json",
       "backend/qlib_exporter/authoritative_bin_exporter.py",
-      "backend/services/dataset_release/daily_minute_materializer.py",
-      "backend/services/dataset_release/qlib_bounded_update.py",
-      "backend/services/dataset_release/candidate_validator.py",
       "backend/tests/test_authoritative_bin_pit_universe.py",
-      "backend/tests/dataset_release/test_daily_minute_materializer.py",
-      "backend/tests/dataset_release/test_qlib_bounded_update.py",
-      "backend/tests/dataset_release/test_candidate_validator.py"
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "backend/qlib_exporter/quote_catalog.py"
     ],
-    "changed_files_source": "planned_intake",
-    "ownership": {
-      "changed_files": [
-        "backend/qlib_exporter/authoritative_bin_exporter.py",
-        "backend/services/dataset_release/daily_minute_materializer.py",
-        "backend/services/dataset_release/qlib_bounded_update.py",
-        "backend/services/dataset_release/candidate_validator.py",
-        "backend/tests/test_authoritative_bin_pit_universe.py",
-        "backend/tests/dataset_release/test_daily_minute_materializer.py",
-        "backend/tests/dataset_release/test_qlib_bounded_update.py",
-        "backend/tests/dataset_release/test_candidate_validator.py",
-        "backend/qlib_exporter/quote_catalog.py",
-        "backend/tests/test_qlib_quote_catalog.py"
-      ],
-      "impacted_modules": [
-        "qlib_data",
-        "qe.core",
-        "factor_library",
-        "paper_v2",
-        "local_data",
-        "platform.api",
-        "tests.backend"
-      ],
-      "matched_rules": [
-        {
-          "file": "backend/qlib_exporter/authoritative_bin_exporter.py",
-          "impact_modules": [
-            "qe.core",
-            "factor_library",
-            "paper_v2"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_data_pipeline"
-        },
-        {
-          "file": "backend/services/dataset_release/daily_minute_materializer.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/services/dataset_release/qlib_bounded_update.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/services/dataset_release/candidate_validator.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/test_authoritative_bin_pit_universe.py",
-          "impact_modules": [
-            "qe.core"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_remaining_tests"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_daily_minute_materializer.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_qlib_bounded_update.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_candidate_validator.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/qlib_exporter/quote_catalog.py",
-          "impact_modules": [
-            "qe.core",
-            "factor_library",
-            "paper_v2"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_data_pipeline"
-        },
-        {
-          "file": "backend/tests/test_qlib_quote_catalog.py",
-          "impact_modules": [],
-          "primary_module": "tests.backend",
-          "risk_level": "medium",
-          "rule_id": "backend_tests_default"
-        }
-      ],
-      "risk_levels": [
-        "critical",
-        "medium"
-      ],
-      "suggested_scope": [
-        "backend/qlib_exporter/authoritative_bin_exporter.py",
-        "backend/services/dataset_release/daily_minute_materializer.py",
-        "backend/services/dataset_release/qlib_bounded_update.py",
-        "backend/services/dataset_release/candidate_validator.py",
-        "backend/tests/test_authoritative_bin_pit_universe.py",
-        "backend/tests/dataset_release/test_daily_minute_materializer.py",
-        "backend/tests/dataset_release/test_qlib_bounded_update.py",
-        "backend/tests/dataset_release/test_candidate_validator.py",
-        "backend/qlib_exporter/quote_catalog.py",
-        "backend/tests/test_qlib_quote_catalog.py"
-      ],
-      "unmatched_files": []
-    },
+    "changed_files_source": "git_finish",
     "planned_files": [
       "backend/qlib_exporter/authoritative_bin_exporter.py",
-      "backend/services/dataset_release/daily_minute_materializer.py",
-      "backend/services/dataset_release/qlib_bounded_update.py",
-      "backend/services/dataset_release/candidate_validator.py",
-      "backend/tests/test_authoritative_bin_pit_universe.py",
-      "backend/tests/dataset_release/test_daily_minute_materializer.py",
-      "backend/tests/dataset_release/test_qlib_bounded_update.py",
-      "backend/tests/dataset_release/test_candidate_validator.py",
-      "backend/qlib_exporter/quote_catalog.py",
-      "backend/tests/test_qlib_quote_catalog.py"
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "backend/qlib_exporter/quote_catalog.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/qlib_exporter/authoritative_bin_exporter.py",
-      "backend/services/dataset_release/daily_minute_materializer.py",
-      "backend/services/dataset_release/qlib_bounded_update.py",
-      "backend/services/dataset_release/candidate_validator.py",
-      "backend/tests/test_authoritative_bin_pit_universe.py",
-      "backend/tests/dataset_release/test_daily_minute_materializer.py",
-      "backend/tests/dataset_release/test_qlib_bounded_update.py",
-      "backend/tests/dataset_release/test_candidate_validator.py",
-      "backend/qlib_exporter/quote_catalog.py",
-      "backend/tests/test_qlib_quote_catalog.py"
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "backend/qlib_exporter/quote_catalog.py"
     ]
   },
   "first_seen_at": "2026-10-14T17:53:36.171411Z",
@@ -246,17 +88,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/config",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "RED: native minute rewrite incorrectly queried PIT selection. GREEN: new process validates authentic quote catalog with unchanged bins and unchanged PIT stock pools; successor builder rejects source pin drift and active overwrite. Production backend restart remains user-owned and pending."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "backend-main",
     "target_ids": [
-      "backend-main",
-      "worker-scheduler"
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
