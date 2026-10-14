@@ -5,9 +5,11 @@ import errno
 import hashlib
 import importlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
+import numpy as np
 import pytest
 
 from backend.services.dataset_release import monthly_unified as monthly_subject
@@ -537,6 +539,166 @@ def test_existing_successor_adoption_rejects_drift_and_incomplete_evidence(
     values["evidence_refs"] = values["evidence_refs"][:1]
     with pytest.raises(monthly_subject.MonthlyReleaseNotReady, match="required release gates"):
         service.adopt_existing_successor(**values)
+
+
+def _quote_only_successor(tmp_path: Path, service: MonthlyReleaseService) -> dict[str, Any]:
+    values = _adoptable_successor(tmp_path, service)
+    baseline = Path(ActiveProfileSnapshot.read(service.active_profile).candidate_root)
+    candidate = values['candidate_root']
+    provider = 'components/minute_bin_candidate'
+    mutable = {'minute_provider_catalog', 'minute_meta_export'}
+    symbols = ['000698.SZ', '002305.SZ', '002496.SZ']
+    stamps = [f'2026-01-05 09:{minute}:00' for minute in range(31, 36)] + ['2026-08-31 15:00:00']
+    (baseline / provider / 'calendars').mkdir(parents=True)
+    (baseline / provider / 'instruments').mkdir()
+    (baseline / provider / 'calendars/1min.txt').write_text('\n'.join(stamps) + '\n', encoding='utf-8')
+    (baseline / provider / 'instruments/all.txt').write_text('\n'.join(f'{s}\t2025-01-01\t2025-12-31' for s in symbols) + '\n', encoding='utf-8')
+    _canonical(baseline / provider / 'meta_export.json', {'cutoff': '2026-08-31'})
+    for symbol in symbols:
+        directory = baseline / provider / 'features' / symbol.lower()
+        directory.mkdir(parents=True)
+        (directory / 'close.1min.bin').write_bytes(np.array([0, 1, 2, 3, 4, 5, 6], dtype='<f4').tobytes())
+    pool = baseline / 'stock_pools/stock_universe.txt'
+    pool.parent.mkdir()
+    pool.write_text('\n'.join(f'{s}\t2025-01-01\t2025-12-31' for s in symbols) + '\n', encoding='utf-8')
+    pins = {key: {'path': path, 'sha256': _sha(baseline / path), 'size': (baseline / path).stat().st_size}
+            for key, path in {'minute_provider_catalog': provider + '/instruments/all.txt',
+                              'minute_meta_export': provider + '/meta_export.json',
+                              'minute_calendar': provider + '/calendars/1min.txt',
+                              'stock_universe': 'stock_pools/stock_universe.txt'}.items()}
+    old = {'release_id': 'qe_hmm_full_v2_20260831', 'cutoff_trade_date': '2026-08-31',
+           'deployment_snapshot_id': 'old', 'components': pins}
+    old['dataset_manifest_sha256'] = monthly_subject._digest(old)
+    _canonical(baseline / 'qe_dataset_manifest.json', old)
+    active = json.loads(service.active_profile.read_text(encoding='utf-8'))
+    active['components'].update(dataset_manifest_sha256=old['dataset_manifest_sha256'],
+                                dataset_manifest_file_sha256=_sha(baseline / 'qe_dataset_manifest.json'))
+    active['node_bindings'] = {'wsl2-5080': {'candidate_root': '/mnt/releases/baseline'},
+                              'rdagent-node1': {'candidate_root': '/home/releases/baseline'}}
+    _canonical(service.active_profile, active)
+    for path in baseline.rglob('*'):
+        if path.is_file() and path.name != 'qe_dataset_manifest.json':
+            target = candidate / path.relative_to(baseline)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.link(path, target)
+    catalog = candidate / provider / 'instruments/all.txt'
+    catalog.unlink()
+    catalog.write_bytes(('\n'.join(f'{s}\t{stamps[0]}\t{stamps[-1]}' for s in sorted(symbols)) + '\n').encode('utf-8'))
+    metadata = candidate / provider / 'meta_export.json'
+    metadata.unlink()
+    _canonical(metadata, {'cutoff': '2026-08-31', 'mode': 'physical_quote_catalog_v1'})
+    report = {'schema_version': 'aistock_minute_quote_catalog_repair_v1', 'cutoff': '2026-08-31',
+              'predecessor_manifest_identity': old['dataset_manifest_sha256'],
+              'price_write': False, 'stock_pool_write': False, 'database_write': False,
+              'active_profile_write': False, 'runtime_action': False,
+              'catalog': {'sha256': _sha(catalog)}}
+    _canonical(candidate / 'reports/minute_quote_catalog_repair.json', report)
+    new_pins = {key: ({'path': pin['path'], 'sha256': _sha(candidate / pin['path']),
+                      'size': (candidate / pin['path']).stat().st_size} if key in mutable else pin)
+                for key, pin in pins.items()}
+    report_path = candidate / 'reports/minute_quote_catalog_repair.json'
+    new_pins['minute_quote_catalog_repair'] = {'path': 'reports/minute_quote_catalog_repair.json',
+                                             'sha256': _sha(report_path), 'size': report_path.stat().st_size}
+    new = {**old, 'components': new_pins, 'deployment_snapshot_id': 'new'}
+    new.pop('dataset_manifest_sha256')
+    new['dataset_manifest_sha256'] = monthly_subject._digest(new)
+    _canonical(candidate / 'qe_dataset_manifest.json', new)
+    target = json.loads(values['profile_candidate'].read_text(encoding='utf-8'))
+    _canonical(values['profile_candidate'], {**active, **{k: target[k] for k in ['generation', 'controller_paths', 'node_bindings']},
+        'components': {**active['components'], 'dataset_manifest_sha256': new['dataset_manifest_sha256'],
+                       'dataset_manifest_file_sha256': _sha(candidate / 'qe_dataset_manifest.json')}})
+    readback = {'schema_version': 'aistock_minute_quote_catalog_readback_v1', 'status': 'PASS',
+                'dataset_manifest_sha256': new['dataset_manifest_sha256'],
+                'manifest_file_sha256': _sha(candidate / 'qe_dataset_manifest.json'),
+                'minute_catalog_sha256': _sha(catalog), 'nodes': {},
+                'quote_sample_start': stamps[0], 'quote_sample_end': stamps[4],
+                'database_write': False, 'runtime_action': False, 'training_experiment': False}
+    for node in REQUIRED_NODES:
+        readback['nodes'][node] = {'status': 'PASS', 'dataset_identity_complete': True,
+            'manifest_identity': new['dataset_manifest_sha256'],
+            'manifest_file_sha256': readback['manifest_file_sha256'],
+            'component_hashes': {'minute_provider_catalog': _sha(catalog)},
+            'catalog_quotes': {s: {'rows': 5, 'close': [1, 2, 3, 4, 5]} for s in symbols},
+            'PIT_buy_excluded_samples': symbols}
+    readback_path = candidate / 'reports/minute_quote_catalog_readback.json'
+    _canonical(readback_path, readback)
+    return {**values, 'predecessor_profile_sha256': _sha(service.active_profile),
+            'target_profile_sha256': _sha(values['profile_candidate']),
+            'dataset_manifest_sha256': new['dataset_manifest_sha256'],
+            'dataset_manifest_file_sha256': readback['manifest_file_sha256'],
+            'node_manifest_file_sha256': {n: readback['manifest_file_sha256'] for n in REQUIRED_NODES},
+            'evidence_refs': [{'relative_path': p.relative_to(candidate).as_posix(), 'sha256': _sha(p),
+                               'schema_version': schema} for p, schema in [(report_path, report['schema_version']), (readback_path, readback['schema_version'])]]}
+
+
+def test_quote_only_successor_uses_typed_quote_evidence_without_rebinding_hmm(tmp_path: Path) -> None:
+    service = _service(tmp_path, Pipeline())
+    values = _quote_only_successor(tmp_path, service)
+    before = service.active_profile.read_bytes()
+    adopted = service.adopt_existing_successor(**values)
+    assert adopted['status'] == 'READY_TO_ACTIVATE'
+    assert service.active_profile.read_bytes() == before
+    assert service.adopt_existing_successor(**values)['operation_id'] == adopted['operation_id']
+
+
+@pytest.mark.parametrize('case', ['unrelated_pin', 'nonfinite_quote', 'missing_node', 'false_eligibility', 'lineage', 'missing_readback'])
+def test_quote_only_successor_rejects_incomplete_or_changed_proofs(tmp_path: Path, case: str) -> None:
+    service = _service(tmp_path, Pipeline())
+    values = _quote_only_successor(tmp_path, service)
+    candidate = values['candidate_root']
+    proof_path = candidate / 'reports/minute_quote_catalog_readback.json'
+    if case in {'nonfinite_quote', 'missing_node', 'false_eligibility'}:
+        proof = json.loads(proof_path.read_text(encoding='utf-8'))
+        if case == 'missing_node':
+            del proof['nodes']['rdagent-node1']
+        elif case == 'false_eligibility':
+            proof['nodes']['rdagent-node1']['PIT_buy_excluded_samples'] = []
+        else:
+            proof['nodes']['rdagent-node1']['catalog_quotes']['000698.SZ']['close'][0] = None
+        _canonical(proof_path, proof)
+        values['evidence_refs'][1]['sha256'] = _sha(proof_path)
+    elif case == 'missing_readback':
+        values['evidence_refs'] = values['evidence_refs'][:1]
+    elif case == 'lineage':
+        report_path = candidate / 'reports/minute_quote_catalog_repair.json'
+        report = json.loads(report_path.read_text(encoding='utf-8'))
+        report['predecessor_manifest_identity'] = 'e' * 64
+        _canonical(report_path, report)
+        values['evidence_refs'][0]['sha256'] = _sha(report_path)
+    else:
+        manifest_path = candidate / 'qe_dataset_manifest.json'
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        manifest['components']['minute_calendar']['sha256'] = 'e' * 64
+        manifest.pop('dataset_manifest_sha256')
+        manifest['dataset_manifest_sha256'] = monthly_subject._digest(manifest)
+        _canonical(manifest_path, manifest)
+        profile = json.loads(values['profile_candidate'].read_text(encoding='utf-8'))
+        profile['components']['dataset_manifest_sha256'] = manifest['dataset_manifest_sha256']
+        profile['components']['dataset_manifest_file_sha256'] = _sha(manifest_path)
+        _canonical(values['profile_candidate'], profile)
+        values.update(target_profile_sha256=_sha(values['profile_candidate']),
+                      dataset_manifest_sha256=manifest['dataset_manifest_sha256'],
+                      dataset_manifest_file_sha256=_sha(manifest_path),
+                      node_manifest_file_sha256={node: _sha(manifest_path) for node in REQUIRED_NODES})
+    with pytest.raises(monthly_subject.MonthlyReleaseNotReady, match='quote-only adoption proof'):
+        service.adopt_existing_successor(**values)
+
+
+@pytest.mark.parametrize('status,exact,allowed', [('ACTIVATED_VERIFIED', True, True), ('READY_TO_ACTIVATE', True, False), ('ACTIVATED_VERIFIED', False, False)])
+def test_quote_only_same_cutoff_requires_exact_activated_predecessor(tmp_path: Path, status: str, exact: bool, allowed: bool) -> None:
+    service = _service(tmp_path, Pipeline())
+    values = _quote_only_successor(tmp_path, service)
+    operation = 'dmr_' + '1' * 32
+    root = service.store.operation_root(operation)
+    _canonical(root / 'request.json', {'operation_id': operation, 'product_profile': values['product_profile'],
+               'target_cutoff': values['target_cutoff'].isoformat(), 'idempotency_key': 'old-adoption',
+               'target_profile_sha256': values['predecessor_profile_sha256'] if exact else 'e' * 64})
+    _canonical(root / 'state.json', {'status': status, 'operation_id': operation})
+    if allowed:
+        assert service.adopt_existing_successor(**values)['status'] == 'READY_TO_ACTIVATE'
+    else:
+        with pytest.raises(MonthlyReleaseConflict, match='another operation'):
+            service.adopt_existing_successor(**values)
 
 
 def _authorization(
