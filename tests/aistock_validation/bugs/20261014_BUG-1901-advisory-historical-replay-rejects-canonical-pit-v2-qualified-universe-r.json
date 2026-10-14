@@ -28,12 +28,18 @@
   ],
   "expected": "Native qualified PIT identity matching frozen universe_key/hash/count can produce candidates; wrong namespace, key, date, count or hash still fails without publication.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_historical_range/candidate_producer.py",
+      "backend/tests/advisory_historical_range/test_r2b_candidate_producer.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1901-advisory-historical-replay-rejects-canonical-pit-v2-qualified-universe-r.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/advisory_historical_range/candidate_producer.py",
-      "backend/tests/advisory_historical_range/test_r2b_candidate_producer.py"
+      "backend/tests/advisory_historical_range/test_r2b_candidate_producer.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1901-advisory-historical-replay-rejects-canonical-pit-v2-qualified-universe-r.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_historical_range/candidate_producer.py",
@@ -110,11 +116,15 @@
       "powershell -NoProfile -File X:/AIstock_temp/advisory-shared-kernel-replay-20261014-v2/check_native_receipts.ps1 -RepositoryRoot F:/Dev/AIstock_worktrees/BUG-1901-advisory-historical-replay-rejects-canonical-pit-20261014 -> PASS; fresh source import validates real frozen 2026-01-05 LSTM window279 and all four native receipts including qualified PIT identity/4913 rows; no training, prediction, database writes or service control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
