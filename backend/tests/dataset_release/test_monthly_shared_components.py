@@ -61,6 +61,40 @@ def _snapshot():  # type: ignore[no-untyped-def]
     )
 
 
+def test_native_builder_reads_full_market_inventory_above_small_control_cap(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_shared_components as module
+    from backend.services.dataset_release import monthly_build_bridge
+
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    cutoff = date(2026, 9, 30)
+    source_sha, predecessor_sha = "a" * 64, "b" * 64
+    files = {f"minute_bin/qlib/features/SH{i:06d}/close.1min.bin": {
+        "sha256": "c" * 64, "size": 123456789, "signature": [1, i, 123456789, 1791900000000000000],
+    } for i in range(100_000)}
+    authority = {"schema_version": "aistock_monthly_native_component_authority_v1",
+        "validation_scope": "month_delta", "cutoff": cutoff.isoformat(), "release_id": "september",
+        "source_bundle_sha256": source_sha, "predecessor_manifest_sha256": predecessor_sha,
+        "verified_output_files": files}
+    reference = cas.put_json(authority)
+    assert reference.size > 16 * 1024 * 1024
+    monkeypatch.setattr(module, "load_source_stage_receipt",
+        lambda *args, **kwargs: SimpleNamespace(artifact_ready_contract_ref={"frozen": True}))
+    monkeypatch.setattr(monthly_build_bridge, "load_monthly_predecessor_prefix",
+        lambda **kwargs: SimpleNamespace(manifest_sha256=predecessor_sha))
+    def reached_files(*args, **kwargs):
+        raise RuntimeError("verified authority reached physical files")
+    monkeypatch.setattr(module, "_plain_existing_file", reached_files)
+    profile = SimpleNamespace(start_date=date(2018, 8, 1), profile="fixture")
+    context = SimpleNamespace(stage="BUILD", plan={"target_cutoff": cutoff.isoformat(), "release_id": "september"})
+    compiled = SimpleNamespace(source_stage_receipt_ref=reference, source_bundle_sha256=source_sha,
+        physical_plan={"build_inputs": {"monthly_legacy_predecessor": {"frozen": True}}})
+    builder = FrozenMonthlySharedComponentBuilder(profile, cas, date(2024, 7, 1))
+    with pytest.raises(RuntimeError, match="reached physical files"):
+        builder.execute(context=context, staging_root=tmp_path, compiled=compiled,
+            validation_result={"validation_scope": "month_delta", "validation_ref": reference.as_dict(),
+                "component_artifact_manifest_ref": reference.as_dict(), "verified_output_files": files})
+
+
 def test_native_suspend_keeps_pinned_prefix_and_checks_only_new_month(tmp_path):
     import json
 

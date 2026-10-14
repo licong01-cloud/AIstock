@@ -21,6 +21,7 @@ from typing import Any, Iterable, Mapping, Sequence
 from .canonical import canonical_json_bytes, digest_named_fields
 from .cas_store import CASStore
 from .monthly_build_bridge import CompiledMonthlyBuild
+from .monthly_build_resume import load_sealed_build_json
 from .monthly_candidate_finalizer import SharedReleaseComponents
 from .monthly_consumer_layout import publish_consumer_layout
 from .monthly_worker import ProducerContext
@@ -820,7 +821,7 @@ class FrozenMonthlySharedComponentBuilder:
             if not isinstance(prefix_plan, Mapping):
                 raise MonthlySharedComponentsError("native shared builder lacks exact predecessor binding")
             prefix = load_monthly_predecessor_prefix(context_plan=prefix_plan, profile=self.profile)
-            physical_authority = self.cas.get_json_bounded(component_manifest_ref, max_bytes=16 * 1024 * 1024)
+            physical_authority = load_sealed_build_json(self.cas, component_manifest_ref)
             if (physical_authority.get("schema_version") != "aistock_monthly_native_component_authority_v1"
                 or physical_authority.get("validation_scope") != "month_delta"
                 or physical_authority.get("cutoff") != cutoff.isoformat()
@@ -983,7 +984,7 @@ class FrozenMonthlySharedComponentBuilder:
         history_proof = None
         if physical_authority.get("industry_history_projection_ref") is not None:
             from .monthly_industry_history import IndustryHistoryProjection
-            history_proof = self.cas.get_json_bounded(physical_authority["industry_history_projection_ref"], max_bytes=16 * 1024 * 1024)
+            history_proof = load_sealed_build_json(self.cas, physical_authority["industry_history_projection_ref"])
             history = IndustryHistoryProjection.read(history_proof["projection"])
             if history_proof.get("historical_projection_reused") is not True:
                 # A one-time explicitly requested PIT repair. A normal later
@@ -1063,7 +1064,7 @@ class FrozenMonthlySharedComponentBuilder:
         history_ref = physical_authority.get("industry_history_projection_ref")
         if history_ref is not None:
             from .monthly_industry_history import IndustryHistoryProjection
-            proof = self.cas.get_json_bounded(history_ref, max_bytes=16 * 1024 * 1024)
+            proof = load_sealed_build_json(self.cas, history_ref)
             history = IndustryHistoryProjection.read(proof["projection"])
             history_path = _write_json(sector_root / "industry_l2_history_authority.json", {
                 **history.payload, "projection_sha256": history.sha256,
