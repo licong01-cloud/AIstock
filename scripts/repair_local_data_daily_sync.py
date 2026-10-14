@@ -22,7 +22,10 @@ from dotenv import dotenv_values  # noqa: E402
 import psycopg2.extras as pgx  # noqa: E402
 from scripts.repair_sw_sector_revision import connect  # noqa: E402
 from backend.services.dataset_release.canonical import canonical_json_bytes  # noqa: E402
-from backend.services.tushare_sync_engine import _query_tushare_dataapi  # noqa: E402
+from backend.services.tushare_sync_engine import (  # noqa: E402
+    _query_tushare_dataapi, _etf_share_size_publication_quality,
+)
+from backend.services.data_refresh_audit import DataRefreshAuditRepository  # noqa: E402
 from backend.services.tushare_dataset_specs import ETF_SHARE_SIZE, MARGIN_DETAIL  # noqa: E402
 
 DAY = "20261008"
@@ -151,6 +154,94 @@ def plan_group(table, columns, rows, before):
     return patches, dict(stats)
 
 
+def readback_audit_contract(table, rows, actual, source_sha256, *, provider_rows_sha256=None):
+    """Certify the captured full-date sources, never a partial raw repair."""
+    if table == "kline_daily_raw":
+        return None
+    if table not in {"etf_share_size", "margin_detail"}:
+        raise ValueError("unsupported repair audit dataset")
+    if not rows or len({(r["ts_code"], r["trade_date"]) for r in rows}) != len(rows):
+        raise ValueError("source keys must be nonempty and unique")
+    if (len({r["trade_date"] for r in rows}) != 1 or len(source_sha256) != 64
+            or any(c not in "0123456789abcdef" for c in source_sha256)):
+        raise ValueError("source date/hash identity is invalid")
+    if any(r["ts_code"] not in actual for r in rows):
+        raise ValueError("source keys remain absent in repair readback")
+    columns = tuple(rows[0])
+    for row in rows:
+        old = actual[row["ts_code"]]
+        if old["ts_code"] != row["ts_code"] or old["trade_date"] != row["trade_date"]:
+            raise ValueError("readback key differs from the source")
+        if any(row[f] is not None and old[f] is None for f in columns):
+            raise ValueError("source-backed fields remain empty in repair readback")
+    metadata = {"schema_version": "local_data_source_repair_readback_v1",
+                "source_sha256": source_sha256, "source_rowset_sha256": digest(rows),
+                "readback_row_count": len(rows), "partial_raw_repair": False,
+                "readback_rows_sha256": digest([actual[r["ts_code"]] for r in rows])}
+    if table == "etf_share_size":
+        quality, status = _etf_share_size_publication_quality(rows)
+        if status["quality_status"] != "ok":
+            raise ValueError("ETF source publication is still incomplete")
+        metadata["publication_quality"] = quality
+    else:
+        metadata["provider_publication"] = {
+            "source": "tushare_response", "row_count": len(rows),
+            "source_rows_sha256": provider_rows_sha256 or digest(rows),
+        }
+    return metadata
+
+
+def guarded_audit_statements(conn, table, columns, rows, actual, source_sha256, *, provider_rows_sha256=None):
+    """Reuse the repository upsert, preceded by exact immutable-plan readback."""
+    if table == "kline_daily_raw":
+        return [], None
+    if table not in {"etf_share_size", "margin_detail"}:
+        raise ValueError("unsupported repair audit dataset")
+    payload = json.dumps([actual[r["ts_code"]] for r in rows], default=str, allow_nan=False)
+    # Normalize the projected values through the actual table types, so a
+    # planned numeric value and its database readback have the same digest.
+    with conn.cursor(cursor_factory=pgx.RealDictCursor) as typed:
+        typed.execute(f"SELECT {','.join(columns)} FROM "
+                      f"jsonb_populate_recordset(NULL::market.{table},%s::jsonb)", (payload,))
+        actual = {r["ts_code"]: dict(r) for r in typed.fetchall()}
+    metadata = readback_audit_contract(table, rows, actual, source_sha256,
+                                       provider_rows_sha256=provider_rows_sha256)
+    if metadata is None:
+        return [], None
+    statements = []
+    with conn.cursor() as cur:
+        payload = json.dumps([actual[r["ts_code"]] for r in rows], default=str, allow_nan=False)
+        left = ",".join(f"a.{field}" for field in columns)
+        right = ",".join(f"e.{field}" for field in columns)
+        guard = f"""DO $repair_readback$ BEGIN
+            IF EXISTS (SELECT 1 FROM jsonb_populate_recordset(NULL::market.{table},%s::jsonb) e
+              LEFT JOIN market.{table} a USING (ts_code,trade_date)
+              WHERE ROW({left}) IS DISTINCT FROM ROW({right}))
+            THEN RAISE EXCEPTION 'source repair readback changed: {table}'; END IF;
+            END $repair_readback$;"""
+        statements.append(cur.mogrify(guard, (payload,)).decode("utf-8"))
+
+        class Collector:
+            def cursor(self):
+                return self
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def execute(self, sql, args):
+                statements.append(cur.mogrify(sql, args).decode("utf-8") + ";")
+
+        DataRefreshAuditRepository().record_success(
+            dataset=table, trade_date=rows[0]["trade_date"], row_count=len(rows),
+            data_source="tushare", metadata=metadata, written_rows=0,
+            expected_rows=len(rows), coverage_ratio=1, conn=Collector(),
+        )
+    return statements, metadata
+
+
 def run_plan(env_file, target, source, *, apply=False, sql_output=None):
     if apply and target != "dev":
         raise ValueError("this tool does not authorize production writes")
@@ -184,8 +275,30 @@ def run_plan(env_file, target, source, *, apply=False, sql_output=None):
                     if any(value is not None and after[code][field] != value for field, value in old.items()):
                         raise ValueError("existing finite fact changed")
                 stats.update(readback_fillable_rows=len(remaining), idempotent=True, preserved_facts=True)
+            projected = {row["ts_code"]: {
+                field: before.get(row["ts_code"], {}).get(field)
+                if before.get(row["ts_code"], {}).get(field) is not None else row[field]
+                for field in columns
+            } for row in rows}
+            if apply:
+                projected = existing_rows(conn, table, columns, rows)
+            audit_sql, audit = guarded_audit_statements(
+                conn, table, columns, rows, projected, digest(source),
+                provider_rows_sha256=next((b["rows_sha256"] for b in source["batches"]
+                    if b["api"] == table and b["request_date"] == rows[0]["trade_date"].strftime("%Y%m%d")), None),
+            )
+            if sql_output:
+                statements.extend(audit_sql)
+            if apply and audit_sql:
+                with conn.cursor() as cur:
+                    for statement in audit_sql:
+                        cur.execute(statement)
             results.append({"table": table, "date": rows[0]["trade_date"].isoformat(),
-                            "source_rows": len(rows), "stats": stats, "patch_rows_sha256": digest(patches)})
+                            "source_rows": len(rows), "stats": stats,
+                            "patch_rows_sha256": digest(patches),
+                            "refresh_audit": audit,
+                            "refresh_audit_written": bool(apply and audit),
+                            "partial_raw_audit_skipped": table == "kline_daily_raw"})
         if apply:
             conn.commit()
         else:

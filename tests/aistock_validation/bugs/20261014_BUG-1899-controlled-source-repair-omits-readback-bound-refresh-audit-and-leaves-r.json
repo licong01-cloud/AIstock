@@ -9,9 +9,11 @@
   "bug_id": "BUG-1899",
   "closed_at": null,
   "closure_requirements": [
-    "Fix the observed behavior.",
-    "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "Controlled source repairs must bind full-date ETF/margin publication and typed post-apply readback to the frozen provider capture.",
+    "Persist DEV facts and refresh audit in one transaction; reject source key gaps, unpublished fields and concurrent readback drift.",
+    "Production SQL remains an exclusive, non-executing exact plan requiring separate authorization; historical failed jobs and raw partial repairs are never relabeled successful.",
+    "Run RED-to-GREEN, idempotent real DEV readback and three review passes; CI covers data_sync_autonomy_backend.",
+    "Keep BUG JSON and GitHub Issue synchronized; report code completion separately from production audit application."
   ],
   "created_at": "2026-10-14T07:31:01.965423Z",
   "description": "Production rows are complete but old ETF publication and margin empty-response audits remain blocked.",
@@ -24,7 +26,9 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1893-production-apply-20261014-r3/production-readback.json"
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1893-production-apply-20261014-r3/production-readback.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1899-audit-closure-20261014-r2/dev-receipt.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1899-audit-closure-20261014-r2/production-readonly-plan.json"
   ],
   "expected": "Verified source repair closes only ETF/margin date readiness via actual readback and frozen source identity; production plan remains non-executing and raw partial captures cannot certify a full market.",
   "file_scope_contract": {
@@ -110,7 +114,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "RED missing readback_audit_contract ImportError; GREEN 16 targeted tests including missing keys, source publication, finite-value preservation, raw partial source rejection, identity, production guard and transactional failure.",
+      "Fresh-process actual existing DEV replay from frozen source SHA8e06df68d6f3b8169d3eddb2b7f4b73c69ab7610f92ed7a5c1ae85dd9b1365ec: zero factual patches, six source-bound success/ok date audits, no production writes. SQL fff28250309ba3f1289dc81d0734d1e4b4b7dd7ffff16ad78619af0d6f6488a4 is planned only.",
+      "Review1 reuse original publication contract and exact typed source/readback. Review2 preserve finite facts, upstream NULLs and raw partial-source boundary; raw provider hash separate from normalized dates. Review3 same-transaction guard/upsert, rollback on audit error and idempotent no-data-change replay; no new provider threshold, activation, process or source semantics. DESIGN-COMPLIANCE-001 four checks passed for producer code; current production audit application remains separately unauthorized."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "not_required",
     "post_restart_effective_gate": "not_required",
