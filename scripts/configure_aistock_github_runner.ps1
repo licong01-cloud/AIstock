@@ -14,6 +14,9 @@ param(
   [switch]$AuditOnly,
   [switch]$Apply,
   [switch]$Start,
+  [switch]$ScheduledDispatch,
+  [string]$SchedulerPython = $(Join-Path ([Environment]::GetFolderPath('UserProfile')) 'miniconda3\envs\AIstock-CI\pythonw.exe'),
+  [string]$SchedulerGhConfigRoot = $(if ($env:GH_CONFIG_DIR) { $env:GH_CONFIG_DIR } else { Join-Path $env:APPDATA 'GitHub CLI' }),
   [switch]$Json
 )
 
@@ -40,6 +43,93 @@ function Resolve-BoundedPath {
     throw "Runner install root cannot equal the runner boundary: $resolved"
   }
   return $resolved
+}
+
+# Separate infrastructure-only mode: no runner/service/DB lifecycle operations.
+if ($ScheduledDispatch) {
+  if ($Start -or ($AuditOnly -and $Apply)) {
+    throw 'ScheduledDispatch cannot start a runner or combine AuditOnly with Apply'
+  }
+  $commonGit = & git -C (Join-Path $PSScriptRoot '..') rev-parse --path-format=absolute --git-common-dir
+  if ($LASTEXITCODE -ne 0 -or -not $commonGit) { throw 'Cannot resolve canonical Git authority' }
+  $canonical = Split-Path ([IO.Path]::GetFullPath($commonGit.Trim())) -Parent
+  $python = [IO.Path]::GetFullPath($SchedulerPython)
+  $script = Join-Path $canonical 'scripts\aistock_runner_health.py'
+  $state = Join-Path (Split-Path $canonical -Parent) 'aistock-nightly-scheduler'
+  $taskName = 'AIstock Nightly Scheduled Dispatch'
+  $zone = Get-TimeZone
+  if ($zone.BaseUtcOffset.TotalHours -ne 8 -or $zone.SupportsDaylightSavingTime) {
+    throw 'Scheduler requires a fixed UTC+8 Windows timezone'
+  }
+  if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'Existing gh CLI is required; not installed here' }
+  $ghConfig = [IO.Path]::GetFullPath($SchedulerGhConfigRoot)
+  if (-not (Test-Path -LiteralPath (Join-Path $ghConfig 'hosts.yml') -PathType Leaf)) {
+    throw 'Existing authenticated gh config location is required; credentials are not copied'
+  }
+  $arguments = '"{0}" dispatch-scheduled --state-root "{1}" --gh-config-dir "{2}" --apply' -f $script, $state, $ghConfig
+  foreach ($required in @($python, $script)) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing scheduler entry: $required" }
+  }
+  $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+  if ($existing -and ($existing.Actions.Count -ne 1 -or
+      $existing.Actions[0].Execute -ne $python -or $existing.Actions[0].Arguments -ne $arguments)) {
+    throw 'Existing scheduled task has unexpected ownership/action; not overwritten'
+  }
+  if ($existing) {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $triggerTimes = @($existing.Triggers | ForEach-Object { ([datetime]$_.StartBoundary).ToString('HH:mm') })
+    # Task Scheduler CIM enums are numeric: Disabled=1, Interactive=3, Limited=0, IgnoreNew=2.
+    if ([int]$existing.State -eq 1 -or $existing.Actions[0].WorkingDirectory -ne $canonical -or
+        $existing.Principal.UserId -notin @($identity.Name, $identity.User.Value) -or
+        [int]$existing.Principal.RunLevel -ne 0 -or -not $existing.Settings.Hidden -or
+        -not $existing.Settings.StartWhenAvailable -or
+        [int]$existing.Principal.LogonType -ne 3 -or $triggerTimes.Count -ne 3 -or
+        @('02:30','03:07','04:27' | Where-Object { $_ -notin $triggerTimes }).Count -ne 0 -or
+        $existing.Triggers[0].Repetition.Interval -ne 'PT5M' -or
+        $existing.Triggers[0].Repetition.Duration -ne 'PT3H45M' -or
+        [int]$existing.Settings.MultipleInstances -ne 2 -or
+        $existing.Settings.ExecutionTimeLimit -ne 'PT4M') {
+      throw 'Owned scheduler configuration drift; inspect before modifying'
+    }
+  }
+  if ($Apply) {
+    if ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\') -ne $canonical) {
+      throw 'Apply scheduler only from the merged canonical script'
+    }
+    $branch = & git -C $canonical branch --show-current
+    if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') { throw 'Scheduler apply requires canonical main' }
+    $dirty = & git -C $canonical status --porcelain
+    if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'Scheduler apply requires a clean canonical checkout' }
+    $triggers = @()
+    foreach ($at in @('02:30', '03:07', '04:27')) {
+      $triggers += New-ScheduledTaskTrigger -Daily -At $at
+    }
+    # A bounded retry tick covers missed wakeup/network failures; no continuous daemon.
+    $triggers[0].Repetition = New-CimInstance -ClientOnly -Namespace 'Root/Microsoft/Windows/TaskScheduler' `
+      -ClassName MSFT_TaskRepetitionPattern -Property @{ Interval='PT5M'; Duration='PT3H45M'; StopAtDurationEnd=$false }
+    $action = New-ScheduledTaskAction -Execute $python -Argument $arguments -WorkingDirectory $canonical
+    $settings = New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -MultipleInstances IgnoreNew `
+      -ExecutionTimeLimit (New-TimeSpan -Minutes 4) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) `
+      -LogonType Interactive -RunLevel Limited
+    if (-not $existing) {
+      Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers `
+        -Settings $settings -Principal $principal -Description 'Only dispatch existing overnight workflows; no service control.' | Out-Null
+    }
+    # Existing exact owned action is left untouched, including while running.
+    $existing = Get-ScheduledTask -TaskName $taskName
+  }
+  $info = if ($existing) { Get-ScheduledTaskInfo -TaskName $taskName } else { $null }
+  Write-Result @{
+    schema_version='aistock_scheduled_dispatch_install_v1'
+    status=$(if ($existing) { 'installed' } else { 'planned' })
+    configured=[bool]$existing; started=$false; role='scheduled_dispatch'
+    task_name=$taskName; state_root=$state; execute=$python; arguments=$arguments
+    next_run_time=$(if ($info) { $info.NextRunTime.ToString('o') } else { $null })
+    last_task_result=$(if ($info) { $info.LastTaskResult } else { $null })
+    requires_awake_signed_in_host=$true
+  }
+  exit 0
 }
 
 if ($Role -notin @('general', 'security')) {
