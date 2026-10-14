@@ -28,6 +28,9 @@ from .data_sync_targets import (
     DataSyncAttemptRecord,
     DataSyncTargetRecord,
     DataSyncTargetRepository,
+    LATE_PUBLICATION_TAIL_DAYS,
+    PUBLICATION_LAG_DAYS,
+    publication_target_date,
 )
 from .tushare_rate_limiter import get_limiter
 from .tushare_dataset_specs import DAILY_BASIC, DatasetSpec, QueryMode
@@ -315,7 +318,7 @@ def _query_tushare_dataapi(
     data = result.get("data") or {}
     columns = list(data.get("fields") or [])
     items = data.get("items") or []
-    if api_name in {"daily_basic", "stk_limit"} and items:
+    if api_name in {"daily_basic", "stk_limit", "etf_share_size", "margin_detail"} and items:
         # An omitted column is not an explicitly returned provider NULL.
         # Validate before zip/row.get can fabricate NULLs that the ordinary
         # upsert would write over existing facts. Other API contracts stay
@@ -499,6 +502,7 @@ class TushareSyncEngine:
         self._tushare_token_cache: Optional[str] = None
         self._refresh_audit = DataRefreshAuditRepository()
         self._target_repo = target_repository
+        self._late_recheck_dates: Dict[str, List[dt.date]] = {}
 
     @property
     def pro(self):
@@ -686,7 +690,15 @@ class TushareSyncEngine:
 
         col_list = ", ".join(col_names)
         conflict_cols = ", ".join(spec.primary_keys)
-        update_set = ", ".join(f"{c}=EXCLUDED.{c}" for c in non_pk)
+        # Late publication retries must not erase finite facts with provider NULLs.
+        # Non-null revisions remain supported; adj_factor and other datasets
+        # retain their own restatement contracts.
+        table = spec.target_table.rsplit(".", 1)[1]
+        update_set = ", ".join(
+            f"{c}=COALESCE(EXCLUDED.{c}, {table}.{c})"
+            if spec.name in LATE_PUBLICATION_TAIL_DAYS else f"{c}=EXCLUDED.{c}"
+            for c in non_pk
+        )
 
         sql = f"INSERT INTO {spec.target_table} ({col_list}) VALUES %s"
         if update_set:
@@ -699,6 +711,9 @@ class TushareSyncEngine:
             vals = []
             for c in col_names:
                 v = r.get(c)
+                if (spec.name in LATE_PUBLICATION_TAIL_DAYS and col_types[c] == "numeric"
+                        and v is not None and not _is_finite_number(v)):
+                    raise ValueError(f"{spec.name}.{c}: non-finite provider fact")
                 if v is not None and col_types[c] == "date":
                     v = _parse_ymd(v)
                 vals.append(v)
@@ -1129,6 +1144,18 @@ class TushareSyncEngine:
         if cursor is not None:
             metadata["safe_audit_cursor_date"] = cursor.isoformat()
             next_start = self._next_sync_date_after(conn, spec, cursor, end_date)
+            tail = LATE_PUBLICATION_TAIL_DAYS.get(spec.name, 0)
+            if tail:
+                # Bound the automatic recheck to recent published trading dates;
+                # no full-history scan on the daily path.
+                dates = self._iter_sync_dates(conn, spec, end_date - dt.timedelta(days=30), end_date)
+                if dates:
+                    next_start = min(next_start, dates[-tail:][0])
+                    metadata["late_publication_recheck"] = True
+                    metadata["late_publication_tail_days"] = tail
+                pending = self._unclosed_publication_dates(conn, spec, end_date)
+                self._late_recheck_dates[spec.name] = pending
+                metadata["unclosed_publication_dates"] = [day.isoformat() for day in pending]
             if next_start > end_date:
                 metadata["audit_reconciled_to_end_date"] = True
             return next_start, metadata
@@ -1137,6 +1164,19 @@ class TushareSyncEngine:
         if initial_start is not None:
             metadata["initial_fill_from_floor"] = initial_start.isoformat()
         return initial_start or end_date, metadata
+
+    @staticmethod
+    def _unclosed_publication_dates(conn, spec, end_date):
+        # A bounded exact-date queue also repairs facts published after the tail.
+        # Do not widen an old target into a contiguous full-history fetch.
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT target_date FROM market.data_sync_targets "
+                "WHERE dataset=%s AND target_date<=%s AND target_date IS NOT NULL "
+                "AND target_status IN ('pending','retry','final_blocked') "
+                "ORDER BY target_date LIMIT 5", (spec.name, end_date),
+            )
+            return [row[0] for row in cur.fetchall()]
 
     def _target_repo_or_none(self) -> DataSyncTargetRepository | None:
         if self._target_repo is not None:
@@ -1273,6 +1313,7 @@ class TushareSyncEngine:
         job_id: uuid.UUID,
     ) -> SyncResult:
         days = self._iter_sync_dates(conn, spec, start_date, end_date)
+        days = sorted(set(days).union(self._late_recheck_dates.get(spec.name, [])))
         result = SyncResult(dataset=spec.name, mode="sync", job_id=job_id,
                             total_batches=len(days))
 
@@ -1355,9 +1396,10 @@ class TushareSyncEngine:
                     conn=conn,
                     **audit_quality,
                 )
+                quality_ok = audit_quality["quality_status"] in {"ok", "empty_valid"}
                 self._record_sync_attempt(
                     target_id,
-                    "reconciled",
+                    "reconciled" if quality_ok else "retry",
                     job_id=job_id,
                     rows_written=inserted,
                     rows_observed=inserted,
@@ -1365,7 +1407,11 @@ class TushareSyncEngine:
                 )
                 result.inserted_rows += inserted
                 result.canonicalized_source_revisions += canonicalized_source_revisions
-                result.success_batches += 1
+                if quality_ok:
+                    result.success_batches += 1
+                else:
+                    result.failed_batches += 1
+                    result.error = f"{spec.name}/{d}: {audit_quality.get('failure_category', 'quality_incomplete')}"
             except Exception as exc:
                 result.failed_batches += 1
                 self._log(conn, job_id, "error", f"{spec.name} {d} failed: {exc}")
@@ -1701,8 +1747,18 @@ class TushareSyncEngine:
         job_id : attach to an existing ingestion_jobs row (API-created)
         """
         today = dt.date.today()
+        self._late_recheck_dates.pop(spec.name, None)
         if end_date is None:
             end_date = today
+            if spec.name in PUBLICATION_LAG_DAYS:
+                calendar = TradingCalendarStatusService()
+                latest = calendar.latest_trading_day_on_or_before(today)
+                if latest is None:
+                    raise RuntimeError("publication policy requires latest trading calendar")
+                end_date = publication_target_date(
+                    spec.name, latest, dt.datetime.now(ZoneInfo("Asia/Shanghai")),
+                    lambda day: calendar.latest_trading_day_on_or_before(day - dt.timedelta(days=1)),
+                )
 
         cursor_metadata: Dict[str, Any] = {}
 
