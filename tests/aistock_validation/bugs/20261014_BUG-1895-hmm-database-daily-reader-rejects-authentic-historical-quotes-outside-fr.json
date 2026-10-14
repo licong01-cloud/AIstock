@@ -28,17 +28,17 @@
   "expected": "Official historical facts are identity-bound and preserved without enabling coefficient output outside the approved publication scope; invalid, missing or mismatched quotes remain fail closed.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261014_BUG-1895-hmm-database-daily-reader-rejects-authentic-historical-quotes-outside-fr.json",
       "backend/services/hmm_data_source/daily_input.py",
       "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
-      "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md"
+      "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md",
+      "tests/aistock_validation/bugs/20261014_BUG-1895-hmm-database-daily-reader-rejects-authentic-historical-quotes-outside-fr.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261014_BUG-1895-hmm-database-daily-reader-rejects-authentic-historical-quotes-outside-fr.json",
       "backend/services/hmm_data_source/daily_input.py",
       "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
-      "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md"
+      "docs/architecture/hmm_daily_coefficient_generation_design_20260428.md",
+      "tests/aistock_validation/bugs/20261014_BUG-1895-hmm-database-daily-reader-rejects-authentic-historical-quotes-outside-fr.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -113,8 +113,8 @@
   },
   "first_seen_at": "2026-10-14T03:15:30.838363Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "442d6ac61efd9d9682b079f1a6a44a17dfb17b39",
+  "fixed_at": "2026-10-14T04:14:15Z",
   "github_issue_number": 6045,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6045",
   "last_seen_at": "2026-10-14T03:15:30.838363Z",
@@ -125,6 +125,7 @@
     "Do not create coefficient jobs, publish production assets, write databases, activate profiles or start training.",
     "Do not modify QE, Selection, Advisory, Paper or workflow/CI code."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6049",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_dml_gate": "noop",
@@ -149,6 +150,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -160,7 +162,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1895",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7bf1769b12c3b974",
+    "recorded_at": "2026-10-14T04:15:02.445608Z",
+    "runtime_contract_digest": "6204481a17347d89a96380cba64e9768bb1278e6eea0e01960667a199df30937",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "163f2601a62c048dc835b711460dbbf653a5bf02",
+    "source_merge_commit": "442d6ac61efd9d9682b079f1a6a44a17dfb17b39",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6049",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed: final HEAD 163f2601a62c048dc835b711460dbbf653a5bf02; launcher=Conda AIstock-CI; blocking=0",
+      "rtk pytest backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_authentic_historical_quote_context_does_not_enable_unpublished_coefficients backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_official_quote_authority_rejects_missing_or_corrupted_source backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_quote_source_identity_changes_even_when_coefficient_scope_does_not backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_database_adapter_rejects_invalid_facts_without_fallback -q --no-cov -> passed: 20 passed; final HEAD 163f2601a62c048dc835b711460dbbf653a5bf02",
+      "rtk ruff check backend/services/hmm_data_source/daily_input.py backend/tests/hmm_data_source/test_hmm_database_daily_input.py -> passed: no findings; format check passed",
+      "python -m py_compile backend/services/hmm_data_source/daily_input.py backend/tests/hmm_data_source/test_hmm_database_daily_input.py -> passed",
+      "git diff --check -> passed",
+      "python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_daily_coefficient_generation_design_20260428.md --tier F2 -> passed: 6 design items; 6 matrix rows; 0 warnings"
+    ],
+    "validation_evidence_digest": "97f67b5524098a20f5a20e3875219f51fc00f6e198df034f3001d2de111a3c93"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm"
   ],
@@ -169,6 +197,14 @@
     "fingerprint": "7784ad9cdd312b88ccd51ca8",
     "source_event_id": "FE-20261014-7784ad9cdd31"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed: final HEAD 163f2601a62c048dc835b711460dbbf653a5bf02; launcher=Conda AIstock-CI; blocking=0",
+    "rtk pytest backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_authentic_historical_quote_context_does_not_enable_unpublished_coefficients backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_official_quote_authority_rejects_missing_or_corrupted_source backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_quote_source_identity_changes_even_when_coefficient_scope_does_not backend/tests/hmm_data_source/test_hmm_database_daily_input.py::test_database_adapter_rejects_invalid_facts_without_fallback -q --no-cov -> passed: 20 passed; final HEAD 163f2601a62c048dc835b711460dbbf653a5bf02",
+    "rtk ruff check backend/services/hmm_data_source/daily_input.py backend/tests/hmm_data_source/test_hmm_database_daily_input.py -> passed: no findings; format check passed",
+    "python -m py_compile backend/services/hmm_data_source/daily_input.py backend/tests/hmm_data_source/test_hmm_database_daily_input.py -> passed",
+    "git diff --check -> passed",
+    "python scripts/aistock_feature_workflow.py validate --design docs/architecture/hmm_daily_coefficient_generation_design_20260428.md --tier F2 -> passed: 6 design items; 6 matrix rows; 0 warnings"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
