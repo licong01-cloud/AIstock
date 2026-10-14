@@ -2,7 +2,7 @@
   "actual": "Production rows are complete but old ETF publication and margin empty-response audits remain blocked.",
   "allowed_write_scope": [
     "scripts/repair_local_data_daily_sync.py",
-    "backend/tests/scripts/test_repair_local_data_daily_sync.py",
+    "backend/tests/ingestion/test_daily_sync_recovery.py",
     "tests/aistock_validation/bugs/20261014_BUG-1899-controlled-source-repair-omits-readback-bound-refresh-audit-and-leaves-r.json"
   ],
   "assigned_agent": null,
@@ -32,17 +32,22 @@
   ],
   "expected": "Verified source repair closes only ETF/margin date readiness via actual readback and frozen source identity; production plan remains non-executing and raw partial captures cannot certify a full market.",
   "file_scope_contract": {
-    "added_files": [
-      "backend/tests/scripts/test_repair_local_data_daily_sync.py"
+    "actual_changed_files": [
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
+      "scripts/repair_local_data_daily_sync.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1899-controlled-source-repair-omits-readback-bound-refresh-audit-and-leaves-r.json"
     ],
+    "added_files": [],
     "changed_files": [
-      "scripts/repair_local_data_daily_sync.py"
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
+      "scripts/repair_local_data_daily_sync.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1899-controlled-source-repair-omits-readback-bound-refresh-audit-and-leaves-r.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/repair_local_data_daily_sync.py",
-        "backend/tests/scripts/test_repair_local_data_daily_sync.py"
+        "backend/tests/ingestion/test_daily_sync_recovery.py"
       ],
       "impacted_modules": [
         "local_data",
@@ -64,7 +69,7 @@
           "rule_id": "local_data_pipeline"
         },
         {
-          "file": "backend/tests/scripts/test_repair_local_data_daily_sync.py",
+          "file": "backend/tests/ingestion/test_daily_sync_recovery.py",
           "impact_modules": [],
           "primary_module": "tests.backend",
           "risk_level": "medium",
@@ -77,18 +82,18 @@
       ],
       "suggested_scope": [
         "scripts/repair_local_data_daily_sync.py",
-        "backend/tests/scripts/test_repair_local_data_daily_sync.py"
+        "backend/tests/ingestion/test_daily_sync_recovery.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "scripts/repair_local_data_daily_sync.py",
-      "backend/tests/scripts/test_repair_local_data_daily_sync.py"
+      "backend/tests/ingestion/test_daily_sync_recovery.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "scripts/repair_local_data_daily_sync.py",
-      "backend/tests/scripts/test_repair_local_data_daily_sync.py"
+      "backend/tests/ingestion/test_daily_sync_recovery.py"
     ]
   },
   "first_seen_at": "2026-10-14T07:31:01.965423Z",
@@ -114,15 +119,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [
-      "RED missing readback_audit_contract ImportError; GREEN 16 targeted tests including missing keys, source publication, finite-value preservation, raw partial source rejection, identity, production guard and transactional failure.",
-      "Fresh-process actual existing DEV replay from frozen source SHA8e06df68d6f3b8169d3eddb2b7f4b73c69ab7610f92ed7a5c1ae85dd9b1365ec: zero factual patches, six source-bound success/ok date audits, no production writes. SQL fff28250309ba3f1289dc81d0734d1e4b4b7dd7ffff16ad78619af0d6f6488a4 is planned only.",
-      "Review1 reuse original publication contract and exact typed source/readback. Review2 preserve finite facts, upstream NULLs and raw partial-source boundary; raw provider hash separate from normalized dates. Review3 same-transaction guard/upsert, rollback on audit error and idempotent no-data-change replay; no new provider threshold, activation, process or source semantics. DESIGN-COMPLIANCE-001 four checks passed for producer code; current production audit application remains separately unauthorized."
-    ],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
