@@ -7,6 +7,7 @@
     "backend/services/data_health_alerter.py",
     "backend/services/data_sync_targets.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "backend/tests/ingestion/test_tdx_go_integrity.py",
     "backend/tests/test_tushare_sync_engine.py",
     "backend/tests/test_data_sync_targets.py",
     "backend/tests/ingestion/test_daily_sync_recovery.py",
