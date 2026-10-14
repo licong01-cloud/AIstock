@@ -195,8 +195,20 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         super().__init__(**kwargs)
         self.performance_reference = performance_reference
 
+    def _build_env_exports(self, *, historical_read_only: bool = False) -> str:
+        # The production factory supplies no optional safe_artifact_roots.
+        # Bind the validated owned run, without mutating this shared provider
+        # or process-wide environment while other days may run concurrently.
+        root = windows_x_root(own_scope().root)
+        roots = tuple(dict.fromkeys((root, *self.safe_artifact_roots)))
+        translated = ":".join(win_to_wsl_path(str(item)) for item in roots)
+        native = super()._build_env_exports(historical_read_only=historical_read_only)
+        return f"{native} AISTOCK_STRATEGY_PACKAGE_RUNTIME_ROOTS={self._quote(translated)}"
+
     def run(self, *, workspace, trade_date: date, cutoff_date: date | None = None, historical_read_only=False):
         scope = own_scope()
+        if not Path(workspace.workspace_path).resolve().is_relative_to(scope.root.resolve()):
+            raise ValueError("LocalSIM workspace must belong to its own run")
         scope.stage = "shared_raw_inference"
         clocks = SelectionSignalDayV1(trade_date, cutoff_date or trade_date, scope.clocks.target_trade_date)
         if clocks.decision_date != scope.clocks.decision_date or (scope.clocks_bound and clocks != scope.clocks):

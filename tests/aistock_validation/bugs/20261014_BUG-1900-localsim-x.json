@@ -3,7 +3,8 @@
   "allowed_write_scope": [
     "backend/services/simulation_runtime/localsim_selection_inference.py",
     "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
-    "tests/aistock_validation/bugs/20261014_BUG-1900-localsim-x.json"
+    "tests/aistock_validation/bugs/20261014_BUG-1900-localsim-x.json",
+    "backend/services/simulation_runtime/localsim_selection_probe.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1900",
@@ -14,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-14T07:40:10.883304Z",
-  "description": "生产默认 provider 空 safe_artifact_roots；探针显式根可通过。",
+  "description": "生产默认 provider 空 safe_artifact_roots；探针显式根可通过。 Probe provider now uses production defaults; no probe-only safe-root override remains.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,12 +29,20 @@
   ],
   "expected": "默认生产路径自动绑定已验证的本次独立 X workspace 和原址冻结资产，WSL 原生路径守卫通过，未知 worker 路径继续拒绝。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1900-localsim-x.json",
       "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/services/simulation_runtime/localsim_selection_probe.py",
       "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1900-localsim-x.json",
+      "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/services/simulation_runtime/localsim_selection_probe.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/localsim_selection_inference.py",
@@ -108,11 +117,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Independent Windows Python pytest process loaded tracked LocalSIM provider and ran 31 contracts; native default-provider environment, own-run binding and unchanged process/provider state passed. Backend process control was not performed.",
+      "Independent Windows Python process loaded tracked provider: 31 contracts passed. Independent WSL native default-provider Jan20 node COMPLETE: 4912 scores, universe 4918, LOCALSIM and exact Jan19 cutoff. Later native reference-price validation requires missing Jan19 price for 301362.SZ; full Jan20 acceptance remains blocked, no generation bypass. Backend process control was not performed.",
+      "Independent native production-default readonly probe Jan5 COMPLETE/EXACT_PASS and source binding EXACT_PASS: 4907/4913 scored, all 16 complete-score/order/TopK/policy/population/UNKNOWN/status checks pass against prior legitimate reference; full selection wall 293.458s, RSS 8705015808 bytes, disk peak 1684980835 bytes, commit-before-checkpoint recovery and exact retry 1.433s with one node/evidence. X:/AIstock_temp/LOCALSIM/BUG-1900-production-default-r2/progress.json. Jan20 raw node COMPLETE but native suspended-stock reference-price gate remains blocked; no bypass or production account replay started."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
