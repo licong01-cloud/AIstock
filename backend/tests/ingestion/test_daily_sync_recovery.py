@@ -35,6 +35,18 @@ def test_health_uses_same_publication_policy():
     assert checker._expected_date("margin_detail", dt.date(2026, 10, 14)) == dt.date(2026, 10, 12)
 
 
+def test_retry_alert_does_not_label_ledger_events_as_request_retries():
+    from backend.services.data_health_alerter import classify_retry_alert
+
+    alert = classify_retry_alert("margin_detail", "exhausted", attempt_count=6)
+    assert "6条同步尝试记录" in alert.message
+    assert "6次" not in alert.message
+    assert alert.details["attempt_count"] == 6
+    deadline_alert = classify_retry_alert("margin_detail", "exhausted")
+    assert "重试截止时间" in deadline_alert.message
+    assert "3次" not in deadline_alert.message
+
+
 def test_etf_completed_cursor_rechecks_bounded_tail():
     engine = TushareSyncEngine()
     engine._get_incremental_cursor = lambda *_args: dt.date(2026, 10, 13)

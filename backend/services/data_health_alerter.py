@@ -135,7 +135,7 @@ def classify_retry_alert(
     original_status: str = "",
     attempt_count: Optional[int] = None,
 ) -> DataAlert:
-    """Classify a retry outcome into an alert."""
+    """Classify a retry outcome; attempt_count counts ledger events, not requests."""
     if retry_result == "recovered":
         return DataAlert(
             severity="info",
@@ -151,7 +151,7 @@ def classify_retry_alert(
             dataset=dataset,
             alert_type="retry_exhausted",
             title=f"{dataset} 重试耗尽仍失败",
-            message=(f"数据集 {dataset} 经{attempt_count}次尝试仍未成功，需检查失败原因"
+            message=(f"数据集 {dataset} 已有{attempt_count}条同步尝试记录，仍未成功，需检查失败原因"
                      if attempt_count is not None else f"数据集 {dataset} 到达重试截止时间仍未成功，需检查失败原因"),
             details={"retry_result": retry_result, "original_status": original_status,
                      "attempt_count": attempt_count},
