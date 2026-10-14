@@ -78,15 +78,16 @@ if ($ScheduledDispatch) {
   if ($existing) {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $triggerTimes = @($existing.Triggers | ForEach-Object { ([datetime]$_.StartBoundary).ToString('HH:mm') })
-    if ($existing.State -eq 'Disabled' -or $existing.Actions[0].WorkingDirectory -ne $canonical -or
+    # Task Scheduler CIM enums are numeric: Disabled=1, Interactive=3, Limited=0, IgnoreNew=2.
+    if ([int]$existing.State -eq 1 -or $existing.Actions[0].WorkingDirectory -ne $canonical -or
         $existing.Principal.UserId -notin @($identity.Name, $identity.User.Value) -or
-        $existing.Principal.RunLevel -ne 'Limited' -or -not $existing.Settings.Hidden -or
+        [int]$existing.Principal.RunLevel -ne 0 -or -not $existing.Settings.Hidden -or
         -not $existing.Settings.StartWhenAvailable -or
-        $existing.Principal.LogonType -ne 'Interactive' -or $triggerTimes.Count -ne 3 -or
+        [int]$existing.Principal.LogonType -ne 3 -or $triggerTimes.Count -ne 3 -or
         @('02:30','03:07','04:27' | Where-Object { $_ -notin $triggerTimes }).Count -ne 0 -or
         $existing.Triggers[0].Repetition.Interval -ne 'PT5M' -or
         $existing.Triggers[0].Repetition.Duration -ne 'PT3H45M' -or
-        $existing.Settings.MultipleInstances -ne 'IgnoreNew' -or
+        [int]$existing.Settings.MultipleInstances -ne 2 -or
         $existing.Settings.ExecutionTimeLimit -ne 'PT4M') {
       throw 'Owned scheduler configuration drift; inspect before modifying'
     }
