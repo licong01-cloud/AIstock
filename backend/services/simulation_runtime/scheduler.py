@@ -3004,6 +3004,8 @@ class SimulationLifecycleScheduler:
         self.repository = repository or SimulationRuntimeRepository()
         self._localsim_successor_repository = localsim_successor_repository
         self.selection_service = selection_service or StrategyPackageSelectionService(repository=self.repository)
+        self._selection_service_injected = selection_service is not None
+        self._localsim_selection_service = None
         self.orchestrator = orchestrator or SimulationLifecycleOrchestrator(
             repository=self.repository,
             b0_quote_v2_controller_factory=effective_b0_factory,
@@ -11586,7 +11588,21 @@ class SimulationLifecycleScheduler:
         runtime_config: dict[str, Any],
         created_by: str,
     ) -> StrategyPackageSelectionResult:
-        return self.selection_service.run_selection(
+        service = self.selection_service
+        if (
+            not self._selection_service_injected
+            and binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+            and self._selection_artifact_auto_generation_enabled(runtime_config)
+        ):
+            # LocalSIM computes independently with the same public algorithms.
+            # Its business evidence still uses this scheduler's native writer.
+            with self._selection_inference_lock:
+                if self._localsim_selection_service is None:
+                    from .localsim_selection_signal import LocalSimSelectionSignalService
+
+                    self._localsim_selection_service = LocalSimSelectionSignalService(repository=self.repository)
+                service = self._localsim_selection_service
+        return service.run_selection(
             package_ids=[binding.package_id],
             mode=SelectionMode.SINGLE_PACKAGE,
             trade_date=trade_date,
@@ -11700,6 +11716,11 @@ class SimulationLifecycleScheduler:
         data_source: str,
         runtime_config: dict[str, Any],
     ) -> bool:
+        if not self._selection_service_injected and binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
+            # The global raw repository has no consumer/run namespace. Even an
+            # identical Advisory artifact is not this LocalSIM run's output.
+            # Own committed evidence recovery occurs on the inference worker.
+            return False
         artifact_config = StrategyPackageSelectionService.selection_artifact_config(runtime_config)
         if bool(artifact_config.get("force_regenerate")):
             return False
@@ -11785,7 +11806,7 @@ class SimulationLifecycleScheduler:
         data_source: str,
         runtime_config: dict[str, Any],
     ) -> tuple[Any, ...]:
-        return (
+        key = (
             binding.package_id,
             binding.manifest_sha256,
             binding.release_id,
@@ -11794,6 +11815,9 @@ class SimulationLifecycleScheduler:
             data_source,
             selection_artifact_runtime_hash(runtime_config),
         )
+        if not self._selection_service_injected and binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
+            return (*key, "LOCALSIM")
+        return key
 
     def _selection_inference_context(
         self,
@@ -11861,7 +11885,7 @@ class SimulationLifecycleScheduler:
         trade_date: date,
         data_source: str,
     ) -> tuple[Any, ...]:
-        return (
+        key = (
             binding.package_id,
             binding.manifest_sha256,
             binding.release_id,
@@ -11869,6 +11893,9 @@ class SimulationLifecycleScheduler:
             trade_date.isoformat(),
             data_source,
         )
+        if not self._selection_service_injected and binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM:
+            return (*key, "LOCALSIM")
+        return key
 
     def _shared_selection_cache_keys(
         self,
