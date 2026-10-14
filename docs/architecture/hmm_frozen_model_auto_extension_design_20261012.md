@@ -1,8 +1,8 @@
 # HMM 冻结模型自动延伸详细设计（QE 文件入口）
 
-初始日期：2026-10-12；修订日期：2026-10-13；版本：v1.1；tier=F2。
+初始日期：2026-10-12；修订日期：2026-10-15；版本：v1.2；tier=F2。
 
-用户已批准自动延伸及双入口方向。本文件是QE冻结文件模式的详细合同；数据库收盘日度模式以`hmm_daily_coefficient_generation_design_20260428.md`为准，两者展开父蓝图v2.85 §2.6。#5899既有源码已合入，触发接线修订仍待实施；源码、policy登记、真实任务和消费者验收分别报告。
+用户已批准自动延伸及双入口方向。本文件是QE冻结文件模式的详细合同；数据库收盘日度模式以`hmm_daily_coefficient_generation_design_20260428.md`为准，两者展开父蓝图v2.86 §2.6。#5899既有源码已合入，触发接线修订仍待实施；源码、policy登记、真实任务和消费者验收分别报告。2026-10-15数据库日度指定快照单次job/登记已完成，不等于QE文件自动延伸job或共享自动触发完成。
 
 ## 背景与终极目标
 
@@ -18,7 +18,7 @@
 - `backend/tests/hmm_data_source/test_coefficient_extension.py`
 - 本详细设计。
 
-当前文档任务只修改父蓝图及两份直接设计。不修改QE、Selection、Advisory、模型算法、特征、参数、窗口、seed、阈值、数据候选、active profile、全局工作流或测试计划。不训练、不读取效果评估tail、不启动实验。生产写入、启用策略和用户进程控制本次不执行；此前独立授权登记的policy保留，不等于当前首个资产已完成。
+当前文档任务同步父蓝图及三份直接设计的状态。不修改QE、Selection、Advisory、模型算法、特征、参数、窗口、seed、阈值、数据候选、active profile、全局工作流或测试计划。不训练、不读取效果评估tail、不启动实验。生产写入、启用策略和用户进程控制本次不执行；此前独立授权登记的policy保留，DB单次资产完成不等于QE文件首个自动资产完成。
 
 ## 架构与接口契约
 
@@ -82,13 +82,19 @@
 - 第一轮审核修复持久 plan 只比较 key 的不足和半写入输出风险；第二轮修复真实节点名、缺少 market-volume 定义和新默认组合末日窗口；第三轮复核固定权重/参数、停发语义、原 registry/文件保护、失败状态、SQL读回和模块边界，无阻断 finding。
 - 源码可合入与生产激活分离：正式启用、首个真实自动任务、当前资产登记及 QE smoke 均尚未执行，不能据此声称预测价值改善或 QE 完整历史已支持。
 
-## 2026-10-13当前只读核验与差异
+## 2026-10-13只读核验与差异（历史快照）
 
 当前HEAD读取仍是`init_hmm_scheduler()`同时添加一分钟rolling训练与系数callback，缺APScheduler会跳过启动。`test_scheduler_reconciles_new_release_without_reenrollment_or_retraining`直接调用service且mock worker，没有启动真实调度器；Windows/WSL导入通过也没有启动它。因此原F-006“passed/none”仅能说明reconcile单元路径，不足以证明真实自动派发，现纠正为pending。
 
 只读GET指定config=`fc0683a9-6ca0-4d55-b053-17c2360c3c40`读回policy.enabled=true、snapshot=`ecee7c40-6764-49ad-bc0f-1c6c6b390504`、preset_A、起点2026-05-20；模型SHA仍`7223c32648792443020cbc02e9ded3102e81d30330640e623d4c2ef0ddf8f665`，jobs=[]。未生成/登记首个自动资产，不能报告QE窗口解锁；该快照不能凭更新数据把校准前2024窗口追认为严格无泄漏。此次只是读回，不改policy或DB。
 
-下表F-001～F-005保留既有源码/单元及DEV证据，不代表本次新触发接线或数据库日度模式已实施；F-006明确真实缺口，完成证据不得从历史单元测试外推。
+下表F-001～F-005只保留QE文件模式的既有源码/单元及DEV证据，不代表新自动触发完成；数据库日度实际状态以其v2.4直接设计为准。F-006仍有真实缺口，不能从历史单元测试或DB单次job外推。
+
+## 2026-10-15双入口交付状态与owner依赖
+
+数据库模式指定snapshot的job=`9c97a277-9ab3-4373-9b9d-ff4b034dcf01`已COMPLETED/REGISTERED_READBACK，T=2026-10-14、T+1=2026-10-15，系数SHA=`66602de8dc6c9aa0db6d9522df0da67db4b7e027e292c9c965c7ce2a957f6b06`。其实际`source_mode=database_daily`；本文件的QE模式仍保留原policy/旧窗口，不把该单日DB任务算作文件延伸job，也不据此解除QE完整窗口/因果边界。
+
+只读源码核验确认`TDXScheduler`仍无通用callback注册/取消公共入口；HMM日度订阅/reconcile和实际自动接线待对应owner提供最小接口后完成。不得向调度器私有job字段写入、增加HMM scheduler或启用原一分钟训练tick。Selection的实际资产smoke尚不兼容7个合法quote-unavailable行业，属于该consumer owner的显式no-overlay/只读消费合同缺口，不由HMM补1.0或删membership规避。自动触发、两个来源的生成/登记和目标消费各自验收；当前不新增生产写入、训练、QE实验、数据导出或进程动作。
 
 ## Design Acceptance Matrix
 
