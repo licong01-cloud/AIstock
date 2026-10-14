@@ -31,24 +31,43 @@
       "timestamp": "2026-10-14T02:40:14.991866Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1893-dev-apply-20261014-v1/dev-receipt.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1893-production-plan-20261014-r3/production-readonly-plan.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1893-production-plan-20261014-r3/production-repair.sql",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1893-production-apply-20261014-r3/production-readback.json"
+  ],
+  "expected": "Publication-time-aware fetching, bounded late-fact retries, preservation of existing facts when provider returns NULL, honest Go/sector completion audits and database-isolated tests. Production apply, backend restart and readback remain separate required delivery steps; legacy historical PIT holes and conflicting raw facts must remain explicit, not silently waived.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1893-daily-sync-loses-late-facts-and-misreports-partial-go-sector-jobs.json",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/audit_backed_data_health.py",
+      "backend/services/data_health_alerter.py",
+      "backend/services/data_sync_targets.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
+      "scripts/repair_local_data_daily_sync.py"
+    ],
     "added_files": [
       "backend/tests/ingestion/test_daily_sync_recovery.py",
       "scripts/repair_local_data_daily_sync.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261014_BUG-1893-daily-sync-loses-late-facts-and-misreports-partial-go-sector-jobs.json",
       "backend/ingestion/tdx_scheduler.py",
-      "backend/services/tushare_sync_engine.py",
       "backend/services/audit_backed_data_health.py",
       "backend/services/data_health_alerter.py",
       "backend/services/data_sync_targets.py",
+      "backend/services/tushare_sync_engine.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/test_data_sync_targets.py"
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
+      "scripts/repair_local_data_daily_sync.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -246,11 +265,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/sector_data/status",
+    "fresh_process_evidence": [
+      "Fresh AIstock process: targeted regression validates publication clocks, exact late-date queues, current-sector priority with retained historical errors, isolated target repositories, asynchronous Go watcher and raw-day contract. Production runtime remains pending user restart.",
+      "Fresh existing DEV: official frozen source repairs/readbacks have zero remaining fillable rows and preserve existing finite values; exact production SQL executed successfully in DEV with database-name guard changed to DEV only. Production apply remains pending exact authorization.",
+      "Fresh AIstock process imported tracked persistent daily-sync fixes and passed publication/late-fact/Go/sector/isolation contracts; real read-only single-day SQL probe 0.28..0.36s; production backend not restarted",
+      "Existing DEV official source apply/readback and exact production SQL idempotent validation passed; production apply is pending exact authorization. Fresh Python process validated persisted daily-sync contracts; no service control.",
+      "2026-10-14 production exact SQL e5a7242496d06a425e58190f54dc116122bee17e9211f2b487b4517aec48395d independently authorized and applied: daily 3 inserts; ETF 4723 inserts,3747 row updates,11169 NULL fields filled; margin 4456 inserts. Readback has zero fillable rows and preserved existing nonnull facts. No other tables/profile/dataset/runtime written. Backend source activation remains pending."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

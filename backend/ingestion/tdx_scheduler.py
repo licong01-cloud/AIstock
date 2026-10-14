@@ -47,7 +47,10 @@ from ..services.audit_backed_data_health import AuditBackedDataHealthChecker
 from ..services.data_completeness import DATASET_TABLE_MAP
 from ..services.data_refresh_audit import DataRefreshAuditRepository
 from ..services.data_health_alerter import DataHealthAlerter, classify_retry_alert
-from ..services.data_sync_targets import DataSyncAttemptRecord, DataSyncTargetRecord, DataSyncTargetRepository
+from ..services.data_sync_targets import (
+    DataSyncAttemptRecord, DataSyncTargetRecord, DataSyncTargetRepository,
+    PUBLICATION_LAG_DAYS, PUBLICATION_READY_AT, publication_target_date,
+)
 from ..services.suspend_d_coverage import (
     SCHEMA_VERSION as SUSPEND_D_COVERAGE_SCHEMA_VERSION,
     audit_suspend_d_coverage,
@@ -86,8 +89,8 @@ _SCHEDULE_ERROR_CLEAR_STATUSES = frozenset({"success"})
 _STALE_QUEUED_JOB_MINUTES = 10
 _TARGET_STALE_QUEUED_JOB_MINUTES = _AUTO_RETRY_LEASE_MINUTES
 _STALE_RUNNING_JOB_MINUTES = _ACTIVE_JOB_LEASE_MINUTES
-_AVAILABILITY_LAG_TRADING_DAYS = {"margin_detail": 1}
-_AVAILABILITY_READY_AT = {"margin_detail": dt.time(19, 10)}
+_AVAILABILITY_LAG_TRADING_DAYS = PUBLICATION_LAG_DAYS
+_AVAILABILITY_READY_AT = PUBLICATION_READY_AT
 _DAILY_DATA_COMPLETION_READY_AT = dt.time(16, 0)
 _NEXT_DAY_RECOVERY_DEADLINE_DATASETS = frozenset(
     {"index_daily", "sector_data", "stock_moneyflow_ts", "sw_daily", "sw_sector"}
@@ -414,8 +417,9 @@ class TDXScheduler:
                    AND (
                        (
                            status IN ('queued', 'pending', 'running')
-                           AND COALESCE(started_at, created_at) >=
-                               NOW() - (%s || ' minutes')::interval
+                           AND (summary->>'via' = 'go_init'
+                                OR COALESCE(started_at, created_at) >=
+                                    NOW() - (%s || ' minutes')::interval)
                        )
                        OR (
                            status = 'success'
@@ -645,6 +649,7 @@ class TDXScheduler:
                    finished_at = NOW(),
                    summary = COALESCE(summary::jsonb, '{}'::jsonb) || %s::jsonb
              WHERE status = 'running'
+               AND COALESCE(summary->>'via', '') <> 'go_init'
                AND started_at IS NOT NULL
                AND started_at < NOW() - (%s || ' minutes')::interval
                AND (%s IS NULL OR lower(summary->>'dataset') = %s)
@@ -915,7 +920,7 @@ class TDXScheduler:
         self._last_go_audit_reconcile_sweep = now
         rows = self._fetchall(
             """
-            SELECT job_id, summary
+            SELECT job_id, summary, status
               FROM market.ingestion_jobs
              WHERE status = 'success'
                AND finished_at >= NOW() - INTERVAL '3 days'
@@ -945,18 +950,18 @@ class TDXScheduler:
             if start_d is None or end_d is None:
                 continue
             audit_rows = self._fetchall(
-                """
-                SELECT MAX(trade_date)::date AS mx
-                  FROM market.dataset_date_refresh_audit
-                 WHERE dataset = %s AND status = 'success'
-                """,
-                (dataset,),
+                """SELECT COUNT(*) AS unproven_dates FROM market.trading_calendar c
+                    WHERE c.is_trading=TRUE AND c.cal_date BETWEEN %s AND %s
+                      AND NOT EXISTS (SELECT 1 FROM market.dataset_date_refresh_audit a
+                          WHERE a.dataset=%s AND a.trade_date=c.cal_date
+                            AND a.status='success' AND a.quality_status='ok'
+                            AND a.metadata ? 'raw_date_completeness' AND a.job_id=%s)""",
+                (start_d, end_d, dataset, row.get("job_id")),
             )
-            audit_max = audit_rows[0].get("mx") if audit_rows else None
-            if audit_max is not None and audit_max >= end_d:
+            if audit_rows and audit_rows[0].get("unproven_dates") == 0:
                 continue
             try:
-                self._record_refresh_audit_from_table_range(
+                audit_ready = self._record_refresh_audit_from_table_range(
                     dataset=dataset,
                     job_id=row.get("job_id"),
                     start_date=start_d,
@@ -964,6 +969,17 @@ class TDXScheduler:
                     data_source="tdx_api",
                     metadata={"mode": "incremental", "via": "go_init", "audit_reconcile": True},
                 )
+                if audit_ready:
+                    # Never clear a newer job's failure with an older completion.
+                    self._execute(
+                        """UPDATE market.ingestion_schedules SET last_status='success', last_error=NULL,
+                                  updated_at=NOW()
+                            WHERE enabled=TRUE AND dataset=%s
+                              AND %s=(SELECT job_id FROM market.ingestion_jobs
+                                      WHERE summary->>'dataset'=%s
+                                      ORDER BY created_at DESC LIMIT 1)""",
+                        (dataset, row.get("job_id"), dataset),
+                    )
                 _logger.info(
                     "go audit reconcile: backfilled refresh audit for %s %s→%s (job %s)",
                     dataset, start_d, end_d, row.get("job_id"),
@@ -1429,13 +1445,12 @@ class TDXScheduler:
         dataset: str,
         expected_date: Optional[dt.date],
     ) -> Optional[dt.date]:
-        adjusted = expected_date
-        lag_days = _AVAILABILITY_LAG_TRADING_DAYS.get((dataset or "").strip().lower(), 0)
-        for _ in range(lag_days):
-            if adjusted is None:
-                return None
-            adjusted = self._latest_trading_day(adjusted - dt.timedelta(days=1))
-        return adjusted
+        if expected_date is None:
+            return None
+        return publication_target_date(
+            (dataset or "").strip().lower(), expected_date, _now().astimezone(_CN_TZ),
+            lambda day: self._latest_trading_day(day - dt.timedelta(days=1)),
+        )
 
     def _availability_date_for_target(self, dataset: str, target_date: dt.date) -> dt.date:
         availability_date = target_date
@@ -1516,7 +1531,8 @@ class TDXScheduler:
         if use_calendar_dates:
             latest_date: Optional[dt.date] = dt.date.today()
         else:
-            latest_date = self._latest_completed_trading_day()
+            latest_date = (self._latest_trading_day() if dataset in PUBLICATION_LAG_DAYS
+                           else self._latest_completed_trading_day())
             latest_date = self._availability_adjusted_target_date(dataset, latest_date)
         if latest_date is None:
             return None, None
@@ -1871,7 +1887,8 @@ class TDXScheduler:
                     return dt.date.fromisoformat(str(raw))
                 except ValueError:
                     continue
-        latest_trading_day = self._latest_completed_trading_day()
+        latest_trading_day = (self._latest_trading_day() if dataset in PUBLICATION_LAG_DAYS
+                              else self._latest_completed_trading_day())
         return self._availability_adjusted_target_date(dataset, latest_trading_day)
 
     def _final_deadline_for_target(self, dataset: str, target_date: Optional[dt.date]) -> Optional[dt.datetime]:
@@ -1880,6 +1897,10 @@ class TDXScheduler:
         dataset_key = (dataset or "").strip().lower()
         deadline_date = self._availability_date_for_target(dataset_key, target_date)
         deadline_time = dt.time(23, 30)
+        if dataset_key == "etf_share_size":
+            # Overseas funds may publish later than the T+1 morning batch.
+            for _ in range(4):
+                deadline_date = self._next_trading_day(deadline_date)
         if dataset_key in _NEXT_DAY_RECOVERY_DEADLINE_DATASETS:
             deadline_date += dt.timedelta(days=1)
             deadline_time = dt.time(2, 0)
@@ -2224,7 +2245,8 @@ class TDXScheduler:
             dataset = str(target.get("dataset") or "?")
             target_date = target.get("target_date")
             alerts.append(
-                classify_retry_alert(dataset, "exhausted", original_status=failure_category)
+                classify_retry_alert(dataset, "exhausted", original_status=failure_category,
+                                     attempt_count=target.get("attempt_count"))
             )
             alerts[-1].alert_type = "retry_exhausted"
             alerts[-1].details.update(
@@ -3130,6 +3152,8 @@ class TDXScheduler:
         audit_start: Optional[_dt.date] = None
         audit_end: Optional[_dt.date] = None
         repaired_dates: List[str] = []
+        revision_errors: Dict[str, str] = {}
+        deferred_revisions = 0
         try:
             # 标记 job 为 running
             if job_id is not None:
@@ -3159,22 +3183,6 @@ class TDXScheduler:
                     raise ValueError("依赖表 sw_daily 或 moneyflow_ts 无数据，无法增量构建 sector_data")
 
                 auto_end = min(latest_sw, latest_mf)
-                # MAX does not establish historical freshness. Drain the exact
-                # durable dependency queue, including when today's upstream is
-                # delayed. New pending dates are covered by the normal append.
-                for day in builder.pending_dates(auto_end):
-                    if latest_sector is None or day > latest_sector:
-                        continue
-                    _logger.info("sector_data targeted source revision: %s", day)
-                    changed_rows = builder.build_date(day)
-                    rows += changed_rows
-                    repaired_dates.append(day.isoformat())
-                    self._record_refresh_audit_from_table_range(
-                        dataset="sector_data", job_id=job_id, start_date=day, end_date=day,
-                        data_source="sector_builder",
-                        metadata={"mode": mode, "rows": changed_rows, "repair_kind": "source_revision"},
-                    )
-
                 # 上游就绪检查：确保 sw_daily 和 moneyflow_ts 已更新到最新交易日
                 latest_trading = self._latest_completed_trading_day()
                 if latest_trading:
@@ -3227,20 +3235,41 @@ class TDXScheduler:
                         _logger.info("sector_data incremental: building %s ~ %s", auto_start, auto_end)
                         rows += builder.build_range(auto_start, auto_end)
                         audit_start, audit_end = auto_start, auto_end
+                        self._audit_sector_build(
+                            dataset="sector_data", job_id=job_id, start_date=auto_start, end_date=auto_end,
+                            data_source="sector_builder", metadata={"mode": mode, "repair_kind": "append"},
+                        )
+                        audit_start = audit_end = None
+
+                # Current appends have priority. Preserve failed historical
+                # revisions in the durable queue and expose partial completion,
+                # rather than allowing an old PIT error to starve every day.
+                pending = sorted((day for day in builder.pending_dates(auto_end)
+                                  if latest_sector is not None and day <= latest_sector), reverse=True)
+                deferred_revisions = max(0, len(pending) - 10)
+                for day in sorted(pending[:10]):
+                    try:
+                        changed_rows = builder.build_date(day)
+                        rows += changed_rows
+                        self._audit_sector_build(
+                            dataset="sector_data", job_id=job_id, start_date=day, end_date=day,
+                            data_source="sector_builder",
+                            metadata={"mode": mode, "rows": changed_rows, "repair_kind": "source_revision"},
+                        )
+                        repaired_dates.append(day.isoformat())
+                    except Exception as exc:
+                        revision_errors[day.isoformat()] = str(exc)
+                if not delayed and (revision_errors or deferred_revisions):
+                    status = "partial"
+                    error_msg = json.dumps({"source_revision_errors": revision_errors,
+                                           "deferred_revision_count": deferred_revisions}, ensure_ascii=False)
 
             # 标记 job 状态（delayed 不标记为 success）
-            if not delayed:
-                try:
-                    self._record_refresh_audit_from_table_range(
-                        dataset="sector_data",
-                        job_id=job_id,
-                        start_date=audit_start,
-                        end_date=audit_end,
-                        data_source="sector_builder",
-                        metadata={"mode": mode, "rows": rows},
-                    )
-                except Exception as audit_exc:
-                    _logger.warning("sector_data refresh audit failed: %s", audit_exc)
+            if not delayed and audit_start is not None:
+                self._audit_sector_build(
+                    dataset="sector_data", job_id=job_id, start_date=audit_start, end_date=audit_end,
+                    data_source="sector_builder", metadata={"mode": mode, "rows": rows},
+                )
             if job_id is not None and delayed:
                 try:
                     summary_patch = json.dumps(
@@ -3267,15 +3296,16 @@ class TDXScheduler:
                 try:
                     summary_patch = json.dumps(
                         {"inserted_rows": rows, "dataset": "sector_data", "mode": mode,
-                         "source_revision_dates": repaired_dates},
+                         "source_revision_dates": repaired_dates, "source_revision_errors": revision_errors,
+                         "deferred_revision_count": deferred_revisions},
                         ensure_ascii=False, default=str,
                     )
                     self._execute(
                         """UPDATE market.ingestion_jobs
-                              SET status='success', finished_at=NOW(),
+                              SET status=%s, finished_at=NOW(),
                                   summary=COALESCE(summary::jsonb,'{}'::jsonb)||%s::jsonb
                             WHERE job_id=%s""",
-                        (summary_patch, job_id),
+                        (status, summary_patch, job_id),
                     )
                 except Exception as exc:
                     _logger.error("unexpected error: %s", exc)
@@ -3360,6 +3390,26 @@ class TDXScheduler:
             return None
         return dt.date(year, month, day)
 
+    def _audit_sector_build(self, **kwargs) -> None:
+        """Never turn missing refresh evidence into a successful sector job."""
+        try:
+            if not self._record_refresh_audit_from_table_range(**kwargs):
+                raise RuntimeError("sector_data refresh audit is not ready")
+        except Exception:
+            # build_date clears its dependency queue atomically. If the separate
+            # refresh audit fails, retain an explicit retry date instead of
+            # letting the physical MAX cursor hide this failure permanently.
+            from ..services.sector_data_repair import _MARK_SQL
+
+            start, end = kwargs["start_date"], kwargs["end_date"]
+            dates = [start] if start == end else [row["cal_date"] for row in self._fetchall(
+                "SELECT cal_date FROM market.trading_calendar WHERE is_trading=TRUE "
+                "AND cal_date BETWEEN %s AND %s ORDER BY cal_date", (start, end),
+            )]
+            if dates:
+                self._execute(_MARK_SQL, ("sector_refresh_audit", dates))
+            raise
+
     def _record_refresh_audit_from_table_range(
         self,
         *,
@@ -3369,13 +3419,13 @@ class TDXScheduler:
         end_date: Optional[dt.date],
         data_source: str,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """Write per-date readiness rows from the physical table after a job."""
+    ) -> bool:
+        """Write per-date readiness rows and return whether every date is ready."""
         if start_date is None or end_date is None or start_date > end_date:
-            return
+            return False
         info = DATASET_TABLE_MAP.get(dataset)
         if info is None:
-            return
+            return False
         table_name, date_col = info
         if dataset == "kline_minute_raw":
             floor = self._recent_trading_floor(30)
@@ -3429,6 +3479,7 @@ class TDXScheduler:
         repo = DataRefreshAuditRepository()
         base_metadata = dict(metadata or {})
         base_metadata.update({"audit_from_target_table": True, "table": table_name})
+        all_ready = bool(target_dates)
         with _get_conn(self._db_cfg) as conn:
             for row in target_dates:
                 trade_date = row.get("cal_date")
@@ -3439,6 +3490,12 @@ class TDXScheduler:
                 row_metadata = dict(base_metadata)
                 quality_status = "ok"
                 failure_category = None
+                if dataset in _GO_INCREMENTAL_DATASETS and row_count > 0:
+                    completeness = self._raw_date_completeness(dataset, trade_date)
+                    row_metadata["raw_date_completeness"] = completeness
+                    if completeness["expected_symbols"] <= 0 or completeness["incomplete_symbols"]:
+                        quality_status = "low_coverage"
+                        failure_category = "raw_traded_date_incomplete"
                 if dataset == "daily_basic" and row_count > 0:
                     required_counts = daily_basic_required_counts.get(
                         trade_date,
@@ -3481,8 +3538,11 @@ class TDXScheduler:
                         conn=conn,
                     )
                 else:
+                    all_ready = False
                     error_message = f"{dataset} has 0 rows in {table_name} for {trade_date}"
-                    if row_count > 0:
+                    if row_count > 0 and dataset in _GO_INCREMENTAL_DATASETS:
+                        error_message = f"{dataset}/{trade_date}: {row_metadata['raw_date_completeness']}"
+                    elif row_count > 0:
                         coverages = row_metadata["required_field_coverages"]["fields"]
                         failing = [
                             (field, value)
@@ -3510,6 +3570,44 @@ class TDXScheduler:
                         failure_category=failure_category or "empty_invalid",
                         conn=conn,
                     )
+        return all_ready
+
+    def _raw_date_completeness(self, dataset: str, trade_date: dt.date) -> Dict[str, int]:
+        """Bounded cross-provider key/bar evidence; never a full-history scan."""
+        # Keep hypertable scans independently time-prunable. Joining them
+        # together can produce a nested-loop scan over thousands of chunks.
+        daily_rows = self._fetchall(
+            "SELECT ts_code,volume_hand,volume_shares FROM market.kline_daily_raw WHERE trade_date=%s",
+            (trade_date,),
+        )
+        day_start = dt.datetime.combine(trade_date, dt.time.min, tzinfo=_CN_TZ)
+        minute_rows = self._fetchall(
+            """SELECT ts_code,COUNT(*) AS bars,
+                BOOL_OR(volume_hand > 0 OR volume_shares > 0) AS traded,
+                COUNT(*) FILTER (WHERE NOT (
+                    ((trade_time AT TIME ZONE 'Asia/Shanghai')::time BETWEEN TIME '09:31' AND TIME '11:30') OR
+                    ((trade_time AT TIME ZONE 'Asia/Shanghai')::time BETWEEN TIME '13:01' AND TIME '15:00'))
+                    OR open_li <= 0 OR low_li <= 0 OR high_li <= 0 OR close_li <= 0
+                    OR volume_hand < 0 OR amount_li < 0) AS bad_bars
+              FROM market.kline_minute_raw
+             WHERE trade_time >= %s AND trade_time < %s AND freq='1m' GROUP BY ts_code""",
+            (day_start, day_start + dt.timedelta(days=1)),
+        )
+        daily = {str(row["ts_code"]).strip(): row for row in daily_rows}
+        minute = {str(row["ts_code"]).strip(): row for row in minute_rows}
+        if dataset == "kline_daily_raw":
+            population = {str(row["ts_code"]).strip() for row in self._fetchall(
+                "SELECT ts_code FROM market.stock_basic WHERE list_date<=%s "
+                "AND (delist_date IS NULL OR delist_date>=%s)", (trade_date, trade_date),
+            )}
+            expected = {code for code, row in minute.items() if row["traded"] and code in population}
+            incomplete = len(expected.difference(daily))
+        else:
+            expected = {code for code, row in daily.items()
+                        if (row["volume_hand"] or 0) > 0 or (row["volume_shares"] or 0) > 0}
+            incomplete = sum(code not in minute or minute[code]["bars"] != 240
+                             or minute[code]["bad_bars"] > 0 for code in expected)
+        return {"expected_symbols": len(expected), "incomplete_symbols": incomplete}
 
     def _retry_range_for_health_failure(
         self,
@@ -3675,7 +3773,8 @@ class TDXScheduler:
                 continue
             dataset = str(getattr(result, "dataset", "") or "").strip().lower()
             raw_expected_date = self._coerce_target_date(getattr(result, "expected_date", None))
-            expected_date = self._availability_adjusted_target_date(dataset, raw_expected_date)
+            # Health expected_date already applies the publication policy.
+            expected_date = raw_expected_date
             if not dataset or expected_date is None:
                 continue
             try:
@@ -4731,12 +4830,9 @@ class TDXScheduler:
                 _logger.error("unexpected error: %s", exc)
 
         try:
-            # 1) auto-range: query latest trading date and current max date
-            rows = self._fetchall(
-                "SELECT MAX(cal_date) AS latest FROM market.trading_calendar"
-                " WHERE is_trading = TRUE AND cal_date <= CURRENT_DATE"
-            )
-            latest_trading = rows[0]["latest"] if rows else None
+            # Default daily ingestion must not request an unfinished intraday
+            # date merely because that date exists in the trading calendar.
+            latest_trading = self._latest_completed_trading_day()
             if latest_trading is None:
                 raise RuntimeError("no trading_calendar rows")
             if not isinstance(latest_trading, dt.date):
@@ -4757,14 +4853,17 @@ class TDXScheduler:
                     raise RuntimeError("explicit TDX date window is invalid")
             else:
                 max_rows = self._fetchall(
-                    f"SELECT MAX({spec['date_col']})::date AS mx FROM {spec['table']}"
+                    f"SELECT MAX({spec['date_col']})::date AS mx FROM {spec['table']} "
+                    f"WHERE {spec['date_col']} >= CURRENT_DATE - INTERVAL '45 days'"
                 )
                 current_max = max_rows[0]["mx"] if max_rows else None
+                if current_max is None:
+                    raise RuntimeError("TDX incremental has no recent cursor; specify an exact date window")
                 # A MAX timestamp proves neither a complete day nor all symbols.
                 # Re-read the latest observed day; Go inserts identical keys
                 # idempotently and rejects conflicting existing raw facts.
-                start_date = (dt.date(1990, 1, 1) if current_max is None else current_max
-                              if isinstance(current_max, dt.date) else dt.date.fromisoformat(str(current_max)))
+                start_date = (current_max if isinstance(current_max, dt.date)
+                              else dt.date.fromisoformat(str(current_max)))
                 end_date = latest_trading
 
             if start_date > latest_trading:
@@ -4772,11 +4871,25 @@ class TDXScheduler:
 
             # 2) create job record (or reuse one from _scheduled_ingestion_run)
             workers = int(options.get("workers") or spec["default_workers"])
+            codes = options.get("codes")
+            if not codes:
+                # Provider population, not a strategy stock pool: retain ST and
+                # historical delisted stocks intersecting an explicit window,
+                # but do not request pre-listing dates or unrelated instruments.
+                code_rows = self._fetchall(
+                    "SELECT ts_code FROM market.stock_basic WHERE list_date <= %s "
+                    "AND (delist_date IS NULL OR delist_date >= %s) ORDER BY ts_code",
+                    (end_date, start_date),
+                )
+                codes = [str(row["ts_code"]).strip() for row in code_rows]
+                if not codes:
+                    raise RuntimeError("date-valid TDX provider population is unavailable")
             summary.update({
                 "data_kind": spec["data_kind"],
                 "start_date": start_date.isoformat(),
                 "end_date": end_date.isoformat(),
                 "workers": workers,
+                "requested_code_count": len(codes),
             })
             if job_id:
                 self._execute(
@@ -4798,7 +4911,7 @@ class TDXScheduler:
             start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
             go_payload = {
                 "job_id": str(job_id),
-                "codes": options.get("codes") or [],
+                "codes": codes,
                 "start_time": start_dt.isoformat(),
                 "end_time": end_date.isoformat(),
                 "workers": workers,
@@ -4828,6 +4941,17 @@ class TDXScheduler:
                 raise RuntimeError("Go ingestion response lacks task identity")
 
             summary["go_task_id"] = go_task_id
+            # Persist the accepted task identity before polling. A watcher
+            # timeout/restart must not convert an asynchronously writing Go job
+            # into a failed/re-dispatchable job.
+            self._execute(
+                "UPDATE market.ingestion_jobs SET summary=COALESCE(summary::jsonb,'{}'::jsonb)||%s::jsonb WHERE job_id=%s",
+                (json.dumps({"go_task_id": go_task_id}), job_id),
+            )
+            # Go periodically replaces its summary from an in-memory snapshot.
+            # Keep the accepted identity in the append-only job log as well.
+            self._log_ingestion_run(job_id, schedule_id, triggered_by, start_ts,
+                                    "running", dict(summary), {"phase": "go_task_accepted"}, [])
 
             # Poll Go task until it finishes (or timeout after 40 min).
             # Go backend's markJobFinished() already updates ingestion_jobs
@@ -4859,12 +4983,18 @@ class TDXScheduler:
                         # Go backend may be temporarily unreachable; keep trying
                         continue
                 else:
-                    # Timeout — treat as failure so we don't silently lose data
-                    raise RuntimeError(f"Go task {go_task_id} timed out after 2400s, status={go_status}")
+                    status = "delayed"
+                    summary["watcher_pending"] = True
+                    summary["error"] = f"Go task {go_task_id} remains pending after watcher timeout; status={go_status}"
+                    self._log_ingestion_run(
+                        job_id or run_id, schedule_id, triggered_by, start_ts,
+                        status, summary, {}, [], error=summary["error"],
+                    )
+                    return
 
             status = "success"
             try:
-                self._record_refresh_audit_from_table_range(
+                audit_ready = self._record_refresh_audit_from_table_range(
                     dataset=dataset,
                     job_id=job_id,
                     start_date=start_date,
@@ -4872,17 +5002,20 @@ class TDXScheduler:
                     data_source="tdx_api",
                     metadata={"mode": "incremental", "via": "go_init", "go_task_id": go_task_id},
                 )
+                if not audit_ready:
+                    raise RuntimeError("raw traded-date completeness audit is not ready")
             except Exception as audit_exc:
-                _logger.warning("%s refresh audit after Go sync failed: %s", dataset, audit_exc)
+                raise RuntimeError(f"{dataset} Go completion audit failed: {audit_exc}") from audit_exc
 
         except Exception as exc:  # noqa: BLE001
+            status = "failed"
             summary["error"] = str(exc)
             if job_id is not None:
                 try:
                     # A database success row alone cannot override a malformed
                     # response, missing task identity, source error or failed poll.
                     self._execute(
-                        "UPDATE market.ingestion_jobs SET status='failed', finished_at=NOW(), summary=%s WHERE job_id=%s",
+                        "UPDATE market.ingestion_jobs SET status='failed', finished_at=NOW(), summary=COALESCE(summary::jsonb,'{}'::jsonb)||%s::jsonb WHERE job_id=%s",
                         (json.dumps(summary, ensure_ascii=False), job_id),
                     )
                 except Exception as exc:
@@ -4893,7 +5026,8 @@ class TDXScheduler:
             )
         finally:
             if schedule_id:
-                self._update_ingestion_schedule(schedule_id, last_run=start_ts, last_status=status)
+                self._update_ingestion_schedule(schedule_id, last_run=start_ts, last_status=status,
+                                                last_error=summary.get("error"))
 
     # ------------------------------------------------------------------
     # DB write helpers
