@@ -31,23 +31,23 @@
   "expected": "Valid complete sealed native receipts pass; corrupt/truncated/mismatched/unknown-size refs fail; same operation reuses completed exports.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261014_BUG-1898-monthly-native-authority-read-cap-rejects-verified-full-market-inventory.json",
       "backend/services/dataset_release/build_stage.py",
       "backend/services/dataset_release/monthly_build_resume.py",
       "backend/services/dataset_release/monthly_industry_history.py",
       "backend/services/dataset_release/monthly_shared_components.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
-      "backend/tests/dataset_release/test_monthly_shared_components.py"
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1898-monthly-native-authority-read-cap-rejects-verified-full-market-inventory.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261014_BUG-1898-monthly-native-authority-read-cap-rejects-verified-full-market-inventory.json",
       "backend/services/dataset_release/build_stage.py",
       "backend/services/dataset_release/monthly_build_resume.py",
       "backend/services/dataset_release/monthly_industry_history.py",
       "backend/services/dataset_release/monthly_shared_components.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
-      "backend/tests/dataset_release/test_monthly_shared_components.py"
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1898-monthly-native-authority-read-cap-rejects-verified-full-market-inventory.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -196,8 +196,8 @@
   },
   "first_seen_at": "2026-10-14T05:53:14.687528Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cb37f16034c92904375e811c1463e3a39e29c37a",
+  "fixed_at": "2026-10-14T06:24:24Z",
   "github_issue_number": 6058,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6058",
   "last_seen_at": "2026-10-14T05:53:14.687528Z",
@@ -205,6 +205,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6061",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -227,6 +228,7 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -238,7 +240,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1898",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "341c98778abd9b01",
+    "recorded_at": "2026-10-14T06:25:03.729729Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8fecd12bfe25eb7d859cf91ae925afe65518ba87",
+    "source_merge_commit": "cb37f16034c92904375e811c1463e3a39e29c37a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6061",
+    "validation_evidence": [
+      "validation-receipt: id=79788ed58ca20dd1 commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, 7 scoped files, no blocking findings`",
+      "validation-receipt: id=b6f86d485635830f commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_sector_mapping.py -q` result=`passed, 85 passed, 1 intentional skip; new large-inventory test passed separately`",
+      "validation-receipt: id=3de2d1a5da4c0bb3 commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_build_stage.py -q` result=`passed, 5 passed`",
+      "validation-receipt: id=f2b23c3963ac1797 commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_shared_components.py backend/services/dataset_release/monthly_build_resume.py backend/services/dataset_release/monthly_industry_history.py backend/services/dataset_release/build_stage.py backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_monthly_build_resume.py` result=`passed`",
+      "validation-receipt: id=4b0a309e09b7d0c7 commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "77209773b293ef648fa603712049f5d5c1c2be03a0f6205e1ffbbe17ad896ced"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -247,6 +274,13 @@
     "fingerprint": "671425632da6031ca87ed87c",
     "source_event_id": "FE-20261014-671425632da6"
   },
+  "validation_evidence": [
+    "validation-receipt: id=79788ed58ca20dd1 commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, 7 scoped files, no blocking findings`",
+    "validation-receipt: id=b6f86d485635830f commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_sector_mapping.py -q` result=`passed, 85 passed, 1 intentional skip; new large-inventory test passed separately`",
+    "validation-receipt: id=3de2d1a5da4c0bb3 commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_build_stage.py -q` result=`passed, 5 passed`",
+    "validation-receipt: id=f2b23c3963ac1797 commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_shared_components.py backend/services/dataset_release/monthly_build_resume.py backend/services/dataset_release/monthly_industry_history.py backend/services/dataset_release/build_stage.py backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_monthly_build_resume.py` result=`passed`",
+    "validation-receipt: id=4b0a309e09b7d0c7 commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
