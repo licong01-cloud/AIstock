@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1921",
-  "closed_at": null,
+  "closed_at": "2026-10-15T17:45:04.713848Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -74,17 +74,17 @@
   "expected": "严格错误路径与普通错误路径使用同一原生失败记录和重试收尾，再原样抛出原始异常供父回放按既有合同分类；副作用 UNKNOWN 与真缺价仍阻塞，已有终态不自动恢复。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json",
       "backend/services/simulation_runtime/localsim_replay_runtime.py",
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json",
       "backend/services/simulation_runtime/localsim_replay_runtime.py",
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -142,9 +142,9 @@
   },
   "first_seen_at": "2026-10-15T09:40:31.971126Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "3bf6d0e751305ccc69da38968009036e12de5bd8",
   "fix_summary": "完成 LocalSIM 已取得重试声明路径的原生失败收尾并保留原始异常；日适配器保留可重试数据失败及合法退避；历史日重试使用运行控制时间。严格预检不新建日记录，其他恢复时钟保持原有取值。UNKNOWN、配置错误、终态失败与非法退避仍阻塞，既有 FAILED_TERMINAL 不自动恢复。",
-  "fixed_at": null,
+  "fixed_at": "2026-10-15T10:36:53Z",
   "github_issue_number": 6125,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6125",
   "last_seen_at": "2026-10-15T09:40:31.971126Z",
@@ -152,6 +152,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6145",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -198,9 +199,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1921/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1921",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "031ba7eac33f55d48367c1145361ad313016fc7986c723e2773dfe8bf5289fe6",
+      "contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+      "expected_identity": "3bf6d0e751305ccc69da38968009036e12de5bd8",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-15T17:44:21.967368Z",
+      "mode": "read_only",
+      "observed_identity": "25fb9785e4e563456f7bcaaa7bd58258b000f844",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "49570d934773654cba55fde26adda408c88da61b6acd91700d8724bbb541197b",
+      "receipt_sha256": "0ff7b12f8cfb02158fd1c847dc1f74d8b8f915523a1c79a5bb028d2f9c803168",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "481c93279930c1e977d7b394299925a3c3c007a7b1e4b6aff63a31b0f5bb25a2",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -210,7 +234,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1921",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d13bb8b4ce0bb64e",
+    "recorded_at": "2026-10-15T10:38:07.212723Z",
+    "runtime_contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "86b5eebdd3e04506e3d6d6b59e85be920c102e76",
+    "source_merge_commit": "3bf6d0e751305ccc69da38968009036e12de5bd8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6145",
+    "validation_evidence": [
+      "validation-receipt: id=7542a4a82375d9ac commit=86b5eebdd3e04506e3d6d6b59e85be920c102e76 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/localsim_replay_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json` result=`passed`",
+      "validation-receipt: id=4ceb7db070125aab commit=86b5eebdd3e04506e3d6d6b59e85be920c102e76 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_localsim_strict_retry_finalizes_claim_and_raises_original_failure backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_native_replay_preserves_returned_data_failure_and_blocks_other_failures backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_persists_pre_run_binding_failure_without_duplicate_rows backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_pre_run_binding_failure_does_not_block_other_bindings backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_closed_native_historical_executor_runs_real_broker_and_preserves_residual backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_historical_failed_localsim_authority_corruption_is_backed_off_without_deep_reads backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_simulation_retry_failure_evidence_normalizes_unsupported_context_before_hashing backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_raise_on_error_reraises_live_inference_preflight_failure backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_historical_recovery_backoff_uses_stable_identity_and_failure_completion backend/tests/simulation_runtime/test_localsim_replay_live_transition.py backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py -q --basetemp X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-final-matrix-r3 --junitxml X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-final-matrix-r3.xml` result=`passed (47 tests)`",
+      "validation-receipt: id=c1e0769024378e9e commit=86b5eebdd3e04506e3d6d6b59e85be920c102e76 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/localsim_replay_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "5282dadf46ba51b8fc3beef884507e1f9b102940ddc66ef18dc9003cbe11d8c0"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -219,6 +266,12 @@
     "fingerprint": "23f5a15ad4c363e763580b6f",
     "source_event_id": "FE-20261015-23f5a15ad4c3"
   },
+  "validation_evidence": [
+    "validation-receipt: id=7542a4a82375d9ac commit=86b5eebdd3e04506e3d6d6b59e85be920c102e76 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/localsim_replay_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json` result=`passed`",
+    "validation-receipt: id=4ceb7db070125aab commit=86b5eebdd3e04506e3d6d6b59e85be920c102e76 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_localsim_strict_retry_finalizes_claim_and_raises_original_failure backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_native_replay_preserves_returned_data_failure_and_blocks_other_failures backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_persists_pre_run_binding_failure_without_duplicate_rows backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_pre_run_binding_failure_does_not_block_other_bindings backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_closed_native_historical_executor_runs_real_broker_and_preserves_residual backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_historical_failed_localsim_authority_corruption_is_backed_off_without_deep_reads backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_simulation_retry_failure_evidence_normalizes_unsupported_context_before_hashing backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_raise_on_error_reraises_live_inference_preflight_failure backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_historical_recovery_backoff_uses_stable_identity_and_failure_completion backend/tests/simulation_runtime/test_localsim_replay_live_transition.py backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py -q --basetemp X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-final-matrix-r3 --junitxml X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-final-matrix-r3.xml` result=`passed (47 tests)`",
+    "validation-receipt: id=c1e0769024378e9e commit=86b5eebdd3e04506e3d6d6b59e85be920c102e76 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/simulation_runtime/scheduler.py backend/services/simulation_runtime/localsim_replay_runtime.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py` result=`passed`",
+    "post-restart expected source 3bf6d0e has verified deployed origin/main descendant 25fb9785; native scheduler semantic smoke passed; completed Jan20 is unchanged; production replays remain a separate acceptance and LSTM remains BLOCKED"
+  ],
   "validation_receipts": [
     "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-source-validation-receipt-r1.json",
     "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-final-matrix-r2.xml",
