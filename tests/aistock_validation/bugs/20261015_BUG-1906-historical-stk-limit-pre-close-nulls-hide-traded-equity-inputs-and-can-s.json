@@ -1,11 +1,12 @@
 {
   "actual": "Historical target pre_close missing while raw price facts exist; current ingestion protection excludes stk_limit and batch quality cannot prove applicable-key completeness.",
   "allowed_write_scope": [
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "noxfile.py",
+    "backend/services/data_sync_targets.py",
     "backend/services/tushare_sync_engine.py",
     "backend/services/tushare_dataset_specs.py",
-    "backend/services/dataset_release/monthly_frozen_source_audit.py",
     "backend/tests/test_tushare_sync_engine.py",
-    "backend/tests/dataset_release/test_monthly_source_audit.py",
     "scripts/repair_stk_limit_pre_close.py",
     "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
     "tests/aistock_validation/bugs/20261015_BUG-1906-historical-stk-limit-pre-close-nulls-hide-traded-equity-inputs-and-can-s.json"
@@ -19,7 +20,32 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-15T02:05:29.617226Z",
+  "data_repair": {
+    "candidate_write": false,
+    "dev_validation": "passed_5490_keys_and_repeat_apply",
+    "production_apply": "applied_5490_NULL_only_rows",
+    "production_authorization": "user_explicit_exact_SQL_20261015",
+    "production_readback": "passed_5491_traded_equities_invalid_count_0_native_entry_PASS",
+    "profile_write": false,
+    "receipt": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1906-pre-close-20261015-source1/production-receipt.json",
+    "remaining_source_unresolved_rows": 2089,
+    "remaining_unresolved_with_daily_trades": 0,
+    "replay_state_write": false,
+    "sql_sha256": "9504062a8390a6172b53b40654a439b3a3611023fc422ca6594cec0ba595c8f5",
+    "target": "aistock.market.stk_limit/2026-05-08/pre_close"
+  },
   "description": "Historical target pre_close missing while raw price facts exist; current ingestion protection excludes stk_limit and batch quality cannot prove applicable-key completeness.",
+  "design_compliance_review": {
+    "no_business_change": "No LocalSIM/QE/HMM consumer or replay state changes; five-day retry tail and positive finite same-day source prices only.",
+    "no_extra_gate": "One requested-date SQL readback; no history scan, percentage threshold, dataset rebuild or new approval stage.",
+    "no_partial_claim": "Production data repair complete; persistent source pending merge/runtime activation; monthly consumer integration tracked separately in BUG-1907.",
+    "no_silent_error": "Invalid traded-key readback remains retry/low_coverage; provider NULL or nonfinite facts never become estimated prices.",
+    "review_rounds": [
+      "RED_to_GREEN_source_NULL_preservation",
+      "exact_DEV_SQL_repeat_and_native_readback",
+      "production_authorization_scope_readback_and_CI_mapping"
+    ]
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -31,18 +57,33 @@
   "evidence_uris": [],
   "expected": "Source-backed historical values recoverable, NULL retries preserve finite data, traded keys cannot silently pass missing pre_close; monthly target-month audit uses the same field validity contract.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261015_BUG-1906-historical-stk-limit-pre-close-nulls-hide-traded-equity-inputs-and-can-s.json",
+      "backend/services/data_sync_targets.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
+      "scripts/repair_stk_limit_pre_close.py"
+    ],
     "added_files": [
       "scripts/repair_stk_limit_pre_close.py",
       "backend/tests/scripts/test_repair_stk_limit_pre_close.py"
     ],
     "changed_files": [
-      "backend/services/tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1906-historical-stk-limit-pre-close-nulls-hide-traded-equity-inputs-and-can-s.json",
+      "backend/services/data_sync_targets.py",
       "backend/services/tushare_dataset_specs.py",
-      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/tushare_sync_engine.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/dataset_release/test_monthly_source_audit.py"
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
+      "scripts/repair_stk_limit_pre_close.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/tushare_sync_engine.py",
@@ -154,21 +195,19 @@
       "unmatched_files": []
     },
     "planned_files": [
+      "backend/services/data_sync_targets.py",
       "backend/services/tushare_sync_engine.py",
       "backend/services/tushare_dataset_specs.py",
-      "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/dataset_release/test_monthly_source_audit.py",
       "scripts/repair_stk_limit_pre_close.py",
       "backend/tests/scripts/test_repair_stk_limit_pre_close.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/services/data_sync_targets.py",
       "backend/services/tushare_sync_engine.py",
       "backend/services/tushare_dataset_specs.py",
-      "backend/services/dataset_release/monthly_frozen_source_audit.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/dataset_release/test_monthly_source_audit.py",
       "scripts/repair_stk_limit_pre_close.py",
       "backend/tests/scripts/test_repair_stk_limit_pre_close.py"
     ]
@@ -187,6 +226,10 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "related_bug_ids": [
+    "BUG-1780",
+    "BUG-1907"
+  ],
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -197,17 +240,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/stk_limit/status",
+    "fresh_process_evidence": [
+      "Fresh AIstock processes: 112 direct tests passed; existing DEV repaired 5490 exact source-backed pre_close keys, repeated SQL passed; provider-NULL retry preserved 001205.SZ/2026-05-08 pre_close=15.30 and unchanged limits; native historical minute-provider gate passed. Production separately applied under exact SQL authorization; no replay/runtime writes.",
+      "Source plan X:/AIstock_dataset_candidates/data_repair_staging/BUG-1906-pre-close-20261015-source1/source-plan.json SHA256 c1f5627b6188bd7c7e5219af5541772dbba63e15b20acfc00a7e5214777e9077; DEV receipt validates all5490 keys; authorized production SQL 9504062a8390a6172b53b40654a439b3a3611023fc422ca6594cec0ba595c8f5 applied with independent readback. Remaining2089 provider-missing/invalid rows have no intersection with 5491 observed traded daily keys. Historical trigger (omitted schema versus delayed publication versus NULL overwrite) is not proven.",
+      "Fresh AIstock process loaded tracked producer changes; source NULL retry preserved DEV15.30; production read-only native consumer and exact5491-key quality readback PASS, no runtime process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "registered_runtime_scope_split_monthly_followup_BUG-1907",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
-    "runtime_impact": "worker_scheduler",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "backend-main",
     "target_ids": [
-      "backend-main",
-      "worker-scheduler"
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",

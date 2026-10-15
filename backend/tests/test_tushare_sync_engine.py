@@ -1329,6 +1329,73 @@ def test_stk_limit_keeps_individual_provider_nulls_without_percent_gate():
     assert rows[0]["pre_close"] is None
 
 
+def test_stk_limit_null_retry_preserves_fields_and_finite_revisions(monkeypatch):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    calls = []
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _cur, sql, values: calls.append((sql, values)))
+    TushareSyncEngine()._upsert_plain_batch(_FakeConn(), STK_LIMIT, [
+        {"ts_code": "001205.SZ", "trade_date": "20260508", "pre_close": None, "up_limit": 16.83, "down_limit": 13.77},
+    ])
+    assert "pre_close=COALESCE(EXCLUDED.pre_close, stk_limit.pre_close)" in calls[0][0]
+    assert "up_limit=COALESCE(EXCLUDED.up_limit, stk_limit.up_limit)" in calls[0][0]
+    assert calls[0][1][0][2:] == (None, 16.83, 13.77)
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), "NaN", True, 0, -1])
+def test_stk_limit_rejects_invalid_source_price_before_writing(monkeypatch, value):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda *_: pytest.fail("invalid price reached SQL"))
+    with pytest.raises(ValueError, match="stk_limit.pre_close"):
+        TushareSyncEngine()._upsert_plain_batch(_FakeConn(), STK_LIMIT, [
+            {"ts_code": "001205.SZ", "trade_date": "20260508", "pre_close": value, "up_limit": 16.83, "down_limit": 13.77},
+        ])
+
+
+def test_stk_limit_readback_detects_one_missing_traded_key_without_percentage(monkeypatch):
+    class Cursor(_FakeCursor):
+        def fetchall(self):
+            return [("001205.SZ", None, 16.83, 13.77), ("000001.SZ", 10, 11, 9)]
+    conn = _FakeConn()
+    monkeypatch.setattr(conn, "cursor", lambda: Cursor(conn))
+    receipt, quality = TushareSyncEngine()._stk_limit_readback_quality(conn, dt.date(2026, 5, 8))
+    assert receipt["required_traded_equity_count"] == 2
+    assert receipt["invalid_count"] == 1
+    assert receipt["invalid_sample"] == ["001205.SZ"]
+    assert quality == {"quality_status": "low_coverage", "failure_category": "traded_equity_limit_fact_incomplete"}
+    assert conn.executed[0][1] == (dt.date(2026, 5, 8),)
+    assert "LEFT JOIN market.stk_limit" in conn.executed[0][0]
+
+
+def test_stk_limit_rechecks_a_bounded_tail_and_pending_dates():
+    assert sync_engine.LATE_PUBLICATION_TAIL_DAYS["stk_limit"] == 5
+
+
+def test_stk_limit_partial_traded_readback_cannot_mark_sync_success(monkeypatch):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    engine = TushareSyncEngine(target_repository=_NoopTargetRepository())
+    audit = engine._refresh_audit = _CapturingAudit()
+    day = dt.date(2026, 5, 8)
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_: [
+        {"ts_code": "000001.SZ", "trade_date": "20260508", "pre_close": 10, "up_limit": 11, "down_limit": 9}])
+    monkeypatch.setattr(engine, "_upsert_batch", lambda *_: 1)
+    monkeypatch.setattr(engine, "_iter_sync_dates", lambda *_: [day])
+    monkeypatch.setattr(engine, "_update_progress", lambda *_: None)
+    monkeypatch.setattr(engine, "_stk_limit_readback_quality", lambda *_: (
+        {"required_traded_equity_count": 2, "invalid_count": 1},
+        {"quality_status": "low_coverage", "failure_category": "traded_equity_limit_fact_incomplete"}))
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda _: None)
+    result = engine._sync_by_date(_FakeConn(), STK_LIMIT, day, day, uuid.uuid4())
+    assert result.success_batches == 0 and result.failed_batches == 1
+    assert audit.success_calls[0]["failure_category"] == "traded_equity_limit_fact_incomplete"
+    assert audit.success_calls[0]["metadata"]["traded_equity_readback"]["invalid_count"] == 1
+
+
+@pytest.mark.parametrize("pre_close,expected", [(15.30, True), (None, False), (float("nan"), False), (float("inf"), False), (20, False)])
+def test_shared_stk_limit_price_contract(pre_close, expected):
+    from backend.services.tushare_dataset_specs import stk_limit_prices_valid
+    assert stk_limit_prices_valid({"pre_close": pre_close, "up_limit": 16.83, "down_limit": 13.77}) is expected
+
+
 @pytest.mark.parametrize("pre_close,min_expected,expected_failure", [
     (None, None, "required_source_field_unpublished"),
     (10, 2, "low_coverage"),
