@@ -1,6 +1,6 @@
 # 通用选股信号内核：Advisory 源码交付与设计验收
 
-日期：2026-10-14。级别：F2/T3。当前状态：Advisory 授权范围源码实现、多轮自审修复、真实原生评分对照及最终 F2/静态检查通过；待提交、最终 HEAD CI 与合入。运行激活与跨 owner 接入另行报告。
+日期：2026-10-14。级别：F2/T3。原交付记录：Advisory 授权范围源码实现、多轮自审修复、真实原生评分对照及最终 F2/静态检查通过；当时待提交、最终 HEAD CI 与合入。BUG-1912（2026-10-15）修订当前 provider 时钟及相关验收；原性能收据不证明新 D eligibility，运行激活与跨 owner 接入另行报告。
 
 ## 背景、范围与非目标边界
 
@@ -10,11 +10,11 @@
 
 无策略包 ID 白名单；已支持的模型/特征/组合按原生元数据进入同一代码。优化不命中时仍使用原正确公式或 fresh-load，不新增 QE 训练、回测、收益、UI或人工准入条件。不共享两侧已计算结果。
 
-不修改 QE、StrategyPackage、Selection/HMM、模拟盘、数据服务、公共 CI 或 ownership。无新训练、数据库写入、profile 激活、依赖安装和服务控制；后端重启仍由用户执行。跨 owner 的 native 入口整理和 LocalSIM 产物/账户适配不是本 PR 的修改授权。
+原交付未修改 QE、StrategyPackage、Selection/HMM、模拟盘、数据服务、公共 CI 或 ownership。BUG-1912 按用户本次共享修复授权，仅额外修订原生 `selection_center/tradability.py` 的行业观察日期可选接口及直接测试；不修改 LocalSIM 私有源码、HMM producer、QE、数据服务或 ownership。无新训练、数据库写入、profile 激活、依赖安装和服务控制；后端重启仍由用户执行。
 
 ## 架构与接口契约
 
-`SelectionSignalKernel` 只编排注入的原生准备与 `StrategyPackageSelectionComputation.compute`，不实现第二份过滤/融合/TopK。C/D/T 显式、计划不删日；C<D时native risk/tradability只读日期绑定C，artifact决策日仍D，C=D原调用不变。返回完整 raw 评分、输入身份、基础有效候选和 native stage。未公布完整成员时标记 `NOT_PUBLISHED`，已公布但不能评分的原成员保留 `UNKNOWN`，不能伪造停牌原因或默认评分。长任务使用 `iter_results` 逐日交给消费者自己的writer，仅保留完成日的轻量摘要，不累积每日全池数组。
+`SelectionSignalKernel` 只编排注入的原生准备与 `StrategyPackageSelectionComputation.compute`，不实现第二份过滤/融合/TopK。C/D/T 显式、计划不删日；按 [BUG-1912 provider 合同](../contracts/strategy_package_selection_provider_clocks_v1.md)，模型/参考价/risk/PIT 行业观察 C，停牌 eligibility 按冻结政策观察 D，artifact 决策日仍 D。C=D 的候选、排序和政策调用日期不变，新来源字段明确版本化。此前将整个 tradability 绑定 C 的实现已确认与 BUG-1904 冲突，旧 PASS 不作为 D eligibility 的验收证据。返回完整 raw 评分、输入身份、基础有效候选和 native stage。未公布完整成员时标记 `NOT_PUBLISHED`，已公布但不能评分的原成员保留 `UNKNOWN`，不能伪造停牌原因或默认评分。长任务使用 `iter_results` 逐日交给消费者自己的writer，仅保留完成日的轻量摘要，不累积每日全池数组。
 
 节点仍执行 `InferenceEngine`，元数据驱动混合 Alpha158/动态因子、冻结 infer processors 和训练序列。`InferenceResourceSession` 隔离模型及 processor；不支持序列化/deepcopy的资源正常重新加载，不重训。
 
@@ -33,7 +33,7 @@ Alpha158 仅对已知且等价的公式优化；未知原支持公式仍正常�
 ### 其他消费者的精确接入点（不代实施）
 
 1. 计算使用相同 `InferenceEngine` / 节点CLI和 `SelectionSignalKernel`，不得复制Alpha/动态特征、processor/序列或native compute算法。每个调用显式创建自己的consumer/run/input/feature/resource/materialization会话，并在本run结束关闭；未知可用合同保持正常重算。
-2. 公共owner负责用现有资产解析器收集实际模型腿/seed的冻结workspace，构造节点日期计划；同日多腿各给request_id，再委托原生融合/权重政策。股票池/PIT来自该包原元数据，不硬编码两包或Alpha158数量。当前native历史准备仍C=D；其他映射的prepare adapter必须明确将HMM等所有数据读取绑定C，不能仅修改raw结果上的日期字段。
+2. 公共owner负责用现有资产解析器收集实际模型腿/seed的冻结workspace，构造节点日期计划；同日多腿各给request_id，再委托原生融合/权重政策。股票池/PIT来自该包原元数据，不硬编码两包或Alpha158数量。当前native历史准备仍C=D；其他映射的prepare adapter必须把模型/参考价及 HMM 输入绑定 C，保留 HMM 原生标签/生效日；共享内核另将 risk/PIT 行业绑定 C、停牌 eligibility 绑定 D，不能仅修改raw结果日期或统一广播截止。
 3. LocalSIM owner负责将自己计算的完整评分、原输入/人口及真实stage/source身份映射到原生产物，再按自己账户的事务/checkpoint顺序推进。不得查询或复制Advisory已完成结果，不以节点JSON等同账户发布。Advisory projector、价格模型和episode不进入这个共享基础计算入口。
 
 ## 实施方案与验证方案
@@ -138,3 +138,28 @@ R10：R24 两个真实包的节点进程均自然成功退出；11 文件来源�
 4. 不私设人工门禁：缓存不命中正常原代码重算，未加策略包、QE、收益、UI准入；无数据库/生产配置/进程操作，后端重启仍用户执行。
 
 各轮为本窗口重复自审和定向/真实验证，不声称独立外部审核。最终 F2 为 PASS（10 项/10 行、0 warning），L0 和 quality 均 0 finding，实际 probe 字节来源与当前源码 0 mismatch，diff 检查通过。最终 HEAD 必需 CI 和实际合入状态按交付结果另行报告。
+
+## BUG-1912：停牌 eligibility 的能力时钟修正（2026-10-15）
+
+本节取代原实现中“C<D 时整个 risk/tradability 都观察 C”的合同，不覆盖原性能历史。
+原 BUG-1904 生产样本在 C/D 均停牌，只证明执行成功，不能证明 D 时钟正确。
+
+| 需求/设计项 | 实现 | 验证 | 结论 |
+|---|---|---|---|
+| F-004/F-005：停牌 D、risk/PIT 行业 C | kernel 显式能力 adapter；TradabilityFilter 可选 industry_trade_date | 两个相反停复牌反例先 RED 后 GREEN；C=D/禁用/原生递补/risk/行业未来毒化 | 源码 PASS |
+| F-005：模型/参考价 C，HMM 原生标签与输入分离 | kernel prepared clock 审计；不加载或生成 HMM 系数 | HMM C 输入/D 标签、输入/训练/可用日期/标签未来隔离；普通及递补缺价保持明确错误 | 源码 PASS |
+| F-006/F-010：新时钟不得命中旧后处理 | clock evidence、原生 receipt hash、语义/storage 身份；LocalSIM 原有源码绑定保持 | 实际 LocalSIM pre-lookup 身份链；改变内核字节、合同版本、D 停牌成员分别改变身份，原始评分保持 | 源码/断点合同 PASS；生产 checkpoint 待 owner 复验 |
+| F-001/F-007：唯一原生排序/过滤/TopK | 继续调用原 native compute 和 TradabilityFilter | 四文件最终矩阵 63 项通过；真实已存输入只读验证另绑定源字节 | 定向回归 PASS，不代表收益 |
+
+最终矩阵：`test_selection_signal_kernel.py`、`test_tradability_provider_clocks.py`、
+`test_reference_price_availability.py`、`test_localsim_shared_selection_signal.py`，
+63 passed / 0 failed（5.39 秒）；报告 `X:/AIstock_temp/LOCALSIM/shared-eligibility-clock-20261015/final.xml`。
+这些是公共能力和两侧消费的定向回归，不是生产账户重新运行。
+
+审核 R1（本窗口自审）：确认 `_CutoffBoundProvider` 覆盖缺口；两个相反停复牌例均复现错误，修复后通过。
+R2：拆分原生行业查询日期，保持普通缺价/递补缺价错误；补完整 receipt 身份，避免相同排除数量掩盖成员变化。
+R3：复核 HMM 输入与原生标签，保留无 alpha 时的 NOT_APPLICABLE，不新增快照最早日期/包使用门禁；测试真实 LocalSIM checkpoint 来源空间而非只测共享纯 DTO。最终相关矩阵通过。
+
+DESIGN-COMPLIANCE-001：①真实 kernel.run 及 native consumer 包装层，不以直接 compute 或 mock-only 冒称全链；②真缺价、未来/身份错误保留，零候选与失败分开；③仅纠正获授权时钟，冻结模型/政策、原生算法和 LocalSIM 私有实现不变；④无新增包/训练/人工准入。
+源码 PR/HEAD/CI、最终 fresh-process 绑定和合入状态另行记录。运行态为 pending_user_restart_after_merge，
+生产复验由 LocalSIM owner 执行；未修改数据库、数据集、QE、账户或生产回放。

@@ -23,6 +23,8 @@
 ## D/T 时钟：继续使用原生 eligibility
 
 停牌过滤由原生 `TradabilityFilter` 在冻结政策规定的 D 时钟执行。
+共享内核包装层同样必须遵守 [provider 时钟合同 v1](strategy_package_selection_provider_clocks_v1.md)：
+不能把整个 tradability 改成 C；仅 risk/PIT 行业绑定 C，停牌 eligibility 和相关排除证据保留 D。
 启用过滤时，停牌候选按原生 `suspended_by_suspend_d` 排除并递补；关闭过滤时，不擅自替用户打开。
 参考价状态不参与评分或改变 TopK，也不替代后续交易市场约束。
 C 停牌、D 复牌时仍保留实际历史报价日期；C 正常、D 停牌则在 D 原生 eligibility 判断。
@@ -37,6 +39,8 @@ C 停牌、D 复牌时仍保留实际历史报价日期；C 正常、D 停牌则
 把每股实际报价日期、停牌证明和读取截止日纳入 content/parameter hash。
 `first_observed_at` 使用本次真实读取时间，不倒填历史捕获时间、不提升数据证据等级。
 已存产物不可覆盖；新产物的内容及 source revision 按实际来源绑定，模型/policy 身份不偷换。
+BUG-1912 的新过滤结果另绑定 provider 合同版本和实际观测日期；原始评分身份可保持，
+旧 C 过滤产物不兼容新 D 过滤结果，不能因 TopK 恰好相同而复用旧后处理断点。
 
 ## 验收与交付分层
 
