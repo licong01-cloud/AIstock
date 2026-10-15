@@ -290,8 +290,9 @@ def _request(*, key: str = "monthly-202609") -> MonthlyReleaseRequest:
     )
 
 
+@pytest.mark.parametrize("supplement_name", ["monthly_industry_history", "monthly_prev_close_repairs"])
 @pytest.mark.parametrize("drift", [None, "base_plan", "binding", "source_receipt"])
-def test_history_supplement_keeps_sealed_source_across_producer_upgrade(tmp_path, drift):
+def test_history_supplement_keeps_sealed_source_across_producer_upgrade(tmp_path, drift, supplement_name):
     from backend.services.dataset_release.monthly_unified import _digest
     pipeline = Pipeline(fail_once_at="BUILD")
     producer = {"version": "old"}
@@ -303,7 +304,7 @@ def test_history_supplement_keeps_sealed_source_across_producer_upgrade(tmp_path
     plan = service.store.read_plan(operation_id)
     binding = {"base_plan_digest": _digest(plan), "source_receipt_canonical_sha256": source["canonical_sha256"]}
     reference = {"sha256": hashlib.sha256(canonical_json_bytes(binding) + b"\n").hexdigest()}
-    proposed = {**plan, "monthly_industry_history": binding, "monthly_industry_history_ref": reference}
+    proposed = {**plan, supplement_name: binding, supplement_name + "_ref": reference}
     if drift == "base_plan":
         proposed["generation"] = "different"
     elif drift == "binding":
@@ -389,6 +390,39 @@ def test_history_binding_uses_readonly_snapshot_and_never_changes_source(tmp_pat
         assert after["monthly_industry_history_ref"] == history_ref
         assert after["monthly_industry_quote_source"]["source_bundle_sha256"] == HEX
     assert service.store.read_checkpoint(operation, "SOURCE") == source_before
+
+
+@pytest.mark.parametrize("sealed", [False, True])
+def test_prev_close_binding_retains_source_and_is_idempotent(tmp_path, monkeypatch, sealed):
+    from backend.services.dataset_release import monthly_prev_close_repair as correction
+    class SourcePipeline(Pipeline):
+        def run_stage(self, **kwargs):
+            value = dict(super().run_stage(**kwargs))
+            if kwargs["stage"] == "SOURCE":
+                value["input_refs"] = [{"id": "source-inputs/frozen-source-bundle.json", "sha256": HEX, "size": 1}]
+                value["canonical_sha256"] = monthly_subject._digest({k: v for k, v in value.items() if k != "canonical_sha256"})
+            return value
+    service = _service(tmp_path, SourcePipeline(fail_once_at="BUILD" if sealed else "SOURCE"))
+    operation = service.submit(_request())["operation_id"]
+    service.run(operation)
+    before = service.store.read_checkpoint(operation, "SOURCE")
+    calls = []
+    def capture(inputs, **kwargs):
+        calls.append(inputs)
+        return {"schema_version": correction.SCHEMA, "facts": []}
+    monkeypatch.setattr(correction, "capture_approved_corrections", capture)
+    cas = type("CAS", (), {"put_json": lambda self, value: type("Ref", (), {"as_dict": lambda self: {"sha256": HEX, "size": 1, "relative_path": "fact"}})()})()
+    if not sealed:
+        with pytest.raises(MonthlyReleaseConflict):
+            service.bind_prev_close_repairs(operation, inputs={"exact": True}, principal="operator:test", cas=cas)
+        assert calls == []
+        return
+    result = service.bind_prev_close_repairs(operation, inputs={"exact": True}, principal="operator:test", cas=cas)
+    assert result["status"] == "BOUND" and len(calls) == 1
+    assert service.bind_prev_close_repairs(operation, inputs={"exact": True}, principal="operator:test", cas=cas) == result
+    assert len(calls) == 1 and service.store.read_checkpoint(operation, "SOURCE") == before
+    with pytest.raises(MonthlyReleaseConflict, match="binding changed"):
+        service.bind_prev_close_repairs(operation, inputs={"exact": False}, principal="operator:test", cas=cas)
 
 
 def _adoptable_successor(
