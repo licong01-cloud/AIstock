@@ -1641,7 +1641,8 @@ def test_chip_and_margin_specs_carry_min_expected_rows():
 
 
 @pytest.mark.parametrize("finite_count", [0, 94, 95, 100])
-def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monkeypatch, finite_count):
+@pytest.mark.parametrize("missing_field", ["turnover_rate", "turnover_rate_f", "volume_ratio"])
+def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monkeypatch, finite_count, missing_field):
     from backend.services.tushare_dataset_specs import DAILY_BASIC
 
     trade_date = dt.date(2026, 9, 8)
@@ -1656,7 +1657,8 @@ def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monk
             col: ("20260908" if col == "trade_date" else f"{col}-{index}")
             for col in DAILY_BASIC.columns
         }
-        row["turnover_rate_f"] = 1.5 if index < finite_count else None
+        row.update(turnover_rate=1.0, turnover_rate_f=1.0, volume_ratio=1.0)
+        row[missing_field] = 1.5 if index < finite_count else None
         row["dv_ratio"] = row["dv_ttm"] = None  # Legitimately nullable, not mandatory.
         rows.append(row)
 
@@ -1680,8 +1682,10 @@ def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monk
     assert coverage["schema_version"] == "daily_basic_required_field_coverage_v1"
     assert coverage["field"] == "turnover_rate_f"
     assert coverage["row_count"] == 100
-    assert coverage["finite_count"] == finite_count
-    assert coverage["ratio"] == pytest.approx(finite_count / 100)
+    legacy_count = finite_count if missing_field == "turnover_rate_f" else 100
+    assert coverage["finite_count"] == legacy_count
+    assert coverage["ratio"] == pytest.approx(legacy_count / 100)
+    assert coverage["required_fields_ratio"] == pytest.approx(finite_count / 100)
     assert coverage["required_ratio"] == 0.95
 
 
