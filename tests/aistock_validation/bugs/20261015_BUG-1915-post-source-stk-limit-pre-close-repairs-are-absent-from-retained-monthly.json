@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1915",
-  "closed_at": null,
+  "closed_at": "2026-10-15T15:47:00.979671Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -75,14 +75,27 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1915-post-source-stk-limit-pre-close-repairs-are-absent-from-retained-monthly.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
   "first_seen_at": "2026-10-15T07:26:03.729395Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "08db051dc023744d114139065ca29a8784803910",
+  "fixed_at": "2026-10-15T08:31:53Z",
   "github_issue_number": 6108,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6108",
   "last_seen_at": "2026-10-15T07:26:03.729395Z",
@@ -90,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6115",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -113,9 +127,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\BUG-1915-post-restart-20261015-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1915",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "031ba7eac33f55d48367c1145361ad313016fc7986c723e2773dfe8bf5289fe6",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "08db051dc023744d114139065ca29a8784803910",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-15T15:37:11.104105Z",
+      "mode": "read_only",
+      "observed_identity": "3bf6d0e751305ccc69da38968009036e12de5bd8",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "620a7061224d25551e813a6799859635b015c1c8e8b664b9ba332b4729ec3a76",
+      "receipt_sha256": "c159bd40c8a08b73b8154a23d15724c23f1912ad4d76e63e2bae69adc091e423",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0bb2d7e3f204122600cdba37fe8f9ab417a0f11b88d5c336f33dd7c6069c18fe",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -125,7 +162,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1915",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "94f650b72767f258",
+    "recorded_at": "2026-10-15T08:32:35.261663Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "eeb628642eea2c3c1bfb9aa6e8c910af748f2c1c",
+    "source_merge_commit": "08db051dc023744d114139065ca29a8784803910",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6115",
+    "validation_evidence": [
+      "pytest monthly source, native output, operator API and CLI -> 122 passed, 1 skipped; correction and binding targeted tests passed"
+    ],
+    "validation_evidence_digest": "5d2c90f33636e1764399eaa12416ae9b46b99a46768d1ee5d57f6080fb43eb31"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -134,6 +192,10 @@
     "fingerprint": "ebd49814bc573400e340fd98",
     "source_event_id": "FE-20261015-ebd49814bc57"
   },
+  "validation_evidence": [
+    "pytest monthly source, native output, operator API and CLI -> 122 passed, 1 skipped; correction and binding targeted tests passed",
+    "Actual worker repair and independent readback PASS: 43 day stock-dates in 42 files, 42 minute stock-dates in 41 files; 2864 day cells and 670320 minute cells in changed files match approved provider facts, mismatch=0; only prev_close amended; no DB/profile writes."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
