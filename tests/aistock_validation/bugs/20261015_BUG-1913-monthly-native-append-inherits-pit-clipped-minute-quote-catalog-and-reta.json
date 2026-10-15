@@ -1,6 +1,7 @@
 {
   "actual": "Retained September minute catalog has PIT-clipped ranges and stale pit_universe_spans metadata.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_build_resume.py",
     "backend/services/dataset_release/qlib_bounded_update.py",
     "backend/services/dataset_release/monthly_legacy_validation.py",
     "backend/services/dataset_release/monthly_mature_build_runner.py",
@@ -178,9 +179,14 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "RED: real native minute append omitted physical quote catalog authority; the new regression failed with KeyError quote_catalog.",
+      "GREEN fresh process: 86 targeted native BUILD/resume/validation regressions passed; physical quotes survive PIT exit; interrupted small-file replacements recover without changing any price bins. Daily production sources, active profile and runtime remain unchanged.",
+      "Read-only retained September inspection: 5147 physical quote instruments; 000698.SZ and 002305.SZ real minute boundaries reach 2026-08-31, but inherited all.txt ends in 2025. Physical-edge inspection took 32.469 seconds; no historical business-quality rescan or export."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
     "runtime_impact": "worker_scheduler",

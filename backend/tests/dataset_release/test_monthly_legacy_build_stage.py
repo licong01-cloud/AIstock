@@ -4,6 +4,7 @@ import csv
 from datetime import date
 from pathlib import Path
 import hashlib
+import json
 import struct
 from types import SimpleNamespace
 
@@ -22,6 +23,9 @@ from backend.services.dataset_release.monthly_worker import ProducerContext
 from backend.services.dataset_release.minute_overlay import canonical_session_times
 from backend.services.dataset_release.pit import FrozenPitSnapshot, FrozenPitSpan
 from backend.services.dataset_release.stock_schema import QLIB_STOCK_FIELDS
+from backend.services.dataset_release import monthly_quote_catalog as catalog
+from backend.services.dataset_release.monthly_build_resume import _atomic, _signature
+from backend.services.dataset_release.monthly_legacy_validation import MonthlyLegacyValidationError, validate_qlib_month
 
 
 def _setup(tmp_path, *, dataset="daily_bin", metadata=None):
@@ -220,6 +224,10 @@ def test_real_native_minute_chain_has_exactly_240_closing_bars_and_immutable_pre
     assert values[2:] == (6.0,) * 240
     assert struct.unpack("<ff", (provider / "features/000001.sz/close.1min.bin").read_bytes()) == (0, 10)
     assert receipt["csv"]["rows"] == 240
+    assert receipt["native_writer"]["quote_catalog"]["mode"] == "physical_quote_catalog_v1"
+    assert (target / "instruments/all.txt").read_text(encoding="utf-8") == (
+        "000001.SZ\t2026-08-31 15:00:00\t2026-09-01 15:00:00\n"
+    )
 
 
 @pytest.mark.parametrize("fault", ["source", "prefix", "preparation", "target"])
@@ -236,3 +244,89 @@ def test_native_finalize_rejects_foreign_receipt_without_writing_signoff(tmp_pat
     with pytest.raises(stages.CandidateBuildStageError):
         _append_and_finalize(tmp_path, mutate_child=mutate)
     assert not (tmp_path / ".staging/september.building/daily_bin/materialization_receipt.json").exists()
+
+
+def _retained(tmp_path):
+    invocation, _, materialization = _append_and_finalize(tmp_path, dataset="minute_bin")
+    root, cas = invocation.staging_root, invocation.cas
+    provider = root / "minute_bin/qlib"
+    # This quote-only stock is absent from the monthly PIT population/CSVs.
+    extra = provider / "features/000698.sz"
+    extra.mkdir()
+    (extra / "close.1min.bin").write_bytes((provider / "features/000001.sz/close.1min.bin").read_bytes())
+    old = b"000001.SZ\t2026-08-31\t2026-08-31\n"
+    (provider / "instruments/all.txt").write_bytes(old)
+    native = materialization["native_writer"]
+    native.pop("quote_catalog", None)
+    native["instruments_sha256"] = hashlib.sha256(old).hexdigest()
+    native["instruments_signature"] = list(_signature(provider / "instruments/all.txt"))
+    _atomic(root / "minute_bin/materialization_receipt.json", materialization)
+    ref = cas.put_json(materialization).as_dict()
+    finalized = dict(finalize_receipt_ref=cas.put_json(dict(minute_receipt_ref=ref,
+                    minute_materialization_receipt_file_ref=ref)).as_dict())
+    journal = root.parent / "resume.json"
+    record = dict(binding_digest="a" * 64,
+                  steps={"finalize-bins": cas.put_json(finalized).as_dict()},
+                  files={relative: list(_signature(root / relative)) for relative in catalog._FILES if relative != catalog._META})
+    _atomic(journal, record)
+    resume = SimpleNamespace(root=root, path=journal, record=record,
+                             context=SimpleNamespace(checkpoint=lambda: None))
+    prices = {p: (p.read_bytes(), _signature(p)) for p in provider.glob("features/*/*.bin")}
+    return invocation, resume, finalized, prices
+
+
+def test_retained_catalog_repair_preserves_prices_and_is_idempotent(tmp_path):
+    invocation, resume, finalized, prices = _retained(tmp_path)
+    repaired = catalog.refresh_retained_quote_catalog(resume, finalized=finalized, cas=invocation.cas)
+    actual = (resume.root / catalog._CATALOG).read_text(encoding="utf-8")
+    assert "000698.SZ\t2026-08-31 15:00:00\t2026-09-01 15:00:00" in actual
+    assert all((p.read_bytes(), _signature(p)) == value for p, value in prices.items())
+    assert catalog.refresh_retained_quote_catalog(resume, finalized=repaired, cas=invocation.cas) == repaired
+    assert invocation.cas.get_json(finalized["finalize_receipt_ref"]) != invocation.cas.get_json(repaired["finalize_receipt_ref"])
+    assert json.loads(resume.path.read_text()) == resume.record
+    updated = invocation.cas.get_json(repaired["finalize_receipt_ref"])
+    materialization = invocation.cas.get_json(updated["minute_receipt_ref"])
+    assert "quote_catalog" not in materialization["native_writer"]  # Original writer proof stays honest.
+    result = validate_qlib_month(root=resume.root, materialization=materialization, cas=invocation.cas,
+        cutoff=date(2026, 9, 1), predecessor_manifest_sha256=materialization["predecessor_manifest_sha256"],
+        source_bundle_sha256="e" * 64)
+    assert result["status"] == "PASS"
+
+
+@pytest.mark.parametrize("interrupted_replace", [1, 2, 3])
+def test_retained_catalog_recovers_each_interrupted_small_file_commit(tmp_path, monkeypatch, interrupted_replace):
+    invocation, resume, finalized, prices = _retained(tmp_path)
+    original, count = catalog._replace, 0
+
+    def interrupted(path, payload):
+        nonlocal count
+        original(path, payload)
+        count += 1
+        if count == interrupted_replace:
+            raise OSError("simulated interruption after atomic replacement")
+
+    monkeypatch.setattr(catalog, "_replace", interrupted)
+    with pytest.raises(OSError, match="interruption"):
+        catalog.refresh_retained_quote_catalog(resume, finalized=finalized, cas=invocation.cas)
+    monkeypatch.setattr(catalog, "_replace", original)
+    record = catalog.recover_quote_catalog(root=resume.root, journal=resume.path, record=resume.record, cas=invocation.cas)
+    assert "000698.SZ" in (resume.root / catalog._CATALOG).read_text()
+    assert json.loads(resume.path.read_text()) == record
+    assert not catalog._pending(resume.root).exists()
+    assert all((p.read_bytes(), _signature(p)) == value for p, value in prices.items())
+
+
+@pytest.mark.parametrize("fault", ["catalog", "input", "mode"])
+def test_monthly_validation_rejects_catalog_and_provenance_drift(tmp_path, fault):
+    invocation, _, materialization = _append_and_finalize(tmp_path, dataset="minute_bin")
+    authority = materialization["native_writer"]["quote_catalog"]
+    if fault == "catalog":
+        (invocation.staging_root / catalog._CATALOG).write_bytes(b"000001.SZ\t2026-09-01\t2026-09-01\n")
+    elif fault == "input":
+        authority["input_instruments_sha256"] = "f" * 64
+    else:
+        authority["mode"] = "pit_universe_spans"
+    with pytest.raises(MonthlyLegacyValidationError, match="catalog"):
+        validate_qlib_month(root=invocation.staging_root, materialization=materialization,
+            cas=invocation.cas, cutoff=date(2026, 9, 1),
+            predecessor_manifest_sha256=materialization["predecessor_manifest_sha256"], source_bundle_sha256="e" * 64)
