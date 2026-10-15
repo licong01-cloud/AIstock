@@ -652,7 +652,8 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
 
     workflow = (scheduler.ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
     parsed = yaml.safe_load(workflow)
-    dispatch = parsed.get("on", parsed.get(True))["workflow_dispatch"]["inputs"]
+    triggers = parsed.get("on", parsed.get(True))
+    dispatch = triggers["workflow_dispatch"]["inputs"]
 
     assert "AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env" in workflow
     assert "--provider github_models" not in workflow
@@ -666,42 +667,41 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "Build Nightly LLM design drift audit" in workflow
     assert "scripts/nightly_design_drift_audit.py --json" in workflow
     assert "--invoke-llm `\n            --fail-on-llm-error `\n            --run-id" in workflow
-    assert "--fail-on-llm-error" in workflow
     assert "design-drift-audit.json" in workflow
     assert "design-drift-audit.md" in workflow
-    assert "LLM design drift audit failed; retrying deterministic fallback." not in workflow
     assert "retrying deterministic fallback" not in workflow
     assert "Build Nightly LLM silent degradation audit" in workflow
     assert "scripts/nightly_silent_degradation_audit.py --json" in workflow
     assert "silent-degradation-audit.json" in workflow
     assert "silent-degradation-audit.md" in workflow
-    assert "LLM silent degradation audit failed; retrying deterministic fallback." not in workflow
     assert 'nightly_discovery_input_pack.py `\n            --run-id "${{ github.run_id }}"' in workflow
     assert '--codegraph-freshness-json "$outDir/codegraph-freshness.json"' in workflow
     assert "Build Nightly BugCandidate draft queue" in workflow
     assert "scripts/nightly_bug_candidate_queue.py --json build" in workflow
     assert "bug-candidates" in workflow
-    assert "Promote ready Nightly BugCandidates to Issue workflow" in workflow
-    assert "github.event_name == 'schedule' ||" in workflow
-    assert "inputs.llm_triage_mode == 'opt_in_auto_file'" in workflow
-    assert "inputs.llm_auto_file_opt_in" in workflow
+    assert "schedule" not in triggers
+    assert triggers["repository_dispatch"]["types"] == ["aistock_nightly"]
+    promotion = next(step for job in parsed["jobs"].values() for step in job.get("steps", [])
+                     if step.get("name") == "Promote ready Nightly BugCandidates to Issue workflow")
+    assert promotion["if"] == (
+        "steps.background_window.outputs.background_admitted == 'true' && "
+        "(github.event_name != 'workflow_dispatch' || (github.event_name == 'workflow_dispatch' && "
+        "inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in))"
+    )
     assert "issues: write" in workflow
     assert "promote-nightly-candidate" in workflow
     assert '$extraArgs = @()' in workflow
     assert "--opt-in-auto-file" in workflow
     assert "--create-registry-worktree" in workflow
     assert "Build Nightly adaptive scheduler warning report" in workflow
-    assert "scripts/nightly_adaptive_scheduler.py --json" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json `\n            --provider deepseek_api `" in workflow
     assert "--codegraph-freshness-json" in workflow
     assert "--code-intelligence-json" in workflow
-    assert "--invoke-llm" in workflow
     assert "llm-nightly-adaptive-scheduler.json" in workflow
     assert "llm-value-summary" in workflow
     assert "llm-value-summary.md" in workflow
     assert "LLM + Code Intelligence Value" in workflow
     assert 'cat "${LLM_VALUE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"' in workflow
-    assert "full_nightly_run:" in workflow
     assert dispatch["run_nightly_l3"]["default"] is True
     assert dispatch["full_nightly_run"]["default"] is False
     assert "Build receipt-watermark Nightly execution plan" in workflow
