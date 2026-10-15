@@ -163,3 +163,14 @@ R3：复核 HMM 输入与原生标签，保留无 alpha 时的 NOT_APPLICABLE，
 DESIGN-COMPLIANCE-001：①真实 kernel.run 及 native consumer 包装层，不以直接 compute 或 mock-only 冒称全链；②真缺价、未来/身份错误保留，零候选与失败分开；③仅纠正获授权时钟，冻结模型/政策、原生算法和 LocalSIM 私有实现不变；④无新增包/训练/人工准入。
 源码 PR/HEAD/CI、最终 fresh-process 绑定和合入状态另行记录。运行态为 pending_user_restart_after_merge，
 生产复验由 LocalSIM owner 执行；未修改数据库、数据集、QE、账户或生产回放。
+
+最终只读新进程验证：`X:/AIstock_temp/LOCALSIM/shared-eligibility-clock-20261015/fresh-kernel-r2.json`，
+源码提交 `866599e5ceda80b0be2759e983e85742d6045441`，实际读取字节及提交 LF 内容分别绑定。
+经原 `LocalSimKernelComputation` → 真实 `SelectionSignalKernel.run`，复用已校验、未修改的本侧原始产物；
+4912 评分/4918 成员/6 UNKNOWN、完整 raw 排序及 Top50 核心字段均精确一致。
+停牌排除 `trade_date=2026-01-20`，risk 为 `2026-01-19`；该样本 C/D 均停牌，
+时钟正确性另外由相反停复牌反例证明，不能仅靠 Top50 一致。
+原生 normalized profile hash、release config hash 和带 point-in-time 的 projection config hash 分别核对，
+三者定义不同，不混用同名摘要。参考价原始身份保留，不倒填捕获时间；未运行模型推理或账户。
+F2 文档结构检查为 PASS（10 项/10 行/0 warning）；L0 两类扫描 0 finding，Ruff 与 diff 检查通过。
+这些证据不等于用户后端已加载本次提交，也不等于生产回放或收益验证完成。

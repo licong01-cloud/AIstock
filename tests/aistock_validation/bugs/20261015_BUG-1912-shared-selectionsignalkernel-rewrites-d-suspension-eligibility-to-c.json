@@ -34,6 +34,17 @@
   ],
   "expected": "Model/reference price <= C; risk and PIT industry <= C; frozen-policy suspension at D; HMM input <= C with its native effective date preserved. Native scoring/filter/refill/TopK unchanged, clock contract and actual reads auditable and identity-bound.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_historical_range/selection_signal_kernel.py",
+      "backend/services/selection_center/tradability.py",
+      "backend/tests/advisory_historical_range/test_selection_signal_kernel.py",
+      "backend/tests/selection_center/test_tradability_provider_clocks.py",
+      "docs/analysis/advisory_shared_selection_kernel_implementation_acceptance_20261014.md",
+      "docs/architecture/advisory_shared_selection_signal_kernel_detailed_design_20261014.md",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md",
+      "docs/contracts/strategy_package_selection_provider_clocks_v1.md",
+      "tests/aistock_validation/bugs/20261015_BUG-1912-shared-selectionsignalkernel-rewrites-d-suspension-eligibility-to-c.json"
+    ],
     "added_files": [
       "backend/tests/selection_center/test_tradability_provider_clocks.py",
       "docs/contracts/strategy_package_selection_provider_clocks_v1.md"
@@ -42,11 +53,14 @@
       "backend/services/advisory_historical_range/selection_signal_kernel.py",
       "backend/services/selection_center/tradability.py",
       "backend/tests/advisory_historical_range/test_selection_signal_kernel.py",
-      "docs/architecture/advisory_shared_selection_signal_kernel_detailed_design_20261014.md",
+      "backend/tests/selection_center/test_tradability_provider_clocks.py",
       "docs/analysis/advisory_shared_selection_kernel_implementation_acceptance_20261014.md",
-      "docs/contracts/strategy_package_reference_price_availability_v1.md"
+      "docs/architecture/advisory_shared_selection_signal_kernel_detailed_design_20261014.md",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md",
+      "docs/contracts/strategy_package_selection_provider_clocks_v1.md",
+      "tests/aistock_validation/bugs/20261015_BUG-1912-shared-selectionsignalkernel-rewrites-d-suspension-eligibility-to-c.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_historical_range/selection_signal_kernel.py",
@@ -213,13 +227,16 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages/pkg_cc7eccb6202e4816b9d7c7d6b748bd37/selection-artifacts?limit=1",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "python X:/AIstock_temp/LOCALSIM/shared-eligibility-clock-20261015/fresh_kernel_check.py F:/Dev/AIstock_worktrees/BUG-1912-shared-selectionsignalkernel-rewrites-d-suspensi-20261015 -> passed: actual LocalSimKernelComputation to SelectionSignalKernel.run; 4912 scores/4918 universe/6 UNKNOWN and Top50 exact; suspension D and risk C; immutable receipt fresh-kernel-r2.json sha256 8dbd91c93744496614ffcf79545ef883c0db823e37bd48261f401e592501e70e; source commit 866599e5ceda80b0be2759e983e85742d6045441; no DB writes/inference/replay control; runtime still pending user restart after merge"
+    ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
