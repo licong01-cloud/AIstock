@@ -41,7 +41,9 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
     from backend.services.simulation_runtime.localsim_replay_recovery import (
         RECOVERY_KEY, LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryService,
     )
-    from backend.services.simulation_runtime.models import ExecutionPlan, SimulationDailyRun, SimulationDailyRunStatus
+    from backend.services.simulation_runtime.models import (
+        ExecutionPlan, SimulationDailyRun, SimulationDailyRunStatus, TradingRuleDecision,
+    )
     from backend.services.simulation_signal.contracts import DailySelectionEvidence
     from backend.services.simulation_data.contracts import MinuteDataSource
 
@@ -112,7 +114,20 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
             runtime_profile_version_id=version.profile_version_id, runtime_profile_hash=version.config_sha256,
             source_type="test_int_recovery", data_source="DB_HISTORICAL", candidate_count=0, excluded_count=0,
             artifact_hash=evidence_hash, evidence_payload_json=evidence_payload))
-        plan_payload = {"test_int_marker": marker}
+        decision_payload = {
+            "schema_version": "trading_rule_decision_v1", "symbol": "001205.SZ", "market_board": "SZ_MAIN",
+            "side": "SELL", "requested_quantity": 100, "legal_quantity": 100, "lot_rule": {},
+            "price_limit_rule": {}, "tplus1_available_quantity": 100, "decision": "EMIT",
+            "reason_code": marker, "source_version": "test_int_recovery_v1",
+        }
+        decision_hash = canonical_json_sha256(decision_payload)
+        decision = TradingRuleDecision(
+            **{k: v for k, v in decision_payload.items() if k != "schema_version"},
+            decision_id="trd_" + decision_hash[:16], decision_hash=decision_hash,
+        )
+        plan_payload = {"test_int_marker": marker, "trading_rule_decisions": [{
+            **decision_payload, "decision_id": decision.decision_id, "decision_hash": decision_hash,
+        }]}
         plan_hash = canonical_json_sha256(plan_payload)
         plan = runtime.save_execution_plan(ExecutionPlan(
             plan_id="plan_" + plan_hash[:16], strategy_id=account.account_id, portfolio_id=scope.ledger_scope_id,
@@ -121,7 +136,7 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
             selection_evidence_id=evidence.evidence_id, selection_evidence_hash=evidence.artifact_hash,
             target_trade_date=days[1], execution_policy_version_id=policy["policy_version_id"],
             execution_policy_sha256=policy["policy_sha256"], tail_policy_version_id="test_int_tail",
-            tail_policy_sha256="d" * 64, intents=[], trading_rule_decisions=[],
+            tail_policy_sha256="d" * 64, intents=[], trading_rule_decisions=[decision],
             plan_payload_json=plan_payload, plan_hash=plan_hash))
         run = runtime.save_simulation_daily_run(SimulationDailyRun(
             run_id=marker, trade_date=days[1], strategy_id=account.account_id, broker_backend="local_sim",
@@ -143,6 +158,9 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
         service = recovery(repository)
         check = service.inspect(job.replay_job_id)
         assert check.ready and set(check.economic_counts.values()) == {0}
+        assert service.inspect(job.replay_job_id).snapshot_sha256 == check.snapshot_sha256
+        snapshot = repository.get_replay_recovery_snapshot(job.replay_job_id)
+        assert snapshot["plan"]["plan_payload_json"]["trading_rule_decisions"][0]["decision_hash"] == decision_hash
         request = LocalSimReplayRecoverRequestV1(expected_version=job.version, snapshot_sha256=check.snapshot_sha256)
 
         class BrokenReadback(LocalSimSuccessorRepository):

@@ -40,7 +40,9 @@
     "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1926-source-validation-receipt-r1.json",
     "X:/AIstock_temp/LOCALSIM/workflow/BUG-1926-Jan20-frozen-native-r3/readonly-receipt.json",
     "X:/AIstock_temp/LOCALSIM/workflow/BUG-1926-native-readonly-recovery-r1.json",
-    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1926-source-validation-receipt-r2.json"
+    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1926-source-validation-receipt-r2.json",
+    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1926-source-validation-receipt-r3.json",
+    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1926-final-source-runtime-readonly-r3.json"
   ],
   "expected": "由 LocalSIM 正式合同核对冻结输入、真实经济事实和数据准备状态后恢复原任务；失败前缀与成功历史不变；合法停牌的持仓估值遵循原生权威来源并与交易价格分离，普通可交易股真缺价继续阻塞。",
   "file_scope_contract": {
@@ -289,7 +291,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
-      "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1926-source-validation-receipt-r2.json -> fresh task-checkout import; 61 related tests and 11 final side-effect cases passed; existing DEV 3 passed and atomic readback node passed; frozen 4912/4918/6 native chain passed; no production actions."
+      "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1926-source-validation-receipt-r3.json -> fresh import/compile/lint, 61 related tests plus 11 final side-effect cases passed; DEV 3 passed and final nonempty-plan atomic/stable-snapshot node passed; real frozen 4912/4918/6 native chain passed; no production replay/write."
     ],
     "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
@@ -442,5 +444,5 @@
     "business_semantics": "unchanged orders/cash/ledger/valuation policy",
     "no_extra_approval": "CAS/digest native command; no extra manual approval"
   },
-  "review_rounds": 4
+  "review_rounds": 5
 }

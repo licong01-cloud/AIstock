@@ -910,7 +910,10 @@ class LocalSimSuccessorRepository:
             "binding": self._select_binding(cur, job.binding_id).model_dump(mode="json"),
             "release": self._select_release(cur, job.release_id).model_dump(mode="json"),
             "run": run.model_dump(mode="json") if run else None,
-            "plan": plan.model_dump(mode="json") if plan else None,
+            # The persisted payload contains the complete intents/decisions.
+            # Expanded decisions add a default created_at during native readback;
+            # hashing those transient objects makes an unchanged plan unstable.
+            "plan": plan.model_dump(mode="json", exclude={"intents", "trading_rule_decisions"}) if plan else None,
             "evidence_hash": evidence_hash,
             "economic_counts": economic_fact_counts(cur, run.run_id) if run else {},
         }
