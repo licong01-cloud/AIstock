@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from backend.services.simulation_runtime.localsim_replay_recovery import (
+    LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryCheckV1,
+)
+
 from datetime import date
 from typing import Any, Literal
 
@@ -448,6 +452,29 @@ def cancel_localsim_replay(
 ) -> LocalSimControlResponseV1:
     try:
         return service.cancel_replay(replay_job_id=replay_job_id, expected_version=request.expected_version)
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/replays/{replay_job_id}/recovery", response_model=LocalSimReplayRecoveryCheckV1)
+def inspect_localsim_replay_recovery(
+    replay_job_id: str,
+    service: LocalSimProductControlPlaneService = Depends(get_localsim_product_service),
+) -> LocalSimReplayRecoveryCheckV1:
+    try:
+        return service.inspect_replay_recovery(replay_job_id)
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.post("/localsim/replays/{replay_job_id}/recover", response_model=LocalSimControlResponseV1)
+def recover_localsim_replay(
+    replay_job_id: str,
+    request: LocalSimReplayRecoverRequestV1,
+    service: LocalSimProductControlPlaneService = Depends(get_localsim_product_service),
+) -> LocalSimControlResponseV1:
+    try:
+        return service.recover_replay(replay_job_id, request)
     except TradingCoreError as exc:
         _raise_localsim_http(exc)
 
