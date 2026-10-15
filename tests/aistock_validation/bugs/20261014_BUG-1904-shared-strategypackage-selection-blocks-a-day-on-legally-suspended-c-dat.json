@@ -172,8 +172,8 @@
   },
   "first_seen_at": "2026-10-14T18:53:08.329223Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6633065d489bd527c133c1e42593cd271341430a",
+  "fixed_at": "2026-10-15T02:51:15Z",
   "github_issue_number": 6077,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6077",
   "implementation_review": {
@@ -197,6 +197,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6088",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -222,6 +223,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -233,7 +235,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1904",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e74072e96ed6045e",
+    "recorded_at": "2026-10-15T02:51:54.040547Z",
+    "runtime_contract_digest": "0943de531b97450cda24de96ea571c0e7b57132b7380f064231db405a7f7e590",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5409a6c56ace5b7119554c8795e9224f7b71cc7d",
+    "source_merge_commit": "6633065d489bd527c133c1e42593cd271341430a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6088",
+    "validation_evidence": [
+      "validation-receipt: id=afd9092609a4006c commit=5409a6c56ace5b7119554c8795e9224f7b71cc7d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_reference_price_availability.py backend/tests/strategy_package/test_selection_computation.py backend/tests/strategy_package/test_multi_alpha_signal_preparation.py backend/tests/strategy_package/test_selection_signal_preparation.py backend/tests/strategy_package/test_prospective_selection_evidence.py -q -p no:cacheprovider --basetemp=X:/AIstock_temp/LOCALSIM/strategy-package-suspension-reference-20261015/pytest-final-matrix` result=`64 passed at 32710e3858b97706adc6643f90f12243573f2204; reused, not rerun, after exact six-file git diff and four source SHA256 parity; native chain freshly PASS at 5c64d968078ccaf06438f8bbb1158bb9b8aa7e87; only BUG JSON bindings changed subsequently; receipts in X:/AIstock_temp/LOCALSIM/strategy-package-suspension-reference-20261015/`",
+      "validation-receipt: id=65338c12b34af4e6 commit=5409a6c56ace5b7119554c8795e9224f7b71cc7d kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/strategy_package/selection_artifact.py backend/services/strategy_package/multi_alpha_live.py backend/services/strategy_package/selection_computation.py backend/services/strategy_package/reference_prices.py backend/tests/strategy_package/test_reference_price_availability.py docs/contracts/strategy_package_reference_price_availability_v1.md tests/aistock_validation/bugs/20261014_BUG-1904-shared-strategypackage-selection-blocks-a-day-on-legally-suspended-c-dat.json` result=`passed with 0 blocking guardrails; reused after unchanged source/test/contract comparison and metadata-only runtime bindings; git diff --check PASS`"
+    ],
+    "validation_evidence_digest": "c3d85555483c84da23d339b60d146fd26597c02b2edbfaf92102f3df4f94427b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -242,6 +266,10 @@
     "fingerprint": "b4c5b54b654465ce59a06ad7",
     "source_event_id": "FE-20261014-b4c5b54b6544"
   },
+  "validation_evidence": [
+    "validation-receipt: id=afd9092609a4006c commit=5409a6c56ace5b7119554c8795e9224f7b71cc7d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/strategy_package/test_reference_price_availability.py backend/tests/strategy_package/test_selection_computation.py backend/tests/strategy_package/test_multi_alpha_signal_preparation.py backend/tests/strategy_package/test_selection_signal_preparation.py backend/tests/strategy_package/test_prospective_selection_evidence.py -q -p no:cacheprovider --basetemp=X:/AIstock_temp/LOCALSIM/strategy-package-suspension-reference-20261015/pytest-final-matrix` result=`64 passed at 32710e3858b97706adc6643f90f12243573f2204; reused, not rerun, after exact six-file git diff and four source SHA256 parity; native chain freshly PASS at 5c64d968078ccaf06438f8bbb1158bb9b8aa7e87; only BUG JSON bindings changed subsequently; receipts in X:/AIstock_temp/LOCALSIM/strategy-package-suspension-reference-20261015/`",
+    "validation-receipt: id=65338c12b34af4e6 commit=5409a6c56ace5b7119554c8795e9224f7b71cc7d kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/strategy_package/selection_artifact.py backend/services/strategy_package/multi_alpha_live.py backend/services/strategy_package/selection_computation.py backend/services/strategy_package/reference_prices.py backend/tests/strategy_package/test_reference_price_availability.py docs/contracts/strategy_package_reference_price_availability_v1.md tests/aistock_validation/bugs/20261014_BUG-1904-shared-strategypackage-selection-blocks-a-day-on-legally-suspended-c-dat.json` result=`passed with 0 blocking guardrails; reused after unchanged source/test/contract comparison and metadata-only runtime bindings; git diff --check PASS`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
