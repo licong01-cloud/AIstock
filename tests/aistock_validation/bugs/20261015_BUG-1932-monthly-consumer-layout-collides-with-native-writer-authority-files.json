@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_consumer_layout.py",
     "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+    "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
     "tests/aistock_validation/bugs/20261015_BUG-1932-monthly-consumer-layout-collides-with-native-writer-authority-files.json"
   ],
   "assigned_agent": null,
@@ -28,12 +29,20 @@
   ],
   "expected": "发布打包复用已验证文件，股票池采用本轮冻结PIT，benchmark采用本轮共享冻结authority，元数据按发布身份生成，无同名冲突，不修改writer原件",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261015_BUG-1932-monthly-consumer-layout-collides-with-native-writer-authority-files.json",
       "backend/services/dataset_release/monthly_consumer_layout.py",
+      "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
       "backend/tests/dataset_release/test_monthly_consumer_layout.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261015_BUG-1932-monthly-consumer-layout-collides-with-native-writer-authority-files.json",
+      "backend/services/dataset_release/monthly_consumer_layout.py",
+      "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
+      "backend/tests/dataset_release/test_monthly_consumer_layout.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_consumer_layout.py",
@@ -80,17 +89,20 @@
     },
     "planned_files": [
       "backend/services/dataset_release/monthly_consumer_layout.py",
-      "backend/tests/dataset_release/test_monthly_consumer_layout.py"
+      "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+      "backend/tests/dataset_release/test_monthly_candidate_finalizer.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/dataset_release/monthly_consumer_layout.py",
-      "backend/tests/dataset_release/test_monthly_consumer_layout.py"
+      "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+      "backend/tests/dataset_release/test_monthly_candidate_finalizer.py"
     ]
   },
   "first_seen_at": "2026-10-15T19:01:23.203692Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "Skip only the explicitly layout-owned day stock pool/benchmark/metadata and minute metadata after regular-file/link checks; publish the pinned current PIT stock pool and frozen shared benchmark matching the same release calendar, generate new layout metadata, retain all writer data and provider catalog bytes. Add native/legacy immutable hardlink and authority rejection regressions; extend only the finalizer fixture to model the existing frozen benchmark producer contract.",
   "fixed_at": null,
   "github_issue_number": 6164,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6164",
@@ -108,14 +120,30 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_evidence": [
+    "Round 1: traced real BUILD271 source and target collision, predecessor benchmark cutoff and absence of index.txt; no database or market gap inference.",
+    "Round 2: verified exclusions cannot bypass symlink checks, pool hashes remain enforced, missing or inconsistent frozen benchmark fails closed, output remains create-exclusive and writer bytes/inodes are unchanged.",
+    "Round 3: aligned benchmark start with the shared producer's frozen calendar, resolved the narrow-calendar integration regression, checked finalizer fixture and shared-builder readback; no re-export, activation, historical business scan or consumer-source change.",
+    "DESIGN-COMPLIANCE-001: complete fix for native writer collisions; missing authority/errors still fail closed; PIT selection and quote catalogs remain distinct; no new gate or business-semantic change."
+  ],
   "risk_area": "bug",
+  "root_cause": "Consumer packaging hardlinked every native writer file before create-exclusive publication of layout-owned metadata. Native outputs contain predecessor stock_universe.txt, benchmark.txt and meta_export.json but do not guarantee legacy index.txt; the frozen shared producer already emits the current benchmark under stock_pools. No price source data loss.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "RED: fresh pytest native-writer layout reproduces BUILD271 hardlink collision while legacy layout passes. GREEN: native and legacy layouts publish the current frozen PIT/benchmark plus fresh metadata; writer bytes and inodes remain unchanged and data hardlinks are retained. Direct layout and frozen shared-builder regression: 15 passed.",
+      "Fresh AIstock Python process calls production _benchmark_source on retained BUILD271 staging without writes: validated 000300.SH / 2018-08-01 / 2026-09-30. No database read, candidate mutation or process control.",
+      "Fresh AIstock process validated production _benchmark_source against retained BUILD271 staging for 000300.SH 2018-08-01..2026-09-30 without writes; fresh targeted pytest reproduces native writer collision before fix and passes all 47 related cases after fix with writer hashes/inodes unchanged."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
