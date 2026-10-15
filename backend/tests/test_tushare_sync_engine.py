@@ -1641,7 +1641,7 @@ def test_chip_and_margin_specs_carry_min_expected_rows():
 
 
 @pytest.mark.parametrize("finite_count", [0, 94, 95, 100])
-@pytest.mark.parametrize("missing_field", ["turnover_rate", "turnover_rate_f", "volume_ratio"])
+@pytest.mark.parametrize("missing_field", ["turnover_rate", "turnover_rate_f", "volume_ratio", "total_mv", "circ_mv"])
 def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monkeypatch, finite_count, missing_field):
     from backend.services.tushare_dataset_specs import DAILY_BASIC
 
@@ -1657,7 +1657,7 @@ def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monk
             col: ("20260908" if col == "trade_date" else f"{col}-{index}")
             for col in DAILY_BASIC.columns
         }
-        row.update(turnover_rate=1.0, turnover_rate_f=1.0, volume_ratio=1.0)
+        row.update(turnover_rate=1.0, turnover_rate_f=1.0, volume_ratio=1.0, total_mv=1.0, circ_mv=1.0)
         row[missing_field] = 1.5 if index < finite_count else None
         row["dv_ratio"] = row["dv_ttm"] = None  # Legitimately nullable, not mandatory.
         rows.append(row)
