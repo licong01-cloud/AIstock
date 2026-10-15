@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1911",
-  "closed_at": null,
+  "closed_at": "2026-10-15T04:58:04Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -22,9 +22,11 @@
     "no_limit_applicability": "35 finite first-day BSE references unchanged; 27 NULL IPO references and 1 NULL delisting-first-day reference validated from exact provider facts plus independent listing/exchange evidence; limit sentinels unchanged",
     "nontrade_pit_classification": "1167 documented S-without-R keys, 5 mixed S/R keys remain unproven; no reference prices manufactured",
     "prior_authorization_scope": "BUG-1906/2026-05-08/5490_NULL_pre_close_only; not reusable for other dates",
-    "production_apply": "not_performed",
-    "production_authorization": "pending_exact_SQL_for_new_historical_scope",
-    "production_readback": "pending_apply",
+    "production_apply": "PASS: 100 bounded transactions committed; 377946 authorized invalid references repaired across 72 dates; only pre_close changed",
+    "production_authorization": "User explicitly confirmed production SQL after DEV validation; exact batch r2 SQL SHA256 72ec6d36e3e62d271a23831ddddf65ca30274e8a045151b0031b4ab148d573e7",
+    "production_readback": "PASS: independent fresh read-only connection verified all 377946 keys against frozen source facts; non-target column hashes unchanged; 001205.SZ/2026-05-08 remains 15.30; 603616.SH/2026-01-21 remains NaN without authoritative replacement",
+    "production_receipt": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1911-pre-close-history-20261015/production-apply-r1/production-receipt.json",
+    "production_receipt_sha256": "5c5fcc8a121172ccbb1861a33734d6fd729a2a2eb152cc3f99f9082b5274d636",
     "production_sql": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1911-pre-close-history-20261015/production-repair-batch-r2.sql",
     "production_sql_sha256": "72ec6d36e3e62d271a23831ddddf65ca30274e8a045151b0031b4ab148d573e7",
     "profile_write": false,
@@ -43,7 +45,7 @@
     "business_semantics_unchanged": "No consumer, account, replay, eligibility, time-clock, threshold, frozen candidate or profile change; only pre_close can change under exact SQL.",
     "no_extra_gates": "Historical audit is explicit opt-in and bounded; daily and monthly paths are not expanded into full-history scans; no new runtime approval or consumer gate. Production target authorization is pre-existing project policy.",
     "no_silent_errors": "Source NaN is rejected; original database NaN is serialized explicitly; absent authority remains unresolved; SQL binds exact original value and same-day limits. BSE no-limit reference repairs require independently verified listing dates or hashed original exchange documents; consumer limit-price validation is unchanged.",
-    "no_simplified_completion": "Historical audit covers formal daily PIT union traded holding-quote keys, not only fixed Jan20 symbols; production apply and unresolved sources are not declared complete."
+    "no_simplified_completion": "Historical audit covers formal daily PIT union traded holding-quote keys, not only fixed Jan20 symbols. Separately authorized production apply and independent readback passed for all 377946 repairable keys; source-unavailable suspension references and LocalSIM replay recovery remain explicit separate owner responsibilities."
   },
   "events": [
     {
@@ -58,7 +60,8 @@
     "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1911-pre-close-history-20261015/audit-r1/audit-receipt.json",
     "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1911-pre-close-history-20261015/localsim-blocker-readback-r1.json",
     "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1911-pre-close-history-20261015/production-plan-r2.json",
-    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1911-pre-close-history-20261015/dev-cas-readback-r1.json"
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1911-pre-close-history-20261015/dev-cas-readback-r1.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1911-pre-close-history-20261015/production-apply-r1/production-receipt.json"
   ],
   "expected": "Required historical keys are classified from daily PIT/traded quote applicability; only exact same-day authoritative facts repair invalid pre_close; finite values and unrelated columns preserved; source-unavailable cases stay explicit; daily/monthly known guards retained.",
   "file_scope_contract": {
@@ -133,8 +136,8 @@
   },
   "first_seen_at": "2026-10-15T04:05:26.388104Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ace28ba3233266f7f4028eda83e66105d44a162f",
+  "fixed_at": "2026-10-15T04:58:04Z",
   "github_issue_number": 6099,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6099",
   "last_seen_at": "2026-10-15T04:05:26.388104Z",
@@ -142,6 +145,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6101",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -159,6 +163,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -168,7 +173,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed",
   "suspected_modules": [
     "local_data"
   ],
@@ -177,6 +182,10 @@
     "fingerprint": "20fb94bc6ef4f323e425a82b",
     "source_event_id": "FE-20261015-20fb94bc6ef4"
   },
+  "validation_evidence": [
+    "Source PR6101 merged; CI verdict SUCCESS; targeted repair-tool 20 tests PASS; daily/monthly related 249 tests PASS; DESIGN-COMPLIANCE-001 reviewed.",
+    "DEV fresh exact readback PASS; authorized production SQL SHA256 72ec6d36e3e62d271a23831ddddf65ca30274e8a045151b0031b4ab148d573e7 applied in 100 bounded transactions; 377946 keys over 72 dates independently verified; non-target columns unchanged. Receipt X:/AIstock_dataset_candidates/data_repair_staging/BUG-1911-pre-close-history-20261015/production-apply-r1/production-receipt.json. 603616.SH/2026-01-21 remains explicit documented suspension with no authoritative price; LocalSIM recovery is separate owner."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
