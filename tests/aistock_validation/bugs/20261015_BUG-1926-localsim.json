@@ -27,6 +27,13 @@
   ],
   "created_at": "2026-10-15T15:30:06.391597Z",
   "description": "TCN FAILED_TERMINAL v4056 下一日 2026-05-08；LSTM FAILED_TERMINAL v9165 下一日 2026-01-21。现有原生恢复只覆盖推理超时和历史下单时段，持仓估值仍依赖缺失 pre_close。",
+  "design_compliance_review": {
+    "business_semantics": "unchanged orders/cash/ledger/valuation policy",
+    "no_extra_approval": "CAS/digest native command; no extra manual approval",
+    "no_silent_errors": "typed blockers and rollback; no fabricated prices",
+    "prohibit_simplified_delivery": "source recovery contract verified; production replay and LSTM blockers explicitly pending"
+  },
+  "design_document": "docs/analysis/localsim_replay_recovery_contract_fix_20261015.md",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -46,25 +53,42 @@
   ],
   "expected": "由 LocalSIM 正式合同核对冻结输入、真实经济事实和数据准备状态后恢复原任务；失败前缀与成功历史不变；合法停牌的持仓估值遵循原生权威来源并与交易价格分离，普通可交易股真缺价继续阻塞。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/simulation_runtime.py",
+      "backend/services/simulation_runtime/localsim_dependencies.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_runtime/localsim_selection_signal.py",
+      "backend/services/simulation_runtime/repository.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/simulation_runtime/successor_repository.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+      "docs/analysis/localsim_replay_recovery_contract_fix_20261015.md",
+      "tests/aistock_validation/bugs/20261015_BUG-1926-localsim.json"
+    ],
     "added_files": [
       "backend/services/simulation_runtime/localsim_replay_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
       "docs/analysis/localsim_replay_recovery_contract_fix_20261015.md"
     ],
     "changed_files": [
-      "backend/services/simulation_runtime/localsim_replay.py",
-      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/routers/simulation_runtime.py",
       "backend/services/simulation_runtime/localsim_dependencies.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
       "backend/services/simulation_runtime/localsim_selection_signal.py",
+      "backend/services/simulation_runtime/repository.py",
       "backend/services/simulation_runtime/scheduler.py",
       "backend/services/simulation_runtime/successor_repository.py",
-      "backend/services/simulation_runtime/repository.py",
-      "backend/routers/simulation_runtime.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
-      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py"
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+      "docs/analysis/localsim_replay_recovery_contract_fix_20261015.md",
+      "tests/aistock_validation/bugs/20261015_BUG-1926-localsim.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/localsim_replay.py",
@@ -268,8 +292,8 @@
   },
   "first_seen_at": "2026-10-15T15:30:06.391597Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0b25453254f34e8890e7d731830d29930e740cc7",
+  "fixed_at": "2026-10-15T16:18:45Z",
   "github_issue_number": 6148,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6148",
   "last_seen_at": "2026-10-15T15:30:06.391597Z",
@@ -277,6 +301,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6150",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -287,31 +312,62 @@
     "simulation_core_l2",
     "localsim_successor_core_dev_db"
   ],
+  "review_rounds": 5,
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1926-source-validation-receipt-r3.json -> fresh import/compile/lint, 61 related tests plus 11 final side-effect cases passed; DEV 3 passed and final nonempty-plan atomic/stable-snapshot node passed; real frozen 4912/4918/6 native chain passed; no production replay/write."
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
-    "database_readback_ref": "not_required",
-    "runtime_identity_match": "pending"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scoped_exploration_notes": [
+    "CodeGraph returned legacy paper_trading_v2/qlib symbols outside the active recovery owner; exact native source references used instead.",
+    "Known dev-test filename absent; locate required DEV session from catalog/nox configuration.",
+    "Exploration summarized before implementation: native suspended valuation requires authoritative pre_close; no new valuation policy introduced."
+  ],
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1926",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "265c7c4f999527b9",
+    "recorded_at": "2026-10-15T16:19:24.181357Z",
+    "runtime_contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d456263630e796493e071583eac79cbd0fa7891e",
+    "source_merge_commit": "0b25453254f34e8890e7d731830d29930e740cc7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6150",
+    "validation_evidence": [
+      "validation-receipt: id=e2711401518638fc commit=d456263630e796493e071583eac79cbd0fa7891e kind=nox plan=localsim_successor_core_dev_db status=passed command=`python -m nox -s localsim_successor_core_dev_db --no-install` result=`passed (3 tests); final nonempty-plan stable-snapshot DEV node passed`",
+      "validation-receipt: id=40a28de76781595c commit=d456263630e796493e071583eac79cbd0fa7891e kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py::test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_existing_dev -q -p no:cacheprovider --basetemp=X:/AIstock_temp/LOCALSIM/workflow/BUG-1926-stable-plan-dev-r5` result=`passed (1 test)`",
+      "validation-receipt: id=9fb26c948750306f commit=d456263630e796493e071583eac79cbd0fa7891e kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_localsim_replay_recovery.py::test_unprojected_or_unknown_broker_effects_are_not_discarded -q -p no:cacheprovider --basetemp=X:/AIstock_temp/LOCALSIM/workflow/BUG-1926-unknown-evidence-r4` result=`passed (11 tests)`",
+      "validation-receipt: id=fcffb1eca042b08a commit=d456263630e796493e071583eac79cbd0fa7891e kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "1e270310c8f7a92d7102641203f113bbfd5d5de6c04b967cee9790263ac74e1d"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -320,6 +376,12 @@
     "fingerprint": "f375450c4e8866c67a7fcc6c",
     "source_event_id": "FE-20261015-f375450c4e88"
   },
+  "validation_evidence": [
+    "validation-receipt: id=e2711401518638fc commit=d456263630e796493e071583eac79cbd0fa7891e kind=nox plan=localsim_successor_core_dev_db status=passed command=`python -m nox -s localsim_successor_core_dev_db --no-install` result=`passed (3 tests); final nonempty-plan stable-snapshot DEV node passed`",
+    "validation-receipt: id=40a28de76781595c commit=d456263630e796493e071583eac79cbd0fa7891e kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py::test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_existing_dev -q -p no:cacheprovider --basetemp=X:/AIstock_temp/LOCALSIM/workflow/BUG-1926-stable-plan-dev-r5` result=`passed (1 test)`",
+    "validation-receipt: id=9fb26c948750306f commit=d456263630e796493e071583eac79cbd0fa7891e kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_localsim_replay_recovery.py::test_unprojected_or_unknown_broker_effects_are_not_discarded -q -p no:cacheprovider --basetemp=X:/AIstock_temp/LOCALSIM/workflow/BUG-1926-unknown-evidence-r4` result=`passed (11 tests)`",
+    "validation-receipt: id=fcffb1eca042b08a commit=d456263630e796493e071583eac79cbd0fa7891e kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -431,18 +493,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "design_document": "docs/analysis/localsim_replay_recovery_contract_fix_20261015.md",
-  "scoped_exploration_notes": [
-    "CodeGraph returned legacy paper_trading_v2/qlib symbols outside the active recovery owner; exact native source references used instead.",
-    "Known dev-test filename absent; locate required DEV session from catalog/nox configuration.",
-    "Exploration summarized before implementation: native suspended valuation requires authoritative pre_close; no new valuation policy introduced."
-  ],
-  "design_compliance_review": {
-    "prohibit_simplified_delivery": "source recovery contract verified; production replay and LSTM blockers explicitly pending",
-    "no_silent_errors": "typed blockers and rollback; no fabricated prices",
-    "business_semantics": "unchanged orders/cash/ledger/valuation policy",
-    "no_extra_approval": "CAS/digest native command; no extra manual approval"
-  },
-  "review_rounds": 5
+  }
 }
