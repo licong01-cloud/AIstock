@@ -1246,6 +1246,8 @@ rules:
   - rule_id: local_data_tushare_sync_engine
     priority: 97
     include:
+      - scripts/repair_stk_limit_pre_close.py
+      - backend/tests/scripts/test_repair_stk_limit_pre_close.py
       - backend/services/adj_factor_history_reconciler.py
       - backend/services/tushare_sync_engine.py
       - backend/services/tushare_sync.py
