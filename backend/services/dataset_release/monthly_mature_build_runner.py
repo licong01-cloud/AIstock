@@ -235,6 +235,8 @@ class MatureMonthlyPhysicalBuildRunner:
                 )
                 finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
                 resume.save("finalize-bins", finalized_ref, roots=("daily_bin", "minute_bin", "index_context", "factor_bundle"))
+            from .monthly_quote_catalog import refresh_retained_quote_catalog
+            finalized = refresh_retained_quote_catalog(resume, finalized=finalized, cas=self.cas)
             finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
             from .monthly_industry_history import apply_retained_history
             prepare = apply_retained_history(resume, context=context, compiled=compiled, prepare=prepare, cas=self.cas, profile=self.profile)

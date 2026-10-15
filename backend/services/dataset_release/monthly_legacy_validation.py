@@ -199,10 +199,24 @@ def validate_qlib_month(
         _plain_chain(path)
         before = _signature(path)
         raw = path.read_bytes()
-        record(path, sha256=native.get(sha_key), size=len(raw), signature=native.get(stat_key))
-        if _signature(path) != before or hashlib.sha256(raw).hexdigest() != native.get(sha_key):
+        physical_catalog = frequency == "1min" and relative == "instruments/all.txt"
+        quote_authority = materialization.get("quote_catalog_repair", native.get("quote_catalog")) if physical_catalog else None
+        expected_hash = quote_authority.get("sha256") if isinstance(quote_authority, Mapping) else native.get(sha_key)
+        record(path, sha256=expected_hash if physical_catalog else native.get(sha_key), size=len(raw),
+               signature=list(before) if physical_catalog else native.get(stat_key))
+        if _signature(path) != before or hashlib.sha256(raw).hexdigest() != (expected_hash if physical_catalog else native.get(sha_key)):
             raise MonthlyLegacyValidationError("native month calendar/catalog bytes differ")
         source_ref = prepared["calendar_ref" if relative.startswith("calendars/") else "instruments_ref"]
+        if physical_catalog:
+            from backend.qlib_exporter.quote_catalog import build_minute_quote_catalog
+
+            physical = build_minute_quote_catalog(provider, checkpoint=checkpoint)
+            expected = {**physical.receipt(), "input_instruments_sha256": prepared["instruments_ref"]["sha256"]}
+            if quote_authority != expected or raw != physical.payload:
+                raise MonthlyLegacyValidationError("native minute physical quote catalog differs")
+            # The input sidecar retains its immutable provenance; it no longer
+            # dictates quote visibility. Values and buy eligibility are intact.
+            continue
         if source_ref.get("sha256") != native.get(sha_key) or source_ref.get("size") != len(raw):
             raise MonthlyLegacyValidationError("native month calendar/catalog sealed binding differs")
     calendar = read_calendar(provider / f"calendars/{frequency}.txt")
