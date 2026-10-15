@@ -19,6 +19,7 @@ from backend.services.dataset_release.monthly_shared_components import (
     FrozenMonthlySharedComponentBuilder,
     MonthlySharedComponentsError,
     _build_sector_membership,
+    _build_historical_sector_membership,
     _index_pool_intervals,
     _pit_intervals,
     _append_sector_month_sidecars,
@@ -384,6 +385,55 @@ def test_sector_membership_compresses_causal_code_transitions() -> None:
             "l2_code_id": 1,
         },
     ]
+
+
+@pytest.mark.parametrize("current_id", [0, 131, 132, 133])
+def test_history_membership_resolves_sparse_current_ids_without_densifying(current_id):
+    from backend.services.dataset_release.monthly_industry_history import IndustryHistoryProjection
+
+    codes = [f"801{index:03d}.SI" for index in range(131)]
+    ids = {**dict(zip(codes, range(131))), codes[0]: current_id}
+    current_map = build_release_sw_l2_code_map_payload(
+        code_to_id=ids, member_backed_codes=tuple(ids),
+        authority_id="fixture", authority_sha256="a" * 64,
+    )
+    history = IndustryHistoryProjection.build(
+        [{"canonical_symbol": "000001.SZ", "taxonomy_version": version,
+          "published_l2_code": code, "effective_from": start, "effective_to": end,
+          "known_from": None, "knowledge_time_quality": "FIRST_PUBLICATION_UNVERIFIED",
+          "source_sha256": "a" * 64, "source_row_sha256": "b" * 64}
+         for version, code, start, end in (
+             ("SW2014", "801999.SI", "2018-08-01", "2021-07-29"),
+             ("SW2021", codes[0], "2024-07-01", "2024-07-03"),
+         )], current_map=current_map, authority_sha256="a" * 64,
+    )
+    before = history.sha256
+    source_enricher = FrozenSectorEnricher.build(
+        [{"index_code": code, "level": "L2"} for code in codes],
+        [{"ts_code": "000001.SZ", "in_date": "2024-07-01", "out_date": None, "l2_code": codes[1]}],
+    )
+    enricher = FrozenSectorEnricher(ids, source_enricher.memberships)
+    args = dict(history=history, enricher=enricher)
+    days = (date(2024, 7, 1), date(2024, 7, 2), date(2024, 7, 3))
+    frame, count, _, _ = _build_historical_sector_membership(
+        **args, pit_rows=[("000001.SZ", days[0], days[-1])], calendar=days, start=days[0], end=days[-1],
+    )
+    assert count == 3 and frame["l2_code_id"].tolist() == [current_id]
+    assert history.sha256 == before and dict(enricher.code_map) == ids
+    tail = date(2024, 7, 4)
+    tail_frame, _, _, _ = _build_historical_sector_membership(
+        **args, pit_rows=[("000001.SZ", tail, tail)], calendar=[tail], start=tail, end=tail,
+    )
+    assert tail_frame["l2_code_id"].tolist() == [ids[codes[1]]]
+    old = date(2018, 8, 1)
+    with pytest.raises(MonthlySharedComponentsError, match="outside.*code map"):
+        _build_historical_sector_membership(
+            **args, pit_rows=[("000001.SZ", old, old)], calendar=[old], start=old, end=old,
+        )
+    with pytest.raises(MonthlySharedComponentsError, match="cannot resolve"):
+        _build_historical_sector_membership(
+            **args, pit_rows=[("000002.SZ", days[0], days[-1])], calendar=days, start=days[0], end=days[-1],
+        )
 
 
 def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
