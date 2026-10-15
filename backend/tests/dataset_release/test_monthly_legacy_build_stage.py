@@ -330,3 +330,102 @@ def test_monthly_validation_rejects_catalog_and_provenance_drift(tmp_path, fault
         validate_qlib_month(root=invocation.staging_root, materialization=materialization,
             cas=invocation.cas, cutoff=date(2026, 9, 1),
             predecessor_manifest_sha256=materialization["predecessor_manifest_sha256"], source_bundle_sha256="e" * 64)
+
+
+def _retained_prev_close(tmp_path, dataset="daily_bin", repair_day="2026-08-31"):
+    from backend.services.dataset_release import monthly_prev_close_repair as correction
+    invocation, provider, materialization = _append_and_finalize(tmp_path, dataset=dataset)
+    root, cas = invocation.staging_root, invocation.cas
+    prefix, freq = dataset.removesuffix("_bin"), "day" if dataset == "daily_bin" else "1min"
+    finalized = {"finalize_receipt_ref": cas.put_json({f"{prefix}_receipt_ref": cas.put_json(materialization).as_dict()}).as_dict()}
+    journal = root.parent / "resume.json"
+    files = {p.relative_to(root).as_posix(): list(_signature(p)) for p in (root / dataset).rglob("*") if p.is_file()}
+    record = {"binding_digest": "a" * 64, "steps": {"finalize-bins": cas.put_json(finalized).as_dict()}, "files": files}
+    _atomic(journal, record)
+    facts = [{"ts_code": "000001.SZ", "trade_date": repair_day, "pre_close": "11.0", "up_limit": "12.1", "down_limit": "9.9"}]
+    authority = cas.put_json({"schema_version": correction.SCHEMA, "facts": facts}).as_dict()
+    binding = {"authority_ref": authority, "target_cutoff": "2026-09-01", "operation_id": "dmr_" + "1" * 32,
+               "predecessor_manifest_sha256": materialization["predecessor_manifest_sha256"]}
+    plan = {"target_cutoff": "2026-09-01", correction.BINDING: binding,
+            "predecessor": {"dataset_manifest_sha256": materialization["predecessor_manifest_sha256"]}}
+    resume = SimpleNamespace(root=root, path=journal, record=record,
+                             context=SimpleNamespace(operation_id=binding["operation_id"], checkpoint=lambda: None))
+    return invocation, provider, materialization, finalized, resume, plan, freq
+
+
+@pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
+@pytest.mark.parametrize("repair_day", ["2026-08-31", "2026-09-01"])
+def test_exact_prev_close_correction_keeps_prices_source_and_append_proof(tmp_path, dataset, repair_day):
+    from backend.services.dataset_release import monthly_prev_close_repair as correction
+    invocation, predecessor, original, finalized, resume, plan, freq = _retained_prev_close(tmp_path, dataset, repair_day)
+    before = {p: p.read_bytes() for p in resume.root.rglob("*.bin") if not p.name.startswith("prev_close.")}
+    inherited = (predecessor / f"features/000001.sz/prev_close.{freq}.bin").read_bytes()
+    updated = correction.apply_prev_close_corrections(resume, finalized=finalized, cas=invocation.cas, plan=plan)
+    inner = invocation.cas.get_json(updated["finalize_receipt_ref"])
+    actual = invocation.cas.get_json(inner[f"{dataset.removesuffix('_bin')}_receipt_ref"])
+    assert actual["native_writer"] == original["native_writer"]
+    assert actual["prev_close_correction"]["counts"]["repaired_stock_dates"] == 1
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+    assert (predecessor / f"features/000001.sz/prev_close.{freq}.bin").read_bytes() == inherited
+    assert correction.apply_prev_close_corrections(resume, finalized=updated, cas=invocation.cas, plan=plan) == updated
+    report = validate_qlib_month(root=resume.root, materialization=actual, cas=invocation.cas,
+        cutoff=date(2026, 9, 1), predecessor_manifest_sha256=original["predecessor_manifest_sha256"], source_bundle_sha256="e" * 64)
+    assert report["status"] == "PASS" and report["historical_values_read"] == 0
+    target = resume.root / dataset / f"qlib/features/000001.sz/prev_close.{freq}.bin"
+    target.write_bytes(target.read_bytes() + b"bad!")
+    with pytest.raises(RuntimeError, match="corrected bytes"):
+        validate_qlib_month(root=resume.root, materialization=actual, cas=invocation.cas,
+            cutoff=date(2026, 9, 1), predecessor_manifest_sha256=original["predecessor_manifest_sha256"], source_bundle_sha256="e" * 64)
+
+
+@pytest.mark.parametrize("interrupted_replace", [1, 2])
+def test_prev_close_correction_recovers_exact_files_without_reexport(tmp_path, monkeypatch, interrupted_replace):
+    from backend.services.dataset_release import monthly_prev_close_repair as correction
+    invocation, _, _, finalized, resume, plan, _ = _retained_prev_close(tmp_path)
+    replace, calls = correction._replace, []
+    def interrupted(path, payload):
+        replace(path, payload)
+        calls.append(path)
+        if len(calls) == interrupted_replace:
+            raise OSError("simulated interruption")
+    monkeypatch.setattr(correction, "_replace", interrupted)
+    with pytest.raises(OSError, match="interruption"):
+        correction.apply_prev_close_corrections(resume, finalized=finalized, cas=invocation.cas, plan=plan)
+    monkeypatch.setattr(correction, "_replace", replace)
+    record = correction.recover_prev_close(root=resume.root, journal=resume.path, record=resume.record, cas=invocation.cas)
+    assert record == json.loads(resume.path.read_bytes())
+    assert not correction._pending(resume.root).exists()
+    target = resume.root / "daily_bin/qlib/features/000001.sz/prev_close.day.bin"
+    assert struct.unpack("<fff", target.read_bytes()) == (0, 11, 6)
+
+
+@pytest.mark.parametrize("fault", [None, "unclosed", "source_hash", "nonfinite", "scope"])
+def test_prev_close_correction_requires_closed_exact_provider_sources(tmp_path, fault):
+    from backend.services.dataset_release import monthly_prev_close_repair as correction
+    root = tmp_path / "data_repair_staging"
+    root.mkdir()
+    def pin(name, value):
+        path = root / name
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return str(path), hashlib.sha256(path.read_bytes()).hexdigest()
+    row = {"ts_code": "000001.SZ", "trade_date": "20260831", "pre_close": "11" if fault != "nonfinite" else "nan"}
+    rows_hash = hashlib.sha256(canonical_json_bytes([row])).hexdigest()
+    source = {"schema_version": "local_data_stk_limit_pre_close_repair_v1", "provider": "tushare.stk_limit", "units": "CNY_per_share",
+              "trade_date": "2026-08-31", "source_rows": [row], "patches": [row], "source_rows_sha256": rows_hash}
+    source_path, source_hash = pin("source.json", source)
+    plan = {"schema_version": "local_data_stk_limit_history_production_plan_v1", "target_database": "aistock", "target_table": "market.stk_limit",
+            "changed_columns": ["pre_close"] if fault != "scope" else ["up_limit"],
+            "daily": [{"source_plan_path": source_path, "source_plan_sha256": source_hash if fault != "source_hash" else "0" * 64,
+                       "source_rows_sha256": rows_hash, "keys": 1, "trade_date": "2026-08-31"}]}
+    plan_path, plan_hash = pin("plan.json", plan)
+    receipt = {"schema_version": "local_data_stk_limit_history_production_apply_v1", "plan_sha256": plan_hash,
+               "production_apply": "PASS", "production_readback": "PASS_INDEPENDENT_FRESH_CONNECTION" if fault != "unclosed" else "pending",
+               "non_target_columns_unchanged": True, "verified_keys": 1}
+    receipt_path, receipt_hash = pin("receipt.json", receipt)
+    inputs = {"plan_path": plan_path, "plan_sha256": plan_hash, "receipt_path": receipt_path, "receipt_sha256": receipt_hash}
+    if fault:
+        with pytest.raises(ValueError):
+            correction.capture_approved_corrections(inputs, repair_root=root, cutoff=date(2026, 9, 30))
+    else:
+        actual = correction.capture_approved_corrections(inputs, repair_root=root, cutoff=date(2026, 9, 30))
+        assert actual["facts"] == [{**row, "trade_date": "2026-08-31"}] and actual["database_write"] is False

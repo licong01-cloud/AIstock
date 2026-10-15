@@ -27,7 +27,7 @@ def _parser() -> argparse.ArgumentParser:
         default=os.getenv("AISTOCK_BACKEND_API_ROOT", "http://127.0.0.1:8001/api/v1"),
     )
     commands = parser.add_subparsers(dest="command", required=True)
-    for name in ("bind-repairs", "bind-quality"):
+    for name in ("bind-repairs", "bind-quality", "bind-prev-close"):
         bind = commands.add_parser(name)
         bind.add_argument("--operation-id", required=True)
         bind.add_argument("--inputs", type=Path, required=True)
@@ -229,7 +229,7 @@ def _adoption_body(args: argparse.Namespace) -> dict[str, Any]:
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     _validate_args(args)
-    if args.command in {"bind-repairs", "bind-quality"}:
+    if args.command in {"bind-repairs", "bind-quality", "bind-prev-close"}:
         if not args.inputs.is_absolute() or not args.inputs.is_file() or args.inputs.stat().st_size > 1024 * 1024:
             raise ValueError("repair input file must be a bounded absolute regular file")
         for path in (args.inputs, *args.inputs.parents):
@@ -243,7 +243,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         inputs = json.loads(raw)
         if not isinstance(inputs, dict):
             raise ValueError("repair input file must contain an object")
-        binding = "repair-inputs" if args.command == "bind-repairs" else "source-quality-inputs"
+        binding = {"bind-repairs": "repair-inputs", "bind-quality": "source-quality-inputs",
+                   "bind-prev-close": "prev-close-repairs"}[args.command]
         result = _call(root=args.api_root, method="POST",
             suffix=f"/{urllib.parse.quote(args.operation_id, safe='')}/{binding}",
             body={"schema_version": "aistock_monthly_repair_inputs_request_v1", "inputs": inputs}, idempotency=None)

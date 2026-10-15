@@ -1,6 +1,17 @@
 {
   "actual": "9月保留产物仍有43/42个历史prev_close差异；仅数据源修复没有冻结产物传播证明。",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_prev_close_repair.py",
+    "backend/services/dataset_release/monthly_build_resume.py",
+    "backend/services/dataset_release/monthly_mature_build_runner.py",
+    "backend/services/dataset_release/monthly_legacy_validation.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/routers/monthly_dataset_releases.py",
+    "scripts/monthly_unified_dataset_release.py",
+    "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+    "backend/tests/dataset_release/test_monthly_unified_v2.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
+    "backend/tests/scripts/test_monthly_unified_dataset_release.py",
     "tests/aistock_validation/bugs/20261015_BUG-1915-post-source-stk-limit-pre-close-repairs-are-absent-from-retained-monthly.json"
   ],
   "assigned_agent": null,
@@ -64,15 +75,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "fresh_process_evidence": ["python -m pytest backend/tests/dataset_release/test_monthly_legacy_build_stage.py -k prev_close -q -> 11 passed in isolated fresh process, exact corrections and interrupted commits recovered without reexport"],
     "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
-    "runtime_impact": "none",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": ["worker-scheduler"]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -191,5 +205,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "registered_fix_scope_set"
 }

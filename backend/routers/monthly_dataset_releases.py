@@ -167,6 +167,18 @@ def bind_monthly_source_quality_inputs(
                 inputs=request.inputs, principal=principal.principal_id))}
 
 
+@router.post("/{operation_id}/prev-close-repairs")
+def bind_monthly_prev_close_repairs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_prev_close_binding_response_v1",
+            "data": _call(lambda: service.bind_prev_close_repairs(operation_id,
+                inputs=request.inputs, principal=principal.principal_id))}
+
+
 @router.post("/plan")
 def preview_monthly_release(
     request: UnifiedMonthlyReleaseRequest,
