@@ -17,6 +17,9 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Protocol
 
+from backend.services.selection_center.hmm_overlay_contract import (
+    HMMOverlayDay, NO_L2_OVERLAY_POLICY, validate_overlay_day,
+)
 from backend.services.selection_center.models import SelectionCandidate, SelectionExclusion
 from backend.services.selection_center.prospective_evidence import (
     CandidateStageName,
@@ -39,6 +42,7 @@ class HMMSnapshotProvider(Protocol):
 class HMMCoefficientArtifact:
     path: Path
     payload: dict[str, Any]
+    sha256: str
 
 
 class SectorHMMRuntime:
@@ -168,34 +172,13 @@ class SectorHMMRuntime:
         )
         payload = artifact.payload
         day_key = trade_date.isoformat()
-        daily_coefficients = payload.get("daily_coefficients")
-        stock_sector_map = _stock_sector_map_for_day(
-            payload,
-            day_key=day_key,
-            package_id=package_id,
-            coefficients_path=artifact.path,
+        overlay = self._validated_overlay_day(
+            artifact=artifact, snapshot=snapshot, model_path=model_path,
+            profile=profile, trade_date=trade_date, package_id=package_id,
+            effective_trade_date=effective_trade_date,
         )
-        if not isinstance(daily_coefficients, dict) or not isinstance(stock_sector_map, dict):
-            raise HMMRuntimeUnavailableError(
-                "HMM coefficient artifact is missing required keys",
-                context={
-                    "package_id": package_id,
-                    "snapshot_id": profile.model_snapshot_id,
-                    "coefficients_path": str(artifact.path),
-                    "keys": sorted(str(key) for key in payload),
-                },
-            )
-        day_coefficients = daily_coefficients.get(day_key)
-        if not isinstance(day_coefficients, dict):
-            raise HMMRuntimeUnavailableError(
-                "HMM coefficient artifact has no coefficients for trade_date",
-                context={
-                    "package_id": package_id,
-                    "snapshot_id": profile.model_snapshot_id,
-                    "trade_date": day_key,
-                    "coefficients_path": str(artifact.path),
-                },
-            )
+        stock_sector_map = overlay.membership
+        day_coefficients = overlay.coefficients
 
         adjusted: list[SelectionCandidate] = []
         exclusions: list[SelectionExclusion] = []
@@ -207,7 +190,7 @@ class SectorHMMRuntime:
             )
             sector_code = stock_sector_map.get(candidate.symbol)
             if sector_code is None or not str(sector_code).strip():
-                if profile.missing_sector_policy == "exclude_candidate":
+                if profile.missing_sector_policy == "exclude_candidate" and not overlay.metadata:
                     exclusions.append(
                         SelectionExclusion(
                             symbol=candidate.symbol,
@@ -236,19 +219,8 @@ class SectorHMMRuntime:
                         "coefficients_path": str(artifact.path),
                     },
                 )
-            coeff_value = day_coefficients.get(str(sector_code))
-            coefficient = _positive_finite_float(
-                coeff_value,
-                message="HMM sector coefficient must be positive finite",
-                context={
-                    "package_id": package_id,
-                    "snapshot_id": profile.model_snapshot_id,
-                    "trade_date": day_key,
-                    "symbol": candidate.symbol,
-                    "sector_code": str(sector_code),
-                    "coefficient": coeff_value,
-                },
-            )
+            apply_overlay = sector_code not in overlay.no_overlay_sectors
+            coefficient = day_coefficients[sector_code] if apply_overlay else None
             component_scores = dict(candidate.component_scores or {})
             component_scores.setdefault("raw_rank", candidate.rank)
             component_scores["hmm"] = {
@@ -264,12 +236,21 @@ class SectorHMMRuntime:
                 "raw_rank": candidate.rank,
                 "source_reason": candidate.reason,
             }
+            reason = _hmm_adjusted_reason(candidate.reason)
+            if not apply_overlay:
+                component_scores["hmm"].update({
+                    "overlay_applied": False,
+                    "reason_code": "HMM_L2_QUOTES_UNAVAILABLE",
+                    "l2_overlay_unavailable_policy": overlay.metadata["l2_overlay_unavailable_policy"],
+                    "quote_availability_digest": overlay.metadata["quote_availability_digest"],
+                })
+                reason = f"{candidate.reason}|hmm_overlay_not_applied" if candidate.reason else "hmm_overlay_not_applied"
             adjusted.append(
                 candidate.model_copy(
                     update={
-                        "score": raw_score * coefficient,
+                        "score": raw_score * coefficient if apply_overlay else raw_score,
                         "component_scores": component_scores,
-                        "reason": _hmm_adjusted_reason(candidate.reason),
+                        "reason": reason,
                     }
                 )
             )
@@ -277,7 +258,7 @@ class SectorHMMRuntime:
         adjusted.sort(key=lambda item: (-item.score, item.component_scores.get("raw_rank", item.rank), item.symbol))
         reranked = [item.model_copy(update={"rank": rank}) for rank, item in enumerate(adjusted, start=1)]
         observed_at = datetime.now(timezone.utc)
-        coefficients_sha256 = _file_sha256(artifact.path)
+        coefficients_sha256 = artifact.sha256
         model_sha256 = _file_sha256(model_path)
         generation_mode = "EXACT_SNAPSHOT" if requested_snapshot_id else "DYNAMIC_LATEST_RESOLVED"
         input_data_max_dates = _input_data_max_dates_for_day(
@@ -325,6 +306,11 @@ class SectorHMMRuntime:
             "model_path": str(model_path),
             "coefficients_path": str(artifact.path),
         }
+        if overlay.metadata:
+            hmm_metadata.update(overlay.metadata)
+            hmm_metadata["no_overlay_candidate_count"] = sum(
+                row.component_scores["hmm"].get("overlay_applied") is False for row in reranked
+            )
         receipt = build_stage_receipt(
             stage=CandidateStageName.HMM_ADJUSTED,
             status=StageReceiptStatus.COMPLETE,
@@ -332,8 +318,11 @@ class SectorHMMRuntime:
             candidates=reranked,
             exclusions=exclusions,
             semantic_payload={
-                key: hmm_metadata[key]
-                for key in (
+                **({**overlay.metadata, "no_overlay_candidate_count": hmm_metadata["no_overlay_candidate_count"]}
+                   if overlay.metadata else {}),
+                **{
+                    key: hmm_metadata[key]
+                    for key in (
                     "enabled",
                     "status",
                     "generation_mode",
@@ -358,7 +347,8 @@ class SectorHMMRuntime:
                     "missing_sector_policy",
                     "missing_sector_excluded_count",
                     "missing_sector_excluded_symbols_hash",
-                )
+                    )
+                },
             },
         )
         return HMMAdjustmentResult(candidates=reranked, receipt=receipt, hmm_metadata=hmm_metadata)
@@ -426,117 +416,11 @@ class SectorHMMRuntime:
             allow_generate=not require_frozen_snapshot,
         )
         day_key = trade_date.isoformat()
-        daily_coefficients = artifact.payload.get("daily_coefficients")
-        stock_sector_map = _stock_sector_map_for_day(
-            artifact.payload,
-            day_key=day_key,
-            package_id=package_id,
-            coefficients_path=artifact.path,
+        overlay = self._validated_overlay_day(
+            artifact=artifact, snapshot=snapshot, model_path=model_path,
+            profile=profile, trade_date=trade_date, package_id=package_id,
+            effective_trade_date=trade_date,
         )
-        if not isinstance(daily_coefficients, dict) or not isinstance(stock_sector_map, dict):
-            raise HMMRuntimeUnavailableError(
-                "HMM coefficient artifact is missing required keys",
-                context={
-                    "package_id": package_id,
-                    "snapshot_id": profile.model_snapshot_id,
-                    "coefficients_path": str(artifact.path),
-                    "keys": sorted(str(key) for key in artifact.payload),
-                },
-            )
-        day_coefficients = daily_coefficients.get(day_key)
-        if not isinstance(day_coefficients, dict):
-            raise HMMRuntimeUnavailableError(
-                "HMM coefficient artifact has no coefficients for trade_date",
-                context={
-                    "package_id": package_id,
-                    "snapshot_id": profile.model_snapshot_id,
-                    "trade_date": day_key,
-                    "coefficients_path": str(artifact.path),
-                },
-            )
-        if not day_coefficients:
-            raise HMMRuntimeUnavailableError(
-                "HMM coefficient artifact has empty coefficients for trade_date",
-                context={
-                    "package_id": package_id,
-                    "snapshot_id": profile.model_snapshot_id,
-                    "trade_date": day_key,
-                    "coefficients_path": str(artifact.path),
-                },
-            )
-        if not stock_sector_map:
-            raise HMMRuntimeUnavailableError(
-                "HMM coefficient artifact is missing stock sector mapping",
-                context={
-                    "package_id": package_id,
-                    "snapshot_id": profile.model_snapshot_id,
-                    "trade_date": day_key,
-                    "coefficients_path": str(artifact.path),
-                },
-            )
-        valid_sector_codes: set[str] = set()
-        for raw_sector_code, raw_coefficient in day_coefficients.items():
-            sector_code = str(raw_sector_code or "").strip()
-            if not sector_code:
-                raise HMMRuntimeUnavailableError(
-                    "HMM coefficient artifact contains an empty sector code",
-                    context={
-                        "package_id": package_id,
-                        "snapshot_id": profile.model_snapshot_id,
-                        "trade_date": day_key,
-                        "coefficients_path": str(artifact.path),
-                        "sector_code": raw_sector_code,
-                    },
-                )
-            _positive_finite_float(
-                raw_coefficient,
-                message="HMM sector coefficient must be positive finite",
-                context={
-                    "package_id": package_id,
-                    "snapshot_id": profile.model_snapshot_id,
-                    "trade_date": day_key,
-                    "coefficients_path": str(artifact.path),
-                    "sector_code": sector_code,
-                    "coefficient": raw_coefficient,
-                },
-            )
-            valid_sector_codes.add(sector_code)
-        empty_map_symbols = [
-            str(symbol)
-            for symbol, sector_code in stock_sector_map.items()
-            if not str(sector_code or "").strip()
-        ]
-        if empty_map_symbols:
-            raise HMMRuntimeUnavailableError(
-                "HMM coefficient artifact contains empty stock sector mapping values",
-                context={
-                    "package_id": package_id,
-                    "snapshot_id": profile.model_snapshot_id,
-                    "trade_date": day_key,
-                    "coefficients_path": str(artifact.path),
-                    "symbol_samples": empty_map_symbols[:20],
-                    "missing_count": len(empty_map_symbols),
-                },
-            )
-        missing_sector_coverage = sorted(
-            {
-                str(sector_code).strip()
-                for sector_code in stock_sector_map.values()
-                if str(sector_code).strip() and str(sector_code).strip() not in valid_sector_codes
-            }
-        )
-        if missing_sector_coverage:
-            raise HMMRuntimeUnavailableError(
-                "HMM coefficient artifact has stock sector mapping without coefficients",
-                context={
-                    "package_id": package_id,
-                    "snapshot_id": profile.model_snapshot_id,
-                    "trade_date": day_key,
-                    "coefficients_path": str(artifact.path),
-                    "missing_sector_count": len(missing_sector_coverage),
-                    "missing_sector_samples": missing_sector_coverage[:20],
-                },
-            )
         return {
             "enabled": True,
             "model_config_id": profile.model_config_id,
@@ -547,12 +431,12 @@ class SectorHMMRuntime:
             "model_path": str(model_path),
             "coefficients_path": str(artifact.path),
             "trade_date": day_key,
-            "sector_count": len(day_coefficients),
-            "coefficient_count": len(valid_sector_codes),
-            "stock_sector_map_count": len(stock_sector_map),
+            "sector_count": len(overlay.coefficients),
+            "coefficient_count": len(overlay.coefficients),
+            "stock_sector_map_count": len(overlay.membership),
             "generation_mode": "EXACT_SNAPSHOT" if require_frozen_snapshot else "PREFLIGHT",
             "model_artifact_sha256": _file_sha256(model_path),
-            "coefficient_sha256": _file_sha256(artifact.path),
+            "coefficient_sha256": artifact.sha256,
             "input_data_max_dates_hash": _input_data_max_dates_hash(
                 artifact.payload,
                 snapshot=snapshot,
@@ -565,7 +449,52 @@ class SectorHMMRuntime:
             "training_information_cutoff": _time_value(snapshot.get("training_information_cutoff")),
             "as_of_trade_date": day_key,
             "effective_trade_date": day_key,
+            **overlay.metadata,
         }
+
+    def _validated_overlay_day(
+        self, *, artifact: HMMCoefficientArtifact, snapshot: dict[str, Any],
+        model_path: Path, profile: RuntimeHMMProfile, trade_date: date,
+        package_id: str, effective_trade_date: date | None,
+    ) -> HMMOverlayDay:
+        return validate_overlay_day(
+            payload=artifact.payload,
+            membership=_stock_sector_map_for_day(
+                artifact.payload, day_key=trade_date.isoformat(),
+                package_id=package_id, coefficients_path=artifact.path,
+            ),
+            trade_date=trade_date, effective_trade_date=effective_trade_date,
+            snapshot_id=str(profile.model_snapshot_id),
+            config_id=profile.model_config_id or snapshot.get("config_id"),
+            signal_preset=str(profile.signal_preset), coefficient_filename=artifact.path.name,
+            coefficient_sha256=artifact.sha256, model_sha256=_file_sha256(model_path),
+            registered_windows=lambda: self._registered_coefficient_windows(snapshot),
+            context={"package_id": package_id, "snapshot_id": profile.model_snapshot_id,
+                     "trade_date": trade_date.isoformat(), "coefficients_path": str(artifact.path)},
+        )
+
+    def _registered_coefficient_windows(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
+        provider = self._snapshot_provider
+        if provider is None:
+            from backend.services.hmm_training_service import HMMTrainingService
+
+            provider = HMMTrainingService()
+        get_config = getattr(provider, "get_config", None)
+        if not callable(get_config):
+            # Snapshot-only consumers (including LocalSIM) use the same public
+            # read-only registration API, never a consumer-specific adapter or
+            # the provider's train/generate entry points.
+            from backend.services.hmm_training_service import HMMTrainingService
+
+            get_config = HMMTrainingService().get_config
+        if not snapshot.get("config_id"):
+            raise HMMRuntimeUnavailableError("HMM no-overlay registration reader is unavailable")
+        record = get_config(str(snapshot["config_id"]))
+        config = record.get("config_json") if isinstance(record, dict) else None
+        windows = config.get("coefficient_windows") if isinstance(config, dict) else None
+        if not isinstance(windows, list) or any(not isinstance(row, dict) for row in windows):
+            raise HMMRuntimeUnavailableError("HMM no-overlay registered windows are unavailable")
+        return windows
 
     def _load_snapshot(self, snapshot_id: str) -> dict[str, Any]:
         provider = self._snapshot_provider
@@ -630,9 +559,9 @@ class SectorHMMRuntime:
                         "coefficients_path": profile.coefficients_path,
                     },
                 )
-            payload = _read_coefficients(explicit, package_id=package_id)
-            _validate_preset(payload, profile=profile, path=explicit, package_id=package_id)
-            return HMMCoefficientArtifact(path=explicit, payload=payload)
+            artifact = _read_coefficient_artifact(explicit, package_id=package_id)
+            _validate_preset(artifact.payload, profile=profile, path=explicit, package_id=package_id)
+            return artifact
 
         found = self._load_existing_coefficients(
             model_path=model_path,
@@ -688,11 +617,12 @@ class SectorHMMRuntime:
         trade_key = trade_date.isoformat()
         valid: list[HMMCoefficientArtifact] = []
         for path in matches:
-            payload = _read_coefficients(path, package_id=package_id)
+            artifact = _read_coefficient_artifact(path, package_id=package_id)
+            payload = artifact.payload
             _validate_preset(payload, profile=profile, path=path, package_id=package_id)
             daily_coefficients = payload.get("daily_coefficients")
             if isinstance(daily_coefficients, dict) and trade_key in daily_coefficients:
-                valid.append(HMMCoefficientArtifact(path=path, payload=payload))
+                valid.append(artifact)
         if not valid:
             return {
                 "artifact": None,
@@ -786,9 +716,9 @@ class SectorHMMRuntime:
                     "status": result.get("status"),
                 },
             )
-        payload = _read_coefficients(output_path, package_id=package_id)
-        _validate_preset(payload, profile=profile, path=output_path, package_id=package_id)
-        return HMMCoefficientArtifact(path=output_path, payload=payload)
+        artifact = _read_coefficient_artifact(output_path, package_id=package_id)
+        _validate_preset(artifact.payload, profile=profile, path=output_path, package_id=package_id)
+        return artifact
 
     @classmethod
     def _generation_lock(cls, snapshot_id: str, signal_preset: str, trade_date: str) -> threading.Lock:
@@ -809,10 +739,11 @@ class SectorHMMRuntime:
         return days[-1] if days else None
 
 
-def _read_coefficients(path: Path, *, package_id: str) -> dict[str, Any]:
+def _read_coefficient_artifact(path: Path, *, package_id: str) -> HMMCoefficientArtifact:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        content = path.read_bytes()
+        payload = json.loads(content.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
         raise HMMRuntimeUnavailableError(
             "HMM coefficient artifact is not valid JSON",
             context={"package_id": package_id, "coefficients_path": str(path)},
@@ -827,7 +758,9 @@ def _read_coefficients(path: Path, *, package_id: str) -> dict[str, Any]:
             "HMM coefficient artifact must be a JSON object",
             context={"package_id": package_id, "coefficients_path": str(path)},
         )
-    return payload
+    # Identity describes the exact bytes parsed above, not a second filesystem
+    # read that could race with an asset replacement.
+    return HMMCoefficientArtifact(path=path, payload=payload, sha256=hashlib.sha256(content).hexdigest())
 
 
 def _stock_sector_map_for_day(
@@ -849,7 +782,36 @@ def _stock_sector_map_for_day(
                 },
             )
         return maps_by_date[day_key]
-    return payload.get("stock_sector_map")
+    flat = payload.get("stock_sector_map")
+    if flat is not None or payload.get("l2_overlay_unavailable_policy") != NO_L2_OVERLAY_POLICY:
+        return flat
+    spans = payload.get("stock_sector_membership_spans")
+    if not isinstance(spans, dict) or not spans:
+        return None
+    membership: dict[str, str] = {}
+    try:
+        for symbol, rows in spans.items():
+            if not isinstance(rows, list) or not rows:
+                raise ValueError("missing membership spans")
+            previous_end = ""
+            for row in rows:
+                if not isinstance(row, dict):
+                    raise ValueError("invalid membership span")
+                start, end, sector = (row.get(key) for key in ("start_date", "end_date", "sector_code"))
+                if (not isinstance(start, str) or not isinstance(end, str)
+                        or date.fromisoformat(start).isoformat() != start or date.fromisoformat(end).isoformat() != end
+                        or not isinstance(sector, str) or not sector.strip()
+                        or start > end or start <= previous_end):
+                    raise ValueError("invalid or overlapping membership spans")
+                if start <= day_key <= end:
+                    membership[symbol] = sector
+                previous_end = end
+    except (TypeError, ValueError) as exc:
+        raise HMMRuntimeUnavailableError(
+            "HMM coefficient artifact has invalid point-in-time membership spans",
+            context={"package_id": package_id, "trade_date": day_key, "coefficients_path": str(coefficients_path)},
+        ) from exc
+    return membership
 
 
 def _input_data_max_dates_for_day(
@@ -967,8 +929,3 @@ def _finite_float(value: Any, *, message: str, context: dict[str, Any]) -> float
     return number
 
 
-def _positive_finite_float(value: Any, *, message: str, context: dict[str, Any]) -> float:
-    number = _finite_float(value, message=message, context=context)
-    if number <= 0:
-        raise HMMRuntimeUnavailableError(message, context=context)
-    return number
