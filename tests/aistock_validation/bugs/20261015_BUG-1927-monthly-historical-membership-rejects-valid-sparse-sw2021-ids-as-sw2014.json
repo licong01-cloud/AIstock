@@ -102,6 +102,8 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "root_cause": "The retained 131-code SW2021 catalog has sparse shared IDs through 133. A numeric id>=131 check incorrectly rejects valid IDs 131/132/133 as SW2014. No missing provider fact caused this failure.",
+  "fix_summary": "Validate historical policy projection against exact frozen current ID membership, retain unknown/old-only rejection and source-tail fallback, never renumber IDs or modify sealed facts/price exports.",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -111,11 +113,16 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "RED: sparse current ID131 fails at the production historical-membership path with the original SW2014 rejection.",
+      "GREEN: 35 targeted shared-component/repair-input tests passed in a fresh AIstock process; sparse IDs0/131/132/133, true old-only and unknown rejection, and approved SOURCE tail fallback covered. Ruff/L0/diff checks passed.",
+      "Read-only fresh-process replay of actual sealed projection CAS b5719fd9f3058455459e8305ef52272af98421ef20daf7972b32ed94c3cee3ca passed 000430.SZ/801993.SI/131,000526.SZ/801994.SI/132,000156.SZ/801995.SI/133 on 2024-07-01; authority unchanged, DB/candidate/profile writes false."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
