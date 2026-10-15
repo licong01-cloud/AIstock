@@ -1190,10 +1190,19 @@ class HMMTrainingService:
         }
 
     def _assert_daily_model_current(self, plan: Dict[str, Any]) -> None:
+        from .hmm_data_source.coefficient_extension import validate_daily_subscription
         from .hmm_data_source.daily_input import DailyInputError
 
         snapshot = self.get_snapshot(plan["snapshot_id"])
         config = self._get_config(plan["config_id"])
+        if "subscription_policy" in plan:
+            if config["config_json"].get("daily_coefficient_subscription") != plan["subscription_policy"]:
+                raise DailyInputError(
+                    "hmm_daily_subscription_identity_changed", "subscription changed before execution"
+                )
+            validate_daily_subscription(
+                config["config_json"], plan["subscription_policy"], model_sha256=self._file_sha256(plan["model_path"])
+            )
         preset = self._extract_signal_preset_coefficients(
             config["config_json"], plan["signal_preset"], allow_builtin_metadata_default=True
         )
@@ -1245,6 +1254,16 @@ class HMMTrainingService:
                 if row is None:
                     raise RuntimeError("hmm_daily_registration_failed: config missing")
                 config = self._normalise_config_json(row["config_json"])
+                if "subscription_policy" in plan:
+                    from .hmm_data_source.coefficient_extension import validate_daily_subscription
+
+                    if config.get("daily_coefficient_subscription") != plan["subscription_policy"]:
+                        raise RuntimeError(
+                            "hmm_daily_subscription_identity_changed: subscription changed before registration"
+                        )
+                    validate_daily_subscription(
+                        config, plan["subscription_policy"], model_sha256=self._file_sha256(plan["model_path"])
+                    )
                 preset = self._extract_signal_preset_coefficients(
                     config, plan["signal_preset"], allow_builtin_metadata_default=True
                 )
@@ -1326,6 +1345,8 @@ class HMMTrainingService:
         confirm_generate: bool = False,
         as_of_date: date | None = None,
         effective_trade_date: date | None = None,
+        subscription_policy: Dict[str, Any] | None = None,
+        subscription_readiness_key: str | None = None,
     ) -> Dict[str, Any]:
         """Create a durable background job and return immediately.
 
@@ -1344,11 +1365,46 @@ class HMMTrainingService:
             raise RuntimeError(
                 "hmm_database_daily_input_unavailable: database input is not validated; no daily job has been created"
             )
+        if subscription_policy is not None:
+            from .hmm_data_source.coefficient_extension import validate_daily_subscription
+
+            validate_daily_subscription(plan["config_json"], subscription_policy, model_sha256=plan["model_sha256"])
+            if (
+                plan.get("source_mode") != HMM_DATABASE_DAILY_SOURCE
+                or plan.get("snapshot_id") != subscription_policy["snapshot_id"]
+                or signal_preset not in subscription_policy["signal_presets"]
+            ):
+                raise RuntimeError("hmm_daily_subscription_identity_changed: plan does not belong to subscription")
+            expected_key = self._daily_subscription_readiness_key(
+                subscription_policy,
+                plan["database_completion"],
+                as_of=date.fromisoformat(plan["as_of_trade_date"]),
+                effective=date.fromisoformat(plan["effective_trade_date"]),
+                signal_preset=signal_preset,
+                generator_sha256=plan["generator_sha256"],
+            )
+            if subscription_readiness_key != expected_key:
+                raise RuntimeError("hmm_daily_subscription_identity_changed: completion changed before admission")
+            plan["subscription_policy"] = dict(subscription_policy)
+            plan["subscription_readiness_key"] = expected_key
         with get_conn(autocommit=False, manage_transaction=True) as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended(%s,0))", (f"hmm-database-daily:{plan['config_id']}",)
                 )
+                if subscription_policy is not None:
+                    cur.execute(
+                        "SELECT config_json FROM model_train_configs WHERE config_id=%s FOR SHARE", (plan["config_id"],)
+                    )
+                    row = cur.fetchone()
+                    current = self._normalise_config_json(row["config_json"]) if row else {}
+                    if current.get("daily_coefficient_subscription") != subscription_policy:
+                        raise RuntimeError(
+                            "hmm_daily_subscription_identity_changed: subscription changed before admission"
+                        )
+                    validate_daily_subscription(
+                        current, subscription_policy, model_sha256=self._file_sha256(plan["model_path"])
+                    )
                 cur.execute(
                     "SELECT job_id FROM model_train_daily_coefficient_jobs WHERE config_id=%s "
                     "AND generation_mode=%s AND plan_json->>'daily_key'=%s ORDER BY requested_at DESC LIMIT 2",
@@ -1585,6 +1641,230 @@ class HMMTrainingService:
             "policy": config["config_json"].get("coefficient_extension"),
             "jobs": self.list_daily_coefficient_jobs(config_id=config_id, limit=10),
         }
+
+    def configure_daily_coefficient_subscription(
+        self,
+        config_id: str,
+        *,
+        snapshot_id: str,
+        signal_presets: List[str],
+        enabled: bool,
+    ) -> Dict[str, Any]:
+        """Explicit DB enrollment; it never enrolls or changes QE file policy."""
+        from .hmm_data_source.coefficient_extension import make_daily_subscription
+
+        if type(enabled) is not bool:
+            raise ValueError("enabled must be an explicit boolean")
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT config_json FROM model_train_configs WHERE config_id=%s FOR UPDATE", (config_id,))
+                row = cur.fetchone()
+                if row is None:
+                    raise ValueError("HMM config does not exist")
+                config = self._normalise_config_json(row["config_json"])
+                if enabled:
+                    snapshot = self.get_snapshot(snapshot_id)
+                    if (
+                        snapshot is None
+                        or str(snapshot.get("config_id")) != config_id
+                        or str(snapshot.get("status", "")).lower() not in {"completed", "success", "succeeded", "ready"}
+                    ):
+                        raise ValueError("fixed completed snapshot must belong to config")
+                    for preset in signal_presets:
+                        self._extract_signal_preset_coefficients(config, preset, allow_builtin_metadata_default=True)
+                    policy = make_daily_subscription(
+                        config=config,
+                        snapshot_id=snapshot_id,
+                        model_sha256=self._file_sha256(str(snapshot["model_path"])),
+                        signal_presets=signal_presets,
+                        enabled=True,
+                    )
+                else:
+                    existing = config.get("daily_coefficient_subscription")
+                    if (
+                        not isinstance(existing, dict)
+                        or existing.get("snapshot_id") != snapshot_id
+                        or existing.get("signal_presets") != sorted(signal_presets)
+                    ):
+                        raise ValueError("disable must identify the registered subscription")
+                    policy = {**existing, "enabled": False}
+                config["daily_coefficient_subscription"] = policy
+                cur.execute(
+                    "UPDATE model_train_configs SET config_json=%s WHERE config_id=%s RETURNING config_json",
+                    (psycopg2.extras.Json(config), config_id),
+                )
+                saved = cur.fetchone()
+                if saved is None or self._normalise_config_json(saved["config_json"]) != config:
+                    raise RuntimeError("hmm_daily_subscription_registration_readback_mismatch")
+        return {"config_id": config_id, "policy": policy}
+
+    def get_daily_coefficient_subscription(self, config_id: str) -> Dict[str, Any]:
+        config = self._get_config(config_id)["config_json"]
+        return {"config_id": config_id, "policy": config.get("daily_coefficient_subscription")}
+
+    @staticmethod
+    def _daily_subscription_readiness_key(
+        policy: Dict[str, Any],
+        completion: Dict[str, Any],
+        *,
+        as_of: date,
+        effective: date,
+        signal_preset: str,
+        generator_sha256: str,
+    ) -> str:
+        from .hmm_data_source.coefficient_extension import fingerprint
+
+        return fingerprint(
+            {
+                "policy": policy,
+                "signal_preset": signal_preset,
+                "generator_sha256": generator_sha256,
+                "as_of": as_of.isoformat(),
+                "effective": effective.isoformat(),
+                "completion_authority": completion["completion_authority"],
+                "completion_statuses": completion["completion_statuses"],
+            }
+        )
+
+    def reconcile_daily_coefficient_subscriptions(self) -> List[Dict[str, Any]]:
+        """Public HMM reconciliation hook; no scheduler, notifications or fitting."""
+        from datetime import timedelta, timezone
+        from .hmm_data_source.coefficient_extension import config_fingerprint, validate_daily_subscription
+
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT config_id, config_json FROM model_train_configs "
+                    "WHERE config_json->'daily_coefficient_subscription'->>'enabled'='true'"
+                )
+                configs = [dict(row) for row in cur.fetchall()]
+        results: List[Dict[str, Any]] = []
+        for row in configs:
+            config_id = str(row["config_id"])
+            try:
+                config = self._normalise_config_json(row["config_json"])
+                policy = config["daily_coefficient_subscription"]
+                snapshot = self.get_snapshot(policy["snapshot_id"])
+                if (
+                    snapshot is None
+                    or str(snapshot.get("config_id")) != config_id
+                    or str(snapshot.get("status", "")).lower() not in {"completed", "success", "succeeded", "ready"}
+                ):
+                    raise RuntimeError("hmm_daily_subscription_identity_changed: fixed snapshot is not completed")
+                validate_daily_subscription(config, policy, model_sha256=self._file_sha256(snapshot["model_path"]))
+                as_of, completion = self._database_daily_completion(as_of_date=None)
+                effective = self._next_trading_day(as_of)
+                read_at = datetime.fromisoformat(completion["read_cutoff_at"])
+                if read_at.tzinfo is None:
+                    raise RuntimeError("hmm_database_daily_input_unavailable: invalid completion cutoff")
+                if effective < read_at.astimezone(timezone(timedelta(hours=8))).date():
+                    results.append(
+                        {
+                            "config_id": config_id,
+                            "status": "WAITING",
+                            "reason_code": "hmm_daily_historical_as_known_unavailable",
+                        }
+                    )
+                    continue
+                for preset in policy["signal_presets"]:
+                    readiness = self._daily_subscription_readiness_key(
+                        policy,
+                        completion,
+                        as_of=as_of,
+                        effective=effective,
+                        signal_preset=preset,
+                        generator_sha256=self._daily_generator_sha256(),
+                    )
+                    with get_conn() as conn:
+                        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                            cur.execute(
+                                "SELECT job_id FROM model_train_daily_coefficient_jobs WHERE config_id=%s "
+                                "AND generation_mode=%s AND (plan_json->>'subscription_readiness_key'=%s OR "
+                                "(NOT (plan_json ? 'subscription_policy') AND snapshot_id=%s AND signal_preset=%s "
+                                "AND as_of_trade_date=%s AND effective_trade_date=%s "
+                                "AND plan_json->>'generator_sha256'=%s "
+                                "AND plan_json->'database_completion'->'completion_statuses'=%s::jsonb)) "
+                                "ORDER BY requested_at DESC LIMIT 2",
+                                (
+                                    config_id,
+                                    HMM_DAILY_COEFFICIENT_MODE,
+                                    readiness,
+                                    policy["snapshot_id"],
+                                    preset,
+                                    as_of,
+                                    effective,
+                                    self._daily_generator_sha256(),
+                                    psycopg2.extras.Json(completion["completion_statuses"]),
+                                ),
+                            )
+                            existing = cur.fetchall()
+                    if len(existing) > 1:
+                        raise RuntimeError("hmm_daily_job_identity_conflict: duplicate subscription jobs")
+                    if existing:
+                        job = self.get_daily_coefficient_job(str(existing[0]["job_id"]))
+                        if job is None:
+                            raise RuntimeError("hmm_daily_job_identity_conflict: subscription job disappeared")
+                        cached = job.get("plan_json")
+                        expected = {
+                            "source_mode": HMM_DATABASE_DAILY_SOURCE,
+                            "config_id": config_id,
+                            "snapshot_id": policy["snapshot_id"],
+                            "signal_preset": preset,
+                            "model_sha256": policy["model_sha256"],
+                            "as_of_trade_date": as_of.isoformat(),
+                            "effective_trade_date": effective.isoformat(),
+                        }
+                        if not isinstance(cached, dict) or any(cached.get(k) != value for k, value in expected.items()):
+                            raise RuntimeError("hmm_daily_job_identity_conflict: cached subscription plan differs")
+                        if "subscription_policy" in cached:
+                            if (
+                                cached["subscription_policy"] != policy
+                                or cached.get("subscription_readiness_key") != readiness
+                            ):
+                                raise RuntimeError("hmm_daily_job_identity_conflict: cached subscription differs")
+                        elif (
+                            config_fingerprint(cached["config_json"]) != policy["config_sha256"]
+                            or self._daily_subscription_readiness_key(
+                                policy,
+                                cached["database_completion"],
+                                as_of=as_of,
+                                effective=effective,
+                                signal_preset=preset,
+                                generator_sha256=cached["generator_sha256"],
+                            )
+                            != readiness
+                        ):
+                            raise RuntimeError("hmm_daily_job_identity_conflict: existing manual job differs")
+                    else:
+                        job = self.start_daily_coefficients_job(
+                            policy["snapshot_id"],
+                            signal_preset=preset,
+                            confirm_generate=True,
+                            as_of_date=as_of,
+                            subscription_policy=policy,
+                            subscription_readiness_key=readiness,
+                        )
+                    status = str(job["status"]).upper()
+                    if status not in {"PENDING", "RUNNING", "COMPLETED", "FAILED"}:
+                        raise RuntimeError("hmm_daily_job_identity_conflict: unknown subscription job status")
+                    if status in {"PENDING", "RUNNING"}:
+                        self.run_daily_coefficients_job(str(job["job_id"]))
+                        job = self.get_daily_coefficient_job(str(job["job_id"]))
+                        if job is None:
+                            raise RuntimeError("hmm_daily_job_identity_conflict: subscription result disappeared")
+                    results.append(job)
+            except Exception as exc:
+                logger.exception("HMM database daily subscription blocked: config=%s", config_id)
+                reason = getattr(exc, "reason_code", None) or str(exc).split(":", 1)[0]
+                results.append(
+                    {
+                        "config_id": config_id,
+                        "status": "BLOCKED",
+                        "reason_code": reason if reason.startswith("hmm_") else "hmm_daily_subscription_failed",
+                        "error": str(exc),
+                    }
+                )
+        return results
 
     def _enqueue_coefficient_extension(self, plan: Dict[str, Any]) -> Dict[str, Any]:
         """Serialize admission on the existing config row, without new DDL."""

@@ -93,6 +93,14 @@ class CoefficientExtensionRequest(BaseModel):
     enabled: StrictBool = True
 
 
+class DailyCoefficientSubscriptionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    snapshot_id: str
+    signal_presets: List[str]
+    enabled: StrictBool
+
+
 class RollingTrainingPreviewRequest(BaseModel):
     as_of_date: Optional[date] = None
     train_window_years: float = 3.0
@@ -440,6 +448,22 @@ def get_coefficient_extension(config_id: str):
         raise _http_error(exc) from exc
 
 
+@router.post("/configs/{config_id}/daily-coefficient-subscription")
+def configure_daily_coefficient_subscription(config_id: str, req: DailyCoefficientSubscriptionRequest):
+    try:
+        return service.configure_daily_coefficient_subscription(config_id, **req.model_dump())
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/configs/{config_id}/daily-coefficient-subscription")
+def get_daily_coefficient_subscription(config_id: str):
+    try:
+        return service.get_daily_coefficient_subscription(config_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
 _training_router = router
 from . import hmm_evolution as _hmm_evolution  # noqa: E402
 
@@ -503,6 +527,34 @@ async def coefficient_extension_tick() -> None:
                 )
     except Exception:
         logger.exception("HMM 自动延伸调度失败")
+
+
+async def coefficient_readiness_tick() -> List[Dict[str, Any]]:
+    """Public hook for an existing scheduler owner; never starts a scheduler."""
+    svc = HMMTrainingService()
+    combined: List[Dict[str, Any]] = []
+    for source_mode, reconcile in (
+        ("qe_frozen_file", svc.reconcile_coefficient_extensions),
+        ("database_daily", svc.reconcile_daily_coefficient_subscriptions),
+    ):
+        try:
+            results = await asyncio.to_thread(reconcile)
+            combined.extend(results)
+            for result in results:
+                if result.get("status") in {"FAILED", "BLOCKED"}:
+                    logger.error(
+                        "HMM readiness incomplete: %s",
+                        {
+                            key: result.get(key)
+                            for key in ("config_id", "job_id", "status", "reason_code", "error_message")
+                        },
+                    )
+        except Exception:
+            logger.exception("HMM readiness reconciliation failed: %s", reconcile.__name__)
+            combined.append(
+                {"source_mode": source_mode, "status": "BLOCKED", "reason_code": "hmm_coefficient_readiness_failed"}
+            )
+    return combined
 
 
 def init_hmm_scheduler() -> None:
