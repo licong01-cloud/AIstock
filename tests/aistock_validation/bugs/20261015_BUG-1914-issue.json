@@ -142,7 +142,14 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/factor_research/test_assistance.py::test_memory_unknown_conflict_literal_paging_and_old_context backend/tests/factor_research/test_full_evaluation.py::test_annual_views_cover_actual_history_without_expanding_recent_views backend/tests/factor_research/test_comparison.py::test_hac_interval_preserves_bandwidth_and_contiguous_date_boundaries -q",
+  "validation_evidence": [
+    "RED: extended horizon filters rejected, early annual view and confidence interval absent; GREEN: 7 focused cases passed",
+    "Final related matrix: test_assistance.py test_full_evaluation.py test_comparison.py -> 36 passed; no DEV authorization",
+    "Ruff changed files, git diff --check, python -m nox -s l0 -> passed",
+    "Review 1: only research projection/report additions, no new estimate or horizon/label change; no repository, SQL, official metrics, QE or runtime mutation",
+    "Review 2 DESIGN-COMPLIANCE-001: scopes fully implemented locally; undefined uncertainty stays null; original HAC values/default preserved with explicit no-serial-adjustment flag; no new gates; runtime classification unresolved and not manually downgraded"
+  ],
   "required_verification": [
     "l0",
     "factor_research_backend"
@@ -150,7 +157,10 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh pytest process in BUG-1914 worktree imported changed research modules; final targeted matrix 36 passed without database/service calls"
+    ],
+    "business_smoke_gap": "memory.py and full_evaluation.py are CLI research paths in inspected imports but not exact non_runtime catalog entries; comparison.py already is. No target-owned HTTP semantic smoke exists for these research operations. Request workflow owner classification; do not forge health-as-business evidence or manually downgrade runtime.",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
