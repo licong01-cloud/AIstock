@@ -1566,6 +1566,56 @@ class MonthlyReleaseService:
                 "monthly_repair_inputs_ref": {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}})
             return receipt
 
+    def bind_prev_close_repairs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str, cas=None) -> dict[str, Any]:
+        """Amend exact approved provider facts; never replace SOURCE or exports."""
+        from .monthly_prev_close_repair import BINDING, SCHEMA, SUPPLEMENT_KEYS, capture_approved_corrections
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing = plan.get(BINDING)
+            if existing is not None:
+                ref = plan[BINDING + "_ref"]
+                path = root / ref["id"]
+                if (existing.get("inputs") != inputs or _read_json(path, label="prev_close binding") != existing
+                        or _file_sha256(path) != ref["sha256"] or path.stat().st_size != ref["size"]):
+                    raise MonthlyReleaseConflict("prev_close correction binding changed")
+                return {"status": "BOUND", "reference": ref, "authority_ref": existing["authority_ref"]}
+            state = self.store.read_state(operation_id)
+            source = self.store.read_checkpoint(operation_id, "SOURCE")
+            if (state["status"] != ReleaseState.FAILED.value or state["current_stage"] != "BUILD" or source is None
+                    or any(self.store.read_checkpoint(operation_id, s) is not None for s in STAGES if s != "SOURCE")):
+                raise MonthlyReleaseConflict("prev_close correction requires idle, sealed SOURCE and unfinished BUILD")
+            bundles = [r for r in source["input_refs"] if Path(r["id"]).name == "frozen-source-bundle.json"]
+            if len(bundles) != 1:
+                raise MonthlyReleaseConflict("prev_close correction SOURCE bundle is ambiguous")
+            if cas is None:
+                from .monthly_runtime import MonthlyRuntimeSettings
+                from .cas_store import CASStore
+                cas = CASStore(MonthlyRuntimeSettings.from_env().artifact_root)
+            repair_root = Path(plan["candidate_root"]).parent.parent / "data_repair_staging"
+            try:
+                authority = capture_approved_corrections(inputs, repair_root=repair_root,
+                    cutoff=date.fromisoformat(plan["target_cutoff"]))
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                raise MonthlyReleaseRequestInvalid("prev_close correction source is invalid", context={"cause": str(exc)}) from exc
+            binding = {"schema_version": SCHEMA, "operation_id": operation_id, "inputs": dict(inputs),
+                "base_plan_digest": _digest({k: v for k, v in plan.items() if k not in SUPPLEMENT_KEYS}),
+                "source_receipt_canonical_sha256": source["canonical_sha256"],
+                "source_bundle_sha256": bundles[0]["sha256"], "target_cutoff": plan["target_cutoff"],
+                "predecessor_manifest_sha256": plan["predecessor"]["dataset_manifest_sha256"],
+                "authority_ref": cas.put_json(authority).as_dict(), "bound_by": principal,
+                "database_write": False, "activation_authorized": False}
+            relative = f"inputs/prev-close-{_digest(binding)}.json"
+            path = root / relative
+            if path.exists():
+                if _read_json(path, label="retained prev_close binding") != binding:
+                    raise MonthlyReleaseConflict("retained prev_close binding differs")
+            else:
+                _write_exclusive(path, binding)
+            ref = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
+            self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
+            return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
+
     def bind_industry_history(self, operation_id: str, *, principal: str, connection_factory=None, quote_cas=None) -> dict[str, Any]:
         """Freeze a targeted history supplement without replacing sealed prices.
 
@@ -1629,10 +1679,11 @@ class MonthlyReleaseService:
             finally:
                 connection.rollback()
                 connection.close()
+            from .monthly_prev_close_repair import SUPPLEMENT_KEYS
             value = plan.get("monthly_industry_history") or {"schema_version": "aistock_monthly_industry_history_binding_v1", "operation_id": operation_id,
                 "source_bundle_sha256": bundles[0]["sha256"], "target_cutoff": plan["target_cutoff"],
                 "predecessor_manifest_sha256": predecessor["dataset_manifest_sha256"],
-                "base_plan_digest": _digest(plan), "source_receipt_canonical_sha256": source["canonical_sha256"],
+                "base_plan_digest": _digest({k: v for k, v in plan.items() if k not in SUPPLEMENT_KEYS}), "source_receipt_canonical_sha256": source["canonical_sha256"],
                 "projection": projection.payload, "bound_by": principal, "database_write": False,
                 "activation_authorized": False}
             relative = f"inputs/industry-history-{_digest(value)}.json"
@@ -1914,19 +1965,23 @@ class MonthlyReleaseService:
                         }
                     }
                 )
-                source_supplement = plan.get("monthly_industry_history") if stage == "SOURCE" else None
-                if source_supplement is not None:
+                from .monthly_prev_close_repair import SUPPLEMENT_KEYS
+                supplement_names = ("monthly_industry_history", "monthly_prev_close_repairs")
+                source_supplements = [plan[name] for name in supplement_names if plan.get(name) is not None] if stage == "SOURCE" else []
+                if source_supplements:
                     # Only classification is amended. Verify the ORIGINAL plan,
                     # SOURCE receipt and all original files; never change that
                     # seal or rerun completed price exports under a new source.
-                    base_plan = {key: value for key, value in plan.items() if key not in {
-                        "monthly_industry_history", "monthly_industry_history_ref",
-                        "monthly_industry_quote_source", "monthly_industry_quote_source_ref"}}
-                    ref = plan.get("monthly_industry_history_ref") or {}
-                    if (_digest(base_plan) != source_supplement.get("base_plan_digest") or
-                        hashlib.sha256(_canonical_payload(source_supplement)).hexdigest() != ref.get("sha256")):
-                        raise MonthlyReleaseConflict("industry supplement changed the sealed base plan")
-                    plan_digest = source_supplement["base_plan_digest"]
+                    base_plan = {key: value for key, value in plan.items() if key not in SUPPLEMENT_KEYS}
+                    for name in supplement_names:
+                        supplement = plan.get(name)
+                        if supplement is None:
+                            continue
+                        ref = plan.get(name + "_ref") or {}
+                        if (_digest(base_plan) != supplement.get("base_plan_digest") or
+                            hashlib.sha256(_canonical_payload(supplement)).hexdigest() != ref.get("sha256")):
+                            raise MonthlyReleaseConflict("source supplement changed the sealed base plan")
+                    plan_digest = source_supplements[0]["base_plan_digest"]
                     current_producer_digest = None  # Original producer remains recorded in its unmodified checkpoint.
                 existing = self.store.read_checkpoint(
                     operation_id,
@@ -1936,8 +1991,8 @@ class MonthlyReleaseService:
                     producer_digest=current_producer_digest,
                     input_set_digest=current_input_set_digest,
                 )
-                if source_supplement is not None and (existing is None or existing["canonical_sha256"] != source_supplement["source_receipt_canonical_sha256"]):
-                    raise MonthlyReleaseConflict("industry supplement cannot replace or rebuild sealed SOURCE")
+                if source_supplements and (existing is None or any(existing["canonical_sha256"] != s["source_receipt_canonical_sha256"] for s in source_supplements)):
+                    raise MonthlyReleaseConflict("source supplement cannot replace or rebuild sealed SOURCE")
                 checkpoint_validator = getattr(self.pipeline, "checkpoint_is_valid", None)
                 if existing is not None and callable(checkpoint_validator):
                     if not checkpoint_validator(stage, existing):
