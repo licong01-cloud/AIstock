@@ -2807,6 +2807,26 @@ class SimulationRuntimeRepository:
         )
         return self._daily_run_from_row(rows[0]) if rows else None
 
+    def require_localsim_side_effect_free_rebuild(self, run: SimulationDailyRun) -> None:
+        from .localsim_replay_recovery import economic_fact_counts, recovery_rebuild_receipt, require_no_economic_effects
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("SELECT * FROM paper_v2.simulation_daily_run WHERE run_id = %s FOR UPDATE", (run.run_id,))
+                row = cur.fetchone()
+                if row is None:
+                    raise DataUnavailableError("LocalSIM recovery daily run disappeared", context={"run_id": run.run_id})
+                current = self._daily_run_from_row(dict(row))
+                expected = recovery_rebuild_receipt(run)
+                if (recovery_rebuild_receipt(current) != expected or expected is None
+                        or current.status != SimulationDailyRunStatus.FAILED_RETRYABLE):
+                    raise InvalidStateTransitionError(
+                        "LocalSIM recovery daily inputs changed before rebuilding",
+                        context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_LINEAGE_CONFLICT"},
+                    )
+                require_no_economic_effects(current.run_payload_json, economic_fact_counts(cur, run.run_id),
+                                            now=datetime.now(UTC), check_retry_claims=False)
+
     def list_simulation_daily_runs(
         self,
         *,

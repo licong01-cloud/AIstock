@@ -11,6 +11,7 @@ from uuid import uuid4
 import psycopg2
 import psycopg2.extras
 import pytest
+from types import SimpleNamespace
 
 from backend.db import init_trading_core_v2_schema
 from backend.services.simulation_runtime.localsim_control import LocalSimControlPlaneService
@@ -34,6 +35,148 @@ from backend.services.simulation_runtime.successor_repository import LocalSimSuc
 from backend.services.strategy_package.execution_policy import local_sim_twap_only_policy_snapshot
 from backend.services.trading_core.errors import InvalidStateTransitionError
 from backend.tests.paper_trading_v2.fixtures_dev_db import _dev_dsn
+
+
+def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_existing_dev():
+    from backend.services.simulation_runtime.localsim_replay_recovery import (
+        RECOVERY_KEY, LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryService,
+    )
+    from backend.services.simulation_runtime.models import ExecutionPlan, SimulationDailyRun, SimulationDailyRunStatus
+    from backend.services.simulation_signal.contracts import DailySelectionEvidence
+    from backend.services.simulation_data.contracts import MinuteDataSource
+
+    dsn = _dev_dsn()
+    package_id, manifest = _package_identity(dsn)
+    conn = psycopg2.connect(**dsn)
+    marker = "test_int_recovery_" + uuid4().hex
+    now = datetime(2026, 10, 15, tzinfo=UTC)
+    days = (date(2026, 1, 20), date(2026, 1, 21))
+
+    @contextmanager
+    def factory():
+        savepoint = "recovery_" + uuid4().hex
+        with conn.cursor() as cur:
+            cur.execute(f"SAVEPOINT {savepoint}")
+        try:
+            yield conn
+        except Exception:
+            with conn.cursor() as cur:
+                cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            raise
+        finally:
+            with conn.cursor() as cur:
+                cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+
+    try:
+        repository = LocalSimSuccessorRepository(conn_factory=factory)
+        runtime = SimulationRuntimeRepository(conn_factory=factory)
+        control = LocalSimControlPlaneService(repository=repository, clock=lambda: now)
+        profiles = LocalSimRuntimeProfileService(
+            repository=LocalSimRuntimeProfileRepository(conn_factory=factory),
+            authority=_RuntimeProfileAuthority(), clock=lambda: now,
+        )
+        profile = profiles.create_profile(package_id=package_id, manifest_sha256=manifest,
+                                          profile_name=marker, created_by=marker)
+        profile, version = profiles.create_version(
+            profile_id=profile.profile_id, expected_profile_version=profile.version,
+            config_json={"schema_version": "localsim_runtime_profile_config_request_v1",
+                         "daily_strategy": {"strategy_id": "test_int_daily_strategy", "strategy_version": "v1", "top_k": 50},
+                         "hmm": {"enabled": False}, "risk_policy": {"enabled": False}, "fee_policy": {}}, created_by=marker,
+        )
+        policy = local_sim_twap_only_policy_snapshot()
+        account, scope, release, binding = control.create_account(
+            account_name=marker, package_id=package_id, manifest_sha256=manifest,
+            admission_receipt_id=marker, initial_capital=5_000_000, effective_from=days[0], effective_to=days[-1],
+            runtime_profile_id=profile.profile_id, runtime_profile_version_id=version.profile_version_id,
+            runtime_profile_sha256=version.config_sha256,
+            daily_strategy_profile_version_id=version.daily_strategy_profile_version_id,
+            execution_policy_version_id=policy["policy_version_id"], execution_policy_sha256=policy["policy_sha256"],
+            execution_policy_json=policy["policy_json"], tail_policy_version_id="test_int_tail",
+            tail_policy_sha256="d" * 64, created_by=marker,
+        )
+        coordinator = LocalSimReplayCoordinator(repository=repository, clock=lambda: now,
+            historical_day_runner=LocalSimHistoricalDayRunner(historical_source_id="market.kline_minute_raw.v1",
+                historical_source_sha256="c" * 64, run_day=lambda *_: None))
+        job = coordinator.create_job(simulation_account_id=account.account_id, release_id=release.release_id,
+            binding_id=binding.binding_id, start_trade_date=days[0], end_trade_date=days[-1], trading_days=days,
+            historical_source_id="market.kline_minute_raw.v1", historical_source_sha256="c" * 64, created_by=marker)
+        job = repository.transition_replay_job(replay_job_id=job.replay_job_id, expected_version=job.version,
+            update={"status": LocalSimReplayStatus.FAILED_TERMINAL, "completed_trade_date": days[0],
+                    "next_trade_date": days[1], "failure_code": "BrokerConnectivityError",
+                    "failure_context": {"trade_date": days[1].isoformat()}}, updated_at=now)
+        evidence_payload = {"test_int_marker": marker}
+        evidence_hash = canonical_json_sha256(evidence_payload)
+        evidence = runtime.save_daily_selection_evidence(DailySelectionEvidence(
+            evidence_id="dse_" + evidence_hash[:16], target_trade_date=days[1], package_id=package_id,
+            manifest_sha256=manifest, release_id=release.release_id, release_hash=release.release_hash,
+            runtime_profile_version_id=version.profile_version_id, runtime_profile_hash=version.config_sha256,
+            source_type="test_int_recovery", data_source="DB_HISTORICAL", candidate_count=0, excluded_count=0,
+            artifact_hash=evidence_hash, evidence_payload_json=evidence_payload))
+        plan_payload = {"test_int_marker": marker}
+        plan_hash = canonical_json_sha256(plan_payload)
+        plan = runtime.save_execution_plan(ExecutionPlan(
+            plan_id="plan_" + plan_hash[:16], strategy_id=account.account_id, portfolio_id=scope.ledger_scope_id,
+            package_id=package_id, release_id=release.release_id, release_hash=release.release_hash,
+            binding_id=binding.binding_id, binding_hash=binding.binding_hash,
+            selection_evidence_id=evidence.evidence_id, selection_evidence_hash=evidence.artifact_hash,
+            target_trade_date=days[1], execution_policy_version_id=policy["policy_version_id"],
+            execution_policy_sha256=policy["policy_sha256"], tail_policy_version_id="test_int_tail",
+            tail_policy_sha256="d" * 64, intents=[], trading_rule_decisions=[],
+            plan_payload_json=plan_payload, plan_hash=plan_hash))
+        run = runtime.save_simulation_daily_run(SimulationDailyRun(
+            run_id=marker, trade_date=days[1], strategy_id=account.account_id, broker_backend="local_sim",
+            package_id=package_id, manifest_sha256=manifest, release_id=release.release_id, release_hash=release.release_hash,
+            binding_id=binding.binding_id, binding_hash=binding.binding_hash, selection_evidence_id=evidence.evidence_id,
+            selection_artifact_hash=evidence.artifact_hash, execution_plan_id=plan.plan_id, execution_plan_hash=plan.plan_hash,
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE, run_payload_json={"submit_failure": {
+                "type": "BrokerConnectivityError", "stage": "LOCAL_SIM_SUBMIT_FAILED", "context": {
+                    "source": "DB_HISTORICAL", "symbol": "001205.SZ", "trade_date": days[1].isoformat(),
+                    "cause": "market.stk_limit pre_close is required and cannot be derived"}}}))
+        source = SimpleNamespace(historical_source_id=job.historical_source_id,
+            historical_source_sha256=job.historical_source_sha256, trading_days=days, current_trading_date=now.date())
+        def recovery(repo):
+            return LocalSimReplayRecoveryService(repository=repo,
+                source_authority=SimpleNamespace(resolve=lambda **_: source), clock=lambda: now,
+                market_provider=SimpleNamespace(load_symbol_input=lambda **kw: SimpleNamespace(
+                    symbol=kw["symbol"], trade_date=days[1], source=MinuteDataSource.DB_HISTORICAL,
+                    market_context={"prev_close": 15.3}, minute_bars=[object()])))
+        service = recovery(repository)
+        check = service.inspect(job.replay_job_id)
+        assert check.ready and set(check.economic_counts.values()) == {0}
+        request = LocalSimReplayRecoverRequestV1(expected_version=job.version, snapshot_sha256=check.snapshot_sha256)
+
+        class BrokenReadback(LocalSimSuccessorRepository):
+            def _select_replay(self, cur, replay_job_id, **kwargs):
+                result = super()._select_replay(cur, replay_job_id, **kwargs)
+                if result.status == LocalSimReplayStatus.FAILED_RETRYABLE:
+                    raise RuntimeError("injected recovery readback failure")
+                return result
+
+        with pytest.raises(RuntimeError, match="injected recovery"):
+            recovery(BrokenReadback(conn_factory=factory)).recover(job.replay_job_id, request)
+        assert repository.get_replay_job(job.replay_job_id) == job
+        assert RECOVERY_KEY not in runtime.get_simulation_daily_run(run.run_id).run_payload_json
+        with psycopg2.connect(**dsn) as other:
+            with other.cursor() as cur:
+                cur.execute("SELECT pg_advisory_lock(2403, hashtext(%s))", (run.run_id,))
+                try:
+                    with pytest.raises(InvalidStateTransitionError, match="writer is active"):
+                        service.recover(job.replay_job_id, request)
+                finally:
+                    cur.execute("SELECT pg_advisory_unlock(2403, hashtext(%s))", (run.run_id,))
+        result = service.recover(job.replay_job_id, request)
+        assert result.status == LocalSimReplayStatus.FAILED_RETRYABLE and result.version == job.version + 1
+        assert result.completed_trade_date == days[0] and result.next_trade_date == days[1]
+        assert result.replay_hash == job.replay_hash and result.failure_context == job.failure_context
+        persisted = runtime.get_simulation_daily_run(run.run_id)
+        assert persisted.execution_plan_id == run.execution_plan_id
+        assert persisted.run_payload_json[RECOVERY_KEY]["evidence_hash"] == evidence_hash
+        assert repository.get_account(account.account_id) == account
+        with pytest.raises(InvalidStateTransitionError, match="CAS"):
+            service.recover(job.replay_job_id, request)
+    finally:
+        conn.rollback()
+        conn.close()
 
 
 ROOT = Path(__file__).resolve().parents[3]

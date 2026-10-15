@@ -13,7 +13,9 @@
     "backend/services/simulation_runtime/localsim_replay_recovery.py",
     "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
     "docs/analysis/localsim_replay_recovery_contract_fix_20261015.md",
-    "tests/aistock_validation/bugs/20261015_BUG-1926-localsim.json"
+    "tests/aistock_validation/bugs/20261015_BUG-1926-localsim.json",
+    "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+    "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1926",
@@ -34,7 +36,10 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-merged-source-and-runtime-snapshot-r1.json"
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-merged-source-and-runtime-snapshot-r1.json",
+    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1926-source-validation-receipt-r1.json",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1926-Jan20-frozen-native-r3/readonly-receipt.json",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1926-native-readonly-recovery-r1.json"
   ],
   "expected": "由 LocalSIM 正式合同核对冻结输入、真实经济事实和数据准备状态后恢复原任务；失败前缀与成功历史不变；合法停牌的持仓估值遵循原生权威来源并与交易价格分离，普通可交易股真缺价继续阻塞。",
   "file_scope_contract": {
@@ -52,7 +57,9 @@
       "backend/services/simulation_runtime/successor_repository.py",
       "backend/services/simulation_runtime/repository.py",
       "backend/routers/simulation_runtime.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -234,7 +241,9 @@
       "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "backend/services/simulation_runtime/localsim_replay_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
-      "docs/analysis/localsim_replay_recovery_contract_fix_20261015.md"
+      "docs/analysis/localsim_replay_recovery_contract_fix_20261015.md",
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -249,7 +258,9 @@
       "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "backend/services/simulation_runtime/localsim_replay_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
-      "docs/analysis/localsim_replay_recovery_contract_fix_20261015.md"
+      "docs/analysis/localsim_replay_recovery_contract_fix_20261015.md",
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py"
     ]
   },
   "first_seen_at": "2026-10-15T15:30:06.391597Z",
@@ -276,17 +287,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1926-source-validation-receipt-r1.json -> fresh task-checkout import, 61 targeted contracts, existing DEV DB 3 passed and final readback node passed; real frozen 4912/4918/6 shared chain passed; no production replay or database writes."
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
+    "runtime_identity_match": "pending"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -294,7 +312,7 @@
   "suspected_modules": [
     "simulation_runtime"
   ],
-  "title": "LocalSIM 已修复依赖的终态回放缺少原日受控恢复与停牌持仓估值合同",
+  "title": "LocalSIM ?????????????????????????",
   "trigger_condition": {
     "fingerprint": "f375450c4e8866c67a7fcc6c",
     "source_event_id": "FE-20261015-f375450c4e88"
@@ -410,5 +428,18 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "design_document": "docs/analysis/localsim_replay_recovery_contract_fix_20261015.md",
+  "scoped_exploration_notes": [
+    "CodeGraph returned legacy paper_trading_v2/qlib symbols outside the active recovery owner; exact native source references used instead.",
+    "Known dev-test filename absent; locate required DEV session from catalog/nox configuration.",
+    "Exploration summarized before implementation: native suspended valuation requires authoritative pre_close; no new valuation policy introduced."
+  ],
+  "design_compliance_review": {
+    "prohibit_simplified_delivery": "source recovery contract verified; production replay and LSTM blockers explicitly pending",
+    "no_silent_errors": "typed blockers and rollback; no fabricated prices",
+    "business_semantics": "unchanged orders/cash/ledger/valuation policy",
+    "no_extra_approval": "CAS/digest native command; no extra manual approval"
+  },
+  "review_rounds": 3
 }

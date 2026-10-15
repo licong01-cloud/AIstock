@@ -14,7 +14,7 @@ import psycopg2.extras
 from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 
-from .models import SimulationBrokerBackend, SimulationReleaseBinding, StrategyRuntimeRelease
+from .models import SimulationBrokerBackend, SimulationReleaseBinding, StrategyRuntimeRelease, canonical_json_sha256
 from .successor_models import (
     LegacyLocalSimAccountLineageV1,
     LegacyLocalSimLineageStatus,
@@ -876,6 +876,120 @@ class LocalSimSuccessorRepository:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 return self._select_replay(cur, replay_job_id)
+
+    def get_replay_recovery_snapshot(self, replay_job_id: str) -> dict[str, Any]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                return self._replay_recovery_snapshot(cur, replay_job_id)
+
+    def _replay_recovery_snapshot(self, cur: Any, replay_job_id: str, *, lock: bool = False) -> dict[str, Any]:
+        from .localsim_replay_recovery import economic_fact_counts
+        from .repository import SimulationRuntimeRepository
+
+        job = self._select_replay(cur, replay_job_id, for_update=lock)
+        cur.execute(
+            "SELECT * FROM paper_v2.simulation_daily_run "
+            "WHERE strategy_id = %s AND binding_id = %s AND trade_date = %s" + (" FOR UPDATE" if lock else ""),
+            (job.simulation_account_id, job.binding_id, job.next_trade_date),
+        )
+        row = cur.fetchone()
+        run = SimulationRuntimeRepository._daily_run_from_row(dict(row)) if row else None
+        plan = None
+        evidence_hash = None
+        if run is not None:
+            cur.execute("SELECT * FROM paper_v2.execution_plan WHERE plan_id = %s", (run.execution_plan_id,))
+            row = cur.fetchone()
+            plan = SimulationRuntimeRepository._execution_plan_from_row(dict(row)) if row else None
+            cur.execute("SELECT artifact_hash FROM selection.daily_selection_evidence WHERE evidence_id = %s",
+                        (run.selection_evidence_id,))
+            row = cur.fetchone()
+            evidence_hash = row["artifact_hash"] if row else None
+        return {
+            "job": job.model_dump(mode="json"),
+            "account": self._select_account(cur, job.simulation_account_id).model_dump(mode="json"),
+            "binding": self._select_binding(cur, job.binding_id).model_dump(mode="json"),
+            "release": self._select_release(cur, job.release_id).model_dump(mode="json"),
+            "run": run.model_dump(mode="json") if run else None,
+            "plan": plan.model_dump(mode="json") if plan else None,
+            "evidence_hash": evidence_hash,
+            "economic_counts": economic_fact_counts(cur, run.run_id) if run else {},
+        }
+
+    def recover_terminal_replay(
+        self, *, replay_job_id: str, expected_version: int, expected_snapshot_sha256: str,
+        evaluate: Any, updated_at: datetime,
+    ) -> LocalSimReplayJobV1:
+        from .localsim_replay_recovery import RECOVERY_KEY, RECOVERY_SCHEMA
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                snapshot = self._replay_recovery_snapshot(cur, replay_job_id, lock=True)
+                job, run = snapshot["job"], snapshot["run"]
+                if job["version"] != expected_version:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay recovery CAS conflict",
+                        context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+                    )
+                if run:
+                    # Same namespace as the native LocalSIM economic writer.
+                    cur.execute("SELECT pg_try_advisory_xact_lock(2403, hashtext(%s)) AS locked", (run["run_id"],))
+                    if not cur.fetchone()["locked"]:
+                        raise InvalidStateTransitionError(
+                            "LocalSIM economic writer is active",
+                            context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_ECONOMIC_LOCK_BUSY"},
+                        )
+                    # The first read could race an economic transaction before
+                    # acquiring its advisory lock; inspect again under both locks.
+                    snapshot = self._replay_recovery_snapshot(cur, replay_job_id, lock=True)
+                    run = snapshot["run"]
+                check = evaluate(snapshot)
+                if not check.ready or check.snapshot_sha256 != expected_snapshot_sha256:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay recovery evidence is blocked or has changed",
+                        context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_CHECK_FAILED",
+                                 "blockers": check.reason_codes, "snapshot_sha256": check.snapshot_sha256},
+                    )
+                receipt = {
+                    "schema_version": RECOVERY_SCHEMA, "replay_job_id": replay_job_id,
+                    "replay_version": expected_version, "snapshot_sha256": check.snapshot_sha256,
+                    "run_id": run["run_id"], "trade_date": run["trade_date"],
+                    "binding_id": run["binding_id"], "release_id": run["release_id"],
+                    "plan_id": run["execution_plan_id"], "plan_hash": run["execution_plan_hash"],
+                    "evidence_id": run["selection_evidence_id"], "evidence_hash": run["selection_artifact_hash"],
+                    "native_input": check.native_input, "recovered_at": updated_at.isoformat(),
+                    "original_failure": job["failure_context"], "economic_counts": check.economic_counts,
+                }
+                receipt["receipt_sha256"] = canonical_json_sha256(receipt)
+                payload = {**run["run_payload_json"], RECOVERY_KEY: receipt}
+                cur.execute(
+                    "UPDATE paper_v2.simulation_daily_run SET run_payload_json = %s, updated_at = %s WHERE run_id = %s",
+                    (psycopg2.extras.Json(payload), updated_at, run["run_id"]),
+                )
+                cur.execute(
+                    "UPDATE paper_v2.localsim_replay_job_v1 SET status = %s, version = version + 1, updated_at = %s "
+                    "WHERE replay_job_id = %s AND version = %s AND status = 'FAILED_TERMINAL'",
+                    (LocalSimReplayStatus.FAILED_RETRYABLE.value, updated_at, replay_job_id, expected_version),
+                )
+                if cur.rowcount != 1:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay recovery CAS failed",
+                        context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+                    )
+                result = self._select_replay(cur, replay_job_id, for_update=True)
+                cur.execute("SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s", (run["run_id"],))
+                persisted = cur.fetchone()
+                if (persisted is None or persisted["run_payload_json"].get(RECOVERY_KEY) != receipt
+                        or result.replay_hash != job["replay_hash"]
+                        or result.version != expected_version + 1
+                        or result.status is not LocalSimReplayStatus.FAILED_RETRYABLE
+                        or result.next_trade_date.isoformat() != job["next_trade_date"]
+                        or (result.completed_trade_date.isoformat() if result.completed_trade_date else None)
+                           != job["completed_trade_date"]):
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay recovery transaction readback failed",
+                        context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_READBACK_FAILED"},
+                    )
+                return result
 
     def list_replay_jobs(
         self,

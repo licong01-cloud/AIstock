@@ -325,6 +325,7 @@ class LocalSimProductControlPlaneService:
         readiness: LocalSimMutationReadinessProtocol,
         historical_source_authority: LocalSimHistoricalSourceAuthorityProtocol | None = None,
         historical_day_callback: Any | None = None,
+        replay_recovery: Any | None = None,
     ) -> None:
         self.repository = repository
         self.control = control
@@ -332,6 +333,7 @@ class LocalSimProductControlPlaneService:
         self.readiness = readiness
         self.historical_source_authority = historical_source_authority or LocalSimHistoricalSourceAuthority()
         self.historical_day_callback = historical_day_callback or _unconfigured_historical_day_callback
+        self.replay_recovery = replay_recovery
 
     def create_account(
         self, request: LocalSimAccountCreateRequestV1, *, created_by: str
@@ -518,6 +520,22 @@ class LocalSimProductControlPlaneService:
             expected_version=expected_version,
         )
         return LocalSimControlResponseV1(replay=replay)
+
+    def inspect_replay_recovery(self, replay_job_id: str):
+        return self._require_replay_recovery().inspect(replay_job_id)
+
+    def recover_replay(self, replay_job_id: str, request: Any) -> LocalSimControlResponseV1:
+        self.readiness.require_ready()
+        replay = self._require_replay_recovery().recover(replay_job_id, request)
+        return LocalSimControlResponseV1(replay=replay)
+
+    def _require_replay_recovery(self):
+        if self.replay_recovery is None:
+            raise InvalidStateTransitionError(
+                "LocalSIM native replay recovery is unavailable",
+                context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_UNCONFIGURED"},
+            )
+        return self.replay_recovery
 
     def _account_bundle_kwargs(self, *, request: Any, resolved: Any, created_by: str) -> dict[str, Any]:
         return {

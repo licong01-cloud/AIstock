@@ -9961,13 +9961,17 @@ class SimulationLifecycleScheduler:
         shared_selection_keys: set[tuple[Any, ...]] | None,
         as_of_time: datetime | None,
     ) -> SimulationSchedulerBindingResult:
+        from .localsim_replay_recovery import RECOVERY_KEY, recovery_rebuild_receipt
+
+        recovery = recovery_rebuild_receipt(run)
         context = self._load_run_context(
             runtime_release=runtime_release,
             binding=binding,
             trade_date=trade_date,
             as_of_time=as_of_time,
         )
-        selection = self._run_selection_once_per_release(
+        selection = self._run_localsim_recovery_selection(
+            run=run, recovery=recovery,
             binding=binding,
             runtime_release=runtime_release,
             trade_date=trade_date,
@@ -10021,8 +10025,12 @@ class SimulationLifecycleScheduler:
                     "localsim_context_diagnostics": context.context_diagnostics,
                     "broker_called": False,
                     "submitted_intents": 0,
+                    **({"localsim_replay_recovery_applied_v1": {
+                        "recovery": recovery, "new_plan_id": build_result.execution_plan.plan_id,
+                        "new_evidence_id": build_result.selection_evidence.evidence_id,
+                    }} if recovery else {}),
                 },
-                payload_unset=("submit_failure",),
+                payload_unset=("submit_failure", RECOVERY_KEY) if recovery else ("submit_failure",),
             ),
         )
         if not submit:
@@ -11415,6 +11423,17 @@ class SimulationLifecycleScheduler:
             return False
         if not submit:
             return False
+        from .localsim_replay_recovery import recovery_rebuild_receipt
+
+        recovery = recovery_rebuild_receipt(run)
+        if recovery is not None:
+            if run.status != SimulationDailyRunStatus.FAILED_RETRYABLE or run.trade_date != trade_date:
+                raise InvalidStateTransitionError(
+                    "LocalSIM recovery cannot rebuild a completed or different day",
+                    context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_DAILY_RUN_INVALID"},
+                )
+            self.repository.require_localsim_side_effect_free_rebuild(run)
+            return True
         if bool(run.run_payload_json.get("broker_called")):
             return False
         if run.status == SimulationDailyRunStatus.SUCCEEDED and isinstance(
@@ -11562,6 +11581,29 @@ class SimulationLifecycleScheduler:
                 }
             )
         return receipt
+
+    def _run_localsim_recovery_selection(self, *, run, recovery, **kwargs):
+        if recovery is not None:
+            evidence = self.repository.get_daily_selection_evidence(run.selection_evidence_id or "")
+            if evidence.artifact_hash != run.selection_artifact_hash:
+                raise InvalidStateTransitionError(
+                    "LocalSIM recovery evidence changed",
+                    context={"reason_code": "LOCALSIM_FROZEN_RAW_EVIDENCE_CONFLICT"},
+                )
+            if "localsim_signal_run" in evidence.evidence_payload_json:
+                from .localsim_selection_signal import LocalSimSelectionSignalService
+
+                with self._selection_inference_lock:
+                    if self._localsim_selection_service is None:
+                        self._localsim_selection_service = LocalSimSelectionSignalService(repository=self.repository)
+                    service = self._localsim_selection_service
+                return service.run_selection(
+                    package_ids=[kwargs["binding"].package_id], mode=SelectionMode.SINGLE_PACKAGE,
+                    trade_date=kwargs["trade_date"], data_source=kwargs["data_source"],
+                    runtime_config=StrategyPackageSelectionService.release_selection_runtime_config(kwargs["runtime_release"]),
+                    runtime_release=kwargs["runtime_release"], created_by=kwargs["created_by"], recovery_evidence=evidence,
+                )
+        return self._run_selection_once_per_release(**kwargs)
 
     def _run_selection_once_per_release(
         self,
