@@ -37,9 +37,36 @@
   ],
   "expected": "Approved exact post-seal source corrections propagate with real source hashes to private monthly successor, with exact readback and unchanged unrelated fields; future month inherits the correction.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1915-post-source-stk-limit-pre-close-repairs-are-absent-from-retained-monthly.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1915-post-source-stk-limit-pre-close-repairs-are-absent-from-retained-monthly.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -75,18 +102,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
-    "fresh_process_evidence": ["python -m pytest backend/tests/dataset_release/test_monthly_legacy_build_stage.py -k prev_close -q -> 11 passed in isolated fresh process, exact corrections and interrupted commits recovered without reexport"],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_legacy_build_stage.py -k prev_close -q -> 11 passed in isolated fresh process, exact corrections and interrupted commits recovered without reexport"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
-    "target_ids": ["worker-scheduler"]
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
