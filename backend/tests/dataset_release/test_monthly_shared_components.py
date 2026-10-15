@@ -753,7 +753,29 @@ def _build(source, target, **kwargs):
     )
 
 
-def test_bootstrap_separates_real_classification_from_shared_quote_facts(tmp_path):
+def _quote_stage_control(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_sector_quote_facts
+    from backend.tests.dataset_release.test_monthly_unified_v2 import Pipeline, _request, _service
+
+    release_root = tmp_path / "release"
+    release_root.mkdir()
+    service = _service(release_root, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    service.store.update_state(operation, attempt=1, current_stage="BUILD", status="BUILDING")
+    clock = [0.0]
+    monkeypatch.setattr(monthly_sector_quote_facts.time, "monotonic", lambda: clock[0])
+    checkpoint, progress = service._stage_control(operation, attempt=1, stage="BUILD")
+
+    def slow_chunk():
+        clock[0] += 16
+        checkpoint()
+
+    return slow_chunk, progress, lambda: service.status(operation)
+
+
+def test_bootstrap_separates_real_classification_from_shared_quote_facts(tmp_path, monkeypatch):
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseError
+
     source = tmp_path / "sector_data.h5"
     nan = float("nan")
     _source(source, [
@@ -765,7 +787,8 @@ def test_bootstrap_separates_real_classification_from_shared_quote_facts(tmp_pat
     ])
     before = _pin(source)
     target = tmp_path / "sector_quote_facts.h5"
-    receipt = _build(source, target)
+    checkpoint, progress, state = _quote_stage_control(tmp_path, monkeypatch)
+    receipt = _build(source, target, checkpoint=checkpoint, progress=progress)
     actual = pd.read_hdf(target, "data")
     assert actual.l2_code_id.tolist() == [0, 1]
     assert actual.index.get_level_values("instrument").tolist() == ["801000.SI", "801001.SI"]
@@ -779,6 +802,14 @@ def test_bootstrap_separates_real_classification_from_shared_quote_facts(tmp_pat
     assert receipt["sha256"] == _pin(target)["sha256"]
     assert receipt["mapping_authority"] == dict(_map()[1].mapping_authority)
     assert receipt["historical_business_audit_performed"] is False
+    observation = state()["stage_progress"]
+    assert observation["phase"] == "BUILD_SHARED_SECTOR_QUOTE_FACTS"
+    assert observation["dataset"] == "sector_quote_facts"
+    assert observation["physical_rows_read"] == receipt["source_rows_read"] == 4
+    assert state()["status"] == "BUILDING"
+    assert not any(state()["checkpoints"].values())
+    with pytest.raises(MonthlyReleaseError, match="stage progress fields differ"):
+        progress({"source_rows_read": 4})
     with pytest.raises(SectorQuoteFactsError, match="exists"):
         _build(source, target)
 
@@ -827,12 +858,16 @@ def test_following_month_inherits_small_pinned_facts_and_reads_only_delta(tmp_pa
 
     monkeypatch.setattr(pd.HDFStore, "select", bounded)
     target = tmp_path / "new_quotes.h5"
-    receipt = _build(source, target, prefix=prefix, month_range={"start_row": 1, "row_count": 1})
+    checkpoint, progress, state = _quote_stage_control(tmp_path, monkeypatch)
+    receipt = _build(source, target, prefix=prefix, month_range={"start_row": 1, "row_count": 1},
+                     checkpoint=checkpoint, progress=progress)
     actual = pd.read_hdf(target, "data")
     assert actual.sw2_pct_change.tolist() == [1., 7.]
     assert selected and receipt["validation_scope"] == "month_delta"
     assert receipt["source_rows_read"] == 1
     assert receipt["inherited_row_count"] == 1
+    assert state()["stage_progress"]["dataset"] == "sector_quote_facts"
+    assert state()["stage_progress"]["physical_rows_read"] == 1
     assert receipt["predecessor_manifest_sha256"] == prefix.manifest_sha256
     assert _pin(old_facts)["sha256"] == components["sector_quote_facts"]["sha256"]
     old_facts.write_bytes(b"drift")

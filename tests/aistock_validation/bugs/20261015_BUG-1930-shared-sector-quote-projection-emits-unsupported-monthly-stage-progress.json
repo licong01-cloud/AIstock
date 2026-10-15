@@ -28,12 +28,18 @@
   ],
   "expected": "共享行业报价投影使用正式月更进度字段，慢任务可持续报告真实读取数量；未知字段仍明确失败。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261015_BUG-1930-shared-sector-quote-projection-emits-unsupported-monthly-stage-progress.json",
       "backend/services/dataset_release/monthly_sector_quote_facts.py",
       "backend/tests/dataset_release/test_monthly_shared_components.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261015_BUG-1930-shared-sector-quote-projection-emits-unsupported-monthly-stage-progress.json",
+      "backend/services/dataset_release/monthly_sector_quote_facts.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_sector_quote_facts.py",
@@ -91,6 +97,7 @@
   "first_seen_at": "2026-10-15T18:10:51.496925Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "仅将producer上报转换为既有dataset=sector_quote_facts及physical_rows_read字段，不扩展服务合同、不吞异常；复用bootstrap和增量测试，模拟慢分块并接入真实MonthlyReleaseService._stage_control，验证真实读数、月内读取和未知字段仍失败。三轮审核：根因/字段语义、增量与失败边界、设计符合性与交付范围。",
   "fixed_at": null,
   "github_issue_number": 6158,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6158",
@@ -109,13 +116,19 @@
     "qlib_data_backend"
   ],
   "risk_area": "bug",
+  "root_cause": "共享行业报价producer把自身receipt字段source_rows_read和inherited_row_count直接用于严格月更stage progress回调；原测试投影耗时不到2秒且使用默认空回调，未触发正式服务的字段校验。BUILD270在已通过断点恢复、消费smoke与build validate后因此于打包阶段终止。",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "RED: two fresh-process targeted pytest cases wire the real quote-facts producer to MonthlyReleaseService._stage_control with elapsed chunk time above the 2-second threshold; both reproduce stage progress fields differ before the fix. GREEN: both pass after mapping to the existing physical_rows_read field; bootstrap reports exactly four read rows and incremental reports exactly one new-month row while retaining the prior fact. Unknown source_rows_read progress remains rejected.",
+      "Fresh AIstock pytest process executes production build_sector_quote_facts against real MonthlyReleaseService._stage_control for bootstrap and incremental chunks exceeding 2 seconds; RED two unsupported-field failures before fix, GREEN two passes after fix; unknown progress keys remain rejected, no database access or production candidate mutation."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
