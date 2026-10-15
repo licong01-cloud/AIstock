@@ -29,15 +29,15 @@
   "expected": "共享行业报价投影使用正式月更进度字段，慢任务可持续报告真实读取数量；未知字段仍明确失败。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261015_BUG-1930-shared-sector-quote-projection-emits-unsupported-monthly-stage-progress.json",
       "backend/services/dataset_release/monthly_sector_quote_facts.py",
-      "backend/tests/dataset_release/test_monthly_shared_components.py"
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1930-shared-sector-quote-projection-emits-unsupported-monthly-stage-progress.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261015_BUG-1930-shared-sector-quote-projection-emits-unsupported-monthly-stage-progress.json",
       "backend/services/dataset_release/monthly_sector_quote_facts.py",
-      "backend/tests/dataset_release/test_monthly_shared_components.py"
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1930-shared-sector-quote-projection-emits-unsupported-monthly-stage-progress.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -96,9 +96,9 @@
   },
   "first_seen_at": "2026-10-15T18:10:51.496925Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "465a45c3550373211b097d6fa5c024cc3a31ad5d",
   "fix_summary": "仅将producer上报转换为既有dataset=sector_quote_facts及physical_rows_read字段，不扩展服务合同、不吞异常；复用bootstrap和增量测试，模拟慢分块并接入真实MonthlyReleaseService._stage_control，验证真实读数、月内读取和未知字段仍失败。三轮审核：根因/字段语义、增量与失败边界、设计符合性与交付范围。",
-  "fixed_at": null,
+  "fixed_at": "2026-10-15T18:23:16Z",
   "github_issue_number": 6158,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6158",
   "last_seen_at": "2026-10-15T18:10:51.496925Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6159",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -127,6 +128,7 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -138,7 +140,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1930",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "813aac1ce157aeaa",
+    "recorded_at": "2026-10-15T18:23:55.899516Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ed4b22499df67208d40796afa480a4c6d285b4ef",
+    "source_merge_commit": "465a45c3550373211b097d6fa5c024cc3a31ad5d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6159",
+    "validation_evidence": [
+      "validation-receipt: id=98966640120a140c commit=ed4b22499df67208d40796afa480a4c6d285b4ef kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_shared_components.py -q` result=`23 passed`",
+      "validation-receipt: id=69b8d3ffff10d117 commit=ed4b22499df67208d40796afa480a4c6d285b4ef kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_unified_v2.py -k progress -q` result=`10 passed`",
+      "validation-receipt: id=8d6666194b3b112b commit=ed4b22499df67208d40796afa480a4c6d285b4ef kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_sector_quote_facts.py backend/tests/dataset_release/test_monthly_shared_components.py tests/aistock_validation/bugs/20261015_BUG-1930-shared-sector-quote-projection-emits-unsupported-monthly-stage-progress.json` result=`passed`",
+      "validation-receipt: id=dd12f0540e023e5f commit=ed4b22499df67208d40796afa480a4c6d285b4ef kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_sector_quote_facts.py backend/tests/dataset_release/test_monthly_shared_components.py` result=`passed`",
+      "validation-receipt: id=02c8160b0ec4c628 commit=ed4b22499df67208d40796afa480a4c6d285b4ef kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "30a242df778fc3839acb2bfbfc1b9fda402d85c9b11bac1c1affed59cfdbb644"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -147,6 +174,13 @@
     "fingerprint": "6d4017c187ec1810ef89de81",
     "source_event_id": "FE-20261015-6d4017c187ec"
   },
+  "validation_evidence": [
+    "validation-receipt: id=98966640120a140c commit=ed4b22499df67208d40796afa480a4c6d285b4ef kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_shared_components.py -q` result=`23 passed`",
+    "validation-receipt: id=69b8d3ffff10d117 commit=ed4b22499df67208d40796afa480a4c6d285b4ef kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_unified_v2.py -k progress -q` result=`10 passed`",
+    "validation-receipt: id=8d6666194b3b112b commit=ed4b22499df67208d40796afa480a4c6d285b4ef kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_sector_quote_facts.py backend/tests/dataset_release/test_monthly_shared_components.py tests/aistock_validation/bugs/20261015_BUG-1930-shared-sector-quote-projection-emits-unsupported-monthly-stage-progress.json` result=`passed`",
+    "validation-receipt: id=dd12f0540e023e5f commit=ed4b22499df67208d40796afa480a4c6d285b4ef kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_sector_quote_facts.py backend/tests/dataset_release/test_monthly_shared_components.py` result=`passed`",
+    "validation-receipt: id=02c8160b0ec4c628 commit=ed4b22499df67208d40796afa480a4c6d285b4ef kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
