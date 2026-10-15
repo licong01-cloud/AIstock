@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1928",
-  "closed_at": null,
+  "closed_at": "2026-10-15T18:03:25.446781Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -130,10 +130,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\BUG-1928-post-restart-20261016.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1928",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "031ba7eac33f55d48367c1145361ad313016fc7986c723e2773dfe8bf5289fe6",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "18817c00d61cb9b503b90f70583f4d54df769178",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-15T18:02:52.741250Z",
+      "mode": "read_only",
+      "observed_identity": "18817c00d61cb9b503b90f70583f4d54df769178",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "ac5452c1f28e5389ac7527f780fa02a0bf09cedc03ed14885b563a1901d191a2",
+      "receipt_sha256": "df67588d2d701a6c8d2ce3a183e802d99ab5ed1fe677a06aa3394c1f34b7a885",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "125bb76142ae87be1a04141508acddc658f5e309df19903ff8f540a66ba888ea",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -167,7 +189,7 @@
     ],
     "validation_evidence_digest": "605708c29e55970a36f6c726da4c8d14f567bc3c1190bb3e1411b57f711486f6"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -180,7 +202,8 @@
     "python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_sector_mapping.py -q -> 67 passed, 1 skipped",
     "python -m nox -s l0 -- changed files -> passed",
     "python -m ruff check changed files -> passed",
-    "git diff --check -> passed"
+    "git diff --check -> passed",
+    "User restart verified: worker-scheduler identity 18817c00d61cb9b503b90f70583f4d54df769178 and existing target business smoke passed; original monthly operation resumed without re-exporting completed prices."
   ],
   "verification_budget": {
     "budget": "standard",
