@@ -75,14 +75,27 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1915-post-source-stk-limit-pre-close-repairs-are-absent-from-retained-monthly.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
   "first_seen_at": "2026-10-15T07:26:03.729395Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "08db051dc023744d114139065ca29a8784803910",
+  "fixed_at": "2026-10-15T08:31:53Z",
   "github_issue_number": 6108,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6108",
   "last_seen_at": "2026-10-15T07:26:03.729395Z",
@@ -90,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6115",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -114,6 +128,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -125,7 +140,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1915",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "94f650b72767f258",
+    "recorded_at": "2026-10-15T08:32:35.261663Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "eeb628642eea2c3c1bfb9aa6e8c910af748f2c1c",
+    "source_merge_commit": "08db051dc023744d114139065ca29a8784803910",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6115",
+    "validation_evidence": [
+      "pytest monthly source, native output, operator API and CLI -> 122 passed, 1 skipped; correction and binding targeted tests passed"
+    ],
+    "validation_evidence_digest": "5d2c90f33636e1764399eaa12416ae9b46b99a46768d1ee5d57f6080fb43eb31"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -134,6 +170,9 @@
     "fingerprint": "ebd49814bc573400e340fd98",
     "source_event_id": "FE-20261015-ebd49814bc57"
   },
+  "validation_evidence": [
+    "pytest monthly source, native output, operator API and CLI -> 122 passed, 1 skipped; correction and binding targeted tests passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
