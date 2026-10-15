@@ -1119,6 +1119,15 @@ class ProductionSimulationRunContextProvider:
             )
         return marks
 
+    def load_historical_pre_trade_tradability(
+        self, *, symbols: list[str], trade_date: date, valuation_symbols: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        from backend.services.simulation_execution.localsim.suspension import LocalSimHistoricalSuspensionProvider
+
+        return LocalSimHistoricalSuspensionProvider(
+            conn_factory=self._daily_trading_context_provider.conn_factory,
+        ).load_statuses(symbols=symbols, trade_date=trade_date, valuation_symbols=valuation_symbols)
+
     def load_pre_trade_tradability(
         self,
         *,
@@ -15608,6 +15617,7 @@ class SimulationLifecycleScheduler:
             require_realtime_quote=require_realtime_quote,
             as_of_time=as_of_time,
         )
+        context.pre_trade_tradability.update(pre_trade_tradability)
         snapshot = SignalSnapshot(
             package_id=binding.package_id,
             manifest_sha256=evidence.manifest_sha256,
@@ -15725,6 +15735,12 @@ class SimulationLifecycleScheduler:
         if not symbols:
             return {}
         daily_loader = getattr(self.context_provider, "load_daily_trading_context", None)
+        if (binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+                and context.market_data_source == MinuteDataSource.DB_HISTORICAL.value
+                and getattr(self.context_provider, "provider_mode", None) == "production"):
+            return self.context_provider.load_historical_pre_trade_tradability(
+                symbols=symbols, trade_date=trade_date, valuation_symbols=list(context.current_positions),
+            )
         frozen_daily_statuses: dict[str, dict[str, Any]] = {}
         planning_as_of = scheduler_time(as_of_time)
         requires_live_daily_context = trade_date == planning_as_of.date() and (

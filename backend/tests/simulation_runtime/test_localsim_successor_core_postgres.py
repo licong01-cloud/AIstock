@@ -37,12 +37,13 @@ from backend.services.trading_core.errors import InvalidStateTransitionError
 from backend.tests.paper_trading_v2.fixtures_dev_db import _dev_dsn
 
 
-def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_existing_dev():
+@pytest.mark.parametrize("retire_old_handles", [False, True])
+def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_existing_dev(retire_old_handles):
     from backend.services.simulation_runtime.localsim_replay_recovery import (
-        RECOVERY_KEY, LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryService,
+        RECOVERY_KEY, RETIREMENT_KEY, LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryService,
     )
     from backend.services.simulation_runtime.models import (
-        ExecutionPlan, SimulationDailyRun, SimulationDailyRunStatus, TradingRuleDecision,
+        ExecutionPlan, ExecutionPlanIntent, SimulationDailyRun, SimulationDailyRunStatus, TradingRuleDecision,
     )
     from backend.services.simulation_signal.contracts import DailySelectionEvidence
     from backend.services.simulation_data.contracts import MinuteDataSource
@@ -128,7 +129,23 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
         plan_payload = {"test_int_marker": marker, "trading_rule_decisions": [{
             **decision_payload, "decision_id": decision.decision_id, "decision_hash": decision_hash,
         }]}
+        intent_id = "intent_" + marker
+        if retire_old_handles:
+            plan_payload.update(
+                strategy_id=account.account_id, portfolio_id=scope.ledger_scope_id, package_id=package_id,
+                release_id=release.release_id, release_hash=release.release_hash,
+                binding_id=binding.binding_id, binding_hash=binding.binding_hash, target_trade_date=days[1].isoformat(),
+                intents=[{"intent_id": intent_id, "symbol": "001205.SZ", "side": "SELL", "target_quantity": 0,
+                          "delta_quantity": -100, "order_quantity": 100, "current_quantity": 100,
+                          "current_available_quantity": 100, "rebalance_reason": marker,
+                          "trading_rule_decision_id": decision.decision_id, "schedule_window": {}, "price_policy": {}}],
+            )
         plan_hash = canonical_json_sha256(plan_payload)
+        intents = ([ExecutionPlanIntent(
+            **plan_payload["intents"][0], plan_id="plan_" + plan_hash[:16], strategy_id=account.account_id,
+            portfolio_id=scope.ledger_scope_id, package_id=package_id, release_id=release.release_id,
+            release_hash=release.release_hash, binding_id=binding.binding_id, binding_hash=binding.binding_hash,
+        )] if retire_old_handles else [])
         plan = runtime.save_execution_plan(ExecutionPlan(
             plan_id="plan_" + plan_hash[:16], strategy_id=account.account_id, portfolio_id=scope.ledger_scope_id,
             package_id=package_id, release_id=release.release_id, release_hash=release.release_hash,
@@ -136,22 +153,34 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
             selection_evidence_id=evidence.evidence_id, selection_evidence_hash=evidence.artifact_hash,
             target_trade_date=days[1], execution_policy_version_id=policy["policy_version_id"],
             execution_policy_sha256=policy["policy_sha256"], tail_policy_version_id="test_int_tail",
-            tail_policy_sha256="d" * 64, intents=[], trading_rule_decisions=[decision],
+            tail_policy_sha256="d" * 64, intents=intents, trading_rule_decisions=[decision],
             plan_payload_json=plan_payload, plan_hash=plan_hash))
+        run_payload = {"submit_failure": {
+            "type": "BrokerConnectivityError", "stage": "LOCAL_SIM_SUBMIT_FAILED", "context": {
+                "source": "DB_HISTORICAL", "symbol": "001205.SZ", "trade_date": days[1].isoformat(),
+                "cause": "market.stk_limit pre_close is required and cannot be derived"}}}
+        if retire_old_handles:
+            run_payload.update(broker_called=False, submitted_intents=0, failed_intents=1,
+                broker_order_handles=[{"handle_id": "lsh_" + marker, "intent_id": intent_id,
+                                       "backend_id": "local_sim", "submitted_at": "2026-10-14T00:00:00Z"}],
+                submit_failure={"type": "DataUnavailableError", "stage": "LOCAL_SIM_PERSISTENCE_FAILED",
+                    "context": {"source": "market.stk_limit", "symbol": "001205.SZ",
+                        "trade_date": days[1].isoformat(), "reason_code": "STK_LIMIT_PRE_CLOSE_INVALID",
+                        "economic_commit_staged": False, "broker_called": False,
+                        "submitted_intents": 0, "failed_intents": 1}})
         run = runtime.save_simulation_daily_run(SimulationDailyRun(
             run_id=marker, trade_date=days[1], strategy_id=account.account_id, broker_backend="local_sim",
             package_id=package_id, manifest_sha256=manifest, release_id=release.release_id, release_hash=release.release_hash,
             binding_id=binding.binding_id, binding_hash=binding.binding_hash, selection_evidence_id=evidence.evidence_id,
             selection_artifact_hash=evidence.artifact_hash, execution_plan_id=plan.plan_id, execution_plan_hash=plan.plan_hash,
-            status=SimulationDailyRunStatus.FAILED_RETRYABLE, run_payload_json={"submit_failure": {
-                "type": "BrokerConnectivityError", "stage": "LOCAL_SIM_SUBMIT_FAILED", "context": {
-                    "source": "DB_HISTORICAL", "symbol": "001205.SZ", "trade_date": days[1].isoformat(),
-                    "cause": "market.stk_limit pre_close is required and cannot be derived"}}}))
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE, run_payload_json=run_payload))
+        initial_payload = deepcopy(runtime.get_simulation_daily_run(run.run_id).run_payload_json)
         source = SimpleNamespace(historical_source_id=job.historical_source_id,
             historical_source_sha256=job.historical_source_sha256, trading_days=days, current_trading_date=now.date())
         def recovery(repo):
             return LocalSimReplayRecoveryService(repository=repo,
                 source_authority=SimpleNamespace(resolve=lambda **_: source), clock=lambda: now,
+                process_started_at=datetime(2026, 10, 14, 12, tzinfo=UTC),
                 market_provider=SimpleNamespace(load_symbol_input=lambda **kw: SimpleNamespace(
                     symbol=kw["symbol"], trade_date=days[1], source=MinuteDataSource.DB_HISTORICAL,
                     market_context={"prev_close": 15.3}, minute_bars=[object()])))
@@ -174,12 +203,15 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
             recovery(BrokenReadback(conn_factory=factory)).recover(job.replay_job_id, request)
         assert repository.get_replay_job(job.replay_job_id) == job
         assert RECOVERY_KEY not in runtime.get_simulation_daily_run(run.run_id).run_payload_json
+        assert runtime.get_simulation_daily_run(run.run_id).run_payload_json == initial_payload
         with psycopg2.connect(**dsn) as other:
             with other.cursor() as cur:
                 cur.execute("SELECT pg_advisory_lock(2403, hashtext(%s))", (run.run_id,))
                 try:
                     with pytest.raises(InvalidStateTransitionError, match="writer is active"):
                         service.recover(job.replay_job_id, request)
+                    with pytest.raises(InvalidStateTransitionError, match="writer is active"):
+                        runtime.require_localsim_side_effect_free_rebuild(run)
                 finally:
                     cur.execute("SELECT pg_advisory_unlock(2403, hashtext(%s))", (run.run_id,))
         result = service.recover(job.replay_job_id, request)
@@ -189,6 +221,13 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
         persisted = runtime.get_simulation_daily_run(run.run_id)
         assert persisted.execution_plan_id == run.execution_plan_id
         assert persisted.run_payload_json[RECOVERY_KEY]["evidence_hash"] == evidence_hash
+        if retire_old_handles:
+            retirement = persisted.run_payload_json[RETIREMENT_KEY]
+            assert retirement["original_payload"] == initial_payload
+            assert retirement["plan_hash"] == plan_hash
+            assert persisted.run_payload_json[RECOVERY_KEY]["retirement_sha256"] == retirement["receipt_sha256"]
+            assert not persisted.run_payload_json.get("broker_order_handles")
+        runtime.require_localsim_side_effect_free_rebuild(persisted)
         assert repository.get_account(account.account_id) == account
         with pytest.raises(InvalidStateTransitionError, match="CAS"):
             service.recover(job.replay_job_id, request)
