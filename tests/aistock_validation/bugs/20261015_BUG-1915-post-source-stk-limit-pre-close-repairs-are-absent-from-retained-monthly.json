@@ -1,8 +1,6 @@
 {
   "actual": "9月保留产物仍有43/42个历史prev_close差异；仅数据源修复没有冻结产物传播证明。",
   "allowed_write_scope": [
-    "backend/services/tushare_sync_engine.py",
-    "backend/tests/test_tushare_sync_engine.py",
     "backend/services/dataset_release/monthly_prev_close_repair.py",
     "backend/services/dataset_release/monthly_build_resume.py",
     "backend/services/dataset_release/monthly_mature_build_runner.py",
