@@ -39,24 +39,24 @@
   "expected": "Validated no-overlay sectors preserve raw scores with explicit reasons; normal sectors retain existing adjustment/ranking; preflight and execution share validation; official read-only asset consumption never generates coefficients.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261015_BUG-1910-shared-hmm-consumer-rejects-authoritative-explicit-no-l2-overlay-sectors.json",
+      "backend/services/selection_center/hmm_overlay_contract.py",
       "backend/services/selection_center/hmm_runtime.py",
       "backend/tests/selection_center/test_hmm_runtime.py",
       "backend/tests/strategy_package/test_selection_signal_preparation.py",
-      "backend/services/selection_center/hmm_overlay_contract.py",
-      "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md"
+      "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md",
+      "tests/aistock_validation/bugs/20261015_BUG-1910-shared-hmm-consumer-rejects-authoritative-explicit-no-l2-overlay-sectors.json"
     ],
     "added_files": [
       "backend/services/selection_center/hmm_overlay_contract.py",
       "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261015_BUG-1910-shared-hmm-consumer-rejects-authoritative-explicit-no-l2-overlay-sectors.json",
+      "backend/services/selection_center/hmm_overlay_contract.py",
       "backend/services/selection_center/hmm_runtime.py",
       "backend/tests/selection_center/test_hmm_runtime.py",
       "backend/tests/strategy_package/test_selection_signal_preparation.py",
-      "backend/services/selection_center/hmm_overlay_contract.py",
-      "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md"
+      "docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md",
+      "tests/aistock_validation/bugs/20261015_BUG-1910-shared-hmm-consumer-rejects-authoritative-explicit-no-l2-overlay-sectors.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -237,7 +237,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages/pkg_cc7eccb6202e4816b9d7c7d6b748bd37/selection-artifacts?limit=1",
     "fresh_process_evidence": [
-      "python X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/smoke_registered_consumers.py F:/Dev/AIstock_worktrees/BUG-1910-shared-hmm-consumer-rejects-authoritative-explic-20261015 9c97a277-9ab3-4373-9b9d-ff4b034dcf01 X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015 -> passed: native persisted daily registration as_of2026-10-14/effective2026-10-15; Advisory and native LocalSIM each retain5918 candidates/membership,124 coefficient sectors,7 no-overlay sectors/29 stocks preserving raw scores,zero exclusions,exact normal adjustment/ranking. Independent diagnostic scores/envelopes, not inference or P&L. BEGIN READ ONLY/ROLLBACK,no generation/tasks/service control; CURRENT_READ_ONLY_DIAGNOSTIC,historical_as_known_verified remains false. Final HEAD and source hashes: X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/registered-consumers-final.json."
+      "python X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/smoke_registered_consumers.py F:/Dev/AIstock_worktrees/BUG-1910-shared-hmm-consumer-rejects-authoritative-explic-20261015 9c97a277-9ab3-4373-9b9d-ff4b034dcf01 X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015 -> passed: native persisted daily registration as_of2026-10-14/effective2026-10-15; Advisory and native LocalSIM each retain5918 candidates/membership,124 coefficient sectors,7 no-overlay sectors/29 stocks preserving raw scores,zero exclusions,exact normal adjustment/ranking. Independent diagnostic scores/envelopes, not inference or P&L. BEGIN READ ONLY/ROLLBACK,no generation/tasks/service control; CURRENT_READ_ONLY_DIAGNOSTIC,historical_as_known_verified remains false. Final HEAD and source hashes: X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/registered-consumers-final.json.",
+      "python X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/smoke_registered_consumers.py F:/Dev/AIstock_worktrees/BUG-1910-shared-hmm-consumer-rejects-authoritative-explic-20261015 9c97a277-9ab3-4373-9b9d-ff4b034dcf01 X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015 -> passed: both consumers5918 candidates/124 coefficient sectors/7 no-overlay sectors/29 no-overlay stocks,no generation/read-only"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
