@@ -253,7 +253,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1906\\post-restart-verify.json",
     "provisional": true,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -304,7 +304,8 @@
     "validation-receipt: id=23f1aeb91d3ae4fc commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`",
     "validation-receipt: id=f08f31a79abd4069 commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`",
     "validation-receipt: id=60039c037689ee0f commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=ruff plan=direct status=passed command=`ruff check changed paths` result=`passed`",
-    "validation-receipt: id=d23a62181a43d273 commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=d23a62181a43d273 commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1906 --target backend-main --expected-identity 512de1bb52b4e8bfcbf00b8e6d20ff5b60614ebb -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
