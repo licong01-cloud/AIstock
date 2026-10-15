@@ -174,3 +174,105 @@ def test_recover_uses_transactional_repository_without_running_a_day():
     assert service.recover("replay-original", request) == "original-job"
     assert captured["expected_version"] == 8 and captured["expected_snapshot_sha256"] == "f" * 64
     assert not calls
+
+
+def _old_memory_batch():
+    snapshot = _snapshot()
+    run, plan = snapshot["run"], snapshot["plan"]
+    plan["portfolio_id"] = "account"
+    body = {k: run[k] for k in ("binding_id", "binding_hash", "release_id", "release_hash", "strategy_id", "package_id")}
+    body.update(portfolio_id="account", target_trade_date="2026-01-21", intents=[{"intent_id": "intent-old"}])
+    plan["plan_payload_json"] = body
+    plan["plan_hash"] = run["execution_plan_hash"] = canonical_json_sha256(body)
+    payload = run["run_payload_json"]
+    payload.update(broker_called=False, submitted_intents=0, failed_intents=1,
+        broker_order_handles=[{"handle_id": "lsh_original", "intent_id": "intent-old", "backend_id": "local_sim",
+                               "submitted_at": (NOW - timedelta(hours=2)).isoformat()}])
+    payload["submit_failure"] = {"type": "DataUnavailableError", "stage": "LOCAL_SIM_PERSISTENCE_FAILED",
+        "context": {"reason_code": "STK_LIMIT_PRE_CLOSE_INVALID", "symbol": "001205.SZ", "trade_date": "2026-01-21",
+                    "economic_commit_staged": False, "broker_called": False, "submitted_intents": 0, "failed_intents": 1}}
+    return snapshot
+
+
+def test_native_old_memory_retirement_preserves_original_evidence_and_is_deterministic():
+    from backend.services.simulation_runtime.localsim_replay_recovery import (
+        RETIREMENT_KEY, apply_handle_retirement, proposed_handle_retirement,
+    )
+    snapshot = _old_memory_batch()
+    original = deepcopy(snapshot)
+    kwargs = {"process_started_at": NOW - timedelta(hours=1), "now": NOW}
+    proof = proposed_handle_retirement(snapshot, **kwargs)
+    assert proposed_handle_retirement(snapshot, **kwargs) == proof
+    retired = apply_handle_retirement(snapshot["run"]["run_payload_json"], proof, retired_at=NOW)
+    assert retired[RETIREMENT_KEY]["original_payload"] == original["run"]["run_payload_json"]
+    assert snapshot == original and "broker_order_handles" not in retired and "failed_intents" not in retired
+    require_no_economic_effects(retired, snapshot["economic_counts"], now=NOW)
+    retired[RETIREMENT_KEY]["original_payload"]["failed_intents"] = 0
+    with pytest.raises(InvalidStateTransitionError, match="retirement"):
+        require_no_economic_effects(retired, snapshot["economic_counts"], now=NOW)
+
+
+@pytest.mark.parametrize("mutation", ["live_process", "unknown", "qmt", "economic", "outbox", "intent",
+                                      "plan_hash", "staged", "duplicate", "lease"])
+def test_old_handle_retirement_rejects_unproven_or_live_evidence(mutation):
+    from backend.services.simulation_runtime.localsim_replay_recovery import proposed_handle_retirement
+
+    snapshot = _old_memory_batch()
+    p = snapshot["run"]["run_payload_json"]
+    started = NOW - timedelta(hours=1)
+    if mutation == "live_process":
+        started = NOW - timedelta(hours=3)
+    elif mutation == "unknown":
+        p["broker_side_effect_state"] = "UNKNOWN"
+    elif mutation == "qmt":
+        p["broker_order_handles"][0]["backend_id"] = "miniqmt_sim"
+    elif mutation == "economic":
+        snapshot["economic_counts"]["fills"] = 1
+    elif mutation == "outbox":
+        p["local_sim_projection_outbox_v1"] = {"status": "PENDING"}
+    elif mutation == "intent":
+        p["broker_order_handles"][0]["intent_id"] = "different"
+    elif mutation == "plan_hash":
+        snapshot["plan"]["plan_payload_json"]["package_id"] = "different"
+    elif mutation == "staged":
+        p["submit_failure"]["context"]["economic_commit_staged"] = True
+    elif mutation == "duplicate":
+        p["broker_order_handles"] *= 2
+    elif mutation == "lease":
+        p["simulation_scheduler_retry_claims_v1"] = {"claims": {
+            "retry": {"lease_until": (NOW + timedelta(seconds=1)).isoformat()}}}
+    with pytest.raises(InvalidStateTransitionError):
+        proposed_handle_retirement(snapshot, process_started_at=started, now=NOW)
+
+
+def test_full_halt_recovery_uses_separate_C_reference_without_loading_missing_pre_close():
+    from backend.tests.simulation_execution.test_localsim_runtime import _halt_reference
+    from backend.services.simulation_execution.localsim.suspension import REFERENCE_KEY
+
+    snapshot = _snapshot()
+    service, calls = _service(snapshot, market_error=DataUnavailableError("strict pre_close remains missing"))
+    service.suspension_provider = SimpleNamespace(load_statuses=lambda **_: {
+        "001205.SZ": {"suspend_status": {"is_suspended": True},
+                      REFERENCE_KEY: _halt_reference("001205.SZ", DAYS[1])}})
+    check = service.inspect("replay-original")
+    assert check.ready and check.native_input["eligibility"] == "FULL_DAY_SUSPENDED"
+    assert "prev_close" not in check.native_input and not calls
+
+
+@pytest.mark.parametrize("retirement", [None, "invalid", {"plan_id": "different-plan"}])
+def test_rebuild_rejects_missing_or_changed_retirement_lineage(retirement):
+    from backend.services.simulation_runtime.localsim_replay_recovery import RETIREMENT_KEY
+
+    row = _snapshot()["run"]
+    row["trade_date"] = DAYS[1]
+    receipt = {"schema_version": RECOVERY_KEY, "run_id": row["run_id"], "binding_id": row["binding_id"],
+               "release_id": row["release_id"], "trade_date": DAYS[1].isoformat(),
+               "plan_id": row["execution_plan_id"], "plan_hash": row["execution_plan_hash"],
+               "evidence_id": row["selection_evidence_id"], "evidence_hash": row["selection_artifact_hash"],
+               "retirement_sha256": "a" * 64}
+    receipt["receipt_sha256"] = canonical_json_sha256(receipt)
+    row["run_payload_json"][RECOVERY_KEY] = receipt
+    if retirement is not None:
+        row["run_payload_json"][RETIREMENT_KEY] = retirement
+    with pytest.raises(InvalidStateTransitionError, match="retirement lineage"):
+        recovery_rebuild_receipt(SimpleNamespace(**row))
