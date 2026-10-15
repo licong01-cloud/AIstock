@@ -54,7 +54,7 @@ ZERO_ROW_VALID_DATASETS = {
 # audit_backed_data_health._status_from_audit validation.
 DAILY_BASIC_COVERAGE_RECEIPT_SCHEMA = "daily_basic_required_field_coverage_v1"
 DAILY_BASIC_REQUIRED_FIELD = "turnover_rate_f"
-DAILY_BASIC_REQUIRED_FIELDS = ("turnover_rate", "turnover_rate_f", "volume_ratio")
+DAILY_BASIC_REQUIRED_FIELDS = ("turnover_rate", "turnover_rate_f", "volume_ratio", "total_mv", "circ_mv")
 DAILY_BASIC_REQUIRED_RATIO = 0.95
 
 
@@ -101,7 +101,11 @@ def _daily_basic_required_field_coverage_receipt(
     # Same finite-field set as the monthly frozen-source contract. Keep the
     # legacy single-field receipt for existing health readers, but retry if
     # any mandatory column is late; nullable valuations are excluded.
-    complete_rows = sum(all(_is_finite_number(row.get(field)) for field in DAILY_BASIC_REQUIRED_FIELDS) for row in rows)
+    complete_rows = sum(
+        all(_is_finite_number(row.get(field)) for field in DAILY_BASIC_REQUIRED_FIELDS)
+        and all(float(row[field]) > 0 for field in ("total_mv", "circ_mv"))
+        for row in rows
+    )
     return {
         "schema_version": DAILY_BASIC_COVERAGE_RECEIPT_SCHEMA,
         "field": DAILY_BASIC_REQUIRED_FIELD,
