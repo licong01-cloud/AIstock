@@ -411,7 +411,8 @@ def test_prev_close_correction_requires_closed_exact_provider_sources(tmp_path, 
     row = {"ts_code": "000001.SZ", "trade_date": "20260831", "pre_close": "11" if fault != "nonfinite" else "nan"}
     rows_hash = hashlib.sha256(canonical_json_bytes([row])).hexdigest()
     source = {"schema_version": "local_data_stk_limit_pre_close_repair_v1", "provider": "tushare.stk_limit", "units": "CNY_per_share",
-              "trade_date": "2026-08-31", "source_rows": [row], "patches": [row], "source_rows_sha256": rows_hash}
+              "trade_date": "2026-08-31", "source_rows": [row], "patches": [row], "source_rows_sha256": rows_hash,
+              "target_database": "aistock"}
     source_path, source_hash = pin("source.json", source)
     plan = {"schema_version": "local_data_stk_limit_history_production_plan_v1", "target_database": "aistock", "target_table": "market.stk_limit",
             "changed_columns": ["pre_close"] if fault != "scope" else ["up_limit"],
@@ -429,3 +430,13 @@ def test_prev_close_correction_requires_closed_exact_provider_sources(tmp_path, 
     else:
         actual = correction.capture_approved_corrections(inputs, repair_root=root, cutoff=date(2026, 9, 30))
         assert actual["facts"] == [{**row, "trade_date": "2026-08-31"}] and actual["database_write"] is False
+        single_receipt = {"schema_version": "local_data_stk_limit_pre_close_production_readback_v1",
+            "source_plan_sha256": source_hash, "source_rows_sha256": rows_hash, "database": "aistock",
+            "production_database_written": True, "other_columns_unchanged": True, "other_same_day_keys_unchanged": True,
+            "trade_date": "2026-08-31", "readback_keys": 1, "expected_keys": 1}
+        single_path, single_hash = pin("single-receipt.json", single_receipt)
+        single = {"plan_path": source_path, "plan_sha256": source_hash, "receipt_path": single_path, "receipt_sha256": single_hash}
+        group = correction.capture_approved_corrections({"repairs": [inputs, single]}, repair_root=root, cutoff=date(2026, 9, 30))
+        assert group["facts"] == actual["facts"] and len(group["sources"]) == 2  # One fact, not double accumulation.
+        with pytest.raises(ValueError, match="nested"):
+            correction.capture_approved_corrections({"repairs": [{"repairs": []}]}, repair_root=root, cutoff=date(2026, 9, 30))

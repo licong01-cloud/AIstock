@@ -28,6 +28,23 @@ SUPPLEMENT_KEYS = {BINDING, BINDING + "_ref", "monthly_industry_history", "month
 
 def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
     """Read only exact provider plans closed by an actual production readback."""
+    if set(inputs) == {"repairs"}:
+        if not isinstance(inputs["repairs"], list) or not 1 <= len(inputs["repairs"]) <= 16:
+            raise ValueError("prev_close correction group is not bounded")
+        facts, sources = {}, []
+        for item in inputs["repairs"]:
+            if not isinstance(item, dict) or "repairs" in item:
+                raise ValueError("prev_close correction groups cannot be nested")
+            captured = capture_approved_corrections(item, repair_root=repair_root, cutoff=cutoff)
+            sources.extend(captured["sources"])
+            for row in captured["facts"]:
+                key = row["ts_code"], row["trade_date"]
+                if key in facts and facts[key] != row:
+                    raise ValueError("prev_close approved sources conflict")
+                facts[key] = row
+        return {"schema_version": SCHEMA, "inputs": dict(inputs), "sources": sources,
+                "facts": [facts[k] for k in sorted(facts)], "provider": "tushare.stk_limit",
+                "units": "CNY_per_share", "database_write": False}
     if set(inputs) != {"plan_path", "plan_sha256", "receipt_path", "receipt_sha256"}:
         raise ValueError("prev_close repair input fields differ")
 
@@ -46,7 +63,23 @@ def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
 
     plan = pinned(inputs["plan_path"], inputs["plan_sha256"])
     receipt = pinned(inputs["receipt_path"], inputs["receipt_sha256"])
-    if (plan.get("schema_version") != "local_data_stk_limit_history_production_plan_v1"
+    single = plan.get("schema_version") == "local_data_stk_limit_pre_close_repair_v1"
+    if single:
+        if (receipt.get("schema_version") != "local_data_stk_limit_pre_close_production_readback_v1"
+                or plan.get("target_database") != "aistock"
+                or receipt.get("source_plan_sha256") != inputs["plan_sha256"]
+                or receipt.get("source_rows_sha256") != plan.get("source_rows_sha256")
+                or receipt.get("database") != "aistock" or receipt.get("production_database_written") is not True
+                or receipt.get("other_columns_unchanged") is not True
+                or receipt.get("other_same_day_keys_unchanged") is not True
+                or receipt.get("trade_date") != plan.get("trade_date")
+                or receipt.get("readback_keys") != len(plan["patches"])
+                or receipt.get("expected_keys") != len(plan["patches"])):
+            raise ValueError("single-date prev_close correction is not closed")
+        entries = [{"source_plan_path": inputs["plan_path"], "source_plan_sha256": inputs["plan_sha256"],
+                    "source_rows_sha256": plan["source_rows_sha256"], "keys": len(plan["patches"]), "trade_date": plan["trade_date"]}]
+        verified_keys = receipt["readback_keys"]
+    elif (plan.get("schema_version") != "local_data_stk_limit_history_production_plan_v1"
             or plan.get("target_database") != "aistock" or plan.get("target_table") != "market.stk_limit"
             or plan.get("changed_columns") != ["pre_close"]
             or receipt.get("schema_version") != "local_data_stk_limit_history_production_apply_v1"
@@ -55,8 +88,10 @@ def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
             or receipt.get("production_readback") != "PASS_INDEPENDENT_FRESH_CONNECTION"
             or receipt.get("non_target_columns_unchanged") is not True):
         raise ValueError("prev_close production correction is not closed")
+    else:
+        entries, verified_keys = plan["daily"], receipt.get("verified_keys")
     facts, sources, seen = [], [], set()
-    for entry in plan["daily"]:
+    for entry in entries:
         source = pinned(entry["source_plan_path"], entry["source_plan_sha256"])
         source_hash = hashlib.sha256(canonical_json_bytes(source["source_rows"])).hexdigest()
         if (source.get("schema_version") != "local_data_stk_limit_pre_close_repair_v1"
@@ -84,7 +119,7 @@ def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
         sources.append({"sha256": entry["source_plan_sha256"], "source_rows_sha256": source_hash,
                         "trade_date": entry["trade_date"], "keys": entry["keys"],
                         "captured_at": source.get("captured_at"), "historical_publication_time_proven": False})
-    if not facts or len(facts) != receipt.get("verified_keys"):
+    if not facts or len(facts) != verified_keys:
         raise ValueError("prev_close correction key count differs from production readback")
     return {"schema_version": SCHEMA, "inputs": dict(inputs), "sources": sources, "facts": facts,
             "provider": "tushare.stk_limit", "units": "CNY_per_share", "database_write": False}
