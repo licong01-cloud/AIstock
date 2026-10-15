@@ -31,17 +31,29 @@
   "evidence_uris": [],
   "expected": "Monthly append and retained BUILD use real finite quote boundaries independently of PIT buy eligibility, preserve completed bins, validate catalog identity and propagate same shared contract.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_quote_catalog.py",
+      "backend/services/dataset_release/qlib_bounded_update.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1913-monthly-native-append-inherits-pit-clipped-minute-quote-catalog-and-reta.json"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_quote_catalog.py",
       "backend/tests/dataset_release/test_monthly_quote_catalog.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/qlib_bounded_update.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
       "backend/services/dataset_release/monthly_legacy_validation.py",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
-      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py"
+      "backend/services/dataset_release/monthly_quote_catalog.py",
+      "backend/services/dataset_release/qlib_bounded_update.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1913-monthly-native-append-inherits-pit-clipped-minute-quote-catalog-and-reta.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/qlib_bounded_update.py",
@@ -184,11 +196,15 @@
       "GREEN fresh process: 86 targeted native BUILD/resume/validation regressions passed; physical quotes survive PIT exit; interrupted small-file replacements recover without changing any price bins. Daily production sources, active profile and runtime remain unchanged.",
       "Read-only retained September inspection: 5147 physical quote instruments; 000698.SZ and 002305.SZ real minute boundaries reach 2026-08-31, but inherited all.txt ends in 2025. Physical-edge inspection took 32.469 seconds; no historical business-quality rescan or export."
     ],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
