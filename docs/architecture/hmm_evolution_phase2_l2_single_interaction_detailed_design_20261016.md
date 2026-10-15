@@ -126,7 +126,7 @@ typed failure 持久化到合法输出旁的独立 sibling 文件；已知完成
 | F-005 | `run_rotation_l2_interaction.py` | `pytest backend/tests/hmm_risk/test_rotation_l2_interaction.py::test_cli_rejects_child_drift_before_any_outcome_read`；`test_cli_unsafe_destination_cannot_write_failure_or_train` | verified | 无 |
 | F-006 | 本节、定向测试与审修结论 | `pytest backend/tests/hmm_risk/test_rotation_l2_interaction.py`；`nox -s validation_module_registry_l0`；`nox -s l0` | verified | 无 |
 
-矩阵验收对象为实现合同，不是模型效果或正式研究已经完成。提交前正式研究仍为 0/4；正式 file-only preflight 与 4-fit 结果在执行后另列，不以测试或 F2 PASS 替代。
+矩阵验收对象为实现合同，不是模型效果。源码首个提交前正式研究为 0/4；提交后正式 file-only preflight 和 4/4 fits 的结果见§12，不以测试或 F2 PASS 替代。
 
 ## 9. 风险、发布与回滚
 
@@ -150,4 +150,28 @@ typed failure 持久化到合法输出旁的独立 sibling 文件；已知完成
 
 本地结果：新直接测试 18 passed；受纯函数提取直接影响的既有小矩阵 12 passed；Ruff、format、py_compile、ownership（7/7）、module registry（8 passed）、L0（0 blocking）、F2（6 items / 6 rows / 0 warnings）及 diff check 通过。AIstock 环境 fresh-process 导入与路径核验通过。广泛 HMM 回归交正式 CI，不重复完整矩阵。
 
-源码提交前一次零-fit 预检因本合同摘要误用停止（数据未修改、fits=0），已按正式 reader 的 member-backed digest 修正。正式 preflight 和 4-fit 执行结果在提交后追加；本节不宣称研究已完成或 backend runtime 已生效。
+源码提交前一次零-fit 预检因本合同摘要误用停止（数据未修改、fits=0），已按正式 reader 的 member-backed digest 修正。该段记录原审核状态；提交后实际研究见§12，backend runtime 仍未因本研究改变。
+
+## 12. 正式研究结果与取舍（2026-10-16）
+
+执行源码为干净提交 `e77f5fcde0f0c1f2109d2364720fe1ff58a3a67a`（已安全合并当时最新 main）；两个进程全部完成，4/4 fits，逐臂 bitwise 一致、父进程参数/目标函数/预测零-fit 回读通过，随后才读取截至2026-03-31的评估事实。冻结 active profile 的字节 SHA 执行后仍未变化。
+
+正式 file-only preflight=PASS；131目录均保留，每臂输出30,392行，130个合格行业形成222个成熟评价日的共同人口。`801011.SI` 的232行保持正式 `hmm_risk_rotation_l2_quote_unavailable`，未补值、删目录或阻断整个研究；最后10个预测日保持标签未成熟。两臂训练同为126日、16,380行。
+
+| 研究臂 | mean daily Rank IC | 95% HAC区间 | mean 10D spread（收益率） |
+| --- | --- | --- | --- |
+| 四特征 control | 0.0247737229 | [-0.0205049752, 0.0700524210] | 0.0003824485 |
+| 五特征 interaction | 0.0249539548 | [-0.0204378791, 0.0703457886] | 0.0004027028 |
+| 零-fit delta参照 | 0.0180492172 | [-0.0218827588, 0.0579811932] | 0.0019297900 |
+
+interaction−control 的共同人口 IC 增量为 `0.0001802318507448995`，95% HAC区间 `[-0.0003295643230118229, 0.000690028024501622]`；spread增量 `0.000020254331215041453`，区间 `[-0.0002627586562279175, 0.0003032673186580004]`。两个预注册分块的 IC 增量均微正但区间跨零；不能把它称为已确认的增量或非平稳机制证据。
+
+四臂×四成本的16条参考路径均232/232日可估值、无NA。0bp时 control/interaction 累计参考收益分别26.774867%/26.694367%，MDD幅度7.500668%/7.614303%，累计双边换手52.719653/52.807840（初始净值倍数）。interaction相对control在0/5/10/20bp下收益分别少0.080500/0.078550/0.076646/0.072976个百分点，MDD幅度分别更大0.113636/0.108607/0.091249/0.084395个百分点。四份配对日收益HAC区间均跨零。成本只是既有指数收盘参考假设，不是个股实际成交净收益或QE实验。
+
+正式统计终态为 `POSITIVE_INCREMENT_UNCONFIRMED`；业务取舍是**没有证据支持采用该交互项**。不推导所有交互/非线性模型无效，不追加拟合、调参、第三模型或生产替换。`forward_confirmation=NOT_STARTED`、`advisory_status=NOT_AVAILABLE`、`production_promoted=false`。
+
+正式结果：`F:/Dev/AIstock_runtime/hmm_l2_interaction/20261016_e77f5fcde/run/acceptance.json`（271085 bytes）；canonical acceptance SHA=`28e095a60b81870305cf3bfe0442338ab2336655053ee891b47b12252ea0ad9d`，文件字节SHA=`80a0b340e94be430a1593f6d9ac2e0ae639aab9db44e8ba4a4da6f8bb8a6dea3`；input hash=`62e61be7f523b2bb8d643736c693e59692a6a1337dc115dfb05aa41a71215b21`，outcome hash=`59a8c01107aad25146a39983cef8c634da7210394e8827c07e28c8c696ed6327`。canonical hash 与文件字节 SHA 是不同身份，不混写。
+
+control model hash=`7396b08e882fab92eb0acf21cfa3b49c68f7dd156807bf42c4af5e0466e79150`；interaction model hash=`21dc3423fe07b6c5b2dd390bc8ff71562910f6657395e21f35217695e6a1fbb1`。两个进程和最终acceptance均绑定各自模型，不把新研究身份用于旧QE资产或订阅。
+
+后续只交付源码/结论PR，不自动合入、cleanup、生产写入或重启。P0共享调度公共接线仍由对应owner闭合；P1风险优先研究判断不变。本研究已达到有限假设的终止条件，不因预留任务时长继续消耗历史窗口。
