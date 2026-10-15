@@ -65,7 +65,11 @@
   ],
   "evidence_uris": [
     "https://github.com/licong01-cloud/AIstock/issues/6102#issuecomment-6187830997",
-    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1911-localsim-native-contract-verification-20261015-r2.json"
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1911-localsim-native-contract-verification-20261015-r2.json",
+    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-source-validation-receipt-r2.json",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-final-matrix-r3.xml",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-ci-failed-nodes-r1.xml",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-ci-38719303447-job-r1.log"
   ],
   "expected": "严格错误路径与普通错误路径使用同一原生失败记录和重试收尾，再原样抛出原始异常供父回放按既有合同分类；副作用 UNKNOWN 与真缺价仍阻塞，已有终态不自动恢复。",
   "file_scope_contract": {
@@ -139,7 +143,7 @@
   "first_seen_at": "2026-10-15T09:40:31.971126Z",
   "fix_branch": null,
   "fix_commit": null,
-  "fix_summary": "完成 LocalSIM 严格错误路径的原生失败记录与重试收尾，保留原始异常；日适配器保留可重试数据失败及合法退避；历史重试使用运行控制时间。UNKNOWN、配置错误、终态失败与非法退避仍阻塞。既有 FAILED_TERMINAL 不自动恢复。",
+  "fix_summary": "完成 LocalSIM 已取得重试声明路径的原生失败收尾并保留原始异常；日适配器保留可重试数据失败及合法退避；历史日重试使用运行控制时间。严格预检不新建日记录，其他恢复时钟保持原有取值。UNKNOWN、配置错误、终态失败与非法退避仍阻塞，既有 FAILED_TERMINAL 不自动恢复。",
   "fixed_at": null,
   "github_issue_number": 6125,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6125",
@@ -172,6 +176,11 @@
       "finding": "固定历史 as-of 使重试期限无法到达",
       "result": "仅分离 LocalSIM 历史重试控制时钟，市场时间冻结；到期后原日再次重试验证通过。",
       "round": 3
+    },
+    {
+      "finding": "完整 simulation_core_l2 CI 发现严格预检新建日记录及非历史日恢复额外读取时钟两项兼容性回归。",
+      "result": "已收窄到 LocalSIM 重试包装异常及显式历史日时钟路径；2 个 CI 失败节点复验通过，47 项相关矩阵全部通过；完整矩阵由新 HEAD 的 CI 重新验收。",
+      "round": 4
     }
   ],
   "risk_area": "bug",
@@ -180,8 +189,7 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-source-validation-receipt-r1.json -> independent Python process loaded tracked scheduler/day executor from the task checkout; 45 targeted contracts passed, baseline source reproduced 4 failures; no production replay or service control.",
-      "X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-source-validation-receipt-r1.json -> independent process loaded tracked source, 45 passed; baseline 4 regression failures confirmed; no production replay/database writes or process control"
+      "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-source-validation-receipt-r2.json -> independent process loaded scheduler/native day executor from task checkout; 47 targeted contracts and compile passed; original baseline reproduced 4 failures; two CI regressions corrected; no production replay/service/database control."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",

@@ -4255,7 +4255,10 @@ class SimulationLifecycleScheduler:
                 )
                 results.append(self._finalize_binding_retry_result(result=binding_result, as_of_time=as_of_time))
             except Exception as exc:  # noqa: BLE001 - isolate one binding without starving later eligible bindings.
-                if raise_on_error and binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
+                if raise_on_error and (
+                    binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM
+                    or not isinstance(exc, _BindingRetryAttemptError)
+                ):
                     raise
                 retry_claim_token = exc.claim_token if isinstance(exc, _BindingRetryAttemptError) else None
                 retry_source_fingerprint = (
@@ -4488,14 +4491,16 @@ class SimulationLifecycleScheduler:
         self, *, run: SimulationDailyRun, as_of_time: datetime | None,
     ) -> datetime:
         market_time = self._scheduler_time(as_of_time)
-        control_time = self._scheduler_time(self._scheduler_now())
         if (
-            run.broker_backend == SimulationBrokerBackend.LOCAL_SIM
-            and market_time.date() == run.trade_date < control_time.date()
+            as_of_time is not None
+            and run.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+            and market_time.date() == run.trade_date
         ):
             # Only operational retry deadlines advance. The historical market
             # as-of and the frozen daily inputs remain on the replay date.
-            return control_time
+            control_time = self._scheduler_time(self._scheduler_now())
+            if market_time.date() < control_time.date():
+                return control_time
         return market_time
 
     def _record_simulation_retry_failure(
