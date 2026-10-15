@@ -4255,25 +4255,41 @@ class SimulationLifecycleScheduler:
                 )
                 results.append(self._finalize_binding_retry_result(result=binding_result, as_of_time=as_of_time))
             except Exception as exc:  # noqa: BLE001 - isolate one binding without starving later eligible bindings.
-                if raise_on_error:
+                if raise_on_error and binding.broker_backend != SimulationBrokerBackend.LOCAL_SIM:
                     raise
                 retry_claim_token = exc.claim_token if isinstance(exc, _BindingRetryAttemptError) else None
                 retry_source_fingerprint = (
                     exc.source_fingerprint if isinstance(exc, _BindingRetryAttemptError) else None
                 )
                 original_exc = exc.original if isinstance(exc, _BindingRetryAttemptError) else exc
-                results.append(
-                    self._record_pre_run_binding_failure_result(
-                        binding=binding,
-                        trade_date=trade_date,
-                        data_source=data_source,
-                        created_by=created_by,
-                        exc=original_exc,
-                        as_of_time=as_of_time,
-                        retry_claim_token=retry_claim_token,
-                        retry_source_fingerprint=retry_source_fingerprint,
-                    )
+                failure_result = self._record_pre_run_binding_failure_result(
+                    binding=binding,
+                    trade_date=trade_date,
+                    data_source=data_source,
+                    created_by=created_by,
+                    exc=original_exc,
+                    as_of_time=as_of_time,
+                    retry_claim_token=retry_claim_token,
+                    retry_source_fingerprint=retry_source_fingerprint,
                 )
+                if raise_on_error:
+                    # Historical LocalSIM callers need the original typed failure,
+                    # after the durable retry claim and failure evidence are finalized.
+                    failed_payload = failure_result.run.run_payload_json if failure_result.run is not None else {}
+                    if failed_payload.get("broker_side_effect_state") == "UNKNOWN":
+                        raise InvalidStateTransitionError(
+                            "LocalSIM strict failure has unresolved broker side effects",
+                            context={
+                                "reason_code": "LOCALSIM_REPLAY_BROKER_SIDE_EFFECTS_UNKNOWN",
+                                "binding_id": binding.binding_id, "trade_date": trade_date.isoformat(),
+                                "broker_side_effect_state": "UNKNOWN",
+                                "original_error_type": type(original_exc).__name__,
+                            },
+                        ) from exc
+                    if original_exc is not exc:
+                        raise original_exc from exc
+                    raise
+                results.append(failure_result)
         unmatched_failure_result = self._unmatched_kernel_product_failure_result(
             failures=unmatched_kernel_product_tick_failures,
             data_source=data_source,
@@ -4468,6 +4484,20 @@ class SimulationLifecycleScheduler:
             raise AssertionError("simulation retry error evidence normalization must return an object")
         return normalized
 
+    def _simulation_retry_control_time(
+        self, *, run: SimulationDailyRun, as_of_time: datetime | None,
+    ) -> datetime:
+        market_time = self._scheduler_time(as_of_time)
+        control_time = self._scheduler_time(self._scheduler_now())
+        if (
+            run.broker_backend == SimulationBrokerBackend.LOCAL_SIM
+            and market_time.date() == run.trade_date < control_time.date()
+        ):
+            # Only operational retry deadlines advance. The historical market
+            # as-of and the frozen daily inputs remain on the replay date.
+            return control_time
+        return market_time
+
     def _record_simulation_retry_failure(
         self,
         *,
@@ -4531,7 +4561,7 @@ class SimulationLifecycleScheduler:
             failure_fingerprint=failure_fingerprint,
             failure_stage=failure_stage,
             error=normalized_error,
-            as_of_time=self._scheduler_time(as_of_time),
+            as_of_time=self._simulation_retry_control_time(run=run, as_of_time=as_of_time),
             base_delay_seconds=_SIMULATION_RETRY_BASE_DELAY_SECONDS,
             max_delay_seconds=_SIMULATION_RETRY_MAX_DELAY_SECONDS,
             expected_claim_token=expected_claim_token,
@@ -9121,6 +9151,7 @@ class SimulationLifecycleScheduler:
     ) -> tuple[SimulationDailyRun, SimulationSchedulerBindingResult | None, str | None, str | None]:
         if not submit or not self._run_requires_binding_retry_control(run):
             return run, None, None, None
+        control_time = self._simulation_retry_control_time(run=run, as_of_time=as_of_time)
         source_fingerprint = self._simulation_retry_source_fingerprint(
             run=run,
             retry_key=_SIMULATION_BINDING_RETRY_KEY,
@@ -9129,7 +9160,7 @@ class SimulationLifecycleScheduler:
             run=run,
             retry_key=_SIMULATION_BINDING_RETRY_KEY,
             source_fingerprint=source_fingerprint,
-            as_of_time=self._scheduler_time(as_of_time),
+            as_of_time=control_time,
             lease_seconds=_SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS,
         )
         if decision is None:
@@ -9137,7 +9168,7 @@ class SimulationLifecycleScheduler:
                 run_id=run.run_id,
                 retry_key=_SIMULATION_BINDING_RETRY_KEY,
                 source_fingerprint=source_fingerprint,
-                as_of_time=self._scheduler_time(as_of_time),
+                as_of_time=control_time,
                 lease_seconds=_SIMULATION_RETRY_ATTEMPT_LEASE_SECONDS,
             )
         if decision.should_execute:

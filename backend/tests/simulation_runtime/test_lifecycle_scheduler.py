@@ -4372,6 +4372,212 @@ def test_scheduler_persists_pre_run_binding_failure_without_duplicate_rows(exc_c
     assert detail["run"]["errors"][0]["context"]["reason_code"] == reason_code
 
 
+@pytest.mark.parametrize("exc_cls", (DataUnavailableError, RuntimeConfigInvalidError))
+@pytest.mark.parametrize("unknown_side_effects", (False, True))
+def test_localsim_strict_retry_finalizes_claim_and_raises_original_failure(
+    exc_cls, unknown_side_effects, monkeypatch,
+) -> None:
+    from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus
+
+    release, binding, _, repo = _release_and_bindings()
+    assert binding is not None
+    binding = binding.model_copy(update={
+        "broker_account_id": binding.strategy_id,
+        "effective_from": TRADE_DATE,
+        "effective_to": TRADE_DATE,
+        "binding_config_json": {"metadata": {
+            "localsim_account_id": binding.strategy_id,
+            "account_schema_version": "simulation_account_v1",
+        }},
+    })
+    repo.bindings[binding.binding_id] = binding
+    job = SimpleNamespace(
+        status=LocalSimReplayStatus.RUNNING_HISTORICAL,
+        binding_id=binding.binding_id, release_id=release.release_id,
+        start_trade_date=TRADE_DATE, end_trade_date=TRADE_DATE, live_release_id=None,
+    )
+    control_clock = [datetime(2026, 5, 22, tzinfo=ZoneInfo("Asia/Shanghai"))]
+
+    def now():
+        return control_clock[0]
+
+    monkeypatch.setattr("backend.services.simulation_runtime.lifecycle.scheduler_now", now)
+    monkeypatch.setattr("backend.services.simulation_runtime.scheduler.scheduler_now", now)
+    scheduler = SimulationLifecycleScheduler(
+        repository=repo,
+        selection_service=FakeSelectionService(release, candidates=_candidate_rows()),
+        context_provider=StaticSimulationRunContextProvider(
+            by_binding_id={binding.binding_id: _position_context(portfolio_id="strict_retry")},
+        ),
+        localsim_successor_repository=SimpleNamespace(list_replay_jobs=lambda **_kwargs: [job]),
+    )
+    planned = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        release_id=release.release_id,
+        submit=False,
+        as_of_time=datetime(2026, 5, 21, 9, 0),
+    ).results[0].run
+    assert planned is not None and planned.execution_plan_id
+    repo.update_simulation_daily_run(
+        planned.run_id,
+        status=SimulationDailyRunStatus.FAILED_RETRYABLE,
+        payload_patch={
+            "broker_called": False,
+            "submitted_intents": 0,
+            **({"broker_side_effect_state": "UNKNOWN"} if unknown_side_effects else {}),
+            "submit_failure": {
+                "stage": "LOCAL_SIM_SUBMIT_FAILED", "type": "DataUnavailableError",
+                "message": "previous dependency unavailable",
+                "context": {"reason_code": "FROZEN_DAILY_EVIDENCE_UNAVAILABLE"},
+            },
+        },
+    )
+    original = exc_cls(
+        "frozen daily evidence is unavailable",
+        context={"reason_code": "FROZEN_DAILY_EVIDENCE_UNAVAILABLE", "evidence_id": planned.selection_evidence_id},
+    )
+    attempts = []
+
+    def fail_evidence(_evidence_id):
+        attempts.append(True)
+        raise original
+
+    monkeypatch.setattr(repo, "get_daily_selection_evidence", fail_evidence)
+    as_of_time = datetime(2026, 5, 21, 10, 0)
+    expected_error = InvalidStateTransitionError if unknown_side_effects else exc_cls
+    with pytest.raises(expected_error) as caught:
+        unexpected = scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="DB_HISTORICAL",
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            release_id=release.release_id,
+            submit=True,
+            raise_on_error=True,
+            as_of_time=as_of_time,
+        )
+        pytest.fail(f"strict retry returned without raising: {[(item.status, item.error) for item in unexpected.results]}")
+
+    latest = repo.get_simulation_daily_run(planned.run_id)
+    assert latest.status is SimulationDailyRunStatus.FAILED_RETRYABLE
+    assert latest.execution_plan_id == planned.execution_plan_id
+    assert latest.selection_evidence_id == planned.selection_evidence_id
+    if unknown_side_effects:
+        assert caught.value.context["reason_code"] == "LOCALSIM_REPLAY_BROKER_SIDE_EFFECTS_UNKNOWN"
+        assert latest.run_payload_json["broker_side_effect_state"] == "UNKNOWN"
+        return
+    assert caught.value is original
+    assert latest.run_payload_json["broker_called"] is False
+    assert latest.run_payload_json["submitted_intents"] == 0
+    retry = latest.run_payload_json["simulation_scheduler_retry_control_v1"]["entries"]["BINDING_FAILED_RETRYABLE"]
+    assert retry["consecutive_failure_count"] == 1
+    assert retry["last_error"]["type"] == exc_cls.__name__
+    assert retry["last_error"]["reason_code"] == "FROZEN_DAILY_EVIDENCE_UNAVAILABLE"
+    assert retry["next_retry_at"]
+
+    deferred = scheduler.run_once(
+        trade_date=TRADE_DATE,
+        data_source="DB_HISTORICAL",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+        release_id=release.release_id,
+        submit=True,
+        raise_on_error=True,
+        as_of_time=as_of_time + timedelta(seconds=1),
+    )
+    assert deferred.results[0].status == "RETRY_BACKOFF"
+    assert attempts == [True]
+    next_retry = datetime.fromisoformat(retry["next_retry_at"])
+    assert next_retry > control_clock[0]
+    assert next_retry.astimezone(ZoneInfo("Asia/Shanghai")).date() == control_clock[0].date()
+    control_clock[0] = (next_retry + timedelta(seconds=1)).astimezone(ZoneInfo("Asia/Shanghai"))
+    with pytest.raises(exc_cls) as retried:
+        scheduler.run_once(
+            trade_date=TRADE_DATE,
+            data_source="DB_HISTORICAL",
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            release_id=release.release_id,
+            submit=True,
+            raise_on_error=True,
+            as_of_time=as_of_time,
+        )
+    assert retried.value is original
+    assert attempts == [True, True]
+    after = repo.get_simulation_daily_run(planned.run_id)
+    assert after.trade_date == TRADE_DATE
+    assert after.execution_plan_id == planned.execution_plan_id
+    assert after.selection_evidence_id == planned.selection_evidence_id
+    assert after.run_payload_json["simulation_scheduler_retry_control_v1"]["entries"][
+        "BINDING_FAILED_RETRYABLE"
+    ]["consecutive_failure_count"] == 2
+
+
+@pytest.mark.parametrize("case", (
+    "data_unavailable", "retry_backoff", "config_invalid", "terminal_day",
+    "unknown_payload", "unknown_error", "invalid_backoff_contract",
+))
+def test_native_replay_preserves_returned_data_failure_and_blocks_other_failures(case) -> None:
+    from backend.services.simulation_runtime.localsim_replay_runtime import LocalSimHistoricalReplayDayExecutor
+    from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus
+    from backend.services.simulation_runtime.successor_repository import InMemoryLocalSimSuccessorRepository
+    from backend.tests.simulation_runtime.test_localsim_replay_live_transition import _job
+
+    payload = {"broker_called": False, "submitted_intents": 0}
+    status = "FAILED_RETRYABLE"
+    day_status = SimulationDailyRunStatus.FAILED_RETRYABLE
+    error = {
+        "type": "DataUnavailableError", "message": "authoritative price missing",
+        "context": {"reason_code": "STK_LIMIT_PRE_CLOSE_INVALID", "symbol": "603616.SH"},
+    }
+    if case == "config_invalid":
+        error["type"] = "RuntimeConfigInvalidError"
+    if case == "terminal_day":
+        day_status = SimulationDailyRunStatus.FAILED_TERMINAL
+    if case == "unknown_payload":
+        payload["broker_side_effect_state"] = "UNKNOWN"
+    if case == "unknown_error":
+        error["context"]["broker_side_effect_state"] = "UNKNOWN"
+    if case in {"retry_backoff", "invalid_backoff_contract"}:
+        status = "RETRY_BACKOFF"
+        error = {
+            "schema_version": "simulation_binding_retry_backoff_v1",
+            "reason_code": "SIMULATION_BINDING_RETRY_BACKOFF_NOT_DUE",
+        }
+        if case == "invalid_backoff_contract":
+            error["schema_version"] = "unrecognized"
+    before = deepcopy(payload)
+
+    def run_once(**_kwargs):
+        return SimpleNamespace(results=(SimulationSchedulerBindingResult(
+            binding_id=job.binding_id, strategy_id=job.simulation_account_id,
+            broker_backend=SimulationBrokerBackend.LOCAL_SIM,
+            status=status, run=SimpleNamespace(status=day_status, run_payload_json=payload), error=error,
+        ),))
+
+    executor = LocalSimHistoricalReplayDayExecutor(lifecycle_scheduler=SimpleNamespace(run_once=run_once))
+    repository = InMemoryLocalSimSuccessorRepository()
+    coordinator, job, *_ = _job(repository, days=[TRADE_DATE], runner=executor)
+    retryable = case in {"data_unavailable", "retry_backoff"}
+    expected_error = DataUnavailableError if retryable else InvalidStateTransitionError
+    with pytest.raises(expected_error):
+        coordinator.run_next_batch(
+            replay_job_id=job.replay_job_id, expected_version=job.version,
+            trading_days=[TRADE_DATE], current_trading_date=TRADE_DATE + timedelta(days=1), max_days=1,
+        )
+    failed = repository.get_replay_job(job.replay_job_id)
+    assert failed.status is (
+        LocalSimReplayStatus.FAILED_RETRYABLE if retryable else LocalSimReplayStatus.FAILED_TERMINAL
+    )
+    assert failed.failure_code == expected_error.__name__
+    assert failed.completed_trade_date is None
+    assert failed.next_trade_date == TRADE_DATE
+    assert payload == before
+    if retryable:
+        assert failed.failure_context["reason_code"] == (
+            "STK_LIMIT_PRE_CLOSE_INVALID" if case == "data_unavailable" else "SIMULATION_BINDING_RETRY_BACKOFF_NOT_DUE"
+        )
+
+
 def test_scheduler_pre_run_binding_failure_does_not_block_other_bindings() -> None:
     release, local_binding, qmt_binding, repo = _release_and_bindings(qmt_only=False)
     assert local_binding is not None

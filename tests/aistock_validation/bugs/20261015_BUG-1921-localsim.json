@@ -3,7 +3,8 @@
   "allowed_write_scope": [
     "backend/services/simulation_runtime/scheduler.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-    "tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json"
+    "tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json",
+    "backend/services/simulation_runtime/localsim_replay_runtime.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1921",
@@ -14,7 +15,46 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-15T09:40:31.971126Z",
-  "description": "严格错误路径直接抛内部包装异常，父回放 failure_code=_BindingRetryAttemptError；已有 LSTM 01-21 原始 DataUnavailableError 仅留在日运行失败记录。",
+  "description": "LocalSIM 历史回放丢失数据失败合同：严格模式跳过失败记录并泄漏内部包装异常；日适配器把已持久化的数据缺失或合法退避转为状态错误；固定历史 as-of 还冻结重试期限。修复限定在 LocalSIM 错误分类、原生重试收尾及控制时钟，不更改评分、订单、持仓、资金或估值政策。",
+  "design_compliance_001": [
+    {
+      "clause": "禁止简化交付",
+      "evidence": "45 定向回归、baseline 4 项失败及 source-validation receipt。",
+      "implementation": "仅声明本 BUG 错误及重试合同修复；既有终态恢复、旧 C 计划修订、停牌估值明确保留为 gap。",
+      "result": "PASS_FOR_BOUNDED_BUG_SCOPE"
+    },
+    {
+      "clause": "禁止静默错误",
+      "evidence": "strict 4 情形和 native returned failure 7 情形，包含配置、终态、UNKNOWN、非法退避。",
+      "implementation": "失败证据持久化后抛出原异常；只有精确 DataUnavailable/退避合同可重试；UNKNOWN 等仍阻塞。",
+      "result": "PASS"
+    },
+    {
+      "clause": "禁止改变业务逻辑",
+      "evidence": "到期重试时 trade_date/evidence/plan 原样保留；原生真实 broker 市场残量回归通过。",
+      "implementation": "使用既有 DataUnavailable 分类和既有重试事务；只修控制时间，不改 C/D/T 市场截止、评分、计划或经济状态。",
+      "result": "PASS"
+    },
+    {
+      "clause": "禁止私增门禁审批",
+      "evidence": "源码差异、runbook 和既有 catalog target backend-main。",
+      "implementation": "使用现有用户重启和 CI 流程；UNKNOWN 阻塞保留既有安全合同；未新增业务审批或共享请求参数。",
+      "result": "PASS"
+    }
+  ],
+  "diagnosis": {
+    "advisory_followup": "PR #6105 已覆盖共享 D 日资格过滤；本轮无需向荐股窗口新增同一修复请求。",
+    "code_intelligence_scoped_miss": "CodeGraph 关联旧 qmt binding 入口，UA 为 stale_ancestor；已用指定 scheduler.run_once 的异常捕获块及原生 retry 记录方法完成窄范围核查。",
+    "operational_retry_clock": "只在 LocalSIM 已完成历史日且 market as-of 仍绑定 D 时，使用当前运行时间计算重试租约和退避；市场与选股 as-of、交易日、原始证据和计划均保持冻结。",
+    "remaining_owner_work": [
+      "LocalSIM 既有终态的受控恢复及幂等验收",
+      "LocalSIM 失败旧 C 过滤计划的原生修订合同",
+      "LocalSIM 合法停牌且无权威 pre_close 的持仓估值合同；保持 BLOCKED，不推算补值"
+    ],
+    "returned_failure_contract": "日适配器还会把 FAILED_RETRYABLE 中原生 DataUnavailableError / 退避结果统一转为状态错误；修复时保留精确类型和原因，未知副作用或配置等非数据失败保持 fail-closed。",
+    "root_cause": "LocalSIM 历史日执行器使用 raise_on_error=True；调度器在内部重试异常解包和失败记录之前返回异常，原始类型与重试 claim 收尾丢失。",
+    "scope": "仅修改 LocalSIM 严格错误传播路径；其他 broker 的严格模式合同保持不变。既有 FAILED_TERMINAL 不自动恢复；不改变评分、旧计划、持仓估值、交易或账本。"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -29,12 +69,20 @@
   ],
   "expected": "严格错误路径与普通错误路径使用同一原生失败记录和重试收尾，再原样抛出原始异常供父回放按既有合同分类；副作用 UNKNOWN 与真缺价仍阻塞，已有终态不自动恢复。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py",
       "backend/services/simulation_runtime/scheduler.py",
       "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/scheduler.py",
@@ -78,17 +126,20 @@
     },
     "planned_files": [
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py"
     ]
   },
   "first_seen_at": "2026-10-15T09:40:31.971126Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "完成 LocalSIM 严格错误路径的原生失败记录与重试收尾，保留原始异常；日适配器保留可重试数据失败及合法退避；历史重试使用运行控制时间。UNKNOWN、配置错误、终态失败与非法退避仍阻塞。既有 FAILED_TERMINAL 不自动恢复。",
   "fixed_at": null,
   "github_issue_number": 6125,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6125",
@@ -106,14 +157,42 @@
     "l0",
     "simulation_core_l2"
   ],
+  "review_rounds": [
+    {
+      "finding": "严格抛出及返回错误两条路径丢失数据错误类型",
+      "result": "已修复，baseline 4 条回归与新源码验证对应。",
+      "round": 1
+    },
+    {
+      "finding": "UNKNOWN/配置/终态不得被数据重试分类放宽",
+      "result": "已加入阻塞保护及针对性回归。",
+      "round": 2
+    },
+    {
+      "finding": "固定历史 as-of 使重试期限无法到达",
+      "result": "仅分离 LocalSIM 历史重试控制时钟，市场时间冻结；到期后原日再次重试验证通过。",
+      "round": 3
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-source-validation-receipt-r1.json -> independent Python process loaded tracked scheduler/day executor from the task checkout; 45 targeted contracts passed, baseline source reproduced 4 failures; no production replay or service control.",
+      "X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-source-validation-receipt-r1.json -> independent process loaded tracked source, 45 passed; baseline 4 regression failures confirmed; no production replay/database writes or process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -132,6 +211,11 @@
     "fingerprint": "23f5a15ad4c363e763580b6f",
     "source_event_id": "FE-20261015-23f5a15ad4c3"
   },
+  "validation_receipts": [
+    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-source-validation-receipt-r1.json",
+    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-final-matrix-r2.xml",
+    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-baseline-red.xml"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
