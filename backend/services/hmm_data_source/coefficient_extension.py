@@ -1,4 +1,4 @@
-"""File-only contracts for extending a fixed HMM, never training a new model."""
+"""Explicit fixed-HMM file extension and DB subscription contracts; never fit."""
 
 from __future__ import annotations
 
@@ -22,7 +22,12 @@ POLICY_SCHEMA = "hmm_coefficient_extension_policy_v1"
 EXTENSION_MODE = "frozen_window_extension_v1"
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
 _PRESET = re.compile(r"[A-Za-z0-9_-]+\Z")
-_ASSET_FIELDS = {"coefficient_extension", "coefficient_windows", "qe_frozen_input_bundle"}
+_ASSET_FIELDS = {
+    "coefficient_extension",
+    "coefficient_windows",
+    "qe_frozen_input_bundle",
+    "daily_coefficient_subscription",
+}
 _FILE_COMPONENTS = {
     "sector_data_h5": "sector_data",
     "index_daily_h5": "index_daily",
@@ -63,6 +68,52 @@ def file_sha256(path: Path) -> str:
 
 def config_fingerprint(config: Mapping[str, Any]) -> str:
     return fingerprint({k: v for k, v in config.items() if k not in _ASSET_FIELDS})
+
+
+def make_daily_subscription(
+    *,
+    config: Mapping[str, Any],
+    snapshot_id: str,
+    model_sha256: str,
+    signal_presets: list[str],
+    enabled: bool,
+) -> dict[str, Any]:
+    if (
+        type(enabled) is not bool
+        or not isinstance(snapshot_id, str)
+        or not snapshot_id.strip()
+        or not isinstance(model_sha256, str)
+        or not _SHA.fullmatch(model_sha256)
+        or not isinstance(signal_presets, list)
+        or not signal_presets
+        or any(not isinstance(p, str) or not _PRESET.fullmatch(p) for p in signal_presets)
+        or len(set(signal_presets)) != len(signal_presets)
+        or config.get("strict_no_leakage") is not True
+    ):
+        _fail("explicit fixed-model daily subscription is required", "hmm_daily_subscription_identity_changed")
+    return {
+        "schema_version": "hmm_database_daily_subscription_v1",
+        "source_mode": "database_daily",
+        "enabled": enabled,
+        "snapshot_id": snapshot_id,
+        "model_sha256": model_sha256,
+        "config_sha256": config_fingerprint(config),
+        "signal_presets": sorted(signal_presets),
+    }
+
+
+def validate_daily_subscription(config: Mapping[str, Any], policy: Any, *, model_sha256: str) -> None:
+    if not isinstance(policy, dict):
+        _fail("daily subscription is missing", "hmm_daily_subscription_identity_changed")
+    expected = make_daily_subscription(
+        config=config,
+        snapshot_id=policy.get("snapshot_id"),
+        model_sha256=model_sha256,
+        signal_presets=policy.get("signal_presets"),
+        enabled=policy.get("enabled"),
+    )
+    if policy != expected or policy["enabled"] is not True:
+        _fail("daily subscription/model/config changed or disabled", "hmm_daily_subscription_identity_changed")
 
 
 def make_policy(
@@ -273,6 +324,7 @@ def build_plan(
     filename = f"coefficients_{signal_preset}_{start}_{end}__auto_{key[:24]}.json"
     return {
         "generation_mode": EXTENSION_MODE,
+        "source_mode": "qe_frozen_file",
         "extension_key": key,
         "policy": dict(policy),
         "snapshot_id": policy["snapshot_id"],

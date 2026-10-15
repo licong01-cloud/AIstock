@@ -1,11 +1,11 @@
 # HMM 演进与风险管理系统总体蓝图（唯一产品目标权威）
 
-> **版本**：v2.86
+> **版本**：v2.87
 > **初始日期**：2026-07-16
 > **修订日期**：2026-10-15
 > **维护范围**：HMM Evolution；不接管QE、Selection、Paper、Advisory或数据生产
 > **已记录成果（历史验收保留，当前只读核对见§1.5）**：Phase 0/1已完成历史验收。G2-A v1.6已经完成正式双fresh-process零fit development、生产OOF authority reclosure、`2026-08-31/as-of 2026-08-28`真实31-sector单日写入、repository/API/UI readback及用户重启后的runtime验证；mean Rank IC=`0.039580909571655214`，当前为`AVAILABLE_EXPERIMENTAL / RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED / INSUFFICIENT / PENDING_INSUFFICIENT_POWER / NOT_AVAILABLE`。G2-B `risk_L1`也已完成源码、正式双fresh-process 12/12 fits、19,220行生产OOF、独立表/API/UI及重启后runtime验证；其research surface为`AVAILABLE_EXPERIMENTAL`，但precision lift=`0.05844358555076558 < 0.10`、recall=`0.34237132352941174 >= 0.25`，因此capability/advisory仍为`NOT_AVAILABLE`。两者tail均未读取，不得冒充forward-confirmed advisory。
-> **当前方向**：后续统一申万L2，目标仍是可用且可证明经济价值的轮动与独立风险信号。历史模型/新窗口结果保留于§1.10～§1.15；2026-10-15只读复核已完成P1/P2，不重复实验。QE历史回测使用共享冻结文件；未来荐股/模拟盘日度预测使用数据库截至T收盘的完整事实，生效于canonical下一交易日T+1。两模式复用已批准核心但不混身份，数据更新不改权重、不自动重训、不要求月度迁移。指定快照日度job/发布/登记已通过，自动触发和目标消费仍阻断于公共接线/显式no-overlay兼容，详见§1.16；一分钟轮询不是业务要求。L1历史兼容保持，UI前10＋后10、自定义总数≤30，计算/消费保持完整合格L2；不为记录重启、整理旧证据或新增平台。
+> **当前方向**：后续统一申万L2，目标仍是可用且可证明经济价值的轮动与独立风险信号。历史模型/新窗口结果保留于§1.10～§1.15；2026-10-15只读复核已完成P1/P2，不重复实验。QE历史回测使用共享冻结文件；未来荐股/模拟盘日度预测使用数据库截至T收盘的完整事实，生效于canonical下一交易日T+1。两模式复用已批准核心但不混身份，数据更新不改权重、不自动重训、不要求月度迁移。指定快照日度job/发布/登记已通过；本轮补HMM独立日度订阅和直接查询既有完成事实的reconcile，不等待新通知平台。Selection合法no-overlay兼容源码已合入，实际调度挂接及用户重启后的消费验收仍pending，详见§1.16；一分钟轮询不是业务要求。L1历史兼容保持，UI前10＋后10、自定义总数≤30，计算/消费保持完整合格L2；不为记录重启、整理旧证据或新增平台。
 > **本轮核验状态**：最终v17 formal executor已完成双fresh-process **5184/5184 fits**；autocycle L1/L2的train-only D5均选seed47，原D6为29/31、121/131，legacy两个层级无完整D5候选。原全grid仍`d3_d6_accepted=false/ready=false`。另一方面，2026-10-03实时只读L2 API确认既有资金流基线mean Rank IC=`0.02973212294698707`，358个有效评价日、coverage通过，开发期效果合格；HAC区间跨零，当前`research_surface_status=NOT_AVAILABLE/advisory_status=NOT_AVAILABLE`，不代报浏览器通过。2026-09-22输入阻断仅是历史；不同模型、输入和窗口的结果不可混写。
 > **历史生产动作**：G2-A v1.6、G2-B risk_L1及独立risk_L2的生产DDL/DML、产品receipt绑定和用户重启后runtime验证均已按各自明确授权完成。risk_L2为HMM自有两表55,544行，未修改其他业务表。本次蓝图同步不执行新的DDL/DML、依赖安装、runtime activation或进程控制。
 
@@ -197,15 +197,15 @@ P2采用BUG-1827/#5831修复真实前置行情预热后的正式merge=`373a90423
 
 本次官方receipt重算通过、两份executor commit均已包含于main，未重建特征、预测或标签。该新窗口已经按原批准合同读取outcome，今后不可再称tail未消费或全项目untouched。版本交接结论：冻结rank/return保留研究/对照、不默认替换；独立风险具备进一步场景匹配验证价值，但`net_value_status=UNASSESSED`，不自动接交易、不声称所有场景有效；旧QE HMM保留显式可选项，QE正式实验继续由QE窗口后置。此取舍只针对本包冻结版本，不对其他未复验候选作全局优胜裁决。
 
-### 1.16 日度生成已完成，自动触发与消费仍有明确owner依赖（2026-10-15）
+### 1.16 单次日度生成、HMM订阅源码与真实自动消费分开验收（2026-10-15）
 
 BUG-1895源码#6049合入`442d6ac61efd9d9682b079f1a6a44a17dfb17b39`，用户重启后runtime=`5c5fc5684458582115a28ae5f4f5c8b1b08a0829`及业务probe通过，close-sync #6052已合入、Issue #6045关闭。指定config fc0683a9-6ca0-4d55-b053-17c2360c3c40 / snapshot ecee7c40-6764-49ad-bc0f-1c6c6b390504 / preset_A的job=`9c97a277-9ab3-4373-9b9d-ff4b034dcf01`已COMPLETED/REGISTERED_READBACK，DB完成T=2026-10-14、生效T+1=2026-10-15。真实DEV事务写入/回读回滚和指定授权生产API任务均已完成，fits=0；正常过程/结果不改环境变量、不需重启。
 
-实际资产SHA=`66602de8dc6c9aa0db6d9522df0da67db4b7e027e292c9c965c7ce2a957f6b06`，693092 bytes；131目录/完整membership、124有限系数、7合法无报价行业显式`explicit_no_l2_overlay_v1`，旧QE资产/窗口未改。源输入与输出完整路径见`hmm_daily_coefficient_generation_design_20260428.md` v2.4 §1.1；单次完成不代表自动派发或全模型日更。
+实际资产SHA=`66602de8dc6c9aa0db6d9522df0da67db4b7e027e292c9c965c7ce2a957f6b06`，693092 bytes；131目录/完整membership、124有限系数、7合法无报价行业显式`explicit_no_l2_overlay_v1`，旧QE资产/窗口未改。源输入与输出完整路径见`hmm_daily_coefficient_generation_design_20260428.md` v2.5 §1.1；单次完成不代表自动派发或全模型日更。
 
-本轮实际资产+实际snapshot API的只读fresh-process消费smoke被Selection的`SectorHMMRuntime.preflight_coefficients`准确拒绝：它尚不兼容7个合法无报价行业，报`HMM coefficient artifact has stock sector mapping without coefficients`。不可由HMM给它们填1.0、删membership或改其他模块来绕过；Selection owner负责将显式no-overlay接入其profile/读取/trace，并继续拒绝未知缺系数。普通消费者只能读完成且身份/日期匹配的正式资产，不在读路径触发长推断。
+最初实际资产+snapshot只读消费smoke被Selection准确拒绝，原因是7个合法无报价行业尚未接入显式no-overlay语义；HMM未填1.0、删membership或越界修改。该缺陷BUG-1910/#6100已合入`c16db8b8bd2d42928a34d25e38be3d072ce797b8`，owner实际资产诊断为5918个membership候选、124个系数行业、7个no-overlay行业/29只股票保留原score、零排除；这不是实际荐股/模拟盘运行验收。当前后端尚未加载该源码，用户暂不能重启，close-sync #6114保持pending。普通消费者只读完成且身份/日期匹配资产，不在读路径触发长推断，仍拒绝未知缺系数。
 
-本地数据`TDXScheduler`也未提供通用callback注册/取消公共入口；旧HMM初始化仍同时挂一分钟训练/文件延伸tick，不能拿它替代日度共享就绪触发。调度owner先提供最小公共接线，HMM再完成日度订阅/reconcile与真实自动job验收；不新建scheduler、依赖、平台或逐月人工审批。两个owner缺口不推翻已完成HMM单次生成，也不能被文档或单元mock报成完成。P1/P2已有结果不为等待该依赖重复运行。
+HMM已可直接只读查询`market.dataset_date_refresh_audit`并复用`require_success`，无需新通知模块。本轮实现与文件policy隔离的`hmm_database_daily_subscription_v1`、完成水位/生成器/模型身份去重、原持久job与锁复用，以及不初始化scheduler/训练的异步`coefficient_readiness_tick`；实现与离线验证见日度设计§5.2。本地数据`TDXScheduler`尚无通用consumer公共接点，真正最小挂接仍交调度owner；不写其私有job、不调用旧一分钟训练tick、不新增依赖或调度平台。HMM自己的实现不再等待该接点，但在实际挂接/启用和新job读回前不报自动日更完成；P1/P2不因等待重跑。
 
 ## 2. 总体架构
 
@@ -276,7 +276,7 @@ QE冻结历史文件 / 数据库收盘事实（显式分入口，不互相fallba
 
 “数据就绪”要求该版本必需键/日期/字段完整、有限值和PIT/正常停牌/正式停发语义闭合，不能仅取各表`MAX(date)`。T由已完成交易日事实决定，不取墙钟自然日；晚入库显式等待，缺数或身份损坏明确失败。不能悄悄改用T−1的输出并标为T+1成功；末端无下一交易日日历则明确阻断。若使用有记忆的滤波模型，沿原固定起点连续推断或验证同身份状态检查点，不以仅最近窗口重置状态；不实际使用状态的版本不额外增加状态合同。
 
-无需HMM专用新scheduler、APScheduler安装或每分钟重训。优先复用已有数据完成/调度能力，周期检查只补偿遗漏的就绪事件并发现新身份；复用既有频率，不另设一分钟业务周期，不每次检查扫描全历史。HMM只登记自己的轻量就绪回调/幂等job；旧rolling训练tick不进入系数更新链。现有TDX调度器只有数据测试/入库专用注册入口，尚无核验通过的通用HMM回调，不能直接写其私有job列表或宣称已经接线；必要的最小公共接线由调度owner协调，禁止新建调度平台。
+无需HMM专用新scheduler、APScheduler安装或每分钟重训。优先直接查询已有权威完成记录，周期检查补偿遗漏并发现新身份；复用既有频率，不另设一分钟业务周期，不每次检查扫描全历史。HMM实现自己的轻量reconcile/幂等job和可调用入口，旧rolling训练tick不进入系数更新链。现有TDX调度器只有数据测试/入库专用注册入口，尚无核验通过的通用HMM回调，不能写其私有job列表或宣称已经接线；真正最小公共挂接由调度owner完成，但不是HMM源码实现或其他离线研究的前置条件，禁止新建通知/调度平台。
 
 仅一次性显式启用的版本/模式可自动派发；复用现有policy与持久job/锁/失败结果，不创建平行队列、状态平台或环境变量指针。发布/登记失败不形成可消费成功，重复触发不重算已完成同身份；改模型/重训/新场景消费各自按直接合同与授权执行。Consumer只读已完成且日期匹配输出；找不到时typed unavailable，不在读路径推断、补默认值或偷偷换模型。源码首次实际加载仍归用户，之后日度数据更新、资产登记或记录动作不要求重启。
 
@@ -511,10 +511,11 @@ L2是当前业务目标而非可选的样本扩容手段：它可能减轻L1内�
 | 已完成：风险消费与监督资金流 | §1.9/§1.10及直接设计回填终态；确认政策有换手改善和回撤/延迟代价，Ridge无可信增量 | 不因单项改善默认替换政策，不补NA、拼净值、降阈值或调参 |
 | 已完成：P0＋P1连续业务包 | §1.10 rank生产真实API/UI、BUG-1807关闭及精确源树清理；§1.11 return-target唯一2/2 fits及完整历史比较已结束 | 研究产品可用但净增益未证明；return只交付文件，旧run/默认不替换，生产写入/验收及原fit不重复 |
 | 已完成：匹配经济价值回放 | §1.12源码#5791与一次正式双process零fit回放结束，16/16路径完整；return毛收益点估计较好，20个全期paired区间均跨零 | DEVELOPMENT_REFERENCE_VALUE_INCONCLUSIVE；不宣称稳定增益、不自动换生产版本或第三模型 |
-| 当前P0：自动触发与真实消费闭环 | §1.16：HMM指定快照DB输入/单次T→T+1/job/发布/登记已完成；剩余共享callback由调度owner、合法no-overlay及只读消费由Selection owner处理，HMM仅完成自身接线/验收 | 真实自动job及目标消费者分别验证；不调用旧一分钟训练tick，不补系数/删membership，不越界编辑。owner依赖时保持部分完成，正常日更不用重启 |
+| 当前P0：自动触发与真实消费闭环 | §1.16：单次DB job/发布/登记已完成；本轮补HMM独立日度订阅、查询水位/幂等reconcile及离线验证。Selection #6100源码已合入，公共挂接与用户重启后的真实消费仍pending | HMM自身实现不等待新通知平台；实际自动job和目标消费分别验证，不调用旧一分钟训练tick、不补系数/删membership。源码首次加载归用户，正常日更不需重启 |
 | 已完成P1：冻结轮动新历史验证 | §1.15复核104预测/94成熟日、四臂四成本；rank/return/delta平均IC均为负、区间跨零，19/104可估值，完整路径不足 | 已形成终态，不重跑、不补价、不改窗口/消费或自动第三候选；不提升默认版本或宣称QE净增益 |
 | 已完成P2：原风险独立价值验证 | §1.15修复后103/103日完整、风险减少参考点估计可观察；R比同敞口X的MDD较小，但收益少/换手多，示意成本全部保留 | REFERENCE_RISK_REDUCTION_OBSERVED不是净收益认证；原模型/20D/阈值不改，不借轮动输入，也不重复旧错误版本 |
-| 当前P3：版本取舍与跨场景交接 | 冻结rank/return保留研究/对照，独立风险保留匹配验证候选，旧QE版本显式可选；提供真实日期/模型/输入/asset身份及局限 | HMM侧结论已闭合；QE实验只由QE窗口、荐股/模拟盘消费由各owner，未实测不报采用。没有新合同不自动滚动训练/新方向 |
+| 接续P1：L2风险适用性与代价闭合 | 基于已完成P2结果，将R与同敞口X的回撤改善、收益损失和换手代价放在同一判断中；下一验证设计见直接新历史设计§13，不开启模型搜索 | 本轮只完成可执行问题/输入/停止边界设计，不重跑P1/P2；没有新独立数据和对应消费合同不得宣称净增益。QE实验仍由QE窗口后置 |
+| 当前P3：版本取舍与跨场景交接 | 冻结rank/return保留研究/对照，独立风险保留风险导向验证候选，旧QE版本显式可选；提供真实日期/模型/输入/asset身份及局限 | HMM侧结论已闭合；QE实验只由QE窗口、荐股/模拟盘消费由各owner，未实测不报采用。没有新合同不自动滚动训练/新方向 |
 | 独立善后，不作主线前置 | §1.8记录解耦源码已合入，运行态及close-sync按原BUG核验；流水线probe归属流水线owner，不为记录制造新实验或写库 | 未获真实加载/读回仍pending；不用环境变量绑定记录，不启动停用worker或重复旧验收 |
 | 后置：目标场景增益与有限演进 | QE仍由QE窗口在用户恢复后执行；荐股/模拟盘各自匹配验证。新候选只有明确问题与精确批准后才能启动，保留旧版可选项 | 场景成本后收益/风险与代价；不自动继承A线效果，不将smoke/fit次数当增益 |
 
@@ -596,7 +597,7 @@ P0/原效果/R1/risk及risk产品均有真实终态，不重复；#5433/#5444/#5
 
 ## 11. Design Acceptance Matrix
 
-记录v2.86当前状态。11行历史verified及§11.2原行保留；§1.15新历史P1/P2结果已只读核验，§1.16指定快照DB日度单次job/登记已完成。QE文件自动延伸policy与DB日度job不混同；共享自动触发及目标消费仍有明确owner阻断，不以文档通过、enabled或单次job提高完整业务完成度。
+记录v2.87当前状态。11行历史verified及§11.2原行保留；§1.15新历史P1/P2结果已只读核验，§1.16指定快照DB日度单次job/登记已完成，本轮补HMM自己的订阅/reconcile源码。QE文件policy与DB订阅不混同；Selection消费源码已合入、运行态待用户重启，实际调度挂接交owner。源码/离线测试不代报真实自动日更或场景采用。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -613,7 +614,7 @@ P0/原效果/R1/risk及risk产品均有真实终态，不重复；#5433/#5444/#5
 | F-010A | Phase 1 详细设计 §5.1/§13.5/§18～§21；`worker_service.py` + `hmm_evolution_worker.py --serve` + UI worker 文案 | `python -m pytest backend/tests/hmm_evolution/test_worker_service.py backend/tests/hmm_evolution/test_worker_cli.py -q`：22 passed；2026-07-21 受控中断旧 PID 73948，新 PID 37024 保持服务，过期 lease 明确 timed_out，显式 retry 2/2 succeeded，活动队列归零；详细设计 §17.4.6 31.6 分钟 bounded soak 六类事件 durable 监督记录 | verified | 无 |
 | F-011 | 原formal/effect及§1.10～§1.15结果，L1历史保留 | artifact: F:/Dev/AIstock_runtime/hmm_l2_frozen_history/20261009_20e75e4f6/P1/run/acceptance.json；artifact: F:/Dev/AIstock_runtime/hmm_l2_frozen_history/20261009_373a90423/P2/run/acceptance.json；官方receipt重算通过，source commit为main祖先 | APPROVED_BY_USER_CONTRACT_NEW_HISTORY_RESULTS_VERIFIED_VALUE_UNPROVEN | 原批准合同允许真实不足/负终态：轮动新历史效果不利/完整NAV不足；风险103日同敞口MDD改善但收益少/换手多，净增益未证明；不提升默认版本，QE后置 |
 | F-012 | 正式reader、共享身份与20D risk输入 | backend/tests/hmm_risk/test_formal_state_input.py；artifact: F:/Dev/AIstock_runtime/hmm_l2_risk/20261005/preflight.json；131/20D及601/591/424/414闭合 | APPROVED_BY_USER_MODEL_INPUTS_VERIFIED | 不改旧失败/源/hash；156合法观测NA保留，P/S不冒充目录全无缺失 |
-| F-013 | 既有rotation/risk研究产品、rank四特征分支；§1.16日度job/资产 | artifact: F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_price_20261008_1988e7909/production_post_restart_20261008.json；GET /api/v1/hmm-training/daily-coefficients/jobs/9c97a277-9ab3-4373-9b9d-ff4b034dcf01及§1.16实际资产SHA/consumer smoke | APPROVED_BY_USER_CONTRACT_SINGLE_DAILY_JOB_VERIFIED_PENDING_TARGET_CONSUMER | 批准的是日度/no-overlay合同，不是完成豁免：rank历史验收/return未上线保持；7个合法no-overlay尚未被Selection支持，共享触发pending；不报场景采用或净增益 |
+| F-013 | 既有rotation/risk研究产品、rank四特征分支；§1.16日度job/资产、独立DB订阅与reconcile | artifact: F:/Dev/AIstock_runtime/hmm_rotation_l2/moneyflow_price_20261008_1988e7909/production_post_restart_20261008.json；§1.16实际job/资产SHA；backend/tests/hmm_data_source/test_daily_coefficient_subscription.py | APPROVED_BY_USER_CONTRACT_SINGLE_DAILY_JOB_VERIFIED_PENDING_PUBLIC_HOOK_AND_RUNTIME | HMM订阅源码/离线测试不代表自动日更；Selection #6100已合入、#6114待用户重启后验收，共享挂接pending；rank历史验收/return未上线不变，不报场景采用或净增益 |
 | F-014 | 本文Phase 3 UI与独立候选方向 | 目标`backend/tests/hmm_training/test_rolling_research_training.py`、`frontend/tests/hmm-training/hmm-training.spec.ts` | APPROVED_BY_USER_DIRECTION_ONLY_PENDING_IMPLEMENTATION_LEVEL_DESIGN | 独立实现级设计待后置任务；不是G2-A前置 |
 | F-015 | Phase 3研究训练manual-first；§2.6及两份日度/文件直接设计 | 目标`backend/tests/hmm_training/test_scheduler_contract.py`；#5899 reconcile单元不代表真实自动派发 | APPROVED_BY_USER_MANUAL_RETRAIN_AND_DATA_EXTENSION_DIRECTION_PENDING_TRIGGER_VALIDATION | 自动重训未批准；固定模型更新复用共享调度仍待接线验证，不依赖独立APScheduler。手工推理不需要scheduler |
 | F-016 | 全阶段隔离与发布边界 | 目标`tests/aistock_validation/test_hmm_evolution_isolation.py`及各阶段直接无副作用测试 | APPROVED_BY_USER_DESIGN_READY_PENDING_PHASE_IMPLEMENTATION | 对应阶段真实证据待完成；本次文档无运行动作 |
@@ -642,9 +643,9 @@ P0/原效果/R1/risk及risk产品均有真实终态，不重复；#5433/#5444/#5
 
 ## 13. Production Gates
 
-本次文档任务：`production_ddl_gate=noop`、`production_dml_gate=noop`、
+本次连续任务含HMM后端订阅/reconcile源码及直接文档：`production_ddl_gate=noop`、`production_dml_gate=noop`、
 `production_frontend_dependency_gate=noop`、`production_backend_dependency_gate=noop`、
-`runtime_impact=none`，不需要后端重启。
+`runtime_impact=backend / target_ids=[backend-main]`；源码加载仍由用户决定，本任务不控制进程、不启用实际订阅或运行实际job。普通数据/结果更新不需要重启。
 
 此前已获单独授权并完成的G2-C DEV两日期DML、G2-A/G2-B及risk_L2生产动作见§1.1/§1.6/§3；risk_L2 DEV先验、生产55,544行和重启后验证均已完成，不是本次文档写入，不改变上述gate。
 
@@ -759,6 +760,10 @@ DESIGN-COMPLIANCE-001逐项结论：不缩小计算人口或用设计冒充交�
 本次v2.86两轮作者审核（非独立第三方）：第一轮核对两份正式acceptance/官方receipt和真实日度job/runtime/文件SHA，纠正active“未运行/未合入”及来源模式混写，补足可定位证据引用；第二轮核对四文档状态、owner边界与终态，明确原423日风险不足和新103日参考改善不同，不将单次job记为自动触发/场景通过。12行P1/P2 D1～D6、11行历史verified、32行旧版本表、§11.2及日度PIT/quote核心逐字保持；四文档F2与diff通过。DESIGN-COMPLIANCE-001：全分母/成本不简化，NA/负效果/阻断不静默，模型与其他业务不迁移，不新增门禁或把合同批准当完成豁免。未重新训练/推断/读原始outcome/写库/控制服务。
 
 2026-10-15 v2.86：只读复核#5804/P1与BUG-1827后的#5831/P2正式结果，纠正active仍写“未运行”的旧状态；轮动新历史IC均负/区间跨零、完整路径不足，风险103/103日同敞口MDD改善但收益少/换手多。同步BUG-1895已合入/重启生效/close-sync及真实日度T→T+1/job/登记；共享callback与目标no-overlay兼容明确交对应owner。保留历史/原精确合同，不重复fit、特征、标签、回放或DB写入，不修改模型、其他模块、数据集或用户进程。
+
+2026-10-15 v2.87：同一连续任务实施HMM独立日度订阅及直接查询既有完成记录的reconcile，修正新通知平台前置和Selection源码旧状态；真实挂接/用户重启后消费未完成。接续风险工作收敛为收益/回撤/换手代价和适用场景的完整设计，不重跑已完成结果、不扩模型方向。保留历史和原精确合同，本次无实际DB/数据/训练/服务动作，源码runtime按backend-main报告。
+
+v2.87作者源码三轮审修及文档交叉核对见日度设计v2.5末节；最终定向25项、既有相关小矩阵143项通过/1项未执行，两个环境fresh-process导入无DB/网络连接。原12行P1/P2合同、11行历史verified、32行历史版本均保留。测试、文档和源码可交付不替代实际订阅启用、调度owner挂接、用户重启后真实目标消费，亦不改变P1/P2经济结论。
 
 2026-10-13 v2.85：明确QE冻结文件与数据库收盘日度双入口；模型训练身份保持，推理输入更新不需月度人工迁移或重启。取消一分钟APScheduler作为业务要求，复用已有数据就绪/调度能力，禁止附带旧训练tick；修正MAX(date)+旧文件混用及F-006单元测试外推自动派发的口径。只读policy已enabled、jobs为空，首个资产/数据库日度链待验；旧模型结果、历史验收和所有旧版本记录保留，本次零fit/零DB写入/零服务控制。
 
