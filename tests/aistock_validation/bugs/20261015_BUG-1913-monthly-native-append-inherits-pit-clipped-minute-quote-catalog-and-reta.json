@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1913",
-  "closed_at": null,
+  "closed_at": "2026-10-15T15:50:53.708367Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -170,8 +170,8 @@
   },
   "first_seen_at": "2026-10-15T06:58:12.513810Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6750acd7802d02676ba5ef386920634904903204",
+  "fixed_at": "2026-10-15T07:51:41Z",
   "github_issue_number": 6104,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6104",
   "last_seen_at": "2026-10-15T06:58:12.513810Z",
@@ -179,6 +179,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6109",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -202,9 +203,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\BUG-1913-post-restart-20261015-r3.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1913",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "031ba7eac33f55d48367c1145361ad313016fc7986c723e2773dfe8bf5289fe6",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "6750acd7802d02676ba5ef386920634904903204",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-15T15:49:01.732721Z",
+      "mode": "read_only",
+      "observed_identity": "3bf6d0e751305ccc69da38968009036e12de5bd8",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "620a7061224d25551e813a6799859635b015c1c8e8b664b9ba332b4729ec3a76",
+      "receipt_sha256": "dd2ee1f9d583b899f82f3fcb061c2e34e8c3ee5eaa6ed085d8717e39358e5270",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b9dc52d350560319af44f7d07c013786434e231bdec4954280e40cf5c76e7612",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -214,7 +238,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1913",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "542d763daa72b756",
+    "recorded_at": "2026-10-15T07:53:00.049185Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "794b12e963b15f4e49c153401f1177cc67763c25",
+    "source_merge_commit": "6750acd7802d02676ba5ef386920634904903204",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6109",
+    "validation_evidence": [
+      "pytest monthly release contract tests -> 86 passed"
+    ],
+    "validation_evidence_digest": "188e655f9367fc33e8b61397ef296d2d43422a3a6b80eb9fa5c4e170cd37a6dd"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -223,6 +268,11 @@
     "fingerprint": "c1b769d4b2107793e6e783a4",
     "source_event_id": "FE-20261015-c1b769d4b210"
   },
+  "validation_evidence": [
+    "pytest monthly release contract tests -> 86 passed",
+    "Retained September catalog readback PASS: 5147 physical instruments, SHA 1ba196c366104bd60f376774ba8f5345c1fb3ac9e879be758881c8957cb8e344; all three reported symbols expose five true Jan05 minute quotes; PIT selection unchanged; original price export retained.",
+    "Actual retained monthly catalog PASS: 5147 instruments; three reported symbols have five finite Jan05 closes through formal catalog; PIT selection unchanged; no reexport. DESIGN-COMPLIANCE-001 checked."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

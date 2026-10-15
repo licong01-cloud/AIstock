@@ -37,7 +37,7 @@ from backend.services.strategy_package.selection_computation import StrategyPack
 from backend.services.strategy_package.selection_signal_preparation import (
     PreparedRawSelectionArtifactV2, StrategyPackageSignalPreparationResultV1,
 )
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 from scripts.strategy_package_live_inference import _atomic_json
 
 from .localsim_selection_inference import (
@@ -75,12 +75,27 @@ class LocalSimRawRepository:
 
     def get(self, *, package_id, manifest_sha256, trade_date, data_source, runtime_config_hash):
         artifact = own_scope().artifacts.get(package_id)
-        if artifact is None or (artifact.manifest_sha256, artifact.trade_date, artifact.data_source, artifact.runtime_config_hash) != (
-            manifest_sha256, trade_date, data_source, runtime_config_hash
-        ):
+        if artifact is None:
             raise DataUnavailableError("this LocalSIM run has not computed the requested raw artifact",
                                        context={"reason_code": "LOCALSIM_OWN_RAW_NOT_COMPUTED"})
+        if (artifact.manifest_sha256, artifact.trade_date, artifact.data_source, artifact.runtime_config_hash) != (
+            manifest_sha256, trade_date, data_source, runtime_config_hash
+        ):
+            # Native health/preparation may probe both v2 and legacy runtime
+            # hashes. A miss is not permission to regenerate frozen scores.
+            raise DataUnavailableError("LocalSIM raw artifact does not match this native lookup",
+                                       context={"reason_code": "LOCALSIM_OWN_RAW_NOT_COMPUTED"})
         return artifact.model_copy(deep=True)
+
+
+class LocalSimSelectionArtifactService(StrategyPackageSelectionArtifactService):
+    def generate_from_live_inference(self, **kwargs):
+        if kwargs["package_id"] in own_scope().artifacts:
+            raise InvalidStateTransitionError(
+                "LocalSIM frozen raw cannot be regenerated after a native identity miss",
+                context={"reason_code": "LOCALSIM_FROZEN_RAW_IDENTITY_CONFLICT"},
+            )
+        return super().generate_from_live_inference(**kwargs)
 
 
 class LocalSimReadOnlyHmmSnapshots:
@@ -184,6 +199,9 @@ class LocalSimDailyEvidenceWriter:
             "projection": projection, "projection_sha256": canonical_json_sha256(projection),
             "request_identity": scope.root.parent.name,
         }
+        raw_owner = artifact.metadata.get("localsim_signal_run", {})
+        if raw_owner.get("run_id") != scope.run_id:
+            payload["localsim_signal_run"]["reused_raw_run_id"] = raw_owner.get("run_id")
         digest = canonical_json_sha256(payload)
         prepared = DailySelectionEvidence.model_validate({**evidence.model_dump(mode="json"),
                                                          "evidence_id": f"dse_{digest[:16]}", "artifact_hash": digest,
@@ -232,7 +250,7 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
         raw_repository = LocalSimRawRepository()
         resolver = asset_resolver or LocalSimReferencedAssetResolver(cache_root=self.temporary_root / "assets")
         node = provider or LocalSimSharedInferenceProvider(repo_root=Path(__file__).resolve().parents[3])
-        artifact_service = StrategyPackageSelectionArtifactService(
+        artifact_service = LocalSimSelectionArtifactService(
             package_repository=package_repository, artifact_repository=raw_repository,
             runtime_asset_resolver=resolver, live_inference_provider=node,
         )
@@ -254,6 +272,7 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
         return super()._build_operational_evidence_by_package(**kwargs)
 
     def run_selection(self, **kwargs):
+        recovery_evidence = kwargs.pop("recovery_evidence", None)
         if kwargs.get("prospective_context") is not None:
             raise ValueError("LocalSIM consumer uses its own daily evidence, not an Advisory prospective writer")
         trade_date = kwargs["trade_date"]
@@ -273,7 +292,8 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
                                          "ordered_package_ids": kwargs["package_ids"],
                                          "config": config, "mode": kwargs["mode"].value,
                                          "release": getattr(release, "release_hash", None),
-                                         "code": {str(p.name): hashlib.sha256(p.read_bytes()).hexdigest() for p in code_paths}})
+                                          "recovery_evidence": getattr(recovery_evidence, "artifact_hash", None),
+                                          "code": {str(p.name): hashlib.sha256(p.read_bytes()).hexdigest() for p in code_paths}})
         logical_root = self.temporary_root / identity
         logical_root.mkdir(parents=True, exist_ok=True)
         with inference_output_lease(logical_root / "checkpoint.json"):
@@ -285,9 +305,16 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
             run_id = "lsselection_" + uuid4().hex
             root = logical_root / run_id
             root.mkdir()
-            cutoff = self.parse_selection_cutoff_date(self.selection_artifact_config(config), trade_date=trade_date, strict_before=True)
+            # Fresh inference resolves symbolic PIT dates in its native provider.
+            # Reusing frozen scores skips that provider, so resolve the same
+            # native policy before validating the frozen C/D/T identity.
+            clock_config = self._apply_point_in_time_selection_config(config, trade_date=trade_date) if recovery_evidence is not None else config
+            cutoff = self.parse_selection_cutoff_date(self.selection_artifact_config(clock_config), trade_date=trade_date, strict_before=True)
             from backend.services.advisory_historical_range.selection_signal_kernel import SelectionSignalDayV1
             scope = LocalSimInferenceScope(run_id, root, SelectionSignalDayV1(trade_date, cutoff or trade_date, trade_date), {})
+            if recovery_evidence is not None:
+                artifact = self._recovery_raw(recovery_evidence, kwargs=kwargs, clocks=scope.clocks)
+                scope.artifacts[artifact.package_id] = artifact
             token = LOCALSIM_INFERENCE_SCOPE.set(scope)
             _atomic_json(logical_root / "attempt.json", {"identity": identity, "consumer_scope": "LOCALSIM", "run_id": run_id,
                                                         "package_ids": kwargs["package_ids"]})
@@ -309,6 +336,35 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
                 raise
             finally:
                 LOCALSIM_INFERENCE_SCOPE.reset(token)
+
+    def _recovery_raw(self, evidence, *, kwargs, clocks):
+        stored = self.native_repository.get_daily_selection_evidence(evidence.evidence_id)
+        # Evidence freezes arrays as tuples. Restore its canonical JSON shape
+        # before handing native membership/score inputs back to the kernel.
+        payload = stored.model_dump(mode="json")["evidence_payload_json"]
+        owner = payload.get("localsim_signal_run", {})
+        if (stored.artifact_hash != evidence.artifact_hash
+                or canonical_json_sha256(payload) != evidence.artifact_hash
+                or kwargs["package_ids"] != [stored.package_id]
+                or stored.manifest_sha256 != self.package_repository.get(stored.package_id).manifest_sha256
+                or stored.target_trade_date != kwargs["trade_date"]
+                or owner.get("consumer_scope") != "LOCALSIM" or not owner.get("run_id")
+                or owner.get("clocks") != clocks.to_dict()
+                or self.selection_artifact_config(kwargs.get("runtime_config") or {}).get("force_regenerate")):
+            raise InvalidStateTransitionError("LocalSIM recovery raw evidence is not the exact native frozen input",
+                                              context={"reason_code": "LOCALSIM_FROZEN_RAW_EVIDENCE_CONFLICT"})
+        artifact = SelectionScoreArtifact.model_validate(owner.get("raw_artifact", {}))
+        sealed = StrategyPackageSelectionArtifactRepository._with_digest(artifact)
+        if (sealed.artifact_payload_sha256 != artifact.artifact_payload_sha256
+                or artifact.package_id != stored.package_id or artifact.manifest_sha256 != stored.manifest_sha256
+                or artifact.trade_date != stored.target_trade_date or artifact.data_source != kwargs["data_source"]
+                or artifact.metadata.get("localsim_signal_run", {}).get("consumer_scope") != "LOCALSIM"
+                or artifact.metadata.get("localsim_signal_run", {}).get("run_id")
+                   != owner.get("reused_raw_run_id", owner["run_id"])
+                or artifact.metadata.get("localsim_signal_run", {}).get("clocks") != clocks.to_dict()):
+            raise InvalidStateTransitionError("LocalSIM recovery raw artifact identity is invalid",
+                                              context={"reason_code": "LOCALSIM_FROZEN_RAW_IDENTITY_CONFLICT"})
+        return artifact
 
     def _recover(self, logical_root, identity, *, expected_package_ids=None):
         attempt = logical_root / "attempt.json"

@@ -14,6 +14,7 @@ from backend.services.selection_center.runtime_profile import parse_selection_ru
 from backend.services.simulation_runtime.localsim_selection_inference import LOCALSIM_INFERENCE_SCOPE, LocalSimInferenceScope
 from backend.services.simulation_runtime.localsim_selection_signal import (
     LocalSimDailyEvidenceWriter, LocalSimKernelComputation, LocalSimRawRepository, LocalSimSelectionSignalService,
+    LocalSimSelectionArtifactService,
     _serialize_projection,
 )
 from backend.services.simulation_runtime.repository import InMemorySimulationRuntimeRepository
@@ -23,7 +24,7 @@ from backend.services.simulation_runtime.localsim_selection_probe import _compar
 from backend.services.strategy_package.selection_computation import (
     StrategyPackageSelectionComputationRequestV1, selection_runtime_profile_sha256,
 )
-from backend.services.trading_core.errors import DataUnavailableError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 from backend.services.simulation_signal.strategy_package_selection import StrategyPackageSelectionService
 from backend.tests.advisory_historical_range.test_r2b_candidate_producer import _fixture, TRADE_DATE
 from scripts.strategy_package_live_inference import _atomic_json
@@ -117,6 +118,48 @@ def test_raw_repository_cannot_discover_another_run(tmp_path):
                                        runtime_config_hash=artifact.runtime_config_hash)
     finally:
         LOCALSIM_INFERENCE_SCOPE.reset(token)
+
+
+def test_recovery_reuses_owned_full_scores_and_runs_shared_kernel_in_new_scope(tmp_path):
+    scope, previous, program, producer = _computed(tmp_path, cutoff=TRADE_DATE-timedelta(days=1), unscored=True)
+    repository = InMemorySimulationRuntimeRepository()
+    service, evidence, _ = _commit(scope, previous, program, repository)
+    service.package_repository = SimpleNamespace(get=lambda _: SimpleNamespace(manifest_sha256=program.manifest_sha256))
+    kwargs = {"package_ids": [program.package_id], "trade_date": TRADE_DATE, "data_source": "DB_HISTORICAL",
+              "runtime_config": program.runtime_config}
+    artifact = service._recovery_raw(evidence, kwargs=kwargs, clocks=scope.clocks)
+    assert artifact.scores_json == scope.artifacts[program.package_id].scores_json
+    assert tuple(artifact.metadata["universe_members"]) == tuple(scope.artifacts[program.package_id].metadata["universe_members"])
+    assert artifact.artifact_payload_sha256 == scope.artifacts[program.package_id].artifact_payload_sha256
+    new = replace(scope, run_id="recovery-independent-run", root=tmp_path / "new", artifacts={program.package_id: artifact})
+    new.root.mkdir()
+    token = LOCALSIM_INFERENCE_SCOPE.set(new)
+    try:
+        with pytest.raises(DataUnavailableError):
+            LocalSimRawRepository().get(package_id=artifact.package_id, manifest_sha256=artifact.manifest_sha256,
+                                       trade_date=artifact.trade_date, data_source=artifact.data_source,
+                                       runtime_config_hash="native-alternate-hash-probe")
+        with pytest.raises(InvalidStateTransitionError, match="cannot be regenerated"):
+            LocalSimSelectionArtifactService.__new__(LocalSimSelectionArtifactService).generate_from_live_inference(
+                package_id=program.package_id)
+        profile = parse_selection_runtime_profile(program.runtime_config)
+        result = LocalSimKernelComputation().compute(
+            request=StrategyPackageSelectionComputationRequestV1(
+                trade_date=TRADE_DATE, data_source="DB_HISTORICAL", selection_mode=SelectionMode.SINGLE_PACKAGE,
+                ordered_package_ids=(program.package_id,), package_runtime_profiles={program.package_id: profile},
+                package_runtime_profile_hashes={program.package_id: selection_runtime_profile_sha256(profile)},
+                package_top_k={program.package_id: 2}),
+            prepared_signals={program.package_id: producer._signal_preparation.result.prepared_signal},
+            providers=producer._signal_kernel._providers,
+        )
+    finally:
+        LOCALSIM_INFERENCE_SCOPE.reset(token)
+    assert result.package_results == previous.package_results
+    assert new.signal_result.storage_identity != scope.signal_result.storage_identity
+    assert new.signal_result.unscored_members == scope.signal_result.unscored_members
+    with pytest.raises(InvalidStateTransitionError, match="exact native frozen"):
+        service._recovery_raw(evidence, kwargs=kwargs,
+                              clocks=SelectionSignalDayV1(TRADE_DATE+timedelta(days=1), TRADE_DATE, TRADE_DATE+timedelta(days=1)))
 
 
 def test_native_commit_before_checkpoint_recovers_without_recomputing(tmp_path):
