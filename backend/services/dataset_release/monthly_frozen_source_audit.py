@@ -22,6 +22,7 @@ from backend.data_service.security_source_identity import (
     load_default_security_source_identity_manifest,
     load_security_source_identity_manifest,
 )
+from backend.services.tushare_dataset_specs import stk_limit_prices_valid
 
 from .canonical import canonical_json_bytes
 from .canonical_stock_transformer import MINUTE_OPENING_AUCTION_TIME, raw_volume_shares, suspended_zero_turnover_placeholder
@@ -336,15 +337,13 @@ def audit_month_rows(
         gates["suspend_limit"].check(
             key,
             limit,
-            valid=lambda row: (
-                all(_finite(row.get(name)) and float(row[name]) > 0 for name in ("pre_close", "up_limit", "down_limit"))
-                and float(row["up_limit"]) >= float(row["down_limit"])
-            ),
+            valid=stk_limit_prices_valid,
             exception=exception("stk_limit"),
             dataset="stk_limit",
             invalid_details={"invalid_fields": sorted({
                 name for row in limit for name in ("pre_close", "up_limit", "down_limit")
                 if not _finite(row.get(name)) or float(row[name]) <= 0
+                or (name == "pre_close" and not stk_limit_prices_valid(row))
             })},
         )
         if key in suspended and (
@@ -570,9 +569,8 @@ def audit_prepared_limit_source(*, cas, frozen, profile, raw_gate, input_root, a
         for index, key in enumerate(expected):
             if index % 1000 == 0:
                 checkpoint()
-            counter.check(key, actual.get(key, []), dataset="stk_limit", exception=allowed.get(key), valid=lambda row:
-                all(_finite(row.get(name)) and float(row[name]) > 0 for name in ("pre_close", "up_limit", "down_limit"))
-                and float(row["up_limit"]) >= float(row["down_limit"]))
+            counter.check(key, actual.get(key, []), dataset="stk_limit", exception=allowed.get(key),
+                          valid=stk_limit_prices_valid)
     # Require the exact same independent PIT denominator as the raw audit.
     original = json.loads((artifact_root / raw_gate.expectation_contract_ref).read_text(encoding="utf-8"))
     if counter.expected_count != raw_gate.expected_count or counter.expected_keys.hexdigest() != original["expected_keys_sha256"]:
