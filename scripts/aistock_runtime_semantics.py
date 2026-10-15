@@ -1224,6 +1224,116 @@ def _validate_hmm_research_records(payload: Any, *, url: str) -> tuple[str, str 
                             "scope": "existing record readback, not authorization or proof of a new write"}
 
 
+def _validate_selection_artifacts(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Read one declared native artifact; not proof of scoring or suspension behavior.
+
+    expected_* parameters bind local verification, not server-side list filters.
+    The route deliberately omits full scores; only its header/preview is verified.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    match = re.fullmatch(r"/api/v1/strategy-packages/([^/]+)/selection-artifacts", parsed.path)
+    if match is None:
+        return "failed", "selection artifact probe path is invalid", {}
+    package_id = urllib.parse.unquote(match[1])
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    expected: dict[str, str] = {}
+    for field in ("artifact_id", "manifest_sha256", "runtime_config_hash", "trade_date", "data_source"):
+        values = query.get("expected_" + field, [])
+        if len(values) != 1 or not values[0].strip():
+            return "failed", f"selection artifact probe requires one non-empty expected_{field}", {}
+        expected[field] = values[0]
+    for field in ("manifest_sha256", "runtime_config_hash"):
+        if re.fullmatch(r"[0-9a-f]{64}", expected[field]) is None:
+            return "failed", f"selection artifact expected_{field} must be SHA-256", {}
+    try:
+        if datetime.strptime(expected["trade_date"], "%Y-%m-%d").date().isoformat() != expected["trade_date"]:
+            raise ValueError("non-canonical date")
+    except ValueError:
+        return "failed", "selection artifact expected_trade_date must be an ISO date", {}
+    if (not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("success") is False
+            or payload.get("package_id") != package_id or payload.get("error") or payload.get("errors")):
+        return "failed", "selection artifact envelope must report ok=true and the requested package", {}
+    rows = payload.get("artifacts")
+    if not isinstance(rows, list) or not rows:
+        return "failed", "selection artifact readback must not be empty", {}
+    ids: set[str] = set()
+    for item in rows:
+        if (not isinstance(item, dict) or not isinstance(item.get("artifact_id"), str)
+                or not item["artifact_id"].strip() or item["artifact_id"] in ids
+                or item.get("package_id") != package_id or item.get("manifest_sha256") != expected["manifest_sha256"]):
+            return "failed", "selection artifact rows have duplicate or conflicting identities", {}
+        ids.add(item["artifact_id"])
+    matches = [row for row in rows if row["artifact_id"] == expected["artifact_id"]]
+    if len(matches) != 1 or any(matches[0].get(key) != value for key, value in expected.items()):
+        return "failed", "declared selection artifact identity is absent or mismatched", {}
+    row = matches[0]
+    facts = {"package_id": package_id, **expected, "status": row.get("status"),
+             "acceptance_scope": "native_artifact_header_preview_readback_only; BUG-specific behavior requires separate evidence"}
+    if row.get("status") != "SUCCEEDED" or "error_json" not in row or row["error_json"] is not None:
+        # A correctly read FAILED record is still failure, never business success.
+        error = row.get("error_json")
+        facts["error_code"] = error.get("error_code") if isinstance(error, dict) else None
+        return "failed", "selection artifact status/error_json does not prove successful native generation", facts
+    metadata = row.get("metadata")
+    if (not isinstance(metadata, dict) or metadata.get("authority_scope") != "authoritative_selection"
+            or metadata.get("source_type") not in ("live_qe_model_inference_v1", "live_multi_alpha_inference_v1")):
+        return "failed", "selection artifact must have native authoritative inference provenance, not diagnostic data", facts
+    count, universe, preview = row.get("score_count"), row.get("universe_count"), row.get("score_preview")
+    if (type(count) is not int or type(universe) is not int or not 0 <= count <= universe
+            or not isinstance(preview, list) or len(preview) != min(count, 10)):
+        return "failed", "selection artifact counts and score_preview are inconsistent", facts
+    symbols: set[str] = set()
+    for score in preview:
+        if (not isinstance(score, dict) or not isinstance(score.get("symbol"), str) or not score["symbol"].strip()
+                or score["symbol"] in symbols or type(score.get("score")) not in {int, float}
+                or abs(score["score"]) > sys.float_info.max or not math.isfinite(score["score"])):
+            return "failed", "selection artifact preview contains malformed/duplicate scores", facts
+        symbols.add(score["symbol"])
+    if row.get("top_score_symbol") != (preview[0]["symbol"] if preview else None):
+        return "failed", "selection artifact top symbol contradicts its preview", facts
+    version = row.get("artifact_contract_version")
+    hash_fields = ["artifact_sha256"]
+    if version == "selection_score_artifact_v2":
+        hash_fields += ["artifact_payload_sha256", "artifact_input_context_hash", "source_revision_set_hash", "asset_closure_hash"]
+        if (metadata.get("provider_semantics_id") != "strategy_package_live_inference_v2"
+                or not isinstance(metadata.get("provider_semantics_hash"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", metadata["provider_semantics_hash"]) is None):
+            return "failed", "selection artifact v2 provider identity is incomplete", facts
+        outcome = metadata.get("candidate_outcome")
+        if (outcome != ("CANDIDATES_PRESENT" if count else "VALID_NO_CANDIDATE")
+                or (not count and (universe <= 0 or metadata.get("empty_stage") != "alpha_raw"))):
+            return "failed", "selection artifact v2 candidate outcome contradicts native counts", facts
+    elif version is not None or count == 0:
+        return "failed", "unsupported artifact version or unproven empty legacy artifact", facts
+    if any(not isinstance(row.get(field), str) or re.fullmatch(r"[0-9a-f]{64}", row[field]) is None for field in hash_fields):
+        return "failed", "selection artifact persisted digest identity is incomplete", facts
+    # When GET returns every score, verify the score digest too. For >10 scores,
+    # never pretend that the truncated preview verifies the full ranking payload.
+    if count <= 10:
+        try:
+            encoded = json.dumps(preview, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        except (TypeError, ValueError):
+            return "failed", "selection artifact preview is not canonical JSON", facts
+        if hashlib.sha256(encoded).hexdigest() != row["artifact_sha256"]:
+            return "failed", "selection artifact score digest mismatch", facts
+    if version is not None:
+        parity_hash = metadata.get("multi_alpha_parent_parity_hash")
+        if parity_hash is not None and (not isinstance(parity_hash, str) or re.fullmatch(r"[0-9a-f]{64}", parity_hash) is None):
+            return "failed", "selection artifact parent parity identity is malformed", facts
+        # Exact writer canonical_v2_header; full scores are intentionally not returned by GET.
+        header = {key: row.get(key) for key in (
+            "package_id", "manifest_sha256", "trade_date", "data_source", "runtime_config_hash", "artifact_sha256",
+            "score_count", "universe_count", "top_score_symbol", "status", "artifact_input_context_hash",
+            "source_revision_set_hash", "asset_closure_hash")}
+        header.update(schema_version=version)
+        header.update({key: metadata.get(key) for key in ("authority_scope", "candidate_outcome", "provider_semantics_id",
+                                                       "provider_semantics_hash", "multi_alpha_parent_parity_hash")})
+        digest = hashlib.sha256(json.dumps(header, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        if row["artifact_payload_sha256"] != digest:
+            return "failed", "selection artifact v2 header digest mismatch", facts
+    return "passed", None, {**facts, "artifact_sha256": row["artifact_sha256"], "score_count": count, "universe_count": universe}
+
+
 def _validate_qe_dataset_profile(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """QE dataset-profile must identify one usable active profile."""
     if not isinstance(payload, dict) or payload.get("ok") is not True:

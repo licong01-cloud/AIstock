@@ -544,27 +544,27 @@ def _local_data_payload(overview: bool = False) -> dict[str, Any]:
 @pytest.mark.parametrize('overview', [False, True])
 def test_local_data_freshness_separates_cache_and_readiness(overview: bool) -> None:
     endpoint = 'overview' if overview else 'data-stats'
-    _, verdict = workflow._evaluate_business_smoke_semantics(
-        f'http://127.0.0.1:8001/api/v1/local-data/{endpoint}',
-        json.dumps(_local_data_payload(overview)), response_sha256='a'*64)
+    verdict = _business_semantic(f'http://127.0.0.1:8001/api/v1/local-data/{endpoint}', _local_data_payload(overview), 'a'*64)
     assert verdict['verdict'] == 'passed'
     assert verdict['contract_id'] == 'local_data_freshness'
     assert verdict['facts']['stale'] == 1
 
 
-@pytest.mark.parametrize(('key', 'value'), [
+@pytest.mark.parametrize(('area', 'key', 'value'), [
+    *(("row", key, value) for key, value in [
     ('physical_max_date', '2026-09-29'), ('physical_max_date_source', 'cache'),
     ('stats_date_source', 'live'), ('readiness_source', 'cache'),
     ('ready_date', '2026-08-11'), ('cache_state', 'fresh'),
     ('readiness_status', 'unknown'), ('operator_action_required', 0),
     ('audit_ready_date', '2026-09-31'), ('stats_max_date', '2026-8-11'),
     ('audit_quality_status', {}),
+    ]),
+    *(("envelope", key, value) for key, value in [('success', False), ('operation', 'wrong'), ('risk_level', 'write')]),
 ])
-def test_local_data_freshness_rejects_conflated_evidence(key: str, value: Any) -> None:
+def test_local_data_freshness_rejects_invalid_readback(area: str, key: str, value: Any) -> None:
     payload = _local_data_payload()
-    payload['data']['items'][0][key] = value
-    status, _, _ = workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')
-    assert status == 'failed'
+    (payload['data']['items'][0] if area == "row" else payload)[key] = value
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
 
 
 @pytest.mark.parametrize('state', ['unknown', 'quality_blocked'])
@@ -578,13 +578,6 @@ def test_local_data_freshness_preserves_non_ready_states(state: str) -> None:
         row['audit_quality_status'] = 'low_coverage'
     status, _, facts = workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')
     assert status == 'passed' and facts[state] == 1
-
-
-@pytest.mark.parametrize(('key', 'value'), [('success', False), ('operation', 'wrong'), ('risk_level', 'write')])
-def test_local_data_freshness_requires_read_only_envelope(key: str, value: Any) -> None:
-    payload = _local_data_payload()
-    payload[key] = value
-    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
 
 
 def test_local_data_overview_validates_counters_without_hiding_real_alerts() -> None:
@@ -638,9 +631,7 @@ def _metrics_payload() -> dict[str, Any]:
 
 
 def test_factor_metrics_semantics_bind_real_results_without_profitability_threshold() -> None:
-    _, verdict = workflow._evaluate_business_smoke_semantics(
-        _METRICS_PROBE, json.dumps(_metrics_payload()), response_sha256="a" * 64
-    )
+    verdict = _business_semantic(_METRICS_PROBE, _metrics_payload(), "a" * 64)
     assert verdict["verdict"] == "passed" and verdict["contract_id"] == "factor_metrics_results"
     assert verdict["facts"]["calc_batch_id"] == "batch1"
     assert verdict["facts"]["acceptance_scope"] == "bound_metrics_readback_only"
@@ -657,34 +648,28 @@ def test_factor_metrics_semantics_bind_real_results_without_profitability_thresh
     _METRICS_PROBE.split("?", 1)[1] + "&offset=1",
 ])
 def test_factor_metrics_semantics_reject_unbound_or_conflicting_probe(query: str) -> None:
-    assert workflow._validate_factor_metrics_results(
-        _metrics_payload(), url=_METRICS_PROBE.split("?", 1)[0] + "?" + query
-    )[0] == "failed"
+    assert _business_semantic(_METRICS_PROBE.split("?", 1)[0] + "?" + query, _metrics_payload(), "a" * 64)["verdict"] == "failed"
 
 
-@pytest.mark.parametrize(("field", "value"), [
+@pytest.mark.parametrize(("area", "field", "value"), [
+    *(("row", field, value) for field, value in [
     ("factor_name", "other"), ("calc_batch_id", "old_batch"), ("eval_window", "2024"),
     ("snapshot_date", "2026-06-30"), ("universe", "old_pool"), ("return_horizon", "20d"),
     ("id", True), ("n_trading_days", 0), ("coverage", float("nan")), ("ic_mean", float("inf")),
     ("rank_ic_mean", 2), ("ic_positive_ratio", -1), ("icir", None), ("rank_icir", "1"),
     ("h20_ic_mean", float("nan")), ("ic_mean", 10 ** 500),
     ("calculated_at", "2026-09-30T13:04:21"), ("calculated_at", "2026-08-30T13:04:21+08:00"),
-])
-def test_factor_metrics_semantics_reject_invalid_business_rows(field: str, value: Any) -> None:
-    payload = _metrics_payload()
-    payload["items"][0][field] = value
-    assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE)[0] == "failed"
-
-
-@pytest.mark.parametrize(("field", "value"), [
+    ]),
+    *(("envelope", field, value) for field, value in [
     ("items", []), ("total", True), ("total", 0), ("ok", False), ("domain", "other"),
     ("errors", ["failed"]), ("pagination", {}),
     ("success", False), ("status", "failed"),
     ("pagination", {"limit": 1, "offset": 0, "next_offset": 1, "total": 2, "has_more": False}),
+    ]),
 ])
-def test_factor_metrics_semantics_reject_empty_or_contradictory_envelope(field: str, value: Any) -> None:
+def test_factor_metrics_semantics_reject_invalid_readback(area: str, field: str, value: Any) -> None:
     payload = _metrics_payload()
-    payload[field] = value
+    (payload["items"][0] if area == "row" else payload)[field] = value
     assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE)[0] == "failed"
 
 
@@ -700,6 +685,61 @@ def _business_semantic(url: str, payload: Any, response_hash: str) -> dict[str, 
     return workflow._evaluate_business_smoke_semantics(
         url, json.dumps(payload), response_sha256=response_hash,
     )[1]
+
+
+@pytest.mark.parametrize("target,value", [
+    ("native", None), ("multi_alpha", None), ("valid_empty", None), ("legacy", None), ("history", None),
+    ("row.status", "FAILED"), ("row.status", "PENDING"), ("row.error_json", {"error_code": "DATA_UNAVAILABLE"}),
+    ("row.artifact_id", "other"), ("row.package_id", "other"), ("row.manifest_sha256", "0" * 64),
+    ("row.runtime_config_hash", "0" * 64), ("row.trade_date", "2026-10-13"), ("row.data_source", "other"),
+    ("query.expected_artifact_id", ""), ("query.expected_artifact_id", ["duplicate", "duplicate"]),
+    ("query.expected_trade_date", "invalid"), ("query.expected_manifest_sha256", "invalid"), ("payload.ok", False),
+    ("payload.artifacts", []), ("payload.artifacts", [None]), ("duplicate", None), ("missing_error", None),
+    ("metadata.authority_scope", "diagnostic_backtest_only"), ("metadata.source_type", []),
+    ("row.artifact_sha256", None), ("row.artifact_payload_sha256", "0" * 64), ("row.artifact_input_context_hash", []),
+    ("metadata.provider_semantics_id", "other"), ("row.score_count", 2), ("row.score_count", True),
+    ("row.score_preview", [None]), ("score.score", float("nan")), ("score.score", True), ("row.score_preview", None),
+    ("row.top_score_symbol", "other"), ("row.artifact_contract_version", []), ("metadata.candidate_outcome", "other"),
+    ("metadata.multi_alpha_parent_parity_hash", []), ("legacy_empty", None), ("score.score", 0.6),
+])
+def test_selection_artifact_semantic_native_readback(target, value):
+    # Use the real writer's pure model/digest helpers as an independent contract oracle; no repository I/O.
+    from backend.services.strategy_package.selection_artifact import SelectionScoreArtifact, StrategyPackageSelectionArtifactRepository
+
+    empty = target in {"valid_empty", "legacy_empty"}
+    scores = [] if empty else [{"symbol": "000001.SZ", "score": 0.5}]
+    artifact = SelectionScoreArtifact(
+        package_id="pkg_native", manifest_sha256="a" * 64, trade_date="2026-10-14", data_source="DB",
+        runtime_config_hash="b" * 64, scores_json=scores, score_count=len(scores), universe_count=2,
+        top_score_symbol=None if empty else "000001.SZ", artifact_contract_version="selection_score_artifact_v2",
+        artifact_input_context_hash="c" * 64, source_revision_set_hash="d" * 64, asset_closure_hash="e" * 64,
+        metadata=dict(authority_scope="authoritative_selection", source_type="live_qe_model_inference_v1",
+                      candidate_outcome="VALID_NO_CANDIDATE" if empty else "CANDIDATES_PRESENT",
+                      empty_stage="alpha_raw" if empty else None,
+                      provider_semantics_id="strategy_package_live_inference_v2", provider_semantics_hash="f" * 64))
+    row = StrategyPackageSelectionArtifactRepository._with_digest(artifact).model_dump(mode="json")
+    row["score_preview"] = row.pop("scores_json")[:10]
+    query = {"expected_" + key: row[key] for key in ("artifact_id", "manifest_sha256", "runtime_config_hash", "trade_date", "data_source")}
+    payload = dict(ok=True, package_id="pkg_native", artifacts=[row])
+    if "." in target:
+        area, key = target.split(".")
+        {"row": row, "query": query, "payload": payload, "metadata": row["metadata"], "score": row["score_preview"][0]}[area][key] = value
+    elif target in {"legacy", "legacy_empty"}:
+        row["artifact_contract_version"] = None
+    elif target == "multi_alpha":
+        row["metadata"]["source_type"] = "live_multi_alpha_inference_v1"
+    elif target == "missing_error":
+        row.pop("error_json")
+    elif target == "duplicate":
+        payload["artifacts"] *= 2
+    elif target == "history":
+        payload["artifacts"].append({**row, "artifact_id": "old", "status": "FAILED", "error_json": {"error_code": "DATA_UNAVAILABLE"}})
+    semantic = _business_semantic("http://127.0.0.1:8001/api/v1/strategy-packages/pkg_native/selection-artifacts?"
+                                  + urllib.parse.urlencode(query, doseq=True), payload, "1" * 64)
+    passed = target in {"native", "multi_alpha", "valid_empty", "legacy", "history"}
+    assert (semantic["contract_id"], semantic["verdict"]) == ("strategy_package_selection_artifact_readback", "passed" if passed else "failed")
+    if target == "row.error_json":
+        assert semantic["facts"]["error_code"] == "DATA_UNAVAILABLE"
 
 
 def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test") -> dict[str, Any]:
