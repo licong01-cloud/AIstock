@@ -411,6 +411,31 @@ def _read_sector_frame(path: Path):
     return frame
 
 
+def _build_historical_sector_membership(*, history, enricher, pit_rows, calendar, start, end):
+    """Project an explicit frozen history repair into the current policy window."""
+    # Directory cardinality is not an ID boundary: the frozen map is sparse.
+    current_ids = frozenset(enricher.code_map.values())
+
+    class EffectiveHistoryEnricher:
+        code_map = enricher.code_map
+
+        def enrich(self, payload):
+            day = payload["trade_date"]
+            if date.fromisoformat(history.payload["start_date"]) <= day <= date.fromisoformat(history.payload["end_date"]):
+                id_ = history.resolve(payload["ts_code"], day)
+                if id_ >= 0 and id_ not in current_ids:
+                    raise MonthlySharedComponentsError(
+                        "industry history ID is outside the frozen current L2 code map: "
+                        f"{payload['ts_code']}:{day.isoformat()}:{id_}"
+                    )
+                return {**payload, "l2_code_id": id_}
+            return enricher.enrich(payload)
+
+    return _build_sector_membership(
+        enricher=EffectiveHistoryEnricher(), pit_rows=pit_rows, calendar=calendar, start=start, end=end,
+    )
+
+
 def _build_sector_membership(
     *,
     enricher: FrozenSectorEnricher,
@@ -989,18 +1014,8 @@ class FrozenMonthlySharedComponentBuilder:
             if history_proof.get("historical_projection_reused") is not True:
                 # A one-time explicitly requested PIT repair. A normal later
                 # month inherits this sidecar and validates/appends only its tail.
-                class EffectiveHistoryEnricher:
-                    code_map = enricher.code_map
-                    def enrich(self, payload):
-                        day = payload["trade_date"]
-                        if date.fromisoformat(history.payload["start_date"]) <= day <= date.fromisoformat(history.payload["end_date"]):
-                            id_ = history.resolve(payload["ts_code"], day)
-                            if id_ >= 131:
-                                raise MonthlySharedComponentsError("SW2014 is outside the current L2 policy window")
-                            return {**payload, "l2_code_id": id_}
-                        return enricher.enrich(payload)
-                sector_membership, repaired_days, _, _ = _build_sector_membership(
-                    enricher=EffectiveHistoryEnricher(), pit_rows=pit_rows, calendar=calendar,
+                sector_membership, repaired_days, _, _ = _build_historical_sector_membership(
+                    history=history, enricher=enricher, pit_rows=pit_rows, calendar=calendar,
                     start=self.sector_membership_start, end=cutoff,
                 )
                 counts = {**counts, "explicit_historical_membership_repair_days": repaired_days}
