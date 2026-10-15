@@ -654,6 +654,7 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     parsed = yaml.safe_load(workflow)
     triggers = parsed.get("on", parsed.get(True))
     dispatch = triggers["workflow_dispatch"]["inputs"]
+    assert dispatch["llm_triage_mode"]["options"] == ["off", "warning_only", "opt_in_auto_file"]
 
     assert "AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env" in workflow
     assert "--provider github_models" not in workflow
