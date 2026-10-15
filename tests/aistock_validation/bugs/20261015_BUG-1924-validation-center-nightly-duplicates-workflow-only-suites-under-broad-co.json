@@ -1,6 +1,8 @@
 {
   "actual": "Nightly run 38713384823 validation_center_backend timed out at 302.078s while validation_workflow_automation passed. Center full_tests unnecessarily includes the three workflow-only suites also owned by the workflow plan; on producer timeout all repeat. Separate plan responsibility without dropping tests, reducing coverage thresholds or increasing timeouts, and update shared-success reuse contracts.",
   "allowed_write_scope": [
+    "noxfile.py",
+    "backend/tests/test_noxfile_validation_env.py",
     "tests/aistock_validation/bugs/20261015_BUG-1924-validation-center-nightly-duplicates-workflow-only-suites-under-broad-co.json"
   ],
   "assigned_agent": null,
