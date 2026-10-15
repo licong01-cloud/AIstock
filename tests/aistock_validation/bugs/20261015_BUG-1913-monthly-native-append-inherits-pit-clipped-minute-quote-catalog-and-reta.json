@@ -204,7 +204,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\BUG-1913-post-restart-20261015-r2.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -247,7 +247,8 @@
     "source_event_id": "FE-20261015-c1b769d4b210"
   },
   "validation_evidence": [
-    "pytest monthly release contract tests -> 86 passed"
+    "pytest monthly release contract tests -> 86 passed",
+    "Retained September catalog readback PASS: 5147 physical instruments, SHA 1ba196c366104bd60f376774ba8f5345c1fb3ac9e879be758881c8957cb8e344; all three reported symbols expose five true Jan05 minute quotes; PIT selection unchanged; original price export retained."
   ],
   "verification_budget": {
     "budget": "standard",
