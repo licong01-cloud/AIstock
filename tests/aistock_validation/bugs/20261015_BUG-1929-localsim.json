@@ -1,0 +1,420 @@
+{
+  "actual": "TCN 原任务 lsreplay_4c2e743bea7789e6 v4108 停在2026-05-11，301139.SZ 为权威全天停牌且 pre_close=NaN；LSTM 原任务 lsreplay_81ca085e8ec56e05 v9165 停在2026-01-21，603616.SH 同样合法停牌且无权威 pre_close，并遗留18条未提交经济事实的LocalSim内存句柄。需要按用户授权的长任务规划并实施停牌交易资格/持仓估值/旧提交核销的严格合同，保留原任务、成功前缀和账本，完成连续多日和正式LocalSIM接续验收。",
+  "allowed_write_scope": [
+    "backend/services/simulation_execution/localsim/runtime.py",
+    "backend/services/simulation_execution/localsim/models.py",
+    "backend/services/simulation_runtime/localsim_replay_recovery.py",
+    "backend/services/simulation_runtime/successor_repository.py",
+    "backend/services/simulation_runtime/repository.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_execution/test_localsim_runtime.py",
+    "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+    "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+    "backend/services/simulation_execution/localsim/suspension.py",
+    "docs/analysis/localsim_long_replay_recovery_plan_20261016.md",
+    "docs/analysis/localsim_suspension_valuation_and_retirement_contract_20261016.md",
+    "tests/aistock_validation/bugs/20261015_BUG-1929-localsim.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1929",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-15T18:06:13.802340Z",
+  "description": "TCN 原任务 lsreplay_4c2e743bea7789e6 v4108 停在2026-05-11，301139.SZ 为权威全天停牌且 pre_close=NaN；LSTM 原任务 lsreplay_81ca085e8ec56e05 v9165 停在2026-01-21，603616.SH 同样合法停牌且无权威 pre_close，并遗留18条未提交经济事实的LocalSim内存句柄。需要按用户授权的长任务规划并实施停牌交易资格/持仓估值/旧提交核销的严格合同，保留原任务、成功前缀和账本，完成连续多日和正式LocalSIM接续验收。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261015-3e8097399ac6",
+      "timestamp": "2026-10-15T18:06:13.802325Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/LOCALSIM/workflow/LOCALSIM-longtask-phase0-authoritative-market-20261016-r1.json"
+  ],
+  "expected": "合法全天停牌先按原生资格排除交易；持仓估值采用独立可追溯PIT权威报价合同而不制造pre_close；旧提交仅在原生事实、完整身份和正式核销收据证明下受控退休；普通可交易股缺价和未知副作用继续阻塞；恢复原回放并完整验收后接续正式模拟盘。",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/simulation_execution/localsim/suspension.py",
+      "docs/analysis/localsim_long_replay_recovery_plan_20261016.md",
+      "docs/analysis/localsim_suspension_valuation_and_retirement_contract_20261016.md"
+    ],
+    "changed_files": [
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/simulation_execution/localsim/models.py",
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_runtime/successor_repository.py",
+      "backend/services/simulation_runtime/repository.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_execution/localsim/runtime.py",
+        "backend/services/simulation_execution/localsim/models.py",
+        "backend/services/simulation_runtime/localsim_replay_recovery.py",
+        "backend/services/simulation_runtime/successor_repository.py",
+        "backend/services/simulation_runtime/repository.py",
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/tests/simulation_execution/test_localsim_runtime.py",
+        "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+        "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+        "backend/services/simulation_execution/localsim/suspension.py",
+        "docs/analysis/localsim_long_replay_recovery_plan_20261016.md",
+        "docs/analysis/localsim_suspension_valuation_and_retirement_contract_20261016.md"
+      ],
+      "impacted_modules": [
+        "platform.api",
+        "platform.db",
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "simulation.localsim_successor_core",
+        "strategy_package",
+        "simulation.layer_foundation",
+        "selection_center",
+        "docs.analysis"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_execution/localsim/runtime.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/simulation_execution/localsim/models.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/services/simulation_runtime/localsim_replay_recovery.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/successor_repository.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/repository.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_execution/test_localsim_runtime.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "paper_v2",
+            "miniqmt_execution_runtime",
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.layer_foundation",
+          "risk_level": "critical",
+          "rule_id": "simulation_layer_foundation_tests"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "backend/services/simulation_execution/localsim/suspension.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "docs/analysis/localsim_long_replay_recovery_plan_20261016.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        },
+        {
+          "file": "docs/analysis/localsim_suspension_valuation_and_retirement_contract_20261016.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_execution/localsim/runtime.py",
+        "backend/services/simulation_execution/localsim/models.py",
+        "backend/services/simulation_runtime/localsim_replay_recovery.py",
+        "backend/services/simulation_runtime/successor_repository.py",
+        "backend/services/simulation_runtime/repository.py",
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/tests/simulation_execution/test_localsim_runtime.py",
+        "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+        "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+        "backend/services/simulation_execution/localsim/suspension.py",
+        "docs/analysis/localsim_long_replay_recovery_plan_20261016.md",
+        "docs/analysis/localsim_suspension_valuation_and_retirement_contract_20261016.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/simulation_execution/localsim/models.py",
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_runtime/successor_repository.py",
+      "backend/services/simulation_runtime/repository.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+      "backend/services/simulation_execution/localsim/suspension.py",
+      "docs/analysis/localsim_long_replay_recovery_plan_20261016.md",
+      "docs/analysis/localsim_suspension_valuation_and_retirement_contract_20261016.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/simulation_execution/localsim/models.py",
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_runtime/successor_repository.py",
+      "backend/services/simulation_runtime/repository.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+      "backend/services/simulation_execution/localsim/suspension.py",
+      "docs/analysis/localsim_long_replay_recovery_plan_20261016.md",
+      "docs/analysis/localsim_suspension_valuation_and_retirement_contract_20261016.md"
+    ]
+  },
+  "first_seen_at": "2026-10-15T18:06:13.802340Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6157,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6157",
+  "last_seen_at": "2026-10-15T18:06:13.802340Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "platform_api_backend",
+    "simulation_core_l2",
+    "localsim_successor_core_dev_db"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM 合法停牌缺少交易昨收时阻断执行估值及原回放受控恢复",
+  "trigger_condition": {
+    "fingerprint": "3e8097399ac6d1fe5546e6f5",
+    "source_event_id": "FE-20261015-3e8097399ac6"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "platform_api",
+        "simulation_core",
+        "localsim_successor_core_dev_db"
+      ],
+      "plans": [
+        "platform_api_backend",
+        "simulation_core_l2",
+        "localsim_successor_core_dev_db"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "platform_api",
+          "simulation_core",
+          "localsim_successor_core_dev_db"
+        ],
+        "plans": [
+          "platform_api_backend",
+          "simulation_core_l2",
+          "localsim_successor_core_dev_db"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
