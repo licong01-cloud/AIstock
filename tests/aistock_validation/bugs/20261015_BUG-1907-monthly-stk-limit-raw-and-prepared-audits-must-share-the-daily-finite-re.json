@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_frozen_source_audit.py",
     "backend/tests/dataset_release/test_monthly_source_audit.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "tests/aistock_validation/bugs/20261015_BUG-1907-monthly-stk-limit-raw-and-prepared-audits-must-share-the-daily-finite-re.json"
   ],
   "assigned_agent": null,
@@ -29,7 +30,8 @@
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
-      "backend/tests/dataset_release/test_monthly_source_audit.py"
+      "backend/tests/dataset_release/test_monthly_source_audit.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -78,12 +80,14 @@
     },
     "planned_files": [
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
-      "backend/tests/dataset_release/test_monthly_source_audit.py"
+      "backend/tests/dataset_release/test_monthly_source_audit.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
-      "backend/tests/dataset_release/test_monthly_source_audit.py"
+      "backend/tests/dataset_release/test_monthly_source_audit.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py"
     ]
   },
   "first_seen_at": "2026-10-15T02:17:31.549195Z",
@@ -100,6 +104,7 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
+  "related_bug_ids": ["BUG-1780", "BUG-1906"],
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -109,7 +114,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "RED: target-month audit accepted an out-of-band pre_close=20 with limits13.77..16.83; existing NULL/NaN/Inf cases failed closed. No databases, frozen releases, profiles or runtime processes changed.",
+      "Raw and prepared monthly SOURCE now reuse BUG-1906 stk_limit_prices_valid; no additional date windows, source fallback, suspension exemptions or dataset exports introduced. Runtime activation remains pending user restart."
+    ],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

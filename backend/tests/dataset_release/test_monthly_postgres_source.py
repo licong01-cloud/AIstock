@@ -1252,7 +1252,7 @@ def test_only_rule_preparable_limits_can_reach_materialization(tmp_path):
                                    predecessor_cutoff=date(2026, 8, 31), changes=())
 
 
-@pytest.mark.parametrize("defect", [None, "null", "duplicate", "denominator"])
+@pytest.mark.parametrize("defect", [None, "null", "nan", "inf", "out_of_band", "duplicate", "denominator"])
 def test_prepared_limits_close_actual_month_rows_not_raw_nulls(tmp_path, monkeypatch, defect):
     import json
     from types import SimpleNamespace
@@ -1273,6 +1273,10 @@ def test_prepared_limits_close_actual_month_rows_not_raw_nulls(tmp_path, monkeyp
               for day in days for code in codes]
     if defect == "null":
         values[0]["pre_close"] = None
+    elif defect in {"nan", "inf"}:
+        values[0]["pre_close"] = float(defect)
+    elif defect == "out_of_band":
+        values[0]["pre_close"] = "20.00"
     elif defect == "duplicate":
         values.append(dict(values[0]))
     elif defect == "denominator":
