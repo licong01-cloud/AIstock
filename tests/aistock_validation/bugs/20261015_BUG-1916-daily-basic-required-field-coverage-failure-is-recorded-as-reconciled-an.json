@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Existing mandatory daily_basic field coverage drives audit status and persistent retry; optional valuation NAs remain valid.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1916-daily-basic-required-field-coverage-failure-is-recorded-as-reconciled-an.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1916-daily-basic-required-field-coverage-failure-is-recorded-as-reconciled-an.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/tushare_sync_engine.py",
@@ -112,14 +118,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "fresh_process_evidence": ["python -m pytest backend/tests/test_tushare_sync_engine.py -q -> 108 passed in isolated fresh process; required-field failures persist retry, optional valuation NA remains legal"],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/test_tushare_sync_engine.py -q -> 108 passed in isolated fresh process; required-field failures persist retry, optional valuation NA remains legal",
+      "isolated pytest process loaded persisted source and verified 0/94/95/100 percent boundaries -> 108 passed"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
