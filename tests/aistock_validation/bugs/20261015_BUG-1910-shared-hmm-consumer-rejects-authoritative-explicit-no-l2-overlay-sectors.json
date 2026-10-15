@@ -229,7 +229,8 @@
   "review_rounds": [
     "第1轮：复现原报错并实现共享 validator；补齐 snapshot-only LocalSIM 对原生登记的只读查询，两端不分别写适配器。",
     "第2轮：修复原生压缩 membership 读取与区间未来隔离，并把系数哈希绑定解析的同一批字节，消除二次读取身份漂移风险。",
-    "第3轮：逐项复核 fail-closed、正常调分/排序、禁生成、HMM 关闭及模块边界；新声明未知映射不得隐藏为排除，聚焦矩阵63项通过，四项 DESIGN-COMPLIANCE-001 通过。"
+    "第3轮：逐项复核 fail-closed、正常调分/排序、禁生成、HMM 关闭及模块边界；新声明未知映射不得隐藏为排除，聚焦矩阵63项通过，四项 DESIGN-COMPLIANCE-001 通过。",
+    "第4轮CI反馈：paper_v2_backend 首轮1190通过、1失败，唯一失败为空membership提前拒绝后漏掉既有错误context.symbol；保留相同fail-closed判定并恢复原生候选诊断，失败节点定向复跑1项PASS，不修改模拟盘或放宽校验，重新推送触发CI。"
   ],
   "risk_area": "bug",
   "root_cause": "共享消费者将完整行业 membership 的行业集合强制要求为系数集合子集，没有消费 HMM 原生产物 explicit_no_l2_overlay_v1 的已登记不可用声明；预检和执行又各自实现了不一致的校验。不是行情补数或系数生成问题。",

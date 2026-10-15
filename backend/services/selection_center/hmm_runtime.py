@@ -176,6 +176,8 @@ class SectorHMMRuntime:
             artifact=artifact, snapshot=snapshot, model_path=model_path,
             profile=profile, trade_date=trade_date, package_id=package_id,
             effective_trade_date=effective_trade_date,
+            empty_mapping_context={"symbol": candidates[0].symbol, "raw_rank": candidates[0].rank,
+                                   "manifest_sha256": manifest_sha256},
         )
         stock_sector_map = overlay.membership
         day_coefficients = overlay.coefficients
@@ -456,21 +458,28 @@ class SectorHMMRuntime:
         self, *, artifact: HMMCoefficientArtifact, snapshot: dict[str, Any],
         model_path: Path, profile: RuntimeHMMProfile, trade_date: date,
         package_id: str, effective_trade_date: date | None,
+        empty_mapping_context: dict[str, Any] | None = None,
     ) -> HMMOverlayDay:
+        membership = _stock_sector_map_for_day(
+            artifact.payload, day_key=trade_date.isoformat(),
+            package_id=package_id, coefficients_path=artifact.path,
+        )
+        context = {"package_id": package_id, "snapshot_id": profile.model_snapshot_id,
+                   "trade_date": trade_date.isoformat(), "coefficients_path": str(artifact.path)}
+        if isinstance(membership, dict) and not membership:
+            # Keep the native candidate-specific failure diagnostics when every
+            # candidate is unmapped. Validation still rejects the entire asset.
+            context.update(empty_mapping_context or {})
         return validate_overlay_day(
             payload=artifact.payload,
-            membership=_stock_sector_map_for_day(
-                artifact.payload, day_key=trade_date.isoformat(),
-                package_id=package_id, coefficients_path=artifact.path,
-            ),
+            membership=membership,
             trade_date=trade_date, effective_trade_date=effective_trade_date,
             snapshot_id=str(profile.model_snapshot_id),
             config_id=profile.model_config_id or snapshot.get("config_id"),
             signal_preset=str(profile.signal_preset), coefficient_filename=artifact.path.name,
             coefficient_sha256=artifact.sha256, model_sha256=_file_sha256(model_path),
             registered_windows=lambda: self._registered_coefficient_windows(snapshot),
-            context={"package_id": package_id, "snapshot_id": profile.model_snapshot_id,
-                     "trade_date": trade_date.isoformat(), "coefficients_path": str(artifact.path)},
+            context=context,
         )
 
     def _registered_coefficient_windows(self, snapshot: dict[str, Any]) -> list[dict[str, Any]]:
