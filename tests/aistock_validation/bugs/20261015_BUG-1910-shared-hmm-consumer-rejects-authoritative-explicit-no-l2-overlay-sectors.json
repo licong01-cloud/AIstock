@@ -206,9 +206,9 @@
   },
   "first_seen_at": "2026-10-15T03:30:25.564299Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "c16db8b8bd2d42928a34d25e38be3d072ce797b8",
   "fix_summary": "以一个共享日度校验器核验 schema、authority、原生登记 SHA256、模型和日期身份；合法 no-overlay 保留股票与原分数并显式记录未应用及原因。正常调分排序保持不变；未知缺失和身份漂移继续失败。支持原生压缩 membership，系数解析和哈希绑定同一次读取。未修改 LocalSIM、HMM 或数据模块代码。",
-  "fixed_at": null,
+  "fixed_at": "2026-10-15T08:07:06Z",
   "github_issue_number": 6097,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6097",
   "last_seen_at": "2026-10-15T03:30:25.564299Z",
@@ -216,6 +216,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6100",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -246,6 +247,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -257,7 +259,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1910",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "eb2dcfca00a4ef05",
+    "recorded_at": "2026-10-15T08:07:48.329138Z",
+    "runtime_contract_digest": "0943de531b97450cda24de96ea571c0e7b57132b7380f064231db405a7f7e590",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "088b7398c74214e21e1d1cd6ace187fc02a8076a",
+    "source_merge_commit": "c16db8b8bd2d42928a34d25e38be3d072ce797b8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6100",
+    "validation_evidence": [
+      "validation-receipt: id=b2cd4a2afcee7452 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/selection_center/test_runtime_selection.py::test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_inference -q --basetemp=X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/pytest-ci-failed-node -o cache_dir=X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/pytest-cache` result=`passed: 1 in4.42s; exact failing CI node after diagnostic-context compatibility fix, no broad repeat`",
+      "validation-receipt: id=4ad46800f6e0eeb4 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/selection_center/hmm_runtime.py backend/services/selection_center/hmm_overlay_contract.py backend/tests/selection_center/test_hmm_runtime.py backend/tests/strategy_package/test_selection_signal_preparation.py docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md tests/aistock_validation/bugs/20261015_BUG-1910-shared-hmm-consumer-rejects-authoritative-explicit-no-l2-overlay-sectors.json` result=`passed: zero findings`",
+      "validation-receipt: id=0a5d1d333f8d0718 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/selection_center/hmm_runtime.py` result=`passed`",
+      "validation-receipt: id=4f0b3ca381db3282 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "34c70e7729d997087b8773f1efb801c91774d0727339354c8dffe163a093778f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "selection_center"
   ],
@@ -266,6 +292,12 @@
     "fingerprint": "4a8344b1cfbec4672f6f8503",
     "source_event_id": "FE-20261015-4a8344b1cfbe"
   },
+  "validation_evidence": [
+    "validation-receipt: id=b2cd4a2afcee7452 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/selection_center/test_runtime_selection.py::test_selection_center_health_blocks_hmm_missing_stock_sector_map_before_inference -q --basetemp=X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/pytest-ci-failed-node -o cache_dir=X:/AIstock_temp/LOCALSIM/hmm-no-l2-consumer-20261015/pytest-cache` result=`passed: 1 in4.42s; exact failing CI node after diagnostic-context compatibility fix, no broad repeat`",
+    "validation-receipt: id=4ad46800f6e0eeb4 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/selection_center/hmm_runtime.py backend/services/selection_center/hmm_overlay_contract.py backend/tests/selection_center/test_hmm_runtime.py backend/tests/strategy_package/test_selection_signal_preparation.py docs/contracts/strategy_package_hmm_no_l2_overlay_v1.md tests/aistock_validation/bugs/20261015_BUG-1910-shared-hmm-consumer-rejects-authoritative-explicit-no-l2-overlay-sectors.json` result=`passed: zero findings`",
+    "validation-receipt: id=0a5d1d333f8d0718 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/selection_center/hmm_runtime.py` result=`passed`",
+    "validation-receipt: id=4f0b3ca381db3282 commit=088b7398c74214e21e1d1cd6ace187fc02a8076a kind=diff_check plan=direct status=passed command=`rtk git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
