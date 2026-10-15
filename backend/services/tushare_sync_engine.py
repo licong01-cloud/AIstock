@@ -1396,9 +1396,18 @@ class TushareSyncEngine:
                     # the freshness gate can prove turnover_rate_f coverage
                     # instead of failing closed with
                     # required_field_coverage_unproven.
-                    audit_metadata["required_field_coverage"] = (
-                        _daily_basic_required_field_coverage_receipt(rows)
-                    )
+                    coverage = _daily_basic_required_field_coverage_receipt(rows)
+                    audit_metadata["required_field_coverage"] = coverage
+                    # The existing mandatory-field contract must also drive
+                    # the durable retry queue. A receipt alone leaves a late
+                    # field falsely reconciled after the rolling tail expires.
+                    # Nullable valuation fields have no new threshold here.
+                    if (coverage["ratio"] < coverage["required_ratio"]
+                            and audit_quality["quality_status"] in {"ok", "empty_valid"}):
+                        audit_quality.update(
+                            quality_status="low_coverage",
+                            failure_category="required_field_coverage_below_threshold",
+                        )
                 if spec.name == "margin_detail" and rows:
                     # Independently bind the validated provider response, not a
                     # subsequent database COUNT or the number written by upsert.
