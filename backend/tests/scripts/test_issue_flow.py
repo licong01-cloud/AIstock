@@ -70,6 +70,33 @@ def test_catalog_snapshot_preserves_selection_without_mutating_inputs(paths) -> 
     assert json.dumps(vars(catalog), sort_keys=True) == before
 
 
+@pytest.mark.parametrize('native', [True, False])
+def test_catalog_yaml_prefers_safe_native_parser_with_fresh_reads(tmp_path, monkeypatch, native):
+    preferred = getattr(yaml, 'CSafeLoader', None)
+    if native and preferred is None:
+        pytest.skip('PyYAML native parser unavailable; fallback tested separately')
+    if not native:
+        monkeypatch.delattr(yaml, 'CSafeLoader', raising=False)
+    original, loaders = yaml.load, []
+    def checked(text, Loader):
+        loaders.append(Loader)
+        return original(text, Loader=Loader)
+    monkeypatch.setattr(yaml, 'load', checked)
+    path = tmp_path / 'catalog.yaml'
+    text = 'name: 中文\nflag: off\nitems: &items [1, 2]\ncopy: *items\n'
+    path.write_text(text, encoding='utf-8')
+    assert flow._load_yaml(path) == original(text, Loader=yaml.SafeLoader)
+    assert loaders == [preferred if native else yaml.SafeLoader]
+    path.write_text('name: updated\n', encoding='utf-8')
+    assert flow._load_yaml(path) == {'name': 'updated'}
+    path.write_text('!!python/object/apply:builtins.str [unsafe]', encoding='utf-8')
+    with pytest.raises(yaml.YAMLError):
+        flow._load_yaml(path)
+    path.write_text('[not, mapping]', encoding='utf-8')
+    with pytest.raises(flow.IssueFlowError, match='root must be a mapping'):
+        flow._load_yaml(path)
+
+
 def test_write_json_dash_writes_stdout_without_dash_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(tmp_path)
 

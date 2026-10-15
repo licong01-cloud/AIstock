@@ -1,6 +1,8 @@
 {
   "actual": "After separating workflow tests, validation_center_backend still took 310.230s including 284 passing tests and unchanged 79.82/62.76 coverage. Existing PyYAML CSafeLoader parses the three real catalogs with identical payloads in 0.1478s versus SafeLoader 1.2159s under coverage. Use the existing safe native parser with SafeLoader fallback, preserve fresh file reads, schema validation and unsafe tag rejection. No new dependency or caching.",
   "allowed_write_scope": [
+    "scripts/issue_flow.py",
+    "backend/tests/scripts/test_issue_flow.py",
     "tests/aistock_validation/bugs/20261015_BUG-1925-validation-catalog-pure-python-yaml-parsing-consumes-nightly-coverage-ti.json"
   ],
   "assigned_agent": null,
