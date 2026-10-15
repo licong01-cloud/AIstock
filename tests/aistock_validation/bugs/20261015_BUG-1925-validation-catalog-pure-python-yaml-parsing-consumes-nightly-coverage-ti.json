@@ -24,7 +24,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Use the prebuilt safe native YAML parser with SafeLoader fallback and fresh file reads. Keep semantic/security validation and the original Nightly timeout/coverage budgets. Deduplicate identical Semgrep assertions and retire generic config-key presence smoke superseded by actual tools and policy scanning, retaining the under-30-percent workflow test budget.",
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/tests/scripts/test_issue_flow.py",

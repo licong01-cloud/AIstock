@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -1298,24 +1297,6 @@ def test_pr_quality_markdown_is_compact_and_comment_budget_is_checked(
     assert budget["truncated"] is True
 
 
-def test_open_source_tooling_configs_are_parseable() -> None:
-    assert yaml.safe_load(Path(".pre-commit-config.yaml").read_text(encoding="utf-8"))["repos"]
-    assert yaml.safe_load(Path(".semgrep.yml").read_text(encoding="utf-8"))["rules"]
-    assert tomllib.loads(Path("ruff.toml").read_text(encoding="utf-8"))["lint"]["select"]
-    assert json.loads(Path(".github/renovate.json").read_text(encoding="utf-8"))["dependencyDashboard"] is True
-    assert "semgrep" in Path(".github/requirements/semgrep.txt").read_text(encoding="utf-8")
-    assert "semgrep" in Path(".github/requirements/pr-quality.txt").read_text(encoding="utf-8")
-    for workflow in [
-        ".github/workflows/pr-quality.yml",
-        ".github/workflows/semgrep.yml",
-        ".github/workflows/codeql.yml",
-        ".github/workflows/dependency-update-validate.yml",
-    ]:
-        loaded = yaml.safe_load(Path(workflow).read_text(encoding="utf-8"))
-        assert loaded["name"]
-        assert loaded["jobs"]
-
-
 def test_semgrep_runs_only_in_dedicated_changed_file_workflow() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]
@@ -1329,20 +1310,8 @@ def test_semgrep_runs_only_in_dedicated_changed_file_workflow() -> None:
         if isinstance(step, dict) and str(step.get("name") or "").startswith("Semgrep AIstock guardrails")
     ]
     assert semgrep_steps == []
-
-    semgrep_workflow = yaml.safe_load(Path(".github/workflows/semgrep.yml").read_text(encoding="utf-8"))
-    dedicated_steps = semgrep_workflow["jobs"]["semgrep"]["steps"]
-    run_step = next(step for step in dedicated_steps if step.get("name") == "Run Semgrep")
-    run = str(run_step["run"])
-    assert "python scripts/ci_changed_files.py" in run
-    assert '--base-ref "${BASE_REF}"' in run
-    assert '--base-sha "${BASE_SHA}"' in run
-    assert '--head-sha "${HEAD_SHA}"' in run
-    assert "--diff-filter ACMRT" in run
-    assert "tmp/validation/semgrep/semgrep_changed_files.txt" in run
-    assert "xargs -a tmp/validation/semgrep/semgrep_changed_files.txt semgrep" in run
-    assert "semgrep --config .semgrep.yml --json --output tmp/validation/semgrep/semgrep.json ." not in run
-    assert '"paths":{"scanned":[]}' in run
+    # Dedicated-run selection and empty/deleted paths are asserted once in
+    # test_standalone_semgrep_scans_changed_files_only below.
 
 
 def test_pr_quality_ruff_ignores_deleted_python_files() -> None:
