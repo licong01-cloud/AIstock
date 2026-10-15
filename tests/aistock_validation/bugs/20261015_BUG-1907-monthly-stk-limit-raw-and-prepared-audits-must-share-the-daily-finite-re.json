@@ -16,6 +16,17 @@
   ],
   "created_at": "2026-10-15T02:17:31.549195Z",
   "description": "Duplicated monthly predicates reject NULL but accept out-of-band finite reference prices, allowing producer/publication quality drift.",
+  "design_compliance_review": {
+    "no_business_or_scope_drift": "No LocalSIM/HMM/QE consumer change; no source fallback, new exemption, old-month audit, export, data/profile write or runtime action.",
+    "no_partial_completion_claim": "126 related tests passed; source pending merge and supervised worker activation pending user-owned backend restart.",
+    "no_silent_failure": "NULL/NaN/Inf/out-of-band, duplicate facts and changed PIT denominator remain BLOCKED; existing authoritative suspension exception unchanged.",
+    "no_unapproved_simplification": "Raw and prepared SOURCE both use the daily producer contract; monthly integration is implemented, not a placeholder.",
+    "review_rounds": [
+      "raw_and_prepared_contract_parity",
+      "typed_suspension_and_target_month_scope",
+      "dependency_identity_and_side_effect_boundaries"
+    ]
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -27,13 +38,20 @@
   "evidence_uris": [],
   "expected": "Daily ingestion and monthly raw/prepared sources apply the same finite positive and lower<=pre_close<=upper contract; legal suspension source NULL remains typed, unproven missing prices remain failures.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_source_audit.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1907-monthly-stk-limit-raw-and-prepared-audits-must-share-the-daily-finite-re.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_monthly_source_audit.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "tests/aistock_validation/bugs/20261015_BUG-1907-monthly-stk-limit-raw-and-prepared-audits-must-share-the-daily-finite-re.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_frozen_source_audit.py",
@@ -104,7 +122,10 @@
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
-  "related_bug_ids": ["BUG-1780", "BUG-1906"],
+  "related_bug_ids": [
+    "BUG-1780",
+    "BUG-1906"
+  ],
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
   "required_verification": [
@@ -116,13 +137,18 @@
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
       "RED: target-month audit accepted an out-of-band pre_close=20 with limits13.77..16.83; existing NULL/NaN/Inf cases failed closed. No databases, frozen releases, profiles or runtime processes changed.",
-      "Raw and prepared monthly SOURCE now reuse BUG-1906 stk_limit_prices_valid; no additional date windows, source fallback, suspension exemptions or dataset exports introduced. Runtime activation remains pending user restart."
+      "Raw and prepared monthly SOURCE now reuse BUG-1906 stk_limit_prices_valid; no additional date windows, source fallback, suspension exemptions or dataset exports introduced. Runtime activation remains pending user restart.",
+      "GREEN: fresh process on merged BUG-1906 dependency21bbf68444092c8a5a86ce0d4b4e1cdd15c2e3f4 ran both monthly source-audit test files:126 passed. Raw/prepared missing and nonfinite cases, full-day suspension, prepared denominator identity and target-month-only query regression passed without database or runtime access."
     ],
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
