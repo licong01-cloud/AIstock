@@ -92,6 +92,9 @@ def test_catalog_yaml_prefers_safe_native_parser_with_fresh_reads(tmp_path, monk
     path.write_text('!!python/object/apply:builtins.str [unsafe]', encoding='utf-8')
     with pytest.raises(yaml.YAMLError):
         flow._load_yaml(path)
+    path.write_text('items: [unfinished', encoding='utf-8')
+    with pytest.raises(yaml.YAMLError):
+        flow._load_yaml(path)
     path.write_text('[not, mapping]', encoding='utf-8')
     with pytest.raises(flow.IssueFlowError, match='root must be a mapping'):
         flow._load_yaml(path)
