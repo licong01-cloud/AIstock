@@ -23,6 +23,11 @@ COMMON_ENV = {
     "PYTHONIOENCODING": "utf-8",
     "PYTHONDONTWRITEBYTECODE": "1",
 }
+# Match HMM's guarded CLI children before pytest imports numpy/scipy.
+HMM_TEST_NUMERIC_ENV = dict.fromkeys((
+    "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS",
+), "1")
 VALIDATION_ENV_FILE_DENYLIST = {
     "MINIQMT_EXECUTION_RUNTIME",
 }
@@ -3989,7 +3994,7 @@ def hmm_risk_backend(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-        env=_env({"COVERAGE_FILE": str(coverage_data)}),
+        env=_env({"COVERAGE_FILE": str(coverage_data), **HMM_TEST_NUMERIC_ENV}),
         external=True,
     )
 
