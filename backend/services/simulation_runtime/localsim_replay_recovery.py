@@ -20,6 +20,8 @@ ECONOMIC_PAYLOAD_KEYS = (
     "local_sim_execution_states_v1", "local_sim_economic_receipts_v1",
     "local_sim_projection_outbox_v1", "local_sim_projection_receipts_v1",
     "local_sim_economic_generation", "local_sim_persistence", "broker_order_handles",
+    "broker_side_effect_state", "miniqmt_side_effect_state", "miniqmt_submit_timeout",
+    "qmt_batch_id", "qmt_batch_result", "reconcile_after_submit", "tail_handling",
 )
 
 
@@ -63,6 +65,7 @@ def require_no_economic_effects(
         )
     if ((payload.get("broker_called") is not None and payload.get("broker_called") is not False)
             or payload.get("submitted_intents", 0) != 0
+            or payload.get("failed_intents", 0) != 0
             or any(payload.get(k) for k in ECONOMIC_PAYLOAD_KEYS)):
         raise InvalidStateTransitionError(
             "LocalSIM recovery cannot discard submitted or durable runtime evidence",

@@ -124,6 +124,8 @@ def test_recovery_rejects_other_days_states_identities_and_failures(section, fie
     {"broker_called": True}, {"broker_called": "false"}, {"submitted_intents": 1},
     {"local_sim_projection_outbox_v1": {"status": "PENDING"}},
     {"local_sim_execution_states_v1": {"state": "ACTIVE"}}, {"broker_order_handles": ["handle"]},
+    {"broker_side_effect_state": "UNKNOWN"}, {"failed_intents": 1}, {"failed_intents": "unknown"},
+    {"qmt_batch_id": "unexpected-cross-backend-evidence"}, {"reconcile_after_submit": {"pending": True}},
 ])
 def test_unprojected_or_unknown_broker_effects_are_not_discarded(patch):
     snapshot = _snapshot()
