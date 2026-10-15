@@ -1,0 +1,353 @@
+{
+  "actual": "Exact-C reference-price validation raises for a suspended raw TopK row and prevents native suspended exclusion and the whole selection artifact/day.",
+  "allowed_write_scope": [
+    "backend/services/strategy_package/selection_artifact.py",
+    "backend/services/strategy_package/multi_alpha_live.py",
+    "backend/services/strategy_package/selection_computation.py",
+    "backend/services/strategy_package/reference_prices.py",
+    "backend/tests/strategy_package/test_reference_price_availability.py",
+    "docs/contracts/strategy_package_reference_price_availability_v1.md",
+    "tests/aistock_validation/bugs/20261014_BUG-1904-shared-strategypackage-selection-blocks-a-day-on-legally-suspended-c-dat.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1904",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-14T18:53:08.329223Z",
+  "description": "Exact-C reference-price validation raises for a suspended raw TopK row and prevents native suspended exclusion and the whole selection artifact/day.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261014-b4c5b54b6544",
+      "timestamp": "2026-10-14T18:53:08.329203Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/LOCALSIM/strategy-package-suspension-reference-20261015/findings.md"
+  ],
+  "expected": "Legal suspension is represented by native market constraints and genuine as-of valuation reference with its actual quote date; ordinary tradable missing prices fail explicitly before quantity/order generation. Full native scoring and ranking remain unchanged, future data is never consumed.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/strategy_package/multi_alpha_live.py",
+      "backend/services/strategy_package/reference_prices.py",
+      "backend/services/strategy_package/selection_artifact.py",
+      "backend/services/strategy_package/selection_computation.py",
+      "backend/tests/strategy_package/test_reference_price_availability.py",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md",
+      "tests/aistock_validation/bugs/20261014_BUG-1904-shared-strategypackage-selection-blocks-a-day-on-legally-suspended-c-dat.json"
+    ],
+    "added_files": [
+      "backend/services/strategy_package/reference_prices.py",
+      "backend/tests/strategy_package/test_reference_price_availability.py",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md"
+    ],
+    "changed_files": [
+      "backend/services/strategy_package/multi_alpha_live.py",
+      "backend/services/strategy_package/reference_prices.py",
+      "backend/services/strategy_package/selection_artifact.py",
+      "backend/services/strategy_package/selection_computation.py",
+      "backend/tests/strategy_package/test_reference_price_availability.py",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md",
+      "tests/aistock_validation/bugs/20261014_BUG-1904-shared-strategypackage-selection-blocks-a-day-on-legally-suspended-c-dat.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/strategy_package/selection_artifact.py",
+        "backend/services/strategy_package/multi_alpha_live.py",
+        "backend/services/strategy_package/selection_computation.py",
+        "backend/services/strategy_package/reference_prices.py",
+        "backend/tests/strategy_package/test_reference_price_availability.py",
+        "docs/contracts/strategy_package_reference_price_availability_v1.md"
+      ],
+      "impacted_modules": [
+        "strategy_package",
+        "paper_v2",
+        "selection_center",
+        "qe.single_experiment"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/strategy_package/selection_artifact.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/multi_alpha_live.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/selection_computation.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/services/strategy_package/reference_prices.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "backend/tests/strategy_package/test_reference_price_availability.py",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        },
+        {
+          "file": "docs/contracts/strategy_package_reference_price_availability_v1.md",
+          "impact_modules": [
+            "paper_v2",
+            "selection_center",
+            "qe.single_experiment"
+          ],
+          "primary_module": "strategy_package",
+          "risk_level": "high",
+          "rule_id": "strategy_package_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/strategy_package/selection_artifact.py",
+        "backend/services/strategy_package/multi_alpha_live.py",
+        "backend/services/strategy_package/selection_computation.py",
+        "backend/services/strategy_package/reference_prices.py",
+        "backend/tests/strategy_package/test_reference_price_availability.py",
+        "docs/contracts/strategy_package_reference_price_availability_v1.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/strategy_package/selection_artifact.py",
+      "backend/services/strategy_package/multi_alpha_live.py",
+      "backend/services/strategy_package/selection_computation.py",
+      "backend/services/strategy_package/reference_prices.py",
+      "backend/tests/strategy_package/test_reference_price_availability.py",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/strategy_package/selection_artifact.py",
+      "backend/services/strategy_package/multi_alpha_live.py",
+      "backend/services/strategy_package/selection_computation.py",
+      "backend/services/strategy_package/reference_prices.py",
+      "backend/tests/strategy_package/test_reference_price_availability.py",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md"
+    ]
+  },
+  "first_seen_at": "2026-10-14T18:53:08.329223Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6077,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6077",
+  "implementation_review": {
+    "design_compliance_001": {
+      "no_silent_error": "PASS: ordinary/invalid/unproven prices fail explicitly; full scoring universe is preserved",
+      "no_simplified_delivery": "PASS: common reference-price reader, single/multi-alpha producers, effective-candidate price invariant and real native chain covered",
+      "no_unapproved_gate": "PASS: no new package approval or data maturity gate; native price requirement moved before target quantities",
+      "no_unapproved_semantic_change": "PASS: approved reference availability correction documented; scoring/fusion/filter/TopK and frozen policy unchanged"
+    },
+    "design_contract": "docs/contracts/strategy_package_reference_price_availability_v1.md",
+    "l0": "PASS: 7 exact registered files, 0 blocking guardrails",
+    "review_mode": "same_window_review_and_fix_not_independent_review",
+    "rounds": 3,
+    "runtime_activation": "PENDING_USER_RESTART",
+    "source_delivery_blocker": null,
+    "source_delivery_blocker_resolution": "BUG-1905 / PR #6083 merged as 61a5088df2e28670abf251ed76024686d1ec5971; canonical finish recognizes the target-owned StrategyPackage selection-artifacts GET semantic contract. Runtime activation remains pending user restart.",
+    "targeted_tests": "64 passed; one final related small matrix"
+  },
+  "last_seen_at": "2026-10-14T18:53:08.329223Z",
+  "module": "strategy_package",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/strategy_package/test_reference_price_availability.py -q",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages/pkg_cc7eccb6202e4816b9d7c7d6b748bd37/selection-artifacts?limit=1",
+    "fresh_process_evidence": [
+      "python X:/AIstock_temp/LOCALSIM/strategy-package-suspension-reference-20261015/native_chain_check.py F:/Dev/AIstock_worktrees/BUG-1904-shared-strategypackage-selection-blocks-a-day-on-20261014 -> PASS: real saved 2026-01-20 LocalSIM inference, C=2026-01-19, 4912 scores/4918 universe/6 UNKNOWN unchanged; raw original failure reproduced; 50 effective candidates with native D-date suspension exclusion and exact native policy parity on the same legal priced input; current read-only diagnostic, not original historical capture; no model run, database writes, replay or process control",
+      "python X:/AIstock_temp/LOCALSIM/strategy-package-suspension-reference-20261015/native_chain_check.py F:/Dev/AIstock_worktrees/BUG-1904-shared-strategypackage-selection-blocks-a-day-on-20261014 -> PASS at 5c64d968078ccaf06438f8bbb1158bb9b8aa7e87; receipt native-chain-receipt-5c64d968.json; 4912 scores / 4918 universe / 6 UNKNOWN unchanged; native 50 effective candidates and baseline parity; READ ONLY, no inference or replay; runtime pending user restart"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "strategy_package"
+  ],
+  "title": "Shared StrategyPackage selection blocks a day on legally suspended C-date reference price",
+  "trigger_condition": {
+    "fingerprint": "b4c5b54b654465ce59a06ad7",
+    "source_event_id": "FE-20261014-b4c5b54b6544"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "strategy_package",
+        "paper_v2"
+      ],
+      "plans": [
+        "paper_v2_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "strategy_package",
+          "paper_v2"
+        ],
+        "plans": [
+          "paper_v2_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

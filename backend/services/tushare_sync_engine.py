@@ -33,7 +33,7 @@ from .data_sync_targets import (
     publication_target_date,
 )
 from .tushare_rate_limiter import get_limiter
-from .tushare_dataset_specs import DAILY_BASIC, DatasetSpec, QueryMode
+from .tushare_dataset_specs import DAILY_BASIC, DatasetSpec, QueryMode, stk_limit_prices_valid
 
 PIT_SOURCE_DATASETS = {"stock_basic", "stock_st", "stock_st_events"}
 FINANCIAL_EVENT_RAW_DATASETS = {
@@ -54,6 +54,7 @@ ZERO_ROW_VALID_DATASETS = {
 # audit_backed_data_health._status_from_audit validation.
 DAILY_BASIC_COVERAGE_RECEIPT_SCHEMA = "daily_basic_required_field_coverage_v1"
 DAILY_BASIC_REQUIRED_FIELD = "turnover_rate_f"
+DAILY_BASIC_REQUIRED_FIELDS = ("turnover_rate", "turnover_rate_f", "volume_ratio", "total_mv", "circ_mv")
 DAILY_BASIC_REQUIRED_RATIO = 0.95
 
 
@@ -97,6 +98,14 @@ def _daily_basic_required_field_coverage_receipt(
         if _is_finite_number(row.get(DAILY_BASIC_REQUIRED_FIELD))
     )
     ratio = finite_count / row_count if row_count > 0 else 0.0
+    # Same finite-field set as the monthly frozen-source contract. Keep the
+    # legacy single-field receipt for existing health readers, but retry if
+    # any mandatory column is late; nullable valuations are excluded.
+    complete_rows = sum(
+        all(_is_finite_number(row.get(field)) for field in DAILY_BASIC_REQUIRED_FIELDS)
+        and all(float(row[field]) > 0 for field in ("total_mv", "circ_mv"))
+        for row in rows
+    )
     return {
         "schema_version": DAILY_BASIC_COVERAGE_RECEIPT_SCHEMA,
         "field": DAILY_BASIC_REQUIRED_FIELD,
@@ -104,6 +113,8 @@ def _daily_basic_required_field_coverage_receipt(
         "row_count": row_count,
         "ratio": ratio,
         "required_ratio": DAILY_BASIC_REQUIRED_RATIO,
+        "required_fields": list(DAILY_BASIC_REQUIRED_FIELDS),
+        "required_fields_ratio": complete_rows / row_count if row_count else 0.0,
         # Batch-local observations, not new completeness thresholds. Nullable
         # valuations may legitimately be NULL; preserve and expose that fact
         # instead of hiding all columns behind a row-count success receipt.
@@ -712,7 +723,8 @@ class TushareSyncEngine:
             for c in col_names:
                 v = r.get(c)
                 if (spec.name in LATE_PUBLICATION_TAIL_DAYS and col_types[c] == "numeric"
-                        and v is not None and not _is_finite_number(v)):
+                        and v is not None and (not _is_finite_number(v)
+                            or (spec.name == "stk_limit" and float(v) <= 0))):
                     raise ValueError(f"{spec.name}.{c}: non-finite provider fact")
                 if v is not None and col_types[c] == "date":
                     v = _parse_ymd(v)
@@ -1305,6 +1317,33 @@ class TushareSyncEngine:
             count += 1
         return count
 
+    def _stk_limit_readback_quality(self, conn, trade_date):
+        """Verify only real, traded A-share keys for this requested day.
+
+        Suspended securities without trades, funds and indices do not become
+        required keys just because stk_limit happens to contain them. The LEFT
+        JOIN also catches absent rows, not only NULLs in returned provider rows.
+        """
+        with conn.cursor() as cur:
+            cur.execute(r"""SELECT DISTINCT k.ts_code,s.pre_close,s.up_limit,s.down_limit
+                FROM market.kline_daily_raw k
+                LEFT JOIN market.stk_limit s ON s.ts_code=k.ts_code AND s.trade_date=k.trade_date
+                WHERE k.trade_date=%s AND k.adjust_type='none' AND k.close_li>0
+                  AND (k.volume_hand>0 OR k.volume_shares>0)
+                  AND (k.ts_code ~ '^(00|30)[0-9]{4}\.SZ$'
+                    OR k.ts_code ~ '^6[0-9]{5}\.SH$'
+                    OR k.ts_code ~ '^[489][0-9]{5}\.BJ$')
+                ORDER BY k.ts_code""", (trade_date,))
+            rows = cur.fetchall()
+        invalid = [code for code, reference, upper, lower in rows
+                   if not stk_limit_prices_valid({"pre_close": reference, "up_limit": upper, "down_limit": lower})]
+        receipt = {"schema_version": "stk_limit_traded_readback_v1", "scope": "requested_date_only",
+                   "trade_date": trade_date.isoformat(), "required_traded_equity_count": len(rows),
+                   "invalid_count": len(invalid), "invalid_sample": invalid[:10]}
+        quality = {"quality_status": "ok"} if not invalid else {
+            "quality_status": "low_coverage", "failure_category": "traded_equity_limit_fact_incomplete"}
+        return receipt, quality
+
     # -- sync strategies ----------------------------------------------------
 
     def _sync_by_date(
@@ -1359,14 +1398,27 @@ class TushareSyncEngine:
                     # to ok merely because one pre_close is published.
                     if field_quality["quality_status"] != "ok":
                         audit_quality.update(field_quality)
+                    readback, readback_quality = self._stk_limit_readback_quality(conn, d)
+                    audit_metadata["traded_equity_readback"] = readback
+                    if readback_quality["quality_status"] != "ok":
+                        audit_quality.update(readback_quality)
                 if spec.name == "daily_basic":
                     # BUG-1425: persist the required-field coverage receipt so
                     # the freshness gate can prove turnover_rate_f coverage
                     # instead of failing closed with
                     # required_field_coverage_unproven.
-                    audit_metadata["required_field_coverage"] = (
-                        _daily_basic_required_field_coverage_receipt(rows)
-                    )
+                    coverage = _daily_basic_required_field_coverage_receipt(rows)
+                    audit_metadata["required_field_coverage"] = coverage
+                    # The existing mandatory-field contract must also drive
+                    # the durable retry queue. A receipt alone leaves a late
+                    # field falsely reconciled after the rolling tail expires.
+                    # Nullable valuation fields have no new threshold here.
+                    if (coverage["required_fields_ratio"] < coverage["required_ratio"]
+                            and audit_quality["quality_status"] in {"ok", "empty_valid"}):
+                        audit_quality.update(
+                            quality_status="low_coverage",
+                            failure_category="required_field_coverage_below_threshold",
+                        )
                 if spec.name == "margin_detail" and rows:
                     # Independently bind the validated provider response, not a
                     # subsequent database COUNT or the number written by upsert.

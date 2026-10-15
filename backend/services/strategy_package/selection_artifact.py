@@ -24,11 +24,6 @@ import psycopg2.extras
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.db.pg_pool import get_conn
-from backend.services.market_data.instrument_validator import (
-    DEFAULT_SQL_CHUNK_SIZE,
-    load_chunks_with_logging,
-    normalize_and_validate_ts_codes,
-)
 from backend.services.selection_center.runtime_profile import parse_selection_runtime_profile
 from backend.services.selection_center.prospective_evidence import (
     REASON_ASSET_CLOSURE_INCOMPLETE,
@@ -58,6 +53,7 @@ from .live_inference import (
 )
 from .models import AlphaMode, SelectionScoreArtifactStatus
 from .repository import StrategyPackageRepository
+from .reference_prices import load_reference_prices, reference_price_components, reference_price_observations_from_rows
 from .workspace_policy import ensure_not_forbidden_worker_workspace_path
 
 ConnFactory = Callable[[], Iterator[Any]]
@@ -541,23 +537,29 @@ def build_reference_price_source_receipt(
     symbols: Sequence[str],
     trade_date: date,
     price_by_symbol: Mapping[str, float],
+    observations: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Record the reference-price query already used while enriching raw scores."""
 
     observed_at = datetime.now(timezone.utc)
     normalized_symbols = sorted({str(item) for item in symbols})
     normalized_prices = {str(symbol): float(price) for symbol, price in sorted(price_by_symbol.items())}
+    historical = any(item.get("state") == "SUSPENSION_LAST_OBSERVED_CLOSE" for item in (observations or {}).values())
+    content: Any = normalized_prices
+    if historical:
+        content = {"prices": normalized_prices, "availability": dict(observations or {})}
     return SourceReadReceipt(
         source_role="reference_price",
-        dataset_id="market.kline_daily_raw",
+        dataset_id=("market.kline_daily_raw+market.suspend_d+market.trading_calendar" if historical else "market.kline_daily_raw"),
         partition_ref=trade_date.isoformat(),
         query_template_id="SelectionArtifact.reference_price",
-        query_template_version="v1",
+        query_template_version="v2" if historical else "v1",
         parameter_hash=canonical_evidence_json_sha256(
-            {"trade_date": trade_date.isoformat(), "symbols": normalized_symbols}
+            {"trade_date": trade_date.isoformat(), "symbols": normalized_symbols,
+             **({"availability_contract": "strategy_package_reference_price_availability_v1"} if historical else {})}
         ),
         row_count=len(normalized_prices),
-        content_hash=canonical_evidence_json_sha256(normalized_prices),
+        content_hash=canonical_evidence_json_sha256(content),
         first_observed_at=observed_at,
         admissibility="PROSPECTIVE_FIRST_OBSERVED",
     ).model_dump(mode="json")
@@ -1340,6 +1342,7 @@ class StrategyPackageSelectionArtifactService:
                             symbols=[str(row["symbol"]) for row in scores],
                             trade_date=score_trade_date,
                             price_by_symbol=reference_price_by_symbol,
+                            observations=reference_price_observations_from_rows(scores),
                         )
                     ]
                     if include_reference_price
@@ -1674,6 +1677,7 @@ class StrategyPackageSelectionArtifactService:
                         "artifact_source": DIAGNOSTIC_BACKTEST_SOURCE_TYPE,
                         "raw_rank": int(item.rank),
                         "manifest_sha256": manifest_sha256,
+                        **reference_price_components(reference_prices, symbol, trade_date, required=include_reference_price),
                     },
                     "reason": "qe_prediction_score_artifact",
                 }
@@ -1686,6 +1690,10 @@ class StrategyPackageSelectionArtifactService:
                     "trade_date": trade_date.isoformat(),
                     "missing_price_count": len(missing_prices),
                     "missing_price_examples": missing_prices[:20],
+                    "reference_price_availability": {
+                        symbol: reference_price_components(reference_prices, symbol, trade_date, required=True)
+                        for symbol in missing_prices[:20]
+                    },
                 },
             )
         return rows
@@ -1785,6 +1793,7 @@ class StrategyPackageSelectionArtifactService:
                         "manifest_sha256": manifest_sha256,
                         "reference_price_missing": reference_price is None,
                         "reference_price_trade_date": trade_date.isoformat(),
+                        **reference_price_components(reference_prices, row["symbol"], trade_date, required=include_reference_price),
                     },
                     "reason": "live_qe_model_inference_score",
                 }
@@ -1797,53 +1806,13 @@ class StrategyPackageSelectionArtifactService:
                     "trade_date": trade_date.isoformat(),
                     "missing_price_count": len(missing_prices),
                     "missing_price_examples": missing_prices[:20],
+                    "reference_price_availability": {
+                        symbol: reference_price_components(reference_prices, symbol, trade_date, required=True)
+                        for symbol in missing_prices[:20]
+                    },
                 },
             )
         return output
 
     def _load_reference_prices(self, symbols: list[str], trade_date: date) -> dict[str, float]:
-        ts_codes = normalize_and_validate_ts_codes(
-            symbols,
-            source="StrategyPackageSelectionArtifactService._load_reference_prices",
-            start_date=trade_date,
-            end_date=trade_date,
-        )
-        if not ts_codes:
-            return {}
-
-        def _load_reference_chunk(chunk: list[str], _chunk_index: int, correlation_id: str) -> list[tuple[Any, Any]]:
-            try:
-                with self._conn_factory() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            """
-                            SELECT ts_code, close_li
-                            FROM market.kline_daily_raw
-                            WHERE trade_date = %s
-                              AND ts_code = ANY(%s)
-                              AND close_li IS NOT NULL
-                              AND close_li > 0
-                            """,
-                            (trade_date, chunk),
-                        )
-                        return list(cur.fetchall())
-            except Exception as exc:  # noqa: BLE001
-                logger.error(
-                    "selection artifact reference price chunk failed: correlation_id=%s symbols=%s trade_date=%s error=%s",
-                    correlation_id,
-                    len(chunk),
-                    trade_date,
-                    exc,
-                )
-                raise
-
-        row_chunks = load_chunks_with_logging(
-            ts_codes=ts_codes,
-            source="SelectionArtifact.reference_price",
-            start_date=trade_date,
-            end_date=trade_date,
-            chunk_size=DEFAULT_SQL_CHUNK_SIZE,
-            loader=_load_reference_chunk,
-        )
-        rows = [row for chunk in row_chunks for row in chunk]
-        return {str(symbol): float(close_li) / 1000.0 for symbol, close_li in rows}
+        return load_reference_prices(symbols=symbols, as_of_date=trade_date, conn_factory=self._conn_factory)

@@ -199,13 +199,29 @@ def validate_qlib_month(
         _plain_chain(path)
         before = _signature(path)
         raw = path.read_bytes()
-        record(path, sha256=native.get(sha_key), size=len(raw), signature=native.get(stat_key))
-        if _signature(path) != before or hashlib.sha256(raw).hexdigest() != native.get(sha_key):
+        physical_catalog = frequency == "1min" and relative == "instruments/all.txt"
+        quote_authority = materialization.get("quote_catalog_repair", native.get("quote_catalog")) if physical_catalog else None
+        expected_hash = quote_authority.get("sha256") if isinstance(quote_authority, Mapping) else native.get(sha_key)
+        record(path, sha256=expected_hash if physical_catalog else native.get(sha_key), size=len(raw),
+               signature=list(before) if physical_catalog else native.get(stat_key))
+        if _signature(path) != before or hashlib.sha256(raw).hexdigest() != (expected_hash if physical_catalog else native.get(sha_key)):
             raise MonthlyLegacyValidationError("native month calendar/catalog bytes differ")
         source_ref = prepared["calendar_ref" if relative.startswith("calendars/") else "instruments_ref"]
+        if physical_catalog:
+            from backend.qlib_exporter.quote_catalog import build_minute_quote_catalog
+
+            physical = build_minute_quote_catalog(provider, checkpoint=checkpoint)
+            expected = {**physical.receipt(), "input_instruments_sha256": prepared["instruments_ref"]["sha256"]}
+            if quote_authority != expected or raw != physical.payload:
+                raise MonthlyLegacyValidationError("native minute physical quote catalog differs")
+            # The input sidecar retains its immutable provenance; it no longer
+            # dictates quote visibility. Values and buy eligibility are intact.
+            continue
         if source_ref.get("sha256") != native.get(sha_key) or source_ref.get("size") != len(raw):
             raise MonthlyLegacyValidationError("native month calendar/catalog sealed binding differs")
     calendar = read_calendar(provider / f"calendars/{frequency}.txt")
+    from .monthly_prev_close_repair import correction_pins
+    corrected_pins, corrected_month = correction_pins(materialization, provider=provider, cas=cas)
     month_start = cutoff.replace(day=1).isoformat()
     if calendar[-1][:10] != cutoff.isoformat():
         raise MonthlyLegacyValidationError("native month calendar cutoff differs")
@@ -258,7 +274,8 @@ def validate_qlib_month(
             expected_keys.add(key)
             item = lookup[key]
             path = provider / "features" / code / f"{field}.{frequency}.bin"
-            record(path, sha256=item.get("target_sha256"), size=item.get("target_size"), signature=item.get("target_signature"))
+            output_pin = corrected_pins.get(path, item)
+            record(path, sha256=output_pin.get("target_sha256"), size=output_pin.get("target_size"), signature=output_pin.get("target_signature"))
             before = _signature(path)
             with path.open("rb") as stream:
                 header = stream.read(4)
@@ -280,13 +297,16 @@ def validate_qlib_month(
             expected = np.full(last - first + 1, np.nan, dtype="<f4")
             with np.errstate(over="ignore", invalid="ignore"):
                 for position, row in rows.items():
-                    expected[position - first] = float(row[field])
+                    value = corrected_month.get((code, calendar[position][:10]), row[field]) if field == "prev_close" else row[field]
+                    expected[position - first] = float(value)
             if np.isinf(expected).any() or not np.array_equal(observed, expected, equal_nan=True):
                 raise MonthlyLegacyValidationError(f"native month {code}/{field} differs from frozen CSV")
             comparisons += len(rows)
         validated_rows += len(rows)
     if expected_keys != set(lookup) or validated_rows != materialization["csv"]["rows"] + materialization["indices"]["rows"]:
         raise MonthlyLegacyValidationError("native month row/feature population differs")
+    for path, item in corrected_pins.items():
+        record(path, sha256=item["target_sha256"], size=item["target_size"], signature=item["target_signature"])
     return {
         "schema_version": "aistock_monthly_native_qlib_validation_v1", "dataset": dataset,
         "status": "PASS", "validation_scope": "month_delta", "cutoff": cutoff.isoformat(),

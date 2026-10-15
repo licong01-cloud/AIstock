@@ -27,6 +27,7 @@ from backend.services.strategy_package.models import (
     SelectionScoreArtifactStatus,
     StrategyPackageManifest,
 )
+from backend.services.strategy_package.reference_prices import reference_price_components, reference_price_observations_from_rows
 from backend.services.strategy_package.selection_artifact import (
     SelectionScoreArtifact,
     SELECTION_SCORE_ARTIFACT_CONTRACT_V2,
@@ -666,6 +667,7 @@ class MultiAlphaLivePredictionProvider:
                                 for row in rows
                                 if row.get("reference_price") is not None
                             },
+                            observations=reference_price_observations_from_rows(rows),
                         )
                     ]
                     if include_reference_price
@@ -1025,6 +1027,9 @@ class MultiAlphaLivePredictionProvider:
                 }
                 for leg_id in leg_ids
             }
+            component_scores.update(reference_price_components(
+                reference_prices, symbol, trade_date, required=include_reference_price,
+            ))
             rows.append(
                 {
                     "symbol": symbol,
@@ -1044,6 +1049,10 @@ class MultiAlphaLivePredictionProvider:
                     "trade_date": trade_date.isoformat(),
                     "missing_price_count": len(missing_prices),
                     "missing_price_examples": missing_prices[:20],
+                    "reference_price_availability": {
+                        symbol: reference_price_components(reference_prices, symbol, trade_date, required=True)
+                        for symbol in missing_prices[:20]
+                    },
                 },
             )
         return rows
