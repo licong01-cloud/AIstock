@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Callable, Iterator, Protocol
 
 from backend.db.pg_pool import get_conn
@@ -130,8 +130,17 @@ class TradabilityFilter:
         industry_blacklist: list[str] | None = None,
         allow_empty: bool = False,
         exhaustive_evidence: bool = False,
+        industry_trade_date: date | None = None,
     ) -> TradabilityResult:
         """Run the current filter once and preserve its exact in-memory trace."""
+        # Eligibility remains labelled D. Only the PIT industry observation may
+        # be explicitly bounded by an earlier C; old direct calls stay unchanged.
+        if industry_trade_date is not None and (
+            not isinstance(industry_trade_date, date) or isinstance(industry_trade_date, datetime)
+            or industry_trade_date > trade_date
+        ):
+            raise RuntimeConfigInvalidError("industry observation date must not exceed eligibility trade_date")
+        industry_date = industry_trade_date if industry_trade_date is not None else trade_date
         if top_k <= 0:
             raise RuntimeConfigInvalidError(
                 "tradability filter requires positive top_k",
@@ -167,6 +176,7 @@ class TradabilityFilter:
                 trade_date=trade_date,
                 package_id=package_id,
                 manifest_sha256=manifest_sha256,
+                industry_trade_date=industry_trade_date,
             )
 
         suspended = (
@@ -181,7 +191,7 @@ class TradabilityFilter:
         if normalized_industry_blacklist:
             industry_map = self.industry_provider.get_industries(
                 [item.symbol for item in ordered],
-                trade_date,
+                industry_date,
             )
         selected: list[SelectionCandidate] = []
         excluded: list[SelectionExclusion] = []
@@ -234,6 +244,7 @@ class TradabilityFilter:
                             "symbol": candidate.symbol,
                             "raw_rank": candidate.rank,
                             "industry_provider": type(self.industry_provider).__name__,
+                            "industry_trade_date": industry_date.isoformat(),
                             "required_component_score_keys": [
                                 "industry",
                                 "sector",
@@ -262,6 +273,7 @@ class TradabilityFilter:
                                 "industry_blacklist": normalized_industry_blacklist,
                                 "matched_blacklist": matched_blacklist,
                                 "matched_level": matched_level,
+                                **({"industry_trade_date": industry_date.isoformat()} if industry_trade_date is not None else {}),
                                 **industry.to_context(),
                             },
                         )
@@ -282,6 +294,7 @@ class TradabilityFilter:
                     trade_date=trade_date,
                     package_id=package_id,
                     manifest_sha256=manifest_sha256,
+                    industry_trade_date=industry_trade_date,
                 )
             if reasons == ["suspended_by_suspend_d"]:
                 raise DataUnavailableError(
@@ -322,6 +335,7 @@ class TradabilityFilter:
             trade_date=trade_date,
             package_id=package_id,
             manifest_sha256=manifest_sha256,
+            industry_trade_date=industry_trade_date,
         )
 
     @staticmethod
@@ -399,6 +413,7 @@ class TradabilityFilter:
         trade_date: date,
         package_id: str,
         manifest_sha256: str,
+        industry_trade_date: date | None = None,
     ) -> TradabilityResult:
         if inspected_count != len(candidates) + len(exclusions):
             raise RuntimeConfigInvalidError(
@@ -422,6 +437,8 @@ class TradabilityFilter:
             "inspected_count": inspected_count,
             "unprocessed_tail_count": candidate_pool_count - inspected_count,
         }
+        if industry_trade_date is not None:
+            universe_metadata["industry_trade_date"] = industry_trade_date.isoformat()
         receipt = build_stage_receipt(
             stage=CandidateStageName.SELECTION_EFFECTIVE,
             status=StageReceiptStatus.COMPLETE,

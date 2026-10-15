@@ -1,5 +1,5 @@
 schema_version: aistock_runtime_target_catalog_v1
-updated_at: "2026-10-09"
+updated_at: "2026-10-15"
 policy:
   backend_restart_owner: user
   process_control_default: forbidden_without_explicit_target_authorization
@@ -29,8 +29,10 @@ non_runtime_source_paths:
   - backend/services/dataset_release/canonical_pit_activation_envelope.py
   - backend/services/dataset_release/canonical_pit_migration.py
   - backend/services/event_signal/st_announcement_adapter.py
-  # scripts/factor_research.py -> ResearchService -> runner; no server consumer.
+  # Research CLI closure: repository/service/runner/salvage; no server consumer.
   - backend/services/factor_research/comparison.py
+  - backend/services/factor_research/memory.py
+  - backend/services/factor_research/full_evaluation.py
   - backend/services/hmm_risk/rotation_l1_gbdt.py
   - backend/services/hmm_risk/rotation_l1_input_bundle.py
   - backend/services/hmm_risk/stock_fact_repository.py

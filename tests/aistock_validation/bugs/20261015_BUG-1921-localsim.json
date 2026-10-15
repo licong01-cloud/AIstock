@@ -1,0 +1,335 @@
+{
+  "actual": "严格错误路径直接抛内部包装异常，父回放 failure_code=_BindingRetryAttemptError；已有 LSTM 01-21 原始 DataUnavailableError 仅留在日运行失败记录。",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json",
+    "backend/services/simulation_runtime/localsim_replay_runtime.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1921",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-15T09:40:31.971126Z",
+  "description": "LocalSIM 历史回放丢失数据失败合同：严格模式跳过失败记录并泄漏内部包装异常；日适配器把已持久化的数据缺失或合法退避转为状态错误；固定历史 as-of 还冻结重试期限。修复限定在 LocalSIM 错误分类、原生重试收尾及控制时钟，不更改评分、订单、持仓、资金或估值政策。",
+  "design_compliance_001": [
+    {
+      "clause": "禁止简化交付",
+      "evidence": "45 定向回归、baseline 4 项失败及 source-validation receipt。",
+      "implementation": "仅声明本 BUG 错误及重试合同修复；既有终态恢复、旧 C 计划修订、停牌估值明确保留为 gap。",
+      "result": "PASS_FOR_BOUNDED_BUG_SCOPE"
+    },
+    {
+      "clause": "禁止静默错误",
+      "evidence": "strict 4 情形和 native returned failure 7 情形，包含配置、终态、UNKNOWN、非法退避。",
+      "implementation": "失败证据持久化后抛出原异常；只有精确 DataUnavailable/退避合同可重试；UNKNOWN 等仍阻塞。",
+      "result": "PASS"
+    },
+    {
+      "clause": "禁止改变业务逻辑",
+      "evidence": "到期重试时 trade_date/evidence/plan 原样保留；原生真实 broker 市场残量回归通过。",
+      "implementation": "使用既有 DataUnavailable 分类和既有重试事务；只修控制时间，不改 C/D/T 市场截止、评分、计划或经济状态。",
+      "result": "PASS"
+    },
+    {
+      "clause": "禁止私增门禁审批",
+      "evidence": "源码差异、runbook 和既有 catalog target backend-main。",
+      "implementation": "使用现有用户重启和 CI 流程；UNKNOWN 阻塞保留既有安全合同；未新增业务审批或共享请求参数。",
+      "result": "PASS"
+    }
+  ],
+  "diagnosis": {
+    "advisory_followup": "PR #6105 已覆盖共享 D 日资格过滤；本轮无需向荐股窗口新增同一修复请求。",
+    "code_intelligence_scoped_miss": "CodeGraph 关联旧 qmt binding 入口，UA 为 stale_ancestor；已用指定 scheduler.run_once 的异常捕获块及原生 retry 记录方法完成窄范围核查。",
+    "operational_retry_clock": "只在 LocalSIM 已完成历史日且 market as-of 仍绑定 D 时，使用当前运行时间计算重试租约和退避；市场与选股 as-of、交易日、原始证据和计划均保持冻结。",
+    "remaining_owner_work": [
+      "LocalSIM 既有终态的受控恢复及幂等验收",
+      "LocalSIM 失败旧 C 过滤计划的原生修订合同",
+      "LocalSIM 合法停牌且无权威 pre_close 的持仓估值合同；保持 BLOCKED，不推算补值"
+    ],
+    "returned_failure_contract": "日适配器还会把 FAILED_RETRYABLE 中原生 DataUnavailableError / 退避结果统一转为状态错误；修复时保留精确类型和原因，未知副作用或配置等非数据失败保持 fail-closed。",
+    "root_cause": "LocalSIM 历史日执行器使用 raise_on_error=True；调度器在内部重试异常解包和失败记录之前返回异常，原始类型与重试 claim 收尾丢失。",
+    "scope": "仅修改 LocalSIM 严格错误传播路径；其他 broker 的严格模式合同保持不变。既有 FAILED_TERMINAL 不自动恢复；不改变评分、旧计划、持仓估值、交易或账本。"
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261015-23f5a15ad4c3",
+      "timestamp": "2026-10-15T09:40:31.971034Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/issues/6102#issuecomment-6187830997",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1911-localsim-native-contract-verification-20261015-r2.json",
+    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-source-validation-receipt-r2.json",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-final-matrix-r3.xml",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-ci-failed-nodes-r1.xml",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1921-ci-38719303447-job-r1.log"
+  ],
+  "expected": "严格错误路径与普通错误路径使用同一原生失败记录和重试收尾，再原样抛出原始异常供父回放按既有合同分类；副作用 UNKNOWN 与真缺价仍阻塞，已有终态不自动恢复。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261015_BUG-1921-localsim.json",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py"
+    ]
+  },
+  "first_seen_at": "2026-10-15T09:40:31.971126Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fix_summary": "完成 LocalSIM 已取得重试声明路径的原生失败收尾并保留原始异常；日适配器保留可重试数据失败及合法退避；历史日重试使用运行控制时间。严格预检不新建日记录，其他恢复时钟保持原有取值。UNKNOWN、配置错误、终态失败与非法退避仍阻塞，既有 FAILED_TERMINAL 不自动恢复。",
+  "fixed_at": null,
+  "github_issue_number": 6125,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6125",
+  "last_seen_at": "2026-10-15T09:40:31.971126Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2"
+  ],
+  "review_rounds": [
+    {
+      "finding": "严格抛出及返回错误两条路径丢失数据错误类型",
+      "result": "已修复，baseline 4 条回归与新源码验证对应。",
+      "round": 1
+    },
+    {
+      "finding": "UNKNOWN/配置/终态不得被数据重试分类放宽",
+      "result": "已加入阻塞保护及针对性回归。",
+      "round": 2
+    },
+    {
+      "finding": "固定历史 as-of 使重试期限无法到达",
+      "result": "仅分离 LocalSIM 历史重试控制时钟，市场时间冻结；到期后原日再次重试验证通过。",
+      "round": 3
+    },
+    {
+      "finding": "完整 simulation_core_l2 CI 发现严格预检新建日记录及非历史日恢复额外读取时钟两项兼容性回归。",
+      "result": "已收窄到 LocalSIM 重试包装异常及显式历史日时钟路径；2 个 CI 失败节点复验通过，47 项相关矩阵全部通过；完整矩阵由新 HEAD 的 CI 重新验收。",
+      "round": 4
+    }
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-source-validation-receipt-r2.json -> independent process loaded scheduler/native day executor from task checkout; 47 targeted contracts and compile passed; original baseline reproduced 4 failures; two CI regressions corrected; no production replay/service/database control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM 历史回放严格错误路径泄漏重试包装异常并跳过失败收尾",
+  "trigger_condition": {
+    "fingerprint": "23f5a15ad4c363e763580b6f",
+    "source_event_id": "FE-20261015-23f5a15ad4c3"
+  },
+  "validation_receipts": [
+    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-source-validation-receipt-r1.json",
+    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-final-matrix-r2.xml",
+    "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1921-baseline-red.xml"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

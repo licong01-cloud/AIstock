@@ -54,6 +54,7 @@ ZERO_ROW_VALID_DATASETS = {
 # audit_backed_data_health._status_from_audit validation.
 DAILY_BASIC_COVERAGE_RECEIPT_SCHEMA = "daily_basic_required_field_coverage_v1"
 DAILY_BASIC_REQUIRED_FIELD = "turnover_rate_f"
+DAILY_BASIC_REQUIRED_FIELDS = ("turnover_rate", "turnover_rate_f", "volume_ratio", "total_mv", "circ_mv")
 DAILY_BASIC_REQUIRED_RATIO = 0.95
 
 
@@ -97,6 +98,14 @@ def _daily_basic_required_field_coverage_receipt(
         if _is_finite_number(row.get(DAILY_BASIC_REQUIRED_FIELD))
     )
     ratio = finite_count / row_count if row_count > 0 else 0.0
+    # Same finite-field set as the monthly frozen-source contract. Keep the
+    # legacy single-field receipt for existing health readers, but retry if
+    # any mandatory column is late; nullable valuations are excluded.
+    complete_rows = sum(
+        all(_is_finite_number(row.get(field)) for field in DAILY_BASIC_REQUIRED_FIELDS)
+        and all(float(row[field]) > 0 for field in ("total_mv", "circ_mv"))
+        for row in rows
+    )
     return {
         "schema_version": DAILY_BASIC_COVERAGE_RECEIPT_SCHEMA,
         "field": DAILY_BASIC_REQUIRED_FIELD,
@@ -104,6 +113,8 @@ def _daily_basic_required_field_coverage_receipt(
         "row_count": row_count,
         "ratio": ratio,
         "required_ratio": DAILY_BASIC_REQUIRED_RATIO,
+        "required_fields": list(DAILY_BASIC_REQUIRED_FIELDS),
+        "required_fields_ratio": complete_rows / row_count if row_count else 0.0,
         # Batch-local observations, not new completeness thresholds. Nullable
         # valuations may legitimately be NULL; preserve and expose that fact
         # instead of hiding all columns behind a row-count success receipt.
@@ -1396,9 +1407,18 @@ class TushareSyncEngine:
                     # the freshness gate can prove turnover_rate_f coverage
                     # instead of failing closed with
                     # required_field_coverage_unproven.
-                    audit_metadata["required_field_coverage"] = (
-                        _daily_basic_required_field_coverage_receipt(rows)
-                    )
+                    coverage = _daily_basic_required_field_coverage_receipt(rows)
+                    audit_metadata["required_field_coverage"] = coverage
+                    # The existing mandatory-field contract must also drive
+                    # the durable retry queue. A receipt alone leaves a late
+                    # field falsely reconciled after the rolling tail expires.
+                    # Nullable valuation fields have no new threshold here.
+                    if (coverage["required_fields_ratio"] < coverage["required_ratio"]
+                            and audit_quality["quality_status"] in {"ok", "empty_valid"}):
+                        audit_quality.update(
+                            quality_status="low_coverage",
+                            failure_category="required_field_coverage_below_threshold",
+                        )
                 if spec.name == "margin_detail" and rows:
                     # Independently bind the validated provider response, not a
                     # subsequent database COUNT or the number written by upsert.

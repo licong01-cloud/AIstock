@@ -204,7 +204,7 @@ def test_all_routes_require_dataset_release_operator(tmp_path: Path) -> None:
         for route in app.routes
         if isinstance(route, APIRoute) and route.path.startswith("/api/v1/qlib/monthly-releases")
     ]
-    assert len(routes) == 13
+    assert len(routes) == 14
     for route in routes:
         dependencies = {dependency.call for dependency in route.dependant.dependencies}
         assert require_dataset_release_operator in dependencies, route.path
@@ -226,6 +226,22 @@ def test_history_binding_route_is_authenticated_and_cannot_accept_sql_or_activat
     response = client.post(path, json={})
     assert response.status_code == 200 and response.json()["data"]["status"] == "BOUND"
     assert calls == [(operation_id, "dataset-operator:test")]
+
+
+def test_prev_close_binding_is_preparation_only_and_forwards_exact_inputs(tmp_path):
+    client, _, app = _client(tmp_path)
+    calls = []
+    class Service:
+        def bind_prev_close_repairs(self, operation_id, *, inputs, principal):
+            calls.append((operation_id, inputs, principal))
+            return {"status": "BOUND"}
+    app.dependency_overrides[api.get_monthly_release_service] = lambda: Service()
+    operation = "dmr_" + "a" * 32
+    body = {"schema_version": "aistock_monthly_repair_inputs_request_v1", "inputs": {"plan_sha256": "a" * 64}}
+    assert client.post(f"/api/v1/qlib/monthly-releases/{operation}/prev-close-repairs", json={**body, "activate": True}).status_code == 422
+    assert calls == []
+    assert client.post(f"/api/v1/qlib/monthly-releases/{operation}/prev-close-repairs", json=body).status_code == 200
+    assert calls == [(operation, body["inputs"], "dataset-operator:test")]
 
 
 def test_repair_binding_route_only_passes_authenticated_preparation_command(tmp_path):

@@ -2808,6 +2808,8 @@ def build_runtime_contract(
         "backend_restart_owner": "user",
         "target_id": target_id,
         "target_ids": target_ids,
+        # Diagnostic only: excluded from runtime receipt digest and gate decisions.
+        "inferred_runtime_files": list(inferred.get("runtime_files") or []),
         "catalog_ref": catalog_ref,
         "operator_runbook_ref": (target or {}).get("operator_runbook_ref"),
         "expected_identity_ref": (target or {}).get("expected_identity_ref"),
@@ -8539,6 +8541,7 @@ def build_task_card(
             runtime_contract,
             "schema_version",
             "runtime_impact",
+            "inferred_runtime_files",
             "backend_restart_required",
             "backend_restart_owner",
             "target_id",
@@ -8634,6 +8637,11 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- backend_restart_required: `{str(bool(runtime_contract.get('backend_restart_required'))).lower()}`",
         f"- backend_restart_owner: `{runtime_contract.get('backend_restart_owner') or 'user'}`",
         f"- target_id: `{runtime_contract.get('target_id') or 'none'}`",
+        *[f"- runtime_source: `{path}`" for path in (runtime_contract.get("inferred_runtime_files") or [])[:10]],
+        *([f"- runtime_source_count: `{len(runtime_contract['inferred_runtime_files'])}` (at most 10 paths shown; full list in task-card.json)"]
+          if len(runtime_contract.get("inferred_runtime_files") or []) > 10 else []),
+        *(["- source_role_review: inferred source attribution only; suspected offline tools need call-closure review, not health/HTTP-200 substitution or automatic exemption."]
+          if runtime_contract.get("inferred_runtime_files") else []),
         f"- catalog_ref: `{runtime_contract.get('catalog_ref') or 'none'}`",
         f"- operator_runbook_ref: `{runtime_contract.get('operator_runbook_ref') or 'none'}`",
         f"- post_restart_effective_gate: `{runtime_contract.get('post_restart_effective_gate') or 'unknown'}`",

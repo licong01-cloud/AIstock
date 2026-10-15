@@ -7,11 +7,21 @@ import pandas as pd
 import pytest
 
 from backend.services.factor_research.full_evaluation import (
+    build_standard_windows,
     compute_correlation_views,
     load_reference_values,
     validate_full_evaluation_spec,
 )
 from backend.services.factor_research.models import ResearchError
+
+
+def test_annual_views_cover_actual_history_without_expanding_recent_views():
+    dates = pd.to_datetime(["2018-08-01", "2019-01-02", "2023-12-29", "2024-01-02", "2026-08-31"])
+    windows = build_standard_windows(dates, signal_start="2018-08-01", signal_end="2026-08-31")
+    assert windows["year_2018"]["start"] == "2018-08-01"
+    assert windows["year_2019"]["end"] == "2019-01-02" and "year_2020" not in windows
+    assert windows["year_2023"]["start"] == "2023-12-29"
+    assert windows["from_2024"]["start"] == "2024-01-02" and "month_2018_08" not in windows
 
 
 def values(path, column, dates, symbols, *, parquet=False):

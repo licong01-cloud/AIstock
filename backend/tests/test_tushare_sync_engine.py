@@ -1640,7 +1640,9 @@ def test_chip_and_margin_specs_carry_min_expected_rows():
     assert SW_DAILY.min_expected_rows == 100
 
 
-def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monkeypatch):
+@pytest.mark.parametrize("finite_count", [0, 94, 95, 100])
+@pytest.mark.parametrize("missing_field", ["turnover_rate", "turnover_rate_f", "volume_ratio", "total_mv", "circ_mv"])
+def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monkeypatch, finite_count, missing_field):
     from backend.services.tushare_dataset_specs import DAILY_BASIC
 
     trade_date = dt.date(2026, 9, 8)
@@ -1655,9 +1657,9 @@ def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monk
             col: ("20260908" if col == "trade_date" else f"{col}-{index}")
             for col in DAILY_BASIC.columns
         }
-        # 5 rows with a null turnover_rate_f — ratio 95/100 == required ratio.
-        # Set the sentinel AFTER the comprehension so it is not overwritten.
-        row["turnover_rate_f"] = 1.5 if index >= 5 else None
+        row.update(turnover_rate=1.0, turnover_rate_f=1.0, volume_ratio=1.0, total_mv=1.0, circ_mv=1.0)
+        row[missing_field] = 1.5 if index < finite_count else None
+        row["dv_ratio"] = row["dv_ttm"] = None  # Legitimately nullable, not mandatory.
         rows.append(row)
 
     monkeypatch.setattr(engine, "_fetch_from_tushare", lambda _spec, _params: rows)
@@ -1665,19 +1667,25 @@ def test_daily_basic_by_date_audit_includes_required_field_coverage_receipt(monk
     monkeypatch.setattr(engine, "_iter_sync_dates", lambda _conn, _spec, start, end: [trade_date])
     monkeypatch.setattr(engine, "_update_progress", lambda *args, **kwargs: None)
     monkeypatch.setattr(sync_engine.time, "sleep", lambda seconds: None)
+    attempts = []
+    monkeypatch.setattr(engine, "_record_sync_attempt", lambda _target, status, **_kwargs: attempts.append(status))
 
     result = engine._sync_by_date(conn, DAILY_BASIC, trade_date, trade_date, uuid.uuid4())
 
-    assert result.failed_batches == 0
+    complete = finite_count >= 95
+    assert result.failed_batches == (0 if complete else 1)
+    assert attempts == ["reconciled" if complete else "retry"]
     assert len(audit.success_calls) == 1
     call = audit.success_calls[0]
-    assert call["quality_status"] == "ok"
+    assert call["quality_status"] == ("ok" if complete else "low_coverage")
     coverage = call["metadata"]["required_field_coverage"]
     assert coverage["schema_version"] == "daily_basic_required_field_coverage_v1"
     assert coverage["field"] == "turnover_rate_f"
     assert coverage["row_count"] == 100
-    assert coverage["finite_count"] == 95
-    assert coverage["ratio"] == pytest.approx(0.95)
+    legacy_count = finite_count if missing_field == "turnover_rate_f" else 100
+    assert coverage["finite_count"] == legacy_count
+    assert coverage["ratio"] == pytest.approx(legacy_count / 100)
+    assert coverage["required_fields_ratio"] == pytest.approx(finite_count / 100)
     assert coverage["required_ratio"] == 0.95
 
 

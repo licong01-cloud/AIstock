@@ -881,14 +881,21 @@ def test_sector_entry_semantic_requires_explicit_unambiguous_subject(query):
     assert _sector_entry_semantic(_sector_entry_payload(), query)["verdict"] == "failed"
 
 
-def test_offline_factor_comparison_keeps_online_and_unknown_sources_fail_closed():
-    files = ["backend/services/factor_research/comparison.py", "backend/tests/factor_research/test_comparison.py",
-             "docs/analysis/factor-comparison.md", "tests/aistock_validation/bugs/BUG-1755.json"]
+@pytest.mark.parametrize("name", ["comparison", "memory", "full_evaluation"])
+def test_offline_factor_research_keeps_online_and_unknown_sources_fail_closed(name):
+    test_name = "assistance" if name == "memory" else name
+    files = [f"backend/services/factor_research/{name}.py", f"backend/tests/factor_research/test_{test_name}.py",
+             "docs/analysis/factor-comparison.md", "tests/aistock_validation/bugs/20261015_BUG-1914-issue.json"]
     offline = workflow._classify_runtime_impact(files)
     assert (offline["runtime_impact"], offline["target_ids"]) == ("none", [])
     for online in ("backend/routers/factor_metrics.py", "backend/services/factor_research/not_registered.py"):
         mixed = workflow._classify_runtime_impact([*files, online])
         assert (mixed["runtime_impact"], mixed["target_ids"]) == ("backend", ["backend-main"])
+        contract = workflow.build_runtime_contract(record={}, changed_files=[*files, online])
+        assert contract["inferred_runtime_files"] == [online] and contract["pre_pr_ready"] is False
+        assert f"runtime_source: `{online}`" in workflow.render_task_card_markdown({"runtime_contract": contract})
+        original = {key: value for key, value in contract.items() if key != "inferred_runtime_files"}
+        assert workflow._runtime_contract_digest(contract) == workflow._runtime_contract_digest(original)
 
 
 def test_sector_entry_semantic_preserves_nonempty_calculation_and_rejects_tampered_hash():
@@ -901,13 +908,22 @@ def test_sector_entry_semantic_preserves_nonempty_calculation_and_rejects_tamper
     assert _business_semantic(url, payload, "e" * 64)["verdict"] == "failed"
 
 
-def test_factor_comparison_provisional_backend_contract_reconciles_to_offline():
+@pytest.mark.parametrize("name", ["comparison", "memory", "full_evaluation"])
+def test_factor_research_provisional_backend_contract_reconciles_to_offline(name):
     result = workflow.build_runtime_contract(record={"runtime_contract": {
         "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "backend",
         "target_ids": ["backend-main"], "provisional": True, "inference_basis": "planned_scope",
-    }}, changed_files=["backend/services/factor_research/comparison.py"])
+    }}, changed_files=[f"backend/services/factor_research/{name}.py"])
     assert result["runtime_impact"] == "none" and result["target_ids"] == []
     assert result["pre_pr_ready"] is True and result["backend_restart_required"] is False
+    assert result["inferred_runtime_files"] == []
+
+
+def test_runtime_task_card_bounds_source_output_without_losing_attribution():
+    contract = workflow.build_runtime_contract(record={}, changed_files=[f"backend/services/new_{i:02}.py" for i in range(12)])
+    text = workflow.render_task_card_markdown({"runtime_contract": contract})
+    assert len(contract["inferred_runtime_files"]) == 12 and text.count("- runtime_source:") == 10
+    assert "runtime_source_count: `12`" in text and "new_11.py" not in text
 
 
 def _entry_price_payload(configured=False):

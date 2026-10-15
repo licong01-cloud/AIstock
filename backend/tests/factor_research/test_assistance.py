@@ -189,17 +189,18 @@ def test_drift_duplicates_and_script_link(tmp_path, monkeypatch):
     assert inspect_proposal(proposal, request)["inspection_status"] == "requires_revision"
 
 
-def test_memory_unknown_conflict_literal_paging_and_old_context():
+@pytest.mark.parametrize("horizon", ["20d", "40d", "60d", "120d", "240d"])
+def test_memory_unknown_conflict_literal_paging_and_old_context(horizon):
     from backend.services.factor_research.memory import search_rows, validate_query
 
     request = dict(schema_version="factor_research_memory_query_v1", query=dict(problem="反转", terms=["FLOW", "flow", "%_"]),
-                   filters={"horizons": ["20d"]}, include_unknown=True, limit=2)
+                   filters={"horizons": [horizon]}, include_unknown=True, limit=2)
     rows = [dict(task_id=str(uuid4()), record_id=str(uuid4()), revision=1, summary="flow %_",
                  note=note, contexts=contexts) for note, contexts in (
-                     ({"observation": "原观察", "conditions": {"horizons": ["20d"]}}, []),
+                     ({"observation": "原观察", "conditions": {"horizons": [horizon]}}, []),
                      (None, []), (42, []),
                      ({"conditions": {"horizons": ["1d"]}}, []),
-                     ({"conditions": {"horizons": ["20d"]}}, [{"horizons": ["1d"]}]))]
+                     ({"conditions": {"horizons": [horizon]}}, [{"horizons": ["1d"]}]))]
     query_value = validate_query(request)
     found = search_rows(iter(rows), query_value, "dev")
     assert found["matched_count"] == 4 and found["unknown_filter_count"] == 3

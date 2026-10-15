@@ -44,6 +44,15 @@ def test_bind_quality_only_uses_existing_operator_api(tmp_path, monkeypatch):
     assert calls[0]["body"]["inputs"] == json.loads(path.read_text())
 
 
+def test_bind_prev_close_uses_single_existing_operator_api_without_resume(tmp_path, monkeypatch):
+    calls = _capture(monkeypatch)
+    path = tmp_path / "correction.json"
+    path.write_text(json.dumps({"plan_path": "approved-plan", "plan_sha256": "a" * 64}))
+    assert cli.main(["bind-prev-close", "--operation-id", OPERATION_ID, "--inputs", str(path.absolute())]) == 0
+    assert len(calls) == 1 and calls[0]["suffix"] == f"/{OPERATION_ID}/prev-close-repairs"
+    assert calls[0]["body"]["inputs"] == json.loads(path.read_text())
+
+
 def test_plan_calls_the_single_backend_api_without_activation(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
