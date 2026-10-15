@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-10-15T07:37:13.878894Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "15e32b34d347c4d495d87e14c2ef4eef636721e4",
+  "fixed_at": "2026-10-15T08:00:51Z",
   "github_issue_number": 6110,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6110",
   "last_seen_at": "2026-10-15T07:37:13.878894Z",
@@ -106,6 +106,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6112",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -131,6 +132,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -142,7 +144,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1916",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "db8d996ea6f7a402",
+    "recorded_at": "2026-10-15T08:01:37.376472Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ee50c475b7e6e468be39f30c678100f67f1559c0",
+    "source_merge_commit": "15e32b34d347c4d495d87e14c2ef4eef636721e4",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6112",
+    "validation_evidence": [
+      "pytest daily basic retry tests -> 108 passed"
+    ],
+    "validation_evidence_digest": "c34d784b6c5f574c191731e172fa48500c59c02b853ebf3aa106263f1d3af55d"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -151,6 +174,9 @@
     "fingerprint": "7fbea69417e25183dca85b29",
     "source_event_id": "FE-20261015-7fbea69417e2"
   },
+  "validation_evidence": [
+    "pytest daily basic retry tests -> 108 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
