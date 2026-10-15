@@ -891,6 +891,11 @@ def test_offline_factor_research_keeps_online_and_unknown_sources_fail_closed(na
     for online in ("backend/routers/factor_metrics.py", "backend/services/factor_research/not_registered.py"):
         mixed = workflow._classify_runtime_impact([*files, online])
         assert (mixed["runtime_impact"], mixed["target_ids"]) == ("backend", ["backend-main"])
+        contract = workflow.build_runtime_contract(record={}, changed_files=[*files, online])
+        assert contract["inferred_runtime_files"] == [online] and contract["pre_pr_ready"] is False
+        assert f"runtime_source: `{online}`" in workflow.render_task_card_markdown({"runtime_contract": contract})
+        original = {key: value for key, value in contract.items() if key != "inferred_runtime_files"}
+        assert workflow._runtime_contract_digest(contract) == workflow._runtime_contract_digest(original)
 
 
 def test_sector_entry_semantic_preserves_nonempty_calculation_and_rejects_tampered_hash():
@@ -911,6 +916,14 @@ def test_factor_research_provisional_backend_contract_reconciles_to_offline(name
     }}, changed_files=[f"backend/services/factor_research/{name}.py"])
     assert result["runtime_impact"] == "none" and result["target_ids"] == []
     assert result["pre_pr_ready"] is True and result["backend_restart_required"] is False
+    assert result["inferred_runtime_files"] == []
+
+
+def test_runtime_task_card_bounds_source_output_without_losing_attribution():
+    contract = workflow.build_runtime_contract(record={}, changed_files=[f"backend/services/new_{i:02}.py" for i in range(12)])
+    text = workflow.render_task_card_markdown({"runtime_contract": contract})
+    assert len(contract["inferred_runtime_files"]) == 12 and text.count("- runtime_source:") == 10
+    assert "runtime_source_count: `12`" in text and "new_11.py" not in text
 
 
 def _entry_price_payload(configured=False):
