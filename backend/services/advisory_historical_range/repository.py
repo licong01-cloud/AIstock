@@ -28,6 +28,7 @@ from backend.services.advisory_historical_range.models import (
     REASON_DAY_PLAN_CONFLICT,
     REASON_IDENTITY_CONFLICT,
     REASON_IDEMPOTENCY_CONFLICT,
+    REASON_OPERATION_INFLIGHT_CONFLICT,
     REASON_REPOSITORY_CONFLICT,
     REASON_ROW_VERSION_CONFLICT,
     HistoricalRangeArtifactBindingsV1,
@@ -739,6 +740,14 @@ class PostgresHistoricalRangeRepository:
     ) -> tuple[dict[str, Any], bool]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if request.operation_type is HistoricalRangeOperationType.RESUME:
+                    # Serialize identity admission, not execution. A lease expiry
+                    # makes the SAME operation reclaimable; it does not remove
+                    # the database's one-RUNNING-per-type invariant.
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (f"advisory_historical_range_resume:{request.batch_id}",),
+                    )
                 cur.execute(
                     """
                     SELECT * FROM app.advisory_historical_range_operation
@@ -756,7 +765,14 @@ class PostgresHistoricalRangeRepository:
                 row = cur.fetchone()
                 if row is not None:
                     self._assert_operation_matches(dict(row), request)
+                    if (
+                        request.operation_type is HistoricalRangeOperationType.RESUME
+                        and row["status"] not in {"COMPLETED", "FAILED"}
+                    ):
+                        self._require_no_inflight_resume(cur=cur, request=request)
                     return dict(row), True
+                if request.operation_type is HistoricalRangeOperationType.RESUME:
+                    self._require_no_inflight_resume(cur=cur, request=request)
                 inserted = self._insert_operation(cur=cur, request=request)
                 cur.execute(
                     """
@@ -777,6 +793,44 @@ class PostgresHistoricalRangeRepository:
                 created_row = dict(created)
                 self._assert_operation_matches(created_row, request)
                 return created_row, not inserted
+
+    @staticmethod
+    def _require_no_inflight_resume(*, cur: Any, request: HistoricalRangeOperationRequestV1) -> None:
+        cur.execute(
+            """
+            SELECT operation.*,
+                   (operation.status = 'RUNNING'
+                    AND operation.lease_expires_at <= clock_timestamp()) AS lease_expired
+            FROM app.advisory_historical_range_operation operation
+            WHERE operation.batch_id = %s AND operation.operation_type = %s
+              AND operation.status IN ('QUEUED', 'RUNNING')
+            ORDER BY CASE WHEN operation.status = 'RUNNING' THEN 0 ELSE 1 END,
+                     operation.created_at, operation.operation_id
+            LIMIT 1
+            """,
+            (request.batch_id, request.operation_type.value),
+        )
+        existing = cur.fetchone()
+        if existing is None or str(existing["operation_id"]) == request.operation_id:
+            return
+        recovery_action = (
+            "EXACT_RETRY"
+            if existing["status"] == "QUEUED" or existing["lease_expired"] is True
+            else "WAIT"
+        )
+        raise HistoricalRangeContractError(
+            REASON_OPERATION_INFLIGHT_CONFLICT,
+            "resume already has an unfinished operation; preserve its key and payload when retrying",
+            context={
+                "batch_id": request.batch_id,
+                "existing_operation_id": str(existing["operation_id"]),
+                "operation_idempotency_key": str(existing["operation_idempotency_key"]),
+                "expected_row_version": int(existing["expected_row_version"]),
+                "status": str(existing["status"]),
+                "lease_expired": existing["lease_expired"],
+                "recovery_action": recovery_action,
+            },
+        )
 
     def load_execution_operation(self, *, operation_id: str) -> HistoricalRangeExecutionOperationV1:
         with self._conn_factory() as conn:
