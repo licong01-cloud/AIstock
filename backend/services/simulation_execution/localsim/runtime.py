@@ -170,6 +170,7 @@ class LocalSimBackend(BrokerBackend):
         initial_available_cash: float | None = None,
         initial_positions: Mapping[str, PositionLot] | None = None,
         scheduler_as_of_time: datetime | None = None,
+        historical_suspension_provider: Any | None = None,
     ) -> None:
         if not portfolio_id:
             raise ValueError("portfolio_id is required")
@@ -189,6 +190,16 @@ class LocalSimBackend(BrokerBackend):
         )
         self._data_source = data_source
         self._market_data_provider = market_data_provider or SimulationMinuteMarketDataProvider()
+        from .suspension import LocalSimHistoricalSuspensionProvider
+
+        self._historical_suspension_provider = historical_suspension_provider
+        if self._data_source == MinuteDataSource.DB_HISTORICAL and self._historical_suspension_provider is None and isinstance(
+            self._market_data_provider, SimulationMinuteMarketDataProvider,
+        ):
+            self._historical_suspension_provider = LocalSimHistoricalSuspensionProvider(
+                conn_factory=self._market_data_provider.conn_factory,
+            )
+        self._historical_suspension_statuses: dict[str, dict[str, Any]] = {}
         self._oms = oms or OMS()
         self._execution_engine = execution_engine or MinuteExecutionEngine(oms=self._oms)
         self._ledger = InMemoryLedger(
@@ -726,6 +737,20 @@ class LocalSimBackend(BrokerBackend):
     def bind_execution_plan(self, *, plan: Any, as_of_time: datetime) -> None:
         """Bind the immutable scheduler cursor used to prevent look-ahead fills."""
         if self._data_source != MinuteDataSource.TDX_REALTIME:
+            from .suspension import REFERENCE_KEY, SUSPENSION_KEY, validate_suspension_fact, validate_suspension_reference
+
+            statuses = {}
+            for decision in getattr(plan, "trading_rule_decisions", ()):
+                status = decision.price_limit_rule.get("pre_trade_tradability")
+                if isinstance(status, dict) and REFERENCE_KEY in status:
+                    validate_suspension_reference(status[REFERENCE_KEY], symbol=decision.symbol,
+                                                  trade_date=plan.target_trade_date)
+                if isinstance(status, dict) and SUSPENSION_KEY in status:
+                    validate_suspension_fact(status[SUSPENSION_KEY], symbol=decision.symbol,
+                                             trade_date=plan.target_trade_date)
+                if isinstance(status, dict):
+                    statuses[decision.symbol] = deepcopy(status)
+            self._historical_suspension_statuses = statuses
             return
         payload = getattr(plan, "plan_payload_json", {}).get("local_sim_execution_causality")
         if not isinstance(payload, dict) or not payload.get("eligible_bar_after"):
@@ -897,6 +922,19 @@ class LocalSimBackend(BrokerBackend):
                     context={"intent_id": intent.intent_id},
                 )
 
+            historical_suspended = False
+            if self._data_source == MinuteDataSource.DB_HISTORICAL:
+                status = self._historical_suspension_statuses.get(intent.symbol)
+                if status is None and self._historical_suspension_provider is not None:
+                    status = self._historical_suspension_provider.load_statuses(
+                        symbols=[intent.symbol], trade_date=intent.target_trade_date,
+                    ).get(intent.symbol)
+                historical_suspended = pre_trade_tradability_is_suspended(status, symbol=intent.symbol)
+                if historical_suspended:
+                    from .suspension import SUSPENSION_KEY, validate_suspension_fact
+
+                    validate_suspension_fact((status or {}).get(SUSPENSION_KEY, {}), symbol=intent.symbol,
+                                             trade_date=intent.target_trade_date)
             market_input = None
             market_data_error: BrokerConnectivityError | None = None
             try:
@@ -925,7 +963,7 @@ class LocalSimBackend(BrokerBackend):
                             causal_bar_count=len(causal_bars),
                         ),
                     )
-                else:
+                elif not historical_suspended:
                     market_input = self._market_data_provider.load_symbol_input(
                         symbol=intent.symbol,
                         trade_date=intent.target_trade_date,
@@ -1050,6 +1088,9 @@ class LocalSimBackend(BrokerBackend):
                             as_of_time=self._scheduler_as_of_time,
                             increment_sequence=not bool(market_input.minute_bars),
                         )
+                elif historical_suspended:
+                    final_order, event = self._oms.reject_order(order, "SUSPENDED_BY_SUSPEND_D")
+                    fills, events = [], [event]
                 else:
                     final_order, fills, events = self._execution_engine.execute_order(
                         order=order,
@@ -1403,13 +1444,45 @@ class LocalSimBackend(BrokerBackend):
                 trade_date=trade_date,
                 as_of_time=as_of_time,
             )
+        statuses = dict(pre_trade_tradability)
+        if self._data_source == MinuteDataSource.DB_HISTORICAL and self._historical_suspension_provider is not None:
+            missing = [symbol for symbol in normalized_symbols if symbol not in statuses]
+            if missing:
+                statuses.update(self._historical_suspension_provider.load_statuses(
+                    symbols=missing, trade_date=trade_date, valuation_symbols=missing,
+                ))
         for symbol in normalized_symbols:
-            tradability = pre_trade_tradability.get(symbol)
+            tradability = statuses.get(symbol)
             suspended = pre_trade_tradability_is_suspended(
                 tradability,
                 symbol=symbol,
             )
             if suspended:
+                from .suspension import (
+                    NATIVE_PRE_CLOSE_KEY, REFERENCE_KEY, validate_suspended_native_pre_close,
+                    validate_suspension_reference,
+                )
+
+                if isinstance(tradability, Mapping) and NATIVE_PRE_CLOSE_KEY in tradability:
+                    native = validate_suspended_native_pre_close(tradability[NATIVE_PRE_CLOSE_KEY],
+                                                                symbol=symbol, trade_date=trade_date)
+                    records[symbol] = LocalSimMarketMarkV1(
+                        symbol=symbol, price=native["pre_close"], as_of_time=as_of_time,
+                        source="market.stk_limit.pre_close:frozen_historical_suspension",
+                        provenance=LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE,
+                        suspension_reference=native,
+                    )
+                    continue
+                if isinstance(tradability, Mapping) and REFERENCE_KEY in tradability:
+                    reference = validate_suspension_reference(tradability[REFERENCE_KEY], symbol=symbol,
+                                                              trade_date=trade_date)
+                    records[symbol] = LocalSimMarketMarkV1(
+                        symbol=symbol, price=reference["reference_close"], as_of_time=as_of_time,
+                        source="market.kline_daily_raw:strategy_package_reference_price_availability_v1",
+                        provenance=LocalSimMarketMarkProvenance.SUSPENDED_REFERENCE_CLOSE,
+                        suspension_reference=reference,
+                    )
+                    continue
                 daily_reference = tradability.get("daily_trading_context") if isinstance(tradability, Mapping) else None
                 raw_fact = daily_reference.get("symbol_fact") if isinstance(daily_reference, Mapping) else None
                 schema_version = daily_reference.get("schema_version") if isinstance(daily_reference, Mapping) else None

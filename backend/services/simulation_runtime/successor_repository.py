@@ -922,7 +922,7 @@ class LocalSimSuccessorRepository:
         self, *, replay_job_id: str, expected_version: int, expected_snapshot_sha256: str,
         evaluate: Any, updated_at: datetime,
     ) -> LocalSimReplayJobV1:
-        from .localsim_replay_recovery import RECOVERY_KEY, RECOVERY_SCHEMA
+        from .localsim_replay_recovery import RECOVERY_KEY, RECOVERY_SCHEMA, RETIREMENT_KEY, apply_handle_retirement
 
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -962,8 +962,13 @@ class LocalSimSuccessorRepository:
                     "native_input": check.native_input, "recovered_at": updated_at.isoformat(),
                     "original_failure": job["failure_context"], "economic_counts": check.economic_counts,
                 }
+                payload = run["run_payload_json"]
+                retirement = check.native_input.get(RETIREMENT_KEY)
+                if retirement is not None:
+                    payload = apply_handle_retirement(payload, retirement, retired_at=updated_at)
+                    receipt["retirement_sha256"] = payload[RETIREMENT_KEY]["receipt_sha256"]
                 receipt["receipt_sha256"] = canonical_json_sha256(receipt)
-                payload = {**run["run_payload_json"], RECOVERY_KEY: receipt}
+                payload = {**payload, RECOVERY_KEY: receipt}
                 cur.execute(
                     "UPDATE paper_v2.simulation_daily_run SET run_payload_json = %s, updated_at = %s WHERE run_id = %s",
                     (psycopg2.extras.Json(payload), updated_at, run["run_id"]),
@@ -981,7 +986,7 @@ class LocalSimSuccessorRepository:
                 result = self._select_replay(cur, replay_job_id, for_update=True)
                 cur.execute("SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s", (run["run_id"],))
                 persisted = cur.fetchone()
-                if (persisted is None or persisted["run_payload_json"].get(RECOVERY_KEY) != receipt
+                if (persisted is None or persisted["run_payload_json"] != payload
                         or result.replay_hash != job["replay_hash"]
                         or result.version != expected_version + 1
                         or result.status is not LocalSimReplayStatus.FAILED_RETRYABLE

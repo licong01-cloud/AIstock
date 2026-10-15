@@ -18977,6 +18977,7 @@ def test_production_context_provider_selects_explicit_twap_only_policy_for_v25_r
     assert LOCALSIM_TWAP_ONLY_REASON_CODE == "LOCALSIM_TWAP_ONLY_POLICY"
     assert ctx.local_broker is not None
     ctx.local_broker._market_data_provider = market_data
+    ctx.local_broker._historical_suspension_provider = SimpleNamespace(load_statuses=lambda **_: {})
     handle = ctx.local_broker.submit_order_intent(
         OrderIntent(
             package_id=release.package_id,
@@ -19030,6 +19031,7 @@ def test_production_context_provider_policy_authority_never_uses_portfolio_polic
     assert ctx.execution_policy_payload["policy_json"]["algo_code"] == "TWAP"
     assert ctx.local_broker is not None
     ctx.local_broker._market_data_provider = market_data
+    ctx.local_broker._historical_suspension_provider = SimpleNamespace(load_statuses=lambda **_: {})
     handle = ctx.local_broker.submit_order_intent(
         OrderIntent(
             package_id=release.package_id,
