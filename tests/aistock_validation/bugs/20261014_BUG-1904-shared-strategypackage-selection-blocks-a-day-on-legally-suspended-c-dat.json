@@ -32,17 +32,30 @@
   ],
   "expected": "Legal suspension is represented by native market constraints and genuine as-of valuation reference with its actual quote date; ordinary tradable missing prices fail explicitly before quantity/order generation. Full native scoring and ranking remain unchanged, future data is never consumed.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/strategy_package/multi_alpha_live.py",
+      "backend/services/strategy_package/reference_prices.py",
+      "backend/services/strategy_package/selection_artifact.py",
+      "backend/services/strategy_package/selection_computation.py",
+      "backend/tests/strategy_package/test_reference_price_availability.py",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md",
+      "tests/aistock_validation/bugs/20261014_BUG-1904-shared-strategypackage-selection-blocks-a-day-on-legally-suspended-c-dat.json"
+    ],
     "added_files": [
       "backend/services/strategy_package/reference_prices.py",
       "backend/tests/strategy_package/test_reference_price_availability.py",
       "docs/contracts/strategy_package_reference_price_availability_v1.md"
     ],
     "changed_files": [
-      "backend/services/strategy_package/selection_artifact.py",
       "backend/services/strategy_package/multi_alpha_live.py",
-      "backend/services/strategy_package/selection_computation.py"
+      "backend/services/strategy_package/reference_prices.py",
+      "backend/services/strategy_package/selection_artifact.py",
+      "backend/services/strategy_package/selection_computation.py",
+      "backend/tests/strategy_package/test_reference_price_availability.py",
+      "docs/contracts/strategy_package_reference_price_availability_v1.md",
+      "tests/aistock_validation/bugs/20261014_BUG-1904-shared-strategypackage-selection-blocks-a-day-on-legally-suspended-c-dat.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/strategy_package/selection_artifact.py",
@@ -163,6 +176,22 @@
   "fixed_at": null,
   "github_issue_number": 6077,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6077",
+  "implementation_review": {
+    "design_compliance_001": {
+      "no_silent_error": "PASS: ordinary/invalid/unproven prices fail explicitly; full scoring universe is preserved",
+      "no_simplified_delivery": "PASS: common reference-price reader, single/multi-alpha producers, effective-candidate price invariant and real native chain covered",
+      "no_unapproved_gate": "PASS: no new package approval or data maturity gate; native price requirement moved before target quantities",
+      "no_unapproved_semantic_change": "PASS: approved reference availability correction documented; scoring/fusion/filter/TopK and frozen policy unchanged"
+    },
+    "design_contract": "docs/contracts/strategy_package_reference_price_availability_v1.md",
+    "l0": "PASS: 7 exact registered files, 0 blocking guardrails",
+    "review_mode": "same_window_review_and_fix_not_independent_review",
+    "rounds": 3,
+    "runtime_activation": "PENDING_USER_RESTART",
+    "source_delivery_blocker": null,
+    "source_delivery_blocker_resolution": "BUG-1905 / PR #6083 merged as 61a5088df2e28670abf251ed76024686d1ec5971; canonical finish recognizes the target-owned StrategyPackage selection-artifacts GET semantic contract. Runtime activation remains pending user restart.",
+    "targeted_tests": "64 passed; one final related small matrix"
+  },
   "last_seen_at": "2026-10-14T18:53:08.329223Z",
   "module": "strategy_package",
   "non_goals": [
@@ -181,37 +210,26 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/strategy-packages/pkg_cc7eccb6202e4816b9d7c7d6b748bd37/selection-artifacts?limit=1",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "fresh_process_evidence": [
-      "python X:/AIstock_temp/LOCALSIM/strategy-package-suspension-reference-20261015/native_chain_check.py F:/Dev/AIstock_worktrees/BUG-1904-shared-strategypackage-selection-blocks-a-day-on-20261014 -> PASS: real saved 2026-01-20 LocalSIM inference, C=2026-01-19, 4912 scores/4918 universe/6 UNKNOWN unchanged; raw original failure reproduced; 50 effective candidates with native D-date suspension exclusion and exact native policy parity on the same legal priced input; current read-only diagnostic, not original historical capture; no model run, database writes, replay or process control"
+      "python X:/AIstock_temp/LOCALSIM/strategy-package-suspension-reference-20261015/native_chain_check.py F:/Dev/AIstock_worktrees/BUG-1904-shared-strategypackage-selection-blocks-a-day-on-20261014 -> PASS: real saved 2026-01-20 LocalSIM inference, C=2026-01-19, 4912 scores/4918 universe/6 UNKNOWN unchanged; raw original failure reproduced; 50 effective candidates with native D-date suspension exclusion and exact native policy parity on the same legal priced input; current read-only diagnostic, not original historical capture; no model run, database writes, replay or process control",
+      "python X:/AIstock_temp/LOCALSIM/strategy-package-suspension-reference-20261015/native_chain_check.py F:/Dev/AIstock_worktrees/BUG-1904-shared-strategypackage-selection-blocks-a-day-on-20261014 -> PASS at 5c64d968078ccaf06438f8bbb1158bb9b8aa7e87; receipt native-chain-receipt-5c64d968.json; 4912 scores / 4918 universe / 6 UNKNOWN unchanged; native 50 effective candidates and baseline parity; READ ONLY, no inference or replay; runtime pending user restart"
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
     ]
-  },
-  "implementation_review": {
-    "rounds": 3,
-    "review_mode": "same_window_review_and_fix_not_independent_review",
-    "design_contract": "docs/contracts/strategy_package_reference_price_availability_v1.md",
-    "design_compliance_001": {
-      "no_simplified_delivery": "PASS: common reference-price reader, single/multi-alpha producers, effective-candidate price invariant and real native chain covered",
-      "no_silent_error": "PASS: ordinary/invalid/unproven prices fail explicitly; full scoring universe is preserved",
-      "no_unapproved_semantic_change": "PASS: approved reference availability correction documented; scoring/fusion/filter/TopK and frozen policy unchanged",
-      "no_unapproved_gate": "PASS: no new package approval or data maturity gate; native price requirement moved before target quantities"
-    },
-    "targeted_tests": "64 passed; one final related small matrix",
-    "l0": "PASS: 7 exact registered files, 0 blocking guardrails",
-    "runtime_activation": "PENDING_USER_RESTART",
-    "source_delivery_blocker": null,
-    "source_delivery_blocker_resolution": "BUG-1905 / PR #6083 merged as 61a5088df2e28670abf251ed76024686d1ec5971; canonical finish recognizes the target-owned StrategyPackage selection-artifacts GET semantic contract. Runtime activation remains pending user restart."
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
