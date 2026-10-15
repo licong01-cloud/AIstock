@@ -26,7 +26,7 @@
   "evidence_uris": [
     "dmr_63a313d97fd046a38d5a876265565014:BUILD269; industry-history-commit descriptor vs retained journal after quote/prev_close amendments"
   ],
-  "expected": "已完成事务核对其冻结绑定、行业receipt及自身文件后应保留后续合法journal进展并退休小型intent；未完成事务继续原有受控恢复，不回退writer provenance。",
+  "expected": "已完成事务核对其冻结绑定、行业receipt及自身文件后只读确认，保留后续合法journal进展；未完成事务继续原有受控恢复，不回退writer provenance。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -109,9 +109,12 @@
     "qlib_data_backend"
   ],
   "risk_area": "bug",
+  "root_cause": "行业事务已原子提交，但保留的旧intent被无条件再次按未完成事务恢复；后续合法prev_close及分钟目录回执改变了非行业文件和finalize-bins，导致旧提案与新journal冲突。",
+  "fix_summary": "用精确industry-history完成引用及两个行业文件的journal/物理签名识别已提交事务，仍验证原始备份和私有路径；已完成时只读返回当前journal，不重放旧提案、不回退后续更正；未完成事务维持原有严格恢复。",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": ["RED: interrupted-history completion test fails when a later verified price correction and finalize-bins receipt advance the same journal; GREEN: the fresh-process production helper preserves later journal bytes/mtime and rejects forged completion refs, owned pins and physical output drift.", "Read-only fresh AIstock process loaded persisted recovery helper against actual dmr_63a313d97fd046a38d5a876265565014 attempt259 retained journal: PASS; exact industry completion ref and both outputs/backups verified, all 86 later amended file pins and finalize-bins preserved; _atomic and Path.rename forbidden, journal bytes/mtime unchanged, no database access or export."],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

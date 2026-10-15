@@ -421,7 +421,21 @@ def recover_history_commit(*, root: Path, journal: Path, record: Mapping[str, An
     if set(files) != {"sector_data.h5", "static_factors.parquet"}:
         raise MonthlyBuildResumeError("industry commit would change an unrelated component")
     changed = {f"factor_bundle/{name}" for name in files}
-    if set(proposed["files"]) != set(record["files"]) or any(
+    completion_ref = proposed["steps"].get("industry-history")
+    completed = completion_ref is not None and record["steps"].get("industry-history") == completion_ref
+    if completed:
+        # The durable journal can already contain later quote/prev_close
+        # amendments. Verify this transaction's exact completion and owned
+        # outputs, but never replay its obsolete whole-journal proposal.
+        if any(
+            record["files"].get(f"factor_bundle/{name}") != entry["target_signature"]
+            or list(_signature(root / "factor_bundle" / name)) != entry["target_signature"]
+            for name, entry in files.items()
+        ):
+            raise MonthlyBuildResumeError("completed industry commit identity or output changed")
+    elif any(record["files"].get(f"factor_bundle/{name}") != entry["original_signature"] for name, entry in files.items()):
+        raise MonthlyBuildResumeError("industry commit lost original writer provenance")
+    elif set(proposed["files"]) != set(record["files"]) or any(
         proposed["files"][key] != original for key, original in record["files"].items() if key not in changed
     ) or any(proposed["steps"].get(key) != original for key, original in record["steps"].items()
              if key not in {"prepare", "industry-history"}) or set(proposed["steps"]) != set(record["steps"]) | {"industry-history"}:
@@ -458,6 +472,8 @@ def recover_history_commit(*, root: Path, journal: Path, record: Mapping[str, An
         if list(_signature(source)) != entry["target_signature"]:
             raise MonthlyBuildResumeError("industry commit verified output changed")
         source.rename(target)
+    if completed:
+        return record
     _atomic(journal, proposed)
     return proposed
 
