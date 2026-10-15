@@ -3419,6 +3419,7 @@ _validate_hmm_workers = _runtime_semantics._validate_hmm_workers
 _validate_hmm_risk_l2_overview = _runtime_semantics._validate_hmm_risk_l2_overview
 _validate_research_pipeline_health = _runtime_semantics._validate_research_pipeline_health
 _validate_hmm_research_records = _runtime_semantics._validate_hmm_research_records
+_validate_selection_artifacts = _runtime_semantics._validate_selection_artifacts
 _validate_qe_dataset_profile = _runtime_semantics._validate_qe_dataset_profile
 _validate_openapi_document = _runtime_semantics._validate_openapi_document
 _validate_correlation_status = _runtime_semantics._validate_correlation_status
@@ -3431,6 +3432,8 @@ _validate_monthly_release_ready = _runtime_semantics._validate_monthly_release_r
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/strategy-packages/[^/]+/selection-artifacts$"),
+     "strategy_package_selection_artifact_readback", _validate_selection_artifacts),
     (re.compile(r"^/api/v1/hmm-training/snapshots/[^/]+/daily-coefficients/jobs$"),
      "hmm_database_daily_coefficient_jobs", _validate_hmm_daily_coefficient_jobs),
     (re.compile(r"^/api/kline-all/tdx$"), "tdx_raw_kline_facts", _validate_tdx_raw_kline),
@@ -3598,6 +3601,7 @@ def _evaluate_business_smoke_semantics(
             return schema, semantic
         verdict, reason, facts = validator(payload, expectation=expectation)
     elif contract_id in {
+        "strategy_package_selection_artifact_readback",
         "hmm_worker_liveness",
         "hmm_risk_l2_overview",
         "hmm_research_records",
