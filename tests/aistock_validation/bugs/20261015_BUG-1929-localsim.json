@@ -26,6 +26,12 @@
   ],
   "created_at": "2026-10-15T18:06:13.802340Z",
   "description": "TCN 原任务 lsreplay_4c2e743bea7789e6 v4108 停在2026-05-11，301139.SZ 为权威全天停牌且 pre_close=NaN；LSTM 原任务 lsreplay_81ca085e8ec56e05 v9165 停在2026-01-21，603616.SH 同样合法停牌且无权威 pre_close，并遗留18条未提交经济事实的LocalSim内存句柄。需要按用户授权的长任务规划并实施停牌交易资格/持仓估值/旧提交核销的严格合同，保留原任务、成功前缀和账本，完成连续多日和正式LocalSIM接续验收。",
+  "design_compliance_review": {
+    "business_semantics": "Preserve valid native pre_close and all order/ledger/success-prefix rules; explicitly identify C raw valuation as a separate source only when native pre_close is unavailable.",
+    "no_added_approval": "Use existing recover version/digest contract; no new force/ack parameter; user owns backend restart.",
+    "no_partial_delivery": "Source fix verified; restart, original replay, three-day, full history and LocalSIM activation remain explicitly pending in durable plan.",
+    "no_silent_error": "No manufactured prices; named failures for true missing input, conflicting halt state and unproven side effects."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -39,24 +45,44 @@
   ],
   "expected": "合法全天停牌先按原生资格排除交易；持仓估值采用独立可追溯PIT权威报价合同而不制造pre_close；旧提交仅在原生事实、完整身份和正式核销收据证明下受控退休；普通可交易股缺价和未知副作用继续阻塞；恢复原回放并完整验收后接续正式模拟盘。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_execution/localsim/models.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/simulation_execution/localsim/suspension.py",
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_runtime/repository.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/simulation_runtime/successor_repository.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+      "docs/analysis/localsim_long_replay_recovery_plan_20261016.md",
+      "docs/analysis/localsim_suspension_valuation_and_retirement_contract_20261016.md",
+      "tests/aistock_validation/bugs/20261015_BUG-1929-localsim.json"
+    ],
     "added_files": [
       "backend/services/simulation_execution/localsim/suspension.py",
       "docs/analysis/localsim_long_replay_recovery_plan_20261016.md",
       "docs/analysis/localsim_suspension_valuation_and_retirement_contract_20261016.md"
     ],
     "changed_files": [
-      "backend/services/simulation_execution/localsim/runtime.py",
       "backend/services/simulation_execution/localsim/models.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/simulation_execution/localsim/suspension.py",
       "backend/services/simulation_runtime/localsim_replay_recovery.py",
-      "backend/services/simulation_runtime/successor_repository.py",
       "backend/services/simulation_runtime/repository.py",
       "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/simulation_runtime/successor_repository.py",
       "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+      "docs/analysis/localsim_long_replay_recovery_plan_20261016.md",
+      "docs/analysis/localsim_suspension_valuation_and_retirement_contract_20261016.md",
+      "tests/aistock_validation/bugs/20261015_BUG-1929-localsim.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_execution/localsim/runtime.py",
@@ -278,26 +304,46 @@
     "simulation_core_l2",
     "localsim_successor_core_dev_db"
   ],
+  "review_rounds": [
+    {
+      "focus": "historical eligibility and valuation clocks",
+      "result": "Resolved halt-before-price ordering; no price needed to exclude a non-held halt; shared C reference only for valuation; valid native pre_close retains priority.",
+      "round": 1
+    },
+    {
+      "focus": "memory evidence and atomic recovery",
+      "result": "Proved original native intent projection, complete old payload and previous-process handles; zero native facts plus all no-effect checks; atomic recovery/rebuild locks, CAS, rollback/readback and duplicate rejection passed on existing DEV.",
+      "round": 2
+    },
+    {
+      "focus": "legacy hashes and forward conflicts",
+      "result": "Old mark serialization/hash unchanged; future/wrong/partial/conflicting halt sources, unknown effects and altered retirement lineage rejected; S/R Jan22 source conflict remains explicit owner gap.",
+      "round": 3
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "X:/AIstock_temp/LOCALSIM/workflow/BUG-1929-source-validation-receipt-r4.json -> fresh import and in-memory compile of 7 tracked modules; 540 directed passed/2 existing skips; 4 existing DEV core passed; lint passed; both original frozen native checks ready; Jan20 successful prefix unchanged; read-only candidate, runtime pending user restart."
+      "X:/AIstock_temp/LOCALSIM/workflow/BUG-1929-source-validation-receipt-r4.json -> fresh import and in-memory compile of 7 tracked modules; 540 directed passed/2 existing skips; 4 existing DEV core passed; lint passed; both original frozen native checks ready; Jan20 successful prefix unchanged; read-only candidate, runtime pending user restart.",
+      "X:/AIstock_temp/LOCALSIM/workflow/BUG-1929-source-validation-receipt-r4.json -> fresh 7-module import and compile passed; both original frozen native checks ready, completed Jan20 prefix unchanged; no production writes/process control.",
+      "X:/AIstock_temp/LOCALSIM/workflow/BUG-1929-source-validation-receipt-r4.json -> fresh 7-module import and compile passed; lint passed; both original native checks ready; original completed Jan20 prefix unchanged; no production writes or process control. Native rebalance receipt BUG-1929-native-rebalance-readonly-r1.json confirms 11500/18400 halted shares produce zero sell intents."
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
-    "database_readback_ref": "not_required"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -425,28 +471,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "review_rounds": [
-    {
-      "round": 1,
-      "focus": "historical eligibility and valuation clocks",
-      "result": "Resolved halt-before-price ordering; no price needed to exclude a non-held halt; shared C reference only for valuation; valid native pre_close retains priority."
-    },
-    {
-      "round": 2,
-      "focus": "memory evidence and atomic recovery",
-      "result": "Proved original native intent projection, complete old payload and previous-process handles; zero native facts plus all no-effect checks; atomic recovery/rebuild locks, CAS, rollback/readback and duplicate rejection passed on existing DEV."
-    },
-    {
-      "round": 3,
-      "focus": "legacy hashes and forward conflicts",
-      "result": "Old mark serialization/hash unchanged; future/wrong/partial/conflicting halt sources, unknown effects and altered retirement lineage rejected; S/R Jan22 source conflict remains explicit owner gap."
-    }
-  ],
-  "design_compliance_review": {
-    "no_partial_delivery": "Source fix verified; restart, original replay, three-day, full history and LocalSIM activation remain explicitly pending in durable plan.",
-    "no_silent_error": "No manufactured prices; named failures for true missing input, conflicting halt state and unproven side effects.",
-    "business_semantics": "Preserve valid native pre_close and all order/ledger/success-prefix rules; explicitly identify C raw valuation as a separate source only when native pre_close is unavailable.",
-    "no_added_approval": "Use existing recover version/digest contract; no new force/ack parameter; user owns backend restart."
   }
 }
