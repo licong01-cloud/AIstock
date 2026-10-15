@@ -284,8 +284,8 @@
   },
   "first_seen_at": "2026-10-15T18:06:13.802340Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b23d26120bd95d088660631e65a2889f866dfa42",
+  "fixed_at": "2026-10-15T18:58:14Z",
   "github_issue_number": 6157,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6157",
   "last_seen_at": "2026-10-15T18:06:13.802340Z",
@@ -293,6 +293,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6162",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -336,6 +337,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -347,7 +349,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1929",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "77d84bcaf2d0e1b6",
+    "recorded_at": "2026-10-15T18:58:55.063546Z",
+    "runtime_contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "da0a42c71364335a3d1adf8adcb49038c08d9685",
+    "source_merge_commit": "b23d26120bd95d088660631e65a2889f866dfa42",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6162",
+    "validation_evidence": [
+      "validation-receipt: id=ffdb5ac3da8441aa commit=da0a42c71364335a3d1adf8adcb49038c08d9685 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/simulation_execution/test_localsim_runtime.py backend/tests/simulation_runtime/test_localsim_replay_recovery.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_target_rebalance_shared.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py backend/tests/simulation_runtime/test_localsim_replay_live_transition.py -q` result=`540 passed, 2 existing skips; source unchanged at metadata-only descendant da0a42c71`",
+      "validation-receipt: id=1f19866f4ec0fc74 commit=da0a42c71364335a3d1adf8adcb49038c08d9685 kind=nox plan=localsim_successor_core_dev_db status=passed command=`python -m nox -s localsim_successor_core_dev_db --no-venv --envdir X:/AIstock_temp/LOCALSIM/workflow/nox-BUG-1929` result=`passed (4 tests)`"
+    ],
+    "validation_evidence_digest": "76343316a387ffc2a60aa0d1b47e700ab3200984450a58d1b155c2169a907b88"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -356,6 +380,10 @@
     "fingerprint": "3e8097399ac6d1fe5546e6f5",
     "source_event_id": "FE-20261015-3e8097399ac6"
   },
+  "validation_evidence": [
+    "validation-receipt: id=ffdb5ac3da8441aa commit=da0a42c71364335a3d1adf8adcb49038c08d9685 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/simulation_execution/test_localsim_runtime.py backend/tests/simulation_runtime/test_localsim_replay_recovery.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_target_rebalance_shared.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py backend/tests/simulation_runtime/test_localsim_replay_live_transition.py -q` result=`540 passed, 2 existing skips; source unchanged at metadata-only descendant da0a42c71`",
+    "validation-receipt: id=1f19866f4ec0fc74 commit=da0a42c71364335a3d1adf8adcb49038c08d9685 kind=nox plan=localsim_successor_core_dev_db status=passed command=`python -m nox -s localsim_successor_core_dev_db --no-venv --envdir X:/AIstock_temp/LOCALSIM/workflow/nox-BUG-1929` result=`passed (4 tests)`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
