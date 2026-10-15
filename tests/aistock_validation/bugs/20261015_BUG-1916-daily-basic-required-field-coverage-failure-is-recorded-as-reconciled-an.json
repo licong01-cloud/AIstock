@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1916",
-  "closed_at": null,
+  "closed_at": "2026-10-15T15:38:09.519913Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -131,10 +131,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\BUG-1916-post-restart-20261015.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1916",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8491091005d1a48e12842529dd81fd8f796930f3ad04fc92df4622c1e3a2add",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "15e32b34d347c4d495d87e14c2ef4eef636721e4",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-15T15:36:11.059284Z",
+      "mode": "read_only",
+      "observed_identity": "3bf6d0e751305ccc69da38968009036e12de5bd8",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "29b308074f55bc33fe293b4719912da53a545e72ef50a6a8e8dcfbc359810f6a",
+      "receipt_sha256": "f02a8b0c65331bac8ef4be6de57a820d5d75fb3e0047068a064b2755d568bbea",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "9cafa625e9466c2576123be97681a049afb856444757e84759a3ec9d128efcfb",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -165,7 +187,7 @@
     ],
     "validation_evidence_digest": "c34d784b6c5f574c191731e172fa48500c59c02b853ebf3aa106263f1d3af55d"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -175,7 +197,8 @@
     "source_event_id": "FE-20261015-7fbea69417e2"
   },
   "validation_evidence": [
-    "pytest daily basic retry tests -> 108 passed"
+    "pytest daily basic retry tests -> 108 passed",
+    "User restart verified: runtime 3bf6d0e751305ccc69da38968009036e12de5bd8 includes source merge; read-only health/identity/local-data business smoke passed; no DB writes or process control."
   ],
   "verification_budget": {
     "budget": "standard",
