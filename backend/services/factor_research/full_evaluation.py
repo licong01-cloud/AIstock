@@ -167,7 +167,7 @@ def build_standard_windows(
 
     add("full", actual_start, actual_end)
     add("from_2024", pd.Timestamp("2024-01-01"), actual_end)
-    for year in range(max(2024, actual_start.year), actual_end.year + 1):
+    for year in range(actual_start.year, actual_end.year + 1):
         add(f"year_{year}", pd.Timestamp(year=year, month=1, day=1), pd.Timestamp(year=year, month=12, day=31))
     for months in (6, 3, 1):
         add(f"recent_{months}m", actual_end - pd.DateOffset(months=months), actual_end)
