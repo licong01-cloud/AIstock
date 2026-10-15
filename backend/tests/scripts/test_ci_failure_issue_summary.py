@@ -216,6 +216,30 @@ def test_deferred_promotion_keeps_local_intake_visible_without_allocating(monkey
     assert "--issue 197 --create-registry-worktree --apply" in compact["local_intake"]["next_command"]
 
 
+@pytest.mark.parametrize("paths,expected", [
+    (["backend/tests/scripts", "backend/tests/scripts/test_failure.py"], ["backend/tests/scripts/test_failure.py"]),
+    (["backend/tests/scripts", "backend/tests/missing.py"], []),
+    (["backend/tests/scripts/test_failure.py"], ["backend/tests/scripts/test_failure.py"]),
+])
+def test_promotion_uses_exact_files_without_expanding_diagnostic_roots(monkeypatch, tmp_path, paths, expected):
+    from scripts import aistock_issue_workflow as workflow
+    test = tmp_path / "backend/tests/scripts/test_failure.py"
+    test.parent.mkdir(parents=True)
+    test.touch()
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", lambda **_: {
+        "classification_recommendation": "real_regression_candidate", "summary": _ci_summary([]),
+        "suggested_bug": {"title": "regression", "module": "validation", "severity": "P1", "allowed_write_scope": paths}})
+    monkeypatch.setattr(workflow, "_github_actions_registry_pr_capability", lambda: {"allowed": True})
+    submissions = []
+    monkeypatch.setattr(workflow, "build_submit_bug_plan", lambda **kw: submissions.append(kw) or {"next_command": "continue"})
+    result = workflow.build_promote_ci_issue_plan(issue_number=197, apply=True, create_registry_worktree=True)
+    assert result["excluded_scope_paths"] == [path for path in paths if path not in expected]
+    assert [call["changed_files"] for call in submissions] == ([expected] if expected else [])
+    assert result["workflow_gate"] == ("promoted" if expected else "blocked_exact_file_scope_required")
+    assert workflow._compact_promote_ci_issue(result)["excluded_scope_paths"] == result["excluded_scope_paths"]
+
+
 def test_cli_log_file_outputs_json_and_markdown(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     log_path = tmp_path / "job.log"
     output_path = tmp_path / "summary.json"

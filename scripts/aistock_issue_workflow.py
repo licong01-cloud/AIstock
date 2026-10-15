@@ -1302,7 +1302,7 @@ def _compact_triage_ci_issue(value: Any) -> dict[str, Any] | None:
 def _compact_promote_ci_issue(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    compact = _pick(value, "dry_run")
+    compact = _pick(value, "dry_run", "excluded_scope_paths", "blocking")
     if isinstance(value.get("registry_pr_capability"), dict):
         compact["registry_pr_capability"] = _pick(value["registry_pr_capability"], "allowed", "source", "reason")
     if isinstance(value.get("local_intake"), dict):
@@ -13240,7 +13240,23 @@ def build_promote_ci_issue_plan(
     failed_tests = first_job.get("failed_tests") or []
     error_signature = first_job.get("error_signature")
     details = ci_failure_summary.render_issue_markdown(summary, github_issue_number=issue_number)
-    changed_files = list(suggested.get("allowed_write_scope") or [])
+    # Diagnostic module roots are context, not permission to recursively edit.
+    # Resolve only the bounded candidate list; submit-bug still validates every
+    # accepted file for repository containment and ownership before allocation.
+    scope = flow._unique_strings(suggested.get("allowed_write_scope") or [])
+    changed_files = [path for path in scope if (REPO_ROOT / path).is_file()]
+    excluded_scope_paths = [path for path in scope if path not in changed_files]
+    if not changed_files:
+        return {
+            "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "blocked_exact_file_scope_required",
+            "dry_run": not apply,
+            "triage": triage,
+            "excluded_scope_paths": excluded_scope_paths,
+            "blocking": ["Diagnostic roots contain no existing exact files; triage must identify the repair files before BUG allocation."],
+            "next_command": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_number}",
+        }
     evidence_refs = flow._unique_strings(
         [
             str(summary.get("run_url") or ""),
@@ -13277,6 +13293,7 @@ def build_promote_ci_issue_plan(
         "dry_run": not apply,
         "triage": triage,
         "submit_bug": plan,
+        "excluded_scope_paths": excluded_scope_paths,
         "next_command": plan.get("next_command"),
     }
 
