@@ -210,7 +210,8 @@
     "targeted_tests": "64 passed; one final related small matrix",
     "l0": "PASS: 7 exact registered files, 0 blocking guardrails",
     "runtime_activation": "PENDING_USER_RESTART",
-    "source_delivery_blocker": "Canonical workflow has no target-owned semantic business-smoke contract for the existing StrategyPackage selection-artifacts GET endpoint. Must be handled by workflow owner; no unrelated endpoint substitution."
+    "source_delivery_blocker": null,
+    "source_delivery_blocker_resolution": "BUG-1905 / PR #6083 merged as 61a5088df2e28670abf251ed76024686d1ec5971; canonical finish recognizes the target-owned StrategyPackage selection-artifacts GET semantic contract. Runtime activation remains pending user restart."
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
