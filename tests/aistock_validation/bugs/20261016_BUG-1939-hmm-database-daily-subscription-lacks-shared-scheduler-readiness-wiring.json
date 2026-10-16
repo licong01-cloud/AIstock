@@ -19,8 +19,8 @@
   "created_at": "2026-10-16T04:28:49.312015Z",
   "description": "The public HMM readiness hook is only referenced by tests; no shared production trigger is registered.",
   "design_compliance_review": {
-    "independent_data_owner_review": "pending_before_merge",
-    "independent_review_finding": "P1 repaired locally; independent re-review pending. Only BLOCKED/hmm_coefficient_readiness_failed and BLOCKED/hmm_daily_subscription_failed retain unchanged-watermark retry. Real subscription/shared-owner fault injection covers a pre-admission DB error and a post-execution readback DB error. Typed business blocks, WAITING and durable FAILED remain non-retryable by this dispatch layer. RED 4 failed/7 passed -> GREEN 11 passed.",
+    "independent_data_owner_review": "PASS: data owner independently reviewed 87b718bb5ce7c07870117d1d718c231ff4b30ee8 and reran 185 passed, 1 skipped. User explicitly authorized source merge; production runtime remains pending user restart and verification.",
+    "independent_review_finding": "P1 resolved and independently re-reviewed PASS. Only BLOCKED/hmm_coefficient_readiness_failed and BLOCKED/hmm_daily_subscription_failed retain unchanged-watermark retry. Both fault injections recover with one durable job; typed business blocks, WAITING and durable FAILED keep their original policy. RED 4 failed/7 passed -> GREEN 11 passed. No ingestion schedule, retry-rule or executor change; callback inference is asynchronous and outside the scheduler lock.",
     "no_business_semantic_change": "PASS: database_daily only; model/features/seeds/thresholds, authoritative completion and durable job identity unchanged; no QE file dispatch or rolling training from new callback.",
     "no_silent_errors": "PASS: callback/query failures are isolated and logged, orchestration failures retry on existing sweep, inactive binding returns HTTP 503.",
     "no_simplified_delivery": "PASS: shared refresh dispatch, startup catch-up, subscription wakeup, single-flight and unregister covered by direct tests; production runtime remains pending.",
@@ -31,7 +31,8 @@
       "R3: checked source scope, unchanged scheduler jobs/executor, public status semantics, no DB/dataset/process actions and CI plan coverage.",
       "R4: PR CI exposed an existing HMM fixture still treating 801011.SI as never quoted after the shared policy correction. Updated only the fixture/current-policy assertions and kept synthetic scope exclusion coverage; 63 direct tests passed. No publication policy or production input reader change. Independent data-owner review remains pending.",
       "R5: independent data-owner review found missed internal subscription DB exceptions. Exact status+reason classification fixes watermark consumption; two actual service/shared-owner fault injections prove same-watermark recovery and one durable execution. No shared scheduler source or HMM service semantic change in this revision.",
-      "R6: reviewed all exception/result paths and negative cases; waiting, identity conflict, unknown typed business BLOCKED and durable FAILED never trigger dispatch-layer retries, even when FAILED carries an orchestration reason string. Independent owner must re-review before merge."
+      "R6: reviewed all exception/result paths and negative cases; waiting, identity conflict, unknown typed business BLOCKED and durable FAILED never trigger dispatch-layer retries, even when FAILED carries an orchestration reason string. Independent owner must re-review before merge.",
+      "R7: independent data owner approved 87b718bb5 with 185 passed/1 skipped. Latest main including BUG-1948 merge 031fd53d409f2c260768e9345ced095f402022e4 merged without conflict; its Go-task reconciliation remains before existing refresh work and HMM completion dispatch remains after existing work. Final-HEAD minimal regression and fresh-process evidence are required separately; source approval does not assert runtime activation."
     ],
     "rule": "DESIGN-COMPLIANCE-001"
   },
