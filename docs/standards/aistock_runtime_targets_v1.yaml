@@ -23,6 +23,8 @@ non_runtime_source_paths:
   - backend/services/dataset_release/daily_basic_history_repair.py
   # Explicit offline receipt adoption; API/worker do not import this CLI helper.
   - backend/services/dataset_release/monthly_legacy_adoption.py
+  # Explicit offline packaging recovery; API/worker do not import this CLI.
+  - backend/services/dataset_release/monthly_build_recovery.py
   # CLI-only canonical PIT evidence/preparation: no server/worker entrypoint.
   - backend/services/dataset_release/canonical_pit_candidate_bundle.py
   - backend/services/dataset_release/canonical_pit_w8_attestation.py
@@ -133,6 +135,7 @@ targets:
       - backend/services/dataset_release/monthly_unified.py
       - backend/services/dataset_release/monthly_worker.py
       - backend/services/dataset_release/monthly_shared_components.py
+      - backend/services/dataset_release/sw_l2_quote_policy.py
       - backend/services/dataset_release/monthly_sector_quote_facts.py
       - backend/services/dataset_release/monthly_hmm_derive.py
       - backend/services/dataset_release/monthly_hmm_consumer_probe.py
@@ -205,6 +208,7 @@ targets:
           - backend/services/dataset_release/monthly_unified.py
           - backend/services/dataset_release/monthly_worker.py
           - backend/services/dataset_release/monthly_shared_components.py
+          - backend/services/dataset_release/sw_l2_quote_policy.py
           - backend/services/dataset_release/monthly_sector_quote_facts.py
           - backend/services/dataset_release/monthly_hmm_derive.py
           - backend/services/dataset_release/monthly_hmm_consumer_probe.py
@@ -230,6 +234,7 @@ targets:
           - backend/services/dataset_release/monthly_worker_runtime.py
         required_source_globs:
           # This shared reader is loaded by the current supervised monthly worker.
+          - backend/routers/monthly_dataset_releases.py
           - backend/services/dataset_release/wsl_resource_guardian.py
           - backend/services/dataset_release/resource_supervisor.py
           - backend/services/dataset_release/monthly_industry_history.py
@@ -238,6 +243,7 @@ targets:
           - backend/services/dataset_release/monthly_unified.py
           - backend/services/dataset_release/monthly_worker.py
           - backend/services/dataset_release/monthly_shared_components.py
+          - backend/services/dataset_release/sw_l2_quote_policy.py
           - backend/services/dataset_release/monthly_sector_quote_facts.py
           - backend/services/dataset_release/monthly_hmm_derive.py
           - backend/services/dataset_release/monthly_hmm_consumer_probe.py
