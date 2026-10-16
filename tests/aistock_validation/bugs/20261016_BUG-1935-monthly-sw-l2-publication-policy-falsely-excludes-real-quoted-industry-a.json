@@ -145,9 +145,9 @@
   },
   "first_seen_at": "2026-10-16T02:39:59.466178Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "d497ba5b577212c1a777d4994c1de6e1fa221675",
   "fix_summary": "Correct the demonstrably false never-quoted classification of 801011.SI; retain all six official stop dates. Provide a narrowly scoped offline recovery for idle, unpublished FAILED DERIVE operations with this exact legacy policy. Verify sealed SOURCE/BUILD, request/plan, frozen official quote proof and 125269 retained file signatures, then preserve the original checkpoint and move the private candidate back to its original staging for ordinary API resume. No producer execution, active-profile change, source rewrite or price re-export in recovery.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-16T03:13:24Z",
   "github_issue_number": 6177,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6177",
   "last_seen_at": "2026-10-16T02:39:59.466178Z",
@@ -155,6 +155,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6180",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -183,6 +184,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -195,7 +197,32 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_expansion_reason": "Add the new direct recovery tests to the existing qlib_data_backend plan and register only the new CLI-only maintenance helper as non-runtime, consistent with monthly_legacy_adoption. Repository import search shows no API/worker caller; module __main__ is the sole production entry. Do not exempt the actual worker publication policy or alter runtime probe contracts.",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1935",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "62d553e9e2fef337",
+    "recorded_at": "2026-10-16T03:13:59.460192Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4736126184ab575b31cdf96c10a1fa637a103a59",
+    "source_merge_commit": "d497ba5b577212c1a777d4994c1de6e1fa221675",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6180",
+    "validation_evidence": [
+      "validation-receipt: id=94c9360475b335b9 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_build_recovery.py backend/tests/dataset_release/test_monthly_build_resume.py -q` result=`43 passed`",
+      "validation-receipt: id=8d5a32119ff63594 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files validation_catalog_integrity` result=`passed, zero findings and 8 catalog tests`",
+      "validation-receipt: id=dca3e73eb90c6d9d commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s guardrail_changed_files validation_catalog_integrity` result=`passed, zero findings and 8 catalog tests`",
+      "validation-receipt: id=5fa328c40f82a6c1 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_build_recovery.py backend/services/dataset_release/sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_build_recovery.py backend/tests/dataset_release/test_sw_l2_quote_policy.py` result=`passed`",
+      "validation-receipt: id=beab515685b15978 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "0bb1608d09e0e82fed8a3dbeba2561b0ce87b250b5c090432af9d0c041c1ac9f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -204,6 +231,13 @@
     "fingerprint": "6cd1755ab52e35553142ba4d",
     "source_event_id": "FE-20261016-6cd1755ab52e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=94c9360475b335b9 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_build_recovery.py backend/tests/dataset_release/test_monthly_build_resume.py -q` result=`43 passed`",
+    "validation-receipt: id=8d5a32119ff63594 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files validation_catalog_integrity` result=`passed, zero findings and 8 catalog tests`",
+    "validation-receipt: id=dca3e73eb90c6d9d commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s guardrail_changed_files validation_catalog_integrity` result=`passed, zero findings and 8 catalog tests`",
+    "validation-receipt: id=5fa328c40f82a6c1 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_build_recovery.py backend/services/dataset_release/sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_build_recovery.py backend/tests/dataset_release/test_sw_l2_quote_policy.py` result=`passed`",
+    "validation-receipt: id=beab515685b15978 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
