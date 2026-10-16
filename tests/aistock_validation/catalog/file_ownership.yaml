@@ -1394,6 +1394,7 @@ rules:
       - backend/tests/scripts/test_repair_suspend_688766.py
       - backend/services/suspend_d_coverage.py
       - scripts/audit_suspend_d_coverage.py
+      - scripts/verify_suspension_day_authority.py
       - backend/tests/services/test_suspend_d_coverage.py
     primary_module: local_data
     impact_modules: [qlib_data, qe.core, paper_v2]
