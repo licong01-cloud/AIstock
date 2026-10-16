@@ -20,6 +20,12 @@
   "description": "Sigmoid TopK gate underflows at approximate ranks near N/2; finite loss check silently accepts -0 and zero gradients.",
   "events": [
     {
+      "action": "ci_execution_coverage_aligned",
+      "actor": "Codex",
+      "note": "pre-PR classifier 指出旧 test_general_ptnn_ltr.py 未被选中 CI plan 执行。本次新增的四个参数化数值/adapter 回归原断言迁入既有 QE CI 文件 test_qe_config_truth.py，原测试文件恢复至 main 原样；未删除旧测试、未改 ownership 或 CI、未绕过覆盖检查。正式 changed_files 收敛为 5 个。",
+      "timestamp": "2026-10-16T18:00:54Z"
+    },
+    {
       "action": "implementation_reviewed",
       "actor": "Codex",
       "note": "实现 log_approx_ndcg_at_k 与 ndcg_at_k_pairwise，保持默认 MSE 和全部非目标配置。独立公式/梯度、4500 截面、正式 Composer、优化器与配置不变性审核通过。最终两文件回归 275 passed；L0、ownership、module registry、Ruff、compile、diff-check 通过。补齐同文件既有 GPU-resident CPU fixture 的 synchronize mock 及逐日次数断言，未改 GAT 生产代码。DESIGN-COMPLIANCE-001 四项逐项通过；无 DDL/DML、依赖/客户端安装、服务控制或正式实验。用户另行授权提交/PR/CI绿后合入，重启仍由用户执行。",
@@ -48,7 +54,6 @@
       "aistock_models/aistock_models/general_ptnn_ltr.py",
       "backend/services/quantevolver/config_composer.py",
       "backend/services/quantevolver/experiment_config_builders.py",
-      "backend/tests/test_general_ptnn_ltr.py",
       "backend/tests/unified_engine/test_qe_config_truth.py"
     ],
     "added_files": [],
@@ -57,7 +62,6 @@
       "aistock_models/aistock_models/general_ptnn_ltr.py",
       "backend/services/quantevolver/config_composer.py",
       "backend/services/quantevolver/experiment_config_builders.py",
-      "backend/tests/test_general_ptnn_ltr.py",
       "backend/tests/unified_engine/test_qe_config_truth.py"
     ],
     "changed_files_source": "git_finish",
