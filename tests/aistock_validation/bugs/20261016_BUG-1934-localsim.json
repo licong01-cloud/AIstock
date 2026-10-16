@@ -213,17 +213,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/LOCALSIM/workflow/BUG-1934-source-candidate-native-readonly-r1.json -> fresh import and compile of 4 tracked native modules; real global in-flight count=1; both original frozen recovery checks ready and target account activity empty; global cutover still refused; no recover or process control. Directed JUnit BUG-1934-directed-final-r1.xml: 103 passed; native DEV nox BUG-1934-native-dev-r1.xml: 4 passed. Source candidate only, runtime pending merge and user restart."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
+    "runtime_identity_match": "pending"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -347,5 +354,28 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "review_rounds": [
+    {
+      "round": 1,
+      "focus": "global prerequisites versus per-account historical scheduling",
+      "result": "Dedicated recovery readiness used by both HTTP GET/POST; all structural, legacy, lineage, malformed and unknown blockers retained; final cutover still uses strict global readiness. Route fixture corrected to a real valid failed replay state."
+    },
+    {
+      "round": 2,
+      "focus": "snapshot, lock ordering and stale proof rejection",
+      "result": "Target account read/lock precedes failed run; complete account activity enters original digest; missing observations and same-account activity refuse recovery. Existing DEV confirms activity after inspection rejects old request atomically, rollback, economic lock, CAS and native memory retirement remain intact."
+    },
+    {
+      "round": 3,
+      "focus": "fresh native code against authoritative running inputs",
+      "result": "4 tracked modules freshly imported/compiled from task worktree. Both original native checks ready with another account genuinely in flight; global activation remains blocked. No production recover accepted; successful Jan20 plan/evidence/economic prefix stays unchanged."
+    }
+  ],
+  "design_compliance_review": {
+    "no_partial_delivery": "Source-level gate scope fix validated; runtime activation, original recovery, continuous/full replay and formal LocalSIM acceptance remain pending.",
+    "no_silent_error": "Unknown account activity, own-account in-flight runs, structural and unknown blockers, stale version/digest and economic effects continue to fail closed.",
+    "business_semantics": "Only historical recovery scheduling prerequisites change; original identity/ledger/market rules and final global activation boundary stay intact.",
+    "no_added_approval": "No new request parameter, force/ack, package/account whitelist or additional manual approval."
   }
 }

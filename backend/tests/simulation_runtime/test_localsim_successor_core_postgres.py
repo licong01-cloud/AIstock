@@ -192,6 +192,22 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
         assert snapshot["plan"]["plan_payload_json"]["trading_rule_decisions"][0]["decision_hash"] == decision_hash
         request = LocalSimReplayRecoverRequestV1(expected_version=job.version, snapshot_sha256=check.snapshot_sha256)
 
+        # Activity that appears after inspection must still refuse the old request
+        # inside the locked recovery transaction. All fixture changes roll back.
+        with conn.cursor() as cur:
+            cur.execute("UPDATE paper_v2.simulation_daily_run SET status = 'INTRADAY_RUNNING' WHERE run_id = %s",
+                        (run.run_id,))
+        busy = service.inspect(job.replay_job_id)
+        assert not busy.ready and busy.reason_codes == ["LOCALSIM_REPLAY_RECOVERY_ACCOUNT_RUN_IN_FLIGHT"]
+        with pytest.raises(InvalidStateTransitionError, match="evidence is blocked"):
+            service.recover(job.replay_job_id, request)
+        assert repository.get_replay_job(job.replay_job_id) == job
+        assert runtime.get_simulation_daily_run(run.run_id).run_payload_json == initial_payload
+        with conn.cursor() as cur:
+            cur.execute("UPDATE paper_v2.simulation_daily_run SET status = 'FAILED_RETRYABLE' WHERE run_id = %s",
+                        (run.run_id,))
+        assert service.inspect(job.replay_job_id).snapshot_sha256 == check.snapshot_sha256
+
         class BrokenReadback(LocalSimSuccessorRepository):
             def _select_replay(self, cur, replay_job_id, **kwargs):
                 result = super()._select_replay(cur, replay_job_id, **kwargs)

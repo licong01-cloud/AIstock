@@ -238,6 +238,11 @@ class LocalSimReplayRecoveryService:
             if (job["status"] != "FAILED_TERMINAL" or job["next_trade_date"] is None
                     or job["live_release_id"] or job["live_binding_id"] or job["activation_trade_date"]):
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_STATE_INVALID")
+            account_activity = snapshot.get("account_in_flight_runs")
+            if not isinstance(account_activity, list):
+                self._invalid("LOCALSIM_REPLAY_RECOVERY_ACCOUNT_ACTIVITY_UNKNOWN")
+            if account_activity:
+                self._invalid("LOCALSIM_REPLAY_RECOVERY_ACCOUNT_RUN_IN_FLIGHT")
             source = self.source_authority.resolve(
                 historical_source_id=job["historical_source_id"], start_trade_date=date.fromisoformat(job["start_trade_date"]),
                 end_trade_date=date.fromisoformat(job["end_trade_date"]), require_latest_completed=False,
@@ -255,6 +260,7 @@ class LocalSimReplayRecoveryService:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_DAILY_RUN_INVALID")
             binding, release, plan = snapshot["binding"], snapshot["release"], snapshot.get("plan")
             if (snapshot["account"]["status"] != "ACTIVE"
+                    or snapshot["account"].get("account_id") != job["simulation_account_id"]
                     or run["trade_date"] != job["next_trade_date"]
                     or job["failure_context"].get("trade_date") != job["next_trade_date"]
                     or run["strategy_id"] != job["simulation_account_id"]
