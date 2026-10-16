@@ -32,6 +32,15 @@
   ],
   "expected": "LocalSIM D-day eligibility and suspended valuation evidence consume the unique public projection; freeze authority payload, implementation/policy/data identities and raw event digest in consumer evidence, invalidate own old uncommitted checkpoints, retain legacy frozen behavior and strict true missing-price checks.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_execution/localsim/suspension.py",
+      "backend/services/simulation_runtime/localsim_selection_signal.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/simulation_execution/test_localsim_suspension_authority.py",
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "docs/analysis/localsim_public_suspension_authority_consumer_fix_20261017.md",
+      "tests/aistock_validation/bugs/20261016_BUG-1953-localsim-ignores-public-suspension-day-authority-and-rejects-disclosure.json"
+    ],
     "added_files": [
       "backend/tests/simulation_execution/test_localsim_suspension_authority.py",
       "docs/analysis/localsim_public_suspension_authority_consumer_fix_20261017.md"
@@ -39,9 +48,13 @@
     "changed_files": [
       "backend/services/simulation_execution/localsim/suspension.py",
       "backend/services/simulation_runtime/localsim_selection_signal.py",
-      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py"
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/simulation_execution/test_localsim_suspension_authority.py",
+      "backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py",
+      "docs/analysis/localsim_public_suspension_authority_consumer_fix_20261017.md",
+      "tests/aistock_validation/bugs/20261016_BUG-1953-localsim-ignores-public-suspension-day-authority-and-rejects-disclosure.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_execution/localsim/suspension.py",
@@ -166,23 +179,27 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "X:/AIstock_temp/LOCALSIM/workflow/BUG-1953-source-candidate-native-readonly-r1.json -> fresh native LocalSIM authority consumer and selection source; real original LSTM 2026-01-22 public full-day suspension, raw S/R and disclosure identities retained, native C=01-21 reference=6.23 quote=01-20; original frozen identity and prefix preserved; no recover, DB writes or service control. Source candidate only, pending merge and user restart; C=01-22 reference gap remains for public owner."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
-    "database_readback_ref": "not_required"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
