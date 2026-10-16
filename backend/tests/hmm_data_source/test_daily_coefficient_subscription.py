@@ -380,6 +380,128 @@ def test_file_reconcile_failure_does_not_mask_database_reconcile(monkeypatch):
     ]
 
 
+def test_shared_completion_binding_survives_missing_legacy_apscheduler(tmp_path, monkeypatch):
+    import sys
+    from backend.ingestion import tdx_scheduler
+    from backend.routers import hmm_training
+    from backend.services.hmm_data_source.daily_input import REQUIRED_DAILY_DATASETS
+
+    monkeypatch.setattr(tdx_scheduler, "DEFAULT_TEST_OUTPUT_DIR", tmp_path)
+    owner = tdx_scheduler.TDXScheduler()
+    monkeypatch.setattr(owner, "_fetchall", lambda *_: [])
+    monkeypatch.setattr(tdx_scheduler, "scheduler", owner)
+    monkeypatch.setitem(sys.modules, "apscheduler.schedulers.asyncio", None)
+    monkeypatch.setattr(hmm_training, "_scheduler", None)
+    monkeypatch.setattr(hmm_training, "_completion_scheduler", None)
+    calls = []
+
+    class Service:
+        def reconcile_coefficient_extensions(self):
+            pytest.fail("database completion must not dispatch frozen-file extension")
+
+        def reconcile_daily_coefficient_subscriptions(self):
+            calls.append(get_ident())
+            return [{"status": "WAITING", "reason_code": "hmm_database_daily_input_unavailable"}]
+
+    monkeypatch.setattr(hmm_training, "HMMTrainingService", Service)
+
+    async def scenario():
+        hmm_training.init_hmm_scheduler()
+        hmm_training.init_hmm_scheduler()
+        assert len(owner._completion_callbacks) == 1
+        entry = owner._completion_callbacks[hmm_training._HMM_COMPLETION_CALLBACK_ID]
+        assert entry.datasets == tuple(sorted(REQUIRED_DAILY_DATASETS))
+        owner._dispatch_completion_callbacks()
+        await asyncio.wrap_future(entry.future)
+        owner._dispatch_completion_callbacks()
+        assert len(calls) == 1
+        assert calls[0] != get_ident()
+        hmm_training.shutdown_hmm_scheduler()
+        assert not owner._completion_callbacks
+        assert hmm_training._completion_scheduler is None
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        owner.shutdown()
+
+
+@pytest.mark.parametrize(
+    "reason,accepted",
+    [
+        ("hmm_coefficient_readiness_failed", False),
+        ("hmm_database_daily_input_unavailable", True),
+        ("hmm_daily_job_identity_conflict", True),
+    ],
+)
+def test_completion_adapter_retries_only_orchestration_failure(monkeypatch, reason, accepted):
+    from backend.routers import hmm_training
+
+    calls = []
+
+    async def tick(**kwargs):
+        calls.append(kwargs)
+        return [{"status": "BLOCKED", "reason_code": reason}]
+
+    monkeypatch.setattr(hmm_training, "coefficient_readiness_tick", tick)
+    assert asyncio.run(hmm_training._coefficient_completion_callback()) is accepted
+    assert calls == [{"source_modes": ("database_daily",)}]
+
+
+def test_enabling_subscription_wakes_owner_without_running_reconcile(monkeypatch):
+    from types import SimpleNamespace
+    from backend.routers import hmm_training
+
+    calls = []
+    owner = SimpleNamespace(request_completion_check=lambda name: calls.append(name) or True)
+    monkeypatch.setattr(hmm_training, "_completion_scheduler", owner)
+    monkeypatch.setattr(
+        hmm_training.service, "configure_daily_coefficient_subscription", lambda *_args, **kwargs: kwargs
+    )
+    request = hmm_training.DailyCoefficientSubscriptionRequest(
+        snapshot_id="snapshot", signal_presets=["preset_A"], enabled=True
+    )
+    result = hmm_training.configure_daily_coefficient_subscription("config", request)
+    assert result["enabled"] is True
+    assert calls == [hmm_training._HMM_COMPLETION_CALLBACK_ID]
+    request.enabled = False
+    hmm_training.configure_daily_coefficient_subscription("config", request)
+    assert len(calls) == 1
+
+
+def test_readiness_status_is_read_only_and_rejects_inactive_binding(monkeypatch):
+    from types import SimpleNamespace
+    from backend.routers import hmm_training
+
+    state = {
+        "registered": True,
+        "owner_running": True,
+        "loop_running": True,
+        "in_flight": False,
+        "datasets": ["index_daily", "sector_data", "sw_daily"],
+    }
+    owner = SimpleNamespace(completion_callback_status=lambda _name: dict(state))
+    monkeypatch.setattr(hmm_training, "_completion_scheduler", owner)
+    monkeypatch.setattr(
+        hmm_training.service,
+        "reconcile_daily_coefficient_subscriptions",
+        lambda: pytest.fail("status probe must not generate or query inputs"),
+    )
+    app = FastAPI()
+    app.include_router(hmm_training.router, prefix="/api/v1")
+    client = TestClient(app)
+    url = "/api/v1/runtime-contracts/hmm-database-daily-dispatch"
+    response = client.get(url)
+    assert response.status_code == 200
+    assert response.json()["dispatch_binding_status"] == "ready"
+    for key in ("registered", "owner_running", "loop_running"):
+        state[key] = False
+        response = client.get(url)
+        assert response.status_code == 503
+        assert response.json()["detail"]["reason_code"] == "hmm_completion_dispatch_unavailable"
+        state[key] = True
+
+
 def test_subscription_api_is_explicit_and_rejects_coerced_enable(monkeypatch):
     from backend.routers import hmm_training
 

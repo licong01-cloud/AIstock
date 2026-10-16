@@ -4,7 +4,7 @@
     "backend/ingestion/tdx_scheduler.py",
     "backend/routers/hmm_training.py",
     "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
-    "backend/tests/ingestion/test_hmm_completion_dispatch.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "tests/aistock_validation/bugs/20261016_BUG-1939-hmm-database-daily-subscription-lacks-shared-scheduler-readiness-wiring.json"
   ],
   "assigned_agent": null,
@@ -28,21 +28,28 @@
   "evidence_uris": [],
   "expected": "Existing scheduler detects completed input watermark changes and dispatches a nonblocking single-flight HMM readiness reconciliation; restart catch-up and unregister are explicit; other ingestion schedules remain unchanged.",
   "file_scope_contract": {
-    "added_files": [
-      "backend/tests/ingestion/test_hmm_completion_dispatch.py"
-    ],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261016_BUG-1939-hmm-database-daily-subscription-lacks-shared-scheduler-readiness-wiring.json",
       "backend/ingestion/tdx_scheduler.py",
       "backend/routers/hmm_training.py",
-      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py"
+      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261016_BUG-1939-hmm-database-daily-subscription-lacks-shared-scheduler-readiness-wiring.json",
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/routers/hmm_training.py",
+      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
         "backend/routers/hmm_training.py",
         "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
-        "backend/tests/ingestion/test_hmm_completion_dispatch.py"
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
       ],
       "impacted_modules": [
         "local_data",
@@ -88,7 +95,7 @@
           "rule_id": "hmm_services"
         },
         {
-          "file": "backend/tests/ingestion/test_hmm_completion_dispatch.py",
+          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
           "impact_modules": [
             "platform.db",
             "qe.core"
@@ -105,7 +112,7 @@
         "backend/ingestion/tdx_scheduler.py",
         "backend/routers/hmm_training.py",
         "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
-        "backend/tests/ingestion/test_hmm_completion_dispatch.py"
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
       ],
       "unmatched_files": []
     },
@@ -113,18 +120,31 @@
       "backend/ingestion/tdx_scheduler.py",
       "backend/routers/hmm_training.py",
       "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
-      "backend/tests/ingestion/test_hmm_completion_dispatch.py"
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/ingestion/tdx_scheduler.py",
       "backend/routers/hmm_training.py",
       "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
-      "backend/tests/ingestion/test_hmm_completion_dispatch.py"
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
     ]
   },
   "first_seen_at": "2026-10-16T04:28:49.312015Z",
   "fix_branch": null,
+  "design_compliance_review": {
+    "rule": "DESIGN-COMPLIANCE-001",
+    "no_simplified_delivery": "PASS: shared refresh dispatch, startup catch-up, subscription wakeup, single-flight and unregister covered by direct tests; production runtime remains pending.",
+    "no_silent_errors": "PASS: callback/query failures are isolated and logged, orchestration failures retry on existing sweep, inactive binding returns HTTP 503.",
+    "no_business_semantic_change": "PASS: database_daily only; model/features/seeds/thresholds, authoritative completion and durable job identity unchanged; no QE file dispatch or rolling training from new callback.",
+    "no_unapproved_gates": "PASS: no new approval, dependency, environment variable, scheduler, notification platform or data gate; status endpoint only observes existing dispatch prerequisites.",
+    "review_rounds": [
+      "R1: fixed cross-source duplicate dispatch; regression proves database completion never runs frozen-file extension.",
+      "R2: moved direct tests into existing CI-selected scheduler test file; checked single-flight/watermark changes/registration lifecycle and failure isolation.",
+      "R3: checked final source scope, unchanged scheduler jobs/executor, public status semantics, no DB/dataset/process actions and CI plan coverage; no remaining local blocking finding."
+    ],
+    "independent_data_owner_review": "pending_before_merge"
+  },
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 6189,
@@ -147,11 +167,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/runtime-contracts/hmm-database-daily-dispatch",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe tmp/handoff/BUG-1939/fresh_process_smoke.py -> PASS; isolated imports and callback, no DB/training/service"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

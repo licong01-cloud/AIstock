@@ -20,6 +20,7 @@ modules. All public methods are thread-safe.
 from __future__ import annotations
 
 import datetime as dt
+import asyncio
 import json
 import os
 import subprocess
@@ -29,8 +30,9 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, Future
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 import psycopg2.extras as pgx
@@ -294,6 +296,19 @@ class _FutureTracker:
             return self._active.get(key)
 
 
+@dataclass
+class _CompletionCallback:
+    datasets: tuple[str, ...]
+    callback: Callable[[], Awaitable[bool | None]]
+    loop: asyncio.AbstractEventLoop
+    future: Future | None = None
+    completed_watermark: str | None = None
+    dispatched_watermark: str | None = None
+    request_version: int = 1
+    completed_version: int = 0
+    dispatched_version: int = 0
+
+
 class TDXScheduler:
     """Coordinates background execution of testing and ingestion jobs."""
 
@@ -309,7 +324,119 @@ class TDXScheduler:
         self._lock = threading.RLock()
         self._tracker = _FutureTracker()
         self._delayed_retry_keys: set[str] = set()
+        self._completion_callbacks: dict[str, _CompletionCallback] = {}
         DEFAULT_TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    def register_completion_callback(
+        self, name: str, *, datasets: Iterable[str], callback: Callable[[], Awaitable[bool | None]]
+    ) -> None:
+        """Register on the consumer's running loop, without adding schedules.
+
+        The existing refresh sweep observes audit changes, not business cadence.
+        Each registration receives one startup catch-up and is single-flight.
+        The audit watermark is only a wakeup hint: the consumer must validate
+        its own authority. A False result or exception retries on a later sweep.
+        """
+        datasets = tuple(sorted(set(datasets)))
+        if not name or not datasets or any(not isinstance(value, str) or not value for value in datasets):
+            raise ValueError("completion callback requires a name and dataset names")
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            if self._stop_event.is_set():
+                raise RuntimeError("completion callback owner is shut down")
+            existing = self._completion_callbacks.get(name)
+            if existing is not None:
+                if (existing.datasets, existing.callback, existing.loop) == (datasets, callback, loop):
+                    return
+                raise ValueError(f"completion callback already registered: {name}")
+            self._completion_callbacks[name] = _CompletionCallback(datasets, callback, loop)
+
+    def unregister_completion_callback(self, name: str) -> bool:
+        """Stop future dispatch; never interrupt an already running consumer job."""
+        with self._lock:
+            return self._completion_callbacks.pop(name, None) is not None
+
+    def request_completion_check(self, name: str) -> bool:
+        """Wake an existing registration after subscription changes, without I/O."""
+        with self._lock:
+            entry = self._completion_callbacks.get(name)
+            if entry is None:
+                return False
+            entry.request_version += 1
+            return True
+
+    def completion_callback_status(self, name: str) -> dict[str, Any]:
+        """Read-only binding state; never certifies consumer data or model value."""
+        with self._lock:
+            entry = self._completion_callbacks.get(name)
+            return {
+                "registered": entry is not None,
+                "owner_running": bool(self._refresh_thread and self._refresh_thread.is_alive())
+                and not self._stop_event.is_set(),
+                "loop_running": bool(entry and entry.loop.is_running() and not entry.loop.is_closed()),
+                "in_flight": bool(entry and entry.future is not None and not entry.future.done()),
+                "datasets": list(entry.datasets) if entry is not None else [],
+            }
+
+    async def _run_completion_callback(self, name: str, entry: _CompletionCallback) -> bool | None:
+        with self._lock:
+            if self._stop_event.is_set() or self._completion_callbacks.get(name) is not entry:
+                return True
+        return await entry.callback()
+
+    def _dispatch_completion_callbacks(self) -> None:
+        # Existing unit fixtures may construct only the legacy scheduler surface.
+        if not getattr(self, "_completion_callbacks", None):
+            return
+        with self._lock:
+            entries = list(self._completion_callbacks.items())
+        for name, entry in entries:
+            try:
+                with self._lock:
+                    if self._stop_event.is_set() or self._completion_callbacks.get(name) is not entry:
+                        continue
+                    if entry.future is not None:
+                        if not entry.future.done():
+                            continue
+                        future, entry.future = entry.future, None
+                        if future.result() is not False:
+                            entry.completed_watermark = entry.dispatched_watermark
+                            entry.completed_version = entry.dispatched_version
+                        else:
+                            _logger.warning("completion callback pending retry: %s", name)
+                rows = self._fetchall(
+                    """
+                    SELECT latest.* FROM unnest(%s::text[]) AS requested(dataset)
+                    CROSS JOIN LATERAL (
+                        SELECT a.dataset, a.trade_date, a.data_source, a.refreshed_at,
+                               a.status, a.quality_status, a.row_count, a.job_id::text
+                        FROM market.dataset_date_refresh_audit a
+                        WHERE a.dataset=requested.dataset AND a.trade_date<=%s
+                        ORDER BY a.trade_date DESC, a.refreshed_at DESC, a.data_source
+                        LIMIT 1
+                    ) latest ORDER BY latest.dataset
+                    """,
+                    (list(entry.datasets), dt.datetime.now(_CN_TZ).date()),
+                )
+                watermark = _json_dump(rows)
+                with self._lock:
+                    if self._stop_event.is_set() or self._completion_callbacks.get(name) is not entry:
+                        continue
+                    if entry.future is not None:
+                        continue
+                    if watermark == entry.completed_watermark and entry.request_version == entry.completed_version:
+                        continue
+                    coroutine = self._run_completion_callback(name, entry)
+                    try:
+                        entry.future = asyncio.run_coroutine_threadsafe(coroutine, entry.loop)
+                    except Exception:
+                        coroutine.close()
+                        raise
+                    entry.dispatched_watermark = watermark
+                    entry.dispatched_version = entry.request_version
+            except Exception:
+                # Consumer failure must not fail a data sync or another callback.
+                _logger.exception("completion callback dispatch failed: %s", name)
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -337,6 +464,8 @@ class TDXScheduler:
 
     def shutdown(self, wait: bool = False) -> None:
         self._stop_event.set()
+        with self._lock:
+            self._completion_callbacks.clear()
         if self._schedule_thread:
             self._schedule_thread.join(timeout=3)
         if self._refresh_thread:
@@ -899,6 +1028,7 @@ class TDXScheduler:
             self._reconcile_due_data_sync_targets()
         except Exception as exc:  # noqa: BLE001
             _logger.warning("data sync target reconciliation failed: %s", exc)
+        self._dispatch_completion_callbacks()
 
     def _reconcile_go_job_refresh_audit(self) -> None:
         """Self-heal refresh-audit rows for successful Go-engine jobs (BUG-972).

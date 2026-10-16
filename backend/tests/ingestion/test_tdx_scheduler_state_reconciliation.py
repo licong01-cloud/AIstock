@@ -1,8 +1,10 @@
+import asyncio
 import datetime as dt
 import json
 import os
 from contextlib import nullcontext
 from pathlib import Path
+from threading import get_ident
 import re
 from typing import Any
 import uuid
@@ -2402,3 +2404,239 @@ def test_bug_1106_dev_postgres_uses_bounded_scheduler_index_paths():
         assert "ix_ingestion_jobs_go_init_success_finished_at" in go_audit_indexes
     finally:
         conn.close()
+
+
+@pytest.fixture
+def completion_owner(tmp_path, monkeypatch):
+    monkeypatch.setattr(scheduler_module, "DEFAULT_TEST_OUTPUT_DIR", tmp_path)
+    scheduler = scheduler_module.TDXScheduler()
+    state = {
+        "rows": [
+            {
+                "dataset": "sector_data",
+                "trade_date": dt.date(2026, 10, 14),
+                "refreshed_at": dt.datetime(2026, 10, 14, 12, tzinfo=dt.timezone.utc),
+                "status": "success",
+                "row_count": 131,
+            }
+        ],
+        "queries": [],
+    }
+
+    def fetch(sql, params=()):
+        state["queries"].append((sql, params))
+        return list(state["rows"])
+
+    monkeypatch.setattr(scheduler, "_fetchall", fetch)
+    yield scheduler, state
+    scheduler.shutdown()
+
+
+async def _settle_completion(scheduler):
+    pending = [entry.future for entry in scheduler._completion_callbacks.values() if entry.future is not None]
+    if pending:
+        await asyncio.gather(*(asyncio.wrap_future(future) for future in pending), return_exceptions=True)
+
+
+def test_completion_change_dispatches_once_and_explicit_request_recovers(completion_owner):
+    scheduler, state = completion_owner
+
+    async def scenario():
+        calls = []
+
+        async def callback():
+            calls.append(get_ident())
+
+        scheduler.register_completion_callback("hmm", datasets=("sector_data", "sw_daily"), callback=callback)
+        await asyncio.to_thread(scheduler._dispatch_completion_callbacks)
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        assert calls == [get_ident()]
+        assert state["queries"][0][1][0] == ["sector_data", "sw_daily"]
+        assert "dataset_date_refresh_audit" in state["queries"][0][0]
+
+        state["rows"][0] = {**state["rows"][0], "refreshed_at": dt.datetime(2026, 10, 14, 13, tzinfo=dt.timezone.utc)}
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        assert len(calls) == 2
+        assert scheduler.request_completion_check("hmm") is True
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        assert len(calls) == 3
+
+    asyncio.run(scenario())
+
+
+def test_single_flight_preserves_watermark_and_requests_arriving_in_flight(completion_owner):
+    scheduler, state = completion_owner
+
+    async def scenario():
+        started, release = asyncio.Event(), asyncio.Event()
+        calls = []
+
+        async def callback():
+            calls.append(1)
+            started.set()
+            await release.wait()
+
+        scheduler.register_completion_callback("hmm", datasets=("sector_data",), callback=callback)
+        scheduler._dispatch_completion_callbacks()
+        await asyncio.wait_for(started.wait(), timeout=2)
+        state["rows"][0] = {**state["rows"][0], "row_count": 132}
+        scheduler.request_completion_check("hmm")
+        for _ in range(3):
+            scheduler._dispatch_completion_callbacks()
+        assert len(calls) == 1
+        release.set()
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        assert len(calls) == 2
+
+    asyncio.run(scenario())
+
+
+def test_restart_catchup_without_audit_does_not_certify_data_ready(completion_owner):
+    scheduler, state = completion_owner
+    state["rows"] = []
+
+    async def scenario():
+        calls = []
+
+        async def callback():
+            calls.append("consumer_checks_authority")
+
+        scheduler.register_completion_callback("hmm", datasets=("sector_data",), callback=callback)
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        assert calls == ["consumer_checks_authority"]
+
+    asyncio.run(scenario())
+
+
+def test_failure_isolated_and_not_consumed_then_retried_on_existing_refresh(completion_owner, caplog):
+    scheduler, _ = completion_owner
+
+    async def scenario():
+        calls = []
+
+        async def callback():
+            calls.append(1)
+            return len(calls) > 1
+
+        scheduler.register_completion_callback("hmm", datasets=("sector_data",), callback=callback)
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        assert len(calls) == 2
+
+    asyncio.run(scenario())
+
+
+def test_failed_audit_query_does_not_block_other_callbacks(completion_owner, monkeypatch, caplog):
+    scheduler, state = completion_owner
+    original = scheduler._fetchall
+
+    def fetch(sql, params=()):
+        if params[0] == ["sw_daily"]:
+            raise RuntimeError("audit temporarily unavailable")
+        return original(sql, params)
+
+    monkeypatch.setattr(scheduler, "_fetchall", fetch)
+
+    async def scenario():
+        calls = []
+
+        async def callback():
+            calls.append(1)
+
+        scheduler.register_completion_callback("broken", datasets=("sw_daily",), callback=callback)
+        scheduler.register_completion_callback("healthy", datasets=("sector_data",), callback=callback)
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        assert calls == [1]
+        assert "broken" in caplog.text
+
+    asyncio.run(scenario())
+
+
+def test_callback_exception_is_visible_and_retried_without_blocking_owner(completion_owner, caplog):
+    scheduler, _ = completion_owner
+
+    async def scenario():
+        calls = []
+
+        async def callback():
+            calls.append(1)
+            if len(calls) == 1:
+                raise RuntimeError("consumer temporarily unavailable")
+
+        scheduler.register_completion_callback("hmm", datasets=("sector_data",), callback=callback)
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        assert "consumer temporarily unavailable" in caplog.text
+        scheduler._dispatch_completion_callbacks()
+        await _settle_completion(scheduler)
+        scheduler._dispatch_completion_callbacks()
+        assert len(calls) == 2
+
+    asyncio.run(scenario())
+
+
+def test_unregistration_prevents_queued_callback_and_does_not_change_schedules(completion_owner):
+    scheduler, _ = completion_owner
+
+    async def scenario():
+        calls = []
+
+        async def callback():
+            calls.append(1)
+
+        scheduled = scheduler._scheduler.every().day.at("20:00").do(lambda: None)
+        original_executor = scheduler._executor
+        scheduler.register_completion_callback("hmm", datasets=("sector_data",), callback=callback)
+        scheduler._dispatch_completion_callbacks()
+        pending = scheduler._completion_callbacks["hmm"].future
+        status = scheduler.completion_callback_status("hmm")
+        assert status == {
+            "registered": True,
+            "owner_running": False,
+            "loop_running": True,
+            "in_flight": True,
+            "datasets": ["sector_data"],
+        }
+        assert scheduler.unregister_completion_callback("hmm") is True
+        await asyncio.wrap_future(pending)
+        scheduler._dispatch_completion_callbacks()
+        assert not calls
+        assert scheduler._scheduler.jobs == [scheduled]
+        assert scheduler._executor is original_executor
+        assert scheduler.request_completion_check("hmm") is False
+        assert scheduler.completion_callback_status("hmm")["registered"] is False
+
+    asyncio.run(scenario())
+
+
+def test_refresh_schedules_uses_shared_dispatch_after_existing_work(completion_owner, monkeypatch):
+    scheduler, _ = completion_owner
+    order = []
+    for name in (
+        "_reconcile_stale_running_ingestion_jobs",
+        "_reconcile_stale_queued_ingestion_jobs",
+        "_reconcile_recovered_final_targets",
+        "_reconcile_go_job_refresh_audit",
+        "_reconcile_due_data_sync_targets",
+    ):
+        monkeypatch.setattr(scheduler, name, lambda name=name: order.append(name))
+    monkeypatch.setattr(scheduler, "_fetchall", lambda *_: [])
+    monkeypatch.setattr(scheduler, "_update_jobs", lambda *_: order.append("existing_jobs"))
+    monkeypatch.setattr(scheduler, "_dispatch_completion_callbacks", lambda: order.append("completion_dispatch"))
+    scheduler.refresh_schedules()
+    assert order[-2:] == ["_reconcile_due_data_sync_targets", "completion_dispatch"]
+    assert "existing_jobs" in order
