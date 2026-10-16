@@ -29,13 +29,20 @@
   ],
   "expected": "Validate batch and operation identity, lifecycle, lease, error and result consistency; honest queued and running readback never implies execution completion.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1933-advisory-historical-range-operation-list-lacks-target-owned-semantic-smo.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/aistock_runtime_semantics.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
       "scripts/aistock_issue_workflow.py",
-      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1933-advisory-historical-range-operation-list-lacks-target-owned-semantic-smo.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_runtime_semantics.py",
@@ -125,10 +132,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
