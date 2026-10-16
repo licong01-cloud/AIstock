@@ -47,6 +47,7 @@
       "backend/ingestion/tdx_scheduler.py",
       "backend/routers/hmm_training.py",
       "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "tests/aistock_validation/bugs/20261016_BUG-1939-hmm-database-daily-subscription-lacks-shared-scheduler-readiness-wiring.json"
     ],
@@ -55,6 +56,7 @@
       "backend/ingestion/tdx_scheduler.py",
       "backend/routers/hmm_training.py",
       "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
       "tests/aistock_validation/bugs/20261016_BUG-1939-hmm-database-daily-subscription-lacks-shared-scheduler-readiness-wiring.json"
     ],
@@ -64,6 +66,7 @@
         "backend/ingestion/tdx_scheduler.py",
         "backend/routers/hmm_training.py",
         "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+        "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
         "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
       ],
       "impacted_modules": [
@@ -118,6 +121,17 @@
           "primary_module": "local_data",
           "risk_level": "high",
           "rule_id": "local_data_remaining_tests"
+        },
+        {
+          "file": "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
         }
       ],
       "risk_levels": [
@@ -127,6 +141,7 @@
         "backend/ingestion/tdx_scheduler.py",
         "backend/routers/hmm_training.py",
         "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+        "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
         "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
       ],
       "unmatched_files": []
