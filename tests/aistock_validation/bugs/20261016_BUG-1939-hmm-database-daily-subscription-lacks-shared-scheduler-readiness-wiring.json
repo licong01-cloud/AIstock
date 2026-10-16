@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1939",
-  "closed_at": null,
+  "closed_at": "2026-10-16T21:05:22.318888Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -203,10 +203,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/handoff/hmm-scheduler-readiness-20261016/post-restart-final.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1939",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "8687be61c68b0eca8c0324b40194d16eb6196e941b3ba3eab5015ed8beb28cb6",
+      "expected_identity": "6cea67bd2a08c7c81cc209e20ea7a31749567572",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-16T20:56:25.719081Z",
+      "mode": "read_only",
+      "observed_identity": "0b1e60e5a1ac0e4e4adf39bc7e49d0edeee1724f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6fd7596ccbec3612a9bd777d6f3dd804c1b9c158c273ec6a751c97bbed5961ad",
+      "receipt_sha256": "16328b6287c9fe5dac4a2f2ad39ccbc25aef926e3f0f2336903c5361f3fa2a6c",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "aa676ee59859f4b97f11763d98744e4fb539ca50de6c3eb17468fb51ba901466",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -241,7 +263,7 @@
     ],
     "validation_evidence_digest": "e370e8d8e79ebfd1b6da3975378d9eed115e19b71a7feb45690074e09d688998"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -255,7 +277,8 @@
     "rtk ruff check backend/ingestion/tdx_scheduler.py backend/routers/hmm_training.py backend/tests/hmm_data_source/test_daily_coefficient_subscription.py backend/tests/hmm_data_source/test_hmm_database_daily_input.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> passed",
     "python -m py_compile backend/ingestion/tdx_scheduler.py backend/routers/hmm_training.py backend/tests/hmm_data_source/test_daily_coefficient_subscription.py backend/tests/hmm_data_source/test_hmm_database_daily_input.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> passed",
     "python -m nox -s validation_module_registry_l0 l0 -> passed; registry: 8 passed, 14 mapped, 0 unmapped, 0 ambiguous; l0: blocking=0",
-    "git diff --check -> passed"
+    "git diff --check -> passed",
+    "post-restart-verify BUG-1939 backend-main expected 6cea67bd2a08c7c81cc209e20ea7a31749567572 verified; health/identity/dispatch binding passed; automatic callback reached explicit input BLOCKED; no process control"
   ],
   "verification_budget": {
     "budget": "standard",
