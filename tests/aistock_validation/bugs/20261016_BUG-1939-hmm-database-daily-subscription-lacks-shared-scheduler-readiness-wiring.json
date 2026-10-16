@@ -4,6 +4,7 @@
     "backend/ingestion/tdx_scheduler.py",
     "backend/routers/hmm_training.py",
     "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+    "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
     "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
     "tests/aistock_validation/bugs/20261016_BUG-1939-hmm-database-daily-subscription-lacks-shared-scheduler-readiness-wiring.json"
   ],
@@ -26,7 +27,8 @@
     "review_rounds": [
       "R1: fixed cross-source duplicate dispatch; regression proves database completion never runs frozen-file extension.",
       "R2: moved direct tests into existing CI-selected scheduler test file; checked single-flight/watermark changes/registration lifecycle and failure isolation.",
-      "R3: checked final source scope, unchanged scheduler jobs/executor, public status semantics, no DB/dataset/process actions and CI plan coverage; no remaining local blocking finding."
+      "R3: checked source scope, unchanged scheduler jobs/executor, public status semantics, no DB/dataset/process actions and CI plan coverage.",
+      "R4: PR CI exposed an existing HMM fixture still treating 801011.SI as never quoted after the shared policy correction. Updated only the fixture/current-policy assertions and kept synthetic scope exclusion coverage; 63 direct tests passed. No publication policy or production input reader change. Independent data-owner review remains pending."
     ],
     "rule": "DESIGN-COMPLIANCE-001"
   },
@@ -133,6 +135,7 @@
       "backend/ingestion/tdx_scheduler.py",
       "backend/routers/hmm_training.py",
       "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
@@ -140,6 +143,7 @@
       "backend/ingestion/tdx_scheduler.py",
       "backend/routers/hmm_training.py",
       "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py"
     ]
   },
