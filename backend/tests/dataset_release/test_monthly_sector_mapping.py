@@ -762,7 +762,8 @@ def test_quote_source_refresh_rejects_change_to_existing_finite_fact():
         def get_json_bounded(self, ref, **_):
             return {"rows": ref}
     old = {"index_code": "801012.SI", "trade_date": "2026-03-13", "amount": "1"}
-    source = lambda rows: {"partitions": [{"partition_key": "2026-03", "ref": rows}]}
+    def source(rows):
+        return {"partitions": [{"partition_key": "2026-03", "ref": rows}]}
     assert_additive_quote_refresh(CAS(), source([old]), source([old]))
     with pytest.raises(SourceManifestError, match="finite"):
         assert_additive_quote_refresh(CAS(), source([old]), source([{**old, "amount": "2"}]))
