@@ -96,6 +96,31 @@ def test_native_builder_reads_full_market_inventory_above_small_control_cap(tmp_
                 "component_artifact_manifest_ref": reference.as_dict(), "verified_output_files": files})
 
 
+@pytest.mark.parametrize("symbol,day,verified", [
+    ("603616.SH", date(2026, 1, 22), True),
+    ("000001.SZ", date(2026, 9, 1), False),
+])
+def test_suspend_export_resolves_only_disclosure_backed_mixed_events(tmp_path, symbol, day, verified):
+    import json
+    from backend.services.dataset_release.monthly_shared_components import MonthlySharedComponentsError
+    kwargs = dict(root=tmp_path, rows=[dict(ts_code=symbol, trade_date=day, suspend_type=kind,
+                  suspend_timing=None) for kind in ("S", "R")], pit_rows=[(symbol, day, day)],
+                  calendar=(day,), profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
+    if not verified:
+        with pytest.raises(MonthlySharedComponentsError, match="unresolved suspension"):
+            _build_suspend(**kwargs)
+        assert not (tmp_path / "components").exists()
+        return
+    parquet, meta, keys, _count = _build_suspend(**kwargs)
+    frame = pd.read_parquet(parquet)
+    evidence = json.loads(meta.read_text())
+    assert len(frame) == 1 and keys == {(symbol, day)}
+    assert frame["suspend_timing"].isna().all()
+    assert len(evidence["raw_provider_events"]) == 2
+    assert evidence["day_resolutions"][0]["basis"] == "OFFICIAL_DISCLOSURE"
+    assert evidence["historical_publication_time_proven"] is False
+
+
 def test_native_suspend_keeps_pinned_prefix_and_checks_only_new_month(tmp_path):
     import json
 
