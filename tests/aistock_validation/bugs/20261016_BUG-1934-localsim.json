@@ -210,8 +210,8 @@
   },
   "first_seen_at": "2026-10-16T02:07:33.601765Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fd056156f00e725f182c8be7a8b8a75d17616f1c",
+  "fixed_at": "2026-10-16T02:38:16Z",
   "github_issue_number": 6170,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6170",
   "last_seen_at": "2026-10-16T02:07:33.601765Z",
@@ -219,6 +219,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6174",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -262,6 +263,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -273,7 +275,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1934",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "fc7ba034377760aa",
+    "recorded_at": "2026-10-16T02:38:54.132994Z",
+    "runtime_contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5aa857ab96797378ff25d6602cf60ec744764981",
+    "source_merge_commit": "fd056156f00e725f182c8be7a8b8a75d17616f1c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6174",
+    "validation_evidence": [
+      "X:/AIstock_temp/LOCALSIM/workflow/BUG-1934-source-validation-receipt-r1.json"
+    ],
+    "validation_evidence_digest": "29719222f861990ada4fcbb6cc21d700c0213af6a97794f4e29548fcc1bf8955"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -282,6 +305,9 @@
     "fingerprint": "a6e8e7a144b86bff30eb792c",
     "source_event_id": "FE-20261016-a6e8e7a144b8"
   },
+  "validation_evidence": [
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1934-source-validation-receipt-r1.json"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
