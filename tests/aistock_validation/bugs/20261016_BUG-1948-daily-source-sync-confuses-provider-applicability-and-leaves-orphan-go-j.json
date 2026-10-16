@@ -36,22 +36,34 @@
   "evidence_uris": [],
   "expected": "Supported daily facts persist atomically; unsupported asset classes and source-null boundaries have explicit semantics; real suspension does not create false missing-price claims; lost task identities reconcile safely and do not hide new-day jobs; data and audit status remain truthful.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "noxfile.py",
-      "backend/tests/scripts/test_repair_local_sync_incident.py",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "scripts/repair_local_sync_incident.py",
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
       "backend/services/adj_factor_history_reconciler.py",
       "backend/services/tushare_sync_engine.py",
-      "backend/ingestion/tdx_scheduler.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/scripts/test_repair_local_sync_incident.py",
       "backend/tests/services/test_adj_factor_history_reconciler.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "scripts/repair_local_data_daily_sync.py",
-      "backend/tests/ingestion/test_daily_sync_recovery.py"
+      "noxfile.py",
+      "scripts/repair_local_sync_incident.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1948-daily-source-sync-confuses-provider-applicability-and-leaves-orphan-go-j.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/adj_factor_history_reconciler.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/scripts/test_repair_local_sync_incident.py",
+      "backend/tests/services/test_adj_factor_history_reconciler.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "scripts/repair_local_sync_incident.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1948-daily-source-sync-confuses-provider-applicability-and-leaves-orphan-go-j.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/adj_factor_history_reconciler.py",
@@ -230,20 +242,24 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/stk_limit/status",
-    "backend_restart_owner": "user",
     "fresh_process_evidence": [
       "Fresh-process targeted regression: initial 8 RED cases reproduced; 229 passed and 1 skipped in first related matrix; review added price-relation overwrite protection and native task-list double confirmation. DEV source-backed 16727 adj_factor additions and 5655 stk_limit rows applied twice with typed SQL readback; no production writes or runtime control. Source boundary and newly listed identities checked; full-history restatement not performed by bounded repair.",
-      "DEV receipt: X:/AIstock_dataset_candidates/data_repair_staging/BUG-1948-dev-20261017-r2/dev-receipt.json; source SHA256 950727e514f442f406c40c27dfb58b614bca8a6a159bcdff5ce1171a4086e956. Production SQL SHA256 377022f9c8d3b1119024ece896a1cd7a8d44ec1d8836d6b45b00fc3047cdd96d pending specific authorization. Initial DEV traded-key readback had 0 daily raw keys; a separate real 920196.BJ raw quote staged within a rolled-back DEV transaction proved required_traded_equity_count=1 and source_zero_lower_bound_count=1 through the native producer readback.",
-      "Final related matrix: 292 passed, 1 skipped; later scoped IPO population and orphan refresh-budget regressions passed. Four review rounds: provider applicability and restatement atomicity; raw source versus strict execution limits; native double-absence/CAS plus bounded refresh; real DEV idempotence and missing IPO population. DESIGN-COMPLIANCE-001 item review passed: all requested source fixes implemented, no placeholder facts or fake runtime success, approved business contracts unchanged, no unapproved feature/framework. Production missing data and runtime restart remain independently pending."
+      "DEV receipt: X:/AIstock_dataset_candidates/data_repair_staging/BUG-1948-dev-20261017-r2/dev-receipt.json; source SHA256 950727e514f442f406c40c27dfb58b614bca8a6a159bcdff5ce1171a4086e956. Production SQL SHA256 377022f9c8d3b1119024ece896a1cd7a8d44ec1d8836d6b45b00fc3047cdd96d specifically authorized by user, rehashed and COMMITTED in 14.688 seconds. Separate read-only connection matched all 16727 adj_factor source keys and 5655 stk_limit rows; invalid pre_close=0, zero lower-bound count=1 (920196.BJ:14.21/99999.99/0). No audit/profile/runtime writes. Initial DEV traded-key readback had 0 daily raw keys; a separate real 920196.BJ raw quote staged within a rolled-back DEV transaction proved required_traded_equity_count=1 and source_zero_lower_bound_count=1 through the native producer readback.",
+      "Final related matrix: 292 passed, 1 skipped; later scoped IPO population and orphan refresh-budget regressions: 9 passed. Four review rounds: provider applicability and restatement atomicity; raw source versus strict execution limits; native double-absence/CAS plus bounded refresh; real DEV idempotence and missing IPO population. DESIGN-COMPLIANCE-001 item review passed: all requested source fixes implemented, no placeholder facts or fake runtime success, approved business contracts unchanged, no unapproved feature/framework. Runtime restart and 2026-10-16 minute collection remain independently pending."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
