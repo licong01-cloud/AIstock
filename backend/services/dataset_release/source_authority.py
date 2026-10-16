@@ -1587,6 +1587,7 @@ class FrozenSourceAuthoritySnapshot:
     artifact_ready_provenance_root: str | None = None
     provider_receipt_refs: tuple[CASRef, ...] = ()
     artifact_ready_derived_source_receipt_refs: tuple[CASRef, ...] = ()
+    suspension_day_authority_sha256: str | None = None
 
     @property
     def source_content_root(self) -> str:
@@ -2323,6 +2324,8 @@ class MonthlySourceAuthority:
             sector_receipt_ref,
             core_index_membership_receipt_ref,
         )
+        from backend.data_service.suspension_day_authority import load_authority
+        suspension_day_authority = load_authority()
         manifest_payload = {
             "schema_version": SOURCE_MANIFEST_ARTIFACT_SCHEMA,
             "authority_policy_version": SOURCE_AUTHORITY_POLICY_VERSION,
@@ -2332,6 +2335,7 @@ class MonthlySourceAuthority:
             "source_content_root": manifest.source_content_root,
             "partitions": [item.as_build_input() for item in sorted(sealed, key=lambda value: value.spec.identity)],
             "safety": _zero_safety(),
+            "suspension_day_authority": suspension_day_authority,
             **({"monthly_sector_mapping": dict(self._monthly_sector_mapping)}
                if self._monthly_sector_mapping is not None else {}),
         }
@@ -2452,6 +2456,7 @@ class MonthlySourceAuthority:
             snapshot_tokens=tokens,
             observation_provenance_root=observation_provenance_root,
             source_cas_usage=budget.as_dict(),
+            suspension_day_authority_sha256=sha256_hex(canonical_json_bytes(suspension_day_authority)),
         )
 
     def _capture_control_snapshot(
@@ -3779,6 +3784,11 @@ def load_source_stage_receipt(
     ):
         raise SourceAuditIncomplete("source-stage referenced receipt graph is inconsistent")
     content_rows = manifest_payload.get("partitions")
+    from backend.data_service.suspension_day_authority import load_authority
+    suspension_payload = manifest_payload.get("suspension_day_authority")
+    suspension_sha = None
+    if suspension_payload is not None:
+        suspension_sha = sha256_hex(canonical_json_bytes(load_authority(suspension_payload)))
     reuse_rows = reuse_payload.get("partitions")
     if not isinstance(content_rows, list) or not isinstance(reuse_rows, list):
         raise SourceAuditIncomplete("source-stage partition manifests are invalid")
@@ -4087,6 +4097,7 @@ def load_source_stage_receipt(
         artifact_ready_provenance_root=artifact_provenance_root,
         provider_receipt_refs=provider_refs,
         artifact_ready_derived_source_receipt_refs=artifact_derived_refs,
+        suspension_day_authority_sha256=suspension_sha,
     )
 
 
