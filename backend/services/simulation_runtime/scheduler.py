@@ -11443,6 +11443,19 @@ class SimulationLifecycleScheduler:
                 )
             self.repository.require_localsim_side_effect_free_rebuild(run)
             return True
+        failure = run.run_payload_json.get("submit_failure")
+        if (
+            run.status == SimulationDailyRunStatus.FAILED_RETRYABLE
+            and run.run_payload_json.get("broker_order_handles")
+            and isinstance(failure, dict)
+            and failure.get("stage") == "LOCAL_SIM_MARK_VALIDATION_FAILED"
+            and (failure.get("context") or {}).get("reason_code") == "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID"
+        ):
+            raise DataUnavailableError(
+                "LocalSim rolled-back suspended-mark batch requires formal recovery before retry",
+                context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_REQUIRED", "run_id": run.run_id,
+                         "trade_date": trade_date.isoformat()},
+            )
         if bool(run.run_payload_json.get("broker_called")):
             return False
         if run.status == SimulationDailyRunStatus.SUCCEEDED and isinstance(
@@ -12773,6 +12786,18 @@ class SimulationLifecycleScheduler:
                 )
             tradability = context.pre_trade_tradability.get(symbol)
             suspended = pre_trade_tradability_is_suspended(tradability, symbol=symbol)
+            if suspended and isinstance(tradability, Mapping) and any(
+                key in tradability
+                for key in ("localsim_suspended_native_pre_close_v1", "localsim_suspension_reference_v1")
+            ):
+                SimulationLifecycleScheduler._validate_local_sim_historical_suspended_mark(
+                    record=record, tradability=tradability, trade_date=execution.run.trade_date,
+                    snapshot_time=snapshot_time, source=source,
+                    historical_terminalization=historical_terminalization,
+                )
+                accepted[symbol] = float(record.price)
+                records[symbol] = record
+                continue
             if suspended:
                 daily_reference = tradability.get("daily_trading_context") if isinstance(tradability, Mapping) else None
                 raw_fact = daily_reference.get("symbol_fact") if isinstance(daily_reference, Mapping) else None
@@ -12859,6 +12884,48 @@ class SimulationLifecycleScheduler:
             accepted[symbol] = float(record.price)
             records[symbol] = record
         return accepted, records
+
+    @staticmethod
+    def _validate_local_sim_historical_suspended_mark(
+        *, record: LocalSimMarketMarkV1, tradability: Mapping[str, Any], trade_date: date,
+        snapshot_time: datetime, source: str, historical_terminalization: bool,
+    ) -> None:
+        from backend.services.simulation_execution.localsim.suspension import (
+            NATIVE_PRE_CLOSE_KEY, REFERENCE_KEY, validate_suspended_native_pre_close,
+            validate_suspension_reference,
+        )
+
+        keys = [key for key in (NATIVE_PRE_CLOSE_KEY, REFERENCE_KEY) if key in tradability]
+        if source != MinuteDataSource.DB_HISTORICAL.value or len(keys) != 1:
+            raise DataUnavailableError(
+                "LocalSim historical suspended mark requires one frozen valuation authority",
+                context={"reason_code": "LOCALSIM_SUSPENDED_MARK_AUTHORITY_CONFLICT", "symbol": record.symbol},
+            )
+        if keys[0] == NATIVE_PRE_CLOSE_KEY:
+            reference = validate_suspended_native_pre_close(
+                tradability[NATIVE_PRE_CLOSE_KEY], symbol=record.symbol, trade_date=trade_date, price=record.price,
+            )
+            expected_provenance = LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
+            expected_source = "market.stk_limit.pre_close:frozen_historical_suspension"
+        else:
+            reference = validate_suspension_reference(
+                tradability[REFERENCE_KEY], symbol=record.symbol, trade_date=trade_date, price=record.price,
+            )
+            expected_provenance = LocalSimMarketMarkProvenance.SUSPENDED_REFERENCE_CLOSE
+            expected_source = "market.kline_daily_raw:strategy_package_reference_price_availability_v1"
+        if (
+            record.suspension_reference != reference
+            or record.provenance != expected_provenance
+            or record.source != expected_source
+            or record.as_of_time.date() != trade_date
+            or (not historical_terminalization
+                and record.as_of_time.replace(tzinfo=None) != snapshot_time.replace(tzinfo=None))
+        ):
+            raise DataUnavailableError(
+                "LocalSim suspended mark does not match its frozen valuation evidence",
+                context={"reason_code": "LOCALSIM_SUSPENDED_MARK_EVIDENCE_CONFLICT", "symbol": record.symbol,
+                         "trade_date": trade_date.isoformat()},
+            )
 
     @staticmethod
     def _previous_local_sim_mark_records(run: SimulationDailyRun) -> dict[str, dict[str, Any]]:

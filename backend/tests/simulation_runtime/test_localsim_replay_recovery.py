@@ -239,6 +239,124 @@ def test_native_old_memory_retirement_preserves_original_evidence_and_is_determi
         require_no_economic_effects(retired, snapshot["economic_counts"], now=NOW)
 
 
+def _repeated_mark_memory_batch():
+    from backend.services.simulation_runtime.localsim_replay_recovery import (
+        apply_handle_retirement, proposed_handle_retirement,
+    )
+    snapshot = _old_memory_batch()
+    proof = proposed_handle_retirement(snapshot, process_started_at=NOW - timedelta(minutes=105), now=NOW)
+    payload = apply_handle_retirement(snapshot["run"]["run_payload_json"], proof,
+                                      retired_at=NOW - timedelta(minutes=90))
+    snapshot["run"]["run_payload_json"] = payload
+    snapshot["plan"]["plan_payload_json"]["intents"] = [{"intent_id": "intent-new"}]
+    snapshot["plan"]["plan_hash"] = snapshot["run"]["execution_plan_hash"] = canonical_json_sha256(
+        snapshot["plan"]["plan_payload_json"])
+    snapshot["run"]["execution_plan_id"] = snapshot["plan"]["plan_id"] = "plan-new"
+    payload.update(broker_called=False, submitted_intents=0, failed_intents=1,
+        broker_order_handles=[{"handle_id": "lsh_new", "intent_id": "intent-new", "backend_id": "local_sim",
+                               "submitted_at": (NOW - timedelta(hours=1)).isoformat()}],
+        submit_failure={"type": "DataUnavailableError", "stage": "LOCAL_SIM_MARK_VALIDATION_FAILED",
+            "context": {"reason_code": "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID", "symbol": "001205.SZ",
+                        "trade_date": "2026-01-21", "economic_commit_staged": False,
+                        "broker_called": False, "submitted_intents": 0, "failed_intents": 1}})
+    return snapshot
+
+
+def test_repeated_native_retirement_preserves_both_plans_and_all_original_payloads():
+    from backend.services.simulation_runtime.localsim_replay_recovery import (
+        RETIREMENT_KEY, apply_handle_retirement, proposed_handle_retirement,
+    )
+    snapshot = _repeated_mark_memory_batch()
+    original = deepcopy(snapshot)
+    proof = proposed_handle_retirement(snapshot, process_started_at=NOW - timedelta(minutes=30), now=NOW)
+    retired = apply_handle_retirement(snapshot["run"]["run_payload_json"], proof, retired_at=NOW)
+    latest = retired[RETIREMENT_KEY]
+    previous = latest["original_payload"][RETIREMENT_KEY]
+    assert previous == original["run"]["run_payload_json"][RETIREMENT_KEY]
+    assert latest["predecessor_retirement_sha256"] == previous["receipt_sha256"]
+    assert latest["plan_id"] == "plan-new" and latest["plan_hash"] != previous["plan_hash"]
+    assert snapshot == original and "broker_order_handles" not in retired
+    require_no_economic_effects(retired, snapshot["economic_counts"], now=NOW)
+    previous["original_payload"]["failed_intents"] = 0
+    latest["original_payload_sha256"] = canonical_json_sha256(latest["original_payload"])
+    latest["receipt_sha256"] = canonical_json_sha256({k: v for k, v in latest.items() if k != "receipt_sha256"})
+    with pytest.raises(InvalidStateTransitionError, match="retirement"):
+        require_no_economic_effects(retired, snapshot["economic_counts"], now=NOW)
+
+
+@pytest.mark.parametrize("mutation", ["reused_handle", "old_time", "prior_hash", "prior_identity", "live_process"])
+def test_repeated_native_retirement_rejects_reused_or_unproven_batches(mutation):
+    from backend.services.simulation_runtime.localsim_replay_recovery import RETIREMENT_KEY, proposed_handle_retirement
+
+    snapshot = _repeated_mark_memory_batch()
+    payload = snapshot["run"]["run_payload_json"]
+    started = NOW - timedelta(minutes=30)
+    if mutation == "reused_handle":
+        payload["broker_order_handles"][0]["handle_id"] = "lsh_original"
+    elif mutation == "old_time":
+        payload["broker_order_handles"][0]["submitted_at"] = (NOW - timedelta(hours=2)).isoformat()
+    elif mutation == "prior_hash":
+        payload[RETIREMENT_KEY]["original_payload"]["failed_intents"] = 0
+    elif mutation == "prior_identity":
+        prior = payload[RETIREMENT_KEY]
+        prior["run_id"] = "different-run"
+        prior["receipt_sha256"] = canonical_json_sha256({k: v for k, v in prior.items() if k != "receipt_sha256"})
+    elif mutation == "live_process":
+        started = NOW - timedelta(hours=2)
+    with pytest.raises(InvalidStateTransitionError):
+        proposed_handle_retirement(snapshot, process_started_at=started, now=NOW)
+
+
+@pytest.mark.parametrize("suspended", [False, True])
+@pytest.mark.parametrize("replay_status", ["FAILED_TERMINAL", "FAILED_RETRYABLE"])
+def test_mark_consumer_failure_recovery_requires_native_full_halt(suspended, replay_status):
+    from backend.services.simulation_execution.localsim.suspension import REFERENCE_KEY
+    from backend.tests.simulation_execution.test_localsim_runtime import _halt_reference
+
+    snapshot = _repeated_mark_memory_batch()
+    snapshot["job"]["status"] = replay_status
+    service, calls = _service(snapshot)
+    service.process_started_at = NOW - timedelta(minutes=30)
+    service.suspension_provider = SimpleNamespace(load_statuses=lambda **_: {
+        "001205.SZ": {"suspend_status": {"is_suspended": True},
+                      REFERENCE_KEY: _halt_reference("001205.SZ", DAYS[1])}} if suspended else {})
+    check = service.inspect("replay-original")
+    assert check.ready == suspended and not calls
+    if suspended:
+        assert check.native_input["eligibility"] == "FULL_DAY_SUSPENDED"
+    else:
+        assert check.reason_codes == ["LOCALSIM_REPLAY_RECOVERY_SUSPENSION_UNPROVEN"]
+
+
+def test_retryable_recovery_does_not_widen_other_failure_types():
+    snapshot = _old_memory_batch()
+    snapshot["job"]["status"] = "FAILED_RETRYABLE"
+    service, calls = _service(snapshot)
+    service.process_started_at = NOW - timedelta(hours=1)
+    check = service.inspect("replay-original")
+    assert not check.ready and check.reason_codes == ["LOCALSIM_REPLAY_RECOVERY_STATE_INVALID"]
+    assert not calls
+
+
+@pytest.mark.parametrize("submit", [False, True])
+def test_restarted_scheduler_preserves_failed_memory_batch_until_formal_recovery(submit):
+    snapshot = _repeated_mark_memory_batch()
+    run = SimpleNamespace(**{**snapshot["run"], "status": SimulationDailyRunStatus.FAILED_RETRYABLE,
+                              "trade_date": DAYS[1]})
+    original = deepcopy(run.run_payload_json)
+    scheduler = SimulationLifecycleScheduler.__new__(SimulationLifecycleScheduler)
+    binding = SimpleNamespace(broker_backend=SimulationBrokerBackend.LOCAL_SIM)
+    if submit:
+        with pytest.raises(DataUnavailableError) as exc_info:
+            scheduler._should_rebuild_localsim_plan_after_side_effect_free_failure(
+                binding=binding, run=run, submit=submit, trade_date=DAYS[1], as_of_time=NOW)
+        assert exc_info.value.context["reason_code"] == "LOCALSIM_REPLAY_RECOVERY_REQUIRED"
+    else:
+        assert not scheduler._should_rebuild_localsim_plan_after_side_effect_free_failure(
+            binding=binding, run=run, submit=submit, trade_date=DAYS[1], as_of_time=NOW)
+    assert run.run_payload_json == original
+
+
 @pytest.mark.parametrize("mutation", ["live_process", "unknown", "qmt", "economic", "outbox", "intent",
                                       "plan_hash", "staged", "duplicate", "lease"])
 def test_old_handle_retirement_rejects_unproven_or_live_evidence(mutation):
