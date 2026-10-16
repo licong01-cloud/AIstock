@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Explicit valid intraday timing is parsed deterministically; unknown blank S/R remains unresolved and official full-day contradictions remain blocked.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/data_service/suspension_day_authority.py",
+      "backend/tests/services/test_suspend_d_coverage.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1944-suspension-authority-rejects-valid-provider-intraday-timing-formats.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/data_service/suspension_day_authority.py",
-      "backend/tests/services/test_suspend_d_coverage.py"
+      "backend/tests/services/test_suspend_d_coverage.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1944-suspension-authority-rejects-valid-provider-intraday-timing-formats.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/data_service/suspension_day_authority.py",
@@ -90,6 +96,13 @@
   "fix_branch": null,
   "fix_commit": null,
   "fixed_at": null,
+  "github_extra": {
+    "review_rounds": [
+      "Semantic review: explicit timing proves intraday only; blank S/R, duplicate event types and official full-day contradictions remain unresolved.",
+      "Boundary review: single-hour and multiple ordered ranges accepted; overlapping, reversed, malformed and out-of-session bounds rejected.",
+      "DESIGN-COMPLIANCE-001: shared data-side parser only; all unknown states remain explicit, raw events and prices remain unchanged, replay and database untouched. No new platform or approval gate. Daily and monthly share this helper."
+    ]
+  },
   "github_issue_number": 6200,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6200",
   "last_seen_at": "2026-10-16T17:48:09.462660Z",
@@ -109,21 +122,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/suspend_d/status",
     "fresh_process_evidence": [
       "RED: four provider timing cases failed. GREEN: 153 direct daily tests passed in a fresh process. Read-only September production scan: 265 raw events, 263 keys, 228 full-day, 24 resumed, 11 intraday, zero unresolved; raw SHA256 0cc5897e9a597a22d18e3576bd2afcc7be5f14934e7967023674d3d1f6118908. Receipt X:/AIstock_dataset_candidates/data_repair_staging/BUG-1944-suspension-september-readback-20261017.json. No database, profile or runtime writes."
     ],
-    "inference_basis": "planned_scope",
+    "health_ref": "http://127.0.0.1:8001/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "health_ref": "http://127.0.0.1:8001/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/suspend_d/status",
     "target_ids": [
       "backend-main"
     ]
@@ -185,13 +202,6 @@
     ],
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
-  },
-  "github_extra": {
-    "review_rounds": [
-      "Semantic review: explicit timing proves intraday only; blank S/R, duplicate event types and official full-day contradictions remain unresolved.",
-      "Boundary review: single-hour and multiple ordered ranges accepted; overlapping, reversed, malformed and out-of-session bounds rejected.",
-      "DESIGN-COMPLIANCE-001: shared data-side parser only; all unknown states remain explicit, raw events and prices remain unchanged, replay and database untouched. No new platform or approval gate. Daily and monthly share this helper."
-    ]
   },
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
