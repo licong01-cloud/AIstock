@@ -687,6 +687,71 @@ def _business_semantic(url: str, payload: Any, response_hash: str) -> dict[str, 
     )[1]
 
 
+@pytest.mark.parametrize("state,patch,area,field,value,passed", [
+    (state, {}, None, None, None, True)
+    for state in ("QUEUED", "RUNNING", "WAITING_INPUT", "COMPLETED", "RETRYABLE_FAILED", "FAILED")
+] + [
+    ("RUNNING", {"lease_expired": True}, None, None, None, True),
+    ("COMPLETED", {"operation_type": "CREATE", "request_payload_sha256": None, "planning_identity_hash": "a" * 64,
+                   "lease_expires_at": "2026-10-16T00:05:00+00:00"}, "ref", "artifact_kind", "SOURCE_REQUIREMENT_PLAN", True),
+    ("RETRYABLE_FAILED", {"attempt_no": 0, "started_at": None, "fencing_token": None,
+                          "error_json": {"schema_version": "advisory_historical_range_background_dispatch_failure_v1",
+                                         "batch_id": "ahrb_test", "operation_id": "ahrop_test", "retryable": True,
+                                         "command": "EXECUTION_RESUME", "stage": "CLAIM_AND_EXECUTION", "reason_code": "FAILED", "error_type": "Error",
+                                         "recorded_at": "2026-10-16T00:00:00+00:00"}}, None, None, None, True),
+    ("QUEUED", {}, "row", "batch_id", "other", False), ("QUEUED", {}, "row", "operation_id", "", False),
+    ("QUEUED", {}, "data", "operations", [], False), ("QUEUED", {}, "payload", "ok", False, False),
+    ("QUEUED", {}, "row", "attempt_no", 1, False), ("RUNNING", {}, "row", "lease_expires_at", None, False),
+    ("QUEUED", {}, "row", "lease_expired", True, False), ("RUNNING", {}, "row", "fencing_token", True, False),
+    ("COMPLETED", {}, "row", "error_json", {"reason": "FAILED"}, False),
+    ("FAILED", {}, "row", "error_json", None, False), ("RUNNING", {}, "row", "result_hash", "a" * 64, False),
+    ("COMPLETED", {}, "row", "finished_at", None, False), ("COMPLETED", {}, "row", "result_ref", None, False),
+    ("COMPLETED", {}, "ref", "semantic_content_hash", "b" * 64, False),
+    ("COMPLETED", {}, "ref", "artifact_kind", "SOURCE_REQUIREMENT_PLAN", False),
+    ("COMPLETED", {}, "ref", "relative_path", "../escape", False),
+    ("COMPLETED", {}, "row", "result_status", "NOT_REAL", False),
+    ("QUEUED", {}, "page", "has_more", True, False), ("QUEUED", {}, "row", "created_at", "naive", False),
+    ("QUEUED", {}, "query", "expected_operation_id", "other", False),
+    ("QUEUED", {}, "query", "status", "COMPLETED", False),
+    ("QUEUED", {}, "duplicate", None, None, False), ("QUEUED", {}, "payload", "data", None, False),
+    ("QUEUED", {}, "row", "request_payload_sha256", "bad", False),
+    ("RETRYABLE_FAILED", {"attempt_no": 0, "started_at": None}, None, None, None, False),
+    ("RETRYABLE_FAILED", {}, "row", "error_json", {"schema_version": "advisory_historical_range_background_dispatch_failure_v1",
+                                                    "operation_id": "wrong", "batch_id": "ahrb_test"}, False),
+])
+def test_advisory_operation_readback_is_not_execution_success(state, patch, area, field, value, passed):
+    stamp = "2026-10-16T00:00:00+00:00"
+    publishes, terminal = state in {"WAITING_INPUT", "COMPLETED", "FAILED"}, state in {"COMPLETED", "FAILED"}
+    ref = dict(schema_version="advisory_historical_range_artifact_ref_v1", artifact_kind="RANGE_RECEIPT",
+               relative_path="receipts/op.json", producer_contract_version="v1", payload_schema_version="v1",
+               semantic_content_hash="a" * 64, payload_sha256="c" * 64, file_sha256="d" * 64)
+    row = dict(operation_id="ahrop_test", batch_id="ahrb_test", operation_type="RESUME",
+               operation_idempotency_key="resume-key", status=state, row_version=1,
+               request_payload_sha256="a" * 64, expected_row_version=1,
+               attempt_no=0 if state == "QUEUED" else 1, fencing_token=None if state == "QUEUED" else 1,
+               created_at=stamp, started_at=None if state == "QUEUED" else stamp,
+               finished_at=stamp if terminal else None, lease_expired=False,
+               lease_expires_at="2026-10-16T00:05:00+00:00" if state == "RUNNING" else None,
+               error_json={"reason": "FAILED"} if state in {"FAILED", "RETRYABLE_FAILED"} else None,
+               result_ref=ref if publishes else None, result_hash="a" * 64 if publishes else None,
+               result_status="PARTIAL" if publishes else None, result_row_version=2 if publishes else None)
+    row.update(patch)
+    data, page = {"operations": [row]}, {"limit": 50, "has_more": False, "next_cursor": None}
+    payload, query = {"ok": True, "data": data, "page": page}, {"expected_operation_id": "ahrop_test"}
+    if area == "duplicate":
+        data["operations"].append(dict(row))
+    elif area:
+        {"row": row, "data": data, "page": page, "payload": payload, "ref": ref, "query": query}[area][field] = value
+    semantic = _business_semantic("http://localhost/api/v1/advisory/historical-range-batches/ahrb_test/operations?"
+                                  + urllib.parse.urlencode(query), payload, "e" * 64)
+    assert semantic["contract_id"] == "advisory_historical_operation_status_readback"
+    assert semantic["verdict"] == ("passed" if passed else "failed")
+    if passed:
+        assert semantic["facts"]["execution_completed"] is False
+        assert semantic["facts"]["operations"][0]["status"] == state
+        assert semantic["facts"]["verification_scope"] == "operation_status_readback_only"
+
+
 @pytest.mark.parametrize("target,value", [
     ("native", None), ("multi_alpha", None), ("valid_empty", None), ("legacy", None), ("history", None),
     ("row.status", "FAILED"), ("row.status", "PENDING"), ("row.error_json", {"error_code": "DATA_UNAVAILABLE"}),
@@ -1532,6 +1597,7 @@ def test_runtime_catalog_validation_error_cannot_be_downgraded(invalid_runtime_c
 
 @pytest.mark.parametrize("path,registered", [
     ("/api/v1/audit-unregistered-contract", False),
+    ("/api/v1/advisory/historical-range-batches/ahrb_test/operations", True),
     ("/api/v1/factor-metrics/results", True),
     ("/api/v1/hmm-training/snapshots/snapshot-1/daily-coefficients/jobs", True),
     ("/api/v1/advisory/programs/advp_test/sector-entry-price?target_trade_date=2026-08-28&list_version_id=list-test", True),
