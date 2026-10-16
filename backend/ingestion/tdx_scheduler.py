@@ -986,6 +986,10 @@ class TDXScheduler:
     def refresh_schedules(self) -> None:
         """Reload enabled schedules from database and update in-memory jobs."""
         try:
+            self._reconcile_lost_go_jobs()
+        except Exception:  # noqa: BLE001 - never infer absence from a transport failure.
+            _logger.exception("Go task identity reconciliation failed")
+        try:
             self._reconcile_stale_running_ingestion_jobs()
         except Exception:  # noqa: BLE001 - refresh continues so the next cadence can retry.
             _logger.exception("stale running ingestion job reconciliation failed")
@@ -1029,6 +1033,92 @@ class TDXScheduler:
         except Exception as exc:  # noqa: BLE001
             _logger.warning("data sync target reconciliation failed: %s", exc)
         self._dispatch_completion_callbacks()
+
+    def _reconcile_lost_go_jobs(self) -> int:
+        """Release only expired jobs whose accepted native task is explicitly gone.
+
+        A Go watcher can vanish during backend restarts, while Go replaces its
+        database summary. Recover its identity from the append-only acceptance
+        log; elapsed time alone is never evidence that an async writer stopped.
+        """
+        now = _now()
+        last = getattr(self, "_last_go_identity_sweep", None)
+        if last is not None and now - last < dt.timedelta(minutes=10):
+            return 0
+        self._last_go_identity_sweep = now
+        rows = self._fetchall("""
+            SELECT j.job_id,j.summary,l.message AS accepted_message
+              FROM market.ingestion_jobs j
+              LEFT JOIN LATERAL (
+                  SELECT message FROM market.ingestion_logs
+                   WHERE job_id=j.job_id AND message LIKE '%%go_task_accepted%%'
+                   ORDER BY ts DESC LIMIT 1
+              ) l ON TRUE
+             WHERE j.status='running' AND j.summary->>'via'='go_init'
+               AND COALESCE(j.started_at,j.created_at)<NOW()-(%s||' minutes')::interval
+             ORDER BY j.created_at LIMIT 20
+            """, (str(_ACTIVE_JOB_LEASE_MINUTES),))
+        count = 0
+        deadline = time.monotonic() + 10
+        base = os.getenv("TDX_API_BASE", "http://localhost:19080").rstrip("/")
+        for row in rows:
+            if time.monotonic() >= deadline:
+                break  # A failed Go endpoint must not monopolize schedule refresh.
+            summary = row.get("summary") or {}
+            if isinstance(summary, str):
+                try:
+                    summary = json.loads(summary)
+                except ValueError:
+                    continue
+            if not isinstance(summary, dict):
+                continue
+            task_id = summary.get("go_task_id")
+            if not task_id and row.get("accepted_message"):
+                try:
+                    accepted = json.loads(row["accepted_message"])
+                    if accepted.get("detail", {}).get("phase") == "go_task_accepted":
+                        task_id = accepted.get("summary", {}).get("go_task_id")
+                except (ValueError, TypeError, AttributeError):
+                    continue
+            try:
+                task_id = str(uuid.UUID(str(task_id)))
+            except (ValueError, TypeError, AttributeError):
+                continue
+            try:
+                response = requests.get(f"{base}/api/tasks/{task_id}", timeout=5)
+                response.raise_for_status()
+                payload = response.json()
+            except (requests.RequestException, ValueError):
+                continue
+            if not isinstance(payload, dict) or payload.get("code") != -1:
+                continue
+            # Older Go builds have a mojibake not-found message. Do not depend
+            # on that text: independently confirm absence in the native list.
+            try:
+                listed = requests.get(f"{base}/api/tasks", timeout=5)
+                listed.raise_for_status()
+                inventory = listed.json()
+            except (requests.RequestException, ValueError):
+                continue
+            if not isinstance(inventory, dict) or inventory.get("code") != 0:
+                continue
+            tasks = inventory.get("data")
+            if not isinstance(tasks, list) or any(
+                not isinstance(task, dict) or not task.get("id") for task in tasks
+            ) or any(task["id"] == task_id for task in tasks):
+                continue
+            patch = {"failure_category": "go_task_identity_lost", "go_task_id": task_id,
+                     "error": "accepted native Go task no longer exists", "reconciled_at": now.isoformat()}
+            # CAS against the complete observed summary: don't overwrite a newer
+            # watcher, completion or concurrently revised job identity.
+            changed = self._fetchall("""UPDATE market.ingestion_jobs
+                SET status='failed',finished_at=NOW(),summary=summary||%s::jsonb
+                WHERE job_id=%s AND status='running' AND summary=%s::jsonb
+                  AND COALESCE(started_at,created_at)<NOW()-(%s||' minutes')::interval
+                RETURNING job_id""", (json.dumps(patch), row["job_id"], json.dumps(summary),
+                                       str(_ACTIVE_JOB_LEASE_MINUTES)))
+            count += len(changed)
+        return count
 
     def _reconcile_go_job_refresh_audit(self) -> None:
         """Self-heal refresh-audit rows for successful Go-engine jobs (BUG-972).
@@ -5013,12 +5103,7 @@ class TDXScheduler:
                 # Provider population, not a strategy stock pool: retain ST and
                 # historical delisted stocks intersecting an explicit window,
                 # but do not request pre-listing dates or unrelated instruments.
-                code_rows = self._fetchall(
-                    "SELECT ts_code FROM market.stock_basic WHERE list_date <= %s "
-                    "AND (delist_date IS NULL OR delist_date >= %s) ORDER BY ts_code",
-                    (end_date, start_date),
-                )
-                codes = [str(row["ts_code"]).strip() for row in code_rows]
+                codes = self._go_provider_codes(start_date, end_date)
                 if not codes:
                     raise RuntimeError("date-valid TDX provider population is unavailable")
             summary.update({
@@ -5275,6 +5360,22 @@ class TDXScheduler:
                     _logger.warning("_extract_job_id_from_cmd: invalid UUID '%s'", cmd[i + 1])
                     return None
         return None
+
+    def _go_provider_codes(self, start_date: dt.date, end_date: dt.date) -> List[str]:
+        # The stock-basic directory may lag an IPO. A real same-window daily
+        # quote is also provider-population evidence, never PIT buy eligibility.
+        rows = self._fetchall(r"""WITH bounds AS (SELECT %s::date AS end_day,%s::date AS start_day)
+            SELECT ts_code FROM market.stock_basic,bounds WHERE list_date<=end_day
+              AND (delist_date IS NULL OR delist_date>=start_day)
+            UNION
+            SELECT DISTINCT k.ts_code FROM market.kline_daily_raw k,bounds
+             WHERE k.trade_date BETWEEN start_day AND end_day AND k.adjust_type='none'
+               AND (k.volume_hand>0 OR k.volume_shares>0)
+               AND (k.ts_code ~ '^(00|20|30)[0-9]{4}\.SZ$'
+                 OR k.ts_code ~ '^(6[0-9]{5}|900[0-9]{3})\.SH$'
+                 OR k.ts_code ~ '^[489][0-9]{5}\.BJ$')
+            ORDER BY ts_code""", (end_date, start_date))
+        return [str(row["ts_code"]).strip() for row in rows]
 
     def _update_ingestion_job_status(
         self, job_id: uuid.UUID, status: str, start_ts: dt.datetime, summary: Dict[str, Any]

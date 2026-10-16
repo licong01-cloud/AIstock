@@ -648,6 +648,7 @@ def test_refresh_schedules_reconciles_due_sync_targets():
     scheduler = TDXScheduler.__new__(TDXScheduler)
     calls = []
 
+    scheduler._reconcile_lost_go_jobs = lambda: calls.append("go_identity")
     scheduler._reconcile_stale_running_ingestion_jobs = lambda: calls.append("stale_running")
     scheduler._reconcile_stale_queued_ingestion_jobs = lambda: calls.append("stale_queued")
     scheduler._fetchall = lambda sql, params=(): []
@@ -657,7 +658,62 @@ def test_refresh_schedules_reconciles_due_sync_targets():
 
     scheduler.refresh_schedules()
 
-    assert calls == ["stale_running", "stale_queued", ("jobs", [], []), "final_recovery", "due"]
+    assert calls == ["go_identity", "stale_running", "stale_queued", ("jobs", [], []), "final_recovery", "due"]
+
+
+def test_go_provider_population_includes_real_ipo_quotes_without_widening_buy_pool():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    def fetch(sql, params):
+        assert "UNION" in sql and "market.kline_daily_raw" in sql
+        assert "stock_universe" not in sql
+        assert params == (dt.date(2026, 10, 15), dt.date(2026, 10, 15))
+        return [{"ts_code": "301569.SZ"}, {"ts_code": "920162.BJ"}]
+    scheduler._fetchall = fetch
+    assert scheduler._go_provider_codes(dt.date(2026, 10, 15), dt.date(2026, 10, 15)) == ["301569.SZ", "920162.BJ"]
+
+
+@pytest.mark.parametrize("go_state,expected", [("missing", 1), ("running", 0), ("transport_error", 0),
+                                              ("malformed", 0), ("list_disagrees", 0), ("bad_summary", 0)])
+def test_orphan_go_reconciliation_requires_explicit_native_absence(monkeypatch, go_state, expected):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    job_id, task_id = uuid.uuid4(), uuid.uuid4()
+    queries = []
+    def fetch(sql, params=()):
+        queries.append((sql, params))
+        if "UPDATE market.ingestion_jobs" in sql:
+            return [{"job_id": job_id}]
+        return [{"job_id": job_id, "summary": "{" if go_state == "bad_summary" else {"dataset": "kline_minute_raw", "via": "go_init"},
+                 "accepted_message": json.dumps({"detail": {"phase": "go_task_accepted"},
+                                                "summary": {"go_task_id": str(task_id)}})}]
+    scheduler._fetchall = fetch
+    scheduler._execute = lambda *_: pytest.fail("must not change unrelated schedules")
+    def get(url, **kwargs):
+        if url.endswith("/api/tasks"):
+            tasks = [{"id": str(task_id), "status": "running"}] if go_state == "list_disagrees" else []
+            return SimpleNamespace(raise_for_status=lambda: None, json=lambda: {"code": 0, "data": tasks})
+        assert url.endswith(str(task_id))
+        if go_state == "transport_error":
+            raise scheduler_module.requests.ConnectionError("unavailable")
+        payload = ({"code": -1, "message": "legacy missing message"} if go_state in {"missing", "list_disagrees"} else
+                   {"code": 0, "data": {"status": "running"}} if go_state == "running" else {})
+        return SimpleNamespace(raise_for_status=lambda: None, json=lambda: payload)
+    monkeypatch.setattr(scheduler_module.requests, "get", get)
+    assert scheduler._reconcile_lost_go_jobs() == expected
+    updates = [sql for sql, _ in queries if "UPDATE market.ingestion_jobs" in sql]
+    assert bool(updates) == bool(expected)
+    if updates:
+        assert "status='running'" in updates[0] and "summary=%s::jsonb" in updates[0]
+    # Repeated refreshes must not flood the Go API.
+    assert scheduler._reconcile_lost_go_jobs() == 0
+
+
+def test_orphan_go_reconciliation_has_bounded_refresh_budget(monkeypatch):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._fetchall = lambda *_: [{"summary": {}}]
+    ticks = iter([0, 11])
+    monkeypatch.setattr(scheduler_module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(scheduler_module.requests, "get", lambda *_: pytest.fail("budget exceeded"))
+    assert scheduler._reconcile_lost_go_jobs() == 0
 
 
 def test_final_target_recovery_sweep_repairs_historical_recovered_family(monkeypatch):
