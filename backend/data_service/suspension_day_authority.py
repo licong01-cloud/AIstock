@@ -7,7 +7,7 @@ No price, missing trade, or S/R ordering is used to manufacture a suspension.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, time
 import hashlib
 import json
 from pathlib import Path
@@ -73,13 +73,18 @@ def frozen_authority(cas: Any, snapshot: Any) -> dict[str, Any]:
 
 
 def _intraday(timing: str) -> bool:
-    if not re.fullmatch(r"\d{2}:\d{2}-\d{2}:\d{2}", timing):
-        return False
-    try:
-        left, right = (datetime.strptime(part, "%H:%M").time() for part in timing.split("-"))
-    except ValueError:
-        return False
-    return datetime.strptime("09:30", "%H:%M").time() <= left < right <= datetime.strptime("15:00", "%H:%M").time()
+    previous_end = None
+    for span in timing.split(","):
+        if not re.fullmatch(r"\d{1,2}:\d{2}-\d{1,2}:\d{2}", span):
+            return False
+        try:
+            left, right = (datetime.strptime(part, "%H:%M").time() for part in span.split("-"))
+        except ValueError:
+            return False
+        if not time(9, 30) <= left < right <= time(15) or (previous_end is not None and left < previous_end):
+            return False
+        previous_end = right
+    return True
 
 
 def project_suspension_days(rows: Iterable[Mapping[str, Any]], *, authority: Mapping[str, Any] | None = None,
@@ -109,12 +114,17 @@ def project_suspension_days(rows: Iterable[Mapping[str, Any]], *, authority: Map
         )
         if entry is not None and disclosure_compatible:
             state, basis = entry["state"], "OFFICIAL_DISCLOSURE"
-        elif entry is None and len(raw) == 1 and valid:
-            event, timing = raw[0]["suspend_type"], str(raw[0]["suspend_timing"] or "").strip()
-            if event == "S":
-                state = "FULL_DAY_SUSPENDED" if not timing else "INTRADAY_SUSPENDED" if _intraday(timing) else "UNRESOLVED"
-            elif not timing:
-                state = "RESUMED"
+        elif entry is None and valid and len({row["suspend_type"] for row in raw}) == len(raw):
+            events = {row["suspend_type"]: str(row["suspend_timing"] or "").strip() for row in raw}
+            if "S" in events and _intraday(events["S"]) and not events.get("R"):
+                # An explicit S interval proves intraday suspension without
+                # claiming the order of a same-day blank R event.
+                state = "INTRADAY_SUSPENDED"
+            elif len(events) == 1:
+                if events == {"S": ""}:
+                    state = "FULL_DAY_SUSPENDED"
+                elif events == {"R": ""}:
+                    state = "RESUMED"
         result.append({"ts_code": symbol, "trade_date": day.isoformat(), "state": state, "basis": basis,
                        "raw_events_sha256": digest(sorted(raw, key=canonical_bytes)), "raw_event_count": len(raw),
                        "authority_sha256": authority_sha256, "historical_publication_time_proven": False,

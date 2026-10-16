@@ -24,19 +24,13 @@ def test_pipeline_overview_probe_validates_partial_observation_contract(case, ex
                        'collected_at': '2026-10-17T00:00:00Z', 'age_seconds': 0, 'stale': False, 'refreshing': False}
     sources['prs'] = {'state': 'unavailable', 'error': 'TimeoutError', 'data': None, 'stale': False, 'refreshing': False}
     payload = {'status': 'success', 'data': {'schema_version': 'aistock_pipeline_overview_v1', 'read_only': True, 'sections': sources}}
-    if case == 'empty':
-        payload['data']['sections'] = {}
-    elif case == 'fake-zero':
-        sources['ci']['data'] = {'queued': 0}
-    elif case == 'no-proof':
-        sources['bugs']['collected_at'] = None
-    elif case == 'empty-available':
-        sources['bugs']['data'] = {}
-    elif case == 'loading':
-        sources['bugs'] = dict(source)
-    verdict = workflow._evaluate_business_smoke_semantics(
-        'http://127.0.0.1:8001/api/v1/validation/overview/snapshot', json.dumps(payload), response_sha256='a' * 64,
-    )[1]
+    mutations = {'empty': (payload['data'], 'sections', {}), 'fake-zero': (sources['ci'], 'data', {'queued': 0}),
+                 'no-proof': (sources['bugs'], 'collected_at', None), 'empty-available': (sources['bugs'], 'data', {}),
+                 'loading': (sources, 'bugs', dict(source))}
+    if case in mutations:
+        target, key, value = mutations[case]
+        target[key] = value
+    verdict = workflow._evaluate_business_smoke_semantics('http://127.0.0.1:8001/api/v1/validation/overview/snapshot', json.dumps(payload), response_sha256='a' * 64)[1]
     assert verdict['contract_id'] == 'pipeline_overview_observations'
     assert verdict['verdict'] == expected
 
