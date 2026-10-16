@@ -954,18 +954,42 @@ function appendQuery(path: string, params: Record<string, string | number | bool
 }
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      ...(init?.headers || {}),
-    },
-  });
-  const text = await response.text();
-  const payload = text ? JSON.parse(text) as unknown : {};
-  if (!response.ok) throw new ValidationApiError(errorMessage(payload, response.status), response.status, payload);
-  return payload as T;
+  const controller = new AbortController();
+  // Mutating runner submissions retain their own execution contract.
+  const timer = !init?.method || init.method === "GET" ? setTimeout(() => controller.abort(), 12_000) : undefined;
+  try {
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...init,
+      signal: init?.signal || controller.signal,
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", ...(init?.headers || {}) },
+    });
+    const text = await response.text();
+    const payload = text ? JSON.parse(text) as unknown : {};
+    if (!response.ok) throw new ValidationApiError(errorMessage(payload, response.status), response.status, payload);
+    return payload as T;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
+
+export type OverviewSource = {
+  state: "loading" | "available" | "unavailable" | "timeout";
+  data: JsonObject | null;
+  collected_at: string | null;
+  age_seconds: number | null;
+  stale: boolean;
+  refreshing: boolean;
+  source?: string | null;
+  error?: string;
+};
+
+export type PipelineOverviewSnapshot = {
+  schema_version: string;
+  generated_at: string;
+  ttl_seconds: number;
+  sections: Record<string, OverviewSource>;
+};
 
 async function unwrap<T>(path: string): Promise<T> {
   const response = await apiFetch<ValidationEnvelope<T>>(path);
@@ -973,6 +997,13 @@ async function unwrap<T>(path: string): Promise<T> {
 }
 
 export const validationApi = {
+  async overviewSnapshot(): Promise<PipelineOverviewSnapshot> {
+    const data = await unwrap<PipelineOverviewSnapshot>("/validation/overview/snapshot");
+    if (!data || data.schema_version !== "aistock_pipeline_overview_v1" || !data.sections || typeof data.sections !== "object") {
+      throw new Error("流水线快照合同缺失或不兼容；请确认后端已加载相应源码");
+    }
+    return data;
+  },
   health(): Promise<ValidationHealth> {
     return unwrap<ValidationHealth>("/validation/health");
   },

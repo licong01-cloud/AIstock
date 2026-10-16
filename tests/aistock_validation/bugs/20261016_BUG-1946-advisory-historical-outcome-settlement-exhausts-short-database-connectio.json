@@ -1,0 +1,457 @@
+{
+  "actual": "Per-item DB connection churn blocks settlement after P1 completion; reconnect and finalization amplify runtime.",
+  "allowed_write_scope": [
+    "backend/services/advisory_historical_range/models.py",
+    "backend/services/advisory_historical_range/runtime_factories.py",
+    "backend/tests/advisory_historical_range/test_r5_composition.py",
+    "backend/services/advisory_historical_range/composition.py",
+    "backend/services/advisory_historical_range/outcome_source.py",
+    "backend/services/advisory_historical_range/outcome_evaluator.py",
+    "backend/services/advisory_historical_range/outcome_service.py",
+    "backend/services/advisory_historical_range/service.py",
+    "backend/services/advisory_historical_range/repository.py",
+    "backend/services/advisory_historical_range/retrospective_projection.py",
+    "backend/services/advisory_historical_range/summary_service.py",
+    "backend/tests/advisory_historical_range/test_r4_outcome_evaluator.py",
+    "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+    "backend/services/advisory_historical_range/outcome_file_source.py",
+    "backend/services/advisory_historical_range/outcome_file_inputs.py",
+    "backend/tests/advisory_historical_range/test_outcome_file_batch.py",
+    "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md",
+    "tests/aistock_validation/bugs/20261016_BUG-1946-advisory-historical-outcome-settlement-exhausts-short-database-connectio.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1946",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-16T17:52:15.213714Z",
+  "description": "Per-item DB connection churn blocks settlement after P1 completion; reconnect and finalization amplify runtime.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261016-2e10adab36c5",
+      "timestamp": "2026-10-16T17:52:15.213698Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/findings.md"
+  ],
+  "expected": "Historical market calculation performs zero SQL and reuses one immutable batch window; only bounded task/checkpoint/result database access remains. Exact source identity, maturity, suspension, genuine missing-price errors and existing financial kernels are preserved.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/services/advisory_historical_range/models.py",
+      "backend/services/advisory_historical_range/outcome_evaluator.py",
+      "backend/services/advisory_historical_range/outcome_file_inputs.py",
+      "backend/services/advisory_historical_range/outcome_file_source.py",
+      "backend/services/advisory_historical_range/outcome_source.py",
+      "backend/services/advisory_historical_range/repository.py",
+      "backend/services/advisory_historical_range/runtime_factories.py",
+      "backend/services/advisory_historical_range/service.py",
+      "backend/tests/advisory_historical_range/test_outcome_file_batch.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_evaluator.py",
+      "backend/tests/advisory_historical_range/test_r5_composition.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md",
+      "tests/aistock_validation/bugs/20261016_BUG-1946-advisory-historical-outcome-settlement-exhausts-short-database-connectio.json"
+    ],
+    "added_files": [
+      "backend/services/advisory_historical_range/outcome_file_source.py",
+      "backend/services/advisory_historical_range/outcome_file_inputs.py",
+      "backend/tests/advisory_historical_range/test_outcome_file_batch.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+    ],
+    "changed_files": [
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/services/advisory_historical_range/models.py",
+      "backend/services/advisory_historical_range/outcome_evaluator.py",
+      "backend/services/advisory_historical_range/outcome_file_inputs.py",
+      "backend/services/advisory_historical_range/outcome_file_source.py",
+      "backend/services/advisory_historical_range/outcome_source.py",
+      "backend/services/advisory_historical_range/repository.py",
+      "backend/services/advisory_historical_range/runtime_factories.py",
+      "backend/services/advisory_historical_range/service.py",
+      "backend/tests/advisory_historical_range/test_outcome_file_batch.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_evaluator.py",
+      "backend/tests/advisory_historical_range/test_r5_composition.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md",
+      "tests/aistock_validation/bugs/20261016_BUG-1946-advisory-historical-outcome-settlement-exhausts-short-database-connectio.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_historical_range/models.py",
+        "backend/services/advisory_historical_range/runtime_factories.py",
+        "backend/tests/advisory_historical_range/test_r5_composition.py",
+        "backend/services/advisory_historical_range/composition.py",
+        "backend/services/advisory_historical_range/outcome_source.py",
+        "backend/services/advisory_historical_range/outcome_evaluator.py",
+        "backend/services/advisory_historical_range/outcome_service.py",
+        "backend/services/advisory_historical_range/service.py",
+        "backend/services/advisory_historical_range/repository.py",
+        "backend/services/advisory_historical_range/retrospective_projection.py",
+        "backend/services/advisory_historical_range/summary_service.py",
+        "backend/tests/advisory_historical_range/test_r4_outcome_evaluator.py",
+        "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+        "backend/services/advisory_historical_range/outcome_file_source.py",
+        "backend/services/advisory_historical_range/outcome_file_inputs.py",
+        "backend/tests/advisory_historical_range/test_outcome_file_batch.py",
+        "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+      ],
+      "impacted_modules": [
+        "advisory.historical_range",
+        "tests.backend",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_historical_range/composition.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/advisory_historical_range/outcome_source.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/advisory_historical_range/outcome_evaluator.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/advisory_historical_range/outcome_service.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/advisory_historical_range/service.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/advisory_historical_range/repository.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/advisory_historical_range/retrospective_projection.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/advisory_historical_range/summary_service.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/tests/advisory_historical_range/test_r4_outcome_evaluator.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/advisory_historical_range/outcome_file_source.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/advisory_historical_range/outcome_file_inputs.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/tests/advisory_historical_range/test_outcome_file_batch.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_historical_range/composition.py",
+        "backend/services/advisory_historical_range/outcome_source.py",
+        "backend/services/advisory_historical_range/outcome_evaluator.py",
+        "backend/services/advisory_historical_range/outcome_service.py",
+        "backend/services/advisory_historical_range/service.py",
+        "backend/services/advisory_historical_range/repository.py",
+        "backend/services/advisory_historical_range/retrospective_projection.py",
+        "backend/services/advisory_historical_range/summary_service.py",
+        "backend/tests/advisory_historical_range/test_r4_outcome_evaluator.py",
+        "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+        "backend/services/advisory_historical_range/outcome_file_source.py",
+        "backend/services/advisory_historical_range/outcome_file_inputs.py",
+        "backend/tests/advisory_historical_range/test_outcome_file_batch.py",
+        "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/services/advisory_historical_range/outcome_source.py",
+      "backend/services/advisory_historical_range/outcome_evaluator.py",
+      "backend/services/advisory_historical_range/outcome_service.py",
+      "backend/services/advisory_historical_range/service.py",
+      "backend/services/advisory_historical_range/repository.py",
+      "backend/services/advisory_historical_range/retrospective_projection.py",
+      "backend/services/advisory_historical_range/summary_service.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_evaluator.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+      "backend/services/advisory_historical_range/outcome_file_source.py",
+      "backend/services/advisory_historical_range/outcome_file_inputs.py",
+      "backend/tests/advisory_historical_range/test_outcome_file_batch.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/services/advisory_historical_range/outcome_source.py",
+      "backend/services/advisory_historical_range/outcome_evaluator.py",
+      "backend/services/advisory_historical_range/outcome_service.py",
+      "backend/services/advisory_historical_range/service.py",
+      "backend/services/advisory_historical_range/repository.py",
+      "backend/services/advisory_historical_range/retrospective_projection.py",
+      "backend/services/advisory_historical_range/summary_service.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_evaluator.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+      "backend/services/advisory_historical_range/outcome_file_source.py",
+      "backend/services/advisory_historical_range/outcome_file_inputs.py",
+      "backend/tests/advisory_historical_range/test_outcome_file_batch.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+    ]
+  },
+  "first_seen_at": "2026-10-16T17:52:15.213714Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6202,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6202",
+  "last_seen_at": "2026-10-16T17:52:15.213714Z",
+  "module": "advisory.historical_range",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "advisory_historical_range_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_e7e25e1696d18d5ea0b4d9c37a7c3d24/operations?limit=50",
+    "fresh_process_evidence": [
+      "python -B X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/file_source_smoke.py -> PASS; isolated fresh process imports persistent Advisory source, freezes the active profile, reads market files once, zero DB/network connect attempts; receipt file-source-smoke.json. This is file consumption evidence, not full production settlement or runtime activation.",
+      "python -B X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/native_financial_smoke.py -> PASS; reads original candidate/policy and compares file/DB adapters through the native financial evaluator for one real h5 candidate, two projection groups; identical raw entry prices, values and pending benchmark status. Receipt native-financial-smoke.json. Read-only, no replay/DB writes/service control; running backend unchanged.",
+      "python -B X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/file_source_smoke.py -> PASS at HEAD 7ebd566b8e8ab09c01da017b9f86ce467d6b5fc4; real active profile binding, 1 batch read, zero DB/network attempts; source file hashes in file-source-smoke.json. Read-only fresh-process loading, not runtime activation or full economic acceptance."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory.historical_range"
+  ],
+  "title": "Advisory historical outcome settlement exhausts short database connections instead of consuming frozen files",
+  "trigger_condition": {
+    "fingerprint": "2e10adab36c51dfbfd964c2f",
+    "source_event_id": "FE-20261016-2e10adab36c5"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory.historical_range",
+        "advisory_historical_range"
+      ],
+      "plans": [
+        "advisory_historical_range_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory.historical_range",
+          "advisory_historical_range"
+        ],
+        "plans": [
+          "advisory_historical_range_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
