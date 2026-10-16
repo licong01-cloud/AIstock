@@ -1,8 +1,8 @@
 # HMM 冻结模型自动延伸详细设计（QE 文件入口）
 
-初始日期：2026-10-12；修订日期：2026-10-15；版本：v1.3；tier=F2。
+初始日期：2026-10-12；修订日期：2026-10-17；版本：v1.4；tier=F2。
 
-用户已批准自动延伸及双入口方向。本文件是QE冻结文件模式的详细合同；数据库收盘模式以`hmm_daily_coefficient_generation_design_20260428.md` v2.5为准，两者展开父蓝图v2.87 §2.6。#5899既有源码已合入；本轮补HMM独立DB订阅及两来源异步调用入口，真正调度挂接尚未完成。源码、policy登记、任务和消费者验收分别报告。数据库指定快照单次job/登记已完成，不等于QE文件自动延伸job或共享自动触发完成。
+用户已批准自动延伸及双入口方向。本文件是QE冻结文件模式的详细合同；数据库收盘模式以`hmm_daily_coefficient_generation_design_20260428.md` v2.6为准，两者展开父蓝图v2.89 §2.6。#5899既有源码保留，BUG-1939/#6191的共享公共接线已合入并经用户重启验证，真实自动回调已进入HMM reader。当前DB业务输入阻断见日度设计§1.2及数据owner BUG-1951/#6223；不能将它误报为接线未开发。源码、policy登记、任务和消费者验收分别报告，DB旧单次job与注册通过不等于QE文件首个自动job完成。本轮仅同步三份现有HMM文档。
 
 ## 背景与终极目标
 
@@ -18,13 +18,13 @@
 - `backend/tests/hmm_data_source/test_coefficient_extension.py`
 - 本详细设计。
 
-当前连续任务的源码scope及API见日度设计§5.2；本模式只补plan的显式source_mode，保留原policy schema及旧资产；源码/直接测试和四份设计一并审修。不修改QE、Selection、Advisory、模型算法、特征、参数、窗口、seed、阈值、数据候选、active profile、全局工作流或测试计划。不训练、不读新outcome或启动实验；生产启用/写入及进程控制本次不执行。原文件policy与新DB订阅独立，DB单次资产不是文件首个自动资产。
+原v1.3源码scope及API见日度设计§5.2；显式source_mode、原policy schema及旧资产已交付。本次只更新蓝图及两份直接设计，不修改任何业务源码、模型算法、特征、参数、窗口、seed、阈值、数据候选、active profile、全局工作流或测试计划。不训练、不读新outcome或启动实验；生产启用/写入及进程控制本次不执行。原文件policy与DB订阅独立，DB单次资产不是文件首个自动资产。
 
 ## 架构与接口契约
 
 1. 既有`POST /api/v1/hmm-training/configs/{config_id}/coefficient-extension`一次性登记固定snapshot、preset、系数起点及enabled；对应GET返回配置。这里的“订阅”是持久化应用配置，不是每月人工批准。本轮plan显式携带`source_mode=qe_frozen_file`，旧policy v1本就只代表文件模式，不能据此启用DB订阅。文件登记沿原dataset identity，数据库沿`database_daily`输入identity，不混源或回写旧记录。
 2. policy 钉住模型文件 SHA 及模型/参数配置摘要；排除运行资产字段但不排除模型参数。后续 data generation/cutoff 不写回训练身份。权重、参数或 preset 变化必须明确失败，不自动换模型/重训。
-3. 复用既有调度能力和`model_train_daily_coefficient_jobs`，不把APScheduler或一分钟周期当业务依赖。模式`frozen_window_extension_v1`只使用文件release，不走数据库最大日期规划。新的`coefficient_readiness_tick`可由现有调度owner挂接，分别调用各自已启用的文件/DB reconcile；不初始化scheduler或调用训练，某来源失败不阻断另一来源。原一分钟接线不是新自动派发已验收的证据，本轮不调用它。
+3. 复用既有调度能力和`model_train_daily_coefficient_jobs`，不把APScheduler或一分钟周期当业务依赖。模式`frozen_window_extension_v1`只使用文件release，不走数据库最大日期规划。`coefficient_readiness_tick`已由BUG-1939接入现有公共completion consumer，分别调用各自已启用的文件/DB reconcile；不初始化scheduler或调用训练，某来源失败不阻断另一来源。注册与DB回调已验证，但文件首个job仍须单独读回；原一分钟接线不作为新派发完成证据。
 4. 每次新的任务重新读取共享 active profile 固定指针，解析并冻结 manifest、六个已有共享输入的相对路径/SHA、正式 `wsl2-5080` 节点、market-volume 定义及文件交易日历。worker 只运行现有 BUG-1510 file-only 生成器，不读取 market 数据库。源码无月度目录或版本常量；不靠修改进程环境变量记录或发现月度状态。
 5. 同一 model/config/preset/input/window/generator-source 的幂等键只创建一次持久任务。config 行锁保护任务创建，job 的 PostgreSQL session advisory lock 防止重复 worker；进程退出释放锁，RUNNING 可恢复，COMPLETED/FAILED 不重跑。恢复可重复零-fit 推断，不能重新训练或把 FAILED 当成功。
 6. 历史模式保持固定 `coefficient_start`，延伸到冻结日历最后可用日，不从新增日冷启动滤波。不改变已有预处理/因果滤波算法。
@@ -36,8 +36,8 @@
 ## 就绪触发与数据库模式隔离
 
 - 一次启用后，兼容共享release或显式请求窗口出现新身份才形成任务；已有完成同身份直接读取，不重复推断。支持既有数据完成通知/调度周期补偿，不新增HMM scheduler、依赖或每月人工审批。固定频率沿共享调度配置，不设一分钟新合同。
-- HMM已能直接查询现有权威完成记录，无需新通知/事件平台。现有本地数据调度器尚无通用consumer注册入口，不能写其私有字段；HMM先完成自己的reconcile和调用入口，再由owner最小挂接，不把挂接缺口当作HMM源码开发前置。本任务不修改数据生产、全局调度或其他模块。
-- 首次接线验收必须观察真实调度回调产生的持久job及产物，而不是测试直接调用reconcile即判自动运行通过。停用/重复/恢复不触发旧训练tick，不让数据入库/其他业务任务等待HMM长推断。
+- HMM可直接查询现有权威完成记录，无需新通知/事件平台。BUG-1939已通过公共completion consumer复用现有本地数据调度刷新机会，未改采集计划/执行器或原采集重试规则，未写私有job列表。本次文档任务不修改数据生产、全局调度或其他模块。
+- 接线注册/真实回调、持久job、完成产物/登记分别验收：前两项已有运行证据，不能从它们或测试直接调用reconcile推出文件/DB新产物完成。停用/重复/恢复不触发旧训练tick，不让数据入库/其他业务任务等待HMM长推断。只有两类明确BLOCKED编排错误保留同水位重试，合法业务/身份阻断和正式FAILED不扩大自动重试。
 - 数据库日度使用完整收盘T事实并映射到下一交易日；它不要求active QE release已包含T。两模式共用相同版本数学核心而各自验证source identity，不能混合“DB最新日期+旧冻结文件”；文件模式禁止market DB fallback，数据库模式禁止文件fallback。
 - 已启用的是QE文件extension policy，不自动等于数据库日度订阅或所有模型启用。日度模式沿已有配置明确登记，旧历史窗口/文件不改写；不把新订阅状态放入环境变量。
 
@@ -52,7 +52,7 @@
 
 ## 实施方案
 
-一个双入口消费闭环包连续复用已交付文件输入/任务/登记，补齐共享触发和日度数据库adapter及直接验证，不按模块层次拆小阶段。需要新增调度接口时交owner协调，不创建新表/调度平台或数据副本。滚动重训沿独立批准入口，本包不以模型年龄、日更或自然行情触发重训。数据库模式实现/验收见其直接设计，不在本文件扩大QE禁DB边界或复制数学核心。
+一个双入口消费闭环包连续复用已交付文件输入/任务/登记，不按模块层次拆小阶段。共享接线和数据库adapter已交付，当前先闭合BUG-1951共享发布依据冲突，再由HMM执行业务输入preflight、观察合法自动job/登记，并交对应owner做目标消费验证；文件模式仍按自身release/窗口检查，不因DB阻断改用另一来源。不创建新表/调度平台或数据副本，不以模型年龄、日更或自然行情触发重训；不扩大QE禁DB边界或复制数学核心。
 
 ## 验证方案与可合入标准
 
@@ -68,7 +68,7 @@
 
 ## Production gates
 
-当前连续任务包含HMM订阅/reconcile源码：production_ddl_gate=noop；production_dml_gate=noop；dependency gates=noop；runtime_impact=backend、target_ids=[backend-main]；dataset_write=false；profile_activation=false；training=false；QE_experiment=false；process_control=false。源码加载仍由用户决定，真实自动派发和消费验收pending；普通日度更新/资产登记不需要重启。本轮没有实际启用订阅或执行任务，不以文档runtime=none降低源码影响。
+本次仅同步文档：production_ddl_gate=noop；production_dml_gate=noop；dependency gates=noop；runtime_impact=none、target_ids=[]；database_write=false；dataset_write=false；profile_activation=false；training=false；QE_experiment=false；process_control=false。BUG-1939源码仍按backend/backend-main分类且已由用户重启验收，不用文档none降级。真实新job/产物与场景采用保持pending，普通数据/资产登记不需重启；本轮不重新启用订阅或执行生产任务。
 
 历史源码#5899为runtime_impact=backend/target=backend-main；当时DEV事务验证passed_and_rolled_back。用户随后已单独授权指定policy登记，当前读回见下节；本次不重复生产写入。未来源码首次加载、首个生成/登记的生产授权与消费者验收单独核对，不从本次文档合入推导。
 
@@ -90,11 +90,17 @@
 
 下表F-001～F-005只保留QE文件模式的既有源码/单元及DEV证据，不代表新自动触发完成；数据库日度实际状态以其v2.4直接设计为准。F-006仍有真实缺口，不能从历史单元测试或DB单次job外推。
 
-## 2026-10-15双入口交付状态与owner依赖
+## 2026-10-15双入口交付状态与owner依赖（历史快照，当前见下节）
 
 数据库模式指定snapshot的job=`9c97a277-9ab3-4373-9b9d-ff4b034dcf01`已COMPLETED/REGISTERED_READBACK，T=2026-10-14、T+1=2026-10-15，系数SHA=`66602de8dc6c9aa0db6d9522df0da67db4b7e027e292c9c965c7ce2a957f6b06`。其实际`source_mode=database_daily`；本文件的QE模式仍保留原policy/旧窗口，不把该单日DB任务算作文件延伸job，也不据此解除QE完整窗口/因果边界。
 
 本轮HMM先实施独立日度订阅、直接查询完成记录和可调用reconcile，不等待新增通知平台；真实调度挂接仍需owner的最小公共接点，不写其私有job、不新增HMM scheduler或调用旧一分钟训练tick。Selection的7个合法无报价兼容源码已由BUG-1910/#6100合入，待用户重启后的identity/真实消费验收；不再报告源码尚未修复，也不提前合入close-sync #6114。HMM不补1.0或删除membership。两个来源、自动触发、目标消费分别验收，本轮不新增生产写入、训练、QE实验、数据导出或进程动作。
+
+## 2026-10-17当前状态与版本消费边界
+
+BUG-1939/#6191的公共接线已在用户重启后完成canonical verified，close-sync #6221合入；registered/owner_running/loop_running均true，真实DB回调到达reader。当前在`801011.SI/2026-04-29/sw2_pct_change`明确BLOCKED，复用数据owner BUG-1951/#6223闭合发布authority，不以MAX日期自行豁免。BUG-1910消费者兼容的重启验收及#6114已完成，但新日度job与真实荐股/模拟盘运行仍未完成。
+
+文件policy和DB订阅均是固定snapshot=`ecee7c40-6764-49ad-bc0f-1c6c6b390504`、config=`fc0683a9-6ca0-4d55-b053-17c2360c3c40`、preset_A的显式可选入口，模型SHA=`7223c32648792443020cbc02e9ded3102e81d30330640e623d4c2ef0ddf8f665`。2026-10-17只读snapshot GET确认train_period=`2023-02-13 ~ 2026-02-13`、val_period=`2026-02-24 ~ 2026-05-19`；因此不能自动为更早的2024回放追认strict_no_leakage。L2 rank/return研究模型及独立risk输出也不能直接当作该preset系数，不能因API/smoke通过默认替换或承诺QE收益。新QE实验由QE窗口执行，且必须核对自身精确窗口、源identity、因果资格和已登记资产；本轮不启动QE、重训或生产登记。
 
 ## Design Acceptance Matrix
 
@@ -105,10 +111,12 @@
 | F-003 | backend/services/hmm_data_source/coefficient_extension.py | backend/tests/hmm_data_source/test_coefficient_extension.py::test_crop_preserves_legal_unavailable_and_does_not_materialize_stock_day_panel | passed | none |
 | F-004 | backend/services/hmm_training_service.py | backend/tests/hmm_data_source/test_coefficient_extension.py::test_immutable_publish_is_idempotent_and_matches_existing_qe_reader；DEV事务回滚读回 | passed | none |
 | F-005 | backend/services/hmm_training_service.py | backend/tests/hmm_data_source/test_coefficient_extension.py::test_worker_lock_crash_recovery_and_failed_job_stop；DEV 幂等 job | passed | none |
-| F-006 | backend/routers/hmm_training.py::coefficient_readiness_tick；日度设计§5.2；父蓝图§2.6 | backend/tests/hmm_data_source/test_daily_coefficient_subscription.py::test_public_readiness_entry_is_nonblocking_and_has_no_training_side_effect及两来源失败隔离；原文件reconcile直接矩阵 | APPROVED_BY_USER_CONTRACT_HMM_SOURCE_TEST_VERIFIED_PENDING_PUBLIC_HOOK_AND_RUNTIME | 可调用源码不等于真实定时挂接；文件首个job/发布/登记/QE smoke及运行态仍未完成，不能由policy.enabled/导入/单元调用代报 |
+| F-006 | backend/routers/hmm_training.py::coefficient_readiness_tick；日度设计§1.2/§5.2；父蓝图§2.6 | backend/tests/hmm_data_source/test_daily_coefficient_subscription.py::test_public_readiness_entry_is_nonblocking_and_has_no_training_side_effect；artifact: F:/Dev/AIstock/tmp/handoff/hmm-scheduler-readiness-20261016/post-restart-final.json；BUG-1939/#6191/#6221及真实DB回调 | APPROVED_BY_USER_CONTRACT_PUBLIC_HOOK_RUNTIME_VERIFIED_FILE_JOB_PENDING | 公共注册和DB真实回调不代报QE文件首个job/发布/登记/Composer；DB新job另受BUG-1951业务输入阻断，不混源绕过 |
 
 ## DESIGN-COMPLIANCE-001
 
 不交付占位、空成功或假 READY；不吞掉输入/生成/登记异常；不改变模型、PIT、停发和消费语义；不引入模型年龄、资源、效果显著性或每月人工审批门禁。源码验收不代表实际启用、真实 QE smoke 或收益改善。
 
 2026-10-15 v1.3：HMM侧新DB订阅独立于既有文件policy；本轮plan标明文件source_mode并提供两来源async可调用入口。修正“先建通知接口才能开发”的误判和Selection源码旧状态。源码实际runtime_impact=backend/target=backend-main，用户加载与真实挂接/运行验收未完成；本轮无DB/数据集/服务动作。
+
+2026-10-17 v1.4：更新公共接线及BUG-1910已重启闭环，保留真实DB输入阻断和文件新job未验收状态；固定旧快照因果截止与研究模型/系数类型边界，防止跨源、跨模型或旧窗口误用。仅文档，不重算/重登记旧资产，不以记录推进替代价值验证。
