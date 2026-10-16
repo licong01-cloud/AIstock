@@ -124,7 +124,9 @@ def _requests_general_ptnn_ltr(params: dict[str, Any] | None) -> bool:
     if raw_mode is not None and str(raw_mode).strip().lower() != "mse":
         return True
     raw_loss = params.get("loss")
-    return raw_loss is not None and str(raw_loss).strip().lower() == "approx_ndcg_at_k"
+    return raw_loss is not None and str(raw_loss).strip().lower() in {
+        "approx_ndcg_at_k", "log_approx_ndcg_at_k", "ndcg_at_k_pairwise",
+    }
 
 
 def _reject_custom_evo_ltr_outside_model_params(

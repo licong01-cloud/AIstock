@@ -18,9 +18,12 @@ if str(AISTOCK_MODELS_ROOT) not in sys.path:
     sys.path.insert(0, str(AISTOCK_MODELS_ROOT))
 
 from aistock_models.general_ptnn_ltr import (  # noqa: E402
+    AIStockGeneralPTNNLTR,
     DateGroupedDataset,
     GeneralPTNNLTRError,
+    LTR_LOSS_MODES,
     approx_ndcg_at_k_loss,
+    ndcg_at_k_loss,
 )
 
 
@@ -78,6 +81,113 @@ def test_approx_ndcg_label_direction_high_return_score_reduces_loss() -> None:
 
     assert improved_loss.item() < neutral_loss.item()
     assert 0.0 <= improved_ndcg.item() <= 1.0
+
+
+@pytest.mark.parametrize("mode", sorted(LTR_LOSS_MODES))
+@pytest.mark.parametrize("group_size,score_span", [(512, 0.0), (4500, 0.1)])
+def test_market_scale_ltr_has_informative_gradients(group_size: int, score_span: float, mode: str) -> None:
+    # One real-sized daily query, without datasets, services, CUDA or model training.
+    previous_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        labels = torch.linspace(-0.2, 0.2, group_size)
+        scores = torch.linspace(score_span, -score_span, group_size).requires_grad_()
+        loss, ndcg, size = ndcg_at_k_loss(scores, labels, topk_train_k=50, min_group_size=50, loss_mode=mode)
+        loss.backward()
+        assert size == group_size
+        assert torch.isfinite(loss) and torch.isfinite(ndcg)
+        assert torch.isfinite(scores.grad).all()
+        assert torch.count_nonzero(scores.grad) > group_size // 2
+        # Gradient descent must raise high-relevance scores relative to low ones.
+        assert scores.grad[-group_size // 5 :].mean() < scores.grad[: group_size // 5].mean()
+    finally:
+        torch.set_num_threads(previous_threads)
+
+
+@pytest.mark.parametrize("mode", sorted(LTR_LOSS_MODES))
+def test_ranking_loss_matches_independent_reference_and_gradient(mode):
+    # Five distinct labels map to gains 0,1,3,7,15; no tied score boundary.
+    labels = torch.arange(5, dtype=torch.float32)
+    scores = torch.tensor([0.2, -0.7, 0.5, 0.1, 0.9], requires_grad=True)
+    loss, ndcg, _ = ndcg_at_k_loss(scores, labels, topk_train_k=3, loss_mode=mode)
+    ref_scores = scores.detach().clone().requires_grad_()
+    gains = torch.tensor([0., 1., 3., 7., 15.])
+    ideal = sum(gains[4 - i] / np.log2(i + 2) for i in range(3))
+    order = torch.argsort(ref_scores, descending=True).tolist()
+    if mode == "log_approx_ndcg_at_k":
+        dcg = 0
+        for i in range(5):
+            rank = 1 + sum(torch.sigmoid(ref_scores[j] - ref_scores[i]) for j in range(5) if i != j)
+            dcg = dcg + gains[i] * torch.sigmoid(3.5 - rank) / torch.log2(1 + rank)
+        ref_loss = -torch.log(dcg / ideal)
+    else:
+        total, denominator = 0, 0
+        for i in range(5):
+            for j in range(i + 1, 5):
+                ri, rj = order.index(i), order.index(j)
+                di = 1 / np.log2(ri + 2) if ri < 3 else 0
+                dj = 1 / np.log2(rj + 2) if rj < 3 else 0
+                weight = abs((gains[i] - gains[j]) * (di - dj)) / ideal
+                margin = torch.sign(gains[i] - gains[j]) * (ref_scores[i] - ref_scores[j])
+                total = total + weight * torch.nn.functional.softplus(-margin)
+                denominator = denominator + weight
+        ref_loss = total / denominator
+    torch.testing.assert_close(loss, ref_loss)
+    torch.testing.assert_close(
+        torch.autograd.grad(loss, scores)[0], torch.autograd.grad(ref_loss, ref_scores)[0],
+    )
+    exact = sum(gains[order[i]] / np.log2(i + 2) for i in range(3)) / ideal
+    torch.testing.assert_close(ndcg, exact)
+    perm = torch.tensor([4, 2, 0, 3, 1])
+    permuted, _, _ = ndcg_at_k_loss(scores[perm] + 7, labels[perm], topk_train_k=3, loss_mode=mode)
+    torch.testing.assert_close(permuted, loss)
+
+
+@pytest.mark.parametrize("mode", sorted(LTR_LOSS_MODES))
+def test_adapter_dispatch_diagnostics_and_fail_closed(mode):
+    # Exercise the real constructor/epoch interface on CPU, no fit or data read.
+    model = AIStockGeneralPTNNLTR(
+        loss=mode, GPU=-1, n_jobs=0, topk_train_k=3, ltr_min_group_size=3,
+        pt_model_uri="torch.nn.Linear", pt_model_kwargs={"in_features": 1, "out_features": 1},
+    )
+    scores = torch.tensor([0.2, 0.1, 0.3, 0.7, 0.5])
+    labels = torch.arange(5, dtype=torch.float32)
+    expected, _, _ = ndcg_at_k_loss(scores, labels, topk_train_k=3, loss_mode=mode)
+    torch.testing.assert_close(model.loss_fn(scores, labels), expected)
+    assert model.loss == model.ltr_loss_mode == mode
+    diag = model.test_ltr_epoch([(scores[:, None], labels, "2024-01-02", [])], segment="valid")
+    assert diag["loss_mode"] == mode and diag["query_count"] == 1
+    for invalid_labels, reason in [(torch.zeros(5), "ltr_degenerate_relevance"),
+                                   (torch.full((5,), float("nan")), "ltr_query_all_nan_label")]:
+        with pytest.raises(GeneralPTNNLTRError, match=reason):
+            model.loss_fn(scores, invalid_labels)
+    with pytest.raises(GeneralPTNNLTRError, match="ltr_query_too_small"):
+        model.loss_fn(scores[:2], labels[:2])
+    with pytest.raises(GeneralPTNNLTRError, match="general_ptnn_ltr_invalid_loss_mode"):
+        AIStockGeneralPTNNLTR(loss=mode, ltr_loss_mode=next(iter(LTR_LOSS_MODES - {mode})))
+
+
+@pytest.mark.parametrize("mode", sorted(LTR_LOSS_MODES))
+def test_ranking_optimizer_updates_and_mse_is_unchanged(mode):
+    from qlib.contrib.model.pytorch_general_nn import GeneralPTNN
+
+    kwargs = dict(GPU=-1, n_jobs=0, seed=42, pt_model_uri="torch.nn.Linear",
+                  pt_model_kwargs={"in_features": 1, "out_features": 1})
+    # qrun applies the runtime seed before construction for every arm.
+    torch.manual_seed(42)
+    mse = GeneralPTNN(**kwargs)
+    torch.manual_seed(42)
+    ranking = AIStockGeneralPTNNLTR(loss=mode, topk_train_k=3, ltr_min_group_size=3, **kwargs)
+    torch.testing.assert_close(mse.dnn_model.weight, ranking.dnn_model.weight)
+    scores, labels = torch.arange(5, dtype=torch.float32)[:, None], torch.arange(5, dtype=torch.float32)
+    before = ranking.dnn_model.weight.detach().clone()
+    diag = ranking.train_ltr_epoch([(scores, labels, "2024-01-02", [])])
+    assert diag["loss_mode"] == mode and diag["query_count"] == 1
+    assert torch.isfinite(ranking.dnn_model.weight).all()
+    assert not torch.equal(before, ranking.dnn_model.weight)
+    legacy = AIStockGeneralPTNNLTR(**kwargs)
+    labels[0] = float("nan")
+    torch.testing.assert_close(legacy.loss_fn(scores, labels), mse.loss_fn(scores, labels))
 
 
 def test_date_grouped_dataset_returns_one_cross_section_per_batch() -> None:

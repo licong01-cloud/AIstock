@@ -1406,7 +1406,9 @@ def test_custom_evo_builder_accepts_persisted_factor_list():
     assert cfg.model_source_loop_index == 26
 
 
-def test_custom_evo_general_ptnn_ltr_model_params_reaches_composed_conf(monkeypatch):
+@pytest.mark.parametrize("field", ["ltr_loss_mode", "loss"])
+@pytest.mark.parametrize("mode", ["approx_ndcg_at_k", "log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_custom_evo_general_ptnn_ltr_model_params_reaches_composed_conf(monkeypatch, field, mode):
     composer = ConfigComposer()
     monkeypatch.setattr(composer, "_get_factors_info", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
@@ -1436,7 +1438,7 @@ def test_custom_evo_general_ptnn_ltr_model_params_reaches_composed_conf(monkeypa
             label_horizon=20,
             runtime_flags={"random_seed": 42},
             model_params={
-                "ltr_loss_mode": "approx_ndcg_at_k",
+                field: mode,
                 "topk_train_k": 25,
                 "ltr_temperature": 0.8,
             },
@@ -1472,8 +1474,9 @@ def test_custom_evo_general_ptnn_ltr_model_params_reaches_composed_conf(monkeypa
     model_kwargs = model_cfg["kwargs"]
     assert model_cfg["class"] == "AIStockGeneralPTNNLTR"
     assert model_cfg["module_path"] == "aistock_models.general_ptnn_ltr"
-    assert model_kwargs["loss"] == "approx_ndcg_at_k"
-    assert model_kwargs["ltr_loss_mode"] == "approx_ndcg_at_k"
+    expected_mode = "log_approx_ndcg_at_k" if mode == "approx_ndcg_at_k" else mode
+    assert model_kwargs["loss"] == expected_mode
+    assert model_kwargs["ltr_loss_mode"] == expected_mode
     assert model_kwargs["topk_train_k"] == 25
     assert model_kwargs["ltr_temperature"] == 0.8
     assert "aistock_models/general_ptnn_ltr.py" in result["experiment_files"]
@@ -1488,6 +1491,9 @@ def test_custom_evo_general_ptnn_ltr_model_params_reaches_composed_conf(monkeypa
         {"custom_params": {"ltr_loss_mode": "approx_ndcg_at_k"}},
         {"ltr_loss_mode": "approx_ndcg_at_k"},
         {"strategy_params": {"ltr_loss_mode": "approx_ndcg_at_k"}},
+        {"custom_params": {"loss": "log_approx_ndcg_at_k"}},
+        {"loss": "ndcg_at_k_pairwise"},
+        {"strategy_params": {"loss": "ndcg_at_k_pairwise"}},
     ],
 )
 def test_custom_evo_general_ptnn_ltr_misplaced_request_fails_loud(bad_patch):
@@ -4136,6 +4142,8 @@ def test_efficient_gats_gpu_resident_predict_uses_lifecycle_without_resource_que
     model.device = torch.device("cuda:0")
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: calls.append("empty_cache"))
+    # This fixture emulates CUDA with CPU tensors; do not touch real hardware.
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: calls.append("synchronize"))
     monkeypatch.setattr(
         efficient_gats,
         "_finalize_gpu_phase_lifecycle",
@@ -4161,7 +4169,8 @@ def test_efficient_gats_gpu_resident_predict_uses_lifecycle_without_resource_que
     monkeypatch.setattr(model, "_can_activate_gpu_resident", _assert_empty_cache_already_called)
     preds = model.predict(dataset)
 
-    assert calls == ["empty_cache", "lifecycle"]
+    daily_queries = len(dataset.prepare("test").get_index().get_level_values("datetime").unique())
+    assert calls == ["empty_cache", *(["synchronize"] * daily_queries), "lifecycle"]
     assert not preds.empty
 
 
@@ -4826,6 +4835,34 @@ def test_general_ptnn_default_mse_path_stays_on_qlib_adapter():
     assert "class: TSDatasetH" in yaml_text
 
 
+@pytest.mark.parametrize("mode", ["log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_ranking_changes_only_objective_and_adapter(mode):
+    # Whole generated config equality preserves dates/labels/pool/seed, all
+    # model hyperparameters, strategy/cost/execution and dataset wiring.
+    base = _parse_conf_yaml_with_jinja_placeholders(_base_yaml(model_info=_custom_timeseries_lstm_model_info()))
+    ranked = _parse_conf_yaml_with_jinja_placeholders(_base_yaml(
+        model_info=_custom_timeseries_lstm_model_info(), custom_params={"ltr_loss_mode": mode},
+    ))
+    model = ranked["task"]["model"]
+    for key in list(model["kwargs"]):
+        if key.startswith("ltr_") or key == "topk_train_k":
+            del model["kwargs"][key]
+    model["kwargs"]["loss"] = "mse"
+    model["class"] = base["task"]["model"]["class"]
+    model["module_path"] = base["task"]["model"]["module_path"]
+    assert ranked == base
+
+
+@pytest.mark.parametrize("field", ["loss", "ltr_loss_mode"])
+@pytest.mark.parametrize("mode", ["log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_ranking_catalog_training_hyperparameters_reach_yaml(field, mode):
+    model = _parse_conf_yaml_with_jinja_placeholders(_base_yaml(
+        model_info=_custom_timeseries_lstm_model_info(training_hp={field: mode}),
+    ))["task"]["model"]
+    assert model["class"] == "AIStockGeneralPTNNLTR"
+    assert model["kwargs"]["loss"] == model["kwargs"]["ltr_loss_mode"] == mode
+
+
 def test_general_ptnn_local_wsl_uses_host_safe_single_process_loader():
     parsed = _parse_conf_yaml_with_jinja_placeholders(
         _base_yaml(
@@ -4872,11 +4909,12 @@ def test_general_ptnn_local_wsl_rejects_unsafe_catalog_loader_override():
         _base_yaml(model_info=model_info, node_id="wsl2-5080")
 
 
-def test_general_ptnn_ltr_custom_params_selects_adapter_and_passes_hp():
+@pytest.mark.parametrize("mode", ["approx_ndcg_at_k", "log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_general_ptnn_ltr_custom_params_selects_adapter_and_passes_hp(mode):
     yaml_text = _base_yaml(
         model_info=_custom_timeseries_lstm_model_info(),
         custom_params={
-            "ltr_loss_mode": "approx_ndcg_at_k",
+            "ltr_loss_mode": mode,
             "topk_train_k": "25",
             "ltr_temperature": "0.8",
             "ltr_gate_temperature": "1.2",
@@ -4887,8 +4925,9 @@ def test_general_ptnn_ltr_custom_params_selects_adapter_and_passes_hp():
 
     assert "class: AIStockGeneralPTNNLTR" in yaml_text
     assert "module_path: aistock_models.general_ptnn_ltr" in yaml_text
-    assert "loss: approx_ndcg_at_k" in yaml_text
-    assert "ltr_loss_mode: approx_ndcg_at_k" in yaml_text
+    expected_mode = "log_approx_ndcg_at_k" if mode == "approx_ndcg_at_k" else mode
+    assert f"loss: {expected_mode}" in yaml_text
+    assert f"ltr_loss_mode: {expected_mode}" in yaml_text
     assert "topk_train_k: 25" in yaml_text
     assert "ltr_temperature: 0.8" in yaml_text
     assert "ltr_gate_temperature: 1.2" in yaml_text
@@ -4900,17 +4939,29 @@ def test_general_ptnn_ltr_custom_params_selects_adapter_and_passes_hp():
     assert "topk_train_k" not in strategy_section
 
 
-def test_general_ptnn_ltr_loss_alias_selects_adapter():
+@pytest.mark.parametrize("mode", ["approx_ndcg_at_k", "log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_general_ptnn_ltr_loss_alias_selects_adapter(mode):
     yaml_text = _base_yaml(
         model_info=_custom_timeseries_lstm_model_info(),
-        custom_params={"loss": "approx_ndcg_at_k", "topk_train_k": 25},
+        custom_params={"loss": mode, "topk_train_k": 25},
     )
 
     assert "class: AIStockGeneralPTNNLTR" in yaml_text
     assert "module_path: aistock_models.general_ptnn_ltr" in yaml_text
-    assert "loss: approx_ndcg_at_k" in yaml_text
+    expected_mode = "log_approx_ndcg_at_k" if mode == "approx_ndcg_at_k" else mode
+    assert f"loss: {expected_mode}" in yaml_text
     strategy_section = _slice_yaml_between(yaml_text, "    strategy:", "    model:")
-    assert "loss: approx_ndcg_at_k" not in strategy_section
+    assert f"loss: {expected_mode}" not in strategy_section
+
+
+@pytest.mark.parametrize("params", [
+    {"ltr_loss_mode": "log_approx_ndcg_at_k", "loss": "ndcg_at_k_pairwise"},
+    {"ltr_loss_mode": "ndcg_at_k_pairwise", "ltr_temperature": float("nan")},
+    {"ltr_loss_mode": "log_approx_ndcg_at_k", "ltr_gate_temperature": float("inf")},
+])
+def test_general_ptnn_ltr_conflicting_or_non_finite_parameters_fail(params):
+    with pytest.raises(ValueError, match="general_ptnn_ltr_invalid"):
+        _base_yaml(model_info=_custom_timeseries_lstm_model_info(), custom_params=params)
 
 
 def test_general_ptnn_ltr_invalid_config_fails_fast():
@@ -4933,7 +4984,8 @@ def test_general_ptnn_ltr_invalid_config_fails_fast():
         )
 
 
-def test_general_ptnn_ltr_request_on_non_ptnn_model_fails_loud_not_mse():
+@pytest.mark.parametrize("mode", ["approx_ndcg_at_k", "log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_general_ptnn_ltr_request_on_non_ptnn_model_fails_loud_not_mse(mode):
     with pytest.raises(ValueError, match="reason_code=ltr_loss_mode_injection_failed"):
         _base_yaml(
             model_info={
@@ -4941,7 +4993,7 @@ def test_general_ptnn_ltr_request_on_non_ptnn_model_fails_loud_not_mse():
                 "model_name": "lgbm",
                 "model_type": "LGBM",
             },
-            custom_params={"ltr_loss_mode": "approx_ndcg_at_k"},
+            custom_params={"ltr_loss_mode": mode},
         )
 
 
