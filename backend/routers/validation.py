@@ -13,6 +13,7 @@ from backend.services.validation.models import ValidationResponse
 from backend.services.validation.module_quality import ModuleQualityService
 from backend.services.validation.plan_catalog import ValidationCatalogError, ValidationPlanCatalog
 from backend.services.validation.pipeline_center import ValidationPipelineCenterService
+from backend.services.validation.overview_snapshot import overview_snapshot
 from backend.services.validation.ui_target_catalog import (
     ValidationUiTargetCatalog,
     ValidationUiTargetCatalogError,
@@ -20,6 +21,11 @@ from backend.services.validation.ui_target_catalog import (
 
 
 router = APIRouter(prefix="/validation", tags=["validation"])
+
+
+@router.get("/overview/snapshot", response_model=ValidationResponse, summary="Read shared nonblocking pipeline overview")
+def get_validation_overview_snapshot():
+    return _success(overview_snapshot.read())
 
 
 def get_history_store() -> ValidationHistoryStore:

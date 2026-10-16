@@ -1388,6 +1388,12 @@ class TushareSyncEngine:
                     "tushare_api": spec.tushare_api,
                     "mode": spec.query_mode.value,
                 }
+                if spec.name == "suspend_d":
+                    from backend.data_service.suspension_day_authority import publication_quality as suspension_publication_quality
+                    suspension, suspension_quality = suspension_publication_quality(rows, d)
+                    if suspension_quality["quality_status"] == "low_coverage" or audit_quality["quality_status"] in {"ok", "empty_valid"}:
+                        audit_quality.update(suspension_quality)
+                    audit_metadata["suspension_day_authority"] = suspension
                 if spec.name == "etf_share_size":
                     publication_quality, audit_quality = _etf_share_size_publication_quality(rows)
                     audit_metadata["publication_quality"] = publication_quality

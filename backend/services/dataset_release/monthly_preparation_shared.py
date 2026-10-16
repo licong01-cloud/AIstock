@@ -125,7 +125,11 @@ def shared_preparation_identity(
         component=component,
         cutoff=snapshot.official_cutoff,
         predecessor_profile_sha256=predecessor_sha256,
-        effective_source_sha256=digest_named_fields("aistock_monthly_private_shared_inputs_v1", {"partitions": rows}),
+        effective_source_sha256=digest_named_fields("aistock_monthly_private_shared_inputs_v1", {
+            "partitions": rows,
+            **({"suspension_day_authority_sha256": getattr(snapshot, "suspension_day_authority_sha256", None)}
+               if component == "suspend" else {}),
+        }),
         pit_sha256=snapshot.pit_snapshot_digest,
         qfq_sha256=digest_named_fields(
             "aistock_monthly_private_benchmark_qfq_v1",
@@ -137,6 +141,9 @@ def shared_preparation_identity(
             "aistock_monthly_private_shared_producer_v1",
             {
                 "files": {name: _file_ref(code_root, name) for name in names},
+                **({"suspension_projection": _file_ref(code_root.parent.parent / "data_service",
+                                                      "suspension_day_authority.py")}
+                   if component == "suspend" else {}),
                 "toolchain": profile.qlib_toolchain.digest,
             },
         ),
@@ -608,6 +615,7 @@ def prepare_shared_domain_files(
         outputs = [path.name]
         counts = {"benchmark_code": "000300.SH", "provider_catalog_only": True}
     elif component == "suspend":
+        from backend.data_service.suspension_day_authority import frozen_authority
         parquet, metadata, keys, input_count = _build_suspend(
             root=output_root,
             rows=_source_rows(cas, snapshot, "suspend_d"),
@@ -615,6 +623,7 @@ def prepare_shared_domain_files(
             calendar=calendar,
             profile=profile,
             cutoff=snapshot.official_cutoff,
+            suspension_authority=frozen_authority(cas, snapshot),
         )
         outputs = [parquet.relative_to(output_root).as_posix(), metadata.relative_to(output_root).as_posix()]
         counts = {"suspended_stock_date_count": len(keys), "source_rows_read": input_count}
