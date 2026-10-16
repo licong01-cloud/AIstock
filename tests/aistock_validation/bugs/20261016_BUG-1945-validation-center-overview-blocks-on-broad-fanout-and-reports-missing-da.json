@@ -13,6 +13,9 @@
     "backend/services/validation/overview_snapshot.py",
     "backend/tests/test_validation_overview_snapshot.py",
     "frontend/src/lib/validation/section-loader.ts",
+    "scripts/aistock_runtime_semantics.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "tests/aistock_validation/bugs/20261016_BUG-1945-validation-center-overview-blocks-on-broad-fanout-and-reports-missing-da.json"
   ],
   "assigned_agent": null,
@@ -282,6 +285,9 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/validation/overview/snapshot",
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
     "inference_basis": "planned_scope",

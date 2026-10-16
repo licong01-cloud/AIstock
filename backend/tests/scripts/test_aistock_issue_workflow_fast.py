@@ -16,6 +16,31 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize('case,expected', [('partial', 'passed'), ('empty', 'failed'), ('fake-zero', 'failed'), ('empty-available', 'failed'), ('no-proof', 'failed'), ('loading', 'pending')])
+def test_pipeline_overview_probe_validates_partial_observation_contract(case, expected):
+    source = {'state': 'loading', 'data': None, 'collected_at': None, 'stale': False, 'refreshing': True}
+    sources = {key: dict(source) for key in ['ci', 'runners', 'nightly', 'bugs', 'prs', 'worktrees']}
+    sources['bugs'] = {'state': 'available', 'data': {'pending': 1, 'total': 3}, 'source': 'registry',
+                       'collected_at': '2026-10-17T00:00:00Z', 'age_seconds': 0, 'stale': False, 'refreshing': False}
+    sources['prs'] = {'state': 'unavailable', 'error': 'TimeoutError', 'data': None, 'stale': False, 'refreshing': False}
+    payload = {'status': 'success', 'data': {'schema_version': 'aistock_pipeline_overview_v1', 'read_only': True, 'sections': sources}}
+    if case == 'empty':
+        payload['data']['sections'] = {}
+    elif case == 'fake-zero':
+        sources['ci']['data'] = {'queued': 0}
+    elif case == 'no-proof':
+        sources['bugs']['collected_at'] = None
+    elif case == 'empty-available':
+        sources['bugs']['data'] = {}
+    elif case == 'loading':
+        sources['bugs'] = dict(source)
+    verdict = workflow._evaluate_business_smoke_semantics(
+        'http://127.0.0.1:8001/api/v1/validation/overview/snapshot', json.dumps(payload), response_sha256='a' * 64,
+    )[1]
+    assert verdict['contract_id'] == 'pipeline_overview_observations'
+    assert verdict['verdict'] == expected
+
+
 @pytest.mark.parametrize("error,attempts,success", [
     ("error: fetching ref refs/remotes/origin/main failed: incorrect old value provided", 2, True),
     (f"error: cannot lock ref 'refs/remotes/origin/main': is at {'a'*40} but expected {'b'*40}", 2, True),

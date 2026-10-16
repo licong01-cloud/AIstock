@@ -6,9 +6,11 @@ import MetricCard from "@/components/trading-console/MetricCard";
 import SectionCard from "@/components/trading-console/SectionCard";
 import StatusBadge from "@/components/trading-console/StatusBadge";
 import GitHubIssuesPanel from "@/components/validation/GitHubIssuesPanel";
-import PipelineOverviewCards from "@/components/validation/PipelineOverviewCards";
+import PipelineOverviewCards, { PipelineGlobalOverview } from "@/components/validation/PipelineOverviewCards";
+import { loadSection } from "@/lib/validation/section-loader";
 import {
   type JsonObject,
+  type PipelineOverviewSnapshot,
   type ValidationAgentContext,
   type ValidationBug,
   type ValidationBugSummary,
@@ -141,6 +143,7 @@ function CountChips({ counts }: { counts?: Record<string, number> }) {
 }
 
 function MergeGatePanel({ mergeGate }: { mergeGate?: ValidationMergeGate | null }) {
+  if (!mergeGate?.decision || !Array.isArray(mergeGate.blocking_reasons)) return <SectionCard title="分区数据未就绪"><div role="status">unknown / 正在加载或读取失败；不作通过判断。</div></SectionCard>;
   return (
     <SectionCard title="合入门禁" eyebrow="read-only merge gate / no merge action" action={<StatusBadge status={mergeGate?.decision || "unknown"} />}>
       <div className="pv2-grid pv2-grid-4">
@@ -166,6 +169,7 @@ function MergeGatePanel({ mergeGate }: { mergeGate?: ValidationMergeGate | null 
 }
 
 function IssueWorkflowPanel({ summary, items, onOpenBug }: { summary?: ValidationIssueWorkflowSummary | null; items?: ValidationPage<ValidationIssueWorkflowItem> | null; onOpenBug: (bugId: string) => void }) {
+  if (typeof summary?.open_count !== "number") return <SectionCard title="分区数据未就绪"><div role="status">unknown / 正在加载或读取失败；不作通过判断。</div></SectionCard>;
   return (
     <SectionCard title="Issue 修复流程" eyebrow="Open / Triaged / In Progress / Review Ready / Fixed / Verified">
       <div className="pv2-grid pv2-grid-4">
@@ -198,6 +202,7 @@ function IssueWorkflowPanel({ summary, items, onOpenBug }: { summary?: Validatio
 
 
 function IssueCandidateQueuePanel({ summary, items }: { summary?: ValidationIssueCandidateSummary | null; items?: ValidationPage<ValidationIssueCandidateItem> | null }) {
+  if (!summary) return <SectionCard title="分区数据未就绪"><div role="status">unknown / 正在加载或读取失败；不作通过判断。</div></SectionCard>;
   const candidates = items?.items || [];
   const outcome = isObject(summary?.outcome_metrics) ? summary?.outcome_metrics : {};
   const readyCount = summary?.issue_payload_ready_count ?? candidates.filter((item) => item.issue_payload_ready === true).length;
@@ -320,6 +325,7 @@ function CodeIntelligencePanel({ summary }: { summary?: ValidationCodeIntelligen
 }
 
 function ModuleDetailSummaryPanel({ detail }: { detail?: ValidationModuleQualitySummary | null }) {
+  if (!detail) return <SectionCard title="分区数据未就绪"><div role="status">unknown / 正在加载或读取失败；不作通过判断。</div></SectionCard>;
   const modules = detail?.modules || [];
   const touchedModuleCount = Number(detail?.summary?.touched_module_count ?? 0);
   const blockingModuleCount = Number(detail?.summary?.blocking_module_count ?? 0);
@@ -354,6 +360,7 @@ function ModuleDetailSummaryPanel({ detail }: { detail?: ValidationModuleQuality
 }
 
 function PipelineTestsPhase1Panel({ summary, tests }: { summary?: ValidationPipelineTestSummary | null; tests?: ValidationPage<ValidationPipelineTestItem> | null }) {
+  if (typeof summary?.test_count !== "number") return <SectionCard title="分区数据未就绪"><div role="status">unknown / 正在加载或读取失败；不作通过判断。</div></SectionCard>;
   return (
     <SectionCard title="流水线测试概览" eyebrow="blocking / fast path / evidence bundles">
       <div className="pv2-grid pv2-grid-4">
@@ -384,6 +391,7 @@ function PipelineTestsPhase1Panel({ summary, tests }: { summary?: ValidationPipe
 }
 
 function GithubSyncPanel({ summary, issues }: { summary?: JsonObject | null; issues?: ValidationPage<ValidationGithubIssueSync> | null }) {
+  if (typeof summary?.bug_count !== "number") return <SectionCard title="分区数据未就绪"><div role="status">unknown / 正在加载或读取失败；不作通过判断。</div></SectionCard>;
   const bugCount = Number(summary?.bug_count ?? 0);
   const linkedCount = Number(summary?.linked_count ?? 0);
   const missingLinkCount = Number(summary?.missing_link_count ?? 0);
@@ -418,6 +426,7 @@ function GithubSyncPanel({ summary, issues }: { summary?: JsonObject | null; iss
 }
 
 function BranchPrPanel({ branchDetail, prSummary, prs }: { branchDetail?: ValidationBranchDetailSummary | null; prSummary?: ValidationGithubPrSummary | null; prs?: ValidationPage<ValidationGithubPr> | null }) {
+  if (!prSummary) return <SectionCard title="分区数据未就绪"><div role="status">unknown / 正在加载或读取失败；不作通过判断。</div></SectionCard>;
   return (
     <SectionCard title="分支与 PR" eyebrow="local branches / worktrees / GitHub PRs">
       <div className="pv2-grid pv2-grid-4">
@@ -435,6 +444,7 @@ function BranchPrPanel({ branchDetail, prSummary, prs }: { branchDetail?: Valida
 }
 
 function LegacyDebtPanel({ summary, groups }: { summary?: ValidationLegacyDebtSummary | null; groups?: ValidationPage<ValidationLegacyDebtGroup> | null }) {
+  if (typeof summary?.debt_count !== "number") return <SectionCard title="分区数据未就绪"><div role="status">unknown / 正在加载或读取失败；不作通过判断。</div></SectionCard>;
   return (
     <SectionCard title="历史遗留问题" eyebrow="baseline debt / not blocking unrelated merge">
       <div className="pv2-grid pv2-grid-3">
@@ -452,16 +462,19 @@ function LegacyDebtPanel({ summary, groups }: { summary?: ValidationLegacyDebtSu
   );
 }
 
-function AutomationPanel({ automation }: { automation?: ValidationAutomationSummary | null }) {
+function AutomationPanel({ automation, snapshot }: { automation?: ValidationAutomationSummary | null; snapshot?: PipelineOverviewSnapshot | null }) {
+  if (!automation) return <SectionCard title="分区数据未就绪"><div role="status">unknown / 正在加载或读取失败；不作通过判断。</div></SectionCard>;
   return (
-    <SectionCard title="Nightly / Runner 自动化" eyebrow="read-only / dry-run / protected actions" action={<StatusBadge status={automation?.gh_auth_status || "unknown"} />}>
+    <SectionCard title="Nightly / Runner 自动化" eyebrow="read-only / dry-run / protected actions" action={<StatusBadge status={snapshot?.sections.nightly?.state || "unknown"} />}>
       <div className="pv2-notice pv2-notice-info">
         <div className="pv2-notice-title">夜间验证边界</div>
         <div className="pv2-notice-body">第一阶段仅展示 Nightly / Runner / MCP 状态和手动命令提示，不从 UI 触发 GitHub workflow，不向前端暴露 GitHub token。</div>
       </div>
       <KeyValuePanel rows={[
         ["summary", automation?.summary],
-        ["nightly", automation?.nightly || "未接入 /validation/nightly/summary 时显示 unknown"],
+        ["nightly latest_run", snapshot?.sections.nightly?.data?.latest_run ?? "unknown"],
+        ["GitHub runners", snapshot?.sections.runners?.data ?? "unknown"],
+        ["数据时间", snapshot?.generated_at],
         ["github_data_state", automation?.github_data_state],
         ["scripts", automation?.scripts],
         ["mcp_policy", automation?.mcp_policy],
@@ -479,6 +492,7 @@ function AutomationPanel({ automation }: { automation?: ValidationAutomationSumm
 
 function UiTargetCoveragePanel({ uiTargets, uiTargetSummary }: { uiTargets?: ValidationUiTargetPage | null; uiTargetSummary?: ValidationUiTargetSummary | null }) {
   const [selectedRouteId, setSelectedRouteId] = useState("");
+  if (!uiTargetSummary) return <SectionCard title="分区数据未就绪"><div role="status">unknown / 正在加载或读取失败；不作通过判断。</div></SectionCard>;
   const targets = uiTargets?.items || [];
   const selectedTarget = targets.find((item) => item.route_id === selectedRouteId) || targets[0];
   const missingCatalog = Boolean(uiTargets?.missing || uiTargetSummary?.missing);
@@ -656,6 +670,7 @@ function AgentContextPanel({ context }: { context?: ValidationAgentContext | nul
 }
 
 function GitWorkspacePanel({ workspaceStatus, branchStatus }: { workspaceStatus?: ValidationGitWorkspaceStatus | null; branchStatus?: ValidationGitBranchStatus | null }) {
+  if (!workspaceStatus) return <SectionCard title="分区数据未就绪"><div role="status">unknown / 正在加载或读取失败；不作通过判断。</div></SectionCard>;
   const summary: NonNullable<ValidationGitWorkspaceStatus["summary"]> = workspaceStatus?.summary || {};
   const files = workspaceStatus?.files || [];
   const modules = workspaceStatus?.by_module || [];
@@ -751,6 +766,7 @@ function GitWorkspacePanel({ workspaceStatus, branchStatus }: { workspaceStatus?
 }
 
 function GitModuleQualityPanel({ commitActivity, moduleQuality }: { commitActivity?: ValidationGitCommitActivity | null; moduleQuality?: ValidationModuleQualitySummary | null }) {
+  if (!moduleQuality) return <SectionCard title="分区数据未就绪"><div role="status">unknown / 正在加载或读取失败；不作通过判断。</div></SectionCard>;
   const commitSummary = commitActivity?.summary || {};
   const qualitySummary = moduleQuality?.summary || {};
   const modules = (moduleQuality?.modules || []).slice(0, 15);
@@ -883,129 +899,92 @@ export default function ValidationCenterPage() {
   const [filters, setFilters] = useState({ module: "", level: "", status: "", search: "", includeMarkdownOnly: true, page: 1, pageSize: DEFAULT_PAGE_SIZE });
   const [qualityFilters, setQualityFilters] = useState({ findingSource: "", findingSeverity: "", findingStatus: "", findingSearch: "", findingPage: 1, bugSeverity: "", bugStatus: "", bugSearch: "", bugPage: 1, pageSize: DEFAULT_PAGE_SIZE });
 
-  const loadStatic = useCallback(async () => {
-    setLoading(true);
-    setError(null);
-    const optionalWarnings: Record<string, string> = {};
-    const optional = async <T,>(key: string, request: () => Promise<T>, fallback: T): Promise<T> => {
-      try {
-        return await request();
-      } catch (err) {
-        optionalWarnings[key] = errorText(err);
-        return fallback;
-      }
+  const [snapshot, setSnapshot] = useState<PipelineOverviewSnapshot | null>(null);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [refreshVersion, setRefreshVersion] = useState(0);
+  const loadStatic = useCallback(async () => { setRefreshVersion((value) => value + 1); }, []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout>;
+    const poll = async () => {
+      let delay = 30_000;
+      await loadSection(() => validationApi.overviewSnapshot(), (data) => {
+        setSnapshot(data); setSnapshotError(null);
+        delay = Object.values(data.sections).some((source) => source.refreshing || source.state === "loading") ? 5_000 : 30_000;
+      }, setSnapshotError, controller.signal);
+      if (!controller.signal.aborted) timer = setTimeout(() => void poll(), delay);
     };
-    try {
-      const [
-        healthData,
-        platformHealthData,
-        summaryData,
-        codeIntelligenceData,
-        planCatalog,
-        coverageData,
-        evidenceData,
-        executionData,
-        findingSummaryData,
-        bugSummaryData,
-        workspaceData,
-        branchData,
-        commitData,
-        moduleQualityData,
-        uiTargetsData,
-        uiTargetSummaryData,
-        cardsData,
-        mergeGateData,
-        issueWorkflowSummaryData,
-        issueWorkflowData,
-        issueCandidateSummaryData,
-        issueCandidateData,
-        moduleDetailData,
-        pipelineTestSummaryData,
-        pipelineTestsData,
-        githubIssueSummaryData,
-        githubIssuesData,
-        branchDetailData,
-        githubPrSummaryData,
-        githubPrData,
-        legacyDebtSummaryData,
-        legacyDebtGroupsData,
-        automationData,
-      ] = await Promise.all([
-        validationApi.health(),
-        optional("platform/health", () => validationApi.platformHealth(), null as ValidationHealth | null),
-        validationApi.summary(),
-        optional("code-intelligence/summary", () => validationApi.codeIntelligenceSummary(), null as ValidationCodeIntelligenceSummary | null),
-        validationApi.plans(),
-        validationApi.coverage({ page: 1, page_size: 10 }),
-        validationApi.evidence({ page: 1, page_size: 10 }),
-        validationApi.executions({ page: 1, page_size: 10 }),
-        validationApi.findingSummary(),
-        validationApi.bugSummary(),
-        optional("git/workspace-status", () => validationApi.workspaceStatus(), null as ValidationGitWorkspaceStatus | null),
-        optional("git/branch-status", () => validationApi.branchStatus(), null as ValidationGitBranchStatus | null),
-        optional("git/commit-activity", () => validationApi.commitActivity(50), null as ValidationGitCommitActivity | null),
-        optional("modules/quality-summary", () => validationApi.moduleQualitySummary(50), null as ValidationModuleQualitySummary | null),
-        optional("ui-targets", () => validationApi.uiTargets({ page: 1, page_size: 100 }), null as ValidationUiTargetPage | null),
-        optional("ui-targets/summary", () => validationApi.uiTargetSummary(), null as ValidationUiTargetSummary | null),
-        optional("cards/summary", () => validationApi.cardsSummary(), null as ValidationPhase1CardsSummary | null),
-        optional("merge-gate/summary", () => validationApi.mergeGateSummary(), null as ValidationMergeGate | null),
-        optional("issues/workflow/summary", () => validationApi.issueWorkflowSummary(), null as ValidationIssueWorkflowSummary | null),
-        optional("issues/workflow", () => validationApi.issueWorkflow({ page: 1, page_size: 20 }), emptyPage<ValidationIssueWorkflowItem>()),
-        optional("issues/candidates/summary", () => validationApi.issueCandidateSummary(), null as ValidationIssueCandidateSummary | null),
-        optional("issues/candidates", () => validationApi.issueCandidates({ page: 1, page_size: 20 }), emptyPage<ValidationIssueCandidateItem>()),
-        optional("modules/detail-summary", () => validationApi.moduleDetailSummary(), null as ValidationModuleQualitySummary | null),
-        optional("pipeline/tests/summary", () => validationApi.pipelineTestsSummary(), null as ValidationPipelineTestSummary | null),
-        optional("pipeline/tests", () => validationApi.pipelineTests({ page: 1, page_size: 20 }), emptyPage<ValidationPipelineTestItem>()),
-        optional("github/issues/summary", () => validationApi.githubIssuesSummary(), null as JsonObject | null),
-        optional("github/issues", () => validationApi.githubIssues({ page: 1, page_size: 20 }), emptyPage<ValidationGithubIssueSync>()),
-        optional("git/branches/detail-summary", () => validationApi.branchDetailSummary(), null as ValidationBranchDetailSummary | null),
-        optional("github/prs/summary", () => validationApi.githubPrsSummary(), null as ValidationGithubPrSummary | null),
-        optional("github/prs", () => validationApi.githubPrs({ page: 1, page_size: 20 }), emptyPage<ValidationGithubPr>()),
-        optional("legacy-debt/summary", () => validationApi.legacyDebtSummary(), null as ValidationLegacyDebtSummary | null),
-        optional("legacy-debt/groups", () => validationApi.legacyDebtGroups({ page: 1, page_size: 20 }), emptyPage<ValidationLegacyDebtGroup>()),
-        optional("automation/summary", () => validationApi.automationSummary(), null as ValidationAutomationSummary | null),
-      ]);
-      setHealth(healthData);
-      setPlatformHealth(platformHealthData);
-      setSummary(summaryData);
-      setCodeIntelligenceSummary(codeIntelligenceData || summaryData.code_intelligence || null);
-      setPlans(planCatalog.plans || []);
-      setCoverage(coverageData || emptyPage<ValidationCoverageSummary>(10));
-      setEvidence(evidenceData || emptyPage<ValidationEvidenceSummary>(10));
-      setExecutions(executionData || emptyPage<ValidationExecutionJob>(10));
-      setFindingSummary(findingSummaryData);
-      setBugSummary(bugSummaryData);
-      setWorkspaceStatus(workspaceData);
-      setBranchStatus(branchData);
-      setCommitActivity(commitData);
-      setModuleQuality(moduleQualityData);
-      setUiTargets(uiTargetsData);
-      setUiTargetSummary(uiTargetSummaryData);
-      setPhase1Cards(cardsData);
-      setMergeGate(mergeGateData);
-      setIssueWorkflowSummary(issueWorkflowSummaryData);
-      setIssueWorkflow(issueWorkflowData || emptyPage<ValidationIssueWorkflowItem>());
-      setIssueCandidateSummary(issueCandidateSummaryData);
-      setIssueCandidates(issueCandidateData || emptyPage<ValidationIssueCandidateItem>());
-      setModuleDetailSummary(moduleDetailData);
-      setPipelineTestSummary(pipelineTestSummaryData);
-      setPipelineTests(pipelineTestsData || emptyPage<ValidationPipelineTestItem>());
-      setGithubIssueSummary(githubIssueSummaryData);
-      setGithubIssues(githubIssuesData || emptyPage<ValidationGithubIssueSync>());
-      setBranchDetailSummary(branchDetailData);
-      setGithubPrSummary(githubPrSummaryData);
-      setGithubPrs(githubPrData || emptyPage<ValidationGithubPr>());
-      setLegacyDebtSummary(legacyDebtSummaryData);
-      setLegacyDebtGroups(legacyDebtGroupsData || emptyPage<ValidationLegacyDebtGroup>());
-      setAutomationSummary(automationData);
-      setOptionalApiWarnings(optionalWarnings);
-    } catch (err) {
-      setOptionalApiWarnings(optionalWarnings);
-      setError(errorText(err));
-    } finally {
-      setLoading(false);
+    void poll();
+    return () => { controller.abort(); clearTimeout(timer); };
+  }, [refreshVersion]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const tasks: Promise<void>[] = [];
+    setError(null);
+    setOptionalApiWarnings({});
+    const load = <T,>(key: string, request: () => Promise<T>, commit: (value: T) => void) => {
+      tasks.push(loadSection(request, commit, (message) => {
+        setOptionalApiWarnings((previous) => ({ ...previous, [key]: message }));
+      }, controller.signal));
+    };
+    // First paint uses only overview/snapshot. Expensive details are opt-in.
+    switch (activeSection) {
+      case "code_intelligence":
+        load("code-intelligence/summary", () => validationApi.codeIntelligenceSummary(), setCodeIntelligenceSummary);
+        break;
+      case "merge_gate":
+        load("merge-gate/summary", () => validationApi.mergeGateSummary(), setMergeGate);
+        break;
+      case "issue_workflow":
+        load("issues/workflow/summary", () => validationApi.issueWorkflowSummary(), setIssueWorkflowSummary);
+        load("issues/workflow", () => validationApi.issueWorkflow({ page: 1, page_size: 20 }), setIssueWorkflow);
+        load("issues/candidates/summary", () => validationApi.issueCandidateSummary(), setIssueCandidateSummary);
+        load("issues/candidates", () => validationApi.issueCandidates({ page: 1, page_size: 20 }), setIssueCandidates);
+        break;
+      case "pipeline_tests":
+        load("health", () => validationApi.health(), setHealth);
+        load("summary", () => validationApi.summary(), setSummary);
+        load("plans", () => validationApi.plans(), (data) => setPlans(data.plans || []));
+        load("pipeline/tests/summary", () => validationApi.pipelineTestsSummary(), setPipelineTestSummary);
+        load("pipeline/tests", () => validationApi.pipelineTests({ page: 1, page_size: 20 }), setPipelineTests);
+        load("coverage", () => validationApi.coverage({ page: 1, page_size: 10 }), setCoverage);
+        load("evidence", () => validationApi.evidence({ page: 1, page_size: 10 }), setEvidence);
+        break;
+      case "features":
+        load("ui-targets", () => validationApi.uiTargets({ page: 1, page_size: 100 }), setUiTargets);
+        load("ui-targets/summary", () => validationApi.uiTargetSummary(), setUiTargetSummary);
+        break;
+      case "modules":
+        load("modules/quality-summary", () => validationApi.moduleQualitySummary(50), setModuleQuality);
+        load("modules/detail-summary", () => validationApi.moduleDetailSummary(), setModuleDetailSummary);
+        load("git/commit-activity", () => validationApi.commitActivity(50), setCommitActivity);
+        break;
+      case "github_issues":
+        load("github/issues/summary", () => validationApi.githubIssuesSummary(), setGithubIssueSummary);
+        load("github/issues", () => validationApi.githubIssues({ page: 1, page_size: 20 }), setGithubIssues);
+        load("bugs/summary", () => validationApi.bugSummary(), setBugSummary);
+        break;
+      case "branches_prs":
+        load("git/branches/detail-summary", () => validationApi.branchDetailSummary(), setBranchDetailSummary);
+        load("github/prs/summary", () => validationApi.githubPrsSummary(), setGithubPrSummary);
+        load("github/prs", () => validationApi.githubPrs({ page: 1, page_size: 20 }), setGithubPrs);
+        load("git/workspace-status", () => validationApi.workspaceStatus(), setWorkspaceStatus);
+        load("git/branch-status", () => validationApi.branchStatus(), setBranchStatus);
+        break;
+      case "legacy_debt":
+        load("legacy-debt/summary", () => validationApi.legacyDebtSummary(), setLegacyDebtSummary);
+        load("legacy-debt/groups", () => validationApi.legacyDebtGroups({ page: 1, page_size: 20 }), setLegacyDebtGroups);
+        break;
+      case "automation":
+        load("automation/summary", () => validationApi.automationSummary(), setAutomationSummary);
+        break;
     }
-  }, []);
+    setLoading(tasks.length > 0);
+    void Promise.allSettled(tasks).then(() => { if (!controller.signal.aborted) setLoading(false); });
+    return () => controller.abort();
+  }, [activeSection, refreshVersion]);
 
   const loadExecutions = useCallback(async () => {
     try {
@@ -1073,11 +1052,10 @@ export default function ValidationCenterPage() {
     }
   }, [qualityFilters]);
 
-  useEffect(() => { void loadStatic(); }, [loadStatic]);
-  useEffect(() => { void loadExecutions(); }, [loadExecutions]);
-  useEffect(() => { void loadRuns(); }, [loadRuns]);
-  useEffect(() => { void loadFindings(); }, [loadFindings]);
-  useEffect(() => { void loadBugs(); }, [loadBugs]);
+  useEffect(() => { if (activeSection === "pipeline_tests") void loadExecutions(); }, [loadExecutions, activeSection]);
+  useEffect(() => { if (activeSection === "pipeline_tests") void loadRuns(); }, [loadRuns, activeSection]);
+  useEffect(() => { if (activeSection === "issue_workflow") void loadFindings(); }, [loadFindings, activeSection]);
+  useEffect(() => { if (activeSection === "issue_workflow" || activeSection === "github_issues") void loadBugs(); }, [loadBugs, activeSection]);
 
   const statusCounts = useMemo(() => summary?.runs_by_status || {}, [summary]);
   const executionCounts = useMemo(() => summary?.runner?.jobs_by_status || health?.runner?.jobs_by_status || {}, [summary, health]);
@@ -1230,7 +1208,9 @@ export default function ValidationCenterPage() {
       {error ? <div className="pv2-error-panel"><div className="pv2-error-kicker">Validation Center Error</div><div className="pv2-error-main">{error}</div></div> : null}
       {loading ? <div className="pv2-notice pv2-notice-info"><div className="pv2-notice-title">加载中</div><div className="pv2-notice-body">正在读取本地验证历史索引和质量问题索引。</div></div> : null}
 
+      <PipelineGlobalOverview snapshot={snapshot} error={snapshotError} onRefresh={() => void loadStatic()} />
       <PipelineOverviewCards
+        snapshot={snapshot}
         activeSection={activeSection}
         automationSummary={automationSummary}
         branchDetailSummary={branchDetailSummary}
@@ -1247,18 +1227,16 @@ export default function ValidationCenterPage() {
         moduleDetailSummary={moduleDetailSummary}
         moduleQuality={moduleQuality}
         onSelect={(section) => setActiveSection(section)}
-        optionalApiWarnings={optionalApiWarnings}
+        optionalApiWarnings={{ ...optionalApiWarnings, ...(snapshotError ? { snapshot: snapshotError } : {}) }}
         pipelineTestSummary={pipelineTestSummary}
         plans={plans}
         uiTargetSummary={uiTargetSummary}
         validationSummary={summary}
       />
 
-      {activeSection === "overview" ? <section className="pv2-grid pv2-grid-4">
-        <MetricCard label="历史 Run" value={summary?.run_count ?? health?.history?.run_count ?? "-"} hint={health?.history?.history_root || "tests/aistock_validation/history"} tone="info" />
-        <MetricCard label="覆盖率快照" value={summary?.coverage_snapshot_count ?? health?.history?.coverage_snapshot_count ?? "-"} hint={`最新行覆盖 ${pct(latestCoverageTotals.line_percent)}`} tone="success" />
-        <MetricCard label="质量发现" value={findingSummary?.finding_count ?? summary?.quality?.finding_count ?? health?.quality?.finding_count ?? "-"} hint="guardrail / legacy inventory" tone="warning" />
-        <MetricCard label="Bug Registry" value={bugSummary?.bug_count ?? summary?.quality?.bug_count ?? health?.quality?.bug_count ?? "-"} hint={health?.production_8001_touched ? "异常：触碰 8001" : "read_only / agent-context"} tone={health?.production_8001_touched ? "danger" : "success"} />
+      {activeSection === "pipeline_tests" ? <section className="pv2-grid pv2-grid-4">
+        <MetricCard label="历史 Run" value={summary?.run_count ?? "unknown"} hint="按需读取历史汇总" tone={summary ? "info" : "neutral"} />
+        <MetricCard label="覆盖率快照" value={summary?.coverage_snapshot_count ?? "unknown"} hint={`最新行覆盖 ${pct(latestCoverageTotals.line_percent)}`} tone={summary?.coverage_snapshot_count ? "info" : "neutral"} />
       </section> : null}
 
       {activeSection === "merge_gate" ? <MergeGatePanel mergeGate={mergeGate} /> : null}
@@ -1294,7 +1272,7 @@ export default function ValidationCenterPage() {
       ) : null}
       {activeSection === "features" ? <UiTargetCoveragePanel uiTargets={uiTargets} uiTargetSummary={uiTargetSummary} /> : null}
       {activeSection === "legacy_debt" ? <LegacyDebtPanel summary={legacyDebtSummary} groups={legacyDebtGroups} /> : null}
-      {activeSection === "automation" ? <AutomationPanel automation={automationSummary} /> : null}
+      {activeSection === "automation" ? <AutomationPanel automation={automationSummary} snapshot={snapshot} /> : null}
 
       {activeSection === "pipeline_tests" ? <><PipelineTestsPhase1Panel summary={pipelineTestSummary} tests={pipelineTests} /><SectionCard
         title="测试计划目录"
