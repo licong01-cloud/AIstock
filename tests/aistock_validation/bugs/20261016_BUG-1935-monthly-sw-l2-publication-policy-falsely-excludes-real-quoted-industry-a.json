@@ -19,6 +19,12 @@
   ],
   "created_at": "2026-10-16T02:39:59.466178Z",
   "description": "801011.SI错误标为never quoted导致DERIVE拒绝；sealed BUILD目标存在不能按现有resume回到打包",
+  "design_compliance": {
+    "business_semantics_unchanged": true,
+    "no_new_approval_or_quality_gate": true,
+    "no_partial_completion_claim": true,
+    "no_silent_error_or_fake_data": true
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -30,15 +36,29 @@
   "evidence_uris": [],
   "expected": "真实官方报价与共享availability闭合；原operation保留导出断点重新打包，旧封存证据不覆盖",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/services/dataset_release/sw_l2_quote_policy.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1935-monthly-sw-l2-publication-policy-falsely-excludes-real-quoted-industry-a.json"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_build_recovery.py",
       "backend/tests/dataset_release/test_monthly_build_recovery.py"
     ],
     "changed_files": [
+      "backend/services/dataset_release/monthly_build_recovery.py",
       "backend/services/dataset_release/sw_l2_quote_policy.py",
-      "backend/tests/dataset_release/test_sw_l2_quote_policy.py"
+      "backend/tests/dataset_release/test_monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1935-monthly-sw-l2-publication-policy-falsely-excludes-real-quoted-industry-a.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/sw_l2_quote_policy.py",
@@ -127,7 +147,6 @@
   "fix_branch": null,
   "fix_commit": null,
   "fix_summary": "Correct the demonstrably false never-quoted classification of 801011.SI; retain all six official stop dates. Provide a narrowly scoped offline recovery for idle, unpublished FAILED DERIVE operations with this exact legacy policy. Verify sealed SOURCE/BUILD, request/plan, frozen official quote proof and 125269 retained file signatures, then preserve the original checkpoint and move the private candidate back to its original staging for ordinary API resume. No producer execution, active-profile change, source rewrite or price re-export in recovery.",
-  "scope_expansion_reason": "Add the new direct recovery tests to the existing qlib_data_backend plan and register only the new CLI-only maintenance helper as non-runtime, consistent with monthly_legacy_adoption. Repository import search shows no API/worker caller; module __main__ is the sole production entry. Do not exempt the actual worker publication policy or alter runtime probe contracts.",
   "fixed_at": null,
   "github_issue_number": 6177,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6177",
@@ -145,24 +164,27 @@
     "l0",
     "qlib_data_backend"
   ],
-  "risk_area": "bug",
   "review_rounds": [
     "1: authority/source closure: actual frozen sw_daily partition proves 801011 publication; only this erroneous empty availability entry changes and all six stop dates remain fixed.",
     "2: recovery safety: FAILED DERIVE and no downstream seals/profile, exact SOURCE/BUILD/request/plan pins, active exclusion, retained file signatures and known legacy-policy identity; no producer calls, DB, activation or deletion.",
     "3: crash/performance regression: recover between atomic candidate/checkpoint moves, retain bytes/inodes/mtime and old receipts, idempotent retry, reject mutation/links/bad proof; 43 targeted tests, guardrail and catalog integrity passed."
   ],
-  "design_compliance": {"no_partial_completion_claim": true, "no_silent_error_or_fake_data": true, "business_semantics_unchanged": true, "no_new_approval_or_quality_gate": true},
+  "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
       "RED: test_real_published_801011_is_not_confused_with_membership_availability reproduces empty spans; GREEN after policy fix with the same six stop dates.",
       "Fresh AIstock process: python -m backend.services.dataset_release.monthly_build_recovery --operation-id dmr_63a313d97fd046a38d5a876265565014 --state-root F:/Dev/AIstock_runtime_state/monthly-dataset-release-v2 --control-root X:/AIstock_dataset_release_control --active-profile F:/Dev/RD-Agent-state/dataset_profiles/active_dataset_profile.json -> dry-run passed, applied=false, retained_file_count=125269, official source b740785cad58bd1b25a40c4477533489711365dcd15c25915a453dd0a99924f7, no database/profile/process writes."
     ],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "provisional": true,
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -171,6 +193,7 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "Add the new direct recovery tests to the existing qlib_data_backend plan and register only the new CLI-only maintenance helper as non-runtime, consistent with monthly_legacy_adoption. Repository import search shows no API/worker caller; module __main__ is the sole production entry. Do not exempt the actual worker publication policy or alter runtime probe contracts.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
