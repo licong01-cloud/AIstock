@@ -57,6 +57,8 @@ _OUTCOME_SOURCE_FILES = (
     "backend/services/advisory_historical_range/outcome_policy_provider.py",
     "backend/services/advisory_historical_range/outcome_projection.py",
     "backend/services/advisory_historical_range/outcome_source.py",
+    "backend/services/advisory_historical_range/outcome_file_source.py",
+    "backend/services/advisory_historical_range/outcome_file_inputs.py",
     "backend/services/advisory_historical_range/retrospective_projection.py",
     "backend/services/advisory_phase1/observation_capture.py",
     "backend/services/advisory_phase1/outcome_engine.py",
@@ -101,7 +103,11 @@ class HistoricalRangeR5DerivedIdentities:
             outcome_producer_hash=_code_set_hash(repository_root, _OUTCOME_SOURCE_FILES),
             summary_producer_hash=_code_set_hash(
                 repository_root,
-                ("backend/services/advisory_historical_range/summary_service.py",),
+                (
+                    "backend/services/advisory_historical_range/summary_service.py",
+                    "backend/services/advisory_historical_range/outcome_file_inputs.py",
+                    "backend/services/advisory_historical_range/outcome_file_source.py",
+                ),
             ),
             bridge_builder_hash=_code_set_hash(repository_root, _BRIDGE_BUILDER_SOURCE_FILES),
             bridge_writer_hash=_code_set_hash(repository_root, _BRIDGE_WRITER_SOURCE_FILES),
@@ -191,9 +197,11 @@ class HistoricalRangeR5OutcomeRequestFactory:
         *,
         policy_registry: HistoricalRangeR5PolicyRegistry,
         identities: HistoricalRangeR5DerivedIdentities,
+        file_binding_factory: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._policy_registry = policy_registry
         self._identities = identities
+        self._file_binding_factory = file_binding_factory
 
     def build(
         self, batch_id: str, request: HistoricalRangeRefreshOutcomesRequest
@@ -203,6 +211,7 @@ class HistoricalRangeR5OutcomeRequestFactory:
             requested_run_ids=request.range_run_ids,
         )
         requests = []
+        file_binding = self._file_binding_factory() if self._file_binding_factory is not None else None
         for run_id, resolution in resolutions:
             unsupported = sorted(set(request.horizons) - set(resolution.bundle.horizons))
             if unsupported:
@@ -240,9 +249,14 @@ class HistoricalRangeR5OutcomeRequestFactory:
                     max_items_per_slice=500,
                     max_parallel_runs=1,
                     lease_seconds=900,
+                    file_source_binding=file_binding,
                 )
             )
         ordered = tuple(sorted(requests, key=lambda item: item.range_run_ids))
+        return self._plan(batch_id, request, ordered)
+
+    @staticmethod
+    def _plan(batch_id, request, ordered):
         return HistoricalRangeOutcomeCommandPlan(
             request_hash=canonical_json_sha256(
                 {
@@ -255,6 +269,37 @@ class HistoricalRangeR5OutcomeRequestFactory:
             ),
             requests=ordered,
         )
+
+    def restore_frozen_plan(self, batch_id, request, payload):
+        requests = tuple(HistoricalRangeOutcomeRefreshRequestV1.model_validate(item) for item in payload["requests"])
+        plan = self._plan(batch_id, request, requests)
+        if plan.request_hash != payload["request_hash"] or not requests:
+            raise ValueError("frozen outcome command hash differs")
+        if (any(len(item.range_run_ids) != 1 for item in requests) or
+            requests != tuple(sorted(requests, key=lambda item: item.range_run_ids)) or
+            len({item.range_run_ids for item in requests}) != len(requests) or
+            (request.range_run_ids and tuple(item.range_run_ids[0] for item in requests) != tuple(request.range_run_ids))):
+            raise ValueError("frozen outcome command run scope differs from API request")
+        if any(item.batch_id != batch_id or len(item.range_run_ids) != 1 or
+               item.label_as_of_trade_date != request.label_as_of_trade_date or
+               item.expected_batch_row_version != request.expected_row_version or item.horizons != tuple(request.horizons)
+               or item.requested_outcome_logical_ids != tuple(request.requested_outcome_logical_ids)
+               or item.correction_reason != request.correction_reason or item.correction_evidence_ref != request.correction_evidence_ref
+               for item in requests):
+            raise ValueError("frozen outcome command scope differs from API request")
+        self._policy_registry.register_frozen_policy_refs(tuple(item.policy_bundle_ref for item in requests))
+        return plan
+
+    def build_frozen(self, batch_id, request, *, artifact_store, resolved_request_hash):
+        from .outcome_file_inputs import load_frozen_outcome_command, publish_frozen_outcome_command
+        existing = load_frozen_outcome_command(store=artifact_store, batch_id=batch_id, api_request=request,
+                                              resolved_request_hash=resolved_request_hash)
+        if existing is not None:
+            return self.restore_frozen_plan(batch_id, request, existing)
+        plan = self.build(batch_id, request)
+        publish_frozen_outcome_command(store=artifact_store, batch_id=batch_id, api_request=request,
+                                       plan=plan, resolved_request_hash=resolved_request_hash)
+        return plan
 
     def summary_policy(
         self, request: HistoricalRangeOutcomeRefreshRequestV1
