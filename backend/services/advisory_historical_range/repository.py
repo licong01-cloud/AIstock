@@ -8,6 +8,7 @@ writes ordinary Selection, Advisory, Paper, simulation, QE, or QMT tables.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from collections import OrderedDict
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -280,6 +281,7 @@ class PostgresHistoricalRangeRepository:
         self._conn_factory = conn_factory
         self._artifact_store = artifact_store
         self._validated_upstream_closures: set[tuple[str, str, str | None, str | None, str | None]] = set()
+        self._outcome_subject_identities: OrderedDict[tuple[str, str, str], tuple[str, str, str | None]] = OrderedDict()
 
     def create_planning_batch(
         self,
@@ -3688,6 +3690,7 @@ class PostgresHistoricalRangeRepository:
         finished_at: datetime | None = None,
         attempt: HistoricalRangeOperationAttemptV1 | None = None,
         expired_attempt: HistoricalRangeOperationAttemptV1 | None = None,
+        finalize_lease: Callable[[], Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         resolved_request_hash = self._get_operation_artifact_identity(operation_id)
         operation_type = self._get_operation_type(operation_id)
@@ -3713,6 +3716,15 @@ class PostgresHistoricalRangeRepository:
             )
         elif result_ref is not None:
             raise ValueError("operation status cannot publish result_ref")
+        if finalize_lease is not None:
+            # Expensive immutable-artifact validation runs while the parent
+            # heartbeat is still renewing. Stop/join only at the CAS boundary.
+            claim = finalize_lease()
+            if (str(claim["operation_id"]) != operation_id or int(claim["attempt_no"]) != attempt_no
+                    or int(claim["fencing_token"]) != fencing_token or attempt is None
+                    or claim.get("worker_id") != attempt.worker_id or claim.get("lease_token") != attempt.lease_token):
+                raise ValueError("operation finalization claim identity differs")
+            expected_row_version = int(claim["row_version"])
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 current = self._lock_row(
@@ -5188,6 +5200,11 @@ class PostgresHistoricalRangeRepository:
         subject_id: str,
         subject_ref: HistoricalRangeArtifactRefV1,
     ) -> tuple[str, str, str | None]:
+        cache_key = (subject_type, subject_id, canonical_json_sha256(subject_ref.model_dump(mode="json")))
+        cached = self._outcome_subject_identities.get(cache_key)
+        if cached is not None:
+            self._outcome_subject_identities.move_to_end(cache_key)
+            return cached
         relation = {
             "CANDIDATE": (
                 "app.advisory_historical_range_candidate AS subject "
@@ -5252,11 +5269,15 @@ class PostgresHistoricalRangeRepository:
                 subject_id=subject_id,
             )
         row = rows[0]
-        return (
+        result = (
             str(row["range_run_id"]),
             str(row["request_payload_sha256"]),
             (str(row["day_run_id"]) if row["day_run_id"] is not None else None),
         )
+        self._outcome_subject_identities[cache_key] = result
+        if len(self._outcome_subject_identities) > 4096:
+            self._outcome_subject_identities.popitem(last=False)
+        return result
 
     def _validate_day_attempt_artifacts(
         self,
