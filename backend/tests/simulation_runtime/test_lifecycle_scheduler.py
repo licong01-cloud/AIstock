@@ -14424,6 +14424,77 @@ def test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance
     assert exc_info.value.context["reason_code"] == "LOCALSIM_PRE_TRADE_SUSPEND_SCHEMA_INVALID"
 
 
+def _historical_suspension_mark_consumer_case(*, native_pre_close=False):
+    from backend.services.simulation_execution.localsim.suspension import NATIVE_PRE_CLOSE_KEY, REFERENCE_KEY
+    from backend.tests.simulation_execution.test_localsim_runtime import _build_backend, _halt_reference
+
+    day = date(2026, 1, 21)
+    symbol = "603616.SH"
+    reference = _halt_reference(symbol, day)
+    key = REFERENCE_KEY
+    if native_pre_close:
+        reference = {k: v for k, v in reference.items()
+                     if k not in ("reference_close", "reference_source", "reference_price_availability", "evidence_sha256")}
+        reference.update(schema_version=NATIVE_PRE_CLOSE_KEY, pre_close=6.23, up_limit=6.85, down_limit=5.61,
+                         price_source="market.stk_limit.pre_close")
+        reference["evidence_sha256"] = canonical_json_sha256(reference)
+        key = NATIVE_PRE_CLOSE_KEY
+    status = {"suspend_status": {"is_suspended": True}, key: reference}
+    broker, _, _ = _build_backend()
+    context = SimpleNamespace(local_broker=broker, market_data_source=MinuteDataSource.DB_HISTORICAL.value,
+                              pre_trade_tradability={symbol: status})
+    execution = SimpleNamespace(run=SimpleNamespace(trade_date=day, run_payload_json={}),
+                                execution_plan=SimpleNamespace(plan_id="plan_historical_halt"))
+    return {symbol: object()}, context, execution, datetime.fromisoformat("2026-01-21T15:30:00+08:00"), key
+
+
+@pytest.mark.parametrize("native_pre_close", [False, True])
+def test_scheduler_consumes_native_historical_suspension_mark_without_legacy_daily_fact(native_pre_close):
+    positions, context, execution, stamp, key = _historical_suspension_mark_consumer_case(
+        native_pre_close=native_pre_close)
+    accepted, records = SimulationLifecycleScheduler._local_sim_position_marks(
+        positions=positions, context=context, execution=execution, snapshot_time=stamp)
+    assert accepted == {"603616.SH": 6.23}
+    assert records["603616.SH"].suspension_reference == context.pre_trade_tradability["603616.SH"][key]
+    if not native_pre_close:
+        assert "pre_close" not in records["603616.SH"].suspension_reference
+
+
+@pytest.mark.parametrize("mutation", ["source", "price", "frozen_evidence", "stale", "missing_evidence",
+                                      "both_authorities", "not_suspended", "realtime_source"])
+def test_scheduler_historical_suspension_mark_keeps_frozen_evidence_guards(mutation):
+    from backend.services.simulation_execution.localsim.suspension import NATIVE_PRE_CLOSE_KEY
+
+    positions, context, execution, stamp, key = _historical_suspension_mark_consumer_case()
+    record = context.local_broker.load_authoritative_position_marks(
+        symbols=tuple(positions), trade_date=execution.run.trade_date, as_of_time=stamp,
+        pre_trade_tradability=context.pre_trade_tradability)["603616.SH"].model_dump(mode="json")
+    record["mark_hash"] = ""
+    if mutation == "source":
+        record["source"] = "unproven_reference"
+    elif mutation == "price":
+        record["price"] = 6.24
+    elif mutation == "frozen_evidence":
+        evidence = context.pre_trade_tradability["603616.SH"][key]
+        evidence["cutoff_date"] = "2026-01-19"
+        evidence["reference_price_availability"].update(as_of_date="2026-01-19", quote_date="2026-01-19")
+        evidence["evidence_sha256"] = canonical_json_sha256({k: v for k, v in evidence.items() if k != "evidence_sha256"})
+    elif mutation == "stale":
+        record["as_of_time"] = (stamp - timedelta(minutes=1)).isoformat()
+    elif mutation == "missing_evidence":
+        record.pop("suspension_reference")
+    elif mutation == "both_authorities":
+        context.pre_trade_tradability["603616.SH"][NATIVE_PRE_CLOSE_KEY] = {}
+    elif mutation == "not_suspended":
+        context.pre_trade_tradability["603616.SH"]["suspend_status"]["is_suspended"] = False
+    elif mutation == "realtime_source":
+        context.market_data_source = MinuteDataSource.TDX_REALTIME.value
+    context.local_broker = SimpleNamespace(load_authoritative_position_marks=lambda **_: {"603616.SH": record})
+    with pytest.raises(DataUnavailableError):
+        SimulationLifecycleScheduler._local_sim_position_marks(
+            positions=positions, context=context, execution=execution, snapshot_time=stamp)
+
+
 def test_scheduler_suspended_previous_close_mark_keeps_current_snapshot_and_healthy_peer() -> None:
     release, _, _, _ = _release_and_bindings(qmt_only=False)
     suspended_symbol = "000001.SZ"

@@ -67,3 +67,19 @@ def test_quote_policy_fails_closed_on_taxonomy_drift(monkeypatch) -> None:
             required_start=date(2024, 7, 1),
             cutoff=date(2026, 9, 30),
         )
+
+
+def test_real_published_801011_is_not_confused_with_membership_availability(monkeypatch):
+    # market.sw_daily frozen CAS b740785c... contains the official
+    # 2024-07-01 row: pct_change=3.48, vol=8175.6, amount=16559.9817.
+    # Do not infer publication from active membership or from the HMM catalog.
+    real = {"801011.SI", *policy._LAST_PUBLISHED}
+    codes = sorted(real) + [f"801{i:03d}.SI" for i in range(1000) if f"801{i:03d}.SI" not in real][:124]
+    monkeypatch.setattr(policy, "SW2021_L2_TAXONOMY_DIGEST", policy.taxonomy_digest(codes))
+    mapping = _code_map(codes)
+    payload = policy.build_quote_availability_payload(
+        code_map=mapping, required_start=date(2024, 7, 1), cutoff=date(2026, 9, 30))
+    spans = {row["canonical_l2_code"]: row["availability_spans"] for row in payload["entries"]}
+    assert spans["801011.SI"] == [{"start_date": "2024-07-01", "end_date": "2026-09-30"}]
+    for code in policy._LAST_PUBLISHED:
+        assert spans[code] == [{"start_date": "2024-07-01", "end_date": "2026-04-28"}]

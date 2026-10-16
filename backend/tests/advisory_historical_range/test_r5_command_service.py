@@ -21,9 +21,11 @@ from backend.services.advisory_historical_range.dataset_bridge import (
 )
 from backend.services.advisory_historical_range.models import (
     REASON_DATASET_BRIDGE_VALID_EMPTY,
+    REASON_OPERATION_INFLIGHT_CONFLICT,
     HistoricalRangeArtifactKind,
     HistoricalRangeArtifactRefV1,
     HistoricalRangeBridgeResultStatus,
+    HistoricalRangeContractError,
     HistoricalRangeDatasetBridgeRequestV1,
     HistoricalRangeDatasetBridgeReceiptV1,
     HistoricalRangeOperationAttemptV1,
@@ -170,6 +172,33 @@ def test_resume_identity_freezes_the_configured_candidate_prefetch_width() -> No
             "lease_seconds": 3600,
         }
     )
+
+
+def test_resume_conflict_preserves_recovery_context_without_dispatch(monkeypatch) -> None:
+    repository = _Repository()
+    context = {
+        "existing_operation_id": "old-operation",
+        "operation_idempotency_key": "old-key",
+        "expected_row_version": 3,
+        "recovery_action": "EXACT_RETRY",
+    }
+
+    def reject_competing_identity(_request):
+        raise HistoricalRangeContractError(
+            REASON_OPERATION_INFLIGHT_CONFLICT, "existing unfinished resume", context=context
+        )
+
+    monkeypatch.setattr(repository, "get_or_create_operation", reject_competing_identity)
+    service = HistoricalRangeApplicationService(runtime_factory=lambda: _runtime(repository))
+    background = _Background()
+    with pytest.raises(HistoricalRangeContractError) as caught:
+        service.resume_batch(
+            "ahrb_1",
+            HistoricalRangeCommandRequest(operation_idempotency_key="new-key", expected_row_version=7),
+            background_tasks=background,
+        )
+    assert caught.value.context == context
+    assert background.tasks == []
 
 
 def test_dispatcher_uses_the_same_candidate_prefetch_width_as_resume_identity() -> None:

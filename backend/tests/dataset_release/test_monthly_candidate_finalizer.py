@@ -120,6 +120,9 @@ class _Shared:
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("SH000001\t2026-09-30\t2026-09-30\n", encoding="utf-8")
             pool_paths[name] = path
+        (pool_root / "benchmark.txt").write_text(
+            "000300.SH\t2018-08-01\t2026-09-30\n", encoding="utf-8"
+        )
 
         def pin(path: Path) -> dict[str, object]:
             return {

@@ -8,6 +8,7 @@ writes ordinary Selection, Advisory, Paper, simulation, QE, or QMT tables.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from collections import OrderedDict
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -28,6 +29,7 @@ from backend.services.advisory_historical_range.models import (
     REASON_DAY_PLAN_CONFLICT,
     REASON_IDENTITY_CONFLICT,
     REASON_IDEMPOTENCY_CONFLICT,
+    REASON_OPERATION_INFLIGHT_CONFLICT,
     REASON_REPOSITORY_CONFLICT,
     REASON_ROW_VERSION_CONFLICT,
     HistoricalRangeArtifactBindingsV1,
@@ -279,6 +281,7 @@ class PostgresHistoricalRangeRepository:
         self._conn_factory = conn_factory
         self._artifact_store = artifact_store
         self._validated_upstream_closures: set[tuple[str, str, str | None, str | None, str | None]] = set()
+        self._outcome_subject_identities: OrderedDict[tuple[str, str, str], tuple[str, str, str | None]] = OrderedDict()
 
     def create_planning_batch(
         self,
@@ -739,6 +742,14 @@ class PostgresHistoricalRangeRepository:
     ) -> tuple[dict[str, Any], bool]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if request.operation_type is HistoricalRangeOperationType.RESUME:
+                    # Serialize identity admission, not execution. A lease expiry
+                    # makes the SAME operation reclaimable; it does not remove
+                    # the database's one-RUNNING-per-type invariant.
+                    cur.execute(
+                        "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))",
+                        (f"advisory_historical_range_resume:{request.batch_id}",),
+                    )
                 cur.execute(
                     """
                     SELECT * FROM app.advisory_historical_range_operation
@@ -756,7 +767,14 @@ class PostgresHistoricalRangeRepository:
                 row = cur.fetchone()
                 if row is not None:
                     self._assert_operation_matches(dict(row), request)
+                    if (
+                        request.operation_type is HistoricalRangeOperationType.RESUME
+                        and row["status"] not in {"COMPLETED", "FAILED"}
+                    ):
+                        self._require_no_inflight_resume(cur=cur, request=request)
                     return dict(row), True
+                if request.operation_type is HistoricalRangeOperationType.RESUME:
+                    self._require_no_inflight_resume(cur=cur, request=request)
                 inserted = self._insert_operation(cur=cur, request=request)
                 cur.execute(
                     """
@@ -777,6 +795,44 @@ class PostgresHistoricalRangeRepository:
                 created_row = dict(created)
                 self._assert_operation_matches(created_row, request)
                 return created_row, not inserted
+
+    @staticmethod
+    def _require_no_inflight_resume(*, cur: Any, request: HistoricalRangeOperationRequestV1) -> None:
+        cur.execute(
+            """
+            SELECT operation.*,
+                   (operation.status = 'RUNNING'
+                    AND operation.lease_expires_at <= clock_timestamp()) AS lease_expired
+            FROM app.advisory_historical_range_operation operation
+            WHERE operation.batch_id = %s AND operation.operation_type = %s
+              AND operation.status IN ('QUEUED', 'RUNNING')
+            ORDER BY CASE WHEN operation.status = 'RUNNING' THEN 0 ELSE 1 END,
+                     operation.created_at, operation.operation_id
+            LIMIT 1
+            """,
+            (request.batch_id, request.operation_type.value),
+        )
+        existing = cur.fetchone()
+        if existing is None or str(existing["operation_id"]) == request.operation_id:
+            return
+        recovery_action = (
+            "EXACT_RETRY"
+            if existing["status"] == "QUEUED" or existing["lease_expired"] is True
+            else "WAIT"
+        )
+        raise HistoricalRangeContractError(
+            REASON_OPERATION_INFLIGHT_CONFLICT,
+            "resume already has an unfinished operation; preserve its key and payload when retrying",
+            context={
+                "batch_id": request.batch_id,
+                "existing_operation_id": str(existing["operation_id"]),
+                "operation_idempotency_key": str(existing["operation_idempotency_key"]),
+                "expected_row_version": int(existing["expected_row_version"]),
+                "status": str(existing["status"]),
+                "lease_expired": existing["lease_expired"],
+                "recovery_action": recovery_action,
+            },
+        )
 
     def load_execution_operation(self, *, operation_id: str) -> HistoricalRangeExecutionOperationV1:
         with self._conn_factory() as conn:
@@ -3634,6 +3690,7 @@ class PostgresHistoricalRangeRepository:
         finished_at: datetime | None = None,
         attempt: HistoricalRangeOperationAttemptV1 | None = None,
         expired_attempt: HistoricalRangeOperationAttemptV1 | None = None,
+        finalize_lease: Callable[[], Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         resolved_request_hash = self._get_operation_artifact_identity(operation_id)
         operation_type = self._get_operation_type(operation_id)
@@ -3659,6 +3716,15 @@ class PostgresHistoricalRangeRepository:
             )
         elif result_ref is not None:
             raise ValueError("operation status cannot publish result_ref")
+        if finalize_lease is not None:
+            # Expensive immutable-artifact validation runs while the parent
+            # heartbeat is still renewing. Stop/join only at the CAS boundary.
+            claim = finalize_lease()
+            if (str(claim["operation_id"]) != operation_id or int(claim["attempt_no"]) != attempt_no
+                    or int(claim["fencing_token"]) != fencing_token or attempt is None
+                    or claim.get("worker_id") != attempt.worker_id or claim.get("lease_token") != attempt.lease_token):
+                raise ValueError("operation finalization claim identity differs")
+            expected_row_version = int(claim["row_version"])
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 current = self._lock_row(
@@ -5134,6 +5200,11 @@ class PostgresHistoricalRangeRepository:
         subject_id: str,
         subject_ref: HistoricalRangeArtifactRefV1,
     ) -> tuple[str, str, str | None]:
+        cache_key = (subject_type, subject_id, canonical_json_sha256(subject_ref.model_dump(mode="json")))
+        cached = self._outcome_subject_identities.get(cache_key)
+        if cached is not None:
+            self._outcome_subject_identities.move_to_end(cache_key)
+            return cached
         relation = {
             "CANDIDATE": (
                 "app.advisory_historical_range_candidate AS subject "
@@ -5198,11 +5269,15 @@ class PostgresHistoricalRangeRepository:
                 subject_id=subject_id,
             )
         row = rows[0]
-        return (
+        result = (
             str(row["range_run_id"]),
             str(row["request_payload_sha256"]),
             (str(row["day_run_id"]) if row["day_run_id"] is not None else None),
         )
+        self._outcome_subject_identities[cache_key] = result
+        if len(self._outcome_subject_identities) > 4096:
+            self._outcome_subject_identities.popitem(last=False)
+        return result
 
     def _validate_day_attempt_artifacts(
         self,

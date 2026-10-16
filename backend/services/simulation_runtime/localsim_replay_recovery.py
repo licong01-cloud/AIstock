@@ -18,6 +18,10 @@ RECOVERY_KEY = "localsim_replay_recovery_v1"
 RECOVERY_SCHEMA = "localsim_replay_recovery_v1"
 RETIREMENT_KEY = "localsim_memory_handle_retirement_v1"
 ECONOMIC_TABLES = ("run", "orders", "order_events", "fills", "cash_ledger", "positions", "daily_snapshots")
+ROLLED_BACK_LOCAL_SIM_FAILURES = frozenset({
+    ("LOCAL_SIM_PERSISTENCE_FAILED", "STK_LIMIT_PRE_CLOSE_INVALID"),
+    ("LOCAL_SIM_MARK_VALIDATION_FAILED", "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID"),
+})
 ECONOMIC_PAYLOAD_KEYS = (
     "local_sim_execution_states_v1", "local_sim_economic_receipts_v1",
     "local_sim_projection_outbox_v1", "local_sim_projection_receipts_v1",
@@ -62,13 +66,8 @@ def require_no_economic_effects(
 ) -> None:
     retirement = payload.get(RETIREMENT_KEY)
     if retirement is not None:
-        original = retirement.get("original_payload") if isinstance(retirement, dict) else None
-        if (not isinstance(original, dict)
-                or retirement.get("schema_version") != RETIREMENT_KEY
-                or retirement.get("receipt_sha256") != canonical_json_sha256(
-                    {k: v for k, v in retirement.items() if k != "receipt_sha256"})
-                or retirement.get("original_payload_sha256") != canonical_json_sha256(original)
-                or payload.get("broker_order_handles") or payload.get("failed_intents", 0) != 0):
+        _validated_retirement_chain(retirement)
+        if payload.get("broker_order_handles") or payload.get("failed_intents", 0) != 0:
             raise InvalidStateTransitionError(
                 "LocalSIM handle retirement evidence is invalid",
                 context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_RETIREMENT_INVALID"},
@@ -107,6 +106,35 @@ def require_no_economic_effects(
             )
 
 
+def _validated_retirement_chain(retirement: Any) -> list[dict[str, Any]]:
+    chain = []
+    while retirement is not None:
+        original = retirement.get("original_payload") if isinstance(retirement, dict) else None
+        if (not isinstance(original, dict)
+                or retirement.get("schema_version") != RETIREMENT_KEY
+                or retirement.get("receipt_sha256") != canonical_json_sha256(
+                    {k: v for k, v in retirement.items() if k != "receipt_sha256"})
+                or retirement.get("original_payload_sha256") != canonical_json_sha256(original)):
+            raise InvalidStateTransitionError(
+                "LocalSIM handle retirement evidence is invalid",
+                context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_RETIREMENT_INVALID"},
+            )
+        predecessor = original.get(RETIREMENT_KEY)
+        if predecessor is not None and (
+            not isinstance(predecessor, dict)
+            or retirement.get("predecessor_retirement_sha256") != predecessor.get("receipt_sha256")
+            or any(retirement.get(k) != predecessor.get(k)
+                   for k in ("run_id", "binding_id", "release_id", "trade_date"))
+        ):
+            raise InvalidStateTransitionError(
+                "LocalSIM handle retirement predecessor is invalid",
+                context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_RETIREMENT_INVALID"},
+            )
+        chain.append(retirement)
+        retirement = predecessor
+    return chain
+
+
 def proposed_handle_retirement(snapshot: dict[str, Any], *, process_started_at: datetime, now: datetime) -> dict | None:
     """Prove a previous-process, rolled-back LocalSIM memory batch; preserve its full evidence."""
     run, plan = snapshot["run"], snapshot["plan"]
@@ -118,6 +146,7 @@ def proposed_handle_retirement(snapshot: dict[str, Any], *, process_started_at: 
     context = failure.get("context", {})
     plan_payload = plan.get("plan_payload_json", {})
     intents = plan_payload.get("intents", [])
+    previous = _validated_retirement_chain(payload.get(RETIREMENT_KEY))
     try:
         intent_ids = [i["intent_id"] for i in intents]
         handle_ids = [h["handle_id"] for h in handles]
@@ -125,8 +154,7 @@ def proposed_handle_retirement(snapshot: dict[str, Any], *, process_started_at: 
         dates = [datetime.fromisoformat(h["submitted_at"]) for h in handles]
         valid = (
             failure.get("type") == "DataUnavailableError"
-            and failure.get("stage") == "LOCAL_SIM_PERSISTENCE_FAILED"
-            and context.get("reason_code") == "STK_LIMIT_PRE_CLOSE_INVALID"
+            and (failure.get("stage"), context.get("reason_code")) in ROLLED_BACK_LOCAL_SIM_FAILURES
             and context.get("economic_commit_staged") is False
             and context.get("broker_called") is False and context.get("submitted_intents") == 0
             and type(payload.get("failed_intents")) is int
@@ -140,7 +168,13 @@ def proposed_handle_retirement(snapshot: dict[str, Any], *, process_started_at: 
             and all(plan_payload.get(k) == run[k] for k in (
                 "binding_id", "binding_hash", "release_id", "release_hash", "strategy_id", "package_id"))
             and plan_payload.get("target_trade_date") == run["trade_date"]
-            and payload.get(RETIREMENT_KEY) is None
+            and all(
+                all(receipt.get(k) == run[k] for k in ("run_id", "binding_id", "release_id", "trade_date"))
+                and datetime.fromisoformat(receipt["retired_at"]) <= min(dates)
+                and not set(handle_ids).intersection(
+                    handle["handle_id"] for handle in receipt["original_payload"]["broker_order_handles"])
+                for receipt in previous
+            )
         )
     except (KeyError, TypeError, AttributeError, ValueError):
         valid = False
@@ -153,7 +187,7 @@ def proposed_handle_retirement(snapshot: dict[str, Any], *, process_started_at: 
     operational.pop("broker_order_handles")
     operational.pop("failed_intents")
     require_no_economic_effects(operational, snapshot["economic_counts"], now=now)
-    return {
+    proof = {
         "schema_version": RETIREMENT_KEY, "run_id": run["run_id"],
         "plan_id": run["execution_plan_id"], "plan_hash": run["execution_plan_hash"],
         "binding_id": run["binding_id"], "release_id": run["release_id"], "trade_date": run["trade_date"],
@@ -162,6 +196,9 @@ def proposed_handle_retirement(snapshot: dict[str, Any], *, process_started_at: 
         "original_payload": deepcopy(payload), "original_payload_sha256": canonical_json_sha256(payload),
         "economic_counts": dict(snapshot["economic_counts"]),
     }
+    if previous:
+        proof["predecessor_retirement_sha256"] = previous[0]["receipt_sha256"]
+    return proof
 
 
 def apply_handle_retirement(payload: dict[str, Any], proof: dict[str, Any], *, retired_at: datetime) -> dict[str, Any]:
@@ -235,9 +272,14 @@ class LocalSimReplayRecoveryService:
         native: dict[str, Any] = {}
         counts = snapshot["economic_counts"]
         try:
-            if (job["status"] != "FAILED_TERMINAL" or job["next_trade_date"] is None
+            if (job["status"] not in {"FAILED_TERMINAL", "FAILED_RETRYABLE"} or job["next_trade_date"] is None
                     or job["live_release_id"] or job["live_binding_id"] or job["activation_trade_date"]):
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_STATE_INVALID")
+            account_activity = snapshot.get("account_in_flight_runs")
+            if not isinstance(account_activity, list):
+                self._invalid("LOCALSIM_REPLAY_RECOVERY_ACCOUNT_ACTIVITY_UNKNOWN")
+            if account_activity:
+                self._invalid("LOCALSIM_REPLAY_RECOVERY_ACCOUNT_RUN_IN_FLIGHT")
             source = self.source_authority.resolve(
                 historical_source_id=job["historical_source_id"], start_trade_date=date.fromisoformat(job["start_trade_date"]),
                 end_trade_date=date.fromisoformat(job["end_trade_date"]), require_latest_completed=False,
@@ -255,6 +297,7 @@ class LocalSimReplayRecoveryService:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_DAILY_RUN_INVALID")
             binding, release, plan = snapshot["binding"], snapshot["release"], snapshot.get("plan")
             if (snapshot["account"]["status"] != "ACTIVE"
+                    or snapshot["account"].get("account_id") != job["simulation_account_id"]
                     or run["trade_date"] != job["next_trade_date"]
                     or job["failure_context"].get("trade_date") != job["next_trade_date"]
                     or run["strategy_id"] != job["simulation_account_id"]
@@ -288,13 +331,18 @@ class LocalSimReplayRecoveryService:
             exact_message = "market.stk_limit pre_close is required and cannot be derived"
             if not (
                 (failure.get("type") == "DataUnavailableError"
-                 and failure.get("stage") == "LOCAL_SIM_PERSISTENCE_FAILED"
-                 and context.get("reason_code") == "STK_LIMIT_PRE_CLOSE_INVALID")
+                 and (failure.get("stage"), context.get("reason_code")) in ROLLED_BACK_LOCAL_SIM_FAILURES)
                 or (failure.get("type") == "BrokerConnectivityError"
                     and failure.get("stage") == "LOCAL_SIM_SUBMIT_FAILED"
                     and context.get("source") == "DB_HISTORICAL" and context.get("cause") == exact_message)
             ) or job["failure_code"] not in {"DataUnavailableError", "BrokerConnectivityError", "_BindingRetryAttemptError"}:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_FAILURE_UNSUPPORTED")
+            if job["status"] == "FAILED_RETRYABLE" and (
+                retirement is None
+                or failure.get("stage") != "LOCAL_SIM_MARK_VALIDATION_FAILED"
+                or context.get("reason_code") != "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID"
+            ):
+                self._invalid("LOCALSIM_REPLAY_RECOVERY_STATE_INVALID")
             symbol = context.get("symbol")
             if not isinstance(symbol, str) or not symbol.strip() or context.get("trade_date") != run["trade_date"]:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_FAILURE_IDENTITY_INVALID")
@@ -320,6 +368,8 @@ class LocalSimReplayRecoveryService:
                         status.get(REFERENCE_KEY, {}), symbol=symbol, trade_date=next_day,
                     )
             else:
+                if context.get("reason_code") == "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID":
+                    self._invalid("LOCALSIM_REPLAY_RECOVERY_SUSPENSION_UNPROVEN")
                 market = self.market_provider.load_symbol_input(
                     symbol=symbol, trade_date=next_day, source=MinuteDataSource.DB_HISTORICAL,
                     min_bars=1, require_suspend_status=True,

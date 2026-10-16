@@ -254,6 +254,8 @@ class LocalSimHistoricalSourceAuthorityProtocol(Protocol):
 class LocalSimMutationReadinessProtocol(Protocol):
     def require_ready(self) -> None: ...
 
+    def require_replay_recovery_ready(self) -> None: ...
+
 
 class LocalSimHistoricalSourceAuthority:
     """Resolve the single completed-day DB source and global calendar snapshot."""
@@ -522,10 +524,11 @@ class LocalSimProductControlPlaneService:
         return LocalSimControlResponseV1(replay=replay)
 
     def inspect_replay_recovery(self, replay_job_id: str):
+        self.readiness.require_replay_recovery_ready()
         return self._require_replay_recovery().inspect(replay_job_id)
 
     def recover_replay(self, replay_job_id: str, request: Any) -> LocalSimControlResponseV1:
-        self.readiness.require_ready()
+        self.readiness.require_replay_recovery_ready()
         replay = self._require_replay_recovery().recover(replay_job_id, request)
         return LocalSimControlResponseV1(replay=replay)
 

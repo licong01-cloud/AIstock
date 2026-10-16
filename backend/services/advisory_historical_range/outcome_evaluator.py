@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
@@ -444,10 +446,16 @@ class FrozenHistoricalRangeOutcomeInputFactory:
     ) -> None:
         self._subject_provider = subject_provider
         self._policy_provider = policy_provider
+        self._input_cache: OrderedDict[str, tuple[HistoricalRangeOutcomeSubjectInputV1, HistoricalRangeValuationPolicySetV1]] = OrderedDict()
 
     def _subject_and_policy(
         self, work_item: HistoricalRangeOutcomeWorkItemV1
     ) -> tuple[HistoricalRangeOutcomeSubjectInputV1, HistoricalRangeValuationPolicySetV1]:
+        key = canonical_json_sha256(work_item.model_dump(mode="json"))
+        cached = self._input_cache.get(key)
+        if cached is not None:
+            self._input_cache.move_to_end(key)
+            return cached
         subject = self._subject_provider.load(work_item)
         if (
             subject.source_artifact_ref_set_hash
@@ -457,6 +465,9 @@ class FrozenHistoricalRangeOutcomeInputFactory:
         policy = self._policy_provider.load(work_item.policy_bundle_hash)
         if policy.bundle.policy_bundle_hash != work_item.policy_bundle_hash:
             raise ValueError("policy provider returned a different frozen policy bundle")
+        self._input_cache[key] = (subject, policy)
+        if len(self._input_cache) > 256:
+            self._input_cache.popitem(last=False)
         return subject, policy
 
     def source_request(

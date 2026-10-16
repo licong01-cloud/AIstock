@@ -37,10 +37,11 @@ from backend.services.trading_core.errors import InvalidStateTransitionError
 from backend.tests.paper_trading_v2.fixtures_dev_db import _dev_dsn
 
 
-@pytest.mark.parametrize("retire_old_handles", [False, True])
+@pytest.mark.parametrize("retire_old_handles", [False, True, "repeated_mark", "retryable_mark"])
 def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_existing_dev(retire_old_handles):
     from backend.services.simulation_runtime.localsim_replay_recovery import (
         RECOVERY_KEY, RETIREMENT_KEY, LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryService,
+        apply_handle_retirement, proposed_handle_retirement,
     )
     from backend.services.simulation_runtime.models import (
         ExecutionPlan, ExecutionPlanIntent, SimulationDailyRun, SimulationDailyRunStatus, TradingRuleDecision,
@@ -104,7 +105,8 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
             binding_id=binding.binding_id, start_trade_date=days[0], end_trade_date=days[-1], trading_days=days,
             historical_source_id="market.kline_minute_raw.v1", historical_source_sha256="c" * 64, created_by=marker)
         job = repository.transition_replay_job(replay_job_id=job.replay_job_id, expected_version=job.version,
-            update={"status": LocalSimReplayStatus.FAILED_TERMINAL, "completed_trade_date": days[0],
+            update={"status": (LocalSimReplayStatus.FAILED_RETRYABLE if retire_old_handles == "retryable_mark"
+                               else LocalSimReplayStatus.FAILED_TERMINAL), "completed_trade_date": days[0],
                     "next_trade_date": days[1], "failure_code": "BrokerConnectivityError",
                     "failure_context": {"trade_date": days[1].isoformat()}}, updated_at=now)
         evidence_payload = {"test_int_marker": marker}
@@ -174,13 +176,43 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
             binding_id=binding.binding_id, binding_hash=binding.binding_hash, selection_evidence_id=evidence.evidence_id,
             selection_artifact_hash=evidence.artifact_hash, execution_plan_id=plan.plan_id, execution_plan_hash=plan.plan_hash,
             status=SimulationDailyRunStatus.FAILED_RETRYABLE, run_payload_json=run_payload))
+        previous_retirement = None
+        if retire_old_handles in ("repeated_mark", "retryable_mark"):
+            first_proof = proposed_handle_retirement(
+                repository.get_replay_recovery_snapshot(job.replay_job_id),
+                process_started_at=datetime(2026, 10, 14, 12, tzinfo=UTC), now=now,
+            )
+            second_payload = apply_handle_retirement(
+                first_proof["original_payload"], first_proof, retired_at=datetime(2026, 10, 14, 13, tzinfo=UTC))
+            previous_retirement = deepcopy(second_payload[RETIREMENT_KEY])
+            second_payload.update(failed_intents=1, broker_order_handles=[{
+                "handle_id": "lsh_retry_" + marker, "intent_id": intent_id, "backend_id": "local_sim",
+                "submitted_at": "2026-10-14T18:00:00Z"}])
+            second_payload["submit_failure"]["stage"] = "LOCAL_SIM_MARK_VALIDATION_FAILED"
+            second_payload["submit_failure"]["context"]["reason_code"] = "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID"
+            # save_simulation_daily_run is insert-idempotent; stage the later
+            # failed batch only in this existing DEV rollback fixture.
+            with conn.cursor() as cur:
+                cur.execute("UPDATE paper_v2.simulation_daily_run SET run_payload_json = %s WHERE run_id = %s",
+                            (psycopg2.extras.Json(second_payload), run.run_id))
         initial_payload = deepcopy(runtime.get_simulation_daily_run(run.run_id).run_payload_json)
+        if previous_retirement:
+            assert initial_payload[RETIREMENT_KEY] == previous_retirement
         source = SimpleNamespace(historical_source_id=job.historical_source_id,
             historical_source_sha256=job.historical_source_sha256, trading_days=days, current_trading_date=now.date())
         def recovery(repo):
+            suspension_provider = None
+            if retire_old_handles in ("repeated_mark", "retryable_mark"):
+                from backend.tests.simulation_execution.test_localsim_runtime import _halt_reference
+                from backend.services.simulation_execution.localsim.suspension import REFERENCE_KEY
+
+                suspension_provider = SimpleNamespace(load_statuses=lambda **_: {
+                    "001205.SZ": {"suspend_status": {"is_suspended": True},
+                                  REFERENCE_KEY: _halt_reference("001205.SZ", days[1])}})
             return LocalSimReplayRecoveryService(repository=repo,
                 source_authority=SimpleNamespace(resolve=lambda **_: source), clock=lambda: now,
-                process_started_at=datetime(2026, 10, 14, 12, tzinfo=UTC),
+                process_started_at=datetime(2026, 10, 14, 20 if previous_retirement else 12, tzinfo=UTC),
+                suspension_provider=suspension_provider,
                 market_provider=SimpleNamespace(load_symbol_input=lambda **kw: SimpleNamespace(
                     symbol=kw["symbol"], trade_date=days[1], source=MinuteDataSource.DB_HISTORICAL,
                     market_context={"prev_close": 15.3}, minute_bars=[object()])))
@@ -192,10 +224,26 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
         assert snapshot["plan"]["plan_payload_json"]["trading_rule_decisions"][0]["decision_hash"] == decision_hash
         request = LocalSimReplayRecoverRequestV1(expected_version=job.version, snapshot_sha256=check.snapshot_sha256)
 
+        # Activity that appears after inspection must still refuse the old request
+        # inside the locked recovery transaction. All fixture changes roll back.
+        with conn.cursor() as cur:
+            cur.execute("UPDATE paper_v2.simulation_daily_run SET status = 'INTRADAY_RUNNING' WHERE run_id = %s",
+                        (run.run_id,))
+        busy = service.inspect(job.replay_job_id)
+        assert not busy.ready and busy.reason_codes == ["LOCALSIM_REPLAY_RECOVERY_ACCOUNT_RUN_IN_FLIGHT"]
+        with pytest.raises(InvalidStateTransitionError, match="evidence is blocked"):
+            service.recover(job.replay_job_id, request)
+        assert repository.get_replay_job(job.replay_job_id) == job
+        assert runtime.get_simulation_daily_run(run.run_id).run_payload_json == initial_payload
+        with conn.cursor() as cur:
+            cur.execute("UPDATE paper_v2.simulation_daily_run SET status = 'FAILED_RETRYABLE' WHERE run_id = %s",
+                        (run.run_id,))
+        assert service.inspect(job.replay_job_id).snapshot_sha256 == check.snapshot_sha256
+
         class BrokenReadback(LocalSimSuccessorRepository):
             def _select_replay(self, cur, replay_job_id, **kwargs):
                 result = super()._select_replay(cur, replay_job_id, **kwargs)
-                if result.status == LocalSimReplayStatus.FAILED_RETRYABLE:
+                if result.status == LocalSimReplayStatus.FAILED_RETRYABLE and result.version == job.version + 1:
                     raise RuntimeError("injected recovery readback failure")
                 return result
 
@@ -227,6 +275,9 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
             assert retirement["plan_hash"] == plan_hash
             assert persisted.run_payload_json[RECOVERY_KEY]["retirement_sha256"] == retirement["receipt_sha256"]
             assert not persisted.run_payload_json.get("broker_order_handles")
+            if previous_retirement:
+                assert retirement["original_payload"][RETIREMENT_KEY] == previous_retirement
+                assert retirement["predecessor_retirement_sha256"] == previous_retirement["receipt_sha256"]
         runtime.require_localsim_side_effect_free_rebuild(persisted)
         assert repository.get_account(account.account_id) == account
         with pytest.raises(InvalidStateTransitionError, match="CAS"):

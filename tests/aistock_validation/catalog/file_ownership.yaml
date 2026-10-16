@@ -1372,6 +1372,8 @@ rules:
   - rule_id: local_data_pipeline
     priority: 70
     include:
+      - scripts/repair_local_sync_incident.py
+      - backend/tests/scripts/test_repair_local_sync_incident.py
       - scripts/repair_local_data_daily_sync.py
       - backend/tests/ingestion/test_daily_sync_recovery.py
       - backend/ingestion/tdx_scheduler.py
@@ -1394,6 +1396,7 @@ rules:
       - backend/tests/scripts/test_repair_suspend_688766.py
       - backend/services/suspend_d_coverage.py
       - scripts/audit_suspend_d_coverage.py
+      - scripts/verify_suspension_day_authority.py
       - backend/tests/services/test_suspend_d_coverage.py
     primary_module: local_data
     impact_modules: [qlib_data, qe.core, paper_v2]

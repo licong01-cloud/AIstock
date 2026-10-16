@@ -883,10 +883,12 @@ class LocalSimSuccessorRepository:
                 return self._replay_recovery_snapshot(cur, replay_job_id)
 
     def _replay_recovery_snapshot(self, cur: Any, replay_job_id: str, *, lock: bool = False) -> dict[str, Any]:
+        from .localsim_cutover_readiness import LOCALSIM_IN_FLIGHT_ECONOMIC_RUN_STATUSES
         from .localsim_replay_recovery import economic_fact_counts
         from .repository import SimulationRuntimeRepository
 
         job = self._select_replay(cur, replay_job_id, for_update=lock)
+        account = self._select_account(cur, job.simulation_account_id, for_update=lock)
         cur.execute(
             "SELECT * FROM paper_v2.simulation_daily_run "
             "WHERE strategy_id = %s AND binding_id = %s AND trade_date = %s" + (" FOR UPDATE" if lock else ""),
@@ -904,9 +906,17 @@ class LocalSimSuccessorRepository:
                         (run.selection_evidence_id,))
             row = cur.fetchone()
             evidence_hash = row["artifact_hash"] if row else None
+        cur.execute(
+            "SELECT run_id, broker_backend, binding_id, trade_date::text AS trade_date, status "
+            "FROM paper_v2.simulation_daily_run WHERE strategy_id = %s "
+            "AND status = ANY(%s::text[]) ORDER BY run_id",
+            (job.simulation_account_id, list(LOCALSIM_IN_FLIGHT_ECONOMIC_RUN_STATUSES)),
+        )
+        account_in_flight_runs = [dict(row) for row in cur.fetchall()]
         return {
             "job": job.model_dump(mode="json"),
-            "account": self._select_account(cur, job.simulation_account_id).model_dump(mode="json"),
+            "account": account.model_dump(mode="json"),
+            "account_in_flight_runs": account_in_flight_runs,
             "binding": self._select_binding(cur, job.binding_id).model_dump(mode="json"),
             "release": self._select_release(cur, job.release_id).model_dump(mode="json"),
             "run": run.model_dump(mode="json") if run else None,
@@ -975,8 +985,9 @@ class LocalSimSuccessorRepository:
                 )
                 cur.execute(
                     "UPDATE paper_v2.localsim_replay_job_v1 SET status = %s, version = version + 1, updated_at = %s "
-                    "WHERE replay_job_id = %s AND version = %s AND status = 'FAILED_TERMINAL'",
-                    (LocalSimReplayStatus.FAILED_RETRYABLE.value, updated_at, replay_job_id, expected_version),
+                    "WHERE replay_job_id = %s AND version = %s AND status = %s",
+                    (LocalSimReplayStatus.FAILED_RETRYABLE.value, updated_at, replay_job_id, expected_version,
+                     job["status"]),
                 )
                 if cur.rowcount != 1:
                     raise InvalidStateTransitionError(

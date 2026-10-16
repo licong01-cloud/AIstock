@@ -666,10 +666,16 @@ def test_localsim_realtime_submission_persists_waiting_state_before_first_causal
     assert state.last_processed_bar_time is None
 
 
-def test_localsim_limit_up_buy_waits_per_symbol_without_rolling_back_healthy_peer() -> None:
+@pytest.mark.parametrize(("blocked_volume", "expected_reason"), [
+    (100_000, "LIMIT_UP_BUY_BLOCKED"), (0, "ZERO_VOLUME"),
+])
+def test_localsim_limit_up_buy_waits_per_symbol_without_rolling_back_healthy_peer(
+    blocked_volume: int, expected_reason: str,
+) -> None:
     blocked_input = _make_market_input("000001.SZ", bar_count=2)
     first_blocked_bar = blocked_input.minute_bars[0].model_copy(
-        update={"open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0}
+        update={"open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0,
+                "volume": blocked_volume, "amount": float(blocked_volume) * 11.0}
     )
     blocked_input = replace(
         blocked_input,
@@ -711,7 +717,7 @@ def test_localsim_limit_up_buy_waits_per_symbol_without_rolling_back_healthy_pee
     first_states = {state.symbol: state for state in first_snapshot["execution_states"]}
 
     assert first_states["000001.SZ"].runtime_status.value == "WAITING_FOR_MARKET_STATE"
-    assert first_states["000001.SZ"].waiting_reason_code == "LIMIT_UP_BUY_BLOCKED"
+    assert first_states["000001.SZ"].waiting_reason_code == expected_reason
     assert first_states["000001.SZ"].last_processed_bar_time == first_blocked_bar.bar_time
     assert first_states["000001.SZ"].filled_quantity == 0
     assert first_states["000002.SZ"].runtime_status.value == "ACTIVE"
@@ -720,7 +726,7 @@ def test_localsim_limit_up_buy_waits_per_symbol_without_rolling_back_healthy_pee
     assert any(
         event.order_id == first_states["000001.SZ"].order_id
         and event.event_type == OrderEventType.NO_FILL
-        and event.reason == "LIMIT_UP_BUY_BLOCKED"
+        and event.reason == expected_reason
         for event in first_snapshot["events"]
     )
 
@@ -737,8 +743,15 @@ def test_localsim_limit_up_buy_waits_per_symbol_without_rolling_back_healthy_pee
     assert backend.query_status(healthy_handle).state == "filled"
 
 
-def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplicate_fill() -> None:
+@pytest.mark.parametrize("zero_volume_first_bar", [False, True])
+def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplicate_fill(
+    zero_volume_first_bar: bool,
+) -> None:
     historical = _make_market_input("000001.SZ", bar_count=4)
+    if zero_volume_first_bar:
+        bars = list(historical.minute_bars)
+        bars[0] = bars[0].model_copy(update={"volume": 0, "amount": 0.0})
+        historical = replace(historical, minute_bars=bars)
     provider = ObservedMarketDataProvider(inputs_by_symbol={"000001.SZ": historical})
     cursor = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=30)
     streaming_policy = {

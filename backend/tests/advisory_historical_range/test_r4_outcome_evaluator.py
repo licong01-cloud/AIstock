@@ -135,8 +135,10 @@ class _PolicyProvider:
 class _SubjectProvider:
     def __init__(self, subject: HistoricalRangeOutcomeSubjectInputV1) -> None:
         self.subject = subject
+        self.calls = 0
 
     def load(self, work_item: HistoricalRangeOutcomeWorkItemV1) -> HistoricalRangeOutcomeSubjectInputV1:
+        self.calls += 1
         return self.subject
 
 
@@ -314,8 +316,9 @@ def test_range_native_factory_uses_t_mark_without_phase0a_policy_identity() -> N
     item = _work_item()
     policy = _range_policy(item.policy_bundle_hash)
     subject = _subject(item)
+    provider = _SubjectProvider(subject)
     factory = FrozenHistoricalRangeOutcomeInputFactory(
-        subject_provider=_SubjectProvider(subject),
+        subject_provider=provider,
         policy_provider=_PolicyProvider(policy),
     )
     source_request = factory.source_request(item)
@@ -336,6 +339,7 @@ def test_range_native_factory_uses_t_mark_without_phase0a_policy_identity() -> N
     assert result.calculation_results[0].calculation_evidence.evidence_payload["policy_bundle_hash"] == "f" * 64
     assert "phase1_handoff_bundle_hash" not in policy.bundle.model_dump(mode="json")
     assert "admission_scope_id" not in policy.bundle.model_dump(mode="json")
+    assert provider.calls == 1
 
 
 def test_range_native_episode_stays_open_and_zero_sentinel() -> None:

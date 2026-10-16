@@ -1,0 +1,393 @@
+{
+  "actual": "LOCAL_SIM_INTRADAY_ADVANCE_FAILED / RiskRuleError: order has no executable minute bars; durable cursor remains10:35 at valid zero-volume10:36.",
+  "allowed_write_scope": [
+    "backend/services/trading_core/minute_execution.py",
+    "backend/services/trading_core/risk.py",
+    "backend/execution_algos/twap_algo.py",
+    "backend/services/simulation_execution/localsim/runtime.py",
+    "backend/tests/trading_core/test_minute_execution.py",
+    "backend/tests/simulation_execution/test_localsim_runtime.py",
+    "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md",
+    "tests/aistock_validation/bugs/20261016_BUG-1938-localsim-twap-incremental-zero-volume-minute-stalls-durable-causal-curso.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1938",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-16T03:52:11.523712Z",
+  "description": "LOCAL_SIM_INTRADAY_ADVANCE_FAILED / RiskRuleError: order has no executable minute bars; durable cursor remains10:35 at valid zero-volume10:36.",
+  "design_compliance_review": {
+    "artifact": "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md",
+    "authority": "DESIGN-COMPLIANCE-001",
+    "items": {
+      "no_added_approval_gate": "existing native workflow/restart only",
+      "no_partial_delivery_claim": "reviewed; runtime pending",
+      "no_silent_error": "strict real missing/invalid price preserved",
+      "no_unapproved_business_change": "TWAP existing zero-volume step semantics unchanged; shared implementation only"
+    }
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261016-e5a329af1ab8",
+      "timestamp": "2026-10-16T03:52:11.523692Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/LOCALSIM/workflow/LOCALSIM-formal-no-executable-bars-readonly-20261016-r1.json",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1938-directed-r1.xml",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1938-native-frozen-baseline-r1.json",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1938-native-frozen-candidate-r1.json",
+    "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
+  ],
+  "expected": "????????????????NO_FILL???????????????????????????/limit??????bar?????????????????????????????????????????",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261016_BUG-1938-localsim-twap-incremental-zero-volume-minute-stalls-durable-causal-curso.json",
+      "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/trading_core/test_minute_execution.py",
+      "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
+    ],
+    "added_files": [
+      "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
+    ],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261016_BUG-1938-localsim-twap-incremental-zero-volume-minute-stalls-durable-causal-curso.json",
+      "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/trading_core/test_minute_execution.py",
+      "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/trading_core/minute_execution.py",
+        "backend/services/trading_core/risk.py",
+        "backend/execution_algos/twap_algo.py",
+        "backend/services/simulation_execution/localsim/runtime.py",
+        "backend/tests/trading_core/test_minute_execution.py",
+        "backend/tests/simulation_execution/test_localsim_runtime.py",
+        "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
+      ],
+      "impacted_modules": [
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "qe.core",
+        "strategy_package",
+        "platform.api",
+        "platform.db",
+        "simulation_runtime",
+        "simulation.layer_foundation",
+        "selection_center",
+        "docs.analysis"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/trading_core/minute_execution.py",
+          "impact_modules": [
+            "miniqmt_execution_runtime",
+            "qe.core",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "trading_core_minute_execution"
+        },
+        {
+          "file": "backend/services/trading_core/risk.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/execution_algos/twap_algo.py",
+          "impact_modules": [
+            "miniqmt_execution_runtime",
+            "simulation_runtime",
+            "qe.core",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "execution_algos_runtime"
+        },
+        {
+          "file": "backend/services/simulation_execution/localsim/runtime.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/trading_core/test_minute_execution.py",
+          "impact_modules": [
+            "miniqmt_execution_runtime",
+            "qe.core",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "trading_core_minute_execution"
+        },
+        {
+          "file": "backend/tests/simulation_execution/test_localsim_runtime.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "paper_v2",
+            "miniqmt_execution_runtime",
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.layer_foundation",
+          "risk_level": "critical",
+          "rule_id": "simulation_layer_foundation_tests"
+        },
+        {
+          "file": "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/trading_core/minute_execution.py",
+        "backend/services/trading_core/risk.py",
+        "backend/execution_algos/twap_algo.py",
+        "backend/services/simulation_execution/localsim/runtime.py",
+        "backend/tests/trading_core/test_minute_execution.py",
+        "backend/tests/simulation_execution/test_localsim_runtime.py",
+        "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
+      "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/tests/trading_core/test_minute_execution.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
+      "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/tests/trading_core/test_minute_execution.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
+    ]
+  },
+  "first_seen_at": "2026-10-16T03:52:11.523712Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6186,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6186",
+  "last_seen_at": "2026-10-16T03:52:11.523712Z",
+  "module": "paper_v2",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/trading_core/test_minute_execution.py -k zero_volume_incremental -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "paper_v2_backend",
+    "platform_api_backend",
+    "simulation_core_l2"
+  ],
+  "review_rounds": [
+    {
+      "focus": "market-state and invalid price fail-closed",
+      "round": 1
+    },
+    {
+      "focus": "cursor, deterministic no-fill, restart and healthy peer",
+      "round": 2
+    },
+    {
+      "focus": "same actual native frozen input baseline/candidate, all136 directed tests",
+      "round": 3
+    }
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/LOCALSIM/workflow/BUG-1938-native-frozen-candidate-r1.json -> fresh import/compile of4 tracked native modules; actual frozen context/order/state and native observed10:36/10:37 bars. Same-input baseline reproduces RiskRuleError; candidate has ZERO_VOLUME then LIMIT_UP_BUY_BLOCKED, cursor10:37, no fills/economic change. No DB access, process control or production acceptance. Directed native136 passed."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "scope_reconciliation": "Risk invariant test colocated in CI-covered test_minute_execution.py and individually reverified; test_risk.py unchanged and removed from planned changed scope. No catalog/workflow code edits.",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "paper_v2"
+  ],
+  "title": "LocalSIM TWAP incremental zero-volume minute stalls durable causal cursor",
+  "trigger_condition": {
+    "fingerprint": "e5a329af1ab877e4f3f28f6c",
+    "source_event_id": "FE-20261016-e5a329af1ab8"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "paper_v2",
+        "platform_api",
+        "simulation_core"
+      ],
+      "plans": [
+        "paper_v2_backend",
+        "platform_api_backend",
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "paper_v2",
+          "platform_api",
+          "simulation_core"
+        ],
+        "plans": [
+          "paper_v2_backend",
+          "platform_api_backend",
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
