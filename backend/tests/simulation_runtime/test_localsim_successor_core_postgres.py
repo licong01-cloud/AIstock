@@ -37,8 +37,8 @@ from backend.services.trading_core.errors import InvalidStateTransitionError
 from backend.tests.paper_trading_v2.fixtures_dev_db import _dev_dsn
 
 
-@pytest.mark.parametrize("retire_old_handles", [False, True, "repeated_mark", "retryable_mark"])
-def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_existing_dev(retire_old_handles):
+@pytest.mark.parametrize("retire_old_handles", [False, True, "repeated_mark", "retryable_mark", "preselection"])
+def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_existing_dev(retire_old_handles, monkeypatch):
     from backend.services.simulation_runtime.localsim_replay_recovery import (
         RECOVERY_KEY, RETIREMENT_KEY, LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryService,
         apply_handle_retirement, proposed_handle_retirement,
@@ -108,7 +108,10 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
             update={"status": (LocalSimReplayStatus.FAILED_RETRYABLE if retire_old_handles == "retryable_mark"
                                else LocalSimReplayStatus.FAILED_TERMINAL), "completed_trade_date": days[0],
                     "next_trade_date": days[1], "failure_code": "BrokerConnectivityError",
-                    "failure_context": {"trade_date": days[1].isoformat()}}, updated_at=now)
+                     "failure_context": {"trade_date": days[1].isoformat()}}, updated_at=now)
+        if retire_old_handles == "preselection":
+            _assert_preselection_recovery_on_dev(repository, runtime, factory, dsn, job, now, days, monkeypatch)
+            return
         evidence_payload = {"test_int_marker": marker}
         evidence_hash = canonical_json_sha256(evidence_payload)
         evidence = runtime.save_daily_selection_evidence(DailySelectionEvidence(
@@ -170,12 +173,22 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
                         "trade_date": days[1].isoformat(), "reason_code": "STK_LIMIT_PRE_CLOSE_INVALID",
                         "economic_commit_staged": False, "broker_called": False,
                         "submitted_intents": 0, "failed_intents": 1}})
-        run = runtime.save_simulation_daily_run(SimulationDailyRun(
+        candidate_run = SimulationDailyRun(
             run_id=marker, trade_date=days[1], strategy_id=account.account_id, broker_backend="local_sim",
             package_id=package_id, manifest_sha256=manifest, release_id=release.release_id, release_hash=release.release_hash,
             binding_id=binding.binding_id, binding_hash=binding.binding_hash, selection_evidence_id=evidence.evidence_id,
             selection_artifact_hash=evidence.artifact_hash, execution_plan_id=plan.plan_id, execution_plan_hash=plan.plan_hash,
-            status=SimulationDailyRunStatus.FAILED_RETRYABLE, run_payload_json=run_payload))
+            status=SimulationDailyRunStatus.FAILED_RETRYABLE, run_payload_json=run_payload)
+        if retire_old_handles is False:
+            with psycopg2.connect(**dsn) as other:
+                with other.cursor() as cur:
+                    cur.execute("SELECT pg_advisory_lock(2403, hashtext(%s))", (candidate_run.run_id,))
+                    try:
+                        with pytest.raises(InvalidStateTransitionError, match="writer is active"):
+                            runtime.save_simulation_daily_run(candidate_run)
+                    finally:
+                        cur.execute("SELECT pg_advisory_unlock(2403, hashtext(%s))", (candidate_run.run_id,))
+        run = runtime.save_simulation_daily_run(candidate_run)
         previous_retirement = None
         if retire_old_handles in ("repeated_mark", "retryable_mark"):
             first_proof = proposed_handle_retirement(
@@ -254,14 +267,10 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
         assert runtime.get_simulation_daily_run(run.run_id).run_payload_json == initial_payload
         with psycopg2.connect(**dsn) as other:
             with other.cursor() as cur:
-                cur.execute("SELECT pg_advisory_lock(2403, hashtext(%s))", (run.run_id,))
-                try:
-                    with pytest.raises(InvalidStateTransitionError, match="writer is active"):
-                        service.recover(job.replay_job_id, request)
-                    with pytest.raises(InvalidStateTransitionError, match="writer is active"):
-                        runtime.require_localsim_side_effect_free_rebuild(run)
-                finally:
-                    cur.execute("SELECT pg_advisory_unlock(2403, hashtext(%s))", (run.run_id,))
+                # The native creator now owns this lock until the outer fixture
+                # transaction ends. A second connection must fail without waiting.
+                cur.execute("SELECT pg_try_advisory_lock(2403, hashtext(%s))", (run.run_id,))
+                assert cur.fetchone()[0] is False
         result = service.recover(job.replay_job_id, request)
         assert result.status == LocalSimReplayStatus.FAILED_RETRYABLE and result.version == job.version + 1
         assert result.completed_trade_date == days[0] and result.next_trade_date == days[1]
@@ -285,6 +294,82 @@ def test_terminal_replay_recovery_is_atomic_cas_locked_and_keeps_prefix_on_exist
     finally:
         conn.rollback()
         conn.close()
+
+
+def _assert_preselection_recovery_on_dev(repository, runtime, factory, dsn, job, now, days, monkeypatch):
+    from backend.services.simulation_runtime import localsim_selection_inference as transport
+    from backend.services.simulation_runtime.localsim_replay_recovery import (
+        PRESELECTION_RECOVERY_KEY, LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryService,
+    )
+    from backend.tests.simulation_runtime.test_localsim_replay_recovery import _preselection_snapshot
+
+    context = _preselection_snapshot()["job"]["failure_context"]
+    job = repository.transition_replay_job(replay_job_id=job.replay_job_id, expected_version=job.version,
+        update={"failure_code": "TimeoutExpired", "failure_context": context}, updated_at=now)
+    monkeypatch.setattr(transport, "probe_localsim_wsl_witness", lambda **_: {"witness_sha256": "a" * 64})
+    source = SimpleNamespace(historical_source_id=job.historical_source_id,
+        historical_source_sha256=job.historical_source_sha256, trading_days=days, current_trading_date=now.date())
+
+    def service(repo):
+        return LocalSimReplayRecoveryService(repository=repo, source_authority=SimpleNamespace(resolve=lambda **_: source),
+            market_provider=SimpleNamespace(), clock=lambda: now)
+
+    owner = service(repository)
+    check = owner.inspect(job.replay_job_id)
+    assert check.ready and check.run_id is None and set(check.economic_counts.values()) == {0}
+    assert owner.inspect(job.replay_job_id).snapshot_sha256 == check.snapshot_sha256
+    request = LocalSimReplayRecoverRequestV1(expected_version=job.version, snapshot_sha256=check.snapshot_sha256)
+    bad_digest = request.model_copy(update={"snapshot_sha256": "f" * 64})
+    with pytest.raises(InvalidStateTransitionError, match="evidence is blocked"):
+        owner.recover(job.replay_job_id, bad_digest)
+    assert repository.get_replay_job(job.replay_job_id) == job
+
+    class BrokenReadback(LocalSimSuccessorRepository):
+        def _select_replay(self, cur, replay_job_id, **kwargs):
+            value = super()._select_replay(cur, replay_job_id, **kwargs)
+            if value.version == job.version + 1:
+                raise RuntimeError("injected no-run readback failure")
+            return value
+
+    with pytest.raises(RuntimeError, match="injected no-run"):
+        service(BrokenReadback(conn_factory=factory)).recover(job.replay_job_id, request)
+    assert repository.get_replay_job(job.replay_job_id) == job
+    with factory() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM paper_v2.config_change_audit "
+                        "WHERE object_type = 'LOCALSIM_REPLAY' AND object_id = %s", (job.replay_job_id,))
+            assert cur.fetchone()[0] == 0
+    candidate = check.native_input["candidate_run_id"]
+    with psycopg2.connect(**dsn) as other:
+        with other.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(2403, hashtext(%s))", (candidate,))
+            try:
+                with pytest.raises(InvalidStateTransitionError, match="writer is active"):
+                    owner.recover(job.replay_job_id, request)
+            finally:
+                cur.execute("SELECT pg_advisory_unlock(2403, hashtext(%s))", (candidate,))
+    result = owner.recover(job.replay_job_id, request)
+    assert result.status is LocalSimReplayStatus.FAILED_RETRYABLE and result.version == job.version + 1
+    assert result.replay_hash == job.replay_hash and result.completed_trade_date == days[0]
+    assert result.next_trade_date == days[1] and result.binding_id == job.binding_id and result.release_id == job.release_id
+    receipt = result.failure_context[PRESELECTION_RECOVERY_KEY]
+    assert receipt["run_id"] is None and receipt["native_input"]["candidate_run_id"] == candidate
+    assert receipt["original_failure"] == context
+    assert receipt["receipt_sha256"] == canonical_json_sha256({k: v for k, v in receipt.items() if k != "receipt_sha256"})
+    assert repository.get_replay_recovery_snapshot(job.replay_job_id)["economic_counts"] == check.economic_counts
+    assert runtime.get_simulation_daily_run_by_key(strategy_id=job.simulation_account_id,
+        binding_id=job.binding_id, trade_date=days[1]) is None
+    # Normal resume clears failure fields, while the atomic audit remains durable.
+    repository.transition_replay_job(replay_job_id=job.replay_job_id, expected_version=result.version,
+        update={"status": LocalSimReplayStatus.RUNNING_HISTORICAL, "failure_code": None, "failure_context": None},
+        updated_at=now)
+    with factory() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT after_json FROM paper_v2.config_change_audit "
+                        "WHERE object_type = 'LOCALSIM_REPLAY' AND object_id = %s", (job.replay_job_id,))
+            assert cur.fetchone()[0] == receipt
+    with pytest.raises(InvalidStateTransitionError, match="CAS"):
+        owner.recover(job.replay_job_id, request)
 
 
 ROOT = Path(__file__).resolve().parents[3]
