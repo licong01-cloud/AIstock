@@ -31,8 +31,8 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/qe_archive/workspace_lifecycle.py",
-      "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py",
       "backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py",
+      "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py",
       "tests/aistock_validation/bugs/20261008_BUG-1808-qe-workspace-cleanup-misses-ancestor-references-and-stale-plan-safety-ch.json"
     ],
     "added_files": [
@@ -40,8 +40,8 @@
     ],
     "changed_files": [
       "backend/services/qe_archive/workspace_lifecycle.py",
-      "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py",
       "backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py",
+      "backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py",
       "tests/aistock_validation/bugs/20261008_BUG-1808-qe-workspace-cleanup-misses-ancestor-references-and-stale-plan-safety-ch.json"
     ],
     "changed_files_source": "git_finish",
@@ -97,8 +97,8 @@
   },
   "first_seen_at": "2026-10-08T05:53:27.455522Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6328cb42b072b2d42e47a87941cc2bdb46e661d9",
+  "fixed_at": "2026-10-08T06:23:33Z",
   "fresh_process_evidence": [
     "python -m pytest backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py -q -> isolated fresh process loads cleanup service and verifies only tmp_path deletions"
   ],
@@ -111,6 +111,7 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5757",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -135,6 +136,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -146,7 +148,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1808",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ba038cc98f7fbd1c",
+    "recorded_at": "2026-10-08T06:24:11.795701Z",
+    "runtime_contract_digest": "82dd60cf55c154c1e959c2e8c61fb216fca08c5e2aafeeda072970a7b6e4e1c0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "bed5b5f2be157b4b50082fd0d93eccf4b1a9ca9c",
+    "source_merge_commit": "6328cb42b072b2d42e47a87941cc2bdb46e661d9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5757",
+    "validation_evidence": [
+      "validation-receipt: id=8e3d75328a7c2a25 commit=bed5b5f2be157b4b50082fd0d93eccf4b1a9ca9c kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py -q` result=`24 passed 1 skipped OS symlink privilege`",
+      "validation-receipt: id=85bd1493294ecab1 commit=bed5b5f2be157b4b50082fd0d93eccf4b1a9ca9c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/qe_archive/workspace_lifecycle.py backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py tests/aistock_validation/bugs/20261008_BUG-1808-qe-workspace-cleanup-misses-ancestor-references-and-stale-plan-safety-ch.json` result=`passed files=4 blocking=0`"
+    ],
+    "validation_evidence_digest": "c656edde04aaa463afae00b778abab74ff44b3e5de04d1ae173dfee7beea8353"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.archive"
   ],
@@ -155,6 +179,10 @@
     "fingerprint": "f87654a4324826ab5f6b31b7",
     "source_event_id": "FE-20261008-f87654a43248"
   },
+  "validation_evidence": [
+    "validation-receipt: id=8e3d75328a7c2a25 commit=bed5b5f2be157b4b50082fd0d93eccf4b1a9ca9c kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py -q` result=`24 passed 1 skipped OS symlink privilege`",
+    "validation-receipt: id=85bd1493294ecab1 commit=bed5b5f2be157b4b50082fd0d93eccf4b1a9ca9c kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/qe_archive/workspace_lifecycle.py backend/tests/unified_engine/test_qe_workspace_lifecycle_safety.py backend/tests/unified_engine/test_qe_asset_lifecycle_cleanup.py tests/aistock_validation/bugs/20261008_BUG-1808-qe-workspace-cleanup-misses-ancestor-references-and-stale-plan-safety-ch.json` result=`passed files=4 blocking=0`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
