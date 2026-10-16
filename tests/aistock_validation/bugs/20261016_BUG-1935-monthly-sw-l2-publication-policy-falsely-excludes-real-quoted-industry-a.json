@@ -1,0 +1,313 @@
+{
+  "actual": "801011.SI错误标为never quoted导致DERIVE拒绝；sealed BUILD目标存在不能按现有resume回到打包",
+  "allowed_write_scope": [
+    "noxfile.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/services/dataset_release/sw_l2_quote_policy.py",
+    "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+    "backend/services/dataset_release/monthly_build_recovery.py",
+    "backend/tests/dataset_release/test_monthly_build_recovery.py",
+    "tests/aistock_validation/bugs/20261016_BUG-1935-monthly-sw-l2-publication-policy-falsely-excludes-real-quoted-industry-a.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1935",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-16T02:39:59.466178Z",
+  "description": "801011.SI错误标为never quoted导致DERIVE拒绝；sealed BUILD目标存在不能按现有resume回到打包",
+  "design_compliance": {
+    "business_semantics_unchanged": true,
+    "no_new_approval_or_quality_gate": true,
+    "no_partial_completion_claim": true,
+    "no_silent_error_or_fake_data": true
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261016-6cd1755ab52e",
+      "timestamp": "2026-10-16T02:39:59.466178Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "真实官方报价与共享availability闭合；原operation保留导出断点重新打包，旧封存证据不覆盖",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/services/dataset_release/sw_l2_quote_policy.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1935-monthly-sw-l2-publication-policy-falsely-excludes-real-quoted-industry-a.json"
+    ],
+    "added_files": [
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py"
+    ],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/services/dataset_release/sw_l2_quote_policy.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1935-monthly-sw-l2-publication-policy-falsely-excludes-real-quoted-industry-a.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/sw_l2_quote_policy.py",
+        "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+        "backend/services/dataset_release/monthly_build_recovery.py",
+        "backend/tests/dataset_release/test_monthly_build_recovery.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/sw_l2_quote_policy.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_build_recovery.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_build_recovery.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/sw_l2_quote_policy.py",
+        "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+        "backend/services/dataset_release/monthly_build_recovery.py",
+        "backend/tests/dataset_release/test_monthly_build_recovery.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/sw_l2_quote_policy.py",
+      "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/sw_l2_quote_policy.py",
+      "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py"
+    ]
+  },
+  "first_seen_at": "2026-10-16T02:39:59.466178Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fix_summary": "Correct the demonstrably false never-quoted classification of 801011.SI; retain all six official stop dates. Provide a narrowly scoped offline recovery for idle, unpublished FAILED DERIVE operations with this exact legacy policy. Verify sealed SOURCE/BUILD, request/plan, frozen official quote proof and 125269 retained file signatures, then preserve the original checkpoint and move the private candidate back to its original staging for ordinary API resume. No producer execution, active-profile change, source rewrite or price re-export in recovery.",
+  "fixed_at": null,
+  "github_issue_number": 6177,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6177",
+  "last_seen_at": "2026-10-16T02:39:59.466178Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_rounds": [
+    "1: authority/source closure: actual frozen sw_daily partition proves 801011 publication; only this erroneous empty availability entry changes and all six stop dates remain fixed.",
+    "2: recovery safety: FAILED DERIVE and no downstream seals/profile, exact SOURCE/BUILD/request/plan pins, active exclusion, retained file signatures and known legacy-policy identity; no producer calls, DB, activation or deletion.",
+    "3: crash/performance regression: recover between atomic candidate/checkpoint moves, retain bytes/inodes/mtime and old receipts, idempotent retry, reject mutation/links/bad proof; 43 targeted tests, guardrail and catalog integrity passed."
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "RED: test_real_published_801011_is_not_confused_with_membership_availability reproduces empty spans; GREEN after policy fix with the same six stop dates.",
+      "Fresh AIstock process: python -m backend.services.dataset_release.monthly_build_recovery --operation-id dmr_63a313d97fd046a38d5a876265565014 --state-root F:/Dev/AIstock_runtime_state/monthly-dataset-release-v2 --control-root X:/AIstock_dataset_release_control --active-profile F:/Dev/RD-Agent-state/dataset_profiles/active_dataset_profile.json -> dry-run passed, applied=false, retained_file_count=125269, official source b740785cad58bd1b25a40c4477533489711365dcd15c25915a453dd0a99924f7, no database/profile/process writes."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "Add the new direct recovery tests to the existing qlib_data_backend plan and register only the new CLI-only maintenance helper as non-runtime, consistent with monthly_legacy_adoption. Repository import search shows no API/worker caller; module __main__ is the sole production entry. Do not exempt the actual worker publication policy or alter runtime probe contracts.",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly SW L2 publication policy falsely excludes real quoted industry and cannot retain sealed BUILD on packaging repair",
+  "trigger_condition": {
+    "fingerprint": "6cd1755ab52e35553142ba4d",
+    "source_event_id": "FE-20261016-6cd1755ab52e"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
