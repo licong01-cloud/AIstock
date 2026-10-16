@@ -16,7 +16,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-16T20:40:58.917046Z",
-  "description": "Generic private quote-available stock row lacks facts; current policy marks 801011.SI available through cutoff solely because a historical row existed.",
+  "description": "September operation dmr_63a313d97fd046a38d5a876265565014 is FAILED BUILD attempt 273. BUG-1935 established one historical quote for 801011.SI but incorrectly extrapolated availability through September. The frozen month contains 63 quote-NaN rows for three stocks and 21 trading days. Tushare index_classify returns is_pub=0 and sw_daily returns no September rows, while local sw_daily retains historical observations through 2026-04-28. This does not establish an official stop date. Preserve authentic history, moneyflow and completed exports; do not derive publication dates from missing values or waive the contract.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -26,8 +26,28 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_dataset_candidates/data_repair_staging/monthly-202609-QE-industry-validation/provider-quote-check-20261016.json"
+    "X:/AIstock_dataset_candidates/data_repair_staging/monthly-202609-QE-industry-validation/provider-quote-check-20261016.json",
+    "X:/AIstock_dataset_release_control/cas/sha256/13/139ed5b85aa5151a37576afb30878cbbc639654a946ae59a51908dd9abed8495"
   ],
+  "investigation_readback": {
+    "candidate_ready": false,
+    "conclusion": "BLOCKED_PUBLICATION_AUTHORITY_CONFLICT",
+    "diagnostic_sha256": "139ed5b85aa5151a37576afb30878cbbc639654a946ae59a51908dd9abed8495",
+    "full_history_content_scan": false,
+    "month_rows": 103128,
+    "nonfinite_rows_801011": 63,
+    "price_reexport_performed": false,
+    "production_database_write": false,
+    "profile_write": false,
+    "publication_effective_boundary_verified": false,
+    "remaining_required_evidence": "A dated official publication scope for 801011.SI, reconciling the non-published classification with authentic historical observations; a current flag or latest local quote alone is insufficient.",
+    "runtime_action": false,
+    "source_snapshot_replaced": false,
+    "symbols": ["000592.SZ", "000663.SZ", "002679.SZ"],
+    "trading_days": 21,
+    "validation_end": "2026-09-30",
+    "validation_start": "2026-09-01"
+  },
   "expected": "Explicit independently sourced publication scope and real quote facts remain distinct and date-bound; no perpetual extrapolation, fabricated stop date, erased history or re-export of completed prices. Missing evidence stays typed and blocked with precise keys.",
   "file_scope_contract": {
     "added_files": [],
