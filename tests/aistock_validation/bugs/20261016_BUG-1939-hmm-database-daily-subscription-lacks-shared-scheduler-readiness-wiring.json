@@ -168,8 +168,8 @@
   },
   "first_seen_at": "2026-10-16T04:28:49.312015Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6cea67bd2a08c7c81cc209e20ea7a31749567572",
+  "fixed_at": "2026-10-16T20:17:03Z",
   "github_issue_number": 6189,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6189",
   "last_seen_at": "2026-10-16T04:28:49.312015Z",
@@ -177,6 +177,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6191",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -203,6 +204,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -214,7 +216,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1939",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "425f7504851cb7a2",
+    "recorded_at": "2026-10-16T20:17:43.345200Z",
+    "runtime_contract_digest": "8687be61c68b0eca8c0324b40194d16eb6196e941b3ba3eab5015ed8beb28cb6",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "90253cab865f09029eb7d5d617dec38e8cd29d87",
+    "source_merge_commit": "6cea67bd2a08c7c81cc209e20ea7a31749567572",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6191",
+    "validation_evidence": [
+      "rtk pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/hmm_data_source/test_daily_coefficient_subscription.py -k 'completion or same_watermark or readiness or single_flight or restart_catchup or failed_audit or callback_exception or unregister or refresh_schedules or orphan_go or go_provider' -m 'not integration' -q --disable-warnings --maxfail=1 -> 32 passed",
+      "rtk ruff check backend/ingestion/tdx_scheduler.py backend/routers/hmm_training.py backend/tests/hmm_data_source/test_daily_coefficient_subscription.py backend/tests/hmm_data_source/test_hmm_database_daily_input.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> passed",
+      "python -m py_compile backend/ingestion/tdx_scheduler.py backend/routers/hmm_training.py backend/tests/hmm_data_source/test_daily_coefficient_subscription.py backend/tests/hmm_data_source/test_hmm_database_daily_input.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> passed",
+      "python -m nox -s validation_module_registry_l0 l0 -> passed; registry: 8 passed, 14 mapped, 0 unmapped, 0 ambiguous; l0: blocking=0",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "e370e8d8e79ebfd1b6da3975378d9eed115e19b71a7feb45690074e09d688998"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -223,6 +250,13 @@
     "fingerprint": "4932451b614d6f890ac62190",
     "source_event_id": "FE-20261016-4932451b614d"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/hmm_data_source/test_daily_coefficient_subscription.py -k 'completion or same_watermark or readiness or single_flight or restart_catchup or failed_audit or callback_exception or unregister or refresh_schedules or orphan_go or go_provider' -m 'not integration' -q --disable-warnings --maxfail=1 -> 32 passed",
+    "rtk ruff check backend/ingestion/tdx_scheduler.py backend/routers/hmm_training.py backend/tests/hmm_data_source/test_daily_coefficient_subscription.py backend/tests/hmm_data_source/test_hmm_database_daily_input.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> passed",
+    "python -m py_compile backend/ingestion/tdx_scheduler.py backend/routers/hmm_training.py backend/tests/hmm_data_source/test_daily_coefficient_subscription.py backend/tests/hmm_data_source/test_hmm_database_daily_input.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> passed",
+    "python -m nox -s validation_module_registry_l0 l0 -> passed; registry: 8 passed, 14 mapped, 0 unmapped, 0 ambiguous; l0: blocking=0",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
