@@ -1372,6 +1372,8 @@ rules:
   - rule_id: local_data_pipeline
     priority: 70
     include:
+      - scripts/repair_local_sync_incident.py
+      - backend/tests/scripts/test_repair_local_sync_incident.py
       - scripts/repair_local_data_daily_sync.py
       - backend/tests/ingestion/test_daily_sync_recovery.py
       - backend/ingestion/tdx_scheduler.py
