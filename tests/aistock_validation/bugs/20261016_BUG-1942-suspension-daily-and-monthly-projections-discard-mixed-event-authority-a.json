@@ -35,22 +35,34 @@
   ],
   "expected": "Source-backed day state agrees across daily ingestion audit, missing-bar coverage and monthly SOURCE/export; unresolved ambiguity is explicit and verified evidence survives refresh.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/data_service/suspension_day_authority.py",
+      "backend/data_service/suspension_day_authority_v1.json",
+      "backend/services/suspend_d_coverage.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/services/test_suspend_d_coverage.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "scripts/verify_suspension_day_authority.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1942-suspension-daily-and-monthly-projections-discard-mixed-event-authority-a.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [
       "backend/data_service/suspension_day_authority.py",
       "backend/data_service/suspension_day_authority_v1.json",
       "scripts/verify_suspension_day_authority.py"
     ],
     "changed_files": [
+      "backend/data_service/suspension_day_authority.py",
+      "backend/data_service/suspension_day_authority_v1.json",
       "backend/services/suspend_d_coverage.py",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/services/test_suspend_d_coverage.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/data_service/suspension_day_authority.py",
-      "backend/data_service/suspension_day_authority_v1.json",
       "scripts/verify_suspension_day_authority.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1942-suspension-daily-and-monthly-projections-discard-mixed-event-authority-a.json",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/suspend_d_coverage.py",
@@ -224,8 +236,12 @@
   },
   "first_seen_at": "2026-10-16T16:54:49.989022Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "57929c649d15e95c7930b8c5cb80949fefbd9792",
+  "fixed_at": "2026-10-16T17:39:05Z",
+  "github_issue_extra_sections": [
+    "Monthly SOURCE/build authority binding is tracked separately by BUG-1943. This source PR contains only the backend-main daily interpretation and read-only source verifier.",
+    "DESIGN-COMPLIANCE-001: preserve raw events; no guessed prices/event precedence; no consumer/model changes; no new manual gate. Historical precise publication time is not proven and capture time is not used as as-known time."
+  ],
   "github_issue_number": 6195,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6195",
   "last_seen_at": "2026-10-16T16:54:49.989022Z",
@@ -233,6 +249,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6197",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -246,28 +263,51 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/suspend_d/status",
     "fresh_process_evidence": [
       "Fresh AIstock processes verified shared daily state, source preservation and unresolved S/R rejection. Official source and exact DEV/production verification: X:/AIstock_dataset_candidates/data_repair_staging/BUG-1942-suspension-authority-20261017-r4/verification.json SHA256 ad398f13215ffd99e7be763861673003c508fa0523af3f38384ef0a9d430c71d; five original disclosure hashes verified, ten production raw events read only, ten DEV event rows validated transactionally and rollback confirmed. No production writes, profile or replay changes."
     ],
+    "health_ref": "http://127.0.0.1:8001/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "registered_runtime_scope_split_monthly_followup_BUG-1943",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "health_ref": "http://127.0.0.1:8001/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/suspend_d/status"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1942",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d2dc00e073d3d143",
+    "recorded_at": "2026-10-16T17:43:00.190971Z",
+    "runtime_contract_digest": "22951ed02712f8a9b4ce5cf435fd0088b9185745593fb290b27a0a01dc1377f3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a91c25d46aa936be0f533a99c51276706615ca37",
+    "source_merge_commit": "57929c649d15e95c7930b8c5cb80949fefbd9792",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6197",
+    "validation_evidence": [
+      "validation-receipt: id=b572d29da320958a commit=a91c25d46aa936be0f533a99c51276706615ca37 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-install` result=`passed`"
+    ],
+    "validation_evidence_digest": "b16dcde458df08ffed753aba14fbff9f05f842714dd73a83a11217160d7ee9c4"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -276,6 +316,9 @@
     "fingerprint": "67fe774b9e4d2d1ad3a2e3d8",
     "source_event_id": "FE-20261016-67fe774b9e4d"
   },
+  "validation_evidence": [
+    "validation-receipt: id=b572d29da320958a commit=a91c25d46aa936be0f533a99c51276706615ca37 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-install` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -387,9 +430,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "github_issue_extra_sections": [
-    "Monthly SOURCE/build authority binding is tracked separately by BUG-1943. This source PR contains only the backend-main daily interpretation and read-only source verifier.",
-    "DESIGN-COMPLIANCE-001: preserve raw events; no guessed prices/event precedence; no consumer/model changes; no new manual gate. Historical precise publication time is not proven and capture time is not used as as-known time."
-  ]
+  }
 }
