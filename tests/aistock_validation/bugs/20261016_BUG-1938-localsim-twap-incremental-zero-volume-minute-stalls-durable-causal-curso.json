@@ -6,7 +6,6 @@
     "backend/execution_algos/twap_algo.py",
     "backend/services/simulation_execution/localsim/runtime.py",
     "backend/tests/trading_core/test_minute_execution.py",
-    "backend/tests/trading_core/test_risk.py",
     "backend/tests/simulation_execution/test_localsim_runtime.py",
     "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md",
     "tests/aistock_validation/bugs/20261016_BUG-1938-localsim-twap-incremental-zero-volume-minute-stalls-durable-causal-curso.json"
@@ -21,6 +20,16 @@
   ],
   "created_at": "2026-10-16T03:52:11.523712Z",
   "description": "LOCAL_SIM_INTRADAY_ADVANCE_FAILED / RiskRuleError: order has no executable minute bars; durable cursor remains10:35 at valid zero-volume10:36.",
+  "design_compliance_review": {
+    "artifact": "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md",
+    "authority": "DESIGN-COMPLIANCE-001",
+    "items": {
+      "no_added_approval_gate": "existing native workflow/restart only",
+      "no_partial_delivery_claim": "reviewed; runtime pending",
+      "no_silent_error": "strict real missing/invalid price preserved",
+      "no_unapproved_business_change": "TWAP existing zero-volume step semantics unchanged; shared implementation only"
+    }
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -30,23 +39,38 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/LOCALSIM/workflow/LOCALSIM-formal-no-executable-bars-readonly-20261016-r1.json"
+    "X:/AIstock_temp/LOCALSIM/workflow/LOCALSIM-formal-no-executable-bars-readonly-20261016-r1.json",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1938-directed-r1.xml",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1938-native-frozen-baseline-r1.json",
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1938-native-frozen-candidate-r1.json",
+    "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
   ],
   "expected": "????????????????NO_FILL???????????????????????????/limit??????bar?????????????????????????????????????????",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261016_BUG-1938-localsim-twap-incremental-zero-volume-minute-stalls-durable-causal-curso.json",
+      "backend/execution_algos/twap_algo.py",
+      "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
+      "backend/tests/trading_core/test_minute_execution.py",
+      "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
+    ],
     "added_files": [
       "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
     ],
     "changed_files": [
-      "backend/services/trading_core/minute_execution.py",
-      "backend/services/trading_core/risk.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1938-localsim-twap-incremental-zero-volume-minute-stalls-durable-causal-curso.json",
       "backend/execution_algos/twap_algo.py",
       "backend/services/simulation_execution/localsim/runtime.py",
+      "backend/services/trading_core/minute_execution.py",
+      "backend/services/trading_core/risk.py",
+      "backend/tests/simulation_execution/test_localsim_runtime.py",
       "backend/tests/trading_core/test_minute_execution.py",
-      "backend/tests/trading_core/test_risk.py",
-      "backend/tests/simulation_execution/test_localsim_runtime.py"
+      "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/trading_core/minute_execution.py",
@@ -54,7 +78,6 @@
         "backend/execution_algos/twap_algo.py",
         "backend/services/simulation_execution/localsim/runtime.py",
         "backend/tests/trading_core/test_minute_execution.py",
-        "backend/tests/trading_core/test_risk.py",
         "backend/tests/simulation_execution/test_localsim_runtime.py",
         "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
       ],
@@ -124,16 +147,6 @@
           "rule_id": "trading_core_minute_execution"
         },
         {
-          "file": "backend/tests/trading_core/test_risk.py",
-          "impact_modules": [
-            "simulation_runtime",
-            "miniqmt_execution_runtime"
-          ],
-          "primary_module": "paper_v2",
-          "risk_level": "critical",
-          "rule_id": "paper_trading_core_remaining_tests"
-        },
-        {
           "file": "backend/tests/simulation_execution/test_localsim_runtime.py",
           "impact_modules": [
             "simulation_runtime",
@@ -165,7 +178,6 @@
         "backend/execution_algos/twap_algo.py",
         "backend/services/simulation_execution/localsim/runtime.py",
         "backend/tests/trading_core/test_minute_execution.py",
-        "backend/tests/trading_core/test_risk.py",
         "backend/tests/simulation_execution/test_localsim_runtime.py",
         "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
       ],
@@ -177,7 +189,6 @@
       "backend/execution_algos/twap_algo.py",
       "backend/services/simulation_execution/localsim/runtime.py",
       "backend/tests/trading_core/test_minute_execution.py",
-      "backend/tests/trading_core/test_risk.py",
       "backend/tests/simulation_execution/test_localsim_runtime.py",
       "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
     ],
@@ -188,7 +199,6 @@
       "backend/execution_algos/twap_algo.py",
       "backend/services/simulation_execution/localsim/runtime.py",
       "backend/tests/trading_core/test_minute_execution.py",
-      "backend/tests/trading_core/test_risk.py",
       "backend/tests/simulation_execution/test_localsim_runtime.py",
       "docs/analysis/localsim_zero_volume_incremental_contract_fix_20261016.md"
     ]
@@ -215,14 +225,38 @@
     "platform_api_backend",
     "simulation_core_l2"
   ],
+  "review_rounds": [
+    {
+      "focus": "market-state and invalid price fail-closed",
+      "round": 1
+    },
+    {
+      "focus": "cursor, deterministic no-fill, restart and healthy peer",
+      "round": 2
+    },
+    {
+      "focus": "same actual native frozen input baseline/candidate, all136 directed tests",
+      "round": 3
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/LOCALSIM/workflow/BUG-1938-native-frozen-candidate-r1.json -> fresh import/compile of4 tracked native modules; actual frozen context/order/state and native observed10:36/10:37 bars. Same-input baseline reproduces RiskRuleError; candidate has ZERO_VOLUME then LIMIT_UP_BUY_BLOCKED, cursor10:37, no fills/economic change. No DB access, process control or production acceptance. Directed native136 passed."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -231,6 +265,7 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_reconciliation": "Risk invariant test colocated in CI-covered test_minute_execution.py and individually reverified; test_risk.py unchanged and removed from planned changed scope. No catalog/workflow code edits.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
