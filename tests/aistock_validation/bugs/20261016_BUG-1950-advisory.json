@@ -31,15 +31,24 @@
   ],
   "expected": "新失败父任务持久化真实原因，可重试attempt不声称发布结果；旧失败仅在同operation/attempt/fence/request/status的原生attempt明确保存原因时公开来源透明的错误读回，原空引用的RETRYABLE_FAILED结果标记保留为stored_result_status。无证据或引用矛盾继续暴露，禁止改旧记录或验证器。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/advisory_historical_range/service.py",
+    "actual_changed_files": [
       "backend/services/advisory_historical_range/query_repository.py",
+      "backend/services/advisory_historical_range/service.py",
       "backend/tests/advisory_historical_range/test_r5_command_service.py",
       "backend/tests/advisory_historical_range/test_r5_query_repository.py",
-      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md",
+      "tests/aistock_validation/bugs/20261016_BUG-1950-advisory.json"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_historical_range/query_repository.py",
+      "backend/services/advisory_historical_range/service.py",
+      "backend/tests/advisory_historical_range/test_r5_command_service.py",
+      "backend/tests/advisory_historical_range/test_r5_query_repository.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md",
+      "tests/aistock_validation/bugs/20261016_BUG-1950-advisory.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_historical_range/service.py",
@@ -154,15 +163,19 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_e7e25e1696d18d5ea0b4d9c37a7c3d24/operations?limit=50",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "fresh_process_evidence": [
       "python -B X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/failure_readback_smoke.py -> passed; fresh process loads tracked query source, uses native READ ONLY transactions and original failed operation/attempt, retains RETRYABLE_FAILED and raw row unchanged, same existing operations semantic validator passed without modifying validator or DB. Source hashes and explicit legacy evidence in failure-readback-smoke.json. This is source smoke, not running backend activation."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
