@@ -218,7 +218,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
-      "Fresh AIstock pytest processes: 56 direct monthly suspension/audit/preparation cases passed. Shared disclosure source verification is pinned by BUG-1942 receipt X:/AIstock_dataset_candidates/data_repair_staging/BUG-1942-suspension-authority-20261017-r4/verification.json (SHA256 ad398f13215ffd99e7be763861673003c508fa0523af3f38384ef0a9d430c71d). No build, activation, production DDL/DML or runtime process control."
+      "Fresh AIstock pytest processes: final small monthly matrix 204 passed and one explicit skip; after integrating BUG-1944, seven focused disclosure/intraday/prefix/preparation-pin cases passed. Shared disclosure source verification is pinned by BUG-1942 receipt X:/AIstock_dataset_candidates/data_repair_staging/BUG-1942-suspension-authority-20261017-r4/verification.json (SHA256 ad398f13215ffd99e7be763861673003c508fa0523af3f38384ef0a9d430c71d). No build, activation, production DDL/DML or runtime process control."
     ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
