@@ -3,14 +3,12 @@
   "allowed_write_scope": [
     "backend/services/suspend_d_coverage.py",
     "backend/services/tushare_sync_engine.py",
-    "backend/services/dataset_release/monthly_frozen_source_audit.py",
-    "backend/services/dataset_release/monthly_shared_components.py",
     "backend/tests/services/test_suspend_d_coverage.py",
     "backend/tests/test_tushare_sync_engine.py",
-    "backend/tests/dataset_release/test_monthly_shared_components.py",
     "backend/data_service/suspension_day_authority.py",
     "backend/data_service/suspension_day_authority_v1.json",
     "scripts/verify_suspension_day_authority.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
     "tests/aistock_validation/bugs/20261016_BUG-1942-suspension-daily-and-monthly-projections-discard-mixed-event-authority-a.json"
   ],
   "assigned_agent": null,
@@ -32,7 +30,8 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1911-pre-close-history-20261015/mixed-events-source-readback-r1.json"
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1911-pre-close-history-20261015/mixed-events-source-readback-r1.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1942-suspension-authority-20261017-r4/verification.json"
   ],
   "expected": "Source-backed day state agrees across daily ingestion audit, missing-bar coverage and monthly SOURCE/export; unresolved ambiguity is explicit and verified evidence survives refresh.",
   "file_scope_contract": {
@@ -44,25 +43,24 @@
     "changed_files": [
       "backend/services/suspend_d_coverage.py",
       "backend/services/tushare_sync_engine.py",
-      "backend/services/dataset_release/monthly_frozen_source_audit.py",
-      "backend/services/dataset_release/monthly_shared_components.py",
       "backend/tests/services/test_suspend_d_coverage.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/dataset_release/test_monthly_shared_components.py"
+      "backend/data_service/suspension_day_authority.py",
+      "backend/data_service/suspension_day_authority_v1.json",
+      "scripts/verify_suspension_day_authority.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [
         "backend/services/suspend_d_coverage.py",
         "backend/services/tushare_sync_engine.py",
-        "backend/services/dataset_release/monthly_frozen_source_audit.py",
-        "backend/services/dataset_release/monthly_shared_components.py",
         "backend/tests/services/test_suspend_d_coverage.py",
         "backend/tests/test_tushare_sync_engine.py",
-        "backend/tests/dataset_release/test_monthly_shared_components.py",
         "backend/data_service/suspension_day_authority.py",
         "backend/data_service/suspension_day_authority_v1.json",
-        "scripts/verify_suspension_day_authority.py"
+        "scripts/verify_suspension_day_authority.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml"
       ],
       "impacted_modules": [
         "local_data",
@@ -205,27 +203,23 @@
     "planned_files": [
       "backend/services/suspend_d_coverage.py",
       "backend/services/tushare_sync_engine.py",
-      "backend/services/dataset_release/monthly_frozen_source_audit.py",
-      "backend/services/dataset_release/monthly_shared_components.py",
       "backend/tests/services/test_suspend_d_coverage.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/dataset_release/test_monthly_shared_components.py",
       "backend/data_service/suspension_day_authority.py",
       "backend/data_service/suspension_day_authority_v1.json",
-      "scripts/verify_suspension_day_authority.py"
+      "scripts/verify_suspension_day_authority.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/suspend_d_coverage.py",
       "backend/services/tushare_sync_engine.py",
-      "backend/services/dataset_release/monthly_frozen_source_audit.py",
-      "backend/services/dataset_release/monthly_shared_components.py",
       "backend/tests/services/test_suspend_d_coverage.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/dataset_release/test_monthly_shared_components.py",
       "backend/data_service/suspension_day_authority.py",
       "backend/data_service/suspension_day_authority_v1.json",
-      "scripts/verify_suspension_day_authority.py"
+      "scripts/verify_suspension_day_authority.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-10-16T16:54:49.989022Z",
@@ -252,18 +246,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh AIstock processes verified shared daily state, source preservation and unresolved S/R rejection. Official source and exact DEV/production verification: X:/AIstock_dataset_candidates/data_repair_staging/BUG-1942-suspension-authority-20261017-r4/verification.json SHA256 ad398f13215ffd99e7be763861673003c508fa0523af3f38384ef0a9d430c71d; five original disclosure hashes verified, ten production raw events read only, ten DEV event rows validated transactionally and rollback confirmed. No production writes, profile or replay changes."
+    ],
+    "inference_basis": "registered_runtime_scope_split_monthly_followup_BUG-1943",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
+    "provisional": false,
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "backend-main",
     "target_ids": [
-      "backend-main",
-      "worker-scheduler"
-    ]
+      "backend-main"
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/suspend_d/status"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -387,5 +387,9 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "github_issue_extra_sections": [
+    "Monthly SOURCE/build authority binding is tracked separately by BUG-1943. This source PR contains only the backend-main daily interpretation and read-only source verifier.",
+    "DESIGN-COMPLIANCE-001: preserve raw events; no guessed prices/event precedence; no consumer/model changes; no new manual gate. Historical precise publication time is not proven and capture time is not used as as-known time."
+  ]
 }

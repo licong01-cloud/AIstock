@@ -108,6 +108,28 @@ class _PeriodConn(_FakeConn):
         return _PeriodCursor(self)
 
 
+@pytest.mark.parametrize("symbol,day,expected", [
+    ("603616.SH", dt.date(2026, 1, 22), "ok"),
+    ("000001.SZ", dt.date(2026, 9, 1), "low_coverage"),
+])
+def test_suspend_sync_preserves_mixed_events_and_records_authority(monkeypatch, symbol, day, expected):
+    engine, conn = TushareSyncEngine(), _FakeConn()
+    rows = [dict(ts_code=symbol, trade_date=day.strftime("%Y%m%d"), suspend_type=kind,
+                 suspend_timing=None) for kind in ("S", "R")]
+    writes, audits = [], []
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_args: rows)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, batch: writes.append(batch) or len(batch))
+    monkeypatch.setattr(engine, "_update_progress", lambda *_args: None)
+    monkeypatch.setattr(engine._refresh_audit, "record_success", lambda **kwargs: audits.append(kwargs))
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda _seconds: None)
+    engine._sync_by_date(conn, SUSPEND_D, day, day, uuid.uuid4())
+    assert writes == [rows] and [row["suspend_type"] for row in rows] == ["S", "R"]
+    assert audits[0]["quality_status"] == expected
+    evidence = audits[0]["metadata"]["suspension_day_authority"]
+    assert evidence["raw_events_modified"] is False
+    assert evidence["unresolved_count"] == int(expected == "low_coverage")
+
+
 def test_sync_by_date_replaces_suspend_d_date_even_when_tushare_returns_empty(monkeypatch):
     engine = TushareSyncEngine()
     conn = _FakeConn()
@@ -1500,10 +1522,13 @@ def _run_by_date_with_rows(monkeypatch, spec, count, *, written_count=None):
     required = (set(spec.primary_keys) | {spec.date_column}) - set(spec.nullable_identity_columns)
 
     def _row(i):
-        return {
+        row = {
             col: ("20260821" if col == spec.date_column else f"{col}-{i}")
             for col in required
-    }
+        }
+        if spec.name == "suspend_d":
+            row.update(suspend_type="S", suspend_timing=None)
+        return row
 
     rows = [_row(i) for i in range(count)]
 
