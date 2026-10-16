@@ -8,7 +8,7 @@ from datetime import UTC, date, datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 
 from backend.services.simulation_data.daily_context import canonical_json_sha256
 from backend.services.trading_core.models import OrderSide, PositionLot
@@ -31,6 +31,7 @@ class LocalSimMarketMarkProvenance(str, Enum):
     REALTIME_MINUTE_CLOSE = "REALTIME_MINUTE_CLOSE"
     HISTORICAL_MINUTE_CLOSE = "HISTORICAL_MINUTE_CLOSE"
     SUSPENDED_PREV_CLOSE = "SUSPENDED_PREV_CLOSE"
+    SUSPENDED_REFERENCE_CLOSE = "SUSPENDED_REFERENCE_CLOSE"
 
 
 class LocalSimProjectionOutboxStatus(str, Enum):
@@ -50,7 +51,15 @@ class LocalSimMarketMarkV1(BaseModel):
     reuse_reason_code: str | None = None
     source_error_reason_code: str | None = None
     reused_from_mark_hash: str | None = None
+    suspension_reference: dict[str, Any] | None = None
     mark_hash: str = ""
+
+    @model_serializer(mode="wrap")
+    def _legacy_payload_compatibility(self, handler):
+        payload = handler(self)
+        if self.suspension_reference is None:
+            payload.pop("suspension_reference", None)
+        return payload
 
     @model_validator(mode="after")
     def _validate_identity_and_hash(self) -> "LocalSimMarketMarkV1":
@@ -80,6 +89,21 @@ class LocalSimMarketMarkV1(BaseModel):
             raise ValueError("reused LocalSIM market marks require complete reuse evidence")
         if all(reuse_fields) and self.provenance != LocalSimMarketMarkProvenance.REALTIME_MINUTE_CLOSE:
             raise ValueError("only realtime LocalSIM market marks can carry reuse evidence")
+        if self.provenance == LocalSimMarketMarkProvenance.SUSPENDED_REFERENCE_CLOSE:
+            from .suspension import validate_suspension_reference
+
+            if self.suspension_reference is None:
+                raise ValueError("suspended reference close requires its valuation evidence")
+            validate_suspension_reference(self.suspension_reference, symbol=symbol,
+                                          trade_date=self.as_of_time.date(), price=float(self.price))
+        elif (self.provenance == LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
+              and self.suspension_reference is not None):
+            from .suspension import validate_suspended_native_pre_close
+
+            validate_suspended_native_pre_close(self.suspension_reference, symbol=symbol,
+                                                trade_date=self.as_of_time.date(), price=float(self.price))
+        elif self.suspension_reference is not None:
+            raise ValueError("suspension reference evidence requires its distinct valuation provenance")
         object.__setattr__(self, "symbol", symbol)
         object.__setattr__(self, "source", source)
         expected = canonical_json_sha256(self.model_dump(mode="json", exclude={"mark_hash"}))

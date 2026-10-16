@@ -2817,6 +2817,12 @@ class SimulationRuntimeRepository:
                 if row is None:
                     raise DataUnavailableError("LocalSIM recovery daily run disappeared", context={"run_id": run.run_id})
                 current = self._daily_run_from_row(dict(row))
+                cur.execute("SELECT pg_try_advisory_xact_lock(2403, hashtext(%s)) AS locked", (run.run_id,))
+                if not cur.fetchone()["locked"]:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM economic writer is active before plan rebuild",
+                        context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_ECONOMIC_LOCK_BUSY"},
+                    )
                 expected = recovery_rebuild_receipt(run)
                 if (recovery_rebuild_receipt(current) != expected or expected is None
                         or current.status != SimulationDailyRunStatus.FAILED_RETRYABLE):
