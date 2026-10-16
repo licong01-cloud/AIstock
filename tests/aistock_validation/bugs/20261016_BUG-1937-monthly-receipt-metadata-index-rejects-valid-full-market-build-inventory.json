@@ -103,9 +103,9 @@
   },
   "first_seen_at": "2026-10-16T02:53:54.981365Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "e1d87ba8ad6bd2d0fc7cca220c99072887c47e44",
   "fix_summary": "Remove the small JSON-message cap from the authenticated receipt metadata index. Stream at most the original regular-file length in 1MiB blocks; verify inode, size and mtime before and after, retain link/junction and 64-item response bounds. No payload parsing, whole-file allocation or data-quality relaxation. Register the existing monthly router for the same combined backend/child post-restart probe used by its control plane.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-16T03:14:49Z",
   "github_issue_number": 6179,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6179",
   "last_seen_at": "2026-10-16T02:53:54.981365Z",
@@ -113,6 +113,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6181",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -141,6 +142,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -153,7 +155,31 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_expansion_reason": "The existing monthly router already routes to monthly_release_worker_process but is absent from required_source_globs, so router-only fixes cannot receive the catalog's combined parent/child restart proof. Add only this exact already-routed source to the required list; do not change probe semantics or add a new target.",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1937",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a0248a7f6fd6cef5",
+    "recorded_at": "2026-10-16T03:15:29.658701Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "aa8c5d28928de1581c90069678e7601e649084e2",
+    "source_merge_commit": "e1d87ba8ad6bd2d0fc7cca220c99072887c47e44",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6181",
+    "validation_evidence": [
+      "validation-receipt: id=08aa719d74d03411 commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=pytest plan=direct status=passed command=`pytest backend/tests/routers/test_monthly_dataset_releases.py -q` result=`13 passed`",
+      "validation-receipt: id=c95986b066036ef2 commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed, zero findings`",
+      "validation-receipt: id=83c8b7168efc87dc commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=ruff plan=direct status=passed command=`python -m ruff check backend/routers/monthly_dataset_releases.py backend/tests/routers/test_monthly_dataset_releases.py` result=`passed`",
+      "validation-receipt: id=031cda02eb9772be commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "c58d8ce620474e05afa39a1317fe8d26fb537661ecdd836dbb4871283ee5f471"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -162,6 +188,12 @@
     "fingerprint": "a753c6d090751e9f8bbb4c38",
     "source_event_id": "FE-20261016-a753c6d09075"
   },
+  "validation_evidence": [
+    "validation-receipt: id=08aa719d74d03411 commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=pytest plan=direct status=passed command=`pytest backend/tests/routers/test_monthly_dataset_releases.py -q` result=`13 passed`",
+    "validation-receipt: id=c95986b066036ef2 commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed, zero findings`",
+    "validation-receipt: id=83c8b7168efc87dc commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=ruff plan=direct status=passed command=`python -m ruff check backend/routers/monthly_dataset_releases.py backend/tests/routers/test_monthly_dataset_releases.py` result=`passed`",
+    "validation-receipt: id=031cda02eb9772be commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
