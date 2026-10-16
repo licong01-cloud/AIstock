@@ -42,6 +42,10 @@ LocalSIM 不导入本次结算模块；它通过共享选股服务运行自己�
 
 ## 5. 恢复与失败
 
+BUG-1950（重启后发现的错误读回缺口）：新收益父任务的 FAILED 和 RETRYABLE_FAILED 均记录真实失败原因，并与原生 attempt 一致。旧 REFRESH_OUTCOMES/RETRYABLE_FAILED 若 error_json 为空，公开只读投影仅可从同 operation、attempt_no、fencing_token、status、request hash 的已持久化 attempt 提取明确 reason_codes，并标注 `PERSISTED_OPERATION_ATTEMPT_REASON_CODES`、原 error_json 缺失、attempt 与 receipt hash；不猜测原异常类型，不覆盖数据库或 CAS。来源不完整/错配继续显示缺口并使正式烟测失败；内部 worker 仍读取原记录，不把展示投影当修复或恢复指令。无需 DDL、数据库修补或公共验证器放宽，新增源码合入后仍需用户重启。本项只解决业务错误展示，不升级旧失败任务或收益结果。
+
+同一旧缺陷还将可重试 attempt 的状态写进没有 result ref/hash/version 的 `result_status`。新任务不再为 RETRYABLE_FAILED 声称已发布结果。旧读回仅在上述身份和原因验证通过、原值恰为 RETRYABLE_FAILED 且 ref/hash/version 全空时，把该值明确保存在错误来源的 `stored_result_status`，公开结果状态为空；原 operation/attempt 状态仍失败，内部原值不变。任何不同值或结果引用矛盾继续暴露，不靠字段清空掩盖真实冲突。
+
 保留 CAS/fencing、单调 keyset 和原生原子结果提交。只能复用经过精确输入身份验证的结果，旧 DB 来源断点不得跳过新文件来源工作项。硬中断时不能无证据推进游标；若仅有结果无完成收据，允许重读已提交前缀但不得重算已命中的同身份结果。
 
 失败收尾须保留已提交结果，保持租约覆盖最终校验和状态落库；不得将未完成改成功。去除重复主体和行情读取、减少连接创建及不可变产物重复校验，不删除身份、PIT、候选唯一性或真正缺价校验。

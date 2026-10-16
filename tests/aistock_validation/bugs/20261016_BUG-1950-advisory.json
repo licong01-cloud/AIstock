@@ -29,7 +29,7 @@
   "evidence_uris": [
     "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/post-restart-receipt.json"
   ],
-  "expected": "新失败父任务持久化真实原因；旧失败仅在同operation/attempt/fence/request/status的原生attempt明确保存原因时公开来源透明的错误读回，无证据保持原缺口。",
+  "expected": "新失败父任务持久化真实原因，可重试attempt不声称发布结果；旧失败仅在同operation/attempt/fence/request/status的原生attempt明确保存原因时公开来源透明的错误读回，原空引用的RETRYABLE_FAILED结果标记保留为stored_result_status。无证据或引用矛盾继续暴露，禁止改旧记录或验证器。",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -153,7 +153,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_e7e25e1696d18d5ea0b4d9c37a7c3d24/operations?limit=50",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "fresh_process_evidence": [
+      "python -B X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/failure_readback_smoke.py -> passed; fresh process loads tracked query source, uses native READ ONLY transactions and original failed operation/attempt, retains RETRYABLE_FAILED and raw row unchanged, same existing operations semantic validator passed without modifying validator or DB. Source hashes and explicit legacy evidence in failure-readback-smoke.json. This is source smoke, not running backend activation."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
