@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1934",
-  "closed_at": null,
+  "closed_at": "2026-10-16T20:26:00.010692Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -262,10 +262,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/LOCALSIM/workflow/BUG-1934-post-restart-verify-20261017-r1.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1934",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+      "expected_identity": "fd056156f00e725f182c8be7a8b8a75d17616f1c",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-16T20:20:15.792126Z",
+      "mode": "read_only",
+      "observed_identity": "031fd53d409f2c260768e9345ced095f402022e4",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "f632b47af604947d3ef7b5c0ae530a4662e6f978de155158ecd096ae9c973727",
+      "receipt_sha256": "0029d73e2f99fc93074bdc949856a60e67d543952c305cae23a639886ad25a25",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "759bbb22e60aeff04646fdb3146d98143a94bc5dd98d42951fb4386b67e4b88a",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -296,7 +318,7 @@
     ],
     "validation_evidence_digest": "29719222f861990ada4fcbb6cc21d700c0213af6a97794f4e29548fcc1bf8955"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -306,7 +328,8 @@
     "source_event_id": "FE-20261016-a6e8e7a144b8"
   },
   "validation_evidence": [
-    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1934-source-validation-receipt-r1.json"
+    "X:/AIstock_temp/LOCALSIM/workflow/BUG-1934-source-validation-receipt-r1.json",
+    "Native post-restart identity and scoped scheduler smoke passed. Existing original-day recovery/readback receipts retained. Only the named defect is closed; Jan22 and Jun09 remain separate blocked contracts."
   ],
   "verification_budget": {
     "budget": "standard",
