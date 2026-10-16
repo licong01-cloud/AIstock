@@ -30,7 +30,8 @@ def _snapshot():
                 "day_engine_contract_id": "simulation_daily_engine_v1", "failure_code": "BrokerConnectivityError",
                 "failure_context": {"trade_date": "2026-01-21"}, "live_release_id": None,
                 "live_binding_id": None, "activation_trade_date": None},
-        "account": {"status": "ACTIVE"},
+        "account": {"account_id": "account", "status": "ACTIVE"},
+        "account_in_flight_runs": [],
         "binding": {"binding_hash": "b", "strategy_id": "account", "broker_backend": "local_sim",
                     "release_id": "release", "release_hash": "r", "package_id": "package", "manifest_sha256": "m"},
         "release": {"release_id": "release", "release_hash": "r", "package_id": "package", "manifest_sha256": "m"},
@@ -81,6 +82,32 @@ def test_repaired_native_input_is_ready_without_editing_original_job_or_day():
                       "min_bars": 1, "require_suspend_status": True}]
     assert snapshot == before
     assert service.inspect("replay-original").snapshot_sha256 == check.snapshot_sha256
+
+
+@pytest.mark.parametrize("activity,reason", [
+    ("missing", "LOCALSIM_REPLAY_RECOVERY_ACCOUNT_ACTIVITY_UNKNOWN"),
+    (None, "LOCALSIM_REPLAY_RECOVERY_ACCOUNT_ACTIVITY_UNKNOWN"),
+    ({}, "LOCALSIM_REPLAY_RECOVERY_ACCOUNT_ACTIVITY_UNKNOWN"),
+    ([{"run_id": "different-own-run"}], "LOCALSIM_REPLAY_RECOVERY_ACCOUNT_RUN_IN_FLIGHT"),
+])
+def test_recovery_refuses_unknown_or_in_flight_target_account_activity(activity, reason):
+    snapshot = _snapshot()
+    if activity == "missing":
+        snapshot.pop("account_in_flight_runs")
+    else:
+        snapshot["account_in_flight_runs"] = activity
+    before = deepcopy(snapshot)
+    service, calls = _service(snapshot)
+    check = service.inspect("replay-original")
+    assert not check.ready and check.reason_codes == [reason]
+    assert calls == [] and snapshot == before
+
+
+def test_recovery_refuses_an_account_identity_different_from_the_activity_scope():
+    snapshot = _snapshot()
+    snapshot["account"]["account_id"] = "another-account"
+    service, _ = _service(snapshot)
+    assert service.inspect("replay-original").reason_codes == ["LOCALSIM_REPLAY_RECOVERY_FROZEN_IDENTITY_CONFLICT"]
 
 
 def test_true_missing_pre_close_stays_blocked_including_legal_suspension():
