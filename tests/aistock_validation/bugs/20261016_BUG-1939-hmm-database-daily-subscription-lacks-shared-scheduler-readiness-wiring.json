@@ -1,0 +1,285 @@
+{
+  "actual": "The public HMM readiness hook is only referenced by tests; no shared production trigger is registered.",
+  "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/routers/hmm_training.py",
+    "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+    "backend/tests/ingestion/test_hmm_completion_dispatch.py",
+    "tests/aistock_validation/bugs/20261016_BUG-1939-hmm-database-daily-subscription-lacks-shared-scheduler-readiness-wiring.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1939",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-16T04:28:49.312015Z",
+  "description": "The public HMM readiness hook is only referenced by tests; no shared production trigger is registered.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261016-4932451b614d",
+      "timestamp": "2026-10-16T04:28:49.311991Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Existing scheduler detects completed input watermark changes and dispatches a nonblocking single-flight HMM readiness reconciliation; restart catch-up and unregister are explicit; other ingestion schedules remain unchanged.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/tests/ingestion/test_hmm_completion_dispatch.py"
+    ],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/routers/hmm_training.py",
+      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/routers/hmm_training.py",
+        "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+        "backend/tests/ingestion/test_hmm_completion_dispatch.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "hmm",
+        "selection_center",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/ingestion/tdx_scheduler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/routers/hmm_training.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "backend/tests/ingestion/test_hmm_completion_dispatch.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/routers/hmm_training.py",
+        "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+        "backend/tests/ingestion/test_hmm_completion_dispatch.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/routers/hmm_training.py",
+      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+      "backend/tests/ingestion/test_hmm_completion_dispatch.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/routers/hmm_training.py",
+      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+      "backend/tests/ingestion/test_hmm_completion_dispatch.py"
+    ]
+  },
+  "first_seen_at": "2026-10-16T04:28:49.312015Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6189,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6189",
+  "last_seen_at": "2026-10-16T04:28:49.312015Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend",
+    "hmm_data_source_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM database_daily subscription lacks shared scheduler readiness wiring",
+  "trigger_condition": {
+    "fingerprint": "4932451b614d6f890ac62190",
+    "source_event_id": "FE-20261016-4932451b614d"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "data_sync_autonomy",
+        "hmm_data_source"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend",
+        "hmm_data_source_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "data_sync_autonomy",
+          "hmm_data_source"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend",
+          "hmm_data_source_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
