@@ -985,8 +985,9 @@ class LocalSimSuccessorRepository:
                 )
                 cur.execute(
                     "UPDATE paper_v2.localsim_replay_job_v1 SET status = %s, version = version + 1, updated_at = %s "
-                    "WHERE replay_job_id = %s AND version = %s AND status = 'FAILED_TERMINAL'",
-                    (LocalSimReplayStatus.FAILED_RETRYABLE.value, updated_at, replay_job_id, expected_version),
+                    "WHERE replay_job_id = %s AND version = %s AND status = %s",
+                    (LocalSimReplayStatus.FAILED_RETRYABLE.value, updated_at, replay_job_id, expected_version,
+                     job["status"]),
                 )
                 if cur.rowcount != 1:
                     raise InvalidStateTransitionError(
