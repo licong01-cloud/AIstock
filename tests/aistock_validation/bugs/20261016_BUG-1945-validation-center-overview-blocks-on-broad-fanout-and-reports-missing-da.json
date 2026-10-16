@@ -39,23 +39,36 @@
   "evidence_uris": [],
   "expected": "Independent bounded sections render available data immediately; missing/stale/failed data never implies success; first screen shares cached lightweight sources.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/validation.py",
+      "backend/services/validation/overview_snapshot.py",
+      "backend/tests/test_validation_pipeline_center_phase1.py",
+      "backend/tests/test_validation_platform_health.py",
+      "frontend/src/app/validation-center/page.tsx",
+      "frontend/src/components/validation/PipelineOverviewCards.tsx",
+      "frontend/src/lib/validation/api.ts",
+      "frontend/src/lib/validation/section-loader.ts",
+      "frontend/tests/validation-center/validation-center.spec.ts",
+      "tests/aistock_validation/bugs/20261016_BUG-1945-validation-center-overview-blocks-on-broad-fanout-and-reports-missing-da.json"
+    ],
     "added_files": [
       "backend/services/validation/overview_snapshot.py",
       "backend/tests/test_validation_overview_snapshot.py",
       "frontend/src/lib/validation/section-loader.ts"
     ],
     "changed_files": [
-      "frontend/src/app/validation-center/page.tsx",
-      "frontend/src/lib/validation/api.ts",
-      "frontend/src/components/validation/PipelineOverviewCards.tsx",
-      "frontend/tests/validation-center/validation-center.spec.ts",
       "backend/routers/validation.py",
-      "backend/services/validation/pipeline_center.py",
-      "backend/services/validation/platform_health.py",
+      "backend/services/validation/overview_snapshot.py",
       "backend/tests/test_validation_pipeline_center_phase1.py",
-      "backend/tests/test_validation_platform_health.py"
+      "backend/tests/test_validation_platform_health.py",
+      "frontend/src/app/validation-center/page.tsx",
+      "frontend/src/components/validation/PipelineOverviewCards.tsx",
+      "frontend/src/lib/validation/api.ts",
+      "frontend/src/lib/validation/section-loader.ts",
+      "frontend/tests/validation-center/validation-center.spec.ts",
+      "tests/aistock_validation/bugs/20261016_BUG-1945-validation-center-overview-blocks-on-broad-fanout-and-reports-missing-da.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "frontend/src/app/validation-center/page.tsx",
@@ -285,15 +298,21 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/validation/overview/snapshot",
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/validation/overview/snapshot",
+    "fresh_process_evidence": [
+      "AIstock-CI independent Python imported task backend/routers/validation.py and real overview_snapshot; read returned aistock_pipeline_overview_v1 in 2.55 ms without waiting for collection"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
