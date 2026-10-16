@@ -3,7 +3,9 @@ from __future__ import annotations
 from datetime import date
 import hashlib
 import json
+import os
 from pathlib import Path
+import pytest
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
@@ -420,3 +422,32 @@ def test_receipt_index_requires_an_existing_operation_and_is_bounded(tmp_path: P
     response = client.get(f"/api/v1/qlib/monthly-releases/{operation_id}/receipts")
     assert response.status_code == 400
     assert response.json()["detail"]["error_code"] == "MONTHLY_RELEASE_ERROR"
+
+
+def test_large_receipt_index_streams_metadata_without_loading_payload(tmp_path, monkeypatch):
+    path = tmp_path / "build.json"
+    payload = b"x" * (33 * 1024 * 1024)
+    path.write_bytes(payload)
+    expected = hashlib.sha256(payload).hexdigest()
+    def no_whole_file_read(_path):
+        raise AssertionError("receipt index must not load entire inventory")
+    monkeypatch.setattr(Path, "read_bytes", no_whole_file_read)
+    assert api._receipt_index(tmp_path) == [{"name": "build.json", "size": len(payload), "sha256": expected}]
+
+
+def test_receipt_index_rejects_file_changed_during_streaming(tmp_path, monkeypatch):
+    path = tmp_path / "build.json"
+    path.write_bytes(b"original")
+    fstat = os.fstat
+    calls = []
+    def changed(fd):
+        result = fstat(fd)
+        calls.append(fd)
+        if len(calls) == 2:
+            fields = list(result)
+            fields[6] += 1
+            return os.stat_result(fields)
+        return result
+    monkeypatch.setattr(os, "fstat", changed)
+    with pytest.raises(api.MonthlyReleaseError, match="changed"):
+        api._receipt_index(tmp_path)
