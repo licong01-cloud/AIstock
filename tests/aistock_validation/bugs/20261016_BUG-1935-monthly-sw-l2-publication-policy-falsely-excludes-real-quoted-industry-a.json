@@ -184,7 +184,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\BUG-1935-post-restart-20261016.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -236,7 +236,8 @@
     "validation-receipt: id=8d5a32119ff63594 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files validation_catalog_integrity` result=`passed, zero findings and 8 catalog tests`",
     "validation-receipt: id=dca3e73eb90c6d9d commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s guardrail_changed_files validation_catalog_integrity` result=`passed, zero findings and 8 catalog tests`",
     "validation-receipt: id=5fa328c40f82a6c1 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_build_recovery.py backend/services/dataset_release/sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_build_recovery.py backend/tests/dataset_release/test_sw_l2_quote_policy.py` result=`passed`",
-    "validation-receipt: id=beab515685b15978 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=beab515685b15978 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1935 --target worker-scheduler --expected-identity 03f04891046dc103b9300436aeb679509253aa13 -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
