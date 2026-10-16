@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1937",
-  "closed_at": null,
+  "closed_at": "2026-10-16T03:51:11.040756Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -141,10 +141,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
     "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\BUG-1937-post-restart-20261016.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1937",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "e1d87ba8ad6bd2d0fc7cca220c99072887c47e44",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-16T03:49:55.921015Z",
+      "mode": "read_only",
+      "observed_identity": "03f04891046dc103b9300436aeb679509253aa13",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a73a0754194545c3de6e455f234ad131db28161e1da55ea19b6883c2de9be701",
+      "receipt_sha256": "fdc05bc7fc694ecf94bc38f462d5b845eb246cf0ef988a0cf1f67780fadbf8e1",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ca7208595a9c839d736b462d122eeb92de650e681533db553e0122d03dd1e417",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -179,7 +201,7 @@
     ],
     "validation_evidence_digest": "c58d8ce620474e05afa39a1317fe8d26fb537661ecdd836dbb4871283ee5f471"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -194,7 +216,9 @@
     "validation-receipt: id=83c8b7168efc87dc commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=ruff plan=direct status=passed command=`python -m ruff check backend/routers/monthly_dataset_releases.py backend/tests/routers/test_monthly_dataset_releases.py` result=`passed`",
     "validation-receipt: id=031cda02eb9772be commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
     "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1937 --target worker-scheduler --expected-identity 03f04891046dc103b9300436aeb679509253aa13 -> passed",
-    "python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_63a313d97fd046a38d5a876265565014 -> passed, actual 56507440-byte BUILD receipt SHA256 verified through live API"
+    "python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_63a313d97fd046a38d5a876265565014 -> passed, actual 56507440-byte BUILD receipt SHA256 verified through live API",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1937 --target worker-scheduler --expected-identity e1d87ba8ad6bd2d0fc7cca220c99072887c47e44 -> passed, runtime descendant verified",
+    "python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_63a313d97fd046a38d5a876265565014 -> passed, actual BUILD receipt bytes and SHA256 verified through live API"
   ],
   "verification_budget": {
     "budget": "light",
