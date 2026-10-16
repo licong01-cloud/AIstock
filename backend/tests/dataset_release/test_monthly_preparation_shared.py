@@ -148,6 +148,40 @@ def test_missing_available_sector_quotes_are_not_filled(shared):
     assert not (shared[4] / "sector_context" / "sector_membership_spans.parquet").exists()
 
 
+@pytest.mark.parametrize("field", ["sw2_pct_change", "sw2_vol", "sw2_amount"])
+def test_missing_quote_error_identifies_frozen_source_key_and_field(shared, field):
+    for row in shared[-1]:
+        if row["ts_code"] == "000001.SZ":
+            row[field] = None
+    with pytest.raises(ComponentPreparationError) as failure:
+        run(shared, "sector_context")
+    message = str(failure.value)
+    for value in ("SW_L2_QUOTE_FACTS_MISSING", "000001.SZ", "2026-09-29", "801000.SI", field):
+        assert value in message
+    assert "l2_code_id=0" in message
+    assert not (shared[4] / "sector_context" / "sector_quote_availability.json").exists()
+
+
+@pytest.mark.parametrize("value,reason", [(float("inf"), "SW_L2_QUOTE_NONFINITE"),
+                                          (float("-inf"), "SW_L2_QUOTE_NONFINITE")])
+def test_nonfinite_quote_error_preserves_source_identity(shared, value, reason):
+    shared[-1][0]["sw2_amount"] = value
+    with pytest.raises(ComponentPreparationError) as failure:
+        run(shared, "sector_context")
+    assert all(item in str(failure.value) for item in (reason, "000001.SZ", "2026-09-29", "801000.SI", "sw2_amount"))
+
+
+def test_unexpected_stopped_quote_error_does_not_rewrite_availability(shared):
+    for row in shared[-1]:
+        if row["ts_code"] == "000002.SZ":
+            row["sw2_vol"] = 12.0
+    with pytest.raises(ComponentPreparationError) as failure:
+        run(shared, "sector_context")
+    assert all(item in str(failure.value) for item in (
+        "SW_L2_QUOTE_OUTSIDE_AUTHORITY", "000002.SZ", "2026-09-29", "801001.SI", "sw2_vol"))
+    assert not (shared[4] / "sector_context" / "sector_quote_availability.json").exists()
+
+
 @pytest.mark.parametrize("change", ["stopped_quote", "available_nan", "conflicting_quote"])
 def test_quote_semantics_fail_closed(shared, change):
     rows = shared[-1]

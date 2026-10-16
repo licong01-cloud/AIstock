@@ -27,11 +27,37 @@
   ],
   "evidence_uris": [
     "X:/AIstock_dataset_candidates/data_repair_staging/monthly-202609-QE-industry-validation/provider-quote-check-20261016.json",
-    "X:/AIstock_dataset_release_control/cas/sha256/13/139ed5b85aa5151a37576afb30878cbbc639654a946ae59a51908dd9abed8495"
+    "X:/AIstock_dataset_release_control/cas/sha256/13/139ed5b85aa5151a37576afb30878cbbc639654a946ae59a51908dd9abed8495",
+    "X:/AIstock_dataset_release_control/cas/sha256/ac/ac4b8d362bdca4b1f55e03536e3069e3f1767b6d964bca402204a166abe996fe",
+    "X:/AIstock_dataset_release_control/cas/sha256/77/77574f1dea9200bb2b9a8450d6223655060a115d672758f826e08aaea5eff55f",
+    "X:/AIstock_dataset_release_control/cas/sha256/c1/c1f419eb9e1e4c7ff9e9027ed3bba70c873c3ead3a8210db1c092687c8b2088a"
   ],
+  "development_progress": {
+    "delivery_status": "PARTIAL_DIAGNOSTICS_ONLY_DATA_BLOCKED",
+    "data_repair_complete": false,
+    "full_bug_fix_complete": false,
+    "official_analysis_rows_202609": 21,
+    "official_analysis_source": "https://www.swsresearch.com/institute-sw/api/index_analysis/index_analysis_report/",
+    "official_analysis_missing_required_field": "absolute quote amount; bargainsumrate is a percentage, not sw2_amount",
+    "diagnosis_revision": "Current is_pub=0 and empty Tushare responses cannot prove a stop date. The official historical analysis endpoint returns 801011 observations on 2026-04-29 and all 21 September sessions. Do not add a fabricated publication end or NA waiver. Full quote variant and unit closure remains unresolved.",
+    "source_diagnostics": "Preserve fail-closed behavior while including symbol, trade_date, canonical_l2_code, shared ID, missing/invalid fields and a stable reason code.",
+    "targeted_tests": "63 related tests passed; 6 fix-point tests passed again after review moved error formatting off the healthy-row hot path. RED reproduced missing key diagnostics before the patch; changed-file Ruff and compile passed.",
+    "fresh_process_receipt_sha256": "c1f419eb9e1e4c7ff9e9027ed3bba70c873c3ead3a8210db1c092687c8b2088a",
+    "review_rounds": [
+      "1: field-level RED/GREEN for all three missing quote metrics, positive/negative infinity and quotes outside authority; invalid data still fails before sidecar publication.",
+      "2: preserve publication spans, shared IDs, moneyflow, price files, SOURCE and checkpoint; no fallback, DB/profile writes or extra scans/gates. Review removed per-row error formatting from the healthy-row hot path.",
+      "3: fresh process loads the actual September H5 physical tail only and reports 000592.SZ/2026-09-01/801011.SI with all three fields; source signatures, plan bytes and active profile remain unchanged."
+    ],
+    "design_compliance_001": {
+      "no_partial_claim": "PASS: explicitly partial; candidate and full BUG remain blocked",
+      "no_silent_error": "PASS: real missing quotes still raise typed key-specific error",
+      "business_semantics_unchanged": "PASS: no publication, PIT, threshold or consumer changes",
+      "no_new_gate": "PASS: enrich existing errors only"
+    }
+  },
   "investigation_readback": {
     "candidate_ready": false,
-    "conclusion": "BLOCKED_PUBLICATION_AUTHORITY_CONFLICT",
+    "conclusion": "BLOCKED_OFFICIAL_QUOTE_FIELD_CONTRACT_UNRESOLVED",
     "diagnostic_sha256": "139ed5b85aa5151a37576afb30878cbbc639654a946ae59a51908dd9abed8495",
     "full_history_content_scan": false,
     "month_rows": 103128,
@@ -40,7 +66,7 @@
     "production_database_write": false,
     "profile_write": false,
     "publication_effective_boundary_verified": false,
-    "remaining_required_evidence": "A dated official publication scope for 801011.SI, reconciling the non-published classification with authentic historical observations; a current flag or latest local quote alone is insufficient.",
+    "remaining_required_evidence": "Independently sourced, same-variant complete 801011.SI September pct_change/vol/amount facts and explicit units. Official analysis rows exist but omit absolute amount; do not infer a stop date or reconstruct amount from rounded turnover ratios/mean price.",
     "runtime_action": false,
     "source_snapshot_replaced": false,
     "symbols": ["000592.SZ", "000663.SZ", "002679.SZ"],
@@ -165,8 +191,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh AIstock process: actual September H5 physical tail, 103128 rows, 21 sessions; native summarize_sector_context raises SW_L2_QUOTE_FACTS_MISSING at 000592.SZ/2026-09-01/801011.SI with all three required quote fields. CAS c1f419eb9e1e4c7ff9e9027ed3bba70c873c3ead3a8210db1c092687c8b2088a; no DB, candidate, plan, profile or runtime writes."
+    ],
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
