@@ -34,18 +34,30 @@
   ],
   "expected": "校验新停牌 mark 的冻结证据、身份、价格、来源、时点及摘要；真缺价和冲突仍拒绝；此前已核销批次与本轮回滚内存批次保留完整链条并经原正式 recover 原子核销。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/simulation_runtime/successor_repository.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+      "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
+      "docs/analysis/localsim_suspended_mark_consumer_contract_fix_20261016.md",
+      "tests/aistock_validation/bugs/20261016_BUG-1936-localsim.json"
+    ],
     "added_files": [
       "docs/analysis/localsim_suspended_mark_consumer_contract_fix_20261016.md"
     ],
     "changed_files": [
-      "backend/services/simulation_runtime/scheduler.py",
       "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/services/simulation_runtime/successor_repository.py",
       "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
-      "backend/services/simulation_runtime/successor_repository.py"
+      "docs/analysis/localsim_suspended_mark_consumer_contract_fix_20261016.md",
+      "tests/aistock_validation/bugs/20261016_BUG-1936-localsim.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/scheduler.py",
@@ -161,8 +173,8 @@
   },
   "first_seen_at": "2026-10-16T02:52:40.605449Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "03f04891046dc103b9300436aeb679509253aa13",
+  "fixed_at": "2026-10-16T03:21:11Z",
   "github_issue_number": 6178,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6178",
   "last_seen_at": "2026-10-16T02:52:40.605449Z",
@@ -170,6 +182,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6184",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -183,31 +196,55 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "X:/AIstock_temp/LOCALSIM/workflow/BUG-1936-source-candidate-native-readonly-r1.json -> fresh import/compile of 3 native modules, actual original TCN/LSTM recovery inspection ready, frozen D/C suspended-mark consumer passed, 31/19 proposed rolled-back handles and original18 predecessor preserved. No recover/day execution/process control/production DML. Source candidate only; runtime pending merge and user restart. Directed JUnit union 281 unique passing cases; existing DEV native nox final r2: 6 passed, rollback fixtures."
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
-    "database_readback_ref": "not_required",
-    "planned_target_ids": [
-      "backend-main"
-    ],
-    "runtime_identity_match": "pending"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1936",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "20a7126f8551566c",
+    "recorded_at": "2026-10-16T03:21:52.078584Z",
+    "runtime_contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3275fe1b7839766bb92423842a0580d553e643df",
+    "source_merge_commit": "03f04891046dc103b9300436aeb679509253aa13",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6184",
+    "validation_evidence": [
+      "rtk pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_localsim_replay_recovery.py backend/tests/simulation_execution/test_localsim_runtime.py -k \"mark or suspend or side_effect_free or rebuild or replay_recovery\" -q --junitxml=X:/AIstock_temp/LOCALSIM/workflow/BUG-1936-directed-final-r1.xml --basetemp=X:/AIstock_temp/LOCALSIM/workflow/pytest-BUG-1936-final-tmp -o cache_dir=X:/AIstock_temp/LOCALSIM/workflow/pytest-BUG-1936-final -> 274 passed",
+      "rtk pytest backend/tests/simulation_runtime/test_localsim_replay_recovery.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k \"replay_recovery or rebuild or side_effect_free\" -q --junitxml=X:/AIstock_temp/LOCALSIM/workflow/BUG-1936-recovery-boot-final-r1.xml --basetemp=X:/AIstock_temp/LOCALSIM/workflow/pytest-BUG-1936-recovery-boot-tmp -o cache_dir=X:/AIstock_temp/LOCALSIM/workflow/pytest-BUG-1936-recovery-boot -> 75 passed; combined JUnit unique passing cases 281",
+      "python -m nox -s localsim_successor_core_dev_db --no-venv --envdir X:/AIstock_temp/LOCALSIM/workflow/nox-BUG-1936 -> 6 passed; JUnit=X:/AIstock_temp/LOCALSIM/workflow/BUG-1936-native-dev-final-r2.xml"
+    ],
+    "validation_evidence_digest": "705350007b36ad2b345c70b38f4fbbd2f1076d44f63ea735031f7def25ffaefd"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -216,6 +253,11 @@
     "fingerprint": "f9b5bdeb0e6d5337365fc642",
     "source_event_id": "FE-20261016-f9b5bdeb0e6d"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py backend/tests/simulation_runtime/test_localsim_replay_recovery.py backend/tests/simulation_execution/test_localsim_runtime.py -k \"mark or suspend or side_effect_free or rebuild or replay_recovery\" -q --junitxml=X:/AIstock_temp/LOCALSIM/workflow/BUG-1936-directed-final-r1.xml --basetemp=X:/AIstock_temp/LOCALSIM/workflow/pytest-BUG-1936-final-tmp -o cache_dir=X:/AIstock_temp/LOCALSIM/workflow/pytest-BUG-1936-final -> 274 passed",
+    "rtk pytest backend/tests/simulation_runtime/test_localsim_replay_recovery.py backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k \"replay_recovery or rebuild or side_effect_free\" -q --junitxml=X:/AIstock_temp/LOCALSIM/workflow/BUG-1936-recovery-boot-final-r1.xml --basetemp=X:/AIstock_temp/LOCALSIM/workflow/pytest-BUG-1936-recovery-boot-tmp -o cache_dir=X:/AIstock_temp/LOCALSIM/workflow/pytest-BUG-1936-recovery-boot -> 75 passed; combined JUnit unique passing cases 281",
+    "python -m nox -s localsim_successor_core_dev_db --no-venv --envdir X:/AIstock_temp/LOCALSIM/workflow/nox-BUG-1936 -> 6 passed; JUnit=X:/AIstock_temp/LOCALSIM/workflow/BUG-1936-native-dev-final-r2.xml"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
