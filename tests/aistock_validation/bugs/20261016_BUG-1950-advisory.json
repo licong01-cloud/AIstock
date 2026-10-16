@@ -141,8 +141,8 @@
   },
   "first_seen_at": "2026-10-16T20:25:34.143291Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3b253af4de6571ddbb5978b4f8e96c9d8d53c48d",
+  "fixed_at": "2026-10-16T20:55:53Z",
   "github_issue_number": 6222,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6222",
   "last_seen_at": "2026-10-16T20:25:34.143291Z",
@@ -150,6 +150,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6224",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -174,6 +175,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -185,7 +187,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1950",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1e937481afe57530",
+    "recorded_at": "2026-10-16T20:56:29.905982Z",
+    "runtime_contract_digest": "cd9c20d0a8445c1c522038a67d9a1c13fc9c336e0975013a997fa01d2b98b212",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e5c604e62b6838a5af78eb66f7555f43f8a02791",
+    "source_merge_commit": "3b253af4de6571ddbb5978b4f8e96c9d8d53c48d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6224",
+    "validation_evidence": [
+      "validation-receipt: id=ff8d3d320318adeb commit=e5c604e62b6838a5af78eb66f7555f43f8a02791 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/advisory_historical_range/service.py backend/services/advisory_historical_range/query_repository.py backend/tests/advisory_historical_range/test_r5_command_service.py backend/tests/advisory_historical_range/test_r5_query_repository.py docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md tests/aistock_validation/bugs/20261016_BUG-1950-advisory.json` result=`passed; 0 blocking findings; source unchanged after BUG metadata-only commit`",
+      "validation-receipt: id=70cbef899e119505 commit=e5c604e62b6838a5af78eb66f7555f43f8a02791 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/advisory_historical_range/test_r5_command_service.py::test_outcome_parent_keeps_failure_error_and_attempt_consistent backend/tests/advisory_historical_range/test_r5_query_repository.py::test_legacy_failure_readback_uses_explicit_persisted_attempt_origin backend/tests/advisory_historical_range/test_r5_query_repository.py::test_legacy_failure_without_attempt_and_existing_error_are_unchanged backend/tests/advisory_historical_range/test_r5_query_repository.py::test_legacy_readback_does_not_hide_conflicting_published_result -p no:cacheprovider --basetemp X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/readback-stable-targeted` result=`passed; 9 targeted / 40 unique related scenarios; native readonly smoke passed, raw row unchanged; DESIGN-COMPLIANCE-001 reviewed; source unchanged after BUG metadata-only commit`"
+    ],
+    "validation_evidence_digest": "0291bc6e735b02382abfd4906f113133a42c110e716c5fd4ba18e0ccb74fb100"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory.historical_range"
   ],
@@ -194,6 +218,10 @@
     "fingerprint": "597346f46d0705dd1d8444e1",
     "source_event_id": "FE-20261016-597346f46d07"
   },
+  "validation_evidence": [
+    "validation-receipt: id=ff8d3d320318adeb commit=e5c604e62b6838a5af78eb66f7555f43f8a02791 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/advisory_historical_range/service.py backend/services/advisory_historical_range/query_repository.py backend/tests/advisory_historical_range/test_r5_command_service.py backend/tests/advisory_historical_range/test_r5_query_repository.py docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md tests/aistock_validation/bugs/20261016_BUG-1950-advisory.json` result=`passed; 0 blocking findings; source unchanged after BUG metadata-only commit`",
+    "validation-receipt: id=70cbef899e119505 commit=e5c604e62b6838a5af78eb66f7555f43f8a02791 kind=pytest plan=direct status=passed command=`python -m pytest -q backend/tests/advisory_historical_range/test_r5_command_service.py::test_outcome_parent_keeps_failure_error_and_attempt_consistent backend/tests/advisory_historical_range/test_r5_query_repository.py::test_legacy_failure_readback_uses_explicit_persisted_attempt_origin backend/tests/advisory_historical_range/test_r5_query_repository.py::test_legacy_failure_without_attempt_and_existing_error_are_unchanged backend/tests/advisory_historical_range/test_r5_query_repository.py::test_legacy_readback_does_not_hide_conflicting_published_result -p no:cacheprovider --basetemp X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/readback-stable-targeted` result=`passed; 9 targeted / 40 unique related scenarios; native readonly smoke passed, raw row unchanged; DESIGN-COMPLIANCE-001 reviewed; source unchanged after BUG metadata-only commit`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
