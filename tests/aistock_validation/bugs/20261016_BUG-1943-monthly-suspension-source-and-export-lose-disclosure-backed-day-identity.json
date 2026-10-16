@@ -35,17 +35,32 @@
   ],
   "expected": "Monthly suspend SOURCE, audit, preparation and export bind the same frozen event/disclosure authority and preserve original S/R context.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_shared.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20261016_BUG-1943-monthly-suspension-source-and-export-lose-disclosure-backed-day-identity.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/source_authority.py",
-      "backend/services/dataset_release/monthly_preparation_source.py",
-      "backend/services/dataset_release/monthly_preparation_shared.py",
-      "backend/services/dataset_release/monthly_shared_components.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_shared.py",
       "backend/tests/dataset_release/test_monthly_shared_components.py",
-      "backend/tests/dataset_release/test_monthly_postgres_source.py"
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20261016_BUG-1943-monthly-suspension-source-and-export-lose-disclosure-backed-day-identity.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/source_authority.py",
@@ -179,6 +194,10 @@
   "fix_branch": null,
   "fix_commit": null,
   "fixed_at": null,
+  "github_issue_extra_sections": [
+    "Depends on shared backend data authority from BUG-1942 / PR #6197. This BUG owns only monthly worker SOURCE/audit/preparation/export integration and its worker-target verification.",
+    "DESIGN-COMPLIANCE-001: same-month validation only; immutable prefixes retained; no guessed prices or event order; no model/consumer changes; no source/production readiness claim before runtime readback."
+  ],
   "github_issue_number": 6196,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6196",
   "last_seen_at": "2026-10-16T17:17:05.490414Z",
@@ -201,17 +220,21 @@
     "fresh_process_evidence": [
       "Fresh AIstock pytest processes: 56 direct monthly suspension/audit/preparation cases passed. Shared disclosure source verification is pinned by BUG-1942 receipt X:/AIstock_dataset_candidates/data_repair_staging/BUG-1942-suspension-authority-20261017-r4/verification.json (SHA256 ad398f13215ffd99e7be763861673003c508fa0523af3f38384ef0a9d430c71d). No build, activation, production DDL/DML or runtime process control."
     ],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
     "target_ids": [
       "worker-scheduler"
-    ],
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -329,9 +352,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "github_issue_extra_sections": [
-    "Depends on shared backend data authority from BUG-1942 / PR #6197. This BUG owns only monthly worker SOURCE/audit/preparation/export integration and its worker-target verification.",
-    "DESIGN-COMPLIANCE-001: same-month validation only; immutable prefixes retained; no guessed prices or event order; no model/consumer changes; no source/production readiness claim before runtime readback."
-  ]
+  }
 }
