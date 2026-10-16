@@ -30,15 +30,24 @@
   ],
   "expected": "新key不得创建与既有QUEUED/RUNNING RESUME竞争的操作；返回明确409冲突及原操作身份、原expected_row_version和exact-retry动作；相同key相同payload继续原操作；已终态或其他批次/类型不受影响。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_historical_range/models.py",
+      "backend/services/advisory_historical_range/repository.py",
+      "backend/tests/advisory_historical_range/test_r5_command_service.py",
+      "backend/tests/advisory_historical_range/test_resume_operation_identity.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1931-advisory-replay-resume-creates-stranded-operation-beside-expired-running.json"
+    ],
     "added_files": [
       "backend/tests/advisory_historical_range/test_resume_operation_identity.py"
     ],
     "changed_files": [
-      "backend/services/advisory_historical_range/repository.py",
       "backend/services/advisory_historical_range/models.py",
-      "backend/tests/advisory_historical_range/test_r5_command_service.py"
+      "backend/services/advisory_historical_range/repository.py",
+      "backend/tests/advisory_historical_range/test_r5_command_service.py",
+      "backend/tests/advisory_historical_range/test_resume_operation_identity.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1931-advisory-replay-resume-creates-stranded-operation-beside-expired-running.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_historical_range/repository.py",
@@ -136,16 +145,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_e7e25e1696d18d5ea0b4d9c37a7c3d24/operations?limit=50",
     "fresh_process_evidence": [
       "python X:/AIstock_temp/ADVISORY/mainline-replay-20261015/bug1931_readonly_resume_smoke.py F:/Dev/AIstock_worktrees/BUG-1931-advisory-replay-resume-creates-stranded-operatio-20261015 -> PASS in a fresh process at 2026-10-16 02:52:42+08; real read-only PostgreSQL admission SELECT preserves existing operation/key/version and returns WAIT; source hashes and limitations at X:/AIstock_temp/ADVISORY/mainline-replay-20261015/bug1931-readonly-smoke-20261016-025242.json. No HTTP mutation, concurrent DB writes, production data repair or service control. Runtime activation remains pending user restart."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
