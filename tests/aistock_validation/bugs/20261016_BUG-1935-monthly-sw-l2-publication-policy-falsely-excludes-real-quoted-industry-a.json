@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1935",
-  "closed_at": null,
+  "closed_at": "2026-10-16T03:51:00.987606Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -183,10 +183,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
     "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\BUG-1935-post-restart-20261016.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1935",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "d497ba5b577212c1a777d4994c1de6e1fa221675",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-16T03:49:54.040366Z",
+      "mode": "read_only",
+      "observed_identity": "03f04891046dc103b9300436aeb679509253aa13",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a73a0754194545c3de6e455f234ad131db28161e1da55ea19b6883c2de9be701",
+      "receipt_sha256": "57dd1f7319c678e0c533609fdf7e8cc973621b9a4e1d3d71515810afd94dd2f3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0dd9a9f34693a78d25315dc67bfe2972c30877f8f65feb1dd2e493b80e7f826a",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -222,7 +244,7 @@
     ],
     "validation_evidence_digest": "0bb1608d09e0e82fed8a3dbeba2561b0ce87b250b5c090432af9d0c041c1ac9f"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -237,7 +259,8 @@
     "validation-receipt: id=dca3e73eb90c6d9d commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s guardrail_changed_files validation_catalog_integrity` result=`passed, zero findings and 8 catalog tests`",
     "validation-receipt: id=5fa328c40f82a6c1 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_build_recovery.py backend/services/dataset_release/sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_build_recovery.py backend/tests/dataset_release/test_sw_l2_quote_policy.py` result=`passed`",
     "validation-receipt: id=beab515685b15978 commit=4736126184ab575b31cdf96c10a1fa637a103a59 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
-    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1935 --target worker-scheduler --expected-identity 03f04891046dc103b9300436aeb679509253aa13 -> passed"
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1935 --target worker-scheduler --expected-identity 03f04891046dc103b9300436aeb679509253aa13 -> passed",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1935 --target worker-scheduler --expected-identity d497ba5b577212c1a777d4994c1de6e1fa221675 -> passed, runtime descendant verified"
   ],
   "verification_budget": {
     "budget": "standard",
