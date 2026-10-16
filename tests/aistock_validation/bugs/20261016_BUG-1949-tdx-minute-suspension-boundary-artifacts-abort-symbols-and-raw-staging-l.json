@@ -125,7 +125,7 @@
       "tdx-go-backend"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1949\\post-restart-verify.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -168,7 +168,8 @@
     "source_event_id": "FE-20261016-2589a0bbfc43"
   },
   "validation_evidence": [
-    "validation-receipt: id=a30540efe99ac82e commit=65ea1d8b81c61de9abfcd89a2fefaae57277555e kind=nox plan=l0 status=passed command=`nox -s l0 --no-venv` result=`passed`"
+    "validation-receipt: id=a30540efe99ac82e commit=65ea1d8b81c61de9abfcd89a2fefaae57277555e kind=nox plan=l0 status=passed command=`nox -s l0 --no-venv` result=`passed`",
+    "post-restart-verify BUG-1949 tdx-go-backend: runtime 031fd53d409f2c260768e9345ced095f402022e4 verified; exact 2026-10-15 production 4320-row readback passed; October16 production minutes not repaired"
   ],
   "verification_budget": {
     "budget": "standard",
