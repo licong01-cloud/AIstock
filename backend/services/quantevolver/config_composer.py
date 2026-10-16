@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import posixpath
 import re
@@ -355,6 +356,9 @@ def _coerce_optional_json_object(value: Any, *, field_name: str, reason_code: st
     )
 
 
+_GENERAL_PTNN_RANKING_LOSSES = {"log_approx_ndcg_at_k", "ndcg_at_k_pairwise"}
+
+
 def _requests_general_ptnn_ltr(params: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(params, dict):
         return False
@@ -362,7 +366,9 @@ def _requests_general_ptnn_ltr(params: Optional[Dict[str, Any]]) -> bool:
     if raw_mode is not None and str(raw_mode).strip().lower() != "mse":
         return True
     raw_loss = params.get("loss")
-    return raw_loss is not None and str(raw_loss).strip().lower() == "approx_ndcg_at_k"
+    return raw_loss is not None and str(raw_loss).strip().lower() in {
+        "approx_ndcg_at_k", *_GENERAL_PTNN_RANKING_LOSSES,
+    }
 
 
 def _validate_positive_int_param(value: Any, *, name: str, reason_code: str) -> int:
@@ -382,7 +388,7 @@ def _validate_positive_float_param(value: Any, *, name: str) -> float:
         raise ValueError(
             f"reason_code=general_ptnn_ltr_invalid_temperature: {name} must be positive, got {value!r}"
         ) from exc
-    if parsed <= 0:
+    if not math.isfinite(parsed) or parsed <= 0:
         raise ValueError(f"reason_code=general_ptnn_ltr_invalid_temperature: {name} must be positive, got {value!r}")
     return parsed
 
@@ -395,20 +401,21 @@ def _finalize_general_ptnn_ltr_routing(
     model_dataset_cls: str,
     model_name: str,
 ) -> tuple[str, str, Dict[str, Any]]:
-    """Switch opt-in GeneralPTNN listwise requests to the AIstock LTR adapter."""
+    """Switch opt-in ranking requests; serialize the actual objective name."""
 
     if model_class not in _GENERAL_PTNN_MODEL_CLASSES:
         return model_class, model_module, model_kwargs
 
     updated_kwargs = dict(model_kwargs)
-    requested_mode = str(updated_kwargs.get("ltr_loss_mode") or updated_kwargs.get("loss") or "mse").strip()
-    if updated_kwargs.get("loss") == "approx_ndcg_at_k":
-        requested_mode = "approx_ndcg_at_k"
-    if requested_mode not in {"mse", "approx_ndcg_at_k"}:
+    modes = {str(updated_kwargs.get(key) or "mse").strip().lower() for key in ("loss", "ltr_loss_mode")}
+    modes = {"log_approx_ndcg_at_k" if value == "approx_ndcg_at_k" else value for value in modes}
+    modes.discard("mse")
+    if len(modes) > 1 or not modes.issubset(_GENERAL_PTNN_RANKING_LOSSES):
         raise ValueError(
             "reason_code=general_ptnn_ltr_invalid_loss_mode: "
-            f"model={model_name} requested unsupported ltr_loss_mode={requested_mode!r}"
+            f"model={model_name} requested unsupported or conflicting losses={sorted(modes)!r}"
         )
+    requested_mode = next(iter(modes), "mse")
 
     if requested_mode == "mse":
         updated_kwargs["loss"] = "mse"
@@ -422,8 +429,8 @@ def _finalize_general_ptnn_ltr_routing(
             f"model={model_name} requested ltr_loss_mode={requested_mode!r} with dataset={model_dataset_cls}"
         )
 
-    updated_kwargs["ltr_loss_mode"] = "approx_ndcg_at_k"
-    updated_kwargs["loss"] = "approx_ndcg_at_k"
+    updated_kwargs["ltr_loss_mode"] = requested_mode
+    updated_kwargs["loss"] = requested_mode
     updated_kwargs["topk_train_k"] = _validate_positive_int_param(
         updated_kwargs.get("topk_train_k", 25),
         name="topk_train_k",
@@ -467,8 +474,9 @@ def _finalize_general_ptnn_ltr_routing(
             "ltr_fail_on_degenerate_group=false is not supported for QE listwise LTR"
         )
     logger.info(
-        "GeneralPTNN LTR opt-in: model=%s class=AIStockGeneralPTNNLTR topk_train_k=%s relevance_bins=%s",
+        "GeneralPTNN LTR opt-in: model=%s class=AIStockGeneralPTNNLTR loss=%s topk_train_k=%s relevance_bins=%s",
         model_name,
+        requested_mode,
         updated_kwargs["topk_train_k"],
         updated_kwargs["ltr_relevance_bins"],
     )
@@ -3764,11 +3772,11 @@ class ConfigComposer:
                         # Preserve the request long enough for the authoritative
                         # local-WSL contract below to accept it or fail closed.
                         model_kwargs[loader_key] = thp[loader_key]
-                if str(thp.get("ltr_loss_mode", "mse")) != "mse" or thp.get("loss") == "approx_ndcg_at_k":
+                if _requests_general_ptnn_ltr(thp):
                     model_kwargs.update(
                         {
-                            "ltr_loss_mode": thp.get("ltr_loss_mode", "approx_ndcg_at_k"),
-                            "loss": thp.get("loss", "approx_ndcg_at_k"),
+                            "ltr_loss_mode": thp.get("ltr_loss_mode", "mse"),
+                            "loss": thp.get("loss", "mse"),
                             "topk_train_k": thp.get("topk_train_k", 25),
                             "ltr_temperature": thp.get("ltr_temperature", 1.0),
                             "ltr_gate_temperature": thp.get("ltr_gate_temperature", 1.0),
@@ -4350,7 +4358,7 @@ class ConfigComposer:
         if _requests_general_ptnn_ltr(custom_params) and (
             model_class != "AIStockGeneralPTNNLTR"
             or model_module != "aistock_models.general_ptnn_ltr"
-            or model_kwargs.get("ltr_loss_mode") != "approx_ndcg_at_k"
+            or model_kwargs.get("ltr_loss_mode") not in _GENERAL_PTNN_RANKING_LOSSES
         ):
             raise ValueError(
                 "reason_code=ltr_loss_mode_injection_failed: "

@@ -959,7 +959,14 @@ func ingestSingleSymbol(ctx context.Context, tsCode string, start time.Time, opt
 	if opt.TruncateBefore {
 		rowStart = time.Time{}
 	}
-	rows, err := rawRows(resp.List, tsCode, rowStart, end, true, source)
+	if pgPool == nil {
+		return 0, errors.New("database not configured")
+	}
+	filtered, err := filterSuspendedMinutePlaceholders(ctx, pgPool.QueryRow, tsCode, resp.List, rowStart, end)
+	if err != nil {
+		return 0, err
+	}
+	rows, err := rawRows(filtered, tsCode, rowStart, end, true, source)
 	if err != nil {
 		return 0, err
 	}
