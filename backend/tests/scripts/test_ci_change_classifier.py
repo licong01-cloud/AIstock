@@ -780,10 +780,8 @@ def test_validation_center_ui_catalog_covers_changed_ui_without_business_plans()
     selected = classifier._catalog_backend_selection(paths)
     assert 'tests/validation-center/validation-center.spec.ts' in selected['frontend_test_targets']
     assert not selected['unmapped_code_files']
-    coverage = classifier._changed_test_plan_coverage(
-        paths, repo_root=Path(__file__).resolve().parents[3], file_backend_sessions={},
-        frontend_test_targets=selected['frontend_test_targets'])
-    assert coverage['unexecuted_test_files'] == []
+    assert classifier._changed_test_plan_coverage(paths, repo_root=Path(__file__).resolve().parents[3],
+        file_backend_sessions={}, frontend_test_targets=selected['frontend_test_targets'])['unexecuted_test_files'] == []
 
 
 def test_deleted_frontend_test_needs_no_execution(tmp_path):
@@ -2138,8 +2136,8 @@ def test_pr_quality_is_pr_only_and_codeql_is_nightly_only() -> None:
         assert set(triggers) == {"workflow_dispatch"}
 
     codeql = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))[True]
-    assert set(codeql) == {"schedule", "workflow_dispatch"}
-    assert codeql["schedule"] == [{"cron": "27 20 * * *"}]
+    assert set(codeql) == {"repository_dispatch", "workflow_dispatch"}
+    assert codeql["repository_dispatch"] == {"types": ["aistock_codeql"]}
 
 
 def test_pr_quality_and_semgrep_enforcement_share_ci_verdict_runner() -> None:
@@ -2243,7 +2241,7 @@ def test_merge_quality_workflows_do_not_duplicate_close_sync_runner_work() -> No
     codeql_text = Path(".github/workflows/codeql.yml").read_text(encoding="utf-8")
     assert "pull_request:" not in codeql_text
     assert "\n  push:\n" not in codeql_text
-    assert "schedule:" in codeql_text
+    assert "repository_dispatch:" in codeql_text and "schedule:" not in codeql_text
     assert "workflow_dispatch:" in codeql_text
 
     for relative_path in (".github/workflows/semgrep.yml", ".github/workflows/pr-quality.yml"):
