@@ -54,6 +54,9 @@ from .sw_l2_quote_policy import (
     quote_publication_policy_identity,
 )
 from backend.services.core_index_catalog import P0_POOL_IDS, POOL_DEFINITIONS
+from backend.data_service.suspension_day_authority import (
+    day_value, digest as suspension_digest, frozen_authority, load_authority, project_suspension_days,
+)
 
 
 BASE_DATASET_MANIFEST_SCHEMA = "aistock_monthly_base_dataset_manifest_v1"
@@ -292,6 +295,7 @@ def _build_suspend(
     profile: DatasetProfile,
     cutoff: date,
     prefix=None,
+    suspension_authority: Mapping[str, Any] | None = None,
 ) -> tuple[Path, Path, set[tuple[str, date]], int]:
     import pandas as pd
 
@@ -303,17 +307,22 @@ def _build_suspend(
         pit_by_symbol.setdefault(symbol, []).append((start, end))
     normalized: list[dict[str, Any]] = []
     keys: set[tuple[str, date]] = set()
-    for raw in rows:
-        if str(raw.get("suspend_type", "")).strip().upper() != "S":
+    authority = load_authority(suspension_authority)
+    raw_events = [{"trade_date": day_value(row["trade_date"]).isoformat(), "ts_code": row["ts_code"],
+                   "suspend_type": row.get("suspend_type"), "suspend_timing": row.get("suspend_timing")}
+                  for row in rows if day_value(row["trade_date"]) in calendar_set]
+    by_key = {(row["ts_code"], day_value(row["trade_date"])): row for row in raw_events
+              if row.get("suspend_type") == "S"}
+    resolutions = project_suspension_days(raw_events, authority=authority, required_dates=effective_calendar)
+    for resolution in resolutions:
+        symbol, day = resolution["ts_code"], day_value(resolution["trade_date"])
+        if not any(start <= day <= end for start, end in pit_by_symbol.get(symbol, ())):
             continue
-        symbol = str(raw.get("ts_code", "")).strip().upper()
-        day = _as_date(raw.get("trade_date"), field="suspend trade_date")
-        if prefix is not None and not month_start <= day <= cutoff:
+        if resolution["state"] == "UNRESOLVED":
+            raise MonthlySharedComponentsError(f"unresolved suspension day: {symbol}/{day}")
+        if resolution["state"] == "RESUMED":
             continue
-        if day not in calendar_set or not any(
-            start <= day <= end for start, end in pit_by_symbol.get(symbol, ())
-        ):
-            continue
+        raw = by_key.get((symbol, day), {})
         key = (symbol, day)
         if key in keys:
             raise MonthlySharedComponentsError("suspend_d stock-date is duplicated")
@@ -323,7 +332,7 @@ def _build_suspend(
                 "trade_date": pd.Timestamp(day),
                 "ts_code": symbol,
                 "suspend_type": "S",
-                "suspend_timing": raw.get("suspend_timing"),
+                "suspend_timing": None if resolution["state"] == "FULL_DAY_SUSPENDED" else raw["suspend_timing"],
             }
         )
     normalized.sort(key=lambda item: (item["trade_date"], item["ts_code"]))
@@ -372,6 +381,12 @@ def _build_suspend(
             "daily_row_counts": daily_counts,
             "source_freeze": True,
             "full_history_content_hash": True,
+            "suspension_day_authority": authority,
+            "suspension_day_authority_sha256": suspension_digest(authority),
+            "raw_provider_events": raw_events,
+            "raw_provider_events_sha256": suspension_digest(raw_events),
+            "day_resolutions": resolutions,
+            "historical_publication_time_proven": False,
             **lineage,
         },
     )
@@ -929,6 +944,7 @@ class FrozenMonthlySharedComponentBuilder:
                 profile=self.profile,
                 cutoff=cutoff,
                 prefix=prefix,
+                suspension_authority=frozen_authority(self.cas, frozen),
             )
         pool_coverage = {
             pool_id: {
