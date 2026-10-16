@@ -26,9 +26,11 @@ FLOW_FIELDS.update(sw2_mf_net_amt="mf_net_amt", sw2_mf_buy_elg_vol="mf_elg_buy_v
                    sw2_mf_sell_elg_vol="mf_elg_sell_vol", sw2_mf_net_vol="mf_net_vol")
 
 
-def capture_industry_quote_source(connection, *, cas, projection):
+def capture_industry_quote_source(connection, *, cas, projection, repair_provider=None):
     """Registered read-only SOURCE query; small monthly CAS partitions only."""
+    from .monthly_quote_repair import repair_quote_partition
     partitions = []
+    audits = []
     codes = sorted({entry["canonical_l2_code"] for entry in projection.payload["entries"] if entry["taxonomy_version"] == "SW2021"})
     for period in pd.period_range(projection.payload["start_date"], projection.payload["end_date"], freq="M"):
         start = max(date.fromisoformat(projection.payload["start_date"]), period.start_time.date())
@@ -45,13 +47,27 @@ def capture_industry_quote_source(connection, *, cas, projection):
         facts = [{"index_code": row[0], "trade_date": row[1].isoformat(),
                   **{key: None if value is None else str(value) for key, value in zip(QUOTE_FIELDS, row[2:], strict=True)}}
                  for row in rows]
+        calendar = []
+        if end >= date(2021, 7, 30):
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT cal_date FROM market.trading_calendar WHERE is_trading=TRUE"
+                    " AND cal_date BETWEEN %s AND %s ORDER BY cal_date LIMIT 32",
+                    (max(start, date(2021, 7, 30)), end))
+                calendar = [row[0] for row in cursor.fetchall()]
+            if not calendar or len(calendar) > 31 or len(calendar) != len(set(calendar)):
+                raise SourceManifestError(f"official quote source calendar is empty or invalid: {period}")
+        facts, audit = repair_quote_partition(facts, codes=codes, calendar=calendar, cas=cas, provider=repair_provider)
+        audits.append({"partition_key": str(period), **audit})
         reference = cas.put_json({"schema_version": SCHEMA, "partition_key": str(period), "rows": facts})
         partitions.append({"partition_key": str(period), "row_count": len(facts), "ref": reference.as_dict()})
     return {"schema_version": SCHEMA, "projection_sha256": projection.sha256,
             "source_dataset": "market.sw_daily", "start_date": projection.payload["start_date"],
             "end_date": projection.payload["end_date"], "quote_units": "sw_daily_native_v1",
             "quote_taxonomy": "SW2021", "quote_start_date": "2021-07-30",
-            "partitions": partitions, "database_write": False}
+            "partitions": partitions, "database_write": False,
+            "quote_fact_audit": {"partitions": audits,
+                "unresolved_key_count": sum(item["unresolved_key_count"] for item in audits),
+                "repaired_key_count": sum(item["repaired_key_count"] for item in audits)}}
 
 
 def load_frozen_industry_quote_source(cas, *, context_plan, build_inputs, projection):
@@ -157,6 +173,9 @@ class FrozenIndustryContext:
                 or source.get("database_write") is not False or source.get("quote_taxonomy") != "SW2021"
                 or source.get("quote_start_date") != "2021-07-30"):
             raise SourceManifestError("independent industry quote source identity differs")
+        # Diagnostics do not introduce a historical publication gate. The
+        # existing release validator enforces its approved consumer window.
+        # A missing historic observation remains NA, never a stop-date rule.
         self.cas, self.source, self.projection = cas, source, projection
         self.moneyflow_path, self.pit, self.identity = moneyflow_path, pit, identity
         self.parts = {part["partition_key"]: part for part in source["partitions"]}

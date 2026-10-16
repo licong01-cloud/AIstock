@@ -519,8 +519,16 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
             if source is not None and not prior.get("historical_projection_reused"):
                 expected = hashlib.sha256(canonical_json_bytes(source)).hexdigest()
                 if prior.get("context_identity", {}).get("quote_source_sha256") != expected:
-                    raise MonthlyBuildResumeError("retained industry context differs from frozen quote source")
-            return prepare
+                    binding = context.plan.get("monthly_industry_quote_source") or {}
+                    previous = prior.get("context_identity", {}).get("quote_source_sha256")
+                    if previous not in {binding.get("supersedes_quote_source_sha256"), binding.get("rebuild_from_quote_source_sha256")}:
+                        raise MonthlyBuildResumeError("retained industry context differs from frozen quote source")
+                    # Explicit additive SOURCE refresh only: rematerialize the
+                    # two industry-bearing files, never completed price exports.
+                else:
+                    return prepare
+            else:
+                return prepare
         # An earlier verified ID-only repair is retained as an input. Replace
         # only sector/static context under new pins, never re-export prices.
     if resume.path is None:

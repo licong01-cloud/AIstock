@@ -104,6 +104,14 @@ def run(shared, component):
     )
 
 
+def test_quote_gap_error_identifies_stock_day_code_and_fields(shared):
+    for row in shared[5]:
+        if row["ts_code"] == "000001.SZ":
+            row["sw2_amount"] = None
+    with pytest.raises(ComponentPreparationError, match=r"000001.SZ/2026-09-29/801000.SI; fields=\['sw2_amount'\]"):
+        run(shared, "sector_context")
+
+
 @pytest.mark.parametrize("component", ["stock_pools", "benchmark", "suspend", "sector_context"])
 def test_real_private_shared_files_without_full_factor_or_release(shared, component):
     result = run(shared, component)

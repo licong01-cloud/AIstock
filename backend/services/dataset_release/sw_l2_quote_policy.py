@@ -67,6 +67,15 @@ def quote_publication_policy_identity() -> str:
     )
 
 
+def quote_is_expected(code: str, day: date) -> bool:
+    """Use the same approved rule in SOURCE diagnostics and release sidecars.
+
+    Missing DB/provider rows never amend this rule or establish a stop date.
+    The caller must first validate the code against the frozen taxonomy.
+    """
+    return code not in _NEVER_QUOTED and day <= _LAST_PUBLISHED.get(code, date.max)
+
+
 def build_quote_availability_payload(
     *,
     code_map: ReleaseSWL2CodeMap,
@@ -127,5 +136,6 @@ __all__ = (
     "SWL2QuotePolicyError",
     "build_quote_availability_payload",
     "quote_publication_policy_identity",
+    "quote_is_expected",
     "taxonomy_digest",
 )

@@ -5,6 +5,15 @@
     "backend/services/dataset_release/monthly_industry_facts.py",
     "backend/services/dataset_release/monthly_preparation_shared.py",
     "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+    "backend/services/dataset_release/monthly_quote_repair.py",
+    "backend/services/dataset_release/monthly_industry_history.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/routers/monthly_dataset_releases.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
+    "backend/tests/dataset_release/test_monthly_quote_repair.py",
+    "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+    "backend/tests/dataset_release/test_monthly_unified_v2.py",
+    "backend/tests/dataset_release/test_monthly_preparation_shared.py",
     "tests/aistock_validation/bugs/20261016_BUG-1940-september-unified-history-repair-has-inconsistent-sw-l2-quote-facts-and.json"
   ],
   "assigned_agent": null,
@@ -16,7 +25,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-16T05:12:06.089431Z",
-  "description": "QE行业ID覆盖通过，但共享报价存在来源/边界不一致，月更BUILD未完成",
+  "description": "共享行业历史修复封存未给出独立报价精确缺键，已有SOURCE绑定不能受控增补真实报价，BUILD在重用大型导出后才报错。3月13日实际漏采12个行业键可由已捕获Tushare原始事实恢复；801011.SI的官方发布边界尚无足够证据，本次不改发布规则、不假报数据READY。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -139,6 +148,22 @@
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
+  "root_cause": "独立quote SOURCE仅封存数据库已返回行，未冻结按批准发布规则诊断的缺键及补采来源；既有绑定直接返回BOUND，retained context遇到source hash变化直接拒绝。错误缺少股票/日期/行业/字段。",
+  "data_delivery_status": "BLOCKED_PUBLICATION_AUTHORITY_UNRESOLVED",
+  "remaining_data_blocker": "801011.SI缺少可验证的发布边界/同口径官方完整报价。Tushare分类is_pub=0、sw_daily空返回与本地既存数值及官网不同接口不一致；不能据此推断终止日、删除事实或借其他序列补数。",
+  "repair_readback_ref": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1940-quote-repair-20261016/real-source-readback.json",
+  "repair_readback_sha256": "a6d7aa94f5f4b41a6078728f17207c16ee4c1325f5375a656a78ff45a5eb1e38",
+  "review_rounds": [
+    "第一轮：来源/有限值保护。补采仅限真实sw_daily返回；拒绝错代码、错日期、重复、非有限及负成交量/成交额，拒绝混合不同有限版本。",
+    "第二轮：范围/业务语义。去除拟新增全历史阻断，诊断不成为新门禁；不修改quote发布规则、PIT、QE/HMM、价格导出或active。",
+    "第三轮：重试/身份。原绑定create-exclusive保留；显式refresh绑定前驱来源，未变化重试复用原ref；SOURCE与已完成价格断点不失效，仅重物化行业承载文件。"
+  ],
+  "design_compliance_review": {
+    "no_partial_success_claim": "PASS：仅报告源码修复和12个真实来源键验证；候选发布边界仍BLOCKED，不声明九月数据集完成。",
+    "no_silent_error": "PASS：缺键和字段精确记录，空响应保留未解决；缺价/真实来源冲突仍报错。",
+    "business_semantics_unchanged": "PASS：未改分类版本、股票池、发布规则、覆盖阈值、QE/HMM模型或实验。",
+    "no_new_gate_or_approval": "PASS：复用现有数据操作鉴权，新增诊断不增加历史发布门禁；无新增人工授权。"
+  },
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -146,7 +171,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "RED：7个定向用例复现缺少受控quote SOURCE修复路径。GREEN：独立AIstock Python/pytest覆盖来源身份、真实数值、只补缺值、原SOURCE/旧绑定保留及错误可见性。",
+      "AIstock fresh-process使用本轮真实冻结CAS和已捕获Tushare响应，3月13日12个行业键补采成功，月内unresolved=0；receipt=a6d7aa94f5f4b41a6078728f17207c16ee4c1325f5375a656a78ff45a5eb1e38。无生产DB/candidate/profile/runtime写入。"
+    ],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",

@@ -6,6 +6,7 @@ import hashlib
 import json
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from backend.services.dataset_release.canonical import canonical_json_bytes, digest_named_fields
@@ -688,3 +689,129 @@ def test_private_source_seals_raw_134_and_enriches_with_pinned_ids(predecessor, 
         assert len(list(stream)) == 134
     with reader.iter_rows("sector_data", "2026-09-01_2026-09-30") as stream:
         assert list(stream)[0]["l2_code_id"] == last["l2_code_id"]
+
+
+def test_quote_repair_only_fills_missing_facts_and_freezes_provider_response(tmp_path):
+    from backend.services.dataset_release.monthly_quote_repair import repair_quote_partition
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.monthly_industry_facts import QUOTE_FIELDS
+
+    ControlStore.initialize(tmp_path / "control")
+    cas = CASStore(tmp_path / "control")
+    old = {"index_code": "801012.SI", "trade_date": "2026-03-13", **dict.fromkeys(QUOTE_FIELDS, "1.0")}
+    old["amount"] = None
+    calls = []
+    def fetch(**params):
+        calls.append(params)
+        if params["ts_code"] != "801012.SI":
+            return pd.DataFrame()
+        return pd.DataFrame([{"ts_code": "801012.SI", "trade_date": "20260313",
+                              **dict.fromkeys(QUOTE_FIELDS, 1.0), "amount": 2.0}])
+    rows, audit = repair_quote_partition([old], codes=["801012.SI", "801019.SI"],
+        calendar=[date(2026, 3, 13)], cas=cas, provider=SimpleNamespace(sw_daily=fetch))
+    assert rows[0]["close"] == "1.0" and rows[0]["amount"] == "2.0"
+    assert old["amount"] is None
+    assert audit["repaired_key_count"] == 1 and audit["unresolved_key_count"] == 1
+    assert audit["unresolved_keys"][0]["index_code"] == "801019.SI"
+    assert len(calls) == 2
+    captured = cas.get_json_bounded(audit["provider_requests"][0]["response_ref"], max_bytes=100000)
+    assert captured["endpoint"] == "sw_daily" and captured["database_write"] is False
+    assert captured["request"]["ts_code"] == "801012.SI"
+
+
+@pytest.mark.parametrize("case", ["wrong_code", "wrong_date", "duplicate", "infinite", "negative"])
+def test_quote_repair_rejects_provider_identity_and_numeric_errors(tmp_path, case):
+    from backend.services.dataset_release.monthly_quote_repair import repair_quote_partition
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.monthly_industry_facts import QUOTE_FIELDS
+
+    ControlStore.initialize(tmp_path / "control")
+    row = {"ts_code": "801012.SI", "trade_date": "20260313", **dict.fromkeys(QUOTE_FIELDS, 2.0)}
+    row.update({"ts_code": "801014.SI"} if case == "wrong_code" else
+               {"trade_date": "20260312"} if case == "wrong_date" else
+               {"amount": float("inf")} if case == "infinite" else {"vol": -1} if case == "negative" else {})
+    provider = SimpleNamespace(sw_daily=lambda **_: pd.DataFrame([row, row] if case == "duplicate" else [row]))
+    with pytest.raises(SourceManifestError, match="provider"):
+        repair_quote_partition([], codes=["801012.SI"], calendar=[date(2026, 3, 13)],
+            cas=CASStore(tmp_path / "control"), provider=provider)
+
+
+def test_quote_repair_preserves_stops_and_reports_empty_response_without_inventing_policy(tmp_path):
+    from backend.services.dataset_release.monthly_quote_repair import repair_quote_partition
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+
+    ControlStore.initialize(tmp_path / "control")
+    calls = []
+    def fetch(**params):
+        calls.append(params)
+        return pd.DataFrame()
+    rows, audit = repair_quote_partition([], codes=["801011.SI", "801019.SI"],
+        calendar=[date(2026, 4, 29)], cas=CASStore(tmp_path / "control"), provider=SimpleNamespace(sw_daily=fetch))
+    assert rows == [] and audit["repaired_key_count"] == 0
+    assert audit["unresolved_keys"] == [{"index_code": "801011.SI", "trade_date": "2026-04-29",
+                                        "missing_fields": ["pct_change", "vol", "amount"]}]
+    assert [call["ts_code"] for call in calls] == ["801011.SI"]
+
+
+def test_quote_source_refresh_rejects_change_to_existing_finite_fact():
+    from backend.services.dataset_release.monthly_quote_repair import assert_additive_quote_refresh
+    class CAS:
+        def get_json_bounded(self, ref, **_):
+            return {"rows": ref}
+    old = {"index_code": "801012.SI", "trade_date": "2026-03-13", "amount": "1"}
+    source = lambda rows: {"partitions": [{"partition_key": "2026-03", "ref": rows}]}
+    assert_additive_quote_refresh(CAS(), source([old]), source([old]))
+    with pytest.raises(SourceManifestError, match="finite"):
+        assert_additive_quote_refresh(CAS(), source([old]), source([{**old, "amount": "2"}]))
+    with pytest.raises(SourceManifestError, match="finite"):
+        assert_additive_quote_refresh(CAS(), source([old]), source([{**old, "amount": None}]))
+
+
+@pytest.mark.parametrize("repair", [False, True])
+def test_source_capture_reports_exact_gaps_before_any_materialization(tmp_path, repair):
+    from backend.services.dataset_release import monthly_industry_facts as subject
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    ControlStore.initialize(tmp_path / "control")
+    cas = CASStore(tmp_path / "control")
+    queries = []
+    class Cursor:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+        def execute(self, sql, params):
+            assert sql.startswith("SELECT ")
+            queries.append(sql)
+        def fetchall(self):
+            return [(date(2026, 3, 13),)] if "trading_calendar" in queries[-1] else []
+    projection = SimpleNamespace(sha256="a" * 64, payload={"start_date": "2026-03-13", "end_date": "2026-03-13",
+        "entries": [{"taxonomy_version": "SW2021", "canonical_l2_code": "801012.SI"}]})
+    response = pd.DataFrame([{"ts_code": "801012.SI", "trade_date": "20260313", **dict.fromkeys(subject.QUOTE_FIELDS, 2.0)}])
+    source = subject.capture_industry_quote_source(SimpleNamespace(cursor=Cursor), cas=cas, projection=projection,
+        repair_provider=SimpleNamespace(sw_daily=lambda **_: response) if repair else None)
+    assert source["quote_fact_audit"]["repaired_key_count"] == int(repair)
+    assert source["quote_fact_audit"]["unresolved_key_count"] == int(not repair)
+    if not repair:
+        context = subject.FrozenIndustryContext(cas=cas, source=source, projection=projection,
+            moneyflow_path=None, pit=None, identity=None)
+        assert context.source["quote_fact_audit"]["unresolved_key_count"] == 1
+
+
+@pytest.mark.parametrize("bound", [False, True])
+def test_retained_context_refresh_requires_exact_source_lineage(monkeypatch, bound):
+    from backend.services.dataset_release import monthly_industry_facts as facts, monthly_industry_history as history
+    from backend.services.dataset_release.monthly_build_resume import MonthlyBuildResumeError
+    prior = {"projection_sha256": "a" * 64, "industry_context_contract": facts.CONTRACT,
+             "context_identity": {"quote_source_sha256": "b" * 64}}
+    projection = SimpleNamespace(sha256="a" * 64)
+    monkeypatch.setattr(history, "load_frozen_history", lambda *_, **__: projection)
+    monkeypatch.setattr(facts, "load_frozen_industry_quote_source", lambda *_, **__: {"new_source": True})
+    context = SimpleNamespace(plan={"monthly_industry_quote_source": {
+        "supersedes_quote_source_sha256": "b" * 64 if bound else "c" * 64}})
+    with pytest.raises(MonthlyBuildResumeError, match="durable completed-export journal" if bound else "differs from frozen quote"):
+        history.apply_retained_history(SimpleNamespace(get=lambda _: prior, path=None), context=context,
+            compiled=SimpleNamespace(physical_plan={}), prepare={}, cas=None, profile=None)

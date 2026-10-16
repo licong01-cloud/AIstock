@@ -486,7 +486,11 @@ def summarize_sector_context(
                     code = code_map.id_to_code[sector_id]
                     available = any(left <= day <= right for left, right in quote.entries[code])
                     if available and not np.isfinite(triple).all():
-                        raise ComponentPreparationError("private quote-available stock row lacks facts")
+                        missing = [field for field, value in zip(("sw2_pct_change", "sw2_vol", "sw2_amount"), triple)
+                                   if not np.isfinite(value)]
+                        raise ComponentPreparationError(
+                            f"private quote-available stock row lacks facts: {row.instrument}/{day}/{code}; fields={missing}"
+                        )
                     if not available and not pd.isna(list(triple)).all():
                         raise ComponentPreparationError("private stopped sector has unexpected quote facts")
                 if np.isfinite(row.sw2_vol):

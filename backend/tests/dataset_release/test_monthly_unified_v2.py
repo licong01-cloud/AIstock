@@ -358,7 +358,7 @@ def test_history_binding_uses_readonly_snapshot_and_never_changes_source(tmp_pat
         return SimpleNamespace(payload=payload, sha256=monthly_subject._digest(payload))
     monkeypatch.setattr(history_module, "capture_industry_history", capture)
     monkeypatch.setattr(history_module.IndustryHistoryProjection, "read", lambda value: SimpleNamespace(payload=value, sha256=monthly_subject._digest(value)))
-    monkeypatch.setattr(facts_module, "capture_industry_quote_source", lambda *args, **kwargs: {"frozen_quotes": True})
+    monkeypatch.setattr(facts_module, "capture_industry_quote_source", lambda *args, **kwargs: {"frozen_quotes": True, "partitions": []})
     monkeypatch.setattr(monthly_legacy_prefix, "load_legacy_prefix", lambda *args, **kwargs: object())
     monkeypatch.setattr(monthly_sector_mapping, "load_predecessor_sector_mapping", lambda prefix: {"code_map": {}})
     if case == "active_drift":
@@ -389,6 +389,22 @@ def test_history_binding_uses_readonly_snapshot_and_never_changes_source(tmp_pat
         assert after["monthly_industry_history"] == binding
         assert after["monthly_industry_history_ref"] == history_ref
         assert after["monthly_industry_quote_source"]["source_bundle_sha256"] == HEX
+        old_quote_ref = after["monthly_industry_quote_source_ref"]
+        old_bytes = (service.store.operation_root(operation) / old_quote_ref["id"]).read_bytes()
+        monkeypatch.setattr(facts_module, "capture_industry_quote_source", lambda *args, **kwargs: {
+            "frozen_quotes": True, "partitions": [],
+            "quote_fact_audit": {"partitions": [], "repaired_key_count": 0, "unresolved_key_count": 0}})
+        refreshed = service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection,
+            quote_cas=object(), quote_provider=object(), refresh_quotes=True)
+        final = service.store.read_plan(operation)
+        assert refreshed["status"] == "REFRESHED"
+        assert final["monthly_industry_history_ref"] == history_ref
+        assert final["monthly_industry_quote_source"]["supersedes_quote_binding_ref"] == old_quote_ref
+        assert (service.store.operation_root(operation) / old_quote_ref["id"]).read_bytes() == old_bytes
+        retry = service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection,
+            quote_cas=object(), quote_provider=object(), refresh_quotes=True)
+        assert retry["status"] == "UNCHANGED" and retry["quote_source_ref"] == refreshed["quote_source_ref"]
+        assert service.store.read_plan(operation) == final
     assert service.store.read_checkpoint(operation, "SOURCE") == source_before
 
 
