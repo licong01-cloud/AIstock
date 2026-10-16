@@ -36,8 +36,6 @@
   "expected": "Native version/digest/CAS recovery rechecks source/calendar/account/release/binding, proves authoritative zero failed-day economics and absent daily run under native writer concurrency protection, records lineage and only resumes original task scheduling.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261016_BUG-1952-localsim-pre-selection-wsl-timeout-strands-original-replay-without-a-rec.json",
-      "backend/services/simulation_runtime/localsim_replay.py",
       "backend/services/simulation_runtime/localsim_replay_recovery.py",
       "backend/services/simulation_runtime/localsim_selection_inference.py",
       "backend/services/simulation_runtime/repository.py",
@@ -45,14 +43,13 @@
       "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
       "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
-      "docs/analysis/localsim_preselection_recovery_fix_20261017.md"
+      "docs/analysis/localsim_preselection_recovery_fix_20261017.md",
+      "tests/aistock_validation/bugs/20261016_BUG-1952-localsim-pre-selection-wsl-timeout-strands-original-replay-without-a-rec.json"
     ],
     "added_files": [
       "docs/analysis/localsim_preselection_recovery_fix_20261017.md"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261016_BUG-1952-localsim-pre-selection-wsl-timeout-strands-original-replay-without-a-rec.json",
-      "backend/services/simulation_runtime/localsim_replay.py",
       "backend/services/simulation_runtime/localsim_replay_recovery.py",
       "backend/services/simulation_runtime/localsim_selection_inference.py",
       "backend/services/simulation_runtime/repository.py",
@@ -60,7 +57,8 @@
       "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
       "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
       "backend/tests/simulation_runtime/test_localsim_successor_core_postgres.py",
-      "docs/analysis/localsim_preselection_recovery_fix_20261017.md"
+      "docs/analysis/localsim_preselection_recovery_fix_20261017.md",
+      "tests/aistock_validation/bugs/20261016_BUG-1952-localsim-pre-selection-wsl-timeout-strands-original-replay-without-a-rec.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -206,8 +204,8 @@
   },
   "first_seen_at": "2026-10-16T20:58:09.837444Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6398853d7bce66f4eb0c0687b7b1023f89560559",
+  "fixed_at": "2026-10-16T21:18:54Z",
   "github_issue_number": 6226,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6226",
   "last_seen_at": "2026-10-16T20:58:09.837444Z",
@@ -215,6 +213,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6227",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -244,6 +243,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -255,7 +255,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1952",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9c223f4d5f331d1a",
+    "recorded_at": "2026-10-16T21:19:29.056967Z",
+    "runtime_contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "495403f195b80ce8a825355206bd610554df9da1",
+    "source_merge_commit": "6398853d7bce66f4eb0c0687b7b1023f89560559",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6227",
+    "validation_evidence": [
+      "python -m nox -s localsim_successor_core_dev_db -> passed (7 tests); CI verdict on 495403f -> passed"
+    ],
+    "validation_evidence_digest": "f0d10a85cdfb8314d1a0c469df6536bc3b8768846142c020b75ef66493e21ccb"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -264,6 +285,9 @@
     "fingerprint": "776ba5bab5a0f9d320669b02",
     "source_event_id": "FE-20261016-776ba5bab5a0"
   },
+  "validation_evidence": [
+    "python -m nox -s localsim_successor_core_dev_db -> passed (7 tests); CI verdict on 495403f -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
