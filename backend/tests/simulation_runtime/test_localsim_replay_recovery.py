@@ -71,6 +71,76 @@ def _service(snapshot, *, market_error=None):
     return service, calls
 
 
+def _preselection_snapshot():
+    snapshot = _snapshot()
+    path = "/mnt/x/AIstock_temp/LOCALSIM/" + "a" * 64 + "/lsselection_" + "b" * 32 + "/node/" + "c" * 32 + "/path-witness.txt"
+    command = ["wsl", "-d", "Ubuntu", "--", "cat", path]
+    snapshot["job"]["failure_code"] = "TimeoutExpired"
+    snapshot["job"]["failure_context"]["message"] = f"Command '{command}' timed out after 20 seconds"
+    snapshot["binding"]["binding_id"] = "binding"
+    snapshot.update(run=None, plan=None, evidence_hash=None,
+                    preselection_absence={"run_id": "simrun_" + "d" * 16, "account_day_runs": []})
+    return snapshot
+
+
+def test_no_run_timeout_recovers_only_after_native_zero_effect_and_path_readback(monkeypatch):
+    from backend.services.simulation_runtime import localsim_selection_inference as transport
+
+    calls = []
+    monkeypatch.setattr(transport, "probe_localsim_wsl_witness", lambda **kw: calls.append(kw) or {"witness_sha256": "f" * 64})
+    snapshot = _preselection_snapshot()
+    original = deepcopy(snapshot)
+    service, market_calls = _service(snapshot)
+    check = service.inspect("replay-original")
+    assert check.ready and check.run_id is None and check.native_input["recovery_phase"] == "PRESELECTION"
+    assert check.native_input["candidate_run_id"] == snapshot["preselection_absence"]["run_id"]
+    assert not market_calls and snapshot == original
+    assert service.inspect("replay-original").snapshot_sha256 == check.snapshot_sha256
+    assert calls[0]["run_id"] == "lsselection_" + "b" * 32
+    assert str(calls[0]["witness"]).replace("\\", "/").startswith("X:/AIstock_temp/LOCALSIM/")
+
+
+@pytest.mark.parametrize("section,key,value,reason", [
+    ("job", "failure_code", "UnexpectedError", "FAILURE_UNSUPPORTED"),
+    ("job", "status", "FAILED_RETRYABLE", "FAILURE_UNSUPPORTED"),
+    ("binding", "binding_id", "other", "FROZEN_IDENTITY_CONFLICT"),
+    ("binding", "release_hash", "other", "FROZEN_IDENTITY_CONFLICT"),
+    ("account", "status", "CLOSED", "FROZEN_IDENTITY_CONFLICT"),
+    ("preselection_absence", "account_day_runs", [{"run_id": "other"}], "PRESELECTION_ABSENCE_UNPROVEN"),
+    ("preselection_absence", "run_id", "unknown", "PRESELECTION_ABSENCE_UNPROVEN"),
+    ("economic_counts", "fills", 1, "ECONOMIC_FACTS_PRESENT"),
+    ("economic_counts", "orders", -1, "ECONOMIC_FACTS_PRESENT"),
+    ("job", "completed_trade_date", None, "SOURCE_IDENTITY_CONFLICT"),
+])
+def test_no_run_recovery_does_not_generalize_to_unknown_failure_or_effects(section, key, value, reason):
+    snapshot = _preselection_snapshot()
+    snapshot[section][key] = value
+    service, _ = _service(snapshot)
+    assert service.inspect("replay-original").reason_codes == ["LOCALSIM_REPLAY_RECOVERY_" + reason]
+
+
+@pytest.mark.parametrize("message", [
+    "unrelated timeout", "Command '['wsl', '-d', 'Ubuntu', 'bash', '-lc', 'secret']' timed out after 20 seconds",
+    "Command '['wsl', '-d', 'Ubuntu', '--', 'cat', '/mnt/c/private/file']' timed out after 20 seconds",
+])
+def test_no_run_recovery_refuses_unrecognized_transport_commands(message):
+    snapshot = _preselection_snapshot()
+    snapshot["job"]["failure_context"]["message"] = message
+    service, _ = _service(snapshot)
+    assert service.inspect("replay-original").reason_codes == ["LOCALSIM_REPLAY_RECOVERY_FAILURE_UNSUPPORTED"]
+
+
+def test_no_run_recovery_remains_blocked_when_wsl_probe_still_fails(monkeypatch):
+    from backend.services.simulation_runtime import localsim_selection_inference as transport
+
+    def blocked(**_):
+        raise DataUnavailableError("unavailable", context={"reason_code": "LOCALSIM_WSL_X_PATH_TIMEOUT"})
+
+    monkeypatch.setattr(transport, "probe_localsim_wsl_witness", blocked)
+    service, _ = _service(_preselection_snapshot())
+    assert service.inspect("replay-original").reason_codes == ["LOCALSIM_WSL_X_PATH_TIMEOUT"]
+
+
 def test_repaired_native_input_is_ready_without_editing_original_job_or_day():
     snapshot = _snapshot()
     before = deepcopy(snapshot)
