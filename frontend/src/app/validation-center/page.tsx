@@ -922,6 +922,12 @@ export default function ValidationCenterPage() {
     const tasks: Promise<void>[] = [];
     setError(null);
     setOptionalApiWarnings({});
+    // Detail summaries have no freshness receipt; never reuse their old green
+    // after a section switch or failed refresh. The shared snapshot stays visible.
+    setMergeGate(null); setCodeIntelligenceSummary(null); setIssueWorkflowSummary(null); setIssueCandidateSummary(null);
+    setPipelineTestSummary(null); setUiTargetSummary(null); setModuleQuality(null); setModuleDetailSummary(null);
+    setGithubIssueSummary(null); setGithubPrSummary(null); setBranchDetailSummary(null); setWorkspaceStatus(null);
+    setLegacyDebtSummary(null); setAutomationSummary(null); setSummary(null); setHealth(null); setFindingSummary(null);
     const load = <T,>(key: string, request: () => Promise<T>, commit: (value: T) => void) => {
       tasks.push(loadSection(request, commit, (message) => {
         setOptionalApiWarnings((previous) => ({ ...previous, [key]: message }));
