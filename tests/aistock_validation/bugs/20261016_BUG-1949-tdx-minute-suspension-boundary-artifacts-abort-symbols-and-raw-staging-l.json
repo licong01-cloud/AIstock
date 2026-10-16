@@ -1,6 +1,7 @@
 {
   "actual": "2026-10-15 minute provider jobs failed for 13 non-trading suspended securities on a 13:00 boundary placeholder and 16 actively traded securities on database statement timeouts. Reject non-trading boundary artifacts without hiding real trades; bound and optimize staging joins for exact idempotent raw writes. Separate Go runtime target from BUG-1948 backend sync fixes. No production writes or process control.",
   "allowed_write_scope": [
+    "tdx-api-main/web/minute_init_task.go",
     "tdx-api-main/web/raw_rows.go",
     "tdx-api-main/web/integrity_test.go",
     "tests/aistock_validation/bugs/20261016_BUG-1949-tdx-minute-suspension-boundary-artifacts-abort-symbols-and-raw-staging-l.json"
@@ -28,6 +29,7 @@
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
+      "tdx-api-main/web/minute_init_task.go",
       "tdx-api-main/web/raw_rows.go",
       "tdx-api-main/web/integrity_test.go"
     ],
@@ -66,11 +68,13 @@
       "unmatched_files": []
     },
     "planned_files": [
+      "tdx-api-main/web/minute_init_task.go",
       "tdx-api-main/web/raw_rows.go",
       "tdx-api-main/web/integrity_test.go"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "tdx-api-main/web/minute_init_task.go",
       "tdx-api-main/web/raw_rows.go",
       "tdx-api-main/web/integrity_test.go"
     ]
@@ -97,8 +101,16 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
+    "health_ref": "http://127.0.0.1:19080/api/health",
+    "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1&start_date=2026-10-15&end_date=2026-10-16",
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh-process offline Go tests: invalid 13:00 remains rejected; only independently evidenced full-day suspension plus zero provider turnover can suppress placeholders. S/R mixed events, conflicting raw turnover and sub-hand precision facts cannot be suppressed. Existing DEV raw write/readback, repeated apply and conflict rejection passed using the real DEV connection and session-local tables. No production writes or process control. Large production-table performance and deployed runtime acceptance remain pending.",
+      "Source-backed DEV repair: 18 symbols and 4320 minute rows on 2026-10-15, all daily OHLC cross-checks match; no existing facts overwritten. DEV bounded apply 8.953 seconds, repeated apply/readback 1.875 seconds. Receipt X:/AIstock_dataset_candidates/data_repair_staging/BUG-1949-minute-dev-20261017-r3/dev-receipt.json; exact production SQL SHA256 3d3385019e0500aedbcbfbe0ea4ba9a2fbbf55dde2134d9dafb878f27133e32d awaits specific authorization. 2026-10-16 production minute collection remains incomplete; no claim of whole-market repair.",
+      "Four review rounds: strict timestamps and independent full-day halt evidence; mixed S/R and one-share trades remain fail-closed; temporary-stage statistics and bounded hypertable joins; real DEV idempotence and unchanged fact/unit provenance. DESIGN-COMPLIANCE-001 item review passed: source fixes complete without suppressing genuine missing facts, no pseudo data or runtime-success claims, existing account/strategy semantics unchanged, no new framework or gate."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
