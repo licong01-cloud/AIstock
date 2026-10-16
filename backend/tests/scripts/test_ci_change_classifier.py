@@ -773,6 +773,19 @@ def test_frontend_targets_include_only_automatic_plans(monkeypatch, enabled, run
     assert selected['frontend_test_targets'] == (['tests/example'] if enabled and runner_enabled else [])
 
 
+def test_validation_center_ui_catalog_covers_changed_ui_without_business_plans():
+    paths = ['frontend/src/app/validation-center/page.tsx',
+             'frontend/src/lib/validation/section-loader.ts',
+             'frontend/tests/validation-center/validation-center.spec.ts']
+    selected = classifier._catalog_backend_selection(paths)
+    assert 'tests/validation-center/validation-center.spec.ts' in selected['frontend_test_targets']
+    assert not selected['unmapped_code_files']
+    coverage = classifier._changed_test_plan_coverage(
+        paths, repo_root=Path(__file__).resolve().parents[3], file_backend_sessions={},
+        frontend_test_targets=selected['frontend_test_targets'])
+    assert coverage['unexecuted_test_files'] == []
+
+
 def test_deleted_frontend_test_needs_no_execution(tmp_path):
     (tmp_path / '.git').mkdir()
     result = classifier.classify_changed_files(['frontend/tests/hmm-risk/hmm-risk.spec.ts'], repo_root=tmp_path)
