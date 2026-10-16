@@ -121,6 +121,21 @@ def test_suspend_export_resolves_only_disclosure_backed_mixed_events(tmp_path, s
     assert evidence["historical_publication_time_proven"] is False
 
 
+@pytest.mark.parametrize("timing", ["9:34-9:44", "13:13-13:23,13:23-13:33"])
+def test_suspend_export_preserves_explicit_intraday_ranges_with_resume(tmp_path, timing):
+    day, symbol = date(2026, 9, 30), "000001.SZ"
+    rows = [dict(ts_code=symbol, trade_date=day, suspend_type="S", suspend_timing=timing),
+            dict(ts_code=symbol, trade_date=day, suspend_type="R", suspend_timing=None)]
+    parquet, meta, keys, count = _build_suspend(
+        root=tmp_path, rows=rows, pit_rows=[(symbol, day, day)], calendar=(day,),
+        profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
+    frame, evidence = pd.read_parquet(parquet), json.loads(meta.read_bytes())
+    assert count == 2 and keys == {(symbol, day)} and len(frame) == 1
+    assert frame.iloc[0]["suspend_timing"] == timing
+    assert len(evidence["raw_provider_events"]) == 2
+    assert evidence["day_resolutions"][0]["state"] == "INTRADAY_SUSPENDED"
+
+
 def test_native_suspend_keeps_pinned_prefix_and_checks_only_new_month(tmp_path):
     import json
 
