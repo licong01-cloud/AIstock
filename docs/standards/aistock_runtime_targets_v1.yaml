@@ -230,6 +230,7 @@ targets:
           - backend/services/dataset_release/monthly_worker_runtime.py
         required_source_globs:
           # This shared reader is loaded by the current supervised monthly worker.
+          - backend/routers/monthly_dataset_releases.py
           - backend/services/dataset_release/wsl_resource_guardian.py
           - backend/services/dataset_release/resource_supervisor.py
           - backend/services/dataset_release/monthly_industry_history.py

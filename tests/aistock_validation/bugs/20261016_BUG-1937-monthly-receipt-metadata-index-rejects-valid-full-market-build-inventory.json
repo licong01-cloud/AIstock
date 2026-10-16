@@ -1,6 +1,7 @@
 {
-  "actual": "receipts HTTP400 monthly receipt entry exceeds the bounded contract",
+  "actual": "receipts HTTP400 monthly receipt entry exceeds the bounded contract: the BUILD receipt is 56507440 bytes and its checkpoint is 88017600 bytes; both are valid full-market metadata, not response payloads",
   "allowed_write_scope": [
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "backend/routers/monthly_dataset_releases.py",
     "backend/tests/routers/test_monthly_dataset_releases.py",
     "tests/aistock_validation/bugs/20261016_BUG-1937-monthly-receipt-metadata-index-rejects-valid-full-market-build-inventory.json"
@@ -89,6 +90,8 @@
   "first_seen_at": "2026-10-16T02:53:54.981365Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "Remove the small JSON-message cap from the authenticated receipt metadata index. Stream at most the original regular-file length in 1MiB blocks; verify inode, size and mtime before and after, retain link/junction and 64-item response bounds. No payload parsing, whole-file allocation or data-quality relaxation. Register the existing monthly router for the same combined backend/child post-restart probe used by its control plane.",
+  "scope_expansion_reason": "The existing monthly router already routes to monthly_release_worker_process but is absent from required_source_globs, so router-only fixes cannot receive the catalog's combined parent/child restart proof. Add only this exact already-routed source to the required list; do not change probe semantics or add a new target.",
   "fixed_at": null,
   "github_issue_number": 6179,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6179",
@@ -107,12 +110,18 @@
     "qlib_data_backend"
   ],
   "risk_area": "bug",
+  "review_rounds": ["1: bounded metadata response is distinct from receipt document size; retain 64-entry bound.", "2: stream original byte length with bounded RAM; reject truncation, changed descriptor/path identity and links/junctions.", "3: RED/GREEN and all 13 router tests passed; actual 56507440-byte sealed receipt produces exact expected SHA without database/profile/process writes."],
+  "design_compliance": {"no_partial_completion_claim": true, "no_silent_error_or_fake_data": true, "business_semantics_unchanged": true, "no_new_approval_or_quality_gate": true},
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "RED: 33MiB receipt rejected by the original metadata index. GREEN: streaming metadata hash passes without Path.read_bytes; mutation during read is rejected.",
+      "Fresh AIstock Python process indexes the actual operation receipts: count=2; BUILD receipt size=56507440 and SHA256=9ff7e1e65c9e85840159b90605c6fb4396fb87ad32d928085ae192add520e353, matching its sealed checkpoint. No DB/profile/process writes."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "provisional": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",

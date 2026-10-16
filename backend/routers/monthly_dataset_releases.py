@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 import hashlib
+import os
 from pathlib import Path
 from typing import Annotated, Any, Awaitable, Callable, Mapping, TypeVar
 
@@ -35,6 +36,7 @@ from backend.services.dataset_release.monthly_unified import (
     MonthlyReleaseRequest,
     MonthlyReleaseRequestInvalid,
     MonthlyReleaseService,
+    _require_plain_existing_chain,
 )
 from backend.services.quantevolver.qe_active_dataset_profile import (
     QEActiveDatasetProfileError,
@@ -75,7 +77,6 @@ router = APIRouter(
 )
 T = TypeVar("T")
 MAX_RECEIPT_FILES = 64
-MAX_RECEIPT_BYTES = 32 * 1024 * 1024
 
 
 @lru_cache(maxsize=1)
@@ -296,23 +297,44 @@ def get_monthly_release(
 def _receipt_index(root: Path) -> list[dict[str, Any]]:
     if not root.exists():
         return []
-    if root.is_symlink() or not root.is_dir():
+    _require_plain_existing_chain(root, label="monthly receipt root")
+    if not root.is_dir():
         raise MonthlyReleaseError("monthly receipt root is invalid")
     paths = sorted(root.glob("*.json"))
     if len(paths) > MAX_RECEIPT_FILES:
         raise MonthlyReleaseError("monthly receipt index exceeds the bounded contract")
     items: list[dict[str, Any]] = []
     for path in paths:
-        if path.is_symlink() or not path.is_file():
+        _require_plain_existing_chain(path, label="monthly receipt entry")
+        if not path.is_file():
             raise MonthlyReleaseError("monthly receipt entry is not a regular file")
-        size = path.stat().st_size
-        if size > MAX_RECEIPT_BYTES:
-            raise MonthlyReleaseError("monthly receipt entry exceeds the bounded contract")
+        # The response contains bounded metadata, not the JSON document. BUILD
+        # inventories legitimately exceed small request/control-message caps.
+        # Stream only the original file length and reject replacement/mutation.
+        def signature(value):
+            return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
+
+        before = path.stat()
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            if signature(os.fstat(handle.fileno())) != signature(before):
+                raise MonthlyReleaseError("monthly receipt entry changed before read")
+            remaining = before.st_size
+            while remaining:
+                block = handle.read(min(1024 * 1024, remaining))
+                if not block:
+                    raise MonthlyReleaseError("monthly receipt entry changed during read")
+                digest.update(block)
+                remaining -= len(block)
+            after = os.fstat(handle.fileno())
+        _require_plain_existing_chain(path, label="monthly receipt entry")
+        if signature(after) != signature(before) or signature(path.stat()) != signature(before):
+            raise MonthlyReleaseError("monthly receipt entry changed during read")
         items.append(
             {
                 "name": path.name,
-                "size": size,
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "size": before.st_size,
+                "sha256": digest.hexdigest(),
             }
         )
     return items
