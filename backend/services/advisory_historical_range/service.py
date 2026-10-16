@@ -814,7 +814,10 @@ class ResponseBoundHistoricalRangeDispatcher:
                     else "DomainSubOperationFailure"
                 ),
             }
-            if target_status is HistoricalRangeOperationStatus.FAILED
+            if target_status in {
+                HistoricalRangeOperationStatus.FAILED,
+                HistoricalRangeOperationStatus.RETRYABLE_FAILED,
+            }
             else None
         )
         attempt = HistoricalRangeOperationAttemptV1(
@@ -849,7 +852,9 @@ class ResponseBoundHistoricalRangeDispatcher:
                 target_status=target_status,
                 attempt_no=int(claimed["attempt_no"]),
                 fencing_token=int(claimed["fencing_token"]),
-                result_status=receipt_status,
+                result_status=(
+                    None if target_status is HistoricalRangeOperationStatus.RETRYABLE_FAILED else receipt_status
+                ),
                 result_ref=stored.ref if target_status in {
                     HistoricalRangeOperationStatus.COMPLETED,
                     HistoricalRangeOperationStatus.FAILED,
