@@ -97,9 +97,74 @@ func rawRows(ks []*protocol.Kline, symbol string, start, end time.Time, minute b
 	return rows, nil
 }
 
+// Suppress an entire provider placeholder day only when independent daily
+// suspension facts prove it. S/R mixed events, missing evidence and any raw
+// turnover remain fail-closed; 13:00 is never shifted or accepted as a quote.
+func filterSuspendedMinutePlaceholders(ctx context.Context, query func(context.Context, string, ...any) pgx.Row,
+	symbol string, ks []*protocol.Kline, start, end time.Time) ([]*protocol.Kline, error) {
+	days := map[string][]*protocol.Kline{}
+	boundary := map[string]bool{}
+	for _, k := range ks {
+		if k == nil {
+			return nil, fmt.Errorf("nil raw fact")
+		}
+		if k.Time.Before(start) || (!end.IsZero() && k.Time.After(end)) {
+			continue
+		}
+		t := k.Time.In(protocol.ExchangeLocation)
+		d := t.Format("2006-01-02")
+		days[d] = append(days[d], k)
+		if t.Hour() == 13 && t.Minute() == 0 {
+			boundary[d] = true
+		}
+	}
+	suppressed := map[string]bool{}
+	for day := range boundary {
+		empty := true
+		for _, k := range days[day] {
+			if k.Volume != 0 || k.Amount != 0 || k.VolumeWire != 0 ||
+				(k.VolumeShares != nil && *k.VolumeShares != 0) ||
+				k.Open != k.High || k.High != k.Low || k.Low != k.Close || k.Close < 0 {
+				empty = false
+			}
+		}
+		if !empty {
+			continue // rawRows reports the invalid session, not fabricated facts.
+		}
+		var proven bool
+		err := query(ctx, `SELECT
+			EXISTS(SELECT 1 FROM market.suspend_d WHERE ts_code=$1 AND trade_date=$2::date
+			 AND suspend_type='S' AND NULLIF(BTRIM(COALESCE(suspend_timing,'')),'') IS NULL)
+			AND NOT EXISTS(SELECT 1 FROM market.suspend_d WHERE ts_code=$1 AND trade_date=$2::date AND suspend_type='R')
+			AND NOT EXISTS(SELECT 1 FROM market.kline_daily_raw WHERE ts_code=$1 AND trade_date=$2::date
+			 AND adjust_type='none' AND (volume_hand IS NULL OR amount_li IS NULL OR volume_hand<>0 OR amount_li<>0 OR volume_shares<>0))
+			AND NOT EXISTS(SELECT 1 FROM market.kline_minute_raw WHERE ts_code=$1 AND freq='1m'
+			 AND trade_time >= $2::date::timestamp AT TIME ZONE 'Asia/Shanghai'
+			 AND trade_time < ($2::date+1)::timestamp AT TIME ZONE 'Asia/Shanghai'
+			 AND (volume_hand IS NULL OR amount_li IS NULL OR volume_hand<>0 OR amount_li<>0 OR volume_shares<>0))`, symbol, day).Scan(&proven)
+		if err != nil {
+			return nil, fmt.Errorf("suspension evidence query failed: %w", err)
+		}
+		suppressed[day] = proven
+	}
+	var filtered []*protocol.Kline
+	for _, k := range ks {
+		if !suppressed[k.Time.In(protocol.ExchangeLocation).Format("2006-01-02")] {
+			filtered = append(filtered, k)
+		}
+	}
+	return filtered, nil
+}
+
 // COPY into a transaction-local staging table, reject conflicting existing
 // facts, then insert new keys and fill only NULL precision provenance.
 func copyRawRows(ctx context.Context, tx pgx.Tx, table pgx.Identifier, columns []string, rows [][]any, chunkSize int) (int, error) {
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	if chunkSize <= 0 {
+		return 0, fmt.Errorf("raw stage chunk size must be positive")
+	}
 	name := table.Sanitize()
 	if _, err := tx.Exec(ctx, "CREATE TEMP TABLE tdx_raw_stage (LIKE "+name+" INCLUDING DEFAULTS) ON COMMIT DROP"); err != nil {
 		return 0, err
@@ -112,6 +177,11 @@ func copyRawRows(ctx context.Context, tx pgx.Tx, table pgx.Identifier, columns [
 		if _, err := tx.CopyFrom(ctx, pgx.Identifier{"tdx_raw_stage"}, columns, pgx.CopyFromRows(rows[off:end])); err != nil {
 			return 0, err
 		}
+	}
+	// COPY does not provide the planner with current temporary-table
+	// cardinality. Analyze before bounded joins against large hypertables.
+	if _, err := tx.Exec(ctx, "ANALYZE tdx_raw_stage"); err != nil {
+		return 0, err
 	}
 	key := "a.ts_code=b.ts_code AND a.trade_date=b.trade_date"
 	dateCol := "a.trade_date"
@@ -129,7 +199,16 @@ func copyRawRows(ctx context.Context, tx pgx.Tx, table pgx.Identifier, columns [
 			hi = d
 		}
 	}
-	bound := " AND " + dateCol + " BETWEEN $1 AND $2"
+	bound := " AND " + dateCol + " BETWEEN $1 AND $2 AND a.ts_code=ANY($3::text[])"
+	symbolSet := map[string]bool{}
+	var symbols []string
+	for _, row := range rows {
+		symbol := row[1].(string)
+		if !symbolSet[symbol] {
+			symbolSet[symbol] = true
+			symbols = append(symbols, symbol)
+		}
+	}
 	var lower, upper any = lo, hi
 	if table[1] == "kline_daily_raw" {
 		lower = lo.In(protocol.ExchangeLocation).Format("2006-01-02")
@@ -137,7 +216,7 @@ func copyRawRows(ctx context.Context, tx pgx.Tx, table pgx.Identifier, columns [
 	}
 	var conflict bool
 	q := "SELECT EXISTS(SELECT 1 FROM " + name + " a JOIN tdx_raw_stage b ON " + key + " WHERE (ROW(a.open_li,a.high_li,a.low_li,a.close_li,a.volume_hand,a.amount_li,a.adjust_type) IS DISTINCT FROM ROW(b.open_li,b.high_li,b.low_li,b.close_li,b.volume_hand,b.amount_li,b.adjust_type) OR (a.volume_shares IS NOT NULL AND b.volume_shares IS NOT NULL AND a.volume_shares<>b.volume_shares))" + bound + ")"
-	if err := tx.QueryRow(ctx, q, lower, upper).Scan(&conflict); err != nil {
+	if err := tx.QueryRow(ctx, q, lower, upper, symbols).Scan(&conflict); err != nil {
 		return 0, err
 	}
 	if conflict {
@@ -152,6 +231,6 @@ func copyRawRows(ctx context.Context, tx pgx.Tx, table pgx.Identifier, columns [
 	if err != nil {
 		return 0, err
 	}
-	_, err = tx.Exec(ctx, "UPDATE "+name+" a SET volume_shares=b.volume_shares,volume_shares_source=b.volume_shares_source,volume_shares_sha256=b.volume_shares_sha256 FROM tdx_raw_stage b WHERE "+key+" AND a.volume_shares IS NULL AND a.volume_shares_source IS NULL AND a.volume_shares_sha256 IS NULL AND b.volume_shares IS NOT NULL"+bound, lower, upper)
+	_, err = tx.Exec(ctx, "UPDATE "+name+" a SET volume_shares=b.volume_shares,volume_shares_source=b.volume_shares_source,volume_shares_sha256=b.volume_shares_sha256 FROM tdx_raw_stage b WHERE "+key+" AND a.volume_shares IS NULL AND a.volume_shares_source IS NULL AND a.volume_shares_sha256 IS NULL AND b.volume_shares IS NOT NULL"+bound, lower, upper, symbols)
 	return int(result.RowsAffected()), err
 }
