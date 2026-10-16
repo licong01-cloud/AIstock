@@ -28,6 +28,12 @@ def test_disclosure_resolves_mixed_events_without_deleting_raw_records():
     ([('S', '09:30-09:30')], "UNRESOLVED"),
     ([('S', None), ('S', None)], "UNRESOLVED"),
     ([('S', '00:00-23:00')], "UNRESOLVED"),
+    ([('S', '9:34-9:44')], "INTRADAY_SUSPENDED"),
+    ([('S', '13:13-13:23,13:23-13:33')], "INTRADAY_SUSPENDED"),
+    ([('S', '9:30-9:40,9:41-9:51')], "INTRADAY_SUSPENDED"),
+    ([('S', '11:13-11:23'), ('R', None)], "INTRADAY_SUSPENDED"),
+    ([('S', '13:20-13:40,13:30-13:50')], "UNRESOLVED"),
+    ([('S', '13:20-13:30,10:30-10:40')], "UNRESOLVED"),
 ])
 def test_shared_day_state_does_not_infer_event_order(rows, expected):
     from backend.data_service.suspension_day_authority import project_suspension_days
