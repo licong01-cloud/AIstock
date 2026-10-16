@@ -142,7 +142,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\BUG-1937-post-restart-20261016.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -192,7 +192,9 @@
     "validation-receipt: id=08aa719d74d03411 commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=pytest plan=direct status=passed command=`pytest backend/tests/routers/test_monthly_dataset_releases.py -q` result=`13 passed`",
     "validation-receipt: id=c95986b066036ef2 commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed, zero findings`",
     "validation-receipt: id=83c8b7168efc87dc commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=ruff plan=direct status=passed command=`python -m ruff check backend/routers/monthly_dataset_releases.py backend/tests/routers/test_monthly_dataset_releases.py` result=`passed`",
-    "validation-receipt: id=031cda02eb9772be commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=031cda02eb9772be commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1937 --target worker-scheduler --expected-identity 03f04891046dc103b9300436aeb679509253aa13 -> passed",
+    "python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_63a313d97fd046a38d5a876265565014 -> passed, actual 56507440-byte BUILD receipt SHA256 verified through live API"
   ],
   "verification_budget": {
     "budget": "light",
