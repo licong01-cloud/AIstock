@@ -2400,7 +2400,11 @@ def test_partial_or_conflicting_halts_cannot_use_the_full_day_price_exception(ro
     def connection():
         yield SimpleNamespace(cursor=Cursor)
 
+    # This generic raw-event contract has no disclosure authority. The separate
+    # public-authority suite covers the now-resolved real 603616/01-22 day.
     provider = LocalSimHistoricalSuspensionProvider(conn_factory=connection,
+        authority={"schema_version": "aistock_suspension_day_authority_v1",
+                   "policy": "provider_events_with_disclosure_resolution_v1", "entries": []},
         calendar=SimpleNamespace(snapshot=lambda _: SimpleNamespace(is_trading_day=True,
                                                                     previous_trading_date=date(2026, 1, 21))))
     if conflict:
