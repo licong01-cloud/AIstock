@@ -20,6 +20,7 @@
   "description": "The public HMM readiness hook is only referenced by tests; no shared production trigger is registered.",
   "design_compliance_review": {
     "independent_data_owner_review": "pending_before_merge",
+    "independent_review_finding": "P1 repaired locally; independent re-review pending. Only BLOCKED/hmm_coefficient_readiness_failed and BLOCKED/hmm_daily_subscription_failed retain unchanged-watermark retry. Real subscription/shared-owner fault injection covers a pre-admission DB error and a post-execution readback DB error. Typed business blocks, WAITING and durable FAILED remain non-retryable by this dispatch layer. RED 4 failed/7 passed -> GREEN 11 passed.",
     "no_business_semantic_change": "PASS: database_daily only; model/features/seeds/thresholds, authoritative completion and durable job identity unchanged; no QE file dispatch or rolling training from new callback.",
     "no_silent_errors": "PASS: callback/query failures are isolated and logged, orchestration failures retry on existing sweep, inactive binding returns HTTP 503.",
     "no_simplified_delivery": "PASS: shared refresh dispatch, startup catch-up, subscription wakeup, single-flight and unregister covered by direct tests; production runtime remains pending.",
@@ -28,7 +29,9 @@
       "R1: fixed cross-source duplicate dispatch; regression proves database completion never runs frozen-file extension.",
       "R2: moved direct tests into existing CI-selected scheduler test file; checked single-flight/watermark changes/registration lifecycle and failure isolation.",
       "R3: checked source scope, unchanged scheduler jobs/executor, public status semantics, no DB/dataset/process actions and CI plan coverage.",
-      "R4: PR CI exposed an existing HMM fixture still treating 801011.SI as never quoted after the shared policy correction. Updated only the fixture/current-policy assertions and kept synthetic scope exclusion coverage; 63 direct tests passed. No publication policy or production input reader change. Independent data-owner review remains pending."
+      "R4: PR CI exposed an existing HMM fixture still treating 801011.SI as never quoted after the shared policy correction. Updated only the fixture/current-policy assertions and kept synthetic scope exclusion coverage; 63 direct tests passed. No publication policy or production input reader change. Independent data-owner review remains pending.",
+      "R5: independent data-owner review found missed internal subscription DB exceptions. Exact status+reason classification fixes watermark consumption; two actual service/shared-owner fault injections prove same-watermark recovery and one durable execution. No shared scheduler source or HMM service semantic change in this revision.",
+      "R6: reviewed all exception/result paths and negative cases; waiting, identity conflict, unknown typed business BLOCKED and durable FAILED never trigger dispatch-layer retries, even when FAILED carries an orchestration reason string. Independent owner must re-review before merge."
     ],
     "rule": "DESIGN-COMPLIANCE-001"
   },

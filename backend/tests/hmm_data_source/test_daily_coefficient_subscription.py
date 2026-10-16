@@ -427,25 +427,94 @@ def test_shared_completion_binding_survives_missing_legacy_apscheduler(tmp_path,
 
 
 @pytest.mark.parametrize(
-    "reason,accepted",
+    "status,reason,accepted",
     [
-        ("hmm_coefficient_readiness_failed", False),
-        ("hmm_database_daily_input_unavailable", True),
-        ("hmm_daily_job_identity_conflict", True),
+        ("BLOCKED", "hmm_coefficient_readiness_failed", False),
+        ("BLOCKED", "hmm_daily_subscription_failed", False),
+        ("BLOCKED", "hmm_database_daily_input_unavailable", True),
+        ("BLOCKED", "hmm_daily_job_identity_conflict", True),
+        ("BLOCKED", "hmm_daily_subscription_identity_changed", True),
+        ("BLOCKED", "another_typed_business_block", True),
+        ("WAITING", "hmm_daily_historical_as_known_unavailable", True),
+        ("FAILED", "hmm_daily_subscription_failed", True),
+        ("FAILED", "hmm_coefficient_readiness_failed", True),
     ],
 )
-def test_completion_adapter_retries_only_orchestration_failure(monkeypatch, reason, accepted):
+def test_completion_adapter_retries_only_orchestration_failure(monkeypatch, status, reason, accepted):
     from backend.routers import hmm_training
 
     calls = []
 
     async def tick(**kwargs):
         calls.append(kwargs)
-        return [{"status": "BLOCKED", "reason_code": reason}]
+        return [{"status": status, "reason_code": reason}]
 
     monkeypatch.setattr(hmm_training, "coefficient_readiness_tick", tick)
     assert asyncio.run(hmm_training._coefficient_completion_callback()) is accepted
     assert calls == [{"source_modes": ("database_daily",)}]
+
+
+@pytest.mark.parametrize("failure_site", ["_database_daily_completion", "get_daily_coefficient_job"])
+def test_same_watermark_retries_internal_database_error_without_reexecuting_job(daily, tmp_path, monkeypatch, failure_site):
+    import psycopg2
+    from backend.ingestion import tdx_scheduler
+    from backend.routers import hmm_training
+
+    svc, state, _, _ = daily
+    monkeypatch.setattr(tdx_scheduler, "DEFAULT_TEST_OUTPUT_DIR", tmp_path)
+    owner = tdx_scheduler.TDXScheduler()
+    rows = [{"dataset": "sector_data", "trade_date": "2026-10-14", "status": "success", "row_count": 131}]
+    monkeypatch.setattr(owner, "_fetchall", lambda *_: deepcopy(rows))
+    monkeypatch.setattr(hmm_training, "HMMTrainingService", lambda: svc)
+    original_lookup = getattr(svc, failure_site)
+    failures = []
+
+    def transient_lookup(*args, **kwargs):
+        if not failures:
+            failures.append(failure_site)
+            raise psycopg2.OperationalError("temporary subscription database outage")
+        return original_lookup(*args, **kwargs)
+
+    monkeypatch.setattr(svc, failure_site, transient_lookup)
+    original_reconcile = svc.reconcile_daily_coefficient_subscriptions
+    results = []
+
+    def reconcile():
+        result = original_reconcile()
+        results.append(result)
+        return result
+
+    monkeypatch.setattr(svc, "reconcile_daily_coefficient_subscriptions", reconcile)
+
+    async def scenario():
+        owner.register_completion_callback(
+            "hmm", datasets=("sector_data",), callback=hmm_training._coefficient_completion_callback
+        )
+        entry = owner._completion_callbacks["hmm"]
+        owner._dispatch_completion_callbacks()
+        await asyncio.wrap_future(entry.future)
+        assert results[0][0]["status"] == "BLOCKED"
+        assert results[0][0]["reason_code"] == "hmm_daily_subscription_failed"
+        assert entry.future.result() is False
+        assert entry.completed_watermark != entry.dispatched_watermark
+        watermark, version = entry.dispatched_watermark, entry.request_version
+
+        owner._dispatch_completion_callbacks()
+        await asyncio.wrap_future(entry.future)
+        owner._dispatch_completion_callbacks()
+        assert len(results) == 2
+        assert results[1][0]["status"] == "COMPLETED"
+        assert entry.completed_watermark == watermark
+        assert entry.request_version == version
+        assert entry.future is None
+        assert state["planned"] == 1 and state["executed"] == ["1"]
+        assert len(state["jobs"]) == 1
+        assert rows == [{"dataset": "sector_data", "trade_date": "2026-10-14", "status": "success", "row_count": 131}]
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        owner.shutdown()
 
 
 def test_enabling_subscription_wakes_owner_without_running_reconcile(monkeypatch):

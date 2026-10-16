@@ -589,9 +589,14 @@ async def coefficient_readiness_tick(
 
 async def _coefficient_completion_callback() -> bool:
     results = await coefficient_readiness_tick(source_modes=("database_daily",))
-    # Only orchestration failures retry unchanged watermarks. Durable job
-    # failures/typed data waiting retain their existing HMM policy, not retries.
-    return not any(result.get("reason_code") == "hmm_coefficient_readiness_failed" for result in results)
+    # Both the outer hook and the per-subscription handler type orchestration
+    # errors as BLOCKED. Neither may consume the unchanged completion watermark.
+    # Typed data/identity blocks and durable FAILED jobs retain their HMM policy.
+    return not any(
+        result.get("status") == "BLOCKED"
+        and result.get("reason_code") in {"hmm_coefficient_readiness_failed", "hmm_daily_subscription_failed"}
+        for result in results
+    )
 
 
 def init_hmm_scheduler() -> None:
