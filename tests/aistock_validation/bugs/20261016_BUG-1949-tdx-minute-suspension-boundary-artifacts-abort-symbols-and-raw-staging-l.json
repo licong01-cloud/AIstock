@@ -1,0 +1,255 @@
+{
+  "actual": "2026-10-15 minute provider jobs failed for 13 non-trading suspended securities on a 13:00 boundary placeholder and 16 actively traded securities on database statement timeouts. Reject non-trading boundary artifacts without hiding real trades; bound and optimize staging joins for exact idempotent raw writes. Separate Go runtime target from BUG-1948 backend sync fixes. No production writes or process control.",
+  "allowed_write_scope": [
+    "tdx-api-main/web/minute_init_task.go",
+    "tdx-api-main/web/raw_rows.go",
+    "tdx-api-main/web/integrity_test.go",
+    "tests/aistock_validation/bugs/20261016_BUG-1949-tdx-minute-suspension-boundary-artifacts-abort-symbols-and-raw-staging-l.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1949",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-16T19:05:29.683274Z",
+  "description": "2026-10-15 minute provider jobs failed for 13 non-trading suspended securities on a 13:00 boundary placeholder and 16 actively traded securities on database statement timeouts. Reject non-trading boundary artifacts without hiding real trades; bound and optimize staging joins for exact idempotent raw writes. Separate Go runtime target from BUG-1948 backend sync fixes. No production writes or process control.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261016-2589a0bbfc43",
+      "timestamp": "2026-10-16T19:05:29.683274Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tdx-api-main/web/integrity_test.go",
+      "tdx-api-main/web/minute_init_task.go",
+      "tdx-api-main/web/raw_rows.go",
+      "tests/aistock_validation/bugs/20261016_BUG-1949-tdx-minute-suspension-boundary-artifacts-abort-symbols-and-raw-staging-l.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tdx-api-main/web/integrity_test.go",
+      "tdx-api-main/web/minute_init_task.go",
+      "tdx-api-main/web/raw_rows.go",
+      "tests/aistock_validation/bugs/20261016_BUG-1949-tdx-minute-suspension-boundary-artifacts-abort-symbols-and-raw-staging-l.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "tdx-api-main/web/raw_rows.go",
+        "tdx-api-main/web/integrity_test.go"
+      ],
+      "impacted_modules": [
+        "local_data"
+      ],
+      "matched_rules": [
+        {
+          "file": "tdx-api-main/web/raw_rows.go",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tdx_go"
+        },
+        {
+          "file": "tdx-api-main/web/integrity_test.go",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tdx_go"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "tdx-api-main/web/raw_rows.go",
+        "tdx-api-main/web/integrity_test.go"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tdx-api-main/web/minute_init_task.go",
+      "tdx-api-main/web/raw_rows.go",
+      "tdx-api-main/web/integrity_test.go"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tdx-api-main/web/minute_init_task.go",
+      "tdx-api-main/web/raw_rows.go",
+      "tdx-api-main/web/integrity_test.go"
+    ]
+  },
+  "first_seen_at": "2026-10-16T19:05:29.683274Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6214,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6214",
+  "last_seen_at": "2026-10-16T19:05:29.683274Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1&start_date=2026-10-15&end_date=2026-10-16",
+    "fresh_process_evidence": [
+      "Fresh-process offline Go tests: invalid 13:00 remains rejected; only independently evidenced full-day suspension plus zero provider turnover can suppress placeholders. S/R mixed events, conflicting raw turnover and sub-hand precision facts cannot be suppressed. Existing DEV raw write/readback, repeated apply and conflict rejection passed using the real DEV connection and session-local tables. No production writes or process control. Large production-table performance and deployed runtime acceptance remain pending.",
+      "Source-backed DEV repair: 18 symbols and 4320 minute rows on 2026-10-15, all daily OHLC cross-checks match; no existing facts overwritten. DEV bounded apply 8.953 seconds, repeated apply/readback 1.875 seconds. Receipt X:/AIstock_dataset_candidates/data_repair_staging/BUG-1949-minute-dev-20261017-r3/dev-receipt.json; exact production SQL SHA256 3d3385019e0500aedbcbfbe0ea4ba9a2fbbf55dde2134d9dafb878f27133e32d specifically authorized by user, rehashed and COMMITTED in 51.531 seconds. Independent read-only connection matched all 4320 source keys, 18 symbols; existing rows updated=0. No other date/table/profile/runtime writes. 2026-10-16 production minute collection remains incomplete; no claim of whole-market repair.",
+      "Four review rounds: strict timestamps and independent full-day halt evidence; mixed S/R and one-share trades remain fail-closed; temporary-stage statistics and bounded hypertable joins; real DEV idempotence and unchanged fact/unit provenance. DESIGN-COMPLIANCE-001 item review passed: source fixes complete without suppressing genuine missing facts, no pseudo data or runtime-success claims, existing account/strategy semantics unchanged, no new framework or gate."
+    ],
+    "health_ref": "http://127.0.0.1:19080/api/health",
+    "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "tdx-go-backend"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "tdx-go-backend",
+    "target_ids": [
+      "tdx-go-backend"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "TDX minute suspension boundary artifacts abort symbols and raw staging lacks statistics",
+  "trigger_condition": {
+    "fingerprint": "2589a0bbfc430e63c6af50b8",
+    "source_event_id": "FE-20261016-2589a0bbfc43"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -24,10 +24,11 @@ SW2021_L2_TAXONOMY_DIGEST = (
     "ce01d8dac21b52ad9852d11f21225bb063964962b0cdaef580d75e7b396abb74"
 )
 
-# 801011.SI is a taxonomy/catalog identity without a published quote series in
-# the approved shared authority.  The six dated rows stopped publication after
-# 2026-04-28; their stock membership and money-flow semantics remain valid.
-_NEVER_QUOTED = frozenset({"801011.SI"})
+# Publication is independent of active membership.  In particular, 801011.SI
+# has authentic market.sw_daily observations (frozen July 2024 CAS b740785c...)
+# and must not be classified as never quoted.  The six dated rows stopped
+# publication after 2026-04-28; membership and money-flow remain valid.
+_NEVER_QUOTED: frozenset[str] = frozenset()
 _LAST_PUBLISHED: Mapping[str, date] = {
     "801019.SI": date(2026, 4, 28),
     "801117.SI": date(2026, 4, 28),

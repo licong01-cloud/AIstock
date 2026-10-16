@@ -111,6 +111,7 @@ _MARKET_STATE_NO_FILL_REASONS = frozenset(
     {
         "LIMIT_UP_BUY_BLOCKED",
         "LIMIT_DOWN_SELL_BLOCKED",
+        "ZERO_VOLUME",
     }
 )
 

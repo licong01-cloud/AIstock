@@ -290,6 +290,17 @@ def test_shared_effective_input_drift_creates_a_new_checkpoint(shared):
     assert first["component_root"] != second["component_root"]
 
 
+@pytest.mark.parametrize("component", ["suspend", "stock_pools"])
+def test_suspension_authority_pin_invalidates_only_suspend_preparation(shared, component):
+    from backend.services.dataset_release.monthly_preparation_shared import shared_preparation_identity
+    _executor, _context, snapshot, _audit, _catalog = checkpoint_fixture(shared, component)
+    kwargs = dict(profile=shared[3], component=component, predecessor_sha256="f" * 64,
+                  sector_membership_start=date(2026, 9, 29))
+    old = shared_preparation_identity(snapshot=replace(snapshot, suspension_day_authority_sha256="a" * 64), **kwargs)
+    new = shared_preparation_identity(snapshot=replace(snapshot, suspension_day_authority_sha256="b" * 64), **kwargs)
+    assert (old.effective_source_sha256 != new.effective_source_sha256) == (component == "suspend")
+
+
 def complete_snapshot(cas, private):
     return FrozenSourceAuthoritySnapshot(
         official_cutoff=private.official_cutoff, pit_snapshot=private.pit_snapshot,

@@ -3412,6 +3412,7 @@ _validate_health_ok = _runtime_semantics._validate_health_ok
 _validate_collection_payload = _runtime_semantics._validate_collection_payload
 _validate_tdx_raw_kline = _runtime_semantics._validate_tdx_raw_kline
 _validate_object_liveness = _runtime_semantics._validate_object_liveness
+_validate_pipeline_overview = _runtime_semantics._validate_pipeline_overview
 _validate_advisory_entry_price_status = _runtime_semantics._validate_advisory_entry_price_status
 _validate_advisory_returns = _runtime_semantics._validate_advisory_returns
 _validate_advisory_historical_operations = _runtime_semantics._validate_advisory_historical_operations
@@ -3513,6 +3514,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/qlib/config$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/runtime-contracts/[^/]+$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/validation/plans/[^/]+$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/api/v1/validation/overview/snapshot$"), "pipeline_overview_observations", _validate_pipeline_overview),
     (re.compile(r"^/openapi\.json$"), "openapi_document", _validate_openapi_document),
 )
 

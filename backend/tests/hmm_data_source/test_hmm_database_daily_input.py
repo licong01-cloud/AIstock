@@ -202,7 +202,7 @@ def input_facts(monkeypatch):
     calendar = [date(2026, 9, 1) + timedelta(days=i) for i in range(32)]
     origin = {"history_start": calendar[0].isoformat(), "origin_authority": "fixture"}
     rows = []
-    unavailable = {"801011.SI", "801019.SI", "801117.SI", "801207.SI", "801216.SI", "801961.SI", "801983.SI"}
+    unavailable = {"801019.SI", "801117.SI", "801207.SI", "801216.SI", "801961.SI", "801983.SI"}
     for code in codes:
         for i, day in enumerate(calendar):
             rows.append(
@@ -242,7 +242,8 @@ def input_facts(monkeypatch):
 def test_database_adapter_preserves_sparse_shared_ids_and_finite_unpublished_moneyflow(input_facts):
     loaded = prepare_database_daily_inputs(**input_facts)
     assert len(loaded["ordered_sector_codes"]) == 131
-    assert len(loaded["coefficient_sector_codes"]) == 124
+    assert len(loaded["coefficient_sector_codes"]) == 125
+    assert "801011.SI" in loaded["coefficient_sector_codes"]
     day = input_facts["as_of"]
     assert loaded["sector_data"]["801019.SI"][day]["sw2_pct_change"] is None
     assert loaded["sector_data"]["801019.SI"][day]["sw2_mf_net_amt"] == 0.01
@@ -254,7 +255,13 @@ def test_database_adapter_preserves_sparse_shared_ids_and_finite_unpublished_mon
     assert prepare_database_daily_inputs(**reverse)["input_identity"] == loaded["input_identity"]
 
 
-def test_authentic_historical_quote_context_does_not_enable_unpublished_coefficients(input_facts):
+def test_authentic_historical_quote_context_does_not_enable_unpublished_coefficients(input_facts, monkeypatch):
+    from backend.services.dataset_release import sw_l2_quote_policy as policy
+
+    # A deliberately narrower synthetic output scope exercises the reader's
+    # context/eligibility separation.  This is not the current publication fact:
+    # the real shared policy quotes 801011.SI, as the preceding test asserts.
+    monkeypatch.setattr(policy, "_NEVER_QUOTED", frozenset({"801011.SI"}))
     facts = deepcopy(input_facts)
     calendar = [date(2023, 1, 30) + timedelta(days=i) for i in range(32)]
     remap = dict(zip(facts["calendar"], calendar))
@@ -519,7 +526,7 @@ def test_database_service_infers_publishes_and_recovers_registration_failure_wit
     assert registered[0]["coefficient_sha256"] == result["artifact_sha256"]
     assert registered[0]["source_mode"] == "database_daily" and "dataset_manifest_identity" not in registered[0]
     payload = json.loads(first)
-    assert len(payload["daily_coefficients"][plan["effective_trade_date"]]) == 124
+    assert len(payload["daily_coefficients"][plan["effective_trade_date"]]) == 125
     assert len(payload["stock_sector_map"]) == 131
 
 

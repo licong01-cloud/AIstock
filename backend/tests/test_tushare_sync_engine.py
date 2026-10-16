@@ -108,6 +108,28 @@ class _PeriodConn(_FakeConn):
         return _PeriodCursor(self)
 
 
+@pytest.mark.parametrize("symbol,day,expected", [
+    ("603616.SH", dt.date(2026, 1, 22), "ok"),
+    ("000001.SZ", dt.date(2026, 9, 1), "low_coverage"),
+])
+def test_suspend_sync_preserves_mixed_events_and_records_authority(monkeypatch, symbol, day, expected):
+    engine, conn = TushareSyncEngine(), _FakeConn()
+    rows = [dict(ts_code=symbol, trade_date=day.strftime("%Y%m%d"), suspend_type=kind,
+                 suspend_timing=None) for kind in ("S", "R")]
+    writes, audits = [], []
+    monkeypatch.setattr(engine, "_fetch_from_tushare", lambda *_args: rows)
+    monkeypatch.setattr(engine, "_upsert_batch", lambda _conn, _spec, batch: writes.append(batch) or len(batch))
+    monkeypatch.setattr(engine, "_update_progress", lambda *_args: None)
+    monkeypatch.setattr(engine._refresh_audit, "record_success", lambda **kwargs: audits.append(kwargs))
+    monkeypatch.setattr(sync_engine.time, "sleep", lambda _seconds: None)
+    engine._sync_by_date(conn, SUSPEND_D, day, day, uuid.uuid4())
+    assert writes == [rows] and [row["suspend_type"] for row in rows] == ["S", "R"]
+    assert audits[0]["quality_status"] == expected
+    evidence = audits[0]["metadata"]["suspension_day_authority"]
+    assert evidence["raw_events_modified"] is False
+    assert evidence["unresolved_count"] == int(expected == "low_coverage")
+
+
 def test_sync_by_date_replaces_suspend_d_date_even_when_tushare_returns_empty(monkeypatch):
     engine = TushareSyncEngine()
     conn = _FakeConn()
@@ -1341,6 +1363,39 @@ def test_stk_limit_null_retry_preserves_fields_and_finite_revisions(monkeypatch)
     assert calls[0][1][0][2:] == (None, 16.83, 13.77)
 
 
+def test_stk_limit_preserves_provider_zero_lower_bound_without_fabricating_price(monkeypatch):
+    from backend.services.tushare_dataset_specs import STK_LIMIT, stk_limit_prices_valid
+    calls = []
+    row = {"ts_code": "920196.BJ", "trade_date": "20261016", "pre_close": 14.21,
+           "up_limit": 99999.99, "down_limit": 0.0}
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _cur, sql, values: calls.append(values))
+    assert TushareSyncEngine()._upsert_plain_batch(_FakeConn(), STK_LIMIT, [row]) == 1
+    assert calls[0][0][-1] == 0.0
+    assert not stk_limit_prices_valid(row)  # consumer execution contract is unchanged.
+
+
+@pytest.mark.parametrize("reference,upper,lower", [(10, 9, 0), (10, 11, -1), (10, 11, 12)])
+def test_stk_limit_invalid_relations_cannot_overwrite_finite_facts(monkeypatch, reference, upper, lower):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda *_: pytest.fail("invalid relation reached SQL"))
+    with pytest.raises(ValueError, match="invalid provider price relation"):
+        TushareSyncEngine()._upsert_plain_batch(_FakeConn(), STK_LIMIT, [{
+            "ts_code": "920196.BJ", "trade_date": "20261016", "pre_close": reference,
+            "up_limit": upper, "down_limit": lower}])
+
+
+def test_stk_limit_readback_distinguishes_provider_zero_boundary_from_missing_price(monkeypatch):
+    class Cursor(_FakeCursor):
+        def fetchall(self):
+            return [("920196.BJ", 14.21, 99999.99, 0)]
+    conn = _FakeConn()
+    monkeypatch.setattr(conn, "cursor", lambda: Cursor(conn))
+    receipt, quality = TushareSyncEngine()._stk_limit_readback_quality(conn, dt.date(2026, 10, 16))
+    assert quality == {"quality_status": "ok"}
+    assert receipt["source_zero_lower_bound_count"] == 1
+    assert receipt["invalid_count"] == 0
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), "NaN", True, 0, -1])
 def test_stk_limit_rejects_invalid_source_price_before_writing(monkeypatch, value):
     from backend.services.tushare_dataset_specs import STK_LIMIT
@@ -1500,10 +1555,13 @@ def _run_by_date_with_rows(monkeypatch, spec, count, *, written_count=None):
     required = (set(spec.primary_keys) | {spec.date_column}) - set(spec.nullable_identity_columns)
 
     def _row(i):
-        return {
+        row = {
             col: ("20260821" if col == spec.date_column else f"{col}-{i}")
             for col in required
-    }
+        }
+        if spec.name == "suspend_d":
+            row.update(suspend_type="S", suspend_timing=None)
+        return row
 
     rows = [_row(i) for i in range(count)]
 
