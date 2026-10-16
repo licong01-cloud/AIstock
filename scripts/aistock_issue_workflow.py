@@ -3414,6 +3414,7 @@ _validate_tdx_raw_kline = _runtime_semantics._validate_tdx_raw_kline
 _validate_object_liveness = _runtime_semantics._validate_object_liveness
 _validate_advisory_entry_price_status = _runtime_semantics._validate_advisory_entry_price_status
 _validate_advisory_returns = _runtime_semantics._validate_advisory_returns
+_validate_advisory_historical_operations = _runtime_semantics._validate_advisory_historical_operations
 _validate_advisory_sector_entry_original_list = _runtime_semantics._validate_advisory_sector_entry_original_list
 _validate_hmm_rotation_l2_overview = _runtime_semantics._validate_hmm_rotation_l2_overview
 _validate_hmm_daily_coefficient_jobs = _runtime_semantics._validate_hmm_daily_coefficient_jobs
@@ -3434,6 +3435,8 @@ _validate_monthly_release_ready = _runtime_semantics._validate_monthly_release_r
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/advisory/historical-range-batches/[^/]+/operations$"),
+     "advisory_historical_operation_status_readback", _validate_advisory_historical_operations),
     (re.compile(r"^/api/v1/strategy-packages/[^/]+/selection-artifacts$"),
      "strategy_package_selection_artifact_readback", _validate_selection_artifacts),
     (re.compile(r"^/api/v1/hmm-training/snapshots/[^/]+/daily-coefficients/jobs$"),
@@ -3615,6 +3618,7 @@ def _evaluate_business_smoke_semantics(
         "advisory_entry_price_status",
         "advisory_sector_entry_original_list",
         "advisory_returns_metrics_v2",
+        "advisory_historical_operation_status_readback",
         "local_data_freshness",
         "monthly_release_ready",
     }:
