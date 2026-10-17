@@ -66,31 +66,33 @@
   "expected": "Explicit independently sourced publication scope and real quote facts remain distinct and date-bound; no perpetual extrapolation, fabricated stop date, erased history or re-export of completed prices. Missing evidence stays typed and blocked with precise keys.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "backend/services/dataset_release/monthly_preparation_shared.py",
-      "backend/tests/dataset_release/test_monthly_preparation_shared.py",
-      "tests/aistock_validation/bugs/20261016_BUG-1951-monthly-sw-l2-publication-policy-extrapolates-a-historical-observation-i.json",
       "backend/services/dataset_release/monthly_build_recovery.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_preparation_shared.py",
       "backend/services/dataset_release/monthly_shared_components.py",
       "backend/services/dataset_release/sw_l2_quote_policy.py",
       "backend/tests/dataset_release/test_monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_shared.py",
       "backend/tests/dataset_release/test_monthly_sector_mapping.py",
       "backend/tests/dataset_release/test_monthly_shared_components.py",
-      "backend/tests/dataset_release/test_sw_l2_quote_policy.py"
+      "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1951-monthly-sw-l2-publication-policy-extrapolates-a-historical-observation-i.json"
     ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/monthly_preparation_shared.py",
-      "backend/tests/dataset_release/test_monthly_preparation_shared.py",
-      "tests/aistock_validation/bugs/20261016_BUG-1951-monthly-sw-l2-publication-policy-extrapolates-a-historical-observation-i.json",
       "backend/services/dataset_release/monthly_build_recovery.py",
       "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_preparation_shared.py",
       "backend/services/dataset_release/monthly_shared_components.py",
       "backend/services/dataset_release/sw_l2_quote_policy.py",
       "backend/tests/dataset_release/test_monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_shared.py",
       "backend/tests/dataset_release/test_monthly_sector_mapping.py",
       "backend/tests/dataset_release/test_monthly_shared_components.py",
-      "backend/tests/dataset_release/test_sw_l2_quote_policy.py"
+      "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1951-monthly-sw-l2-publication-policy-extrapolates-a-historical-observation-i.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -179,8 +181,8 @@
   },
   "first_seen_at": "2026-10-16T20:40:58.917046Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6f5cf1efc5361b6c7e2b862c82800cf431e0f77d",
+  "fixed_at": "2026-10-17T07:21:59Z",
   "github_issue_number": 6223,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6223",
   "investigation_readback": {
@@ -224,6 +226,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6236",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -252,6 +255,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -263,7 +267,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1951",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "382089f0c17de75c",
+    "recorded_at": "2026-10-17T07:22:44.432330Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7a877e5dc3be5f50436a9e6d742be76034cdab54",
+    "source_merge_commit": "6f5cf1efc5361b6c7e2b862c82800cf431e0f77d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6236",
+    "validation_evidence": [
+      "validation-receipt: id=a241b21045c6fd1d commit=7a877e5dc3be5f50436a9e6d742be76034cdab54 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_preparation_shared.py backend/tests/dataset_release/test_monthly_shared_components.py -q --maxfail=1` result=`74 passed`",
+      "validation-receipt: id=8aef18e750eccf0d commit=7a877e5dc3be5f50436a9e6d742be76034cdab54 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_preparation_shared.py::test_versioned_nonpublication_runs_real_shared_policy_without_losing_membership backend/tests/dataset_release/test_monthly_build_recovery.py backend/tests/dataset_release/test_monthly_sector_mapping.py -q --maxfail=1` result=`46 passed, 1 skipped`",
+      "validation-receipt: id=2d9448e66be66460 commit=7a877e5dc3be5f50436a9e6d742be76034cdab54 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_source_audit.py -q --maxfail=1` result=`14 passed`",
+      "validation-receipt: id=5f29c2acd6fdd964 commit=7a877e5dc3be5f50436a9e6d742be76034cdab54 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py::test_frozen_wrapper_persists_all_nine_real_gates -q --maxfail=1` result=`4 passed`",
+      "validation-receipt: id=a84fe2f60ed311b9 commit=7a877e5dc3be5f50436a9e6d742be76034cdab54 kind=ruff plan=direct status=passed command=`ruff check backend/services/dataset_release/sw_l2_quote_policy.py backend/services/dataset_release/monthly_preparation_shared.py backend/services/dataset_release/monthly_shared_components.py backend/services/dataset_release/monthly_frozen_source_audit.py backend/services/dataset_release/monthly_build_recovery.py` result=`passed`",
+      "validation-receipt: id=f6350ad0bd07d36c commit=7a877e5dc3be5f50436a9e6d742be76034cdab54 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- --changed-only` result=`passed, zero findings`"
+    ],
+    "validation_evidence_digest": "8138fa7c29d94ee1f200285a2ac693bed0937f824212fbccc80409706d5ec7e7"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -272,6 +302,14 @@
     "fingerprint": "f604286aca98bdb883fa87ba",
     "source_event_id": "FE-20261016-f604286aca98"
   },
+  "validation_evidence": [
+    "validation-receipt: id=a241b21045c6fd1d commit=7a877e5dc3be5f50436a9e6d742be76034cdab54 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_preparation_shared.py backend/tests/dataset_release/test_monthly_shared_components.py -q --maxfail=1` result=`74 passed`",
+    "validation-receipt: id=8aef18e750eccf0d commit=7a877e5dc3be5f50436a9e6d742be76034cdab54 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_preparation_shared.py::test_versioned_nonpublication_runs_real_shared_policy_without_losing_membership backend/tests/dataset_release/test_monthly_build_recovery.py backend/tests/dataset_release/test_monthly_sector_mapping.py -q --maxfail=1` result=`46 passed, 1 skipped`",
+    "validation-receipt: id=2d9448e66be66460 commit=7a877e5dc3be5f50436a9e6d742be76034cdab54 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_source_audit.py -q --maxfail=1` result=`14 passed`",
+    "validation-receipt: id=5f29c2acd6fdd964 commit=7a877e5dc3be5f50436a9e6d742be76034cdab54 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py::test_frozen_wrapper_persists_all_nine_real_gates -q --maxfail=1` result=`4 passed`",
+    "validation-receipt: id=a84fe2f60ed311b9 commit=7a877e5dc3be5f50436a9e6d742be76034cdab54 kind=ruff plan=direct status=passed command=`ruff check backend/services/dataset_release/sw_l2_quote_policy.py backend/services/dataset_release/monthly_preparation_shared.py backend/services/dataset_release/monthly_shared_components.py backend/services/dataset_release/monthly_frozen_source_audit.py backend/services/dataset_release/monthly_build_recovery.py` result=`passed`",
+    "validation-receipt: id=f6350ad0bd07d36c commit=7a877e5dc3be5f50436a9e6d742be76034cdab54 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- --changed-only` result=`passed, zero findings`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
