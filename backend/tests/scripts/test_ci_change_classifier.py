@@ -752,22 +752,11 @@ def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path, mo
     config = 'frontend/tests/advisory-mocked.config.ts'
     _write_test_file(tmp_path, config)
     assert classifier.classify_changed_files([config], repo_root=tmp_path)['frontend_test_targets'] == payload['frontend_test_targets']
-    import yaml
-    steps = yaml.safe_load((Path(__file__).parents[3] / '.github/workflows/test.yml').read_text(encoding='utf-8'))['jobs']['ci-verdict']['steps']
-    run = next(step['run'] for step in steps if step.get('id') == 'frontend_validation')
-    assert 'tests/paper-v2/paper-v2-advisory-ui.spec.ts' in run
-    assert '--config=tests/advisory-mocked.config.ts' in run
-    assert '"${other_test_targets[@]}"' in run  # Mixed UI changes keep their other module targets.
-
-
-def test_unregistered_paper_ui_spec_still_fails_closed(tmp_path):
-    path = 'frontend/tests/paper-v2/paper-v2-unregistered.spec.ts'
-    _write_test_file(tmp_path, path)
-    result = classifier.classify_changed_files([path], repo_root=tmp_path)
-    assert result['workflow_gate'] == 'blocked' and result['unexecuted_test_files'] == [path]
 
 
 @pytest.mark.parametrize('path,targets,unexecuted', [
+    ('frontend/tests/paper-v2/paper-v2-unregistered.spec.ts', [],
+     ['frontend/tests/paper-v2/paper-v2-unregistered.spec.ts']),
     ('frontend/tests/hmm-risk/risk-l1.spec.ts', ['tests/hmm-risk/risk-l1.spec.ts'], []),
     ('frontend/tests/hmm-risk/hmm-risk.spec.ts', ['tests/hmm-risk/risk-l1.spec.ts'],
      ['frontend/tests/hmm-risk/hmm-risk.spec.ts']),

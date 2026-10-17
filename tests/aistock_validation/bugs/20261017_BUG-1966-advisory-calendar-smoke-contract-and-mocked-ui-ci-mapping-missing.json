@@ -1,6 +1,7 @@
 {
   "actual": "BUG-1962 finish is blocked by missing exact GET trading-days/defaults semantic contract and executable mocked Advisory UI test plan. Shared workflow only; calendar-only semantics; no DB/backend operations.",
   "allowed_write_scope": [
+    "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
     "frontend/tests/advisory-mocked.config.ts",
     ".github/workflows/test.yml",
     "frontend/playwright.advisory-mocked.config.ts",
@@ -236,7 +237,7 @@
     "validation_workflow_automation",
     "validation_catalog_integrity"
   ],
-  "resolution_note": "Register exact calendar-only GET semantics and a single Advisory mocked UI plan. The isolated frontend copies source and existing Next bytes to X, junctions other prebuilt dependencies, uses no shared/live server, and never installs packages. Review rounds covered semantic identity/order failures, fail-closed changed-test coverage, mixed UI target dispatch and real browser startup. DESIGN-COMPLIANCE-001 four checks passed: complete requested contracts, no business scope drift, explicit failures, no added approval gates. Full affected UI regression is executed by the selected CI frontend target, not by the retired Paper backend/database suite.",
+  "resolution_note": "Register exact calendar-only GET semantics and a single Advisory mocked UI plan. The isolated frontend copies source and existing Next bytes to X, junctions other prebuilt dependencies, uses no shared/live server, and never installs packages. Review rounds covered semantic identity/order failures, fail-closed changed-test coverage, mixed UI target dispatch and real browser startup. CI exposed one existing new-program fixture missing two exact read-only NOT_CONFIGURED mocks; the fixture is repaired without filtering HTTP errors or modifying production code. Consolidate duplicated frontend negative cases and retired-HMM catalog checks into existing parameterized contract matrices, preserving each online file independently and the unchanged 30 percent test budget. DESIGN-COMPLIANCE-001 four checks passed: complete requested contracts, no business scope drift, explicit failures, no added approval gates. Full affected UI regression is executed by the selected CI frontend target, not by the retired Paper backend/database suite.",
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",

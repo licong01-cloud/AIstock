@@ -1599,30 +1599,25 @@ def test_monthly_release_process_snapshot_binds_worker_to_backend_listener(
     assert snapshot["healthy"] is True
 
 
-def test_repository_runtime_catalog_omits_retired_hmm_sources() -> None:
-    catalog = workflow._load_runtime_target_catalog()
-
-    retired = {
-        "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
-        "backend/services/hmm_risk/b3_mixed_dimension.py",
-        "backend/services/hmm_risk/b3_training.py",
-        "backend/services/hmm_risk/state_model_set.py",
-    }
-
-    assert retired.isdisjoint(catalog["non_runtime_source_paths"])
-
-
 @pytest.mark.parametrize("path,targets", [("tdx-api-main/pagination_test.go", []), ("tdx-api-main/web/integrity_test.go", []),
     ("tdx-api-main/protocol/model_kline.go", ["tdx-go-backend"]), ("tdx-api-main/web/server.go", ["tdx-go-backend"]),
     ("tdx-api-main/go.mod", ["tdx-go-backend"]), ("tdx-api-main/web/go.sum", ["tdx-go-backend"]),
     ("scripts/start_tdx_go_backend.py", ["tdx-go-backend"]), ("backend/data_service/tdx_adapter.py", ["backend-main"]),
     ("backend/services/advisory_model_first/generic_daily_price_input_v1.py", []),
+    ("backend/services/hmm_risk/b3_d1_inactive_dimension.py", ["backend-main"]),
+    ("backend/services/hmm_risk/b3_mixed_dimension.py", ["backend-main"]),
+    ("backend/services/hmm_risk/b3_training.py", ["backend-main"]),
+    ("backend/services/hmm_risk/contracts.py", ["backend-main"]),
+    ("backend/services/hmm_risk/risk_l1_prediction.py", ["backend-main"]),
+    ("backend/services/hmm_risk/state_model_set.py", ["backend-main"]),
+    ("backend/services/hmm_risk/stock_fact_observation.py", ["backend-main"]),
     (["backend/services/advisory_model_first/generic_daily_price_input_v1.py", "backend/tests/advisory_model_first/test_generic_daily_price_input_v1.py", "docs/analysis/advisory-input.md", "tests/aistock_validation/bugs/BUG-1778.json"], []),
     (["backend/services/advisory_model_first/generic_daily_price_input_v1.py", "backend/routers/advisory.py"], ["backend-main"]),
     ("backend/services/advisory_model_first/generic_unregistered_input_v1.py", ["backend-main"])])
 def test_catalog_runtime_roles_keep_exact_offline_exclusions_and_online_targets(path, targets):
     result = workflow._classify_runtime_impact([path] if isinstance(path, str) else path)
     assert result["target_ids"] == targets and result["runtime_impact"] == ("backend" if targets else "none")
+    assert result["catalog_error"] is None
 
 
 @pytest.fixture
@@ -1673,24 +1668,6 @@ def test_runtime_preflight_checks_semantic_registration_without_http(path, regis
     semantic_errors = [error for error in contract["blocking"] if "semantic contract" in error]
     assert bool(semantic_errors) is not registered
     assert (contract["pre_pr_ready"], contract["runtime_impact"], contract["target_ids"]) == (registered, "backend", ["backend-main"])
-
-
-def test_bug_1549_active_contract_consumers_remain_backend_main() -> None:
-    payload = workflow._classify_runtime_impact(
-        [
-            "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
-            "backend/services/hmm_risk/b3_mixed_dimension.py",
-            "backend/services/hmm_risk/b3_training.py",
-            "backend/services/hmm_risk/contracts.py",
-            "backend/services/hmm_risk/risk_l1_prediction.py",
-            "backend/services/hmm_risk/state_model_set.py",
-            "backend/services/hmm_risk/stock_fact_observation.py",
-        ]
-    )
-
-    assert payload["runtime_impact"] == "backend"
-    assert payload["target_ids"] == ["backend-main"]
-    assert payload["catalog_error"] is None
 
 
 def test_find_bug_record_parses_only_matching_or_opaque_filenames(
