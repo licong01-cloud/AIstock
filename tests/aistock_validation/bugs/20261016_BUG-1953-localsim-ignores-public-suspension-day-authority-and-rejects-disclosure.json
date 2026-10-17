@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1953",
-  "closed_at": null,
+  "closed_at": "2026-10-17T10:10:16.241604Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -157,8 +157,8 @@
   },
   "first_seen_at": "2026-10-16T21:14:08.404266Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f27799ac515cfcbf3ae4289b923d8360a50ed88a",
+  "fixed_at": "2026-10-16T21:31:05Z",
   "github_issue_number": 6228,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6228",
   "last_seen_at": "2026-10-16T21:14:08.404266Z",
@@ -166,6 +166,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6231",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -191,9 +192,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1953-post-restart-verify-20261017-r1.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1953",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+      "expected_identity": "f27799ac515cfcbf3ae4289b923d8360a50ed88a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T09:59:38.623593Z",
+      "mode": "read_only",
+      "observed_identity": "6f5cf1efc5361b6c7e2b862c82800cf431e0f77d",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "ab87728b487672aeb20f18a0d9b39314948c06fdd516771a90989bda1f4b17a5",
+      "receipt_sha256": "d86d5e9a8cae37aaad00c10c92181d33583cde95fedfd0104da7da9e5cd6ea61",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "accabc97317d4e03194d94ae29b1ec940dd2d1bdc7f9e42f5df8534ca7bbe5e2",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -203,7 +227,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1953",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ca1c034837527f5b",
+    "recorded_at": "2026-10-16T21:31:39.525869Z",
+    "runtime_contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "aa3cfe5154523443be05f92c64f0f3024c8325e5",
+    "source_merge_commit": "f27799ac515cfcbf3ae4289b923d8360a50ed88a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6231",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed (7 paths, zero findings); LocalSIM directed pytest 188 passed"
+    ],
+    "validation_evidence_digest": "ed9427c24c6210eb271899e9bbcf06912b131e5363e27a9fccbb7150a9b48805"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -212,6 +257,10 @@
     "fingerprint": "bb260aa18569cb5de416c088",
     "source_event_id": "FE-20261016-bb260aa18569"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed (7 paths, zero findings); LocalSIM directed pytest 188 passed",
+    "X:/AIstock_temp/LOCALSIM/workflow/LOCALSIM-loaded-repairs-business-acceptance-20261017-r1.json -> passed: actual backend loaded; original LSTM Jan22 SUCCEEDED, 4914 scores / 4918 pool / 4 UNKNOWN, native Top50, raw-rank34 603616 excluded, frozen D authority plus native C01-21 true reference6.23 retained, 34 orders/102 fills; C01-22 public reference gap remains separate"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
