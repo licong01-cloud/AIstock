@@ -206,28 +206,29 @@ def test_all_routes_require_dataset_release_operator(tmp_path: Path) -> None:
         for route in app.routes
         if isinstance(route, APIRoute) and route.path.startswith("/api/v1/qlib/monthly-releases")
     ]
-    assert len(routes) == 15
+    assert len(routes) == 16
     for route in routes:
         dependencies = {dependency.call for dependency in route.dependant.dependencies}
         assert require_dataset_release_operator in dependencies, route.path
 
 
-def test_history_binding_route_is_authenticated_and_cannot_accept_sql_or_activation(tmp_path):
+@pytest.mark.parametrize("command", ["industry-history", "industry-quotes/refresh"])
+def test_history_binding_route_is_authenticated_and_cannot_accept_sql_or_activation(tmp_path, command):
     client, _, app = _client(tmp_path)
     calls = []
     class Service:
-        def bind_industry_history(self, operation_id, *, principal):
-            calls.append((operation_id, principal))
+        def bind_industry_history(self, operation_id, *, principal, refresh_quotes=False):
+            calls.append((operation_id, principal, refresh_quotes))
             return {"status": "BOUND", "projection_sha256": "a" * 64}
     app.dependency_overrides[api.get_monthly_release_service] = lambda: Service()
     operation_id = "dmr_" + "a" * 32
-    path = f"/api/v1/qlib/monthly-releases/{operation_id}/industry-history"
+    path = f"/api/v1/qlib/monthly-releases/{operation_id}/{command}"
     for body in ({"sql": "UPDATE forbidden"}, {"activation_authorized": True}):
         assert client.post(path, json=body).status_code == 422
     assert calls == []
     response = client.post(path, json={})
     assert response.status_code == 200 and response.json()["data"]["status"] == "BOUND"
-    assert calls == [(operation_id, "dataset-operator:test")]
+    assert calls == [(operation_id, "dataset-operator:test", command.endswith("refresh"))]
 
 
 @pytest.mark.parametrize("kind", ["prev_close", "suspension"])
