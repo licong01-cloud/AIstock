@@ -18,7 +18,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1940",
-  "closed_at": null,
+  "closed_at": "2026-10-17T16:33:07.805529Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -205,10 +205,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_dataset_candidates/data_repair_staging/data-preparation-aftercare-20261017-r2/BUG-1940-post-restart-20261018-final.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1940",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "cfccaab5b904f45d29bb54c57a33fcbf3793c153",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T16:32:08.399419Z",
+      "mode": "read_only",
+      "observed_identity": "cfccaab5b904f45d29bb54c57a33fcbf3793c153",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "f5f3a8d168a90e6b8d82b16d8e562bbfd035a0c40c9eda4081e9a77573e3ab9a",
+      "receipt_sha256": "09d4cc6b3b8708f30f997f559aabb939fd369a759c11431811d13a2129a2815a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f27eb09ad39a17608cf05571adba21f77ddc200d956a94512d04494eb1247410",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -244,7 +266,7 @@
     "validation_evidence_digest": "f1bd11a3c66109c2f359dfaff64eb84dc4b3f6b5a4a75dda0f1ba96119bbf9d3"
   },
   "source_review_note": "2026-10-18补充复审：旧PR与主线正式发布规则不兼容，已修为同一受审目录合同；既有来源审计为历史证据而非本轮运行态/数据就绪证明。源码合入后仍须用户重启worker-scheduler并单独验证月更operation；不关闭Issue冒充运行态完成。",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
