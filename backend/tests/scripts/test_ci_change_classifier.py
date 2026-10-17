@@ -725,7 +725,7 @@ def test_hmm_ui_catalog_matches_nox_directory_and_changed_spec_coverage(tmp_path
     assert payload['classification'] == ('frontend_ci_required' if covered else 'unmapped_code_blocked')
 
 
-def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path) -> None:
+def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path, monkeypatch) -> None:
     _write_test_file(tmp_path, 'frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts')
     payload = classifier.classify_changed_files(
         [
@@ -736,13 +736,27 @@ def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path) ->
     )
 
     _assert_fields(payload,
-        classification='unexecuted_test_blocked', workflow_gate='blocked', frontend_required=True,
-        backend_required=False, frontend_test_targets=[], unmapped_code_files=[],
+        classification='frontend_ci_required', workflow_gate='passed', frontend_required=True,
+        backend_required=False, frontend_test_targets=['tests/paper-v2/paper-v2-advisory-ui.spec.ts'], unmapped_code_files=[],
     )
-    assert payload['unexecuted_test_files'] == ['frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts']
+    assert payload['unexecuted_test_files'] == []
+    assert payload['dev_db_required'] is False
+    import noxfile
+    calls = []
+    monkeypatch.setattr(noxfile, 'FRONTEND_DIRECT_ENTRYPOINTS', ())
+    noxfile.advisory_mocked_ui(SimpleNamespace(run=lambda *args, **kwargs: calls.append(args)))
+    assert len(calls) == 1 and '--config=frontend/tests/advisory-mocked.config.ts' in calls[0]
+    plan = classifier.flow.validation_catalog_snapshot().plans['advisory_mocked_ui']
+    assert plan['frontend_test_path'] == payload['frontend_test_targets'][0]
+    assert plan['requires_backend'] is False and plan['writes_database'] is False
+    config = 'frontend/tests/advisory-mocked.config.ts'
+    _write_test_file(tmp_path, config)
+    assert classifier.classify_changed_files([config], repo_root=tmp_path)['frontend_test_targets'] == payload['frontend_test_targets']
 
 
 @pytest.mark.parametrize('path,targets,unexecuted', [
+    ('frontend/tests/paper-v2/paper-v2-unregistered.spec.ts', [],
+     ['frontend/tests/paper-v2/paper-v2-unregistered.spec.ts']),
     ('frontend/tests/hmm-risk/risk-l1.spec.ts', ['tests/hmm-risk/risk-l1.spec.ts'], []),
     ('frontend/tests/hmm-risk/hmm-risk.spec.ts', ['tests/hmm-risk/risk-l1.spec.ts'],
      ['frontend/tests/hmm-risk/hmm-risk.spec.ts']),
@@ -1807,7 +1821,8 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "node node_modules/next/dist/bin/next lint" in frontend_runs
     assert "npx playwright install --with-deps chromium" not in frontend_runs
     assert "FRONTEND_TEST_TARGETS" in frontend_runs
-    assert 'node node_modules/@playwright/test/cli.js test "${module_test_targets[@]}"' in frontend_runs
+    assert 'node node_modules/@playwright/test/cli.js test "${other_test_targets[@]}"' in frontend_runs
+    assert 'node node_modules/@playwright/test/cli.js test --config=tests/advisory-mocked.config.ts' in frontend_runs
     assert "node_modules/.bin" not in frontend_runs
     assert "npm run" not in frontend_runs
     go_runs = str(next(step for step in verdict["steps"] if step.get("id") == "go_validation")["run"])

@@ -599,6 +599,12 @@ def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
 
 
 @nox.session(venv_backend="none")
+def localsim_control_plane_ui(session: nox.Session) -> None:
+    """Run the LocalSIM readback and status UI contract with mocked APIs."""
+    _run_mocked_frontend_target(session, "tests/paper-v2/localsim-unified-control-plane.spec.ts")
+
+
+@nox.session(venv_backend="none")
 def frontend_type_lint(session: nox.Session) -> None:
     """Run the direct shared-frontend compile and lint contract."""
 
@@ -638,6 +644,15 @@ def hmm_risk_ui(session: nox.Session) -> None:
     """Run only the HMM Risk mocked UI contracts."""
 
     _run_mocked_frontend_target(session, "tests/hmm-risk")
+
+
+@nox.session(venv_backend="none")
+def advisory_mocked_ui(session: nox.Session) -> None:
+    """Run only mocked Advisory UI with X-only runner-owned frontend/browser."""
+    if any(not (ROOT / "frontend/node_modules" / path).is_file() for path in FRONTEND_DIRECT_ENTRYPOINTS):
+        session.error("Advisory mocked UI requires prebuilt dependencies; installation is not authorized")
+    session.run("node", "frontend/node_modules/@playwright/test/cli.js", "test",
+                "--config=frontend/tests/advisory-mocked.config.ts", external=True)
 
 
 @nox.session(venv_backend="none")
