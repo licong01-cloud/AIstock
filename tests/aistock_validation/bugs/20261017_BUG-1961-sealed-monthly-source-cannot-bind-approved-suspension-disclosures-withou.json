@@ -32,25 +32,45 @@
       "timestamp": "2026-10-17T12:06:07.463921Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "SOURCE manifest CAS 4661b5666dd190288d0e27b35efe5c2a03349d84549723fbeb0d305107cf5007: fresh-process formal partition reader verified all 255 September suspend_d rows; unresolved before=1 (601238.SH/2026-09-15), after approved disclosure=0. No DB/source/export/profile write.",
+    "RED: test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallback failed before implementation. GREEN: 138 passed, 1 skipped in final related matrix, plus sole failed route-count assertion corrected and nodeid passed (139 passed total). Ruff, compile and changed-only L0 passed.",
+    "Review rounds: (1) explicit frozen-CAS authority and exact month/source/predecessor binding; (2) active predecessor race recheck, source/checkpoint immutability and real resume; (3) independent tamper paths, all-route authentication and final diff. DESIGN-COMPLIANCE-001: no partial-ready claim, no silent fallback, unchanged suspension/selection economics, no new approval or research gate. Source merge is not runtime activation or September READY."
+  ],
   "expected": "Explicit source-bound disclosure amendment resolves legitimate suspended day, keeps prior source and price exports unchanged, and rejects mismatched evidence.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261017_BUG-1961-sealed-monthly-source-cannot-bind-approved-suspension-disclosures-withou.json",
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "scripts/monthly_unified_dataset_release.py",
+      "backend/services/dataset_release/monthly_suspension_repair.py"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_suspension_repair.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/monthly_unified.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1961-sealed-monthly-source-cannot-bind-approved-suspension-disclosures-withou.json",
+      "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/monthly_prev_close_repair.py",
       "backend/services/dataset_release/monthly_shared_components.py",
-      "backend/routers/monthly_dataset_releases.py",
-      "scripts/monthly_unified_dataset_release.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
       "backend/tests/routers/test_monthly_dataset_releases.py",
       "backend/tests/scripts/test_monthly_unified_dataset_release.py",
-      "docs/operations/monthly_unified_dataset_release_v2_runbook.md"
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "scripts/monthly_unified_dataset_release.py",
+      "backend/services/dataset_release/monthly_suspension_repair.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py",
@@ -261,11 +281,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python processes imported the tracked runtime binding/builder; real CAS test resolved the official 601238.SH day and emitted immutable source/authority lineage; source/predecessor/hash drift and conflicting disclosure rejected. The actual sealed September CAS partition was independently read via CASSealedPartitionReader: 255 rows, only old unresolved key resolved by approved announcement 2026-049. Runtime worker not yet reloaded; no database/source/export/profile write.",
+      "Fresh AIstock Python imported tracked monthly_suspension_repair and router, strict CAS real binding and actual sealed September partition readback passed; runtime activation pending user restart."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",

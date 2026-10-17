@@ -56,7 +56,7 @@ from .sw_l2_quote_policy import (
 )
 from backend.services.core_index_catalog import P0_POOL_IDS, POOL_DEFINITIONS
 from backend.data_service.suspension_day_authority import (
-    day_value, digest as suspension_digest, frozen_authority, load_authority, project_suspension_days,
+    day_value, digest as suspension_digest, load_authority, project_suspension_days,
 )
 
 
@@ -297,6 +297,7 @@ def _build_suspend(
     cutoff: date,
     prefix=None,
     suspension_authority: Mapping[str, Any] | None = None,
+    suspension_binding: Mapping[str, Any] | None = None,
 ) -> tuple[Path, Path, set[tuple[str, date]], int]:
     import pandas as pd
 
@@ -384,6 +385,7 @@ def _build_suspend(
             "full_history_content_hash": True,
             "suspension_day_authority": authority,
             "suspension_day_authority_sha256": suspension_digest(authority),
+            **({"suspension_authority_binding": dict(suspension_binding)} if suspension_binding is not None else {}),
             "raw_provider_events": raw_events,
             "raw_provider_events_sha256": suspension_digest(raw_events),
             "day_resolutions": resolutions,
@@ -937,6 +939,9 @@ class FrozenMonthlySharedComponentBuilder:
             suspend_meta = adopt("suspend", f"{component}/meta.json", root / component / "meta.json")
             suspend_source_rows = len(suspend_rows)
         else:
+            from .monthly_suspension_repair import build_authority
+            suspension_authority, suspension_binding = build_authority(self.cas, frozen,
+                plan=context.plan, operation_id=context.operation_id, source_bundle_sha256=compiled.source_bundle_sha256)
             suspend_parquet, suspend_meta, _suspended_keys, suspend_source_rows = _build_suspend(
                 root=root,
                 rows=suspend_rows,
@@ -945,7 +950,8 @@ class FrozenMonthlySharedComponentBuilder:
                 profile=self.profile,
                 cutoff=cutoff,
                 prefix=prefix,
-                suspension_authority=frozen_authority(self.cas, frozen),
+                suspension_authority=suspension_authority,
+                suspension_binding=suspension_binding,
             )
         pool_coverage = {
             pool_id: {
