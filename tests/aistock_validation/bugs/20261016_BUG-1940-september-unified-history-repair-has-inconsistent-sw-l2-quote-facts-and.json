@@ -51,7 +51,6 @@
       "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/monthly_industry_facts.py",
       "backend/services/dataset_release/monthly_industry_history.py",
-      "backend/services/dataset_release/monthly_preparation_shared.py",
       "backend/services/dataset_release/monthly_quote_repair.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/services/dataset_release/sw_l2_quote_policy.py",
@@ -66,7 +65,6 @@
       "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/monthly_industry_facts.py",
       "backend/services/dataset_release/monthly_industry_history.py",
-      "backend/services/dataset_release/monthly_preparation_shared.py",
       "backend/services/dataset_release/monthly_quote_repair.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/services/dataset_release/sw_l2_quote_policy.py",
@@ -163,8 +161,8 @@
   },
   "first_seen_at": "2026-10-16T05:12:06.089431Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cfccaab5b904f45d29bb54c57a33fcbf3793c153",
+  "fixed_at": "2026-10-17T16:22:12Z",
   "github_issue_number": 6192,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6192",
   "last_seen_at": "2026-10-16T05:12:06.089431Z",
@@ -172,6 +170,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6193",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -194,7 +193,6 @@
   ],
   "risk_area": "bug",
   "root_cause": "独立quote SOURCE仅封存数据库已返回行，未冻结按批准发布规则诊断的缺键及补采来源；既有绑定直接返回BOUND，retained context遇到source hash变化直接拒绝。错误缺少股票/日期/行业/字段。",
-  "source_review_note": "2026-10-18补充复审：旧PR与主线正式发布规则不兼容，已修为同一受审目录合同；既有来源审计为历史证据而非本轮运行态/数据就绪证明。源码合入后仍须用户重启worker-scheduler并单独验证月更operation；不关闭Issue冒充运行态完成。",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
@@ -208,6 +206,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -219,7 +218,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1940",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f214b7b34042e7c6",
+    "recorded_at": "2026-10-17T16:23:11.360912Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2b99db094eb375072a1bd3c7c59dfbae55097b72",
+    "source_merge_commit": "cfccaab5b904f45d29bb54c57a33fcbf3793c153",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6193",
+    "validation_evidence": [
+      "validation-receipt: id=c707608b58e33d37 commit=2b99db094eb375072a1bd3c7c59dfbae55097b72 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_preparation_shared.py backend/tests/dataset_release/test_monthly_unified_v2.py backend/tests/routers/test_monthly_dataset_releases.py -q` result=`passed; 191 passed, 2 skipped`",
+      "validation-receipt: id=80bda1213e7aad27 commit=2b99db094eb375072a1bd3c7c59dfbae55097b72 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-install` result=`passed; blocking=0`",
+      "validation-receipt: id=016741713fd8fd0b commit=2b99db094eb375072a1bd3c7c59dfbae55097b72 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_industry_facts.py backend/services/dataset_release/monthly_industry_history.py backend/services/dataset_release/monthly_unified.py backend/services/dataset_release/monthly_quote_repair.py backend/services/dataset_release/sw_l2_quote_policy.py backend/routers/monthly_dataset_releases.py backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_preparation_shared.py backend/tests/dataset_release/test_monthly_unified_v2.py backend/tests/routers/test_monthly_dataset_releases.py` result=`passed`",
+      "validation-receipt: id=aeab1904fca47588 commit=2b99db094eb375072a1bd3c7c59dfbae55097b72 kind=compile plan=direct status=passed command=`python -m compileall -q backend/services/dataset_release/monthly_industry_facts.py backend/services/dataset_release/monthly_industry_history.py backend/services/dataset_release/monthly_unified.py backend/services/dataset_release/monthly_quote_repair.py backend/services/dataset_release/sw_l2_quote_policy.py backend/routers/monthly_dataset_releases.py` result=`passed`",
+      "validation-receipt: id=044510008dd91624 commit=2b99db094eb375072a1bd3c7c59dfbae55097b72 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "f1bd11a3c66109c2f359dfaff64eb84dc4b3f6b5a4a75dda0f1ba96119bbf9d3"
+  },
+  "source_review_note": "2026-10-18补充复审：旧PR与主线正式发布规则不兼容，已修为同一受审目录合同；既有来源审计为历史证据而非本轮运行态/数据就绪证明。源码合入后仍须用户重启worker-scheduler并单独验证月更operation；不关闭Issue冒充运行态完成。",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -228,6 +253,13 @@
     "fingerprint": "3e221b302f7320b7a6bece1c",
     "source_event_id": "FE-20261016-3e221b302f73"
   },
+  "validation_evidence": [
+    "validation-receipt: id=c707608b58e33d37 commit=2b99db094eb375072a1bd3c7c59dfbae55097b72 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_sw_l2_quote_policy.py backend/tests/dataset_release/test_monthly_preparation_shared.py backend/tests/dataset_release/test_monthly_unified_v2.py backend/tests/routers/test_monthly_dataset_releases.py -q` result=`passed; 191 passed, 2 skipped`",
+    "validation-receipt: id=80bda1213e7aad27 commit=2b99db094eb375072a1bd3c7c59dfbae55097b72 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-install` result=`passed; blocking=0`",
+    "validation-receipt: id=016741713fd8fd0b commit=2b99db094eb375072a1bd3c7c59dfbae55097b72 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_industry_facts.py backend/services/dataset_release/monthly_industry_history.py backend/services/dataset_release/monthly_unified.py backend/services/dataset_release/monthly_quote_repair.py backend/services/dataset_release/sw_l2_quote_policy.py backend/routers/monthly_dataset_releases.py backend/tests/dataset_release/test_monthly_sector_mapping.py backend/tests/dataset_release/test_monthly_preparation_shared.py backend/tests/dataset_release/test_monthly_unified_v2.py backend/tests/routers/test_monthly_dataset_releases.py` result=`passed`",
+    "validation-receipt: id=aeab1904fca47588 commit=2b99db094eb375072a1bd3c7c59dfbae55097b72 kind=compile plan=direct status=passed command=`python -m compileall -q backend/services/dataset_release/monthly_industry_facts.py backend/services/dataset_release/monthly_industry_history.py backend/services/dataset_release/monthly_unified.py backend/services/dataset_release/monthly_quote_repair.py backend/services/dataset_release/sw_l2_quote_policy.py backend/routers/monthly_dataset_releases.py` result=`passed`",
+    "validation-receipt: id=044510008dd91624 commit=2b99db094eb375072a1bd3c7c59dfbae55097b72 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
