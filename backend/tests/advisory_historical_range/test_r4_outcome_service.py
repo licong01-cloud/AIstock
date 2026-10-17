@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from threading import Event
 
 import psycopg2
 import pytest
@@ -131,6 +132,8 @@ class _Repository:
         return dict(self.operation), False
 
     def transition_operation(self, **kwargs):
+        if kwargs.get("finalize_lease") is not None:
+            kwargs["expected_row_version"] = kwargs["finalize_lease"]()["row_version"]
         assert kwargs["expected_row_version"] == self.operation["row_version"]
         self.operation["row_version"] += 1
         self.operation["status"] = kwargs["target_status"].value
@@ -254,7 +257,7 @@ class _PartiallyFailingSummaryCoordinator:
     def __init__(self) -> None:
         self.calls = []
 
-    def refresh(self, *, range_run_id):
+    def refresh(self, *, range_run_id, assert_active=None):
         self.calls.append(range_run_id)
         if range_run_id == "run-2":
             raise psycopg2.OperationalError("summary database connection dropped")
@@ -573,3 +576,177 @@ def test_retryable_receipt_preserves_summaries_published_before_failure(
     assert receipt.processed_count == 2
     assert receipt.summary_refs == (_ref(HistoricalRangeArtifactKind.SUMMARY, "9"),)
     assert coordinator.calls == ["run-1", "run-2"]
+
+
+def test_refresh_keeps_child_lease_through_summary_and_receipt_validation(tmp_path, monkeypatch):
+    import backend.services.advisory_historical_range.outcome_service as module
+
+    # A deterministic event, not a lease-length sleep, exercises a real worker
+    # heartbeat and the repository's existing finalization CAS callback.
+    monkeypatch.setattr(module, "_FINALIZATION_HEARTBEAT_MAX_SECONDS", 0.01, raising=False)
+    summary_renewed, receipt_renewed = Event(), Event()
+
+    class Repository(_Repository):
+        phase = "work"
+        heartbeats = []
+
+        def transition_operation(self, **kwargs):
+            if kwargs["target_status"] is HistoricalRangeOperationStatus.RUNNING and self.operation["status"] == "RUNNING":
+                self.heartbeats.append(dict(kwargs))
+                if self.phase == "summary":
+                    summary_renewed.set()
+                if self.phase == "receipt":
+                    receipt_renewed.set()
+            if kwargs["target_status"] is HistoricalRangeOperationStatus.COMPLETED:
+                self.phase = "receipt"
+                assert receipt_renewed.wait(2), "child lease stopped before receipt validation/CAS"
+            return super().transition_operation(**kwargs)
+
+    repository = Repository()
+
+    class Coordinator:
+        def refresh(self, *, range_run_id, assert_active=None):
+            repository.phase = "summary"
+            assert summary_renewed.wait(2), "child lease is not renewed during summary"
+            return _ref(HistoricalRangeArtifactKind.SUMMARY, "9")
+
+    service = HistoricalRangeOutcomeApplicationService(
+        repository=repository, artifact_store=HistoricalRangeArtifactStore(root=tmp_path),
+        planner=_Planner(_work_item()), evaluator=_Evaluator(), summary_coordinator=Coordinator(),
+    )
+    receipt, _ = service.refresh_until_stable_boundary(
+        request=_request_contract(), resolved_request_hash="f" * 64, worker_id="worker-1",
+    )
+    assert receipt.status == repository.operation["status"] == "COMPLETED"
+    assert receipt.processed_count == repository.append_count == 1
+    assert len(repository.heartbeats) >= 2
+    assert all(item["worker_id"] == "worker-1" and item["attempt_no"] == 1 and item["fencing_token"] == 1 for item in repository.heartbeats)
+
+
+def test_native_closure_memoizes_validated_edges_to_already_visited_node(tmp_path, monkeypatch):
+    from backend.services.advisory_historical_range.repository import PostgresHistoricalRangeRepository
+
+    store = HistoricalRangeArtifactStore(root=tmp_path)
+    leaf = store.publish_payload(
+        artifact_kind=HistoricalRangeArtifactKind.REQUEST, producer_contract_version="test_v1",
+        payload_schema_version="test_v1", resolved_request_hash="f" * 64, payload={"leaf": 1},
+    ).ref
+    parents = tuple(store.publish_payload(
+        artifact_kind=HistoricalRangeArtifactKind.RANGE_RECEIPT, producer_contract_version="test_v1",
+        payload_schema_version="test_v1", resolved_request_hash="f" * 64,
+        payload={"parent": index}, upstream_refs=(leaf,),
+    ).ref for index in range(3))
+    root = store.publish_payload(
+        artifact_kind=HistoricalRangeArtifactKind.OUTCOME_REFRESH_RECEIPT, producer_contract_version="test_v1",
+        payload_schema_version="test_v1", resolved_request_hash="f" * 64,
+        payload={"root": 1}, upstream_refs=parents,
+    ).ref
+    envelope = store.load(root)
+    native_load = store.load
+    calls = []
+    monkeypatch.setattr(store, "load", lambda ref: calls.append(ref) or native_load(ref))
+    repository = PostgresHistoricalRangeRepository(conn_factory=lambda: None, artifact_store=store)
+    # The shared leaf was visited in a prior day-context branch of this same
+    # traversal. New edges still need validation, but not repeated payload loads.
+    repository._load_upstream_closure(
+        envelope=envelope, resolved_request_hash="f" * 64, range_run_id=None,
+        day_run_id=None, visited={root.semantic_content_hash, leaf.semantic_content_hash},
+    )
+    assert calls.count(leaf) == 1
+    with pytest.raises(ValueError, match="resolved_request_hash"):
+        repository._load_upstream_closure(
+            envelope=envelope, resolved_request_hash="0" * 64, range_run_id=None,
+            day_run_id=None, visited={leaf.semantic_content_hash},
+        )
+    bad_ref = leaf.model_copy(update={"file_sha256": "0" * 64})
+    corrupt_root = store.publish_payload(
+        artifact_kind=HistoricalRangeArtifactKind.RANGE_RECEIPT, producer_contract_version="test_v1",
+        payload_schema_version="test_v1", resolved_request_hash="f" * 64,
+        payload={"root": 2}, upstream_refs=(bad_ref,),
+    ).ref
+    with pytest.raises(HistoricalRangeContractError, match="raw file hash"):
+        repository._load_upstream_closure(
+            envelope=store.load(corrupt_root), resolved_request_hash="f" * 64,
+            range_run_id=None, day_run_id=None, visited={leaf.semantic_content_hash},
+        )
+    (store.root / leaf.relative_path).write_bytes(b"tampered")
+    from backend.services.advisory_historical_range.models import HistoricalRangeOperationType
+
+    with pytest.raises(ValueError, match="snapshot changed before finalization"):
+        repository._validate_operation_result_artifact(
+            ref=root, resolved_request_hash="f" * 64,
+            operation_type=HistoricalRangeOperationType.REFRESH_OUTCOMES_RUN,
+        )
+
+
+def test_child_heartbeat_failure_preserves_results_and_cannot_complete(tmp_path, monkeypatch):
+    import backend.services.advisory_historical_range.outcome_service as module
+
+    monkeypatch.setattr(module, "_FINALIZATION_HEARTBEAT_MAX_SECONDS", 0.01)
+    heartbeat_failed = Event()
+
+    class Lease(module._OutcomeChildLease):
+        def _run(self):
+            try:
+                super()._run()
+            finally:
+                heartbeat_failed.set()
+
+    monkeypatch.setattr(module, "_OutcomeChildLease", Lease)
+
+    class Repository(_Repository):
+        def transition_operation(self, **kwargs):
+            if kwargs["target_status"] is HistoricalRangeOperationStatus.RUNNING and self.operation["status"] == "RUNNING" and self.append_count:
+                raise psycopg2.OperationalError("lease connection unavailable")
+            return super().transition_operation(**kwargs)
+
+    class Coordinator:
+        def refresh(self, *, range_run_id, assert_active=None):
+            assert heartbeat_failed.wait(2)
+            assert_active()
+
+    repository = Repository()
+    service = HistoricalRangeOutcomeApplicationService(
+        repository=repository, artifact_store=HistoricalRangeArtifactStore(root=tmp_path),
+        planner=_Planner(_work_item()), evaluator=_Evaluator(), summary_coordinator=Coordinator(),
+    )
+    with pytest.raises(psycopg2.OperationalError, match="lease connection unavailable"):
+        service.refresh_until_stable_boundary(
+            request=_request_contract(), resolved_request_hash="f" * 64, worker_id="worker-1",
+        )
+    assert repository.append_count == 1
+    assert repository.operation["status"] == "RUNNING"
+    assert repository.operation["result_ref"] is None
+
+
+def test_new_operation_reuses_exact_financial_facts_without_evaluation(tmp_path):
+    store = HistoricalRangeArtifactStore(root=tmp_path)
+    first_repository = _Repository()
+    first_service = HistoricalRangeOutcomeApplicationService(
+        repository=first_repository, artifact_store=store,
+        planner=_Planner(_work_item()), evaluator=_Evaluator(),
+    )
+    first, _ = first_service.refresh_until_stable_boundary(
+        request=_request_contract(), resolved_request_hash="f" * 64, worker_id="worker-1",
+    )
+    recovery_repository = _Repository()
+    recovery_repository.outcomes = dict(first_repository.outcomes)
+
+    class NoFinancialRecalculation:
+        def evaluate(self, _item):
+            pytest.fail("an exact existing financial fact must not be recalculated")
+
+    recovery = HistoricalRangeOutcomeApplicationService(
+        repository=recovery_repository, artifact_store=store,
+        planner=_Planner(_work_item()), evaluator=NoFinancialRecalculation(),
+    )
+    payload = _request_contract().model_dump(mode="python", exclude={"request_hash"})
+    payload["operation_idempotency_key"] = "summary-recovery-new-operation"
+    second, _ = recovery.refresh_until_stable_boundary(
+        request=HistoricalRangeOutcomeRefreshRequestV1.model_validate(payload),
+        resolved_request_hash="f" * 64, worker_id="worker-2",
+    )
+    assert first.operation_id != second.operation_id
+    assert first.outcome_refs == second.outcome_refs
+    assert second.processed_count == 1
+    assert recovery_repository.append_count == 0

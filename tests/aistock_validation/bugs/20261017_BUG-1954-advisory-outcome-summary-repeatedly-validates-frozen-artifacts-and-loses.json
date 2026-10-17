@@ -1,6 +1,7 @@
 {
   "actual": "All financial facts published at 05:47, child lease expired, parent RUNNING, summaries empty at 12:32.",
   "allowed_write_scope": [
+    "backend/services/advisory_historical_range/repository.py",
     "backend/services/advisory_historical_range/summary_service.py",
     "backend/services/advisory_historical_range/outcome_service.py",
     "backend/tests/advisory_historical_range/test_r4_summary_service.py",
@@ -27,21 +28,37 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/progress.md"
+    "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/progress.md",
+    "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/summary-profile-before.json",
+    "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/summary-native-final.json",
+    "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/finalization-profile-before.json",
+    "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/finalization-profile-after.json"
   ],
   "expected": "Existing immutable outcomes can be summarized with bounded repeated artifact work; active child renews fenced lease throughout finalization and no false liveness. Preserve all outcomes and native maturity semantics.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/advisory_historical_range/summary_service.py",
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261017_BUG-1954-advisory-outcome-summary-repeatedly-validates-frozen-artifacts-and-loses.json",
       "backend/services/advisory_historical_range/outcome_service.py",
-      "backend/tests/advisory_historical_range/test_r4_summary_service.py",
+      "backend/services/advisory_historical_range/repository.py",
+      "backend/services/advisory_historical_range/summary_service.py",
       "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+      "backend/tests/advisory_historical_range/test_r4_summary_service.py",
       "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261017_BUG-1954-advisory-outcome-summary-repeatedly-validates-frozen-artifacts-and-loses.json",
+      "backend/services/advisory_historical_range/outcome_service.py",
+      "backend/services/advisory_historical_range/repository.py",
+      "backend/services/advisory_historical_range/summary_service.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+      "backend/tests/advisory_historical_range/test_r4_summary_service.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
+        "backend/services/advisory_historical_range/repository.py",
         "backend/services/advisory_historical_range/summary_service.py",
         "backend/services/advisory_historical_range/outcome_service.py",
         "backend/tests/advisory_historical_range/test_r4_summary_service.py",
@@ -153,11 +170,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_e7e25e1696d18d5ea0b4d9c37a7c3d24/operations?limit=50",
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/summary-native-final.json: fresh-process native read-only load/calculate PASS; all 8340 existing financial facts and 41700 calculation rows; 467.745691 seconds without profiler; final three runtime source SHA256 values verified against worktree; metrics/coverage/summary and financial producer hashes match the prior read-only result; NO refresh, append, publish, lease claim or financial evaluation. This is not backend activation or recovery of the original operation.",
+      "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/finalization-profile-after.json: native existing FAILED receipt closure validated read-only in 292.415357 seconds; 8340 outcome refs preserved; large candidate loads bounded to 40; no database connection or operation transition. Final sealed-snapshot checks separately covered by direct regression.",
+      "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/summary-native-final.json READ_ONLY_PASS; 8340 facts, 41700 rows, 467.745691s, source hashes and metrics/coverage/summary/financial identity match; no publish or state transitions"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
