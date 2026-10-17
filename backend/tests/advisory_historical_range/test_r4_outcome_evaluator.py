@@ -14,6 +14,7 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeEvaluationWindowType,
     HistoricalRangeOutcomeProjection,
     HistoricalRangeOutcomeRevisionReason,
+    HistoricalRangeOutcomeStatus,
     HistoricalRangeOutcomeSubjectType,
     HistoricalRangeOutcomeWorkItemV1,
 )
@@ -27,9 +28,11 @@ from backend.services.advisory_historical_range.outcome_evaluator import (
     PostgresHistoricalRangeOutcomeSubjectInputProvider,
 )
 from backend.services.advisory_historical_range.outcome_source import (
+    HistoricalRangeOutcomeSourceError,
     HistoricalRangeSymbolPathReceiptV1,
 )
 from backend.services.advisory_historical_range.outcome_projection import (
+    ExecutablePathOutcomeEngine,
     HistoricalRangeAggregateCalculationResultV1,
     HistoricalRangeOutcomeProjectionBuilder,
 )
@@ -44,6 +47,7 @@ from backend.tests.advisory_phase1.test_outcome_engine import (
     AS_OF,
     _path,
     _policies,
+    _request as _calculation_request,
     _source_binding,
     _source_revision_set,
 )
@@ -433,18 +437,13 @@ class _AggregateProvider:
         return self.children
 
 
-def test_list_aggregate_uses_child_outcome_artifacts_without_price_read(
-    tmp_path: Path,
-) -> None:
-    child_item = _child_work_item()
-    child_result = _ChildEvaluator().evaluate(child_item)
+def _publish_child(store, child_item, child_result):
     builder = HistoricalRangeOutcomeProjectionBuilder()
     artifact = builder.build_artifact(
         work_item=child_item,
         result=child_result,
         outcome_version=1,
     )
-    store = HistoricalRangeArtifactStore(root=tmp_path)
     stored = store.publish_payload(
         artifact_kind=HistoricalRangeArtifactKind.OUTCOME,
         producer_contract_version="r4_v1",
@@ -454,15 +453,16 @@ def test_list_aggregate_uses_child_outcome_artifacts_without_price_read(
         range_run_id="run-1",
         upstream_refs=artifact.direct_upstream_refs,
     )
-    child_fact = builder.build_fact(
+    return builder.build_fact(
         work_item=child_item,
         result=child_result,
         artifact=artifact,
         outcome_artifact_ref=stored.ref,
         outcome_version=1,
     )
+def _cohort_item(children, subject_type=HistoricalRangeOutcomeSubjectType.LIST_VERSION):
     list_item = _work_item(
-        subject_type=HistoricalRangeOutcomeSubjectType.LIST_VERSION,
+        subject_type=subject_type,
         projection=HistoricalRangeOutcomeProjection.EXECUTABLE,
     )
     list_payload = list_item.model_dump(
@@ -471,14 +471,21 @@ def test_list_aggregate_uses_child_outcome_artifacts_without_price_read(
     list_payload.update(
         source_revision_refs=(
             *list_item.source_revision_refs,
-            child_fact.outcome_artifact_ref,
+            *(child.outcome_artifact_ref for child in children),
         ),
         source_artifact_ref_set_hash=None,
         source_revision_set_hash=canonical_json_sha256(
-            [child_fact.outcome_artifact_ref.model_dump(mode="json")]
+            [child.outcome_artifact_ref.model_dump(mode="json") for child in children]
         ),
     )
-    list_item = HistoricalRangeOutcomeWorkItemV1.model_validate(list_payload)
+    return HistoricalRangeOutcomeWorkItemV1.model_validate(list_payload)
+
+
+def test_list_aggregate_uses_child_outcome_artifacts_without_price_read(tmp_path: Path) -> None:
+    child_item = _child_work_item()
+    store = HistoricalRangeArtifactStore(root=tmp_path)
+    child_fact = _publish_child(store, child_item, _ChildEvaluator().evaluate(child_item))
+    list_item = _cohort_item((child_fact,))
 
     result = HistoricalRangeAggregateOutcomeEvaluator(
         provider=_AggregateProvider((child_fact,)),
@@ -489,3 +496,49 @@ def test_list_aggregate_uses_child_outcome_artifacts_without_price_read(
     assert isinstance(aggregate, HistoricalRangeAggregateCalculationResultV1)
     assert aggregate.projection_value_decimal == Decimal("0.089108910891")
     assert aggregate.child_outcome_refs == (child_fact.outcome_artifact_ref,)
+
+
+def test_mature_absolute_return_survives_pending_excess_in_list_and_range(tmp_path):
+    store = HistoricalRangeArtifactStore(root=tmp_path)
+    child_item = _child_work_item()
+    result = ExecutablePathOutcomeEngine().calculate(
+        requests={projection: _calculation_request(projection) for projection in
+                  (Projection.RETURN_GROSS, Projection.RETURN_NET_EXCESS)},
+        timeline=None, evaluation_window_type=HistoricalRangeEvaluationWindowType.FIXED_HORIZON,
+        horizon_trade_days=1,
+    )
+    assert result.maturity_status is HistoricalRangeOutcomeStatus.NOT_DUE
+    child = _publish_child(store, child_item, result)
+    expected = Decimal(child.outcome_json["calculation_results"][0]["projection_value_decimal"])
+    for subject_type in (HistoricalRangeOutcomeSubjectType.LIST_VERSION, HistoricalRangeOutcomeSubjectType.RANGE):
+        item = _cohort_item((child,), subject_type)
+        aggregate = HistoricalRangeAggregateOutcomeEvaluator(
+            provider=_AggregateProvider((child,)), artifact_store=store,
+        ).evaluate(item)
+        by_projection = {calculation.projection: calculation for calculation in aggregate.calculation_results}
+        gross = by_projection[Projection.RETURN_GROSS]
+        excess = by_projection[Projection.RETURN_NET_EXCESS]
+        assert gross.maturity_status is HistoricalRangeOutcomeStatus.COMPLETE
+        assert gross.projection_value_decimal == expected
+        assert gross.maturity_coverage["complete"] == gross.maturity_coverage["eligible_total"] == 1
+        assert gross.next_refresh_trade_date is None
+        assert excess.maturity_status is HistoricalRangeOutcomeStatus.NOT_DUE
+        assert excess.projection_value_decimal is None
+        assert excess.maturity_coverage["not_due"] == 1
+        assert "ADVISORY_PHASE1C3_BENCHMARK_UNAVAILABLE" in excess.reason_codes
+        assert aggregate.maturity_status is HistoricalRangeOutcomeStatus.NOT_DUE
+        child = _publish_child(store, item, aggregate)
+
+
+@pytest.mark.parametrize("copies", [0, 2])
+def test_aggregate_missing_or_duplicate_child_calculation_fails_closed(tmp_path, copies):
+    store = HistoricalRangeArtifactStore(root=tmp_path)
+    child_item = _child_work_item()
+    result = _ChildEvaluator().evaluate(child_item)
+    child = _publish_child(store, child_item, result)
+    evaluator = HistoricalRangeAggregateOutcomeEvaluator(provider=_AggregateProvider((child,)), artifact_store=store)
+    with pytest.raises(HistoricalRangeOutcomeSourceError, match="exactly one"):
+        evaluator._aggregate_projection(
+            work_item=_cohort_item((child,)), projection=Projection.RETURN_GROSS,
+            children=(child,), values=[(child, result.calculation_results[0])] * copies,
+        )
