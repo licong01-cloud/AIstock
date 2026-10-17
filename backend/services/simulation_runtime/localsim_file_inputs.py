@@ -4,6 +4,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from contextvars import ContextVar
 from copy import deepcopy
+from functools import wraps
 
 from backend.data_service.frozen_dataset import FrozenDataset, FrozenDatasetError, digest
 
@@ -44,6 +45,22 @@ def localsim_file_inputs(binding, *, run_id):
     finally:
         _DATASET.reset(token)
         dataset.close()
+
+
+def capture_file_input_worker(function, *, worker_id):
+    """Carry immutable identity, not a caller-owned reader, across thread exits."""
+    dataset = current_file_dataset()
+    if dataset is None:
+        return function
+    binding = deepcopy(dataset.binding)
+    run_id = f"{dataset.run_id}:{worker_id}"
+
+    @wraps(function)
+    def worker(*args, **kwargs):
+        with localsim_file_inputs(binding, run_id=run_id):
+            return function(*args, **kwargs)
+
+    return worker
 
 
 def resolve_replay_source(authority, *, job, release, end_trade_date=None, require_latest_completed=False):

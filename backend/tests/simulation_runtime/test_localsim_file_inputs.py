@@ -114,3 +114,69 @@ def test_shared_artifact_entry_never_labels_a_db_provider_as_file():
     with pytest.raises(DataUnavailableError) as failure:
         service.prepare_from_live_inference_dates(package_id="any-native-package", trade_dates=[DAYS[1]], data_source="DATASET_FILES")
     assert failure.value.context["reason_code"] == "FROZEN_FILE_INFERENCE_PROVIDER_REQUIRED"
+
+
+@pytest.mark.parametrize("boundary", ["stage", "binding", "selection"])
+def test_native_scheduler_workers_own_file_readers_after_caller_timeout(tmp_path, monkeypatch, boundary):
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+    from backend.services.simulation_runtime.scheduler import SimulationLifecycleScheduler, SimulationSchedulerBindingResult
+    from backend.services.simulation_runtime.models import SimulationBrokerBackend
+    from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
+    import psycopg2
+
+    monkeypatch.setattr(psycopg2, "connect", lambda *_, **__: pytest.fail("worker fell back to SQL"))
+    binding = freeze_dataset_binding(make_dataset(tmp_path))
+    scheduler = object.__new__(SimulationLifecycleScheduler)
+    scheduler._binding_tick_lock = scheduler._selection_inference_lock = threading.RLock()
+    scheduler._binding_tick_inflight = {}
+    scheduler._selection_inference_inflight = {}
+    scheduler._selection_inference_shutdown = False
+    scheduler._selection_inference_timeout_seconds = 10
+    scheduler._timeout_seconds_from_env = lambda *_: .02
+    scheduler._authoritative_selection_artifact_exists = lambda **_: False
+    scheduler._selection_inference_key = lambda **_: ("file-binding", DAYS[1])
+    scheduler._selection_inference_context = lambda **_: {"data_source": "DATASET_FILES"}
+    release_worker = threading.Event()
+    completed = threading.Event()
+    observations = []
+    carrier = SimulationSchedulerBindingResult(binding_id="file-binding", strategy_id="file-account",
+        broker_backend=SimulationBrokerBackend.LOCAL_SIM, status="SUCCEEDED", data_source="DATASET_FILES")
+
+    def work(**_kwargs):
+        try:
+            assert release_worker.wait(5)
+            dataset = current_file_dataset(required=True)
+            observations.append((dataset is not parent, dataset.identity, dataset.raw_minute_rows(SYMBOL, DAYS[1])[0]["close"]))
+            return carrier
+        finally:
+            completed.set()
+
+    scheduler._run_selection_sync = work
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        scheduler._selection_inference_executor = executor
+        try:
+            with localsim_file_inputs(binding, run_id="original-day") as parent:
+                if boundary == "stage":
+                    with pytest.raises(RuntimeConfigInvalidError):
+                        scheduler._run_callable_with_timeout(stage="FILE_READ", reason_code="TEST_TIMEOUT",
+                            timeout_env_var="UNUSED_TEST_TIMEOUT", default_timeout_seconds=.02, context={}, func=work)
+                elif boundary == "binding":
+                    with pytest.raises(DataUnavailableError):
+                        scheduler._run_local_sim_binding_single_flight(binding=SimpleNamespace(binding_id="file-binding"),
+                            trade_date=DAYS[1], context={}, func=work)
+                else:
+                    with pytest.raises(DataUnavailableError):
+                        scheduler._run_auto_generated_selection_nonblocking(binding=SimpleNamespace(), runtime_release=None,
+                            trade_date=DAYS[1], data_source="DATASET_FILES", runtime_config={}, created_by="test")
+            assert current_file_dataset() is None
+        finally:
+            release_worker.set()
+        assert completed.wait(5)
+        if boundary == "selection":
+            entry = next(iter(scheduler._selection_inference_inflight.values()))
+            assert entry.future.result(timeout=5) is carrier
+        if boundary == "binding":
+            next(iter(scheduler._binding_tick_inflight.values())).thread.join(timeout=5)
+    assert observations == [(True, binding["binding_hash"], 10.5)]
+    assert current_file_dataset() is None

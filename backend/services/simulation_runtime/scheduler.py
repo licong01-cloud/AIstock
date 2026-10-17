@@ -4053,6 +4053,8 @@ class SimulationLifecycleScheduler:
     ) -> Any:
         timeout_seconds = self._timeout_seconds_from_env(timeout_env_var, default_timeout_seconds)
         result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+        from .localsim_file_inputs import capture_file_input_worker
+        func = capture_file_input_worker(func, worker_id=f"stage:{stage}")
 
         def target() -> None:
             try:
@@ -4739,6 +4741,8 @@ class SimulationLifecycleScheduler:
                     raise self._binding_tick_in_progress_error(entry)
                 return self._consume_or_report_binding_tick(entry)
             result_queue: queue.Queue[tuple[str, Any]] = queue.Queue(maxsize=1)
+            from .localsim_file_inputs import capture_file_input_worker
+            func = capture_file_input_worker(func, worker_id=f"binding:{binding.binding_id}")
 
             def target() -> None:
                 try:
@@ -11780,8 +11784,9 @@ class SimulationLifecycleScheduler:
                     data_source=data_source,
                     runtime_config=runtime_config,
                 )
+                from .localsim_file_inputs import capture_file_input_worker
                 future = self._selection_inference_executor.submit(
-                    self._run_selection_sync,
+                    capture_file_input_worker(self._run_selection_sync, worker_id="selection"),
                     binding=binding,
                     runtime_release=runtime_release,
                     trade_date=trade_date,

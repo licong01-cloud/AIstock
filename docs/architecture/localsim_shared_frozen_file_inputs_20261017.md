@@ -61,7 +61,7 @@ LocalSIM 用 DATASET_FILES 历史来源与独立 source identity，薄适配器�
 
 新文件来源在创建时冻结到现有 release metadata，source hash 与 replay identity 绑定，沿用现有 JSON/事务存储，不新增 DDL。重试读已冻结绑定，不重解析当前 active profile。旧 DB 任务保持原来源，不能借本次部署自动升级、改 FAILED_TERMINAL 或替换回放；来源迁移需要单独正式合同，不在本次执行生产变更。
 
-每个消费者/run 独立缓存；文件 hash/时间指纹与实际读值收据进入来源证据。Windows 新临时对象只在 X:/AIstock_temp，WSL 经可访问性验证使用对应目录；模型和数据原址只读，不复制大资产。
+每个消费者/run 独立缓存；绑定线程、stage watchdog 和选股线程仅传递冻结绑定，分别创建自有 reader。父调用超时退出后，原工作线程仍持有同一冻结输入，完成或失败后关闭，不共享父 reader。文件 hash/时间指纹与实际读值收据进入来源证据。Windows 新临时对象只在 X:/AIstock_temp，WSL 经可访问性验证使用对应目录；模型和数据原址只读，不复制大资产。
 
 H5 和小型权威文件绑定内容 SHA256。分钟/日频 bin 使用在注册时冻结的 `consumer_bin_stat_lease_v1`（相对路径、size、mtime_ns）作文件世代检查，实际日切片另记录字节 hash；stat lease 明确不是 producer 全量内容 manifest。压缩后的纯元数据放入 release JSON，当前真实发布包约 0.80 MB、62,384 个 bin，未复制 bin。任何触及已冻结文件的修复都需新发布身份和受控恢复，不会在旧冻结任务内热换输入。提供完整 producer 内容 manifest 仍是数据发布 owner 可以补充的更强校验能力。
 

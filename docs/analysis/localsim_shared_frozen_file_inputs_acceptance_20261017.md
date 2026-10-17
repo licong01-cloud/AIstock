@@ -19,14 +19,19 @@
 
 ## 直接回归与审核
 
-证据目录：`X:/AIstock_temp/LOCALSIM/shared-file-inputs-tests/`。最终小矩阵覆盖 15 个直接相关测试文件：256 项通过、1 项条件跳过、2 项旧 fixture 初始化失败。修正两个使用 `InferenceEngine.__new__` 的测试 fixture，按 nodeid 复验通过；后续文件来源能力守卫新增 1 项通过。有效唯一结果为 259 项通过、1 项条件跳过，不把第一次失败的收据改写成全绿。
+证据目录：`X:/AIstock_temp/LOCALSIM/shared-file-inputs-tests/`。最终小矩阵覆盖 15 个直接相关测试文件：256 项通过、1 项条件跳过、2 项旧 fixture 初始化失败。修正两个使用 `InferenceEngine.__new__` 的测试 fixture，按 nodeid 复验通过；后续补充文件能力守卫、原生错误码传递、三个线程边界与原有DB选股隔离回归。有效唯一结果为 264 项通过、1 项条件跳过，不把第一次失败的收据改写成全绿。
 
 - `final-matrix-r1.xml`：最终直接矩阵原始收据。
 - `fixture-fix-r2.xml`、`review-r3.xml`：失败点及后续 PIT 身份错误码修复复验。
 - `provider-guard-r1.xml`：禁止默认 DB provider 冒充文件来源。
-- `forwarding-final-r4.xml`：最终 forwarding fixture 可移植调整，两个 nodeid 通过；语法/lint、精确写范围、F2 结果在 PR 交付记录补充。
+- `forwarding-final-r4.xml`：最终 forwarding fixture 可移植调整，两个 nodeid 通过。
+- `failure-reason-r1.xml`：原生 PIT 文件身份错误穿过共享 CLI 后保留具体原因码，失败收据没有成功结果。
+- `native-worker-scope-r1.xml`：绑定线程、stage watchdog、异步选股三处真实线程边界；父调用超时退出后仍持有独立 reader 和同一冻结身份，无 SQL 回退。
+- `native-db-worker-r1.xml`：原有 DB 选股的运行 release 隔离回归通过。
 
-三轮人工审核处理了实际发现：第一轮修正 H5 日期查询、文件来源入口守卫及原生静态字段口径；第二轮修正 float32 原始限价还原和 dataclass 适配；第三轮补齐 bin 注册世代校验、恢复时冻结来源核对和文件 risk provider 隔离。新增测试覆盖对应合同，不靠复制评分、过滤或财务逻辑规避问题。
+语法/AST、Ruff、精确33文件写范围、git diff --check及F2八项矩阵校验通过。CI分类targeted_ci_required，六个变更测试文件均登记到实际选定计划；UI新建来源请求合同同步更新，原有DB任务fixture保留，UI回归交CI执行。
+
+三轮人工审核处理了实际发现：第一轮修正 H5 日期查询、文件来源入口守卫及原生静态字段口径；第二轮修正 float32 原始限价还原和 dataclass 适配；第三轮补齐 bin 注册世代校验、恢复时冻结来源核对和文件 risk provider 隔离。最终真实探针修正跨共享CLI的原因码丢失，两包明确返回FROZEN_DATASET_PIT_IDENTITY_MISMATCH。提交后复查补齐三个后台线程入口的独立reader生命周期，定向验证父调用超时/退出后的接续。新增测试覆盖对应合同，不靠复制评分、过滤或财务逻辑规避问题。
 
 DESIGN-COMPLIANCE-001 逐项结论：
 
