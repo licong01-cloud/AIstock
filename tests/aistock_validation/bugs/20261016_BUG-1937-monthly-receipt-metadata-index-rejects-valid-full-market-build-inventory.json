@@ -1,0 +1,329 @@
+{
+  "actual": "receipts HTTP400 monthly receipt entry exceeds the bounded contract: the BUILD receipt is 56507440 bytes and its checkpoint is 88017600 bytes; both are valid full-market metadata, not response payloads",
+  "allowed_write_scope": [
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/routers/monthly_dataset_releases.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
+    "tests/aistock_validation/bugs/20261016_BUG-1937-monthly-receipt-metadata-index-rejects-valid-full-market-build-inventory.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1937",
+  "closed_at": "2026-10-16T03:51:11.040756Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-16T02:53:54.981365Z",
+  "description": "receipts HTTP400 monthly receipt entry exceeds the bounded contract",
+  "design_compliance": {
+    "business_semantics_unchanged": true,
+    "no_new_approval_or_quality_gate": true,
+    "no_partial_completion_claim": true,
+    "no_silent_error_or_fake_data": true
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261016-a753c6d09075",
+      "timestamp": "2026-10-16T02:53:54.981365Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "合法大体积回执可索引，响应仍只返回有界元数据；链接及读取中变化拒绝",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261016_BUG-1937-monthly-receipt-metadata-index-rejects-valid-full-market-build-inventory.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261016_BUG-1937-monthly-receipt-metadata-index-rejects-valid-full-market-build-inventory.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/routers/monthly_dataset_releases.py",
+        "backend/tests/routers/test_monthly_dataset_releases.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/routers/monthly_dataset_releases.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/routers/test_monthly_dataset_releases.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/routers/monthly_dataset_releases.py",
+        "backend/tests/routers/test_monthly_dataset_releases.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py"
+    ]
+  },
+  "first_seen_at": "2026-10-16T02:53:54.981365Z",
+  "fix_branch": null,
+  "fix_commit": "e1d87ba8ad6bd2d0fc7cca220c99072887c47e44",
+  "fix_summary": "Remove the small JSON-message cap from the authenticated receipt metadata index. Stream at most the original regular-file length in 1MiB blocks; verify inode, size and mtime before and after, retain link/junction and 64-item response bounds. No payload parsing, whole-file allocation or data-quality relaxation. Register the existing monthly router for the same combined backend/child post-restart probe used by its control plane.",
+  "fixed_at": "2026-10-16T03:14:49Z",
+  "github_issue_number": 6179,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6179",
+  "last_seen_at": "2026-10-16T02:53:54.981365Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6181",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_rounds": [
+    "1: bounded metadata response is distinct from receipt document size; retain 64-entry bound.",
+    "2: stream original byte length with bounded RAM; reject truncation, changed descriptor/path identity and links/junctions.",
+    "3: RED/GREEN and all 13 router tests passed; actual 56507440-byte sealed receipt produces exact expected SHA without database/profile/process writes."
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "RED: 33MiB receipt rejected by the original metadata index. GREEN: streaming metadata hash passes without Path.read_bytes; mutation during read is rejected.",
+      "Fresh AIstock Python process indexes the actual operation receipts: count=2; BUILD receipt size=56507440 and SHA256=9ff7e1e65c9e85840159b90605c6fb4396fb87ad32d928085ae192add520e353, matching its sealed checkpoint. No DB/profile/process writes."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\BUG-1937-post-restart-20261016.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1937",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "e1d87ba8ad6bd2d0fc7cca220c99072887c47e44",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-16T03:49:55.921015Z",
+      "mode": "read_only",
+      "observed_identity": "03f04891046dc103b9300436aeb679509253aa13",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a73a0754194545c3de6e455f234ad131db28161e1da55ea19b6883c2de9be701",
+      "receipt_sha256": "fdc05bc7fc694ecf94bc38f462d5b845eb246cf0ef988a0cf1f67780fadbf8e1",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ca7208595a9c839d736b462d122eeb92de650e681533db553e0122d03dd1e417",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "The existing monthly router already routes to monthly_release_worker_process but is absent from required_source_globs, so router-only fixes cannot receive the catalog's combined parent/child restart proof. Add only this exact already-routed source to the required list; do not change probe semantics or add a new target.",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1937",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "a0248a7f6fd6cef5",
+    "recorded_at": "2026-10-16T03:15:29.658701Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "aa8c5d28928de1581c90069678e7601e649084e2",
+    "source_merge_commit": "e1d87ba8ad6bd2d0fc7cca220c99072887c47e44",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6181",
+    "validation_evidence": [
+      "validation-receipt: id=08aa719d74d03411 commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=pytest plan=direct status=passed command=`pytest backend/tests/routers/test_monthly_dataset_releases.py -q` result=`13 passed`",
+      "validation-receipt: id=c95986b066036ef2 commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed, zero findings`",
+      "validation-receipt: id=83c8b7168efc87dc commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=ruff plan=direct status=passed command=`python -m ruff check backend/routers/monthly_dataset_releases.py backend/tests/routers/test_monthly_dataset_releases.py` result=`passed`",
+      "validation-receipt: id=031cda02eb9772be commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "c58d8ce620474e05afa39a1317fe8d26fb537661ecdd836dbb4871283ee5f471"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly receipt metadata index rejects valid full-market BUILD inventory above 32 MiB",
+  "trigger_condition": {
+    "fingerprint": "a753c6d090751e9f8bbb4c38",
+    "source_event_id": "FE-20261016-a753c6d09075"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=08aa719d74d03411 commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=pytest plan=direct status=passed command=`pytest backend/tests/routers/test_monthly_dataset_releases.py -q` result=`13 passed`",
+    "validation-receipt: id=c95986b066036ef2 commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed, zero findings`",
+    "validation-receipt: id=83c8b7168efc87dc commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=ruff plan=direct status=passed command=`python -m ruff check backend/routers/monthly_dataset_releases.py backend/tests/routers/test_monthly_dataset_releases.py` result=`passed`",
+    "validation-receipt: id=031cda02eb9772be commit=aa8c5d28928de1581c90069678e7601e649084e2 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1937 --target worker-scheduler --expected-identity 03f04891046dc103b9300436aeb679509253aa13 -> passed",
+    "python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_63a313d97fd046a38d5a876265565014 -> passed, actual 56507440-byte BUILD receipt SHA256 verified through live API",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1937 --target worker-scheduler --expected-identity e1d87ba8ad6bd2d0fc7cca220c99072887c47e44 -> passed, runtime descendant verified",
+    "python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_63a313d97fd046a38d5a876265565014 -> passed, actual BUILD receipt bytes and SHA256 verified through live API"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}

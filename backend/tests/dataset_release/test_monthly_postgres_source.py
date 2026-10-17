@@ -152,6 +152,102 @@ def test_frozen_bundle_pins_formal_source_stage_receipt() -> None:
     assert bundle["source_stage_receipt_ref"] == reference.as_dict()
 
 
+@pytest.mark.parametrize("repair_kind", ["deferred", "no_deferral", "absent", "wrong_date", "wrong_predecessor"])
+def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp_path, monkeypatch, repair_kind):
+    from dataclasses import replace
+    from backend.services.dataset_release import monthly_postgres_source as source
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.canonical import canonical_json_bytes
+    from backend.services.dataset_release.monthly_repair_inputs import deferred_margin_authority
+    from backend.services.dataset_release.monthly_source_audit import SourceGateEvidence, TypedGap
+    from backend.services.dataset_release.monthly_source_producer import (
+        MonthlySourceProducerError, _require_source_provenance, _validated_source_artifacts,
+    )
+    from backend.services.dataset_release.monthly_unified import SOURCE_GATES
+    from backend.services.dataset_release.source_authority import FrozenSourceAuthoritySnapshot
+
+    repair = None if repair_kind == "absent" else {
+        "schema_version": "aistock_monthly_repair_inputs_v1", "target_cutoff": "2026-09-30",
+        "predecessor_manifest_sha256": "a" * 64, "factor_prefixes": {}, "daily_basic_null_repairs": None,
+        "deferred_source_dates": ([{"dataset": "margin_detail", "trade_date": "2026-09-30",
+                                   "reason_code": "USER_DEFERRED_COLLECTION"}] if repair_kind in {"deferred", "wrong_date"} else []),
+    }
+    if repair_kind == "wrong_date":
+        repair["deferred_source_dates"][0]["trade_date"] = "2026-09-29"
+    elif repair_kind == "wrong_predecessor":
+        repair["predecessor_manifest_sha256"] = "b" * 64
+    ControlStore.initialize(tmp_path)
+    cas = CASStore(tmp_path)
+    ref = cas.put_json({"partitions": [_partition("kline_daily_raw", "2026-09-01_2026-09-30", content="tail")]})
+    frozen = FrozenSourceAuthoritySnapshot(
+        official_cutoff=date(2026, 9, 30), pit_snapshot=SimpleNamespace(spans_sha256=ref.sha256),
+        pit_snapshot_ref=ref, manifest=SimpleNamespace(source_content_root=ref.sha256, source_provenance_root=ref.sha256),
+        source_manifest_ref=ref, source_reuse_manifest_ref=ref, source_audit_ref=ref, source_provenance_ref=ref,
+        derived_source_receipt_refs=(), partitions=(), pit_partitions=(), snapshot_tokens=(),
+        observation_provenance_root=ref.sha256, source_cas_usage={},
+    )
+    freeze_calls = []
+    monkeypatch.setattr(source, "MonthlyObservedSourceAuthority", lambda *_a, **_kw:
+                        SimpleNamespace(freeze=lambda **_kw: freeze_calls.append("freeze") or frozen))
+    monkeypatch.setattr(source, "_preflight_refresh_readiness", lambda *_a, **_kw: None)
+    from backend.services.dataset_release import monthly_build_bridge
+    monkeypatch.setattr(monthly_build_bridge, "load_monthly_predecessor_prefix",
+                        lambda **_kw: SimpleNamespace(manifest_sha256="a" * 64))
+
+    def audit(**kwargs):
+        expected_sha = deferred_margin_authority(repair, target_cutoff=date(2026, 9, 30))
+        assert kwargs["deferred_margin_authority_sha256"] == expected_sha
+        assert kwargs["audit_causal_history"] is False
+        gates, artifacts = [], []
+        for name in SOURCE_GATES:
+            paths = [kwargs["input_root"] / f"{name}-{kind}.json" for kind in ("expectation", "readback")]
+            for path in paths:
+                source._write_canonical_exclusive(path, {"gate": name})
+                artifacts.append(source.SourceArtifact(path.relative_to(tmp_path).as_posix(), path))
+            gaps = (TypedGap("margin_detail", "margin_detail", "2026-09-30", "2026-09-30", "*",
+                             "USER_DEFERRED_COLLECTION", expected_sha),) if name == "financial_moneyflow" and expected_sha else ()
+            gates.append(SourceGateEvidence(name, "postgres:1-AA-1", artifacts[-2].artifact_id, artifacts[-1].artifact_id,
+                                           1, 0 if gaps else 1, explained_missing_count=len(gaps), exception_refs=gaps))
+        return tuple(gates), tuple(artifacts)
+
+    monkeypatch.setattr(source, "audit_frozen_source", audit)
+    ready = replace(frozen, artifact_ready_contract_ref=ref, artifact_ready_content_root=ref.sha256)
+    monkeypatch.setattr(source, "ArtifactReadySourceBuilder", lambda *_a, **_kw: SimpleNamespace(build=lambda *_a, **_kw: ready))
+    monkeypatch.setattr(source, "load_artifact_ready_contract", lambda *_a, **_kw: SimpleNamespace(artifact_ready_provenance_root=ref.sha256))
+    monkeypatch.setattr(source, "seal_source_stage_receipt", lambda *_a, **_kw: ref)
+    monkeypatch.setattr(source.PostgresMonthlySourceAdapter, "_catalog_spec", lambda *_a, **_kw: None)
+    adapter = PostgresMonthlySourceAdapter(profile=SimpleNamespace(profile="fixture"), cas=cas,
+        artifact_root=tmp_path, source_catalog=SimpleNamespace(root=tmp_path))
+    context = SimpleNamespace(operation_id="dmr_test", attempt=1,
+        plan={"predecessor": {"cutoff": "2026-08-31"}, "target_cutoff": "2026-09-30", "monthly_repair_inputs": repair})
+    if repair_kind in {"wrong_date", "wrong_predecessor"}:
+        with pytest.raises(ValueError, match="financing cutoff deferral|predecessor/month identity"):
+            adapter.read(None, MonthlySnapshotIdentity("1-AA-1", "2026-10-01T00:00:00+00:00", "repair"), context)
+        assert not freeze_calls
+        assert not (tmp_path / "monthly").exists()
+        return
+    read_set = adapter.read(None, MonthlySnapshotIdentity("1-AA-1", "2026-10-01T00:00:00+00:00", "repair"), context)
+    _, hashes = _validated_source_artifacts(read_set.input_artifacts)
+    _require_source_provenance(read_set, artifact_hashes=hashes)
+    bundle_path = next(item.path for item in read_set.input_artifacts if item.path.name == "frozen-source-bundle.json")
+    bundle = json.loads(bundle_path.read_bytes())
+    assert bundle["monthly_repair_inputs"] == repair
+    if repair is None:
+        assert bundle.get("monthly_repair_payload_ref") is None
+    else:
+        payload_ref = CASRef.from_value(bundle["monthly_repair_payload_ref"])
+        assert hashes[payload_ref.relative_path] == payload_ref.sha256
+        assert cas.get_bytes(payload_ref) == canonical_json_bytes(repair)
+        assert not cas.get_bytes(payload_ref).endswith(b"\n")
+        if repair_kind == "deferred":
+            assert payload_ref.sha256 == deferred_margin_authority(repair, target_cutoff=date(2026, 9, 30))
+            # Removing the genuine pin must still fail: nesting the same payload in the bundle is not a pin.
+            without_pin = {key: value for key, value in hashes.items() if key != payload_ref.relative_path}
+            with pytest.raises(MonthlySourceProducerError, match="exception authority is not pinned: financial_moneyflow"):
+                _require_source_provenance(read_set, artifact_hashes=without_pin)
+
+
 def test_blocked_actual_audit_prevents_materialization_and_seal(tmp_path, monkeypatch):
     from backend.services.dataset_release import monthly_postgres_source as source
     from backend.services.dataset_release.monthly_source_audit import SourceGateEvidence, MonthlySourceAuditError
@@ -229,7 +325,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         "source_audit_contract": source.AUDIT_SCHEMA,
     }
     old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
-    assert adapter.adapter_version == "8"
+    assert adapter.adapter_version == "16"
     assert adapter.contract_sha256 != old_identity
     assert adapter.contract_sha256 == digest_named_fields(
         "aistock_monthly_postgres_source_adapter_v1",
@@ -240,6 +336,10 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
             "business_validation_scope": "target_calendar_month_only_v1",
             "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
             "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
+            "historical_classification_policy": "immutable_version_qualified_effective_history_v1",
+            "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
+            "managed_writer_scope_policy": "bounded_post_cutoff_proven_date_writers_v3",
+            "repair_input_provenance_policy": "canonical_repair_payload_cas_pin_v1",
             "component_preparation_dependency_digest": digest_named_fields(
                 "aistock_monthly_component_dependency_v1",
                 source.component_dependencies(),
@@ -297,7 +397,8 @@ def test_canonical_pit_readiness_blocks_before_freeze(tmp_path, monkeypatch, sta
             root=tmp_path, latest_source_snapshot=lambda **_kwargs: pytest.fail("no baseline read")
         ),
     )
-    context = SimpleNamespace(plan={"predecessor": {"cutoff": "2026-08-31"}, "target_cutoff": DAY.isoformat()})
+    context = SimpleNamespace(operation_id="dmr_" + "1" * 32,
+        plan={"predecessor": {"cutoff": "2026-08-31"}, "target_cutoff": DAY.isoformat()})
     connection = Connection()
     with pytest.raises(MonthlyReleaseSourceBlocked) as caught:
         adapter.read(connection, MonthlySnapshotIdentity("1-AA-1", "2026-10-02T00:00:00+00:00", "watermark"), context)
@@ -435,6 +536,8 @@ def test_explicit_financing_deferral_only_changes_actual_tail_query_and_audit_en
     assert margin[0][0] == basic[0][0] == "2026-09-01_2026-09-30"
     assert margin[0][1]["end"] == date(2026, 9, 29)
     assert margin[0][1]["user_deferred_trade_date"] == DAY
+    assert "codes" not in margin[0][1]
+    assert basic[0][1]["codes"] == ["000001.SZ"]
     assert basic[0][1]["end"] == DAY
     checked = []
     ledger = SimpleNamespace(partition_digest=lambda *args: checked.append(args))
@@ -823,9 +926,9 @@ def test_margin_suspended_quote_nulls_require_independent_zero_turnover(defect):
     gate = GateCounter("financial_moneyflow")
     audit_margin_publication(day=DAY, rows=values, receipt=receipt, gate=gate,
                             suspend_rows=suspension, daily_rows=daily, suspend_authority_sha256=authority)
-    assert gate.status == ("PASS" if defect in {None,"resume_and_suspend_zero"} else "BLOCKED")
+    assert gate.status == ("PASS" if defect is None else "BLOCKED")
     assert values[0]["rzrqye"] is None  # Never synthesize the published value.
-    if defect in {None,"resume_and_suspend_zero"}:
+    if defect is None:
         assert gate.expected_count == 2 and gate.observed_count == 1 and gate.explained_count == 1
         assert gate.exceptions[0].field == "rqye,rzrqye"
         assert gate.exceptions[0].symbol == SYMBOL
@@ -849,8 +952,6 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
     )
 
     codes = [f"801{i:03d}.SI" for i in range(131)]
-    monkeypatch.setattr(policy, "_NEVER_QUOTED", frozenset({codes[0]}))
-    monkeypatch.setattr(policy, "_LAST_PUBLISHED", {})
     monkeypatch.setattr(policy, "SW2021_L2_TAXONOMY_DIGEST", policy.taxonomy_digest(codes))
     data = rows()
     data.update(
@@ -870,7 +971,8 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
                 }
                 for pool in P0_POOL_IDS
             ],
-            "sw_index_classify": [{"index_code": code, "level": "L2"} for code in codes],
+            "sw_index_classify": [{"index_code": code, "level": "L2", "src": "SW2021",
+                                   "is_pub": "0" if code == codes[0] else "1"} for code in codes],
             "sw_index_member": [
                 {
                     "ts_code": SYMBOL if i == 1 else f"{10000 + i:06d}.SZ",
@@ -983,7 +1085,7 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
     daily_gate = next(gate for gate in gates if gate.gate == "daily_price")
     assert daily_gate.expected_count == 1
     assert daily_gate.unexplained_missing_count == int(missing)
-    assert len(artifacts) == (21 if old_partition else 22)
+    assert len(artifacts) == (22 if old_partition else 23)
     readback = json.loads((tmp_path / daily_gate.readback_ref).read_text())
     assert readback["unexplained_missing_count"] == int(missing)
     assert readback["database_write_performed"] is False
@@ -1149,7 +1251,7 @@ def test_only_rule_preparable_limits_can_reach_materialization(tmp_path):
                                    predecessor_cutoff=date(2026, 8, 31), changes=())
 
 
-@pytest.mark.parametrize("defect", [None, "null", "duplicate", "denominator"])
+@pytest.mark.parametrize("defect", [None, "null", "nan", "inf", "out_of_band", "duplicate", "denominator"])
 def test_prepared_limits_close_actual_month_rows_not_raw_nulls(tmp_path, monkeypatch, defect):
     import json
     from types import SimpleNamespace
@@ -1170,6 +1272,10 @@ def test_prepared_limits_close_actual_month_rows_not_raw_nulls(tmp_path, monkeyp
               for day in days for code in codes]
     if defect == "null":
         values[0]["pre_close"] = None
+    elif defect in {"nan", "inf"}:
+        values[0]["pre_close"] = float(defect)
+    elif defect == "out_of_band":
+        values[0]["pre_close"] = "20.00"
     elif defect == "duplicate":
         values.append(dict(values[0]))
     elif defect == "denominator":

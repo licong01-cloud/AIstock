@@ -46,6 +46,8 @@ def test_private_freeze_uses_production_row_sealer_and_bracket(monkeypatch, tmp_
             "ts_code": "000001.SZ",
             "trade_date": "2026-09-30",
             **{key: 1000 for key in queries["kline_daily_raw"].value_columns},
+            "volume_shares_source": "provider_exact_shares_v1",
+            "volume_shares_sha256": "a" * 64,
         },
         "margin_detail": {
             "ts_code": "000001.SZ",

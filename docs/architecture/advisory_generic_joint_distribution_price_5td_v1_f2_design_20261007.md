@@ -1,6 +1,6 @@
 # Advisory GP5-JOINT-DISTRIBUTION-1：固定5交易日联合收益/风险分布 F2详细设计
 
-2026-10-07，SOURCE_VERIFIED_PREPARED_ONLY_WAITING_QE。当前量价路径run advgp5volume_45dbd44d9afa27fa1889191c一次负：candidate−base/matched为−47.5435/−3.8856bps每5TD cohort，避免亏损39.8462、错过上涨89.4341，已知拒买净贡献−49.5879bps。其源码PR #5630当前CI37495032551 SUCCESS，合入524910031f7a12d1abb087a4c3d50275ab723cff；该候选结束，不重拟合、不救阈值。当前实际111研究fit+1历史index。本文只定义新的学习器结构，不宣称已训练或能产生超额收益。 设计#5632合入df43a81aa/自身官方清理完成。两份新源与两份测试已实现，已prepare、未研究fit。 prepare/run与QE互斥状态见下，研究总数仍111+1。
+2026-10-07当前：SOURCE_MERGED_RESEARCH_EVALUATED_NOT_CONFIRMED。设计#5632、源码#5635已经合入并通过各自当前HEAD检查。原一次研究已在04:23北京时间QE三入口全0时完成，新增1物理fit（128内部树不是128试验），累计112研究fit+1历史index。候选相对原Top5−42.5412bps、相对冻结39D GBDT＋5.0023bps每5TD cohort；已知拒买净贡献−44.5856，UNKNOWN空槽＋2.0444另列。仅停止此candidate，不调参数/seed/阈值补救，不能宣称经济确认或激活。以下固定合同不改判，训练前等待段明确为历史快照，最终结果在尾部。
 
 ## Background / Goal
 
@@ -83,7 +83,7 @@ joint_price_set_5td_v1扫描完整legal tick，精确Decimal边界、不将UNKNO
 
 ## Design Acceptance Matrix
 
-当前源码切片已实现，矩阵只验收完整离线模型/编排；未prepare或研究fit/收益，单元fixture不计研究。API/UI/经济/运行不冒充已验收。
+当前源码切片已合入；矩阵验收完整离线模型/编排，真实prepare、唯一研究fit与完整四臂已结束，具体结果见尾部。单元fixture不计研究，API/UI、经济确认/生产启用不冒充已验收。
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-741 | backend/services/advisory_model_first/generic_joint_distribution_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_generic_joint_distribution_price_5td_pipeline_v1.py | SOURCE_VERIFIED | none |
@@ -115,7 +115,7 @@ joint_price_set_5td_v1扫描完整legal tick，精确Decimal边界、不将UNKNO
 
 源码第二轮：按模型数学/分布完整性修订持久化schema/quantile/正成对样本与median校验、CDF浮点边界、概率仅舍入clip及权重集中度解释，成本各一次与完整tick洞2项定向通过；无质量返回UNKNOWN、不计已知AVOID。第三轮：确认原始date/Top5/未结算null、拒买贡献与UNKNOWN贡献严格对账、不补Top6/不复利成NAV；stage只读父prepared/trained、partial journal不可再fit，QE忙不创建fit_attempt。最终小矩阵/Ruff/L0/F2与实际研究另报告。该完整离线切片不含API/UI挂载，不宣称经济激活；本轮无额外研究fit。
 
-## 当前prepare与未开始的研究
+## 历史prepare与训练前等待快照（不代表当前运行状态）
 
 设计#5632当前CI37497157418 SUCCESS、合入df43a81aa774046f1f0789cfefe6d0a21176707e；自身官方cleanup_done24.922秒/0blocking/warnings。源码clean producer 5cba1fc05b1677a651f337196f7ccfd71c4ea2ce，implementation SHA 311e43aa9f2fab56b77043930b03cb29f939e43468866e913f015748afb75bf6。最终两文件8项小矩阵/Ruff、六文件L0 0finding/0blocking、F2八项0warnings通过；Ruff仅删除测试未使用import，行为矩阵不重复跑。
 
@@ -123,4 +123,14 @@ run advgp5joint_2e32e505b715885fee917178，plan SHA 2e32e505b715885fee917178d7ec
 
 训练前最新只读状态2026-10-06 17:10:15UTC记录single/custom_evo/multi-alpha running=0/1/6：QE任务qe_20261007_004423_eda5及多alpha回测正在运行。Advisory停止在PREPARED_ONLY_WAITING_QE，fit_attempt不存在、trained/evaluated未发布，实际新增研究fit=0、累计仍111fit+1旧index。不是研究失败或算法无收益结论；等待只约束真实训练，不阻源码交付/业务设计，不控制QE或读取旧负研究补证。以后必须fresh三路径全0才能启动计划内唯一一fit，不复用本快照声称未来QE空闲。
 
-当前源码待当前HEAD CI交付，业务API/UI挂载、经济确认、角色/模型激活均未完成；backend_restart_required=false，运行/数据库/依赖/profile/服务操作均NOOP。UI不阻价格主线。
+上述等待快照之后，源码#5635 CI37502090239 SUCCESS、合入b5ff897b5fd9c85e6ce85929d3b790369e961ae3。业务API/UI挂载、经济确认及模型激活仍未完成；backend_restart_required=false，运行/数据库/依赖/profile/服务操作均NOOP，UI不阻研究。
+
+## 当前一次研究实际结果与方向决策
+
+等待助手2026-10-06T20:23:24.583281+00:00与20:23:31.802864+00:00两次公共QE single/custom_evo/multi-alpha均0；只执行原登记的一次研究，exit0，train2.172秒、train至四臂评估3.937秒。助手自然退出，不终止或重复拟合。trained/evaluated stage SHA分别c9ac37b838397d3a785ebc855f11d468df7340cbb038553081f0813e79449426/a40f9dc88bd6e01c837c7660f6037371022a119242918c3a693ce1fcb00a3fd9，model SHA 6006d8f49f05e1951fd91d58943821174e8a75de5523af4c1b70c32b54e0898b。原2024-07-04～2026-02-02决策窗口与policy不改。
+
+原成熟pool3684，结构1738/估计1848；结构最新labelend2024-12-23严格早于估计首D2024-12-24，test/validation未参与fit。81testD保留，四臂共同完整80组＋1未结算null；其均值baseline/rule/frozen39D matched/candidate=129.0145/131.5724/81.4711/86.4733bps每5TD cohort。candidate−baseline−42.5412、−matched＋5.0023；这些不是每交易日收益或资金NAV，区间/NAV/MDD仍null。
+
+candidate293已结算TAKE，胜率58.0205%，base403/58.3127%；胜率接近不能代替幅度。已知拒买98次、51D，避免亏损32.1209−错过上涨76.7065=−44.5856bps；UNKNOWN12项空槽＋2.0444单独列、不归模型，另有1不可执行及1未结算。已知与未知贡献合计等于相对base−42.5412。相对matched141个已知改变/63D，不是恒等候选；研究仍负，只停止本candidate。
+
+仅必要只读四stage/hash/固定政策与拒买归因对账，未重跑评价、补证或归档旧实验。下一变量优先保留D分钟路径时序信息，保持本联合学习器参数/诚实分区，以本冻结candidate为控制；原GP5已有D-only matched，不能把删gap当新信息再试。现有gap输出为条件关联，未发现未来泄漏证据，也不宣称未成交limit-fill因果。全程0DB写/其它模块源码/服务控制/模型激活。

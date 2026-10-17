@@ -23,6 +23,7 @@ from .monthly_runtime import MonthlyRuntimeConfigurationError, MonthlyRuntimeSet
 from .monthly_unified import ActionAuthorizationStore
 from .monthly_worker import MonthlyReleaseWorker
 from .monthly_worker_nodes import MonthlyNodeRuntimeSettings
+from .monthly_source_quality import source_gate_quality_contract
 
 
 @dataclass(frozen=True, slots=True)
@@ -80,6 +81,7 @@ class MonthlyWorkerRuntime:
             "hmm_authority_path": str(self.production.hmm_authority_path),
             "registry": self.registry.contract(),
             "source_preparation": preparation_contract,
+            "source_gate_contract": source_gate_quality_contract(),
             "nodes": ["controller", "wsl2-5080", "rdagent-node1"],
             "safety": {
                 "operation_claimed": False,

@@ -27,6 +27,7 @@ from .contracts import Scope
 from .control_store import ControlStore, SourceSnapshotCatalogSpec
 from .index_sources import independent_postgres_connection_factory
 from .monthly_snapshot import MonthlySnapshotIdentity, SnapshotConnection
+from .monthly_repair_journal import MANAGED_WRITER_SCOPE_POLICY
 from .monthly_component_preparation import component_dependencies, preparation_plan
 from .monthly_preparation_source import PreparationSourceSnapshot, freeze_preparation_source
 from .monthly_source_audit import close_source_audit
@@ -53,7 +54,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "8"
+POSTGRES_SOURCE_ADAPTER_VERSION = "16"
 REFRESH_READINESS_POLICY = "same_snapshot_target_month_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -357,6 +358,10 @@ class PostgresMonthlySourceAdapter:
                 "business_validation_scope": "target_calendar_month_only_v1",
                 "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
                 "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
+                "historical_classification_policy": "immutable_version_qualified_effective_history_v1",
+                "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
+                "managed_writer_scope_policy": MANAGED_WRITER_SCOPE_POLICY,
+                "repair_input_provenance_policy": "canonical_repair_payload_cas_pin_v1",
             },
         )
 
@@ -375,13 +380,15 @@ class PostgresMonthlySourceAdapter:
         if target_cutoff <= predecessor_cutoff:
             raise MonthlyPostgresSourceError("monthly source cutoff did not advance")
         repair_inputs = context.plan.get("monthly_repair_inputs")
+        from .monthly_source_quality import load_bound_source_quality
+        quality_acceptance = load_bound_source_quality(context.plan, operation_id=context.operation_id)
         from .monthly_repair_inputs import deferred_margin_authority
-        deferred_margin_sha = deferred_margin_authority(repair_inputs, target_cutoff=target_cutoff)
         if repair_inputs is not None:
             from .monthly_build_bridge import load_monthly_predecessor_prefix
             from .monthly_repair_inputs import validate_monthly_repair_inputs
             repair_prefix = load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile)
-            validate_monthly_repair_inputs(repair_inputs, predecessor=repair_prefix, target_cutoff=target_cutoff)
+            repair_inputs = validate_monthly_repair_inputs(repair_inputs, predecessor=repair_prefix, target_cutoff=target_cutoff)
+        deferred_margin_sha = deferred_margin_authority(repair_inputs, target_cutoff=target_cutoff)
         if self.profile.profile == CANONICAL_PROFILE_ID:
             self._require_pit_coverage(connection, target_cutoff)
 
@@ -413,6 +420,16 @@ class PostgresMonthlySourceAdapter:
             sector_mapping = load_predecessor_sector_mapping(
                 load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile),
             )
+            from .monthly_industry_history import capture_industry_history
+            history = capture_industry_history(connection, current_map=sector_mapping["code_map"])
+            if history is not None:
+                sector_mapping = {**sector_mapping, "historical_classification": history.payload}
+                from .monthly_industry_facts import capture_industry_quote_source, predecessor_context_matches
+                prefix = load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile)
+                if prefix is not None and not predecessor_context_matches(prefix, history):
+                    sector_mapping["historical_quote_source"] = capture_industry_quote_source(
+                        connection, cas=self.cas, projection=history,
+                    )
         authority = MonthlyObservedSourceAuthority(
             self.profile,
             self.cas,
@@ -491,6 +508,7 @@ class PostgresMonthlySourceAdapter:
                 predecessor_cutoff=predecessor_cutoff,
                 audit_causal_history=False,
                 deferred_margin_authority_sha256=deferred_margin_sha,
+                quality_acceptance=quality_acceptance,
                 checkpoint=checkpoint,
             )
             checkpoint()
@@ -597,6 +615,7 @@ class PostgresMonthlySourceAdapter:
             predecessor_cutoff=predecessor_cutoff,
             audit_causal_history=False,
             deferred_margin_authority_sha256=deferred_margin_sha,
+            quality_acceptance=quality_acceptance,
             checkpoint=checkpoint,
         )
         # Persist real blocked gate readbacks before any provider materialization
@@ -641,6 +660,15 @@ class PostgresMonthlySourceAdapter:
             source_stage_ref=source_stage_ref,
         )
         bundle["monthly_repair_inputs"] = repair_inputs
+        repair_payload_ref = None
+        if repair_inputs is not None:
+            # Typed deferrals bind this exact canonical payload, not the outer
+            # controller receipt or bundle. CAS.put_json adds a newline; use
+            # the same no-newline bytes as deferred_margin_authority instead.
+            repair_payload_ref = self.cas.put_bytes(canonical_json_bytes(repair_inputs))
+            bundle["monthly_repair_payload_ref"] = repair_payload_ref.as_dict()
+        if quality_acceptance is not None:
+            bundle["source_quality_report"] = json.loads((input_root / "source-quality-report.json").read_bytes())
         _write_canonical_exclusive(bundle_path, bundle)
 
         artifacts: list[SourceArtifact] = [
@@ -648,6 +676,8 @@ class PostgresMonthlySourceAdapter:
             artifact(bundle_path),
             *audit_artifacts,
         ]
+        if repair_payload_ref is not None:
+            artifacts.append(_cas_artifact(self.cas, repair_payload_ref))
 
         cas_refs = self._all_refs(frozen, source_stage_ref)
         artifacts.extend(_cas_artifact(self.cas, reference) for reference in cas_refs)

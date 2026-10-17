@@ -189,7 +189,9 @@ def test_advisory_api_program_review_leaderboard_and_replay() -> None:
         },
     )
     assert replay.status_code == 200
-    assert replay.json()["replay"]["summary"]["win_rate"] == 1.0
+    summary = replay.json()["replay"]["summary"]
+    assert summary["win_rate"] is None
+    assert summary["metric_evaluable_count"] == 0
 
 
 def test_advisory_quality_report_endpoint_rejects_future_decision_inputs() -> None:
