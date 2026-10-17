@@ -78,7 +78,7 @@ failure记录真实stage、typed reason与已成功child数量（未知保持nul
 | F-012 | §6～§7；run_risk_l2_date_inference.py | test: backend/tests/hmm_risk/test_risk_l2_date_inference.py；零fit/无labels、date-sector闭合、双进程、collision/failure | DESIGN_REVIEW_VERIFIED | 无 |
 | F-013 | §8/§12；父蓝图§7 | test: backend/tests/hmm_risk/test_risk_l2_date_inference.py；实际单日/批量/旧sealed同身份读回；既有holding-reference acceptance | DESIGN_REVIEW_VERIFIED | 无 |
 
-当前源码实施中，直接测试及fresh-process尚未通过，不将本表设计结构PASS冒充执行PASS；最终结果在§12增量同步。
+本表标记设计合同审核；源码、真实执行与交付状态分别在§12读回，不将设计结构PASS冒充运行态或经济价值PASS。
 
 ## 11. Risks / Rollout / Rollback / Production Gates
 
@@ -99,4 +99,20 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 
 源码第一轮作者审修：发现旧calendar解析器仍强制历史development端点，修正为显式release日历的canonical日期/排序/唯一/实际cutoff/稳定性验证；保留旧kernel默认calendar SHA，新增可选pin只给新caller。补上decision必须晚于原模型训练截止日，避免早期回推使用未来训练模型。首次接线测试失败后仅重跑failed节点，最终修复。
 
-源码第二轮作者审修：feature carrier严格拒绝labels/outcomes及未知字段；model/acceptance/原source auth不要求旧features文件；全NA明确NOT_AVAILABLE；parent核对完整grid/as-of/有限概率/warning/NA/coverage和展示，不只相信child自报hash。prepare/第二child启动/readback/collision故障保留0/1/2真实完成数；修改测试以模拟正式间接路径扫描结果，不依赖Windows管理员权限创建junction，未降低实际路径保护。首轮最终小矩阵38 passed/1 OS权限skip；该skip已改为无权限依赖的直接合同测试并将定向复跑；Ruff、registry 8项、L0零blocking、设计F2 PASS。此处为作者审修，不冒称独立第三方审核；真实指定日期推断未执行。
+源码第二轮作者审修：feature carrier严格拒绝labels/outcomes及未知字段；model/acceptance/原source auth不要求旧features文件；全NA明确NOT_AVAILABLE；parent核对完整grid/as-of/有限概率/warning/NA/coverage和展示，不只相信child自报hash。prepare/第二child启动/readback/collision故障保留0/1/2真实完成数；修改测试以模拟正式间接路径扫描结果，不依赖Windows管理员权限创建junction，未降低实际路径保护。直接测试最终21 passed；相关小矩阵首跑38 passed/1 OS权限skip，该skip已替换为无权限依赖的直接合同测试并通过；Ruff、registry 8项、L0零blocking、两文档F2 PASS。此处为作者审修，不冒称独立第三方审核。
+
+2026-10-18真实执行：源码`999ec7e1f239891c39cb352dbcd63cdb5c852c36`已提交并clean，Windows现存固定数值环境、显式任务PYTHONPATH和原fit/DB/network poison下运行正式CLI。request=`F:/Dev/AIstock_runtime/hmm_l2_risk_date_inference/20261018/request.json`，canonical SHA=`13965461614c20427cef814475c0bfd9321586df1d0cf9479e8b7087318d2a7f`；数据仍为active核验后的`20261015-v18-unified-quote1`、manifest=`f82670728cd6cde06bbc834481187794d081070689648c06b88786a7782e435b`，没有切profile或改数据。
+
+两child完成且业务文件逐字节一致，parent readback通过。acceptance=`F:/Dev/AIstock_runtime/hmm_l2_risk_date_inference/20261018/run/acceptance.json`，canonical SHA=`e200669ea2f434041eaa8ac13926ee8e2b9590d5f762493485da97dfa637b16d`；prediction canonical SHA=`b20af42412cf2375797629a8bfc3b4c24457f9995a3b90d4db9734f6af887c74`，文件SHA=`3e464e5e4c7a2c4331f6585c71c47b82260c7cbf2f58dd1c05319c13a4ae5f8c`，71,655字节。原模型SHA仍为`37259b5e9ca2c6eee2845cf0f1f02932a8cfd6cf21ad29080d6570d274b8038d`。两个decision为2026-08-28/31，as-of为27/28；各131目录、129 available、2 typed NA（801032.SI/801218.SI），分别26/28条warning，展示各10项。新增fit=0、labels/outcomes读取=false、DB/dataset/profile写入=false、runtime_action=false。
+
+实际bundle上的最后一日单日消费与批量对应131行完全相等（仅再次调用纯参数predict，无原始源重建）；此项不冒称独立重跑过单日source builder。另与既有同v18、同模型的104日批量封存结果比较262行：warning/availability/reason/as-of/展示完全相同；两次源上下文窗口不同，特征最大绝对差`4.440892098500626e-15`、概率最大差`8.881784197001252e-16`，不是bitwise相等，也不强求不同source-context的hash相等。未设新数值接受阈值、改旧结果或读取其outcomes；相同本次输入的双fresh-process仍严格bytes相等。
+
+最终作者交叉核对：源码持久化、两个router及新service/CLI在任务worktree fresh-process下导入通过；canonical runtime分类为backend、target=[backend-main]、catalog_error=null、pre_pr_ready=true、blocking=[]。这只是PR前源码/import证据，运行装载仍pending_user_restart；该离线执行及研究记录无需重启。PR/CI状态待同包收尾，不将本次文件验证称生产API/UI、QE接入或forward确认。
+
+## 13. 同包价值结论与下一步边界
+
+只读复核既有holding-reference acceptance（父蓝图§1.18，canonical `f5960e739ce79fb0432f2fb013dbfef3a6a9f8dc0379f30d4c841d5b38f65969`），没有重建facts、fit或重跑旧回放。103/103日完整：R的gross累计收益−3.105721%、MDD−10.913908%；C为−3.277568%、−13.702091%。C比R少换手（10.081788→4.418997），但gross收益少0.171848个百分点、MDD幅度多2.788183个百分点。C对同敞口X_C的gross增量+0.316237个百分点、MDD幅度少0.955124个百分点；20bp行业overlay示意成本下增量仍+0.162388个百分点。该成本不含篮子内部成交、税费或冲击，不能称真实净收益。
+
+因此保留独立风险模型为显式可选研究工具，不默认采用C、不称其全面优于R，也不替换旧QE快照。轮动rank/return及单交互的新历史结论保持原终态，没有证据支持再开第三候选；后续应先由场景owner确认愿意验证的风险/换手取舍，再做匹配场景测试，而不是为凑长任务增加训练。QE正式实验仍由QE窗口后置，HMM不代运行。
+
+当前权限内结束于源码/文档PR和最终HEAD CI；没有九月唯一冻结交付身份时不等待、不重跑v18。合入、精确cleanup、实时20维reader/跨模块采用及生产动作各自独立；本轮未自动执行。
