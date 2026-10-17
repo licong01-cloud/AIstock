@@ -55,6 +55,7 @@ def _panel_script(
     *,
     factor_names: list[str] | None = None,
     reference_factor_names: list[str] | None = None,
+    feature_processing: dict | None = None,
 ) -> str:
     _patch_universe(monkeypatch)
     names = factor_names or ["BaseA", "BaseB", "Candidate"]
@@ -73,6 +74,7 @@ def _panel_script(
         custom_params={
             "disable_alpha158": True,
             "observation_panel": _observation_panel(references),
+            **({"feature_processing": feature_processing} if feature_processing is not None else {}),
         },
     )
     assert script is not None
@@ -521,9 +523,8 @@ def test_prepare_factors_missing_configured_output_fails_closed(
         ns["_select_factor_results"](["BaseA", "BaseB"], factor_results)
 
 
-def test_ma_e16_in_memory_compose_keeps_observation_panel_out_of_strategy_kwargs(
-    monkeypatch,
-) -> None:
+@pytest.fixture
+def panel_composer(monkeypatch):
     monkeypatch.setattr(
         "backend.services.quantevolver.config_composer.load_active_qe_profile",
         lambda: None,
@@ -580,6 +581,12 @@ def test_ma_e16_in_memory_compose_keeps_observation_panel_out_of_strategy_kwargs
     )
     monkeypatch.setattr(composer, "_get_read_exp_res_content", lambda: "# read_exp_res")
     _patch_universe(monkeypatch)
+    return composer
+
+
+def test_ma_e16_in_memory_compose_keeps_observation_panel_out_of_strategy_kwargs(panel_composer) -> None:
+    composer = panel_composer
+    factor_names = ["BaseA", "BaseB", "Candidate"]
 
     result = composer.compose_experiment_in_memory(
         factor_names=factor_names,
@@ -605,3 +612,115 @@ def test_ma_e16_in_memory_compose_keeps_observation_panel_out_of_strategy_kwargs
     assert "class: ScoreWeightedTopkStrategyV2" in conf_yaml
     assert "qe_observation_panel_v1" in prepare_factors
     compile(prepare_factors, "prepare_factors.py", "exec")
+
+
+@pytest.mark.parametrize("excluded,clip", [([], True), (["BaseA"], True), ([], False)])
+def test_feature_processing_real_panel_output_keeps_cache_and_identity(monkeypatch, tmp_path, excluded, clip):
+    import pyarrow.parquet as pq
+
+    options = {"exclude_from_model": excluded, "clip_outlier": clip}
+    script = _panel_script(monkeypatch, reference_factor_names=["BaseA"], feature_processing=options)
+    index = pd.MultiIndex.from_product(
+        [pd.date_range("2024-01-02", periods=3), ["000001.SZ"]], names=["datetime", "instrument"],
+    )
+    original = pd.DataFrame(
+        {"BaseA": [1., 2., float("nan")], "BaseB": [4., float("nan"), 6.], "Candidate": [7., 8., 9.]},
+        index=index,
+    )
+    shared = tmp_path / "shared.parquet"
+    original.to_parquet(shared)
+    before = shared.read_bytes()
+    workspace = tmp_path / "workspace"
+    (workspace / "factors").mkdir(parents=True)
+    for name in original.columns:
+        (workspace / "factors" / f"{name}.py").write_text("# supplied cached factor", encoding="utf-8")
+    (workspace / "conf.yaml").write_text(
+        "data_handler_config:\n  data_loader:\n    class: DynamicFactorsOnlyLoader\n", encoding="utf-8",
+    )
+    ns = {"__file__": str(workspace / "prepare_factors.py")}
+    exec(script, ns)
+    monkeypatch.chdir(tmp_path)  # restore cwd even though generated main changes it
+    ns["_validate_factor_data_dataset_contract"] = lambda: None
+    ns["link_all_files_to_dir"] = lambda *_: None
+    ns["execute_factor"] = lambda name, *_: pd.read_parquet(shared, columns=[name])
+    ns["main"]()
+    out = workspace / "combined_factors_df.parquet"
+    actual = pd.read_parquet(out)
+    expected = original.iloc[:2].drop(columns=excluded)
+    expected.columns = pd.MultiIndex.from_product([["feature"], expected.columns])
+    pd.testing.assert_frame_equal(actual, expected)
+    assert shared.read_bytes() == before
+    identity = json.loads(pq.read_schema(out).metadata[b"qe_feature_processing"])
+    assert identity == {
+        **options, "computed_factor_names": list(original.columns),
+        "model_feature_names": list(expected.columns.get_level_values(1)),
+    }
+    assert (workspace / ".factor_env").read_text().strip() == f"export num_features={len(expected.columns)}"
+
+
+def test_feature_processing_b_a_c_b_yaml_isolation_and_real_normalizer(panel_composer, monkeypatch):
+    import copy
+    import sys
+    import yaml
+    from qlib.data.dataset.handler import DataHandlerLP
+    from qlib.data.dataset.loader import StaticDataLoader
+    from backend.services.quantevolver import qe_custom_loaders
+
+    monkeypatch.setitem(sys.modules, "qe_custom_loaders", qe_custom_loaders)
+
+    composer = panel_composer
+    params = {"disable_alpha158": True, "observation_panel": _observation_panel(["BaseA"])}
+    configurations = []
+    for options in (None, {"exclude_from_model": ["BaseA"]}, {"clip_outlier": False}, None):
+        cp = {**params, **({"feature_processing": options} if options is not None else {})}
+        before = copy.deepcopy(cp)
+        result = composer.compose_experiment_in_memory(
+            factor_names=["BaseA", "BaseB", "Candidate"], model_id=None,
+            strategy_id="score_weighted_topk_v2", data_split=dict(RDAGENT_DEFAULT_DATA_SPLIT),
+            custom_params=cp, skip_db_save=True, execution_algo="TWAP",
+        )
+        assert cp == before
+        configurations.append(yaml.safe_load(result["experiment_files"]["conf.yaml"]))
+    baseline, ablation, unclipped, baseline_again = configurations
+    assert baseline == ablation == baseline_again  # only prepare_factors model columns differ
+    assert unclipped != baseline
+    clip_kwargs = unclipped["data_handler_config"]["infer_processors"][0]["kwargs"]
+    assert clip_kwargs["clip_outlier"] is False
+    adjusted = copy.deepcopy(unclipped)
+    adjusted["data_handler_config"]["infer_processors"][0]["kwargs"]["clip_outlier"] = True
+    assert adjusted == baseline  # includes model, label, strategy, cost, split and all fit settings
+    assert "feature_processing" not in yaml.safe_dump(baseline)
+    assert "feature_processing" not in yaml.safe_dump(unclipped)
+
+    # Run Qlib's actual append processing path: both DK_L and DK_I share infer processors.
+    index = pd.MultiIndex.from_product(
+        [pd.bdate_range(RDAGENT_DEFAULT_DATA_SPLIT["train_start"], RDAGENT_DEFAULT_DATA_SPLIT["test_end"]),
+         ["000001.SZ", "000002.SZ"]], names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame([float(i % 5) for i in range(len(index))], index=index,
+                         columns=pd.MultiIndex.from_tuples([("feature", "BaseA")]))
+    outlier = (pd.Timestamp("2020-01-02"), "000001.SZ")
+    frame.loc[outlier, ("feature", "BaseA")] = 1000.
+    frame[("label", "LABEL0")] = [float(i % 7) for i in range(len(index))]
+    for conf, clip in ((baseline, True), (unclipped, False)):
+        handler_conf = conf["data_handler_config"]
+        handler = DataHandlerLP(
+            instruments=None, data_loader=StaticDataLoader(frame.copy()),
+            infer_processors=handler_conf["infer_processors"],
+            learn_processors=handler_conf["learn_processors"],
+        )
+        training = handler.fetch(col_set="feature", data_key=DataHandlerLP.DK_L)
+        inference = handler.fetch(col_set="feature", data_key=DataHandlerLP.DK_I)
+        pd.testing.assert_frame_equal(training, inference.loc[training.index])
+        assert training.loc[outlier, "BaseA"] <= 3. if clip else training.loc[outlier, "BaseA"] > 3.
+
+
+@pytest.mark.parametrize("options", [
+    {"exclude_from_model": ["Unknown"]}, {"exclude_from_model": ["BaseA", "BaseA"]},
+    {"exclude_from_model": ["BaseA", "BaseB", "Candidate"]},
+    {"exclude_from_model": "BaseA"}, {"clip_outlier": "false"}, {"clip_outlier": 0},
+    {"typo": False},
+])
+def test_feature_processing_rejects_silent_misconfiguration(monkeypatch, options):
+    with pytest.raises(ValueError, match="qe_feature_processing_invalid"):
+        _panel_script(monkeypatch, feature_processing=options)
