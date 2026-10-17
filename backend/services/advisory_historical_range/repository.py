@@ -4298,7 +4298,7 @@ class PostgresHistoricalRangeRepository:
                 )
 
     def _validate_outcome_artifact(self, fact: HistoricalRangeOutcomeFactV1) -> None:
-        outcome_artifact = HistoricalRangeOutcomeArtifactV2.model_validate(fact.outcome_json)
+        outcome_artifact = fact.validated_artifact
         range_run_id, resolved_request_hash, subject_day_run_id = self._get_outcome_subject_identity(
             subject_type=fact.subject_type.value,
             subject_id=fact.subject_id,
@@ -5485,7 +5485,7 @@ class PostgresHistoricalRangeRepository:
         self._assert_upstream_snapshot_unchanged()
         if ref.artifact_kind is not self._operation_receipt_kind(operation_type):
             raise ValueError("operation result receipt kind differs from operation type")
-        envelope = self._artifact_store.load(ref)
+        envelope = self._artifact_store.load_readonly(ref)
         if envelope.resolved_request_hash != resolved_request_hash or envelope.day_run_id is not None:
             raise ValueError("operation result artifact differs from the batch operation identity")
         self._load_upstream_closure(
@@ -6374,7 +6374,7 @@ class PostgresHistoricalRangeRepository:
     ) -> HistoricalRangeArtifactEnvelopeV1:
         if ref.artifact_kind is not expected_kind:
             raise ValueError(f"artifact ref must reference {expected_kind.value}")
-        envelope = self._artifact_store.load(ref)
+        envelope = self._artifact_store.load_readonly(ref)
         if envelope.resolved_request_hash != resolved_request_hash:
             raise ValueError("artifact resolved_request_hash differs from the repository request")
         if allow_ancestor_identity:
@@ -6382,7 +6382,7 @@ class PostgresHistoricalRangeRepository:
                 raise ValueError("artifact range/day identity differs from the repository operation")
         elif envelope.range_run_id != range_run_id or envelope.day_run_id != day_run_id:
             raise ValueError("artifact range/day identity differs from the repository operation")
-        if expected_payload is not None and canonicalize(envelope.payload) != canonicalize(expected_payload):
+        if expected_payload is not None and envelope.payload != canonicalize(expected_payload):
             raise ValueError("artifact payload differs from the canonical repository facts")
         upstream_by_identity = {
             (item.artifact_kind, item.semantic_content_hash, item.relative_path): item
@@ -6418,7 +6418,7 @@ class PostgresHistoricalRangeRepository:
         else:
             allowed_day_ids = {None, day_run_id, allow_direct_predecessor_day_run_id}
             for upstream_ref in envelope.upstream_refs:
-                upstream = self._artifact_store.load(upstream_ref)
+                upstream = self._artifact_store.load_readonly(upstream_ref)
                 if upstream.resolved_request_hash != resolved_request_hash:
                     raise ValueError("direct upstream resolved_request_hash differs from its consumer")
                 if range_run_id is not None and upstream.range_run_id not in {None, range_run_id}:
@@ -6459,7 +6459,7 @@ class PostgresHistoricalRangeRepository:
             if predecessor_ref is not None:
                 if predecessor_ref not in envelope.upstream_refs:
                     raise ValueError("typed predecessor receipt must be an exact upstream")
-                predecessor = self._artifact_store.load(predecessor_ref)
+                predecessor = self._artifact_store.load_readonly(predecessor_ref)
                 if (
                     predecessor.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT
                     or predecessor.resolved_request_hash != resolved_request_hash
@@ -6484,7 +6484,7 @@ class PostgresHistoricalRangeRepository:
                     raise ValueError("sealed upstream artifact changed after closure verification")
                 self._validated_upstream_closures.move_to_end(closure_key)
                 continue
-            upstream = self._artifact_store.load(upstream_ref)
+            upstream = self._artifact_store.load_readonly(upstream_ref)
             if self._upstream_file_stamp(upstream_ref) != stamp:
                 raise ValueError("sealed upstream artifact changed during closure verification")
             if upstream.resolved_request_hash != resolved_request_hash:

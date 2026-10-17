@@ -349,11 +349,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_e7e25e1696d18d5ea0b4d9c37a7c3d24/operations?limit=50",
+    "fresh_process_evidence": [
+      "Fresh-process direct pytest: 77 related scenarios passed; one strict industry message compatibility issue fixed and exact nodeid passed; client receipt-type and financial-fact cache-equality RED/GREEN additions passed. Total 80 direct scenarios validated without repeating the full matrix; no production refresh, financial append, service control or QE training.",
+      "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/bug1967-summary-final-readonly.json: READ_ONLY_PASS; 41700 rows over the 20-day window, setup 145.354s, load 336.653s, calculate 0.678s, total 482.685s; OHLC window reads=0. Covered outcomes, summary input, metrics and coverage hashes equal bug1967-summary-optimized-r1.json. Four source hashes unchanged during measurement. Measurement precedes only the final cache-equality correction; not a final-commit runtime activation or guaranteed speedup.",
+      "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/bug1967-final-source-smoke.json: final-source fresh-process native receipt/outcome/fact identity and typed artifact/equality readback, SELECT-only with rollback; no publish/evaluation/service control. Source hashes are explicit."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": ["backend-main"],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

@@ -763,6 +763,7 @@ class ResponseBoundHistoricalRangeDispatcher:
                 request_hash=plan.request_hash,
                 status=receipt_status,
                 processed_count=len(outcome_refs),
+                summary_deferred=all(request.summary_mode == "DEFER" for request in plan.requests),
                 outcome_refs=tuple(
                     sorted(
                         outcome_refs.values(),
