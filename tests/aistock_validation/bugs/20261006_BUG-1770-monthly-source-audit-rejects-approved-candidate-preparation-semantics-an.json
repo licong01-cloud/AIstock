@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1770",
-  "closed_at": null,
+  "closed_at": "2026-10-17T13:22:44.996878Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -186,10 +186,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1770/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1770",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "1d4fc0e75f148ddf1bb3ffc3dd69568dfb7f3c02",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T13:16:27.232439Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2dc5d2fe6aaf42aa6320ca0da85c39a1ed12a54c4d61fce74cc973dcab918bd1",
+      "receipt_sha256": "ad030375521596b1be0cbc1c22c7444ccca278da22ee9dc09ff0642b2d573cf8",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "e32ec85fe179312011e334874ff84f6118d1f53154f161ac744261531b5d9f94",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -221,7 +243,7 @@
     ],
     "validation_evidence_digest": "a052f58a5f533b51f52cb8a55233602a4acd1162dcc1ca4c814e5152823e8607"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -232,7 +254,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=9b9817b1028f7164 commit=919777a8c99bcf718647abff328f313515cc43ff kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_monthly_postgres_source.py -q` result=`67 passed`",
-    "validation-receipt: id=e57d0738ce30ace6 commit=919777a8c99bcf718647abff328f313515cc43ff kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_frozen_source_audit.py backend/services/dataset_release/monthly_postgres_source.py backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_monthly_postgres_source.py` result=`passed`"
+    "validation-receipt: id=e57d0738ce30ace6 commit=919777a8c99bcf718647abff328f313515cc43ff kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_frozen_source_audit.py backend/services/dataset_release/monthly_postgres_source.py backend/services/dataset_release/source_authority.py backend/tests/dataset_release/test_monthly_postgres_source.py` result=`passed`",
+    "Current runtime identity and business-smoke verified; source validation retained by receipt 33a3de992f8b5312"
   ],
   "verification_budget": {
     "budget": "standard",
