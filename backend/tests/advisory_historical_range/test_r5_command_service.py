@@ -786,3 +786,35 @@ def test_bridge_parent_receipt_preserves_child_and_artifact_lineage(tmp_path) ->
         resolved_request_hash="a" * 64,
         operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE,
     )
+
+
+@pytest.mark.parametrize("status", ["RETRYABLE_FAILED", "FAILED", "WAITING_INPUT", "COMPLETED"])
+def test_outcome_parent_keeps_failure_error_and_attempt_consistent(tmp_path, status):
+    transition = {}
+    receipt = SimpleNamespace(
+        status=status, outcome_refs=(), summary_refs=(),
+        reason_codes=("ADVISORY_HR_DATABASE_UNAVAILABLE",) if "FAILED" in status else (),
+    )
+    store = HistoricalRangeArtifactStore(root=tmp_path / "outcome-parent")
+    runtime = SimpleNamespace(
+        artifact_store=store, outcome_service_factory=None,
+        outcome=SimpleNamespace(refresh_until_stable_boundary=lambda **_: (receipt, None)),
+        query=SimpleNamespace(resolved_request_hash=lambda _: "a" * 64),
+        repository=SimpleNamespace(transition_operation=lambda **kw: transition.update(kw)),
+    )
+    claimed = {"attempt_no": 1, "fencing_token": 1, "worker_id": "worker",
+               "lease_token": str(uuid4()), "row_version": 2, "started_at": datetime.now(UTC)}
+    ResponseBoundHistoricalRangeDispatcher._execute_claimed_outcome_plan(
+        runtime=runtime,
+        plan=SimpleNamespace(request_hash="b" * 64, requests=(SimpleNamespace(range_run_ids=("run",)),)),
+        operation_id="parent", batch_id="batch", worker_id="worker", claimed=claimed,
+        parent_heartbeat=SimpleNamespace(stop=lambda: None),
+    )
+    assert transition["target_status"].value == status
+    assert transition["result_status"] == (None if status == "RETRYABLE_FAILED" else status)
+    assert transition["attempt"].error_json == transition["error_json"]
+    if "FAILED" in status:
+        assert transition["error_json"] is not None
+        assert transition["error_json"]["reason_codes"] == ["ADVISORY_HR_DATABASE_UNAVAILABLE"]
+    else:
+        assert transition["error_json"] is None

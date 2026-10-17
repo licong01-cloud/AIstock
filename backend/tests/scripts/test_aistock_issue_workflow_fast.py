@@ -16,6 +16,25 @@ import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
 
 
+@pytest.mark.parametrize('case,expected', [('partial', 'passed'), ('empty', 'failed'), ('fake-zero', 'failed'), ('empty-available', 'failed'), ('no-proof', 'failed'), ('loading', 'pending')])
+def test_pipeline_overview_probe_validates_partial_observation_contract(case, expected):
+    source = {'state': 'loading', 'data': None, 'collected_at': None, 'stale': False, 'refreshing': True}
+    sources = {key: dict(source) for key in ['ci', 'runners', 'nightly', 'bugs', 'prs', 'worktrees']}
+    sources['bugs'] = {'state': 'available', 'data': {'pending': 1, 'total': 3}, 'source': 'registry',
+                       'collected_at': '2026-10-17T00:00:00Z', 'age_seconds': 0, 'stale': False, 'refreshing': False}
+    sources['prs'] = {'state': 'unavailable', 'error': 'TimeoutError', 'data': None, 'stale': False, 'refreshing': False}
+    payload = {'status': 'success', 'data': {'schema_version': 'aistock_pipeline_overview_v1', 'read_only': True, 'sections': sources}}
+    mutations = {'empty': (payload['data'], 'sections', {}), 'fake-zero': (sources['ci'], 'data', {'queued': 0}),
+                 'no-proof': (sources['bugs'], 'collected_at', None), 'empty-available': (sources['bugs'], 'data', {}),
+                 'loading': (sources, 'bugs', dict(source))}
+    if case in mutations:
+        target, key, value = mutations[case]
+        target[key] = value
+    verdict = workflow._evaluate_business_smoke_semantics('http://127.0.0.1:8001/api/v1/validation/overview/snapshot', json.dumps(payload), response_sha256='a' * 64)[1]
+    assert verdict['contract_id'] == 'pipeline_overview_observations'
+    assert verdict['verdict'] == expected
+
+
 @pytest.mark.parametrize("error,attempts,success", [
     ("error: fetching ref refs/remotes/origin/main failed: incorrect old value provided", 2, True),
     (f"error: cannot lock ref 'refs/remotes/origin/main': is at {'a'*40} but expected {'b'*40}", 2, True),
@@ -813,6 +832,42 @@ def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test")
     )
 
 
+@pytest.mark.parametrize("case", ["valid", "no_future", "weekend", "false_ok", "not_calendar", "empty", "duplicate", "reverse",
+                                   "future", "latest", "next", "count", "bounds", "date", "lookback", "query_as_of", "nested"])
+def test_advisory_calendar_defaults_semantics(case):
+    payload = dict(ok=True, calendar_only=True, as_of_date="2026-10-16", lookback_trading_days=10,
+                   latest_trading_day="2026-10-16", next_trading_day="2026-10-19",
+                   trading_days=["2026-10-15", "2026-10-16"], replay_start_date="2026-10-15",
+                   replay_end_date="2026-10-16", available_trading_day_count=2,
+                   trading_day_status=dict(ok=True, as_of_date="2026-10-16", latest_completed_trading_day="2026-10-16",
+                                           next_trading_day="2026-10-19"))
+    changes = {
+        "false_ok": (payload, "ok", False), "not_calendar": (payload, "calendar_only", False),
+        "empty": (payload, "trading_days", []), "duplicate": (payload, "trading_days", ["2026-10-16"] * 2),
+        "reverse": (payload, "trading_days", ["2026-10-16", "2026-10-15"]),
+        "future": (payload, "trading_days", ["2026-10-16", "2026-10-19"]),
+        "latest": (payload, "latest_trading_day", "2026-10-15"), "next": (payload, "next_trading_day", "2026-10-16"),
+        "count": (payload, "available_trading_day_count", True), "bounds": (payload, "replay_start_date", "2026-10-14"),
+        "date": (payload, "as_of_date", "2026-1-1"), "lookback": (payload, "lookback_trading_days", True),
+        "nested": (payload["trading_day_status"], "latest_completed_trading_day", "2026-10-15"),
+    }
+    if case in changes:
+        target, key, value = changes[case]
+        target[key] = value
+    if case == "no_future":
+        payload["next_trading_day"] = payload["trading_day_status"]["next_trading_day"] = None
+    if case == "weekend":
+        payload["as_of_date"] = payload["trading_day_status"]["as_of_date"] = "2026-10-17"
+    url = "http://127.0.0.1:8001/api/v1/advisory/trading-days/defaults?lookback_trading_days=10"
+    if case == "query_as_of":
+        url += "&as_of_date=2026-10-15"
+    result = _business_semantic(url, payload, "a" * 64)
+    assert result["contract_id"] == "advisory_calendar_defaults_only"
+    assert result["verdict"] == ("passed" if case in {"valid", "no_future", "weekend"} else "failed")
+    if result["verdict"] == "passed":
+        assert result["facts"]["market_data_readiness"] == "not_evaluated"
+
+
 def _returns_payload(state="SETTLED", *, reported="2026-10-13T08:00:00+00:00", cutoff="2026-10-13"):
     settled, marked = state == "SETTLED", state == "EXECUTED"
     row = dict(program_id="advp_test", episode_id="ep_test", status="ACTIVE" if marked else "EXITED",
@@ -1544,30 +1599,25 @@ def test_monthly_release_process_snapshot_binds_worker_to_backend_listener(
     assert snapshot["healthy"] is True
 
 
-def test_repository_runtime_catalog_omits_retired_hmm_sources() -> None:
-    catalog = workflow._load_runtime_target_catalog()
-
-    retired = {
-        "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
-        "backend/services/hmm_risk/b3_mixed_dimension.py",
-        "backend/services/hmm_risk/b3_training.py",
-        "backend/services/hmm_risk/state_model_set.py",
-    }
-
-    assert retired.isdisjoint(catalog["non_runtime_source_paths"])
-
-
 @pytest.mark.parametrize("path,targets", [("tdx-api-main/pagination_test.go", []), ("tdx-api-main/web/integrity_test.go", []),
     ("tdx-api-main/protocol/model_kline.go", ["tdx-go-backend"]), ("tdx-api-main/web/server.go", ["tdx-go-backend"]),
     ("tdx-api-main/go.mod", ["tdx-go-backend"]), ("tdx-api-main/web/go.sum", ["tdx-go-backend"]),
     ("scripts/start_tdx_go_backend.py", ["tdx-go-backend"]), ("backend/data_service/tdx_adapter.py", ["backend-main"]),
     ("backend/services/advisory_model_first/generic_daily_price_input_v1.py", []),
+    ("backend/services/hmm_risk/b3_d1_inactive_dimension.py", ["backend-main"]),
+    ("backend/services/hmm_risk/b3_mixed_dimension.py", ["backend-main"]),
+    ("backend/services/hmm_risk/b3_training.py", ["backend-main"]),
+    ("backend/services/hmm_risk/contracts.py", ["backend-main"]),
+    ("backend/services/hmm_risk/risk_l1_prediction.py", ["backend-main"]),
+    ("backend/services/hmm_risk/state_model_set.py", ["backend-main"]),
+    ("backend/services/hmm_risk/stock_fact_observation.py", ["backend-main"]),
     (["backend/services/advisory_model_first/generic_daily_price_input_v1.py", "backend/tests/advisory_model_first/test_generic_daily_price_input_v1.py", "docs/analysis/advisory-input.md", "tests/aistock_validation/bugs/BUG-1778.json"], []),
     (["backend/services/advisory_model_first/generic_daily_price_input_v1.py", "backend/routers/advisory.py"], ["backend-main"]),
     ("backend/services/advisory_model_first/generic_unregistered_input_v1.py", ["backend-main"])])
 def test_catalog_runtime_roles_keep_exact_offline_exclusions_and_online_targets(path, targets):
     result = workflow._classify_runtime_impact([path] if isinstance(path, str) else path)
     assert result["target_ids"] == targets and result["runtime_impact"] == ("backend" if targets else "none")
+    assert result["catalog_error"] is None
 
 
 @pytest.fixture
@@ -1618,24 +1668,6 @@ def test_runtime_preflight_checks_semantic_registration_without_http(path, regis
     semantic_errors = [error for error in contract["blocking"] if "semantic contract" in error]
     assert bool(semantic_errors) is not registered
     assert (contract["pre_pr_ready"], contract["runtime_impact"], contract["target_ids"]) == (registered, "backend", ["backend-main"])
-
-
-def test_bug_1549_active_contract_consumers_remain_backend_main() -> None:
-    payload = workflow._classify_runtime_impact(
-        [
-            "backend/services/hmm_risk/b3_d1_inactive_dimension.py",
-            "backend/services/hmm_risk/b3_mixed_dimension.py",
-            "backend/services/hmm_risk/b3_training.py",
-            "backend/services/hmm_risk/contracts.py",
-            "backend/services/hmm_risk/risk_l1_prediction.py",
-            "backend/services/hmm_risk/state_model_set.py",
-            "backend/services/hmm_risk/stock_fact_observation.py",
-        ]
-    )
-
-    assert payload["runtime_impact"] == "backend"
-    assert payload["target_ids"] == ["backend-main"]
-    assert payload["catalog_error"] is None
 
 
 def test_find_bug_record_parses_only_matching_or_opaque_filenames(

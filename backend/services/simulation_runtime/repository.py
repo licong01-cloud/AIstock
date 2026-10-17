@@ -2737,6 +2737,12 @@ class SimulationRuntimeRepository:
         run = self._daily_run_with_binding_slots(run, binding)
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
+                if run.broker_backend is SimulationBrokerBackend.LOCAL_SIM:
+                    # Share the native economic lock with no-run replay recovery.
+                    cur.execute("SELECT pg_try_advisory_xact_lock(2403, hashtext(%s))", (run.run_id,))
+                    if not cur.fetchone()[0]:
+                        raise InvalidStateTransitionError("LocalSIM daily run writer is active",
+                            context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_ECONOMIC_LOCK_BUSY"})
                 try:
                     cur.execute(
                         """

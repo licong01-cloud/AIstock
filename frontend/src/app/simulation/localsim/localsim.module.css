@@ -27,4 +27,25 @@
 .error { margin: 14px 0; border: 1px solid #efb4b4; background: #fff0f0; color: #9a2828; border-radius: 8px; padding: 11px; white-space: pre-wrap; }
 .muted { color: #6f7e94; font-size: 13px; }
 .code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
+.statusSection { margin-bottom: 20px; }
+.statusToolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 12px; }
+.statusGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.statusCard { min-width: 0; padding: 16px; border: 1px solid hsl(var(--border, 214 32% 91%)); border-left-width: 4px; border-radius: 9px; background: hsl(var(--card, 0 0% 100%)); color: hsl(var(--card-foreground, 222 47% 11%)); }
+.statusWaiting { border-left-color: hsl(var(--warning, 38 92% 50%)); background: hsl(var(--warning-background, 48 100% 97%)); }
+.statusError { border-left-color: hsl(var(--destructive, 0 72% 51%)); background: hsl(var(--destructive-background, 0 86% 97%)); }
+.statusSuccess { border-left-color: hsl(var(--success, 142 72% 29%)); }
+.statusTitle { margin: 0 0 12px; font-size: 15px; font-weight: 600; line-height: 1.5; }
+.statusContent { font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.statusContent p { margin: 8px 0; }
+.statusMeta { color: hsl(var(--muted-foreground, 215 16% 47%)); font-size: 12px; line-height: 1.6; margin: 0; }
+.statusRefresh { display: inline-flex; align-items: center; border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: 7px; padding: 7px 12px; background: hsl(var(--background, 0 0% 100%)); color: hsl(var(--foreground, 222 47% 11%)); cursor: pointer; font-size: 13px; }
+.statusRefresh:disabled { opacity: .5; cursor: not-allowed; }
+.statusDetails { margin-top: 8px; font-size: 12px; }
+.statusDetails summary { cursor: pointer; }
+.statusDetails pre { overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 360px; padding: 8px; background: hsl(var(--muted, 210 40% 96%)); }
+.replayStatus { display: grid; gap: 8px; font-size: 13px; line-height: 1.6; }
+.replayStatus p { margin: 0; }
+.replayBadge { display: inline-block; justify-self: start; padding: 3px 8px; border: 1px solid hsl(var(--border, 214 32% 91%)); border-radius: 999px; font-size: 12px; font-weight: 600; background: hsl(var(--secondary, 210 40% 96%)); color: hsl(var(--secondary-foreground, 222 47% 20%)); }
+.replayBlocked { border-color: hsl(var(--destructive, 0 72% 51%)); background: hsl(var(--destructive-background, 0 86% 97%)); color: hsl(var(--destructive, 0 72% 40%)); }
+@media (max-width: 1000px) { .statusGrid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 900px) { .half { grid-column: span 12; } .form { grid-template-columns: 1fr; } }

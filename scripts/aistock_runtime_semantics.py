@@ -563,6 +563,62 @@ def _validate_tdx_raw_kline(payload: Any) -> tuple[str, str | None, dict[str, An
     return 'passed', None, {'row_count': len(rows), 'first_time': rows[0]['Time'], 'last_time': rows[-1]['Time']}
 
 
+def _validate_pipeline_overview(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Verify truthful partial observations, not the health of unrelated businesses."""
+    if not isinstance(payload, dict) or payload.get('status') != 'success':
+        return 'failed', 'overview success envelope missing', {}
+    data = payload.get('data')
+    if not isinstance(data, dict) or data.get('schema_version') != 'aistock_pipeline_overview_v1':
+        return 'failed', 'overview schema missing', {}
+    sections = data.get('sections')
+    keys = {'ci', 'runners', 'nightly', 'bugs', 'prs', 'worktrees'}
+    if not isinstance(sections, dict) or set(sections) != keys or data.get('read_only') is not True:
+        return 'failed', 'overview source set or read-only boundary invalid', {}
+    available = 0
+    for key, source in sections.items():
+        if not isinstance(source, dict) or source.get('state') not in {'loading', 'available', 'unavailable', 'timeout'}:
+            return 'failed', f'{key} source state invalid', {}
+        if not isinstance(source.get('stale'), bool) or not isinstance(source.get('refreshing'), bool):
+            return 'failed', f'{key} freshness metadata missing', {}
+        if source['state'] == 'available':
+            if not isinstance(source.get('data'), dict) or not source.get('source') or not source.get('collected_at'):
+                return 'failed', f'{key} observation identity missing', {}
+            age = source.get('age_seconds')
+            if isinstance(age, bool) or not isinstance(age, (int, float)) or not math.isfinite(age) or age < 0:
+                return 'failed', f'{key} observation age invalid', {}
+            if not source['stale']:
+                available += 1
+            observed = source['data']
+            def count(value):
+                return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            valid = False
+            if key == 'bugs':
+                valid = count(observed.get('pending')) and count(observed.get('total')) and observed['pending'] <= observed['total']
+            elif key == 'worktrees':
+                valid = count(observed.get('total')) and count(observed.get('task_worktrees')) and observed['total'] > observed['task_worktrees']
+            elif key == 'ci':
+                valid = all(isinstance(observed.get(state), dict) and count(observed[state].get('total'))
+                            and isinstance(observed[state].get('items'), list) for state in ['queued', 'in_progress'])
+            elif key == 'prs':
+                valid = count(observed.get('observed_open')) and isinstance(observed.get('items'), list) and isinstance(observed.get('truncated'), bool)
+            elif key == 'runners':
+                valid = isinstance(observed.get('items'), list) and observed.get('expected_roles') == ['ci', 'security'] and isinstance(observed.get('missing_roles'), list)
+            elif key == 'nightly':
+                run = observed.get('latest_run')
+                valid = isinstance(run, dict) and bool(run.get('id')) and run.get('status') in {'queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending'}
+                if valid:
+                    valid = bool(run.get('conclusion')) == (run['status'] == 'completed')
+            if not valid:
+                return 'failed', f'{key} observed payload invalid', {}
+        elif source['state'] in {'unavailable', 'timeout'} and not source.get('error'):
+            return 'failed', f'{key} failure is not explicit', {}
+        elif source['state'] == 'loading' and source.get('data') is not None:
+            return 'failed', f'{key} loading source fabricates data', {}
+    if not available:
+        return 'pending', 'no fresh independent source has completed yet', {'available_sources': 0}
+    return 'passed', None, {'available_sources': available, 'scope': 'read-only pipeline observations, not business readiness'}
+
+
 def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """Object endpoints must return a non-error object or array payload."""
     if isinstance(payload, list):
@@ -827,6 +883,56 @@ def _validate_advisory_entry_price_status(
             "database_written": database_written,
         },
     )
+
+
+def _validate_advisory_trading_day_defaults(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Attest calendar choices only, never market/minute data readiness."""
+    def failed(reason):
+        return "failed", reason, {}
+
+    def day(value):
+        parsed = datetime.strptime(value, "%Y-%m-%d").date()
+        if parsed.isoformat() != value:
+            raise ValueError("non-canonical calendar date")
+        return parsed
+
+    if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("calendar_only") is not True or payload.get("errors"):
+        return failed("calendar defaults require ok=true and calendar_only=true without errors")
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    try:
+        raw = query.get("lookback_trading_days", ["10"])
+        if len(raw) != 1 or not re.fullmatch(r"[0-9]+", raw[0]):
+            raise ValueError("invalid requested lookback")
+        lookback = int(raw[0])
+        if not 1 <= lookback <= 250 or type(payload.get("lookback_trading_days")) is not int or payload["lookback_trading_days"] != lookback:
+            raise ValueError("lookback identity mismatch")
+        as_of = day(payload.get("as_of_date"))
+        if "as_of_date" in query and query["as_of_date"] != [as_of.isoformat()]:
+            raise ValueError("as-of identity mismatch")
+        values = payload.get("trading_days")
+        if not isinstance(values, list) or not 1 <= len(values) <= lookback:
+            raise ValueError("calendar choices must be nonempty and bounded by lookback")
+        days = [day(value) for value in values]
+        if days != sorted(set(days)) or days[-1] > as_of or day(payload.get("latest_trading_day")) != days[-1]:
+            raise ValueError("calendar choices must be unique, ascending and latest <= as-of")
+        next_value = payload.get("next_trading_day")
+        if next_value is not None and day(next_value) <= as_of:
+            raise ValueError("next trading day must follow as-of")
+        status = payload.get("trading_day_status")
+        if (not isinstance(status, dict) or status.get("ok") is not True
+                or status.get("as_of_date") != as_of.isoformat()
+                or status.get("latest_completed_trading_day") != days[-1].isoformat()
+                or "next_trading_day" not in payload or "next_trading_day" not in status
+                or status.get("next_trading_day") != next_value):
+            raise ValueError("calendar status disagrees with defaults")
+        if (type(payload.get("available_trading_day_count")) is not int or payload["available_trading_day_count"] != len(days)
+                or payload.get("replay_start_date") != values[0] or payload.get("replay_end_date") != values[-1]):
+            raise ValueError("calendar count or replay bounds disagree")
+    except (TypeError, ValueError, OverflowError) as exc:
+        return failed(str(exc))
+    return "passed", None, {"calendar_only": True, "market_data_readiness": "not_evaluated",
+                             "as_of_date": as_of.isoformat(), "latest_trading_day": values[-1],
+                             "next_trading_day": next_value, "trading_day_count": len(days)}
 
 
 def _validate_advisory_returns(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:

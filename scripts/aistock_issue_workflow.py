@@ -3412,8 +3412,10 @@ _validate_health_ok = _runtime_semantics._validate_health_ok
 _validate_collection_payload = _runtime_semantics._validate_collection_payload
 _validate_tdx_raw_kline = _runtime_semantics._validate_tdx_raw_kline
 _validate_object_liveness = _runtime_semantics._validate_object_liveness
+_validate_pipeline_overview = _runtime_semantics._validate_pipeline_overview
 _validate_advisory_entry_price_status = _runtime_semantics._validate_advisory_entry_price_status
 _validate_advisory_returns = _runtime_semantics._validate_advisory_returns
+_validate_advisory_trading_day_defaults = _runtime_semantics._validate_advisory_trading_day_defaults
 _validate_advisory_historical_operations = _runtime_semantics._validate_advisory_historical_operations
 _validate_advisory_sector_entry_original_list = _runtime_semantics._validate_advisory_sector_entry_original_list
 _validate_hmm_rotation_l2_overview = _runtime_semantics._validate_hmm_rotation_l2_overview
@@ -3435,6 +3437,8 @@ _validate_monthly_release_ready = _runtime_semantics._validate_monthly_release_r
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/advisory/trading-days/defaults$"),
+     "advisory_calendar_defaults_only", _validate_advisory_trading_day_defaults),
     (re.compile(r"^/api/v1/advisory/historical-range-batches/[^/]+/operations$"),
      "advisory_historical_operation_status_readback", _validate_advisory_historical_operations),
     (re.compile(r"^/api/v1/strategy-packages/[^/]+/selection-artifacts$"),
@@ -3513,6 +3517,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/qlib/config$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/runtime-contracts/[^/]+$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/validation/plans/[^/]+$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/api/v1/validation/overview/snapshot$"), "pipeline_overview_observations", _validate_pipeline_overview),
     (re.compile(r"^/openapi\.json$"), "openapi_document", _validate_openapi_document),
 )
 
@@ -3618,6 +3623,7 @@ def _evaluate_business_smoke_semantics(
         "advisory_entry_price_status",
         "advisory_sector_entry_original_list",
         "advisory_returns_metrics_v2",
+        "advisory_calendar_defaults_only",
         "advisory_historical_operation_status_readback",
         "local_data_freshness",
         "monthly_release_ready",

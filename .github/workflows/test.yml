@@ -427,7 +427,17 @@ jobs:
           node node_modules/next/dist/bin/next lint
           if [[ "${FRONTEND_TEST_TARGETS}" != "[]" ]]; then
             mapfile -t module_test_targets < <(python -c 'import json, os; print("\n".join(json.loads(os.environ["FRONTEND_TEST_TARGETS"])))' | tr -d '\r')
-            node node_modules/@playwright/test/cli.js test "${module_test_targets[@]}"
+            other_test_targets=()
+            for target in "${module_test_targets[@]}"; do
+              if [[ "$target" == "tests/paper-v2/paper-v2-advisory-ui.spec.ts" ]]; then
+                node node_modules/@playwright/test/cli.js test --config=tests/advisory-mocked.config.ts
+              else
+                other_test_targets+=("$target")
+              fi
+            done
+            if (( ${#other_test_targets[@]} )); then
+              node node_modules/@playwright/test/cli.js test "${other_test_targets[@]}"
+            fi
           fi
 
       - name: Run selected TDX Go tests

@@ -32,6 +32,15 @@ def capture_industry_quote_source(connection, *, cas, projection, repair_provide
     partitions = []
     audits = []
     codes = sorted({entry["canonical_l2_code"] for entry in projection.payload["entries"] if entry["taxonomy_version"] == "SW2021"})
+    from .sw_l2_quote_policy import publication_catalog, quote_publication_policy_identity
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT index_code,src,level,is_pub FROM market.sw_index_classify"
+            " WHERE src='SW2021' AND level='L2' ORDER BY index_code LIMIT 132", ())
+        catalog_rows = cursor.fetchall()
+    if len(catalog_rows) > 131:
+        raise SourceManifestError("official industry publication catalog exceeds its row bound")
+    catalog = publication_catalog([dict(zip(("index_code", "src", "level", "is_pub"), row, strict=True))
+                                   for row in catalog_rows], codes=codes)
     for period in pd.period_range(projection.payload["start_date"], projection.payload["end_date"], freq="M"):
         start = max(date.fromisoformat(projection.payload["start_date"]), period.start_time.date())
         end = min(date.fromisoformat(projection.payload["end_date"]), period.end_time.date())
@@ -56,7 +65,8 @@ def capture_industry_quote_source(connection, *, cas, projection, repair_provide
                 calendar = [row[0] for row in cursor.fetchall()]
             if not calendar or len(calendar) > 31 or len(calendar) != len(set(calendar)):
                 raise SourceManifestError(f"official quote source calendar is empty or invalid: {period}")
-        facts, audit = repair_quote_partition(facts, codes=codes, calendar=calendar, cas=cas, provider=repair_provider)
+        facts, audit = repair_quote_partition(facts, codes=codes, calendar=calendar, catalog=catalog,
+            cas=cas, provider=repair_provider)
         audits.append({"partition_key": str(period), **audit})
         reference = cas.put_json({"schema_version": SCHEMA, "partition_key": str(period), "rows": facts})
         partitions.append({"partition_key": str(period), "row_count": len(facts), "ref": reference.as_dict()})
@@ -64,7 +74,8 @@ def capture_industry_quote_source(connection, *, cas, projection, repair_provide
             "source_dataset": "market.sw_daily", "start_date": projection.payload["start_date"],
             "end_date": projection.payload["end_date"], "quote_units": "sw_daily_native_v1",
             "quote_taxonomy": "SW2021", "quote_start_date": "2021-07-30",
-            "partitions": partitions, "database_write": False,
+            "partitions": partitions, "database_write": False, "publication_catalog": catalog,
+            "publication_policy_identity": quote_publication_policy_identity(),
             "quote_fact_audit": {"partitions": audits,
                 "unresolved_key_count": sum(item["unresolved_key_count"] for item in audits),
                 "repaired_key_count": sum(item["repaired_key_count"] for item in audits)}}

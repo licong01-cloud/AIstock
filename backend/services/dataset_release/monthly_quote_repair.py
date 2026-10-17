@@ -9,7 +9,6 @@ import pandas as pd
 
 from .canonical import canonical_json_bytes
 from .errors import SourceManifestError
-from .sw_l2_quote_policy import quote_is_expected
 
 REQUIRED = ("pct_change", "vol", "amount")
 
@@ -21,7 +20,14 @@ def _finite(value):
         return False
 
 
-def repair_quote_partition(rows, *, codes, calendar, cas, provider=None):
+def _missing(value):
+    try:
+        return value is None or Decimal(str(value)).is_nan()
+    except InvalidOperation:
+        return False
+
+
+def repair_quote_partition(rows, *, codes, calendar, catalog, cas, provider=None):
     """Only requested missing/non-finite fields can be filled from sw_daily.
 
     Raw provider rows, exact request, capture time and units are CAS-pinned.
@@ -29,11 +35,23 @@ def repair_quote_partition(rows, *, codes, calendar, cas, provider=None):
     Each request covers at most one code/month (<=31 source observations).
     """
     from .monthly_industry_facts import QUOTE_FIELDS
-    keys = [(code, day.isoformat()) for day in calendar for code in codes if quote_is_expected(code, day)]
-    key_set = set(keys)
+    if any(catalog.get(code) not in {"0", "1"} for code in codes):
+        raise SourceManifestError("official quote publication catalog is incomplete or invalid")
     facts = {(row["index_code"], row["trade_date"]): dict(row) for row in rows}
     if len(facts) != len(rows):
         raise SourceManifestError("official industry quote keys are duplicated")
+    observed = set()
+    for key, row in facts.items():
+        if catalog.get(key[0]) == "0":
+            values = [row.get(field) for field in REQUIRED]
+            if all(_missing(value) for value in values):
+                continue
+            if not all(_finite(value) for value in values) or any(Decimal(str(row[field])) < 0 for field in ("vol", "amount")):
+                raise SourceManifestError("nonpublished official quote observation is incomplete or invalid")
+            observed.add(key)
+    keys = [(code, day.isoformat()) for day in calendar for code in codes
+            if catalog[code] == "1" or (code, day.isoformat()) in observed]
+    key_set = set(keys)
     missing = {key: [field for field in REQUIRED if not _finite(facts.get(key, {}).get(field))]
                for key in keys}
     missing = {key: fields for key, fields in missing.items() if fields}
@@ -109,6 +127,10 @@ def assert_additive_quote_refresh(cas, before, after):
                   "quote_units", "quote_taxonomy", "quote_start_date", "database_write"):
         if before.get(field) != after.get(field):
             raise SourceManifestError("quote refresh source identity changed")
+    if before.get("publication_catalog") is not None and before["publication_catalog"] != after.get("publication_catalog"):
+        raise SourceManifestError("quote refresh publication catalog changed")
+    if before.get("publication_policy_identity") is not None and before["publication_policy_identity"] != after.get("publication_policy_identity"):
+        raise SourceManifestError("quote refresh publication policy changed")
     old_parts = {part["partition_key"]: part for part in before["partitions"]}
     new_parts = {part["partition_key"]: part for part in after["partitions"]}
     if old_parts.keys() != new_parts.keys():

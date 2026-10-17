@@ -193,6 +193,18 @@ def bind_monthly_prev_close_repairs(
                 inputs=request.inputs, principal=principal.principal_id))}
 
 
+@router.post("/{operation_id}/suspension-authority")
+def bind_monthly_suspension_authority(
+    operation_id: str,
+    request: EmptyCommandRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    del request
+    return {"schema_version": "aistock_monthly_suspension_binding_response_v1",
+            "data": _call(lambda: service.bind_suspension_authority(operation_id, principal=principal.principal_id))}
+
+
 @router.post("/plan")
 def preview_monthly_release(
     request: UnifiedMonthlyReleaseRequest,
