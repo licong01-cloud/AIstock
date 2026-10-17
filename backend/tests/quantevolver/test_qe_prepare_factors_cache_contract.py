@@ -662,11 +662,6 @@ def test_feature_processing_b_a_c_b_yaml_isolation_and_real_normalizer(panel_com
     import copy
     import sys
     import yaml
-    from qlib.data.dataset.handler import DataHandlerLP
-    from qlib.data.dataset.loader import StaticDataLoader
-    from backend.services.quantevolver import qe_custom_loaders
-
-    monkeypatch.setitem(sys.modules, "qe_custom_loaders", qe_custom_loaders)
 
     composer = panel_composer
     params = {"disable_alpha158": True, "observation_panel": _observation_panel(["BaseA"])}
@@ -693,6 +688,13 @@ def test_feature_processing_b_a_c_b_yaml_isolation_and_real_normalizer(panel_com
     assert "feature_processing" not in yaml.safe_dump(unclipped)
 
     # Run Qlib's actual append processing path: both DK_L and DK_I share infer processors.
+    # API-only installations omit Qlib; YAML contracts above still run there.
+    pytest.importorskip("qlib", reason="Real processor contract requires the existing Qlib worker/test environment")
+    from qlib.data.dataset.handler import DataHandlerLP
+    from qlib.data.dataset.loader import StaticDataLoader
+    from backend.services.quantevolver import qe_custom_loaders
+
+    monkeypatch.setitem(sys.modules, "qe_custom_loaders", qe_custom_loaders)
     index = pd.MultiIndex.from_product(
         [pd.bdate_range(RDAGENT_DEFAULT_DATA_SPLIT["train_start"], RDAGENT_DEFAULT_DATA_SPLIT["test_end"]),
          ["000001.SZ", "000002.SZ"]], names=["datetime", "instrument"],
