@@ -1,5 +1,5 @@
 {
-  "actual": "月更 dmr_63a313d97fd046a38d5a876265565014 attempt267 已完成约1GB行业H5，static首批长期未推进。代码证据：Parquet股票批次跨多年，FrozenIndustryContext仅缓存2个原始月份，每批重新加载并聚合全市场月份；独立context重建器路径仍重复读取未消费的sector_data完整日期范围。需要缓存有界行业日聚合而非全市场历史DataFrame，删除未使用读取，补静态阶段进度，并经来源验证复用已有完整行业H5。保留所有PIT/alias/单位/NaN/精确静态列不变及原子发布合同，不重导day/minute/index，不修改HMM/QE业务、数据库、active profile或服务。",
+  "actual": "月更 dmr_63a313d97fd046a38d5a876265565014 attempt267 已完成1019143917字节行业H5；static_factors.parquet自2026-10-14 02:56:40开始仍为0字节，worker存活且持续消耗CPU。真实首批100000行仅覆盖2018-08..2018-09，不是跨多年批次。同范围sector H5读取0.33秒、moneyflow H5读取0.16秒，不能将瓶颈归因于磁盘扫描。已证实独立context路径仍读取未消费的旧sector事实、每次remap重算月度全市场资金流，且static阶段无批次进度；这些是待量化优化点，尚未证明是首批长耗时的直接原因。不得据此宣称根因已确认。",
   "allowed_write_scope": [
     "tests/aistock_validation/bugs/20261013_BUG-1891-monthly-static-industry-repair-repeats-historical-cohort-work.json"
   ],
@@ -12,7 +12,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-13T19:11:02.958686Z",
-  "description": "月更 dmr_63a313d97fd046a38d5a876265565014 attempt267 已完成约1GB行业H5，static首批长期未推进。代码证据：Parquet股票批次跨多年，FrozenIndustryContext仅缓存2个原始月份，每批重新加载并聚合全市场月份；独立context重建器路径仍重复读取未消费的sector_data完整日期范围。需要缓存有界行业日聚合而非全市场历史DataFrame，删除未使用读取，补静态阶段进度，并经来源验证复用已有完整行业H5。保留所有PIT/alias/单位/NaN/精确静态列不变及原子发布合同，不重导day/minute/index，不修改HMM/QE业务、数据库、active profile或服务。",
+  "description": "行业历史修复已写完H5但静态Parquet首批长时间无可见进展。首批实际只含两个历史月份，H5索引读取均小于1秒；原登记中的跨多年批次判断已撤回。需先剖析PIT/证券alias映射、资金流聚合、静态赋值及写入的真实耗时，再最小修复已证实瓶颈并补批次进度、来源绑定的安全断点复用。保留PIT/alias/单位/合法NaN/无关静态列及原子发布合同，不重导已完成day/minute/index，不修改HMM/QE业务、数据库、active profile或服务。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
