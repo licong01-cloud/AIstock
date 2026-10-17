@@ -76,7 +76,8 @@ F-011=五臂真实价值口径；F-012=当前文件输入/因果/身份/零fit�
 |---|---|
 | 精确合同 | APPROVED_BY_USER |
 | 源码/直接验证 | 作者审修通过；31项新研究测试、52项直接helper回归通过；与正式研究状态分离 |
-| 正式双process研究/价值 | NOT_RUN；必须以实际结果更新，不沿用旧数值 |
+| 正式双process研究 | COMPLETED；executor=`03c89377d64c72363c5214a89239d6bdbe1b5e87`；两个fresh process逐字节一致；fit=0 |
+| 价值判断 | INSUFFICIENT_REFERENCE_PATH；70/103共同完整收益日，不采用、不否定连续规则，不宣称完整窗口效果 |
 
 最小本地门禁：changed-file Ruff/py_compile、直接新研究矩阵与受影响旧helper回归、git diff --check、ownership/module/test-plan路由、L0、F2。广域Nightly由CI执行，不重复全量HMM。代码完成至少两轮作者审核/修复，保留结果，不声称独立第三方审核。
 
@@ -97,3 +98,17 @@ production_ddl_gate=noop；production_dml_gate=noop；frontend/backend dependenc
 第二轮作者设计审核：补齐一步消费延迟、原模型完整carrier、parent权威闭合、各成本初始建仓/缺口后未知换手、资本耗尽和零fit≠零predict，禁止研究记录环境变量和生产状态假升级。两轮无剩余设计阻断；真实源码和研究完成后更新此处状态。
 
 第三轮作者源码审核：补充child的可用性/原因/volatility与原features逐行闭合、parent纯算术readback、outcome重复行业日期拒绝，以及原20维输入止于2026-08-28的构造测试。最终新研究矩阵31 passed；受影响原helper矩阵52 passed；changed-file Ruff、py_compile、diff check、ownership（7/7，零歧义）、validation_module_registry_l0（8 passed）、L0（零阻断）及F2通过。独立base fresh-process import指向本任务工作树，未访问数据库、fit或服务。此处仅记录源码审查结果，不代表正式双process研究或运行态验收。
+
+## 11. 当次正式执行结果与后续边界
+
+固定v18与原模型的正式执行已完成。features canonical SHA=`09e8b296000c1e0d8dac540deed23f49e44283b42eb2ff28622444f0c1b88356`；两份sealed prediction canonical SHA均为`a7552ea9215d62d7a21252c8c56613797ab00aef092b0d3a12a88f74dd9b4236`；acceptance canonical SHA=`d8f095f4070a0895a59ebb275a89b93ce94c1153fb87a5bd7c7411af904947e5`。执行结果位于`F:/Dev/AIstock_runtime/hmm_l2_risk_continuous/20261017/run/acceptance.json`。以上都是本次真实执行结果，不重标旧v17结果、不要求为历史证据安排额外工程。
+
+104个预测日和131目录行业完整；实际消费的103个signal日有13,307/13,493个行业日预测可用，不可用预算按批准合同留现金。收益参照存在40个行业日NA，影响33日，五臂共同完整日期为70/103。完整gross净值、完整四成本净值及全窗口比较均不可得；代码如实输出`INSUFFICIENT_REFERENCE_PATH`，没有补0、拼接分块、重置未知换手或采用新策略。
+
+NA归类：40/40均对应冻结`stock_universe.txt`中同日同L2的PIT入池边界；其中包含`002200.SZ`于2026-06-03、`002586.SZ`于2026-08-31的重新入池，不应把全部边界称为IPO。39/40可由下一预测日features直接读回为`hmm_risk_c010_price_domain_weight_denominator_invalid`；最后一日没有窗口内的下一预测日，不能伪造同类features证据。一次仅2026-04-01..02的file-only读回直接确认`301479.SZ`、`301501.SZ`在各自入池日缺少严格前置市值与前收盘。该读回启用fit/filter/数据库/网络poison，没有新模型推断、数据集写入或合同修改。
+
+这暴露的是本研究“复用训练观察域聚合收益”与PIT正常入池边界之间的适用性问题，不是已证明的数据漏采、模型经济无效或应降低D3/D6阈值。不能要求数据窗口补出上市前事实，不能使用当日市值或把新入池股票的未知收益填0来保全路径。正常停牌、合法停发及PIT入池不得直接被表述为模型失败。
+
+本候选按§7停止，不自动追加候选。建议后续只评审一个小范围的收益参照合同修正：将回放持有期的成分资格与权重冻结在决策时刻，而不把当日新入池股票倒算进昨日持仓；保持20维训练观察域、模型、warning和连续预算公式完全不变。停牌估值、退出成分和真实价格缺失的边界须与该合同一并明确，不得在源码中隐含实现。该修订尚未获批；若批准，只复用现有封存预测做零fit、零新推断重评分，不重建模型或开启第二公式搜索。
+
+第四轮作者审查：核对真实执行、40个NA与正式PIT边界的对应关系，区分过程完成、参考路径不足和模型有效性；审查PR机器可读scope及验证回执，修正描述缺项而不修改CI规则。当前不宣称完整窗口效果或runtime生效。
