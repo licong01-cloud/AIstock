@@ -38,6 +38,9 @@ def _dependencies() -> tuple[
 
 
 def build_localsim_product_service() -> LocalSimProductControlPlaneService:
+    from backend.services.simulation_data.minute_provider import SimulationMinuteMarketDataProvider
+    from .localsim_replay_recovery import LocalSimReplayRecoveryService
+
     successor_repository, _, authority, readiness = _dependencies()
     return LocalSimProductControlPlaneService(
         repository=successor_repository,
@@ -47,6 +50,10 @@ def build_localsim_product_service() -> LocalSimProductControlPlaneService:
         ),
         authority=authority,
         readiness=readiness,
+        replay_recovery=LocalSimReplayRecoveryService(
+            repository=successor_repository, source_authority=LocalSimHistoricalSourceAuthority(),
+            market_provider=SimulationMinuteMarketDataProvider(),
+        ),
     )
 
 

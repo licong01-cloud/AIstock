@@ -27,7 +27,7 @@ JSON_COLUMNS = {"target_scope", "metadata", "context_json"}
 # A single publication policy for fetch, health expectations and retry windows.
 PUBLICATION_LAG_DAYS = {"margin_detail": 1, "etf_share_size": 1}
 PUBLICATION_READY_AT = {"margin_detail": time(19, 10), "etf_share_size": time(8, 30)}
-LATE_PUBLICATION_TAIL_DAYS = {"daily_basic": 5, "etf_share_size": 5, "margin_detail": 5}
+LATE_PUBLICATION_TAIL_DAYS = {"daily_basic": 5, "etf_share_size": 5, "margin_detail": 5, "stk_limit": 5}
 
 
 def publication_target_date(dataset, latest_trading, now_cn, previous_trading_day):

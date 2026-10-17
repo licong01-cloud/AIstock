@@ -216,6 +216,30 @@ def test_deferred_promotion_keeps_local_intake_visible_without_allocating(monkey
     assert "--issue 197 --create-registry-worktree --apply" in compact["local_intake"]["next_command"]
 
 
+@pytest.mark.parametrize("paths,expected", [
+    (["backend/tests/scripts", "backend/tests/scripts/test_failure.py"], ["backend/tests/scripts/test_failure.py"]),
+    (["backend/tests/scripts", "backend/tests/missing.py"], []),
+    (["backend/tests/scripts/test_failure.py"], ["backend/tests/scripts/test_failure.py"]),
+])
+def test_promotion_uses_exact_files_without_expanding_diagnostic_roots(monkeypatch, tmp_path, paths, expected):
+    from scripts import aistock_issue_workflow as workflow
+    test = tmp_path / "backend/tests/scripts/test_failure.py"
+    test.parent.mkdir(parents=True)
+    test.touch()
+    monkeypatch.setattr(workflow, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(workflow, "build_triage_ci_issue_plan", lambda **_: {
+        "classification_recommendation": "real_regression_candidate", "summary": _ci_summary([]),
+        "suggested_bug": {"title": "regression", "module": "validation", "severity": "P1", "allowed_write_scope": paths}})
+    monkeypatch.setattr(workflow, "_github_actions_registry_pr_capability", lambda: {"allowed": True})
+    submissions = []
+    monkeypatch.setattr(workflow, "build_submit_bug_plan", lambda **kw: submissions.append(kw) or {"next_command": "continue"})
+    result = workflow.build_promote_ci_issue_plan(issue_number=197, apply=True, create_registry_worktree=True)
+    assert result["excluded_scope_paths"] == [path for path in paths if path not in expected]
+    assert [call["changed_files"] for call in submissions] == ([expected] if expected else [])
+    assert result["workflow_gate"] == ("promoted" if expected else "blocked_exact_file_scope_required")
+    assert workflow._compact_promote_ci_issue(result)["excluded_scope_paths"] == result["excluded_scope_paths"]
+
+
 def test_cli_log_file_outputs_json_and_markdown(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     log_path = tmp_path / "job.log"
     output_path = tmp_path / "summary.json"
@@ -442,16 +466,7 @@ def test_nightly_cli_discovers_bound_artifacts_without_same_run_query(
 
 
 def test_nightly_heterogeneous_failure_groups_build_independent_issue_payloads() -> None:
-    payload = summary.summarize_nightly_status(
-        {
-            "statuses": {"nightlyL3": "failure"},
-            "run_id": "9001",
-            "nightly_session_results": [
-                {"session": "position_timing_backend", "result": "failure"},
-                {"session": "paper_v2_l3", "result": "failure"},
-            ],
-        }
-    )
+    payload = _failed_nightly_sessions("9001", "position_timing_backend", "paper_v2_l3")
 
     assert len(payload["nightly_failure_groups"]) == 2
     assert payload["issue_creation_policy"] == {
@@ -472,17 +487,8 @@ def test_nightly_heterogeneous_failure_groups_build_independent_issue_payloads()
     assert len({item["dedupe"]["nightly_marker"] for item in issue_payloads}) == 2
     assert all(item["synthetic"] is False for item in issue_payloads)
 
-    changed_sessions = summary.summarize_nightly_status(
-        {
-            "statuses": {"nightlyL3": "failure"},
-            "run_id": "9002",
-            "nightly_session_results": [
-                {"session": "position_timing_backend", "result": "failure"},
-                {"session": "position_timing_first_release", "result": "failure"},
-                {"session": "paper_v2_l3", "result": "failure"},
-            ],
-        }
-    )
+    changed_sessions = _failed_nightly_sessions(
+        "9002", "position_timing_backend", "position_timing_first_release", "paper_v2_l3")
     changed_payloads = summary.build_github_issue_payloads(changed_sessions)
     marker_by_module = {
         item["title"].split("][", 1)[1].split("]", 1)[0]: item["dedupe"]["nightly_marker"]
@@ -496,23 +502,17 @@ def test_nightly_heterogeneous_failure_groups_build_independent_issue_payloads()
     assert changed_marker_by_module["paper_v2_selection_center"] == marker_by_module["paper_v2_selection_center"]
 
 
+def _failed_nightly_sessions(run_id: str, *sessions: str):
+    return summary.summarize_nightly_status({
+        "statuses": {"nightlyL3": "failure"},
+        "run_id": run_id,
+        "nightly_session_results": [{"session": session, "result": "failure"} for session in sessions],
+    })
+
+
 def test_nightly_single_group_uses_module_identity_and_preserves_one_time_legacy_match() -> None:
-    advisory_summary = summary.summarize_nightly_status(
-        {
-            "statuses": {"nightlyL3": "failure"},
-            "run_id": "9010",
-            "nightly_session_results": [
-                {"session": "advisory_historical_range_backend", "result": "failure"},
-            ],
-        }
-    )
-    paper_summary = summary.summarize_nightly_status(
-        {
-            "statuses": {"nightlyL3": "failure"},
-            "run_id": "9011",
-            "nightly_session_results": [{"session": "paper_v2_l3", "result": "failure"}],
-        }
-    )
+    advisory_summary = _failed_nightly_sessions("9010", "advisory_historical_range_backend")
+    paper_summary = _failed_nightly_sessions("9011", "paper_v2_l3")
 
     advisory_payloads = summary.build_github_issue_payloads(advisory_summary)
     paper_payloads = summary.build_github_issue_payloads(paper_summary)
@@ -583,15 +583,7 @@ def test_nightly_heterogeneous_failure_groups_are_bounded_with_overflow() -> Non
         "qe_long_trend_phase2_backend",
         "qe_sector_risk_overlay_backend",
     ]
-    payload = summary.summarize_nightly_status(
-        {
-            "statuses": {"nightlyL3": "failure"},
-            "run_id": "9002",
-            "nightly_session_results": [
-                {"session": session, "result": "failure"} for session in sessions
-            ],
-        }
-    )
+    payload = _failed_nightly_sessions("9002", *sessions)
 
     issue_payloads = summary.build_github_issue_payloads(payload)
 

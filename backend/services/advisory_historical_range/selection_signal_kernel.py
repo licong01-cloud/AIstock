@@ -16,6 +16,9 @@ import json
 from typing import Any
 
 
+PROVIDER_CLOCK_CONTRACT = "selection_provider_clocks_v1"
+
+
 @dataclass(frozen=True)
 class SelectionSignalDayV1:
     decision_date: date
@@ -81,6 +84,7 @@ class SelectionSignalDayResultV1:
     unscored_members: Mapping[str, tuple[Mapping[str, str], ...]]
     membership_status: Mapping[str, str]
     computation: Any
+    provider_clock_evidence: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -88,6 +92,7 @@ class SelectionSignalCompletedDayV1:
     clocks: SelectionSignalDayV1
     semantic_identity: str
     storage_identity: str
+    provider_clock_contract: str = PROVIDER_CLOCK_CONTRACT
 
 
 class SelectionSignalBatchError(RuntimeError):
@@ -101,23 +106,131 @@ class SelectionSignalBatchError(RuntimeError):
         super().__init__(f"signal batch failed at {stage}: {self.reason_code}; {day.to_dict()}")
 
 
-class _CutoffBoundProvider:
-    """Bind the native provider's data date without changing its policy.
+class _RiskCutoffProvider:
+    """Risk evidence stays at C; this adapter contains no risk policy."""
 
-    Native computation labels the artifact D; its read-only risk/tradability
-    adapters must observe C, not read D when the explicit request says C<D.
-    Legacy C=D calls preserve the exact original provider invocation.
-    """
-    def __init__(self, provider: Any, clocks: SelectionSignalDayV1):
-        self.provider, self.clocks = provider, clocks
+    def __init__(self, provider: Any, clocks: SelectionSignalDayV1, calls: list):
+        self.provider, self.clocks, self.calls = provider, clocks, calls
 
-    def __getattr__(self, name: str):
-        method = getattr(self.provider, name)
-        def bound(**kwargs):
-            if kwargs.get("trade_date") != self.clocks.decision_date:
-                raise ValueError("native policy read does not match the requested decision date")
-            return method(**{**kwargs, "trade_date": self.clocks.data_cutoff})
-        return bound
+    def _call(self, method: str, kwargs: dict):
+        if kwargs.get("trade_date") != self.clocks.decision_date:
+            raise ValueError("native risk read does not match the requested decision date")
+        self.calls.append({"capability": "risk_policy", "method": method,
+                           "requested_date": self.clocks.decision_date.isoformat(),
+                           "provider_date": self.clocks.data_cutoff.isoformat(),
+                           "package_id": kwargs.get("package_id")})
+        return getattr(self.provider, method)(**{**kwargs, "trade_date": self.clocks.data_cutoff})
+
+    def evaluate(self, **kwargs):
+        return self._call("evaluate", kwargs)
+
+    def apply_to_candidates_with_receipt(self, **kwargs):
+        result = self._call("apply_to_candidates_with_receipt", kwargs)
+        return _with_clock_evidence(result, "risk_metadata", {
+            "provider_clock_contract": PROVIDER_CLOCK_CONTRACT,
+            "requested_date": self.clocks.decision_date.isoformat(),
+            "provider_observation_dates": {"risk_policy": self.clocks.data_cutoff.isoformat()},
+        })
+
+
+class _TradabilityClockProvider:
+    """Native suspension D, native industry C, native TopK unchanged."""
+
+    def __init__(self, provider: Any, clocks: SelectionSignalDayV1, calls: list):
+        self.provider, self.clocks, self.calls = provider, clocks, calls
+
+    def _call(self, method: str, kwargs: dict):
+        if kwargs.get("trade_date") != self.clocks.decision_date:
+            raise ValueError("native tradability read does not match the requested decision date")
+        filtering = method == "filter_candidates_with_receipt"
+        suspension = filtering and kwargs.get("enabled", True)
+        industry = filtering and bool(kwargs.get("industry_blacklist"))
+        if industry and self.clocks.data_cutoff != self.clocks.decision_date:
+            # Optional native contract, never a consumer-side filter or lookup.
+            kwargs = {**kwargs, "industry_trade_date": self.clocks.data_cutoff}
+        dates = {"suspension": self.clocks.decision_date.isoformat() if suspension else None,
+                 "industry": self.clocks.data_cutoff.isoformat() if industry else None}
+        self.calls.append({"capability": "tradability", "method": method,
+                           "requested_date": self.clocks.decision_date.isoformat(),
+                           "provider_date": self.clocks.decision_date.isoformat(),
+                           "lookup_dates": dates, "package_id": kwargs.get("package_id")})
+        result = getattr(self.provider, method)(**kwargs)
+        return _with_clock_evidence(result, "universe_metadata", {
+            "provider_clock_contract": PROVIDER_CLOCK_CONTRACT,
+            "requested_date": self.clocks.decision_date.isoformat(),
+            "provider_observation_dates": dates,
+        })
+
+    def filter_candidates_with_receipt(self, **kwargs):
+        return self._call("filter_candidates_with_receipt", kwargs)
+
+    def select_top_k_with_receipt(self, **kwargs):
+        return self._call("select_top_k_with_receipt", kwargs)
+
+
+def _with_clock_evidence(result: Any, metadata_field: str, evidence: dict) -> Any:
+    """Extend native receipts only; candidate values, counts and reasons stay native."""
+    return result.model_copy(update={
+        metadata_field: {**getattr(result, metadata_field), **evidence},
+        "receipt": result.receipt.model_copy(update={
+            "semantic_payload": {**result.receipt.semantic_payload, **evidence}}),
+    })
+
+
+def _observation_date(value: Any) -> date:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00")).date()
+
+
+def _prepared_clock_evidence(value: Any, clocks: SelectionSignalDayV1, *, hmm_enabled: bool) -> dict:
+    """Validate already prepared observations, without loading/generating HMM assets."""
+    price_observations = set()
+    for row in value.raw.artifact.scores_json:
+        component = row.get("component_scores", {})
+        price_date = component.get("reference_price_trade_date")
+        availability = component.get("reference_price_availability") or {}
+        if ((price_date is not None and _observation_date(price_date) != clocks.data_cutoff)
+                or (availability.get("as_of_date") is not None
+                    and _observation_date(availability["as_of_date"]) != clocks.data_cutoff)
+                or (availability.get("quote_date") is not None
+                    and _observation_date(availability["quote_date"]) > clocks.data_cutoff)):
+            raise ValueError("reference price observation exceeds or differs from requested C")
+        if price_date is not None:
+            price_observations.add(_observation_date(price_date).isoformat())
+        if availability.get("as_of_date") is not None:
+            price_observations.add(_observation_date(availability["as_of_date"]).isoformat())
+    evidence = {"model_input_cutoff": clocks.data_cutoff.isoformat(),
+                "reference_price_limit": clocks.data_cutoff.isoformat(),
+                "reference_price_observation_dates": sorted(price_observations),
+                "hmm": {"status": "NOT_APPLICABLE"}}
+    if not hmm_enabled or not value.prepared_signal.alpha_raw_candidates:
+        return evidence
+    metadata = value.prepared_signal.hmm_metadata
+    inputs = metadata.get("input_data_max_dates")
+    if not isinstance(inputs, Mapping) or not inputs:
+        raise ValueError("HMM input observation dates are missing for the requested C")
+    if (any(_observation_date(v) > clocks.data_cutoff for v in inputs.values())
+            or _observation_date(metadata.get("training_information_cutoff")) > clocks.data_cutoff):
+        raise ValueError("HMM input or training information exceeds requested C")
+    for field in ("snapshot_trained_at", "available_at"):
+        if metadata.get(field) is not None and _observation_date(metadata[field]) > clocks.decision_date:
+            raise ValueError("HMM asset is not available by requested D")
+    as_of = _observation_date(metadata.get("as_of_trade_date"))
+    effective = _observation_date(metadata.get("effective_trade_date"))
+    # The native frozen policy owns validity/freshness. Do not invent a new
+    # minimum-date gate or relabel a legal older snapshot as C/D.
+    if (as_of > clocks.decision_date or effective > clocks.target_trade_date
+            or (metadata.get("coefficient_trade_date") is not None
+                and _observation_date(metadata["coefficient_trade_date"]) != as_of)):
+        raise ValueError("HMM native observation/effective dates differ from requested C/D/T")
+    evidence["hmm"] = {"status": "OBSERVED", "as_of_trade_date": as_of.isoformat(),
+                       "effective_trade_date": effective.isoformat(),
+                       "input_data_max_dates": dict(inputs),
+                       "training_information_cutoff": metadata["training_information_cutoff"]}
+    return evidence
 
 
 class SelectionSignalKernel:
@@ -173,10 +286,17 @@ class SelectionSignalKernel:
                         raise ValueError("native prepared signal cutoff identity mismatch")
                 profiles = {p: parse_selection_runtime_profile_for_computation(request.runtime_configs[p])
                             for p in request.ordered_package_ids}
+                clock_evidence = {
+                    "contract_version": PROVIDER_CLOCK_CONTRACT,
+                    "clocks": day.to_dict(),
+                    "prepared": {p: _prepared_clock_evidence(value, day, hmm_enabled=profiles[p].hmm.enabled)
+                                 for p, value in prepared.items()},
+                    "provider_calls": [],
+                }
                 stage = "native_selection_computation"
-                providers = self._providers if day.data_cutoff == day.decision_date else replace(
-                    self._providers, risk_policy=_CutoffBoundProvider(self._providers.risk_policy, day),
-                    tradability=_CutoffBoundProvider(self._providers.tradability, day))
+                providers = replace(
+                    self._providers, risk_policy=_RiskCutoffProvider(self._providers.risk_policy, day, clock_evidence["provider_calls"]),
+                    tradability=_TradabilityClockProvider(self._providers.tradability, day, clock_evidence["provider_calls"]))
                 computation = self._computation.compute(
                     request=StrategyPackageSelectionComputationRequestV1(
                         trade_date=day.decision_date, data_source="DB_HISTORICAL",
@@ -204,20 +324,23 @@ class SelectionSignalKernel:
                     unscored[p] = tuple({"symbol": str(member), "availability": "UNKNOWN"}
                                         for member in members if member not in scored) if isinstance(members, list) else ()
                 identity = {"clocks": day.to_dict(), "source": request.source_identity,
+                            "provider_clock_evidence": clock_evidence,
                             "package_order": request.ordered_package_ids, "mode": request.selection_mode,
                             "top_k": dict(request.package_top_k), "weights": request.package_weights,
                             "runtime_profiles": {p: selection_runtime_profile_sha256(profiles[p]) for p in profiles},
-                            "native_stages": {p: {stage: getattr(trace, stage).semantic_hash for stage in (
+                            "native_stages": {p: {stage: getattr(trace, stage).receipt_hash for stage in (
                                 "alpha_raw", "hmm_adjusted", "risk_policy_adjusted", "selection_effective")}
                                 for p, trace in computation.stage_trace_by_package.items()},
                             "headers": {p: dict(value.raw.semantic_header) for p, value in prepared.items()}}
                 semantic_hash = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
-                storage_hash = hashlib.sha256(json.dumps([request.consumer_scope, request.run_id, day.to_dict()], sort_keys=True).encode()).hexdigest()
+                storage_hash = hashlib.sha256(json.dumps(
+                    [request.consumer_scope, request.run_id, day.to_dict(), semantic_hash], sort_keys=True).encode()).hexdigest()
                 result = SelectionSignalDayResultV1(
                     consumer_scope=request.consumer_scope, run_id=request.run_id, clocks=day,
                     semantic_identity=semantic_hash, storage_identity=storage_hash,
                     raw_scores=scores, input_contexts=contexts, unscored_members=unscored,
                     membership_status=membership_status, computation=computation,
+                    provider_clock_evidence=deepcopy(clock_evidence),
                 )
                 completed.append(SelectionSignalCompletedDayV1(day, semantic_hash, storage_hash))
                 yield result
