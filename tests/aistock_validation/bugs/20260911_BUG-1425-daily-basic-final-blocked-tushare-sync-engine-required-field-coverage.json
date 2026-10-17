@@ -154,8 +154,8 @@
     ]
   },
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4c7555f9f7949b45deb2d2f9fc1181827bd0ad32",
+  "fixed_at": "2026-09-10T17:57:09Z",
   "github_issue_number": 4515,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4515",
   "last_seen_at": "2026-09-10T17:32:34.026116Z",
@@ -163,6 +163,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4516",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -190,6 +191,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -201,7 +203,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fix_ready",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1425",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "84cc0ea2f26c0865",
+    "recorded_at": "2026-09-10T17:59:22.013995Z",
+    "runtime_contract_digest": "542f44310250fbe5b8237bfa8f6a81c03fe91974d3eb84e4b8e6c708d69a826b",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4a653615aac2d85eda2d95cffd85666431c6ca87",
+    "source_merge_commit": "4c7555f9f7949b45deb2d2f9fc1181827bd0ad32",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4516",
+    "validation_evidence": [
+      "pytest backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 123 passed",
+      "nox -s data_sync_autonomy_backend -> 327 passed",
+      "nox -s validation_module_registry_l0 -> 8 passed",
+      "ruff check backend/services/tushare_sync_engine.py backend/services/audit_backed_data_health.py backend/tests/test_tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -> ok",
+      "git diff --check -> ok"
+    ],
+    "validation_evidence_digest": "cef06b4ecbb1b0694007f1d3a768f37d83f8130f795f51027c5a9e4cb722950b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "aistock_backend"
   ],
