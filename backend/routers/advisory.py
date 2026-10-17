@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from functools import lru_cache
 import logging
 from typing import Any, Callable, Literal, NoReturn
@@ -290,6 +290,41 @@ def _raise_http(exc: TradingCoreError) -> None:
     elif isinstance(exc, UnsupportedFeatureError):
         status_code = 422
     raise HTTPException(status_code=status_code, detail=exc.to_dict()) from exc
+
+
+@router.get("/trading-days/defaults")
+def get_advisory_trading_day_defaults(
+    lookback_trading_days: int = Query(default=10, ge=1, le=250),
+    as_of_date: date | None = None,
+    service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> dict[str, Any]:
+    """Daily UI calendar choices, not a claim that market data is ready."""
+    try:
+        calendar = service.calendar_provider
+        status = calendar.status(as_of_date=as_of_date)
+        as_of = date.fromisoformat(status["as_of_date"])
+        start = as_of - timedelta(days=max(lookback_trading_days * 3, 31))
+        days = calendar.list_trading_days(start, as_of)[-lookback_trading_days:]
+        if not days:
+            raise DataUnavailableError(
+                "advisory daily defaults require authoritative trading calendar dates",
+                context={"as_of_date": as_of.isoformat()},
+            )
+    except TradingCoreError as exc:
+        _raise_http(exc)
+    return {
+        "ok": True,
+        "calendar_only": True,
+        "as_of_date": as_of.isoformat(),
+        "trading_day_status": status,
+        "lookback_trading_days": lookback_trading_days,
+        "latest_trading_day": days[-1].isoformat(),
+        "next_trading_day": status.get("next_trading_day"),
+        "trading_days": [day.isoformat() for day in days],
+        "replay_start_date": days[0].isoformat(),
+        "replay_end_date": days[-1].isoformat(),
+        "available_trading_day_count": len(days),
+    }
 
 
 def _raise_historical_research_http(exc: TradingCoreError) -> None:

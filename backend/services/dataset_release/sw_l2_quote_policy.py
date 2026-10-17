@@ -82,6 +82,20 @@ def quote_publication_policy_identity() -> str:
     )
 
 
+def publication_catalog(classification_rows: Iterable[Mapping[str, Any]], *, codes: Sequence[str]) -> dict[str, str]:
+    """Validate the version-qualified provider catalog without inferring dates."""
+    catalog: dict[str, str] = {}
+    for row in classification_rows:
+        code = str(row.get("index_code", ""))
+        if (code in catalog or row.get("src") != "SW2021" or row.get("level") != "L2"
+            or type(row.get("is_pub")) not in (str, int) or str(row["is_pub"]) not in {"0", "1"}):
+            raise SWL2QuotePolicyError(f"SW L2 publication catalog is invalid: {code}")
+        catalog[code] = str(row["is_pub"])
+    if not set(codes) <= catalog.keys():
+        raise SWL2QuotePolicyError("SW L2 publication catalog omits a canonical code")
+    return catalog
+
+
 def build_quote_availability_payload(
     *,
     code_map: ReleaseSWL2CodeMap,
@@ -108,15 +122,7 @@ def build_quote_availability_payload(
             "SW L2 taxonomy differs from the approved quote policy: "
             f"expected={SW2021_L2_TAXONOMY_DIGEST} actual={observed_digest}"
         )
-    catalog: dict[str, str] = {}
-    for row in classification_rows:
-        code = str(row.get("index_code", ""))
-        if (code in catalog or row.get("src") != "SW2021" or row.get("level") != "L2"
-            or type(row.get("is_pub")) not in (str, int) or str(row["is_pub"]) not in {"0", "1"}):
-            raise SWL2QuotePolicyError(f"SW L2 publication catalog is invalid: {code}")
-        catalog[code] = str(row["is_pub"])
-    if not set(ordered_codes) <= catalog.keys():
-        raise SWL2QuotePolicyError("SW L2 publication catalog omits a canonical code")
+    catalog = publication_catalog(classification_rows, codes=ordered_codes)
     observed: dict[str, set[date]] = {code: set() for code in ordered_codes if catalog[code] == "0"}
     for row in quote_observations:
         code = code_map.id_to_code.get(row.get("l2_code_id"))
@@ -186,6 +192,7 @@ __all__ = (
     "SWL2QuotePolicyError",
     "build_quote_availability_payload",
     "quote_publication_policy_identity",
+    "publication_catalog",
     "publication_quote_observations",
     "taxonomy_digest",
 )

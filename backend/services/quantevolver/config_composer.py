@@ -3706,6 +3706,11 @@ class ConfigComposer:
         结构与 RDAgent conf_baseline.yaml 完全一致，确保在 WSL 环境中
         使用相同的数据集、模型超参数、策略配置执行实验。
         """
+        feature_processing = self._normalize_feature_processing(
+            custom_params,
+            [f["factor_name"] for f in factors_info if f.get("code_text")],
+        )
+        clip_outlier_yaml = str(feature_processing.get("clip_outlier", True)).lower()
         # ── 模型配置 ──
         # 与 RDAgent model_runner.py 完全一致的模型选择逻辑：
         # - 有源代码的自定义模型 → GeneralPTNN + pt_model_uri: "model.model_cls"
@@ -4211,6 +4216,7 @@ class ConfigComposer:
             "archive_reason",
             "archive_allow_override",
             "observation_panel",     # Matched-factor data-loader contract, not a strategy kwarg
+            "feature_processing",    # Input projection / normalization, not model or strategy HP
             "backtest_freq",        # 回测频率（已在上层提取）
             "execution_algo",       # 执行算法（已在上层提取到 inner_strategy）
             "execution_algo_params",  # 执行算法参数（已在上层提取到 inner_strategy）
@@ -4695,7 +4701,7 @@ class ConfigComposer:
             lines.append("        - class: RobustZScoreNorm")
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
-            lines.append("              clip_outlier: true")
+            lines.append(f"              clip_outlier: {clip_outlier_yaml}")
             lines.append(f"              fit_start_time: {data_split['train_start']}")
             lines.append(f"              fit_end_time: {data_split['valid_end']}")
             lines.append("        - class: Fillna")
@@ -4723,7 +4729,7 @@ class ConfigComposer:
             lines.append("        - class: RobustZScoreNorm")
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
-            lines.append("              clip_outlier: true")
+            lines.append(f"              clip_outlier: {clip_outlier_yaml}")
             lines.append(f"              fit_start_time: {data_split['train_start']}")
             lines.append(f"              fit_end_time: {data_split['valid_end']}")
             lines.append("        - class: Fillna")
@@ -4747,7 +4753,7 @@ class ConfigComposer:
             lines.append("        - class: RobustZScoreNorm")
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
-            lines.append("              clip_outlier: true")
+            lines.append(f"              clip_outlier: {clip_outlier_yaml}")
             lines.append("        - class: Fillna")
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
@@ -5072,6 +5078,40 @@ class ConfigComposer:
         }
 
     @staticmethod
+    def _normalize_feature_processing(
+        custom_params: Optional[Dict[str, Any]], factor_names: List[str],
+    ) -> Dict[str, Any]:
+        """Separate computed factors from model inputs without changing the panel."""
+        if custom_params is None or "feature_processing" not in custom_params:
+            return {}
+        raw = custom_params["feature_processing"]
+        prefix = "qe_feature_processing_invalid: "
+        if not isinstance(raw, dict) or set(raw) - {"exclude_from_model", "clip_outlier"}:
+            raise ValueError(prefix + "expected exclude_from_model/clip_outlier object")
+        if custom_params.get("disable_alpha158") is not True or not factor_names:
+            raise ValueError(prefix + "requires custom factors and disable_alpha158=true")
+        excluded = raw.get("exclude_from_model", [])
+        clip = raw.get("clip_outlier", True)
+        if type(clip) is not bool:
+            raise ValueError(prefix + "clip_outlier must be boolean")
+        if (
+            not isinstance(excluded, list)
+            or any(not isinstance(name, str) or not name for name in excluded)
+            or len(set(excluded)) != len(excluded)
+            or set(excluded) - set(factor_names)
+        ):
+            raise ValueError(prefix + "exclude_from_model must name unique computed factors")
+        selected = [name for name in factor_names if name not in excluded]
+        if not selected:
+            raise ValueError(prefix + "cannot exclude all model features")
+        return {
+            "computed_factor_names": list(factor_names),
+            "model_feature_names": selected,
+            "exclude_from_model": list(excluded),
+            "clip_outlier": clip,
+        }
+
+    @staticmethod
     def _normalize_observation_panel_contract(
         custom_params: Optional[Dict[str, Any]],
         factor_names: List[str],
@@ -5185,6 +5225,7 @@ class ConfigComposer:
             custom_params,
             factor_names,
         )
+        feature_processing = self._normalize_feature_processing(custom_params, factor_names)
         formal_dataset_binding = _formal_dataset_binding(custom_params)
         direct_v2_dataset_binding = _direct_v2_dataset_binding(custom_params)
         metadata_kwargs: Dict[str, Any] = {
@@ -5257,6 +5298,8 @@ class ConfigComposer:
         lines.append(
             "QE_OBSERVATION_PANEL_CONTRACT = " + repr(observation_panel_contract)
         )
+        if feature_processing:
+            lines.append(f"QE_FEATURE_PROCESSING = {feature_processing!r}")
         lines.append("")
         lines.append("")
         lines.append("def _validate_factor_data_dataset_contract():")
@@ -5753,7 +5796,7 @@ class ConfigComposer:
         lines.append("")
         lines.append("")
         lines.append("def _select_factor_results(factor_names, factor_results):")
-        lines.append("    if QE_OBSERVATION_PANEL_CONTRACT:")
+        lines.append("    if QE_OBSERVATION_PANEL_CONTRACT" + (" or QE_FEATURE_PROCESSING:" if feature_processing else ":"))
         lines.append("        _require_factor_results(factor_names, factor_results)")
         lines.append("        return [factor_results[name] for name in factor_names]")
         lines.append("    # Preserve the historical no-contract behavior: a failed custom factor is")
@@ -5861,13 +5904,24 @@ class ConfigComposer:
         lines.append("        combined = combined.sort_index()")
         lines.append("")
         lines.append("    combined = _apply_observation_panel(combined)")
+        if feature_processing:
+            lines.append("    # Project only the run-local model input, after the unchanged reference mask.")
+            lines.append("    combined = combined.loc[:, QE_FEATURE_PROCESSING['model_feature_names']].copy()")
         lines.append("")
         lines.append("    # 添加 'feature' 多级列索引（与 RDAgent factor_runner.py 一致）")
         lines.append("    new_columns = pd.MultiIndex.from_product([['feature'], combined.columns])")
         lines.append("    combined.columns = new_columns")
         lines.append("")
         lines.append("    output_path = os.path.join(script_dir, 'combined_factors_df.parquet')")
-        lines.append("    combined.to_parquet(output_path, engine='pyarrow')")
+        if feature_processing:
+            lines.append("    import pyarrow as pa")
+            lines.append("    import pyarrow.parquet as pq")
+            lines.append("    table = pa.Table.from_pandas(combined)")
+            lines.append("    metadata = dict(table.schema.metadata or {})")
+            lines.append("    metadata[b'qe_feature_processing'] = _json.dumps(QE_FEATURE_PROCESSING, sort_keys=True).encode('utf-8')")
+            lines.append("    pq.write_table(table.replace_schema_metadata(metadata), output_path, compression='snappy')")
+        else:
+            lines.append("    combined.to_parquet(output_path, engine='pyarrow')")
         lines.append("    logger.info(f'Saved combined_factors_df.parquet: shape={combined.shape}')")
         lines.append("")
         lines.append("    # 计算 num_features：根据 conf.yaml 中的 data_loader 类型决定")

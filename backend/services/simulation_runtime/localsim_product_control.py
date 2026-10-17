@@ -12,8 +12,11 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
+from backend.data_service.frozen_dataset import FrozenDataset, freeze_dataset_binding
+from backend.services.simulation_data.frozen_file_adapters import FileTradingCalendar
 
 from .localsim_control import LocalSimControlPlaneService
+from .localsim_file_inputs import FILE_BINDING_KEY, FILE_SOURCE_ID
 from .localsim_product_authority import LocalSimProductAuthority
 from .localsim_replay import LocalSimHistoricalDayRunner, LocalSimReplayCoordinator
 from .localsim_runtime_profile import (
@@ -242,12 +245,13 @@ class LocalSimHistoricalSourceResolutionV1:
     trading_days: tuple[date, ...]
     current_trading_date: date
     latest_completed_trade_date: date
+    file_binding: dict[str, Any] | None = None
 
 
 class LocalSimHistoricalSourceAuthorityProtocol(Protocol):
     def resolve(
         self, *, historical_source_id: str, start_trade_date: date, end_trade_date: date,
-        require_latest_completed: bool = True,
+        require_latest_completed: bool = True, file_binding: dict[str, Any] | None = None,
     ) -> LocalSimHistoricalSourceResolutionV1: ...
 
 
@@ -258,7 +262,7 @@ class LocalSimMutationReadinessProtocol(Protocol):
 
 
 class LocalSimHistoricalSourceAuthority:
-    """Resolve the single completed-day DB source and global calendar snapshot."""
+    """Resolve explicit completed-day sources; frozen file retries ignore active pointers."""
 
     def __init__(self, *, calendar: Any | None = None, clock: Any | None = None) -> None:
         self.calendar = calendar or TradeCalendarProvider()
@@ -266,10 +270,10 @@ class LocalSimHistoricalSourceAuthority:
 
     def resolve(
         self, *, historical_source_id: str, start_trade_date: date, end_trade_date: date,
-        require_latest_completed: bool = True,
+        require_latest_completed: bool = True, file_binding: dict[str, Any] | None = None,
     ) -> LocalSimHistoricalSourceResolutionV1:
         source_id = str(historical_source_id or "").strip()
-        if source_id != LOCALSIM_HISTORICAL_SOURCE_ID:
+        if source_id not in {LOCALSIM_HISTORICAL_SOURCE_ID, FILE_SOURCE_ID}:
             raise DataUnavailableError(
                 "LocalSIM historical source is unsupported",
                 context={"reason_code": "LOCALSIM_HISTORICAL_SOURCE_UNSUPPORTED", "historical_source_id": source_id},
@@ -280,7 +284,18 @@ class LocalSimHistoricalSourceAuthority:
                 "LocalSIM replay cannot include the current or future trading date",
                 context={"reason_code": "LOCALSIM_REPLAY_CURRENT_DAY_SOURCE_FORBIDDEN"},
             )
-        days = tuple(self.calendar.list_trading_days(start_trade_date, end_trade_date))
+        if source_id == FILE_SOURCE_ID:
+            file_binding = file_binding or freeze_dataset_binding()
+            dataset = FrozenDataset(file_binding, consumer_scope="LOCALSIM", run_id="source-registration")
+            try:
+                days = tuple(FileTradingCalendar(dataset).list_trading_days(start_trade_date, end_trade_date))
+                dataset.assert_unchanged()
+            finally:
+                dataset.close()
+        else:
+            if file_binding is not None:
+                raise ValueError("database source cannot accept a file binding")
+            days = tuple(self.calendar.list_trading_days(start_trade_date, end_trade_date))
         if not days or days[0] != start_trade_date or days[-1] != end_trade_date:
             raise DataUnavailableError(
                 "LocalSIM replay range must start and end on covered trading dates",
@@ -310,10 +325,11 @@ class LocalSimHistoricalSourceAuthority:
         }
         return LocalSimHistoricalSourceResolutionV1(
             historical_source_id=source_id,
-            historical_source_sha256=canonical_json_sha256(source_payload),
+            historical_source_sha256=file_binding["binding_hash"] if file_binding else canonical_json_sha256(source_payload),
             trading_days=days,
             current_trading_date=current_date,
             latest_completed_trade_date=latest_completed,
+            file_binding=file_binding,
         )
 
 
@@ -453,6 +469,8 @@ class LocalSimProductControlPlaneService:
         )
         kwargs = self._account_bundle_kwargs(request=request, resolved=resolved, created_by=created_by)
         kwargs["effective_to"] = request.end_trade_date
+        if source.file_binding is not None:
+            kwargs["release_metadata"][FILE_BINDING_KEY] = source.file_binding
         account, scope, release, binding = self.control.build_account_bundle(**kwargs)
         runner = LocalSimHistoricalDayRunner(
             historical_source_id=source.historical_source_id,

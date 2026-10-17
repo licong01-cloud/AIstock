@@ -599,6 +599,12 @@ def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
 
 
 @nox.session(venv_backend="none")
+def localsim_control_plane_ui(session: nox.Session) -> None:
+    """Run the LocalSIM readback and status UI contract with mocked APIs."""
+    _run_mocked_frontend_target(session, "tests/paper-v2/localsim-unified-control-plane.spec.ts")
+
+
+@nox.session(venv_backend="none")
 def frontend_type_lint(session: nox.Session) -> None:
     """Run the direct shared-frontend compile and lint contract."""
 
@@ -638,6 +644,15 @@ def hmm_risk_ui(session: nox.Session) -> None:
     """Run only the HMM Risk mocked UI contracts."""
 
     _run_mocked_frontend_target(session, "tests/hmm-risk")
+
+
+@nox.session(venv_backend="none")
+def advisory_mocked_ui(session: nox.Session) -> None:
+    """Run only mocked Advisory UI with X-only runner-owned frontend/browser."""
+    if any(not (ROOT / "frontend/node_modules" / path).is_file() for path in FRONTEND_DIRECT_ENTRYPOINTS):
+        session.error("Advisory mocked UI requires prebuilt dependencies; installation is not authorized")
+    session.run("node", "frontend/node_modules/@playwright/test/cli.js", "test",
+                "--config=frontend/tests/advisory-mocked.config.ts", external=True)
 
 
 @nox.session(venv_backend="none")
@@ -883,6 +898,7 @@ def qlib_data_backend(session: nox.Session) -> None:
             "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
             "scripts/monthly_unified_dataset_release.py": "backend/tests/scripts/test_monthly_unified_dataset_release.py",
             "scripts/audit_qe_moneyflow_alias_coverage.py": "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+            "scripts/repair_qe_moneyflow_alias_candidate.py": "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
             "scripts/monthly_unified_dataset_release_worker.py": "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
             "scripts/dataset_release_hmm_authority.py": "backend/tests/scripts/test_dataset_release_hmm_authority.py",
             "backend/routers/monthly_dataset_releases.py": "backend/tests/routers/test_monthly_dataset_releases.py",
@@ -978,6 +994,7 @@ def advisory_historical_range_backend(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/advisory_historical_range",
+        "backend/tests/test_inference_engine_historical_readonly.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1203,6 +1220,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
     )
     _run_pytest(
         session,
+        "backend/tests/data_service/test_frozen_dataset.py",
         "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
         "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
         "backend/tests/scripts/test_backfill_raw_volume_precision.py",

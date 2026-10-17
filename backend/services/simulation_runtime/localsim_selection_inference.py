@@ -230,6 +230,10 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         super().__init__(**kwargs)
         self.performance_reference = performance_reference
 
+    def require_frozen_file_input_identity(self):
+        from .localsim_file_inputs import current_file_dataset
+        return current_file_dataset(required=True).identity
+
     def _build_env_exports(self, *, historical_read_only: bool = False) -> str:
         # The production factory supplies no optional safe_artifact_roots.
         # Bind the validated owned run, without mutating this shared provider
@@ -262,6 +266,16 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         arguments = ["scripts/strategy_package_live_inference.py", "--runtime-workspace", win_to_wsl_path(str(workspace.workspace_path)),
                      "--historical-plan", win_to_wsl_path(str(plan)), "--historical-read-only", "--consumer-scope", "LOCALSIM",
                      "--run-id", scope.run_id, "--temp-root", win_to_wsl_path(str(root)), "--output-path", win_to_wsl_path(str(output))]
+        from .localsim_file_inputs import current_file_dataset
+        dataset = current_file_dataset()
+        if dataset is not None:
+            binding_path = root / "dataset-binding.json"
+            _atomic_json(binding_path, dataset.binding)
+            # The shared CLI opens this exact locator and verifies pinned content
+            # through WSL before reading any market values. No dataset/model copy.
+            arguments.extend(["--dataset-binding", win_to_wsl_path(str(binding_path)),
+                              "--dataset-root", win_to_wsl_path(str(dataset.root)),
+                              "--input-revision", dataset.identity])
         if self.performance_reference:
             arguments.append("--performance-reference")
         command = (f"source {self.conda_sh} && conda activate {self.conda_env} && cd {self._quote(win_to_wsl_path(str(self.repo_root)))} && "
@@ -300,6 +314,8 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         if item.get("output_path") != win_to_wsl_path(str(path)) or item.get("sha256") != hashlib.sha256(path.read_bytes()).hexdigest():
             raise ValueError("LocalSIM node output path/content identity mismatch")
         payload = json.loads(path.read_text(encoding="utf-8"))
+        if dataset is not None and payload.get("input_context", {}).get("frozen_file_binding_hash") != dataset.identity:
+            raise ValueError("LocalSIM shared node returned a different frozen file input identity")
         metadata = payload.get("metadata", {})
         if (payload.get("ok") is not True or metadata.get("consumer_scope") != "LOCALSIM"
                 or metadata.get("run_id") != scope.run_id or metadata.get("clocks") != clocks.to_dict()

@@ -13,6 +13,7 @@ from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.ledger import FeeModel
 
 from .localsim_runtime_profile import LocalSimRuntimeProfileConfigV1
+from .localsim_file_inputs import frozen_file_binding
 from .models import canonical_json_sha256
 from .successor_models import SimulationAccountStatus, SimulationLedgerScopeKind
 
@@ -172,6 +173,7 @@ def load_native_account_context(*, binding: Any, release: Any, repository: Any, 
         initial_capital=float(account.initial_capital),
         frozen_manifest=manifest,
         profile=profile,
+        data_source=MinuteDataSource.DATASET_FILES if frozen_file_binding(release) else MinuteDataSource.DB_HISTORICAL,
     )
 
 
