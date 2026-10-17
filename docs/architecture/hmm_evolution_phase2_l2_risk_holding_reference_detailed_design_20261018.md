@@ -2,7 +2,7 @@
 
 > v1.0；2026-10-18；F2；HMM owner。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` §1.18。
-> L2-RISK-HOLDING-REFERENCE-D1～D6：**APPROVED_BY_USER**（2026-10-18）。用户已批准完整精确合同并授权实施；这是收益参照合同，不是新模型或第二个消费公式。源码实施中，正式重评分及源码合入尚未执行。
+> L2-RISK-HOLDING-REFERENCE-D1～D6：**APPROVED_BY_USER**（2026-10-18）。源码及直接验证完成，正式双fresh-process零fit/零新推断重评分为`REFERENCE_PATH_COMPLETE`（103/103）；这是收益参照合同，不是新模型或第二个消费公式。源码PR #6289等待交付审核与用户合入确认，未合入或运行激活。结果与取舍见§13。
 
 ## 1. Background / Goal / Scope
 
@@ -124,26 +124,26 @@ cohort/outcomes按`(u,canonical_l2_code,canonical_security_code)`排序且键唯
 
 设计审查与源码/正式执行分表；F2结构PASS不代表精确批准、实现成功或经济有效。F-011=因果篮子/自然边界，F-012=身份/零推断/双进程，F-013=五臂价值与诚实终态。
 
-### 10.1 Design Acceptance Matrix（仅设计定义）
+### 10.1 Design Acceptance Matrix（设计与本次实施）
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-011 | 本设计§3～§5；拟HMM holding-reference builder | test: backend/tests/hmm_risk/test_risk_l2_holding_reference.py；事前成分/同日新入池/重新入池/退出/停牌/市值缺失/证券alias/因子单位 | DESIGN_REVIEW_VERIFIED | 无 |
-| F-012 | 本设计§3/§7；拟薄CLI与parent验证 | test: backend/tests/hmm_risk/test_risk_l2_holding_reference.py；原pins/稀疏行业码/locator内容漂移/未来事实/DB与fit/filter/predict poison/双进程/collision/failure | DESIGN_REVIEW_VERIFIED | 无 |
-| F-013 | 本设计§6/§8；复用risk_l2_value_continuous.py与risk_l2_value_replay.py | test: backend/tests/hmm_risk/test_risk_l2_holding_reference.py；固定五臂/103日共同NA/四成本/漂移/不拼NAV/旧资产不变；artifact: F:/Dev/AIstock_runtime/hmm_l2_risk_continuous/20261017/run/acceptance.json | DESIGN_REVIEW_VERIFIED | 无 |
+| F-011 | 本设计§3～§5；backend/services/hmm_risk/risk_l2_holding_reference.py | test: backend/tests/hmm_risk/test_risk_l2_holding_reference.py；入池/重新入池/退出/停牌/市值/alias/因子；§13实际103日读回 | IMPLEMENTATION_AND_FORMAL_REFERENCE_VERIFIED | 无 |
+| F-012 | 本设计§3/§7；scripts/hmm_risk/run_risk_l2_holding_reference.py与parent验证 | test: backend/tests/hmm_risk/test_risk_l2_holding_reference.py；原pins/未来事实/poison/child closure/collision/failure；artifact: F:/Dev/AIstock_runtime/hmm_l2_risk_holding_reference/20261018/run/acceptance.json | ZERO_FIT_ZERO_NEW_INFERENCE_BITWISE_VERIFIED | 无 |
+| F-013 | 本设计§6/§8/§13；复用risk_l2_value_continuous.py与risk_l2_value_replay.py | test: backend/tests/hmm_risk/test_risk_l2_holding_reference.py；固定五臂/四成本/真实终态；artifact: F:/Dev/AIstock_runtime/hmm_l2_risk_holding_reference/20261018/run/acceptance.json | FORMAL_VALUE_TRADEOFF_VERIFIED | 无 |
 
-### 10.2 实际状态（不作为已实现矩阵）
+### 10.2 实际状态（不与合入、运行生效或经济认证混写）
 
 | 维度 | 当前状态 |
 |---|---|
-| D1～D6新精确参照合同 | APPROVED_BY_USER（2026-10-18）；正式重评分未执行 |
-| 源码/直接测试/源码PR | builder/CLI/直接测试已实现；26项定向测试和55项PR小矩阵通过，lint/format/compile/L0/F2/fresh-process import通过；PR未创建 |
-| 双process重评分 | 未开始，fits=0、新推断=0 |
+| D1～D6新精确参照合同 | APPROVED_BY_USER（2026-10-18）；未改变原模型、20维、窗口和消费公式 |
+| 源码/直接测试/源码PR | builder/CLI/直接测试已实现；26项定向及55项PR小矩阵通过，lint/format/compile/L0/F2/fresh-process import通过；PR #6289，最终HEAD和CI以PR实时读回为准 |
+| 双process重评分 | COMPLETED，103/103日、两child bytes相同、parent算术读回通过；fits=0、新推断=0，执行源码fd3af7760429924413269c40e515834f3cbb0e0b |
 | 数据/生产/运行态 | 零变更 |
 
 直接测试以最小反例证明：即便u新入池股票缺先前市值，q篮子与收益保持不变；若q已有成分市值/报价缺失则不能删它；u退出不会抹去持仓；真实停牌有限报价可用，缺估值NA不填0；单股票行业/真实极端行情可计算；source/code map/PIT/quote权威漂移、未来权重、重复键、缺原sealed或bitwise差异必须typed停止。toy算术测试不可冒充正式103日结果。
 
-实现阶段本地只跑changed-file检查、直接fix-point、小矩阵与L0，广域HMM矩阵留CI/Nightly，不为研究重复全量训练或模块测试。两轮以上作者审修，不声称独立第三方审核。上表历史设计审核状态不等于源码或正式研究通过，实际进度以下表与当次执行回执为准。
+实现阶段本地只跑changed-file检查、直接fix-point、小矩阵与L0，广域HMM矩阵留CI/Nightly，不为研究重复全量训练或模块测试。两轮以上作者审修，不声称独立第三方审核；源码、正式结果、PR、运行态及真实经济认证分别报告，正式结果见§13。
 
 ## 11. Risks / Rollout / Rollback / Production Gates
 
@@ -171,3 +171,34 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 源码第一轮作者审核：修复calendar/PIT universe/manifest/code-map/quote authority的读前后稳定性覆盖；确保cohort先冻结再读报价。直接反例覆盖入池/重新入池、PIT退出后的真实报价、市值最新事实缺失不回取旧值、证券alias、单成分及极端真实收益、停牌合法有限报价/缺估值NA、factor/prev_close单位、五臂四成本和禁止fit/filter/predict/DB/active-profile读取。
 
 源码第二轮作者审核：修复parent在facts构造失败或第二child启动失败时的真实完成数量记录，并用CLI级故障注入覆盖0/1/2成功child、child自报hash身份漂移、finalization写入失败和collision不覆盖；补充自然入池/退出边界及有限停牌报价状态的事实读回。26项定向测试通过，五个原资产canonical pins和双sealed字节一致性实际预检通过。模型、20维、五臂和四成本均未变化；正式一次重评分尚未执行，不将toy测试冒称正式结果。
+
+源码与结果交叉复核：55项PR小矩阵、Ruff/format/compile、L0零blocking、两份直接文档F2及任务树fresh-process import通过。随后在clean committed源码执行§13正式一次重评分，非重复训练或新候选。DESIGN-COMPLIANCE-001四项逐项复核：完整合同实施、无silent fallback、仅批准参照变化、无额外效果/资源/审批门；研究完成不等于生产生效，不改变原记录。前两轮的“未执行”是执行前审查时点，不是当前状态。
+
+## 13. 正式结果与取舍（2026-10-18）
+
+执行源码`fd3af7760429924413269c40e515834f3cbb0e0b`；后续仅文档结果同步不改该次执行身份。request canonical SHA=`a3ab1ee840887e4f2ff8f3dcf89cde8663dc0e84515137ded20ed0b90c119466`，parent facts=`c53aa29b47b237ea351399b18c105593ac9953db4dfd7d6782be7c35dae70f97`，cohort=`e98f6c666345007cfb9963813bdd336d1d0192226c8029d88a0be362ec36231f`。正式acceptance位于`F:/Dev/AIstock_runtime/hmm_l2_risk_holding_reference/20261018/run/acceptance.json`，canonical SHA=`f5960e739ce79fb0432f2fb013dbfef3a6a9f8dc0379f30d4c841d5b38f65969`。
+
+原§3五项canonical pins未改；v18 manifest、风险模型hash与双sealed概率均不变。两个child业务payload bytes相同，parent重建纯算术完全一致，`fits=0/new_inference_calls=0/new_tail_accessed=false`。参考103/103日完整，起止为2026-04-02..2026-08-31，终态`REFERENCE_PATH_COMPLETE`；gross同敞口风险比较点估计为`REFERENCE_RISK_REDUCTION_OBSERVED`，不推导统计显著、forward或净收益认证。
+
+本次5,017证券、504,584个冻结持仓成员日、509,601个报价键；成员估值NA=0。616个停牌成员日使用真实有限报价，200个已在收益日退出PIT的成员日仍按原冻结持仓估值；75个持有期共185个后入池出现次数未倒灌（不是185只唯一股票）。未修改股票池、行业PIT、source facts或训练观察域，没有为自然停牌/退出补值。原70/103结果保留且不改写；本次同时改变了成分时点与市值截止时点，不能把数值差异全部归因于某一个修正。
+
+| 研究臂 | gross累计收益 | MDD（负数） | 最差日 | 平均行业风险预算 | 累计单边行业换手 |
+|---|---:|---:|---:|---:|---:|
+| B 无overlay | −4.890415% | −17.953211% | −3.608153% | 98.621507% | 2.855257 |
+| R 原二值 | −3.105721% | −10.913908% | −1.505067% | 67.724005% | 10.081788 |
+| X_R 二值同敞口 | −2.690442% | −12.616484% | −2.248157% | 67.724005% | 7.333338 |
+| C 连续 | −3.277568% | −13.702091% | −2.444953% | 79.846207% | 4.418997 |
+| X_C 连续同敞口 | −3.593805% | −14.657215% | −2.801141% | 79.846207% | 3.629502 |
+
+相对自身同敞口X_C，C的gross收益高0.316237个百分点、MDD幅度少0.955124个百分点、最差日改善0.356189个百分点，下行平方损失由0.005236309降至0.004598781。这说明本段参考点估计不只是降低总敞口，但不证明独立稳健alpha。相对原R，C的gross收益少0.171848个百分点、MDD幅度更大2.788183个百分点，同时行业换手由10.081788降至4.418997；它是风险强度/机会成本/换手的取舍，不是全面优于R。
+
+| 行业overlay示意成本 | C−X_C累计收益差（百分点） | C−X_C MDD改善（百分点） | C−R累计收益差（百分点） |
+|---|---:|---:|---:|
+| 0bp | +0.316237 | +0.955124 | −0.171848 |
+| 5bp | +0.277545 | +0.933599 | +0.101868 |
+| 10bp | +0.239006 | +0.912108 | +0.373625 |
+| 20bp | +0.162388 | +0.869229 | +0.911306 |
+
+四对比较、各臂四成本完整metrics及逐日机会成本已在同一acceptance保留，不另造历史证据包。机会成本逐日贡献和不是复合收益率，不能混写；示意成本没有包含篮子内部调权/成分、成交限制、税费或冲击，故即使20bp下C−X_C点估计仍为正，`net_value_status=UNASSESSED`不变。
+
+结论：该批准研究包完成，可以交付完整风险消费取舍；不自动采用C、不调整阈值或追加公式，不把负市场行情判为模型/程序失败。`forward_confirmed=false/product_activation=false`；旧版本与研究成果均保留。下一步先交付源码PR供合入确认，之后如决定场景验证则沿原责任边界规划，QE正式实验仍由QE窗口后置执行。九月release等待不影响本次已完成结果。
