@@ -36,7 +36,7 @@ def _json(path: Path, value: Mapping[str, Any]) -> Path:
 def _fixture(tmp_path: Path):
     candidate = tmp_path / "candidate"
     relatives = (
-        "components/factor_h5_static_candidate_v2/sector_data.h5",
+        "components/sector_context_candidate_v1/sector_quote_facts.h5",
         "components/index_context/index_daily.h5",
         "components/sector_context_candidate_v1/sector_code_map.json",
         "components/sector_context_candidate_v1/market_context.parquet",
@@ -133,6 +133,7 @@ def test_hmm_probe_runs_formal_frozen_input_loader(tmp_path: Path) -> None:
     }
     assert observed["bundle"]["schema_version"] == FROZEN_HMM_INPUT_SCHEMA
     assert observed["bundle"]["market_volume_definition"] == MARKET_VOLUME_DEFINITION
+    assert observed["bundle"]["files"]["sector_data_h5"]["relative_path"].endswith("/sector_quote_facts.h5")
     assert observed["test_start"] == date(2024, 7, 1)
     assert observed["backtest_end"] == date(2026, 9, 29)
     assert observed["history_start"] == date(2021, 6, 2)

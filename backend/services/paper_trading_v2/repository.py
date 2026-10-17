@@ -2601,6 +2601,21 @@ class PaperTradingV2Repository:
             (run_id,),
         )
 
+    def list_order_fee_facts_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        """Return the complete fill/cash prefix, including missing cash facts."""
+        return self._fetch_rows(
+            """
+            SELECT f.fill_id, f.order_id, f.symbol, f.side, f.quantity, f.price,
+                   f.run_id, c.run_id AS cash_run_id, c.portfolio_id,
+                   c.symbol AS cash_symbol, c.side AS cash_side, c.notional, c.fee
+            FROM paper_v2.fills f
+            LEFT JOIN paper_v2.cash_ledger c ON c.fill_id = f.fill_id AND c.run_id = f.run_id
+            WHERE f.run_id = %s
+            ORDER BY f.trade_time ASC, f.fill_id ASC
+            """,
+            (run_id,),
+        )
+
     def list_order_events(self, portfolio_id: str, *, run_id: str | None = None, limit: int = 500) -> list[dict[str, Any]]:
         params: list[Any] = [portfolio_id]
         run_filter = ""
@@ -4285,6 +4300,26 @@ class InMemoryPaperTradingV2Repository:
 
     def list_fills_for_run(self, run_id: str) -> list[dict[str, Any]]:
         return [fill.model_dump(mode="json") for fill in self.fills.get(run_id, [])]
+
+    def list_order_fee_facts_for_run(self, run_id: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        entries_by_fill: dict[str, list[CashLedgerEntry]] = {}
+        for entry in self.cash_entries.get(run_id, []):
+            entries_by_fill.setdefault(entry.fill_id, []).append(entry)
+        for fill in self.fills.get(run_id, []):
+            for entry in entries_by_fill.get(fill.fill_id) or [None]:
+                rows.append({
+                    "fill_id": fill.fill_id, "order_id": fill.order_id,
+                    "symbol": fill.symbol, "side": fill.side.value,
+                    "quantity": fill.quantity, "price": fill.price, "run_id": run_id,
+                    "cash_run_id": run_id if entry is not None else None,
+                    "portfolio_id": entry.portfolio_id if entry is not None else None,
+                    "cash_symbol": entry.symbol if entry is not None else None,
+                    "cash_side": entry.side.value if entry is not None else None,
+                    "notional": entry.notional if entry is not None else None,
+                    "fee": entry.fee if entry is not None else None,
+                })
+        return rows
 
     def save_order_event(self, run_id: str, event: OrderEvent) -> None:
         existing = self.events.setdefault(run_id, [])

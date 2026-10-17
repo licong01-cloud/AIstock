@@ -23,6 +23,10 @@ from backend.services.dataset_release.artifact_ready_source import (
 from backend.services.dataset_release.cas_store import CASStore
 from backend.services.dataset_release.control_store import ControlStore
 from backend.services.dataset_release.contracts import Component
+from backend.services.dataset_release.external_ordered_rows import (
+    ExternalOrderedRowsError,
+    external_merge_ordered_rows,
+)
 from backend.services.dataset_release.pit import freeze_pit_snapshot
 
 
@@ -43,6 +47,101 @@ class _Reader:
                 },
             )
         )
+
+
+def _adj_source(component, *, duplicate_month=False):
+    month_key = "2026-09-01_2026-09-30"
+    values = {
+        ("adj_factor", month_key): [
+            {"ts_code": "000001.SZ", "trade_date": "2026-09-01", "adj_factor": 2.0},
+            {"ts_code": "000001.SZ", "trade_date": "2026-09-30", "adj_factor": 3.0},
+        ],
+        ("adj_factor_construction", "construction-2026-09-30"): [
+            {"ts_code": "000001.SZ", "trade_date": "2026-08-31", "adj_factor": 2.0},
+            {"ts_code": "000001.SZ", "trade_date": "2026-09-30", "adj_factor": 3.0},
+            {"ts_code": "000002.SZ", "trade_date": "2026-08-28", "adj_factor": 4.0},
+        ],
+    }
+    if duplicate_month:
+        values[("adj_factor", "2026-09-15_2026-09-30")] = [values[("adj_factor", month_key)][1]]
+    entries = [
+        {"identity": f"{dataset}:{key}", "dataset": dataset, "partition_key": key,
+         "role": "sealed_database_source"}
+        for dataset, key in values
+    ]
+    source = ArtifactReadyBuildSource.__new__(ArtifactReadyBuildSource)
+    source.component_manifests = {component: {"partitions": entries}}
+    source._raw_descriptor = lambda entry: entry
+    source._effective_adj_rows = lambda _component, _descriptor, rows: rows
+    source._reader = SimpleNamespace(iter_rows=lambda dataset, key, **_kwargs: iter(values[(dataset, key)]))
+    return source
+
+
+@pytest.mark.parametrize("component", [Component.DAILY_BIN, Component.MINUTE_BIN, Component.FACTOR_H5_STATIC])
+@pytest.mark.parametrize("selection", ["month", "boundary", "unbounded"])
+def test_monthly_adj_series_does_not_merge_construction_maximum_twice(tmp_path, component, selection):
+    source = _adj_source(component)
+    ranges = {
+        "month": ((date(2026, 9, 1), date(2026, 9, 30)),),
+        "boundary": ((date(2026, 8, 31), date(2026, 8, 31)),),
+        "unbounded": (),
+    }[selection]
+    partitions = source.ordered_partitions(component, "adj_factor", date_ranges=ranges)
+    rows = list(external_merge_ordered_rows(
+        partitions, key=lambda row: (row["ts_code"], row["trade_date"]), spool_root=tmp_path,
+    ))
+    assert [(row["ts_code"], row["trade_date"], row["adj_factor"]) for row in rows] == {
+        "month": [("000001.SZ", "2026-09-01", 2.0), ("000001.SZ", "2026-09-30", 3.0)],
+        "boundary": [("000001.SZ", "2026-08-31", 2.0)],
+        "unbounded": [("000001.SZ", "2026-08-31", 2.0), ("000001.SZ", "2026-09-01", 2.0),
+                      ("000001.SZ", "2026-09-30", 3.0), ("000002.SZ", "2026-08-28", 4.0)],
+    }[selection]
+
+
+def test_construction_direct_read_retains_raw_facts_and_instrument_filter():
+    source = _adj_source(Component.DAILY_BIN)
+    partitions = source.ordered_partitions(
+        Component.DAILY_BIN, "adj_factor_construction", instruments=("000001.SZ",), effective=False,
+    )
+    assert [(row["trade_date"], row["adj_factor"]) for part in partitions for row in part.rows] == [
+        ("2026-08-31", 2.0), ("2026-09-30", 3.0),
+    ]
+
+
+def test_normal_adj_partitions_still_reject_real_duplicate_keys(tmp_path):
+    source = _adj_source(Component.DAILY_BIN, duplicate_month=True)
+    partitions = source.ordered_partitions(Component.DAILY_BIN, "adj_factor", effective=False)
+    with pytest.raises(ExternalOrderedRowsError, match="cross-partition ordered key"):
+        list(external_merge_ordered_rows(
+            partitions, key=lambda row: (row["ts_code"], row["trade_date"]), spool_root=tmp_path,
+        ))
+
+
+@pytest.mark.parametrize("drain", [True, False])
+def test_construction_filter_closes_its_sealed_stream(drain):
+    source = _adj_source(Component.DAILY_BIN)
+    closed = []
+    original = source._reader.iter_rows
+
+    def read_rows(dataset, key, **kwargs):
+        try:
+            yield from original(dataset, key, **kwargs)
+        finally:
+            closed.append(dataset)
+
+    source._reader.iter_rows = read_rows
+    selected = source.ordered_partitions(
+        Component.DAILY_BIN, "adj_factor",
+        date_ranges=((date(2026, 9, 1), date(2026, 9, 30)),) if drain else (),
+    )
+    construction = next(part for part in selected if part.identity.startswith("adj_factor_construction:"))
+    iterator = iter(construction.rows)
+    if drain:
+        assert list(iterator) == []
+    else:
+        assert next(iterator)["trade_date"] == "2026-08-31"
+        iterator.close()
+    assert closed == ["adj_factor_construction"]
 
 
 def test_factor_month_plan_needs_only_month_backings_not_historical_partitions():

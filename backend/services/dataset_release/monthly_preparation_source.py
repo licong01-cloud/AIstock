@@ -50,6 +50,7 @@ class PreparationSourceSnapshot:
     control_digest: str
     manifest: SourceManifest
     deferred_cutoff_datasets: tuple[str, ...] = ()
+    suspension_day_authority_sha256: str | None = None
 
     @property
     def source_content_root(self) -> str:
@@ -257,6 +258,8 @@ def freeze_preparation_source(
     manifest = SourceManifest(tuple(item.summary for item in sealed))
     pit_ref = authority.cas.put_bytes(before.pit_snapshot.canonical_bytes())
     audit_ref = authority.cas.put_json(before.audit.as_receipt(profile=authority.profile.profile, cutoff=cutoff))
+    from backend.data_service.suspension_day_authority import digest, load_authority
+    suspension_authority = load_authority()
     body = {
         "schema_version": PREPARATION_SOURCE_SCHEMA,
         "operation_id": operation_id,
@@ -274,6 +277,7 @@ def freeze_preparation_source(
         "consistent_input_set_complete": False,
         "publication_allowed": False,
         "database_write_performed": False,
+        "suspension_day_authority": suspension_authority,
         **({"monthly_sector_mapping": dict(authority._monthly_sector_mapping)}
            if authority._monthly_sector_mapping is not None else {}),
     }
@@ -296,4 +300,5 @@ def freeze_preparation_source(
         before.consistency_digest,
         manifest,
         tuple(sorted(deferred_cutoff_datasets)),
+        digest(suspension_authority),
     )

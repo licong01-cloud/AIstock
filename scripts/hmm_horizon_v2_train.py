@@ -4,6 +4,7 @@
 This script creates a new HMM asset and optional DB snapshot. It does not
 modify legacy HMM scripts or overwrite existing model directories.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -83,8 +84,11 @@ def candidate_hosts(initial: str) -> list[str]:
         ).strip()
         if ip and ip not in hosts:
             hosts.append(ip)
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(
+            f"hmm_optional_resolver_discovery_unavailable: {type(exc).__name__}; explicit DB hosts still require connection validation",
+            file=sys.stderr,
+        )
     return hosts
 
 
@@ -205,11 +209,11 @@ def trailing_std(values: list[float], idx: int, window: int) -> float:
     return float(np.std(chunk)) if len(chunk) > 1 else 0.0
 
 
-def build_observations(
+def _feature_observations(
     rows: list[dict[str, Any]],
     index_ret: dict[date, float],
     market_vol: dict[date, float],
-) -> tuple[np.ndarray, list[date], dict[int, list[float]]]:
+) -> tuple[np.ndarray, list[date], list[float]]:
     rows = sorted(rows, key=lambda item: item["trade_date"])
     dates: list[date] = []
     daily_ret: list[float] = []
@@ -248,7 +252,30 @@ def build_observations(
             trailing_mean(net_mf_ratio, i, 5),
             trailing_mean(elg_mf_ratio, i, 5),
         ]
-        features.append(feature_row if np.isfinite(feature_row).all() else [0.0] * len(FEATURE_NAMES))
+        if not np.isfinite(feature_row).all():
+            raise ValueError("non-finite horizon-v2 feature input")
+        features.append(feature_row)
+
+    obs = np.asarray(features, dtype=np.float64) if features else np.empty((0, len(FEATURE_NAMES)), dtype=np.float64)
+    return obs, dates, daily_excess
+
+
+def build_feature_observations(
+    rows: list[dict[str, Any]],
+    index_ret: dict[date, float],
+    market_vol: dict[date, float],
+) -> tuple[np.ndarray, list[date]]:
+    """Same frozen feature formulas, without constructing or reading targets."""
+    obs, dates, _ = _feature_observations(rows, index_ret, market_vol)
+    return obs, dates
+
+
+def build_observations(
+    rows: list[dict[str, Any]],
+    index_ret: dict[date, float],
+    market_vol: dict[date, float],
+) -> tuple[np.ndarray, list[date], dict[int, list[float]]]:
+    obs, dates, daily_excess = _feature_observations(rows, index_ret, market_vol)
 
     future_excess: dict[int, list[float]] = {1: [], 3: [], 5: [], 10: [], 20: []}
     for i in range(len(dates)):
@@ -258,9 +285,7 @@ def build_observations(
             else:
                 future_excess[horizon].append(float("nan"))
 
-    if not features:
-        return np.empty((0, len(FEATURE_NAMES)), dtype=np.float64), [], future_excess
-    return np.asarray(features, dtype=np.float64), dates, future_excess
+    return obs, dates, future_excess
 
 
 def preprocess_fit(obs_by_sector: dict[str, np.ndarray], winsor_q: float) -> dict[str, Any]:
@@ -477,7 +502,9 @@ def precompute_daily_coefficients(
     all_dates = sorted({d for labels in sector_date_labels.values() for d in labels})
     daily: dict[str, dict[str, float]] = {}
     for d in all_dates:
-        daily[d] = {code: float(coeffs.get(labels.get(d, "neutral"), 1.0)) for code, labels in sector_date_labels.items()}
+        daily[d] = {
+            code: float(coeffs.get(labels.get(d, "neutral"), 1.0)) for code, labels in sector_date_labels.items()
+        }
     return daily
 
 
@@ -505,7 +532,9 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     index_ret = fetch_index_daily(conn, history_start, data_end)
     market_vol = fetch_market_volume(conn, history_start, data_end)
     stock_sector_map = fetch_stock_sector_map(conn, coeff_end)
-    print(f"Loaded sectors={len(sector_data)}, index_days={len(index_ret)}, market_vol_days={len(market_vol)}, stock_map={len(stock_sector_map)}")
+    print(
+        f"Loaded sectors={len(sector_data)}, index_days={len(index_ret)}, market_vol_days={len(market_vol)}, stock_map={len(stock_sector_map)}"
+    )
 
     train_obs_raw: dict[str, np.ndarray] = {}
     train_future_by_sector: dict[str, dict[int, list[float]]] = {}
@@ -574,10 +603,21 @@ def train(args: argparse.Namespace) -> dict[str, Any]:
     if not models:
         raise RuntimeError("Training produced no models")
 
-    validation_metrics = aggregate_validation_metrics(models, sector_data, index_ret, market_vol, preprocess_params, val_start, val_end)
-    calibration = calibration_from_validation(validation_metrics, args.calibration_lambda, args.coeff_min, args.coeff_max)
+    validation_metrics = aggregate_validation_metrics(
+        models, sector_data, index_ret, market_vol, preprocess_params, val_start, val_end
+    )
+    calibration = calibration_from_validation(
+        validation_metrics, args.calibration_lambda, args.coeff_min, args.coeff_max
+    )
     daily_coefficients = precompute_daily_coefficients(
-        models, sector_data, index_ret, market_vol, preprocess_params, coeff_start, coeff_end, calibration["preset_coeffs"]
+        models,
+        sector_data,
+        index_ret,
+        market_vol,
+        preprocess_params,
+        coeff_start,
+        coeff_end,
+        calibration["preset_coeffs"],
     )
     print(f"Precomputed coefficients for {len(daily_coefficients)} dates")
 
@@ -711,7 +751,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--random-state", type=int, default=42)
     parser.add_argument("--display-name", default=None)
     parser.add_argument("--snapshot-date", default=None)
-    parser.add_argument("--output-root", default="/mnt/f/Dev/AIstock/backend/data/hmm_models")
+    parser.add_argument("--output-root", default=str(Path(__file__).resolve().parents[1] / "backend/data/hmm_models"))
     parser.add_argument("--register-db", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--db-host", default=os.getenv("TDX_DB_HOST", "127.0.0.1"))
     parser.add_argument("--db-port", type=int, default=int(os.getenv("TDX_DB_PORT", "5432")))

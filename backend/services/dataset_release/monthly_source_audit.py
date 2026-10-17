@@ -84,6 +84,7 @@ class SourceGateEvidence:
     duplicate_count: int = 0
     invalid_value_count: int = 0
     exception_refs: tuple[TypedGap, ...] = ()
+    quality_warning_refs: tuple[Mapping[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if self.gate not in SOURCE_GATES:
@@ -112,6 +113,17 @@ class SourceGateEvidence:
             raise ValueError("explained source gaps require typed exception references")
         if not self.explained_missing_count and self.exception_refs:
             raise ValueError("source exception references require explained gaps")
+        if self.quality_warning_refs:
+            from .monthly_source_quality import validate_source_quality_warning
+            if self.gate != "minute_price" or len(self.quality_warning_refs) > self.observed_count:
+                raise ValueError("quality warnings only describe observed minute days")
+            keys = set()
+            for warning in self.quality_warning_refs:
+                validate_source_quality_warning(warning)
+                key = warning.get("symbol"), warning.get("trade_date")
+                if key in keys:
+                    raise ValueError("quality warning is duplicated")
+                keys.add(key)
 
     def payload(self) -> dict[str, Any]:
         return {
@@ -127,6 +139,10 @@ class SourceGateEvidence:
             "duplicate_count": self.duplicate_count,
             "invalid_value_count": self.invalid_value_count,
             "exception_refs": [item.payload() for item in self.exception_refs],
+            **({"quality_status": "ACCEPTED_WITH_WARNINGS",
+                "quality_warning_count": len(self.quality_warning_refs),
+                "quality_warning_refs": [dict(item) for item in self.quality_warning_refs]}
+               if self.quality_warning_refs else {}),
             "status": "PASS"
             if not (self.unexplained_missing_count or self.duplicate_count or self.invalid_value_count)
             else "BLOCKED",
@@ -171,6 +187,9 @@ def close_source_audit(
         "unexplained_gap_count": 0,
         "database_write_performed": False,
         "runtime_fallback": False,
+        **({"quality_status": "ACCEPTED_WITH_WARNINGS",
+            "quality_warning_count": sum(len(gate.quality_warning_refs) for gate in gates)}
+           if any(gate.quality_warning_refs for gate in gates) else {}),
     }
     payload["canonical_sha256"] = hashlib.sha256(canonical_json_bytes(payload)).hexdigest()
     return payload

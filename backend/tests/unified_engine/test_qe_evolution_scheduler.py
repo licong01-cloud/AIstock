@@ -1,3 +1,5 @@
+"""Retry identity and remote-acceptance contracts in the existing QE CI scope."""
+
 from __future__ import annotations
 
 import asyncio
@@ -79,6 +81,13 @@ class _Cursor:
         if normalized.startswith("UPDATE qe_evolution_tasks SET status = 'running'"):
             self.state.task["status"] = "running"
             self.rowcount = 1
+            return
+        if normalized.startswith("UPDATE qe_evolution_loops SET config_json = %s"):
+            config_json, loop_id = params
+            assert loop_id == self.state.loop["loop_id"]
+            if self.state.loop["status"] == "running":
+                self.state.loop["config_json"] = json.loads(config_json)
+                self.rowcount = 1
             return
         if "SET config_json = jsonb_set" in normalized:
             state_value, loop_id, retry_attempt_id = params
@@ -168,7 +177,7 @@ def test_capacity_waiting_retry_reuses_same_attempt_identity_on_resume(
     scheduler._get_workspace_client_for_node_id = lambda _node_id: object()  # type: ignore[method-assign]
     scheduler._get_callback_url_for_node = lambda _node_id: None  # type: ignore[method-assign]
     scheduler._resolve_gpu_execution_contract = (  # type: ignore[method-assign]
-        lambda **_kwargs: ("parallel", False)
+        lambda **_kwargs: ("parallel", False, False)
     )
 
     first = asyncio.run(

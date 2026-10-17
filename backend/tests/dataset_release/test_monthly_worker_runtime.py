@@ -48,6 +48,12 @@ def _runtime(version="6", *, installed=True, shared_scope=True):
 @pytest.mark.parametrize("version", ["6", "7", POSTGRES_SOURCE_ADAPTER_VERSION])
 def test_preflight_proves_current_shared_execution_scope_without_running(version):
     receipt = _runtime(version).preflight_receipt()
+    assert receipt["source_gate_contract"] == {
+        "source_gate_schema": "aistock_monthly_source_gate_v2",
+        "quality_warning_schema": "aistock_monthly_source_quality_warning_v1",
+        "quality_fields": ["quality_status", "quality_warning_count", "quality_warning_refs"],
+        "missing_data_waived": False,
+    }
     assert receipt["status"] == "PASS"
     assert receipt["source_preparation"] == {
         "adapter_id": "aistock.monthly.postgres_source",
