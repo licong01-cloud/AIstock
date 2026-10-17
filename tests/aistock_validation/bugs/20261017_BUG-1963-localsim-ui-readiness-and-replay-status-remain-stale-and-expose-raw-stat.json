@@ -1,0 +1,428 @@
+{
+  "actual": "后台 readiness 可在0/1之间正常变化，但账户页及列表保留打开时结果，原始英文错误码容易被误解为程序失败。",
+  "allowed_write_scope": [
+    "frontend/src/app/simulation/localsim/page.tsx",
+    "frontend/src/app/simulation/localsim/replays/page.tsx",
+    "frontend/src/app/simulation/localsim/replays/[replayJobId]/page.tsx",
+    "frontend/src/app/simulation/localsim/localsim.module.css",
+    "frontend/src/lib/simulation/localsim/api.ts",
+    "frontend/src/lib/simulation/localsim/types.ts",
+    "frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts",
+    "frontend/src/app/simulation/localsim/components/readback-status.tsx",
+    "frontend/src/app/simulation/localsim/components/replay-status.tsx",
+    "frontend/src/lib/simulation/localsim/use-readback.ts",
+    "frontend/src/lib/simulation/localsim/presentation.ts",
+    "tests/aistock_validation/bugs/20261017_BUG-1963-localsim-ui-readiness-and-replay-status-remain-stale-and-expose-raw-stat.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1963",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-17T12:51:32.540110Z",
+  "description": "后台 readiness 可在0/1之间正常变化，但账户页及列表保留打开时结果，原始英文错误码容易被误解为程序失败。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261017-0e4129329b1a",
+      "timestamp": "2026-10-17T12:51:32.540083Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "独立刷新切流条件、当日调度核验与回放进度；显示核验时间及刷新失败；准确区分在途等待、真实阻塞和仅已知原因的异步推理；过期/读取失败不得启用写操作。",
+  "file_scope_contract": {
+    "added_files": [
+      "frontend/src/app/simulation/localsim/components/readback-status.tsx",
+      "frontend/src/app/simulation/localsim/components/replay-status.tsx",
+      "frontend/src/lib/simulation/localsim/use-readback.ts",
+      "frontend/src/lib/simulation/localsim/presentation.ts"
+    ],
+    "changed_files": [
+      "frontend/src/app/simulation/localsim/page.tsx",
+      "frontend/src/app/simulation/localsim/replays/page.tsx",
+      "frontend/src/app/simulation/localsim/replays/[replayJobId]/page.tsx",
+      "frontend/src/app/simulation/localsim/localsim.module.css",
+      "frontend/src/lib/simulation/localsim/api.ts",
+      "frontend/src/lib/simulation/localsim/types.ts",
+      "frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "frontend/src/app/simulation/localsim/page.tsx",
+        "frontend/src/app/simulation/localsim/replays/page.tsx",
+        "frontend/src/app/simulation/localsim/replays/[replayJobId]/page.tsx",
+        "frontend/src/app/simulation/localsim/localsim.module.css",
+        "frontend/src/lib/simulation/localsim/api.ts",
+        "frontend/src/lib/simulation/localsim/types.ts",
+        "frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts",
+        "frontend/src/app/simulation/localsim/components/readback-status.tsx",
+        "frontend/src/app/simulation/localsim/components/replay-status.tsx",
+        "frontend/src/lib/simulation/localsim/use-readback.ts",
+        "frontend/src/lib/simulation/localsim/presentation.ts"
+      ],
+      "impacted_modules": [
+        "simulation.localsim_successor_core",
+        "simulation_runtime",
+        "platform.db",
+        "paper_v2",
+        "strategy_package",
+        "frontend_common",
+        "validation.center",
+        "selection_center"
+      ],
+      "matched_rules": [
+        {
+          "file": "frontend/src/app/simulation/localsim/page.tsx",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "frontend/src/app/simulation/localsim/replays/page.tsx",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "frontend/src/app/simulation/localsim/replays/[replayJobId]/page.tsx",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "frontend/src/app/simulation/localsim/localsim.module.css",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "frontend/src/lib/simulation/localsim/api.ts",
+          "impact_modules": [
+            "validation.center"
+          ],
+          "primary_module": "frontend_common",
+          "risk_level": "medium",
+          "rule_id": "frontend_common"
+        },
+        {
+          "file": "frontend/src/lib/simulation/localsim/types.ts",
+          "impact_modules": [
+            "validation.center"
+          ],
+          "primary_module": "frontend_common",
+          "risk_level": "medium",
+          "rule_id": "frontend_common"
+        },
+        {
+          "file": "frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts",
+          "impact_modules": [
+            "selection_center",
+            "strategy_package"
+          ],
+          "primary_module": "paper_v2",
+          "risk_level": "critical",
+          "rule_id": "paper_v2_services"
+        },
+        {
+          "file": "frontend/src/app/simulation/localsim/components/readback-status.tsx",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "frontend/src/app/simulation/localsim/components/replay-status.tsx",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "frontend/src/lib/simulation/localsim/use-readback.ts",
+          "impact_modules": [
+            "validation.center"
+          ],
+          "primary_module": "frontend_common",
+          "risk_level": "medium",
+          "rule_id": "frontend_common"
+        },
+        {
+          "file": "frontend/src/lib/simulation/localsim/presentation.ts",
+          "impact_modules": [
+            "validation.center"
+          ],
+          "primary_module": "frontend_common",
+          "risk_level": "medium",
+          "rule_id": "frontend_common"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "medium"
+      ],
+      "suggested_scope": [
+        "frontend/src/app/simulation/localsim/page.tsx",
+        "frontend/src/app/simulation/localsim/replays/page.tsx",
+        "frontend/src/app/simulation/localsim/replays/[replayJobId]/page.tsx",
+        "frontend/src/app/simulation/localsim/localsim.module.css",
+        "frontend/src/lib/simulation/localsim/api.ts",
+        "frontend/src/lib/simulation/localsim/types.ts",
+        "frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts",
+        "frontend/src/app/simulation/localsim/components/readback-status.tsx",
+        "frontend/src/app/simulation/localsim/components/replay-status.tsx",
+        "frontend/src/lib/simulation/localsim/use-readback.ts",
+        "frontend/src/lib/simulation/localsim/presentation.ts"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "frontend/src/app/simulation/localsim/page.tsx",
+      "frontend/src/app/simulation/localsim/replays/page.tsx",
+      "frontend/src/app/simulation/localsim/replays/[replayJobId]/page.tsx",
+      "frontend/src/app/simulation/localsim/localsim.module.css",
+      "frontend/src/lib/simulation/localsim/api.ts",
+      "frontend/src/lib/simulation/localsim/types.ts",
+      "frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts",
+      "frontend/src/app/simulation/localsim/components/readback-status.tsx",
+      "frontend/src/app/simulation/localsim/components/replay-status.tsx",
+      "frontend/src/lib/simulation/localsim/use-readback.ts",
+      "frontend/src/lib/simulation/localsim/presentation.ts"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "frontend/src/app/simulation/localsim/page.tsx",
+      "frontend/src/app/simulation/localsim/replays/page.tsx",
+      "frontend/src/app/simulation/localsim/replays/[replayJobId]/page.tsx",
+      "frontend/src/app/simulation/localsim/localsim.module.css",
+      "frontend/src/lib/simulation/localsim/api.ts",
+      "frontend/src/lib/simulation/localsim/types.ts",
+      "frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts",
+      "frontend/src/app/simulation/localsim/components/readback-status.tsx",
+      "frontend/src/app/simulation/localsim/components/replay-status.tsx",
+      "frontend/src/lib/simulation/localsim/use-readback.ts",
+      "frontend/src/lib/simulation/localsim/presentation.ts"
+    ]
+  },
+  "first_seen_at": "2026-10-17T12:51:32.540110Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6266,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6266",
+  "last_seen_at": "2026-10-17T12:51:32.540110Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "frontend_type_lint"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "not_required",
+    "post_restart_effective_gate": "not_required",
+    "provisional": true,
+    "runtime_impact": "frontend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM UI readiness and replay status remain stale and expose raw state codes",
+  "trigger_condition": {
+    "fingerprint": "0e4129329b1a959fb72e557a",
+    "source_event_id": "FE-20261017-0e4129329b1a"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:simulation_runtime",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/simulation/localsim/page.tsx",
+      "frontend/src/app/simulation/localsim/replays/page.tsx",
+      "frontend/src/app/simulation/localsim/replays/[replayJobId]/page.tsx",
+      "frontend/src/app/simulation/localsim/localsim.module.css",
+      "frontend/src/lib/simulation/localsim/api.ts",
+      "frontend/src/lib/simulation/localsim/types.ts",
+      "frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts",
+      "frontend/src/app/simulation/localsim/components/readback-status.tsx",
+      "frontend/src/app/simulation/localsim/components/replay-status.tsx",
+      "frontend/src/lib/simulation/localsim/use-readback.ts",
+      "frontend/src/lib/simulation/localsim/presentation.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/src/app/simulation/localsim/page.tsx",
+    "ui_routes": [
+      "/src/app/simulation/localsim/page.tsx"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_budget": {
+    "budget": "light_ui",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "frontend_type_lint"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-40%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light_ui",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "frontend_type_lint"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-40%"
+    }
+  }
+}
