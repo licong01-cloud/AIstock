@@ -69,7 +69,8 @@ def clone_reusing_bytes(baseline, staging):
     if staging.parent != baseline.parent or staging == baseline:
         raise ValueError("successor must be a distinct sibling on the same volume")
     staging.mkdir(exist_ok=False)
-    private = {MONEYFLOW, META, "qe_dataset_manifest.json", "direct_monthly_state.json"}
+    private = {MONEYFLOW, META, AUDIT, REPAIR, INVENTORY,
+               "qe_dataset_manifest.json", "direct_monthly_state.json"}
     reused = []
     for path in baseline.rglob("*"):
         relative = path.relative_to(baseline)
@@ -104,6 +105,12 @@ def repair(args):
     manifest_file_sha = _sha256(manifest_path)
     manifest = _require_manifest_identity(manifest_path, expected_identity=args.expected_manifest,
                                            expected_file_sha256=manifest_file_sha)
+    baseline_state_path = baseline / "direct_monthly_state.json"
+    baseline_state_sha = _sha256(baseline_state_path)
+    baseline_state = json.loads(baseline_state_path.read_text(encoding="utf-8"))
+    if any(not isinstance(status, str) or not status.strip()
+           for status in (manifest.get("availability_status"), baseline_state.get("status"))):
+        raise ValueError("baseline release readiness status is missing")
     active = json.loads(args.active_profile.read_text(encoding="utf-8"))
     if active["components"]["dataset_manifest_sha256"] != args.expected_manifest:
         raise ValueError("active profile and frozen predecessor identity differ")
@@ -200,7 +207,9 @@ def repair(args):
         path = baseline / relative
         if not os.path.samefile(path, staging / relative) or (path.stat().st_size, path.stat().st_mtime_ns) != (size, mtime):
             raise ValueError(f"reused component drift: {relative}")
-    if _sha256(manifest_path) != manifest_file_sha or _sha256(baseline / MONEYFLOW) != summary["moneyflow_before_sha256"]:
+    if (_sha256(manifest_path) != manifest_file_sha
+            or _sha256(baseline_state_path) != baseline_state_sha
+            or _sha256(baseline / MONEYFLOW) != summary["moneyflow_before_sha256"]):
         raise ValueError("baseline mutated during build")
     if _sha256(args.active_profile) != active_sha:
         raise ValueError("active profile changed concurrently")
@@ -235,7 +244,6 @@ def repair(args):
         elif key == "moneyflow_alias_coverage":
             entry.update({k: after[k] for k in ["expected", "resolved", "provider_absence", "unknown"]})
     updated["revision"] = args.revision
-    updated["availability_status"] = "CANDIDATE_READY"
     updated["source_contract"]["moneyflow_alias"] = {
         "authority_schema": identity.evidence()["schema_version"], "authority_canonical_sha256": identity.manifest_sha256,
         "source_dataset": "market.moneyflow_ts", "audit_start": args.start_date.isoformat(),
@@ -245,9 +253,9 @@ def repair(args):
     updated["deployment_snapshot_id"] = f"{updated['release_id']}_{updated['deployment_content_sha256'][:16]}"
     updated["dataset_manifest_sha256"] = _manifest_identity(updated)
     write_json(staging / "qe_dataset_manifest.json", updated)
-    state = json.loads((baseline / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    state = copy.deepcopy(baseline_state)
     state.update(candidate_root=str(target), baseline_root=str(baseline), generation=args.generation,
-                 revision=args.revision, status="CANDIDATE_READY", production_activation=False,
+                 revision=args.revision, production_activation=False,
                  runtime_action_performed=False, created_at=summary["created_at"], updated_at=summary["created_at"])
     state["source_candidate"] = {"root": str(baseline), "dataset_manifest_sha256": args.expected_manifest,
                                  "manifest_file_sha256": manifest_file_sha}
@@ -258,7 +266,7 @@ def repair(args):
         "status": "PASS", "receipt_sha256": _sha256(staging / REPAIR), "row_count": len(patch)}
     write_json(staging / "direct_monthly_state.json", state)
     staging.rename(target)
-    return {"status": "CANDIDATE_READY", "candidate_root": str(target), "generation": args.generation,
+    return {"status": state["status"], "candidate_root": str(target), "generation": args.generation,
             "manifest": updated["dataset_manifest_sha256"], "manifest_file_sha256": state["manifest"]["file_sha256"],
             "receipt": str(target / REPAIR), "appended": len(patch), "after": after,
             "moneyflow_sha256": summary["moneyflow_after_sha256"]}

@@ -139,9 +139,15 @@ def test_copy_on_write_omits_moneyflow_and_never_overwrites_candidate(tmp_path):
     factor.mkdir(parents=True)
     (factor / "moneyflow.h5").write_bytes(b"original")
     (factor / "daily_pv.h5").write_bytes(b"unchanged")
+    for relative in (repair.AUDIT, repair.REPAIR, repair.INVENTORY):
+        path = baseline / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"previous receipt")
     reused = repair.clone_reusing_bytes(baseline, staging)
     assert len(reused) == 1
     assert not (staging / repair.MONEYFLOW).exists()
+    assert all(not (staging / relative).exists()
+               for relative in (repair.AUDIT, repair.REPAIR, repair.INVENTORY))
     assert (staging / repair.FACTOR / "daily_pv.h5").samefile(factor / "daily_pv.h5")
     with pytest.raises(FileExistsError):
         repair.clone_reusing_bytes(baseline, staging)
@@ -149,7 +155,8 @@ def test_copy_on_write_omits_moneyflow_and_never_overwrites_candidate(tmp_path):
         repair.clone_reusing_bytes(baseline, baseline)
 
 
-def test_complete_successor_build_updates_pins_and_keeps_source_private(tmp_path, monkeypatch):
+@pytest.mark.parametrize("baseline_status", ["CANDIDATE_READY", "BLOCKED", None])
+def test_complete_successor_build_updates_pins_and_keeps_source_private(tmp_path, monkeypatch, baseline_status):
     baseline, target = tmp_path / "baseline", tmp_path / "successor"
     factor = baseline / repair.FACTOR
     factor.mkdir(parents=True)
@@ -181,18 +188,19 @@ def test_complete_successor_build_updates_pins_and_keeps_source_private(tmp_path
         return {"path": path.relative_to(baseline).as_posix(), "sha256": repair._sha256(path), "size": path.stat().st_size}
 
     files = [pin(p) for p in factor.iterdir()]
-    inventory = baseline / "reports/inventory.json"
+    inventory = baseline / repair.INVENTORY
     repair.write_json(inventory, {"files": files, "file_count": len(files)})
-    old_audit, old_repair = baseline / "reports/audit.json", baseline / "reports/repair.json"
+    old_audit, old_repair = baseline / repair.AUDIT, baseline / repair.REPAIR
     repair.write_json(old_audit, {})
     repair.write_json(old_repair, {})
     manifest = {"release_id": "test", "cutoff_trade_date": "2026-08-31", "source_contract": {},
+        "availability_status": baseline_status,
         "components": {"moneyflow_h5": pin(factor / "moneyflow.h5"), "factor_meta": pin(factor / "meta.json"),
             "factor_content_manifest": pin(inventory), "moneyflow_alias_coverage": pin(old_audit),
             "moneyflow_alias_repair": pin(old_repair), "security_source_identity": pin(factor / "security_source_identity.json")}}
     manifest["dataset_manifest_sha256"] = repair._manifest_identity(manifest)
     repair.write_json(baseline / "qe_dataset_manifest.json", manifest)
-    repair.write_json(baseline / "direct_monthly_state.json", {"components": {}})
+    repair.write_json(baseline / "direct_monthly_state.json", {"components": {}, "status": baseline_status})
     profile = tmp_path / "active.json"
     repair.write_json(profile, {"components": {"dataset_manifest_sha256": manifest["dataset_manifest_sha256"]}})
     profile_hash = repair._sha256(profile)
@@ -208,15 +216,23 @@ def test_complete_successor_build_updates_pins_and_keeps_source_private(tmp_path
         provider_absence_manifest=absence, expected_manifest=manifest["dataset_manifest_sha256"],
         start_date=date(2023, 1, 12), end_date=date(2025, 2, 17), env_file=tmp_path / "unused",
         generation="next", revision="next", bug_id="BUG-1646", dry_run=False)
+    if baseline_status is None:
+        with pytest.raises(ValueError, match="baseline release readiness status is missing"):
+            repair.repair(args)
+        assert not target.exists()
+        return
     result = repair.repair(args)
-    assert result["status"] == "CANDIDATE_READY" and result["appended"] == 1
+    assert result["status"] == baseline_status and result["appended"] == 1
     assert result["after"]["resolved"] == 3 and result["after"]["unknown"] == 0
     assert repair._sha256(profile) == profile_hash
     assert not (target / repair.MONEYFLOW).samefile(baseline / repair.MONEYFLOW)
     assert (target / repair.FACTOR / "daily_pv.h5").samefile(factor / "daily_pv.h5")
     assert len(pd.read_hdf(factor / "moneyflow.h5", "data")) == 2
+    assert json.loads(old_audit.read_text()) == json.loads(old_repair.read_text()) == {}
     assert json.loads((target / repair.META).read_text())["rows_by_file"]["moneyflow.h5"] == 3
     updated = json.loads((target / "qe_dataset_manifest.json").read_text())
+    assert updated["availability_status"] == baseline_status
+    assert json.loads((target / "direct_monthly_state.json").read_text())["status"] == baseline_status
     assert repair._manifest_identity(updated) == result["manifest"]
     for item in updated["components"].values():
         assert repair._sha256(target / item["path"]) == item["sha256"]

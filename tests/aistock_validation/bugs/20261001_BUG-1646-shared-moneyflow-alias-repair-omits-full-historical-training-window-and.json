@@ -141,6 +141,7 @@
     "l0",
     "qlib_data_backend"
   ],
+  "resolution_note": "续审已同步最新main。第一轮确认完整冻结日历/共享历史代码和原有CNY/股数合同；第二轮RED复现局部moneyflow修复把BLOCKED前驱提升为READY、同名回执被硬链接复用两项问题，修复为保留前驱状态及私有写入回执；第三轮17项定向测试、8项模块登记和8项目录完整性测试通过，Ruff及diff检查通过。真实候选未重建，未写DB、profile或运行态。此工具仅生成文件候选；正式发布/激活仍通过既有adopt及CAS流程，不替代READY operation或授权资产。DESIGN-COMPLIANCE-001：不以局部通过清除其他阻断，不吞错，不改PIT/单位/模型，不增加审批门禁。",
   "risk_area": "bug",
   "root_cause": "Original canonical export omitted pre-renaming provider rows. BUG-1611 restored only the requested 120 dates starting 2024-08-13; its observed-source-row audit and narrow receipt did not prove full training history. Source DB already contains all 1142 required facts; 10 no-price sessions have frozen full-day suspension evidence.",
   "runtime_contract": {
