@@ -101,6 +101,7 @@ class SubscriptionHandle(BaseModel):
 MarketDataChannelKind = Literal[
     "in_process_tdx",
     "in_process_db",
+    "in_process_files",
     "minqmt_xtdata",
 ]
 

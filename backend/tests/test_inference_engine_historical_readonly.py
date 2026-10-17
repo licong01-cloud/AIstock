@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
+
 from backend.inference_engine import InferenceEngine
 from backend.services.strategy_package.live_inference import WslStrategyPackageInferenceProvider
 
 
-def test_inference_engine_current_defaults_preserve_writes_ensure_fallback_and_cache() -> None:
+def test_inference_engine_current_defaults_preserve_writes_ensure_fallback_and_cache(tmp_path, monkeypatch) -> None:
     engine = object.__new__(InferenceEngine)
+    engine.temp_root = tmp_path
+    monkeypatch.setattr("backend.inference_engine.inference_temporary_environment", lambda _: nullcontext())
     captured = {}
 
     def fake_impl(**kwargs):  # noqa: ANN003, ANN202
@@ -24,8 +28,10 @@ def test_inference_engine_current_defaults_preserve_writes_ensure_fallback_and_c
     assert captured == result
 
 
-def test_inference_engine_historical_policy_is_forwarded_without_silent_override() -> None:
+def test_inference_engine_historical_policy_is_forwarded_without_silent_override(tmp_path, monkeypatch) -> None:
     engine = object.__new__(InferenceEngine)
+    engine.temp_root = tmp_path
+    monkeypatch.setattr("backend.inference_engine.inference_temporary_environment", lambda _: nullcontext())
     engine._run_inference_impl = lambda **kwargs: kwargs  # type: ignore[method-assign]
 
     result = engine.run_inference(

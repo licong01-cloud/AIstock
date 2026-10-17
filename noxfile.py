@@ -898,6 +898,7 @@ def qlib_data_backend(session: nox.Session) -> None:
             "scripts/update_backtest_dataset_monthly.py": "backend/tests/scripts/test_update_backtest_dataset_monthly.py",
             "scripts/monthly_unified_dataset_release.py": "backend/tests/scripts/test_monthly_unified_dataset_release.py",
             "scripts/audit_qe_moneyflow_alias_coverage.py": "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
+            "scripts/repair_qe_moneyflow_alias_candidate.py": "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
             "scripts/monthly_unified_dataset_release_worker.py": "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
             "scripts/dataset_release_hmm_authority.py": "backend/tests/scripts/test_dataset_release_hmm_authority.py",
             "backend/routers/monthly_dataset_releases.py": "backend/tests/routers/test_monthly_dataset_releases.py",
@@ -993,6 +994,7 @@ def advisory_historical_range_backend(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/advisory_historical_range",
+        "backend/tests/test_inference_engine_historical_readonly.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1218,6 +1220,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
     )
     _run_pytest(
         session,
+        "backend/tests/data_service/test_frozen_dataset.py",
         "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
         "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
         "backend/tests/scripts/test_backfill_raw_volume_precision.py",

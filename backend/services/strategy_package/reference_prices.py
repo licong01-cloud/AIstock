@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import date, timedelta
 from math import isfinite
 from typing import Any, Callable, Mapping, Sequence
@@ -87,7 +88,8 @@ def load_reference_prices(
     *,
     symbols: list[str],
     as_of_date: date,
-    conn_factory: Callable[..., Any],
+    conn_factory: Callable[..., Any] | None = None,
+    row_reader: Callable[..., Any] | None = None,
 ) -> ReferencePrices:
     codes = normalize_and_validate_ts_codes(
         symbols,
@@ -95,6 +97,8 @@ def load_reference_prices(
         start_date=as_of_date,
         end_date=as_of_date,
     )
+    if conn_factory is None and row_reader is None:
+        raise ValueError("reference prices require an explicit read-only row source")
     prices = ReferencePrices()
 
     def load_chunk(chunk: list[str], _index: int, _correlation_id: str) -> list[Any]:
@@ -107,15 +111,21 @@ def load_reference_prices(
                 "suspension_dates": [],
                 "reason_code": "REFERENCE_CLOSE_MISSING",
             }
-        with conn_factory() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
+        with (conn_factory() if row_reader is None else nullcontext(None)) as conn:
+            with (conn.cursor() if conn is not None else nullcontext(None)) as cur:
+                def read_rows(role, sql, params):
+                    if row_reader is not None:
+                        return row_reader(role, *params)
+                    cur.execute(sql, params)
+                    return cur.fetchall()
+                source_rows = read_rows(
+                    "current_close",
                     """SELECT ts_code, close_li FROM market.kline_daily_raw
                        WHERE trade_date = %s AND ts_code = ANY(%s)""",
                     (as_of_date, chunk),
                 )
                 invalid_current: set[str] = set()
-                for symbol, close_li in cur.fetchall():
+                for symbol, close_li in source_rows:
                     price = _positive_price(close_li)
                     if price is not None:
                         prices[str(symbol)] = price
@@ -130,12 +140,13 @@ def load_reference_prices(
                 missing = [symbol for symbol in chunk if symbol not in prices and symbol not in invalid_current]
                 if not missing:
                     return []
-                cur.execute(
+                source_rows = read_rows(
+                    "suspensions",
                     """SELECT ts_code, trade_date, suspend_type, suspend_timing FROM market.suspend_d
                        WHERE ts_code = ANY(%s) AND trade_date >= %s AND trade_date <= %s""",
                     (missing, as_of_date, as_of_date),
                 )
-                current_days, current_receipt = _suspension_proof(cur.fetchall(), symbols=missing, dates=[as_of_date])
+                current_days, current_receipt = _suspension_proof(source_rows, symbols=missing, dates=[as_of_date])
                 current_suspensions = {row["ts_code"]: row for row in current_days}
                 for symbol in missing:
                     prices.observations[symbol]["suspension_day_authority"] = current_receipt
@@ -146,31 +157,34 @@ def load_reference_prices(
                 ]
                 if not suspended:
                     return []
-                cur.execute(
+                source_rows = read_rows(
+                    "previous_close",
                     """SELECT DISTINCT ON (ts_code) ts_code, trade_date, close_li
                        FROM market.kline_daily_raw WHERE trade_date < %s AND ts_code = ANY(%s)
                        ORDER BY ts_code, trade_date DESC""",
                     (as_of_date, suspended),
                 )
-                previous = {str(symbol): (day, _positive_price(close)) for symbol, day, close in cur.fetchall()}
+                previous = {str(symbol): (day, _positive_price(close)) for symbol, day, close in source_rows}
                 usable = {
                     symbol: item for symbol, item in previous.items() if item[1] is not None and item[0] < as_of_date
                 }
                 if not usable:
                     return []
                 start = min(day for day, _price in usable.values()) + timedelta(days=1)
-                cur.execute(
+                source_rows = read_rows(
+                    "calendar",
                     """SELECT cal_date, is_trading FROM market.trading_calendar
                        WHERE cal_date >= %s AND cal_date <= %s ORDER BY cal_date""",
                     (start, as_of_date),
                 )
-                calendar = {day: is_open for day, is_open in cur.fetchall() if isinstance(is_open, bool)}
-                cur.execute(
+                calendar = {day: is_open for day, is_open in source_rows if isinstance(is_open, bool)}
+                source_rows = read_rows(
+                    "suspensions",
                     """SELECT ts_code, trade_date, suspend_type, suspend_timing FROM market.suspend_d
                        WHERE ts_code = ANY(%s) AND trade_date >= %s AND trade_date <= %s""",
                     (list(usable), start, as_of_date),
                 )
-                proof_rows = cur.fetchall()
+                proof_rows = source_rows
                 dates = [start + timedelta(days=i) for i in range((as_of_date - start).days + 1)]
                 projected, receipt = _suspension_proof(proof_rows, symbols=list(usable), dates=dates)
                 proof = {(row["ts_code"], date.fromisoformat(row["trade_date"])): row for row in projected}

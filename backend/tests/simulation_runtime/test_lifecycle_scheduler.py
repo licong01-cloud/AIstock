@@ -19829,6 +19829,7 @@ def test_closed_native_historical_executor_runs_real_broker_and_preserves_residu
     )
     job = SimpleNamespace(
         replay_job_id="replay_window_regression", simulation_account_id=native.strategy_id,
+        historical_source_id="market.kline_minute_raw.v1",
         binding_id=native.binding_id, release_id=release.release_id, start_trade_date=TRADE_DATE,
         end_trade_date=TRADE_DATE, status=LocalSimReplayStatus.RUNNING_HISTORICAL, live_release_id=None,
     )
