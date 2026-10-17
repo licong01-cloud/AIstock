@@ -65,12 +65,47 @@ def own_scope() -> LocalSimInferenceScope:
     return scope
 
 
-def windows_x_root(value: Path | str) -> Path:
+def _require_windows_x_root(value: Path | str) -> Path:
     root = Path(value).resolve()
     if root.drive.upper() != "X:" or not root.is_relative_to(Path("X:/AIstock_temp").resolve()):
         raise ValueError("LocalSIM temporary storage must resolve beneath X:/AIstock_temp")
+    return root
+
+
+def windows_x_root(value: Path | str) -> Path:
+    root = _require_windows_x_root(value)
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def probe_localsim_wsl_witness(*, distro: str, witness: Path, run_id: str) -> dict[str, str]:
+    """Read the consumer-owned witness through both native filesystem entrances."""
+    resolved = witness.resolve()
+    try:
+        _require_windows_x_root(resolved.parent)
+    except ValueError:
+        raise DataUnavailableError("LocalSIM witness is outside its owned X directory",
+                                   context={"reason_code": "LOCALSIM_WSL_X_PATH_UNAVAILABLE"}) from None
+    try:
+        content = resolved.read_bytes()
+        if content != run_id.encode("utf-8"):
+            raise ValueError("witness identity differs")
+        probe = subprocess.run(["wsl", "-d", distro, "--", "cat", win_to_wsl_path(str(resolved))],
+                               capture_output=True, text=True, timeout=20, check=False,
+                               creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    except subprocess.TimeoutExpired:
+        raise DataUnavailableError("LocalSIM WSL path probe timed out", context={
+            "reason_code": "LOCALSIM_WSL_X_PATH_TIMEOUT", "failure_stage": "WSL_PATH_PROBE",
+            "run_id": run_id, "timeout_seconds": 20,
+        }) from None
+    except (OSError, ValueError):
+        raise DataUnavailableError("LocalSIM owned WSL witness is unavailable",
+                                   context={"reason_code": "LOCALSIM_WSL_X_PATH_UNAVAILABLE"}) from None
+    if probe.returncode or probe.stdout != run_id:
+        raise DataUnavailableError("WSL cannot read this LocalSIM X directory",
+                                   context={"reason_code": "LOCALSIM_WSL_X_PATH_UNAVAILABLE"})
+    return {"distro": distro, "witness_path": str(resolved), "run_id": run_id,
+            "witness_sha256": hashlib.sha256(content).hexdigest()}
 
 
 class LocalSimReferencedAssetResolver(QEExperimentRuntimeAssetResolver):
@@ -195,8 +230,20 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         super().__init__(**kwargs)
         self.performance_reference = performance_reference
 
+    def _build_env_exports(self, *, historical_read_only: bool = False) -> str:
+        # The production factory supplies no optional safe_artifact_roots.
+        # Bind the validated owned run, without mutating this shared provider
+        # or process-wide environment while other days may run concurrently.
+        root = windows_x_root(own_scope().root)
+        roots = tuple(dict.fromkeys((root, *self.safe_artifact_roots)))
+        translated = ":".join(win_to_wsl_path(str(item)) for item in roots)
+        native = super()._build_env_exports(historical_read_only=historical_read_only)
+        return f"{native} AISTOCK_STRATEGY_PACKAGE_RUNTIME_ROOTS={self._quote(translated)}"
+
     def run(self, *, workspace, trade_date: date, cutoff_date: date | None = None, historical_read_only=False):
         scope = own_scope()
+        if not Path(workspace.workspace_path).resolve().is_relative_to(scope.root.resolve()):
+            raise ValueError("LocalSIM workspace must belong to its own run")
         scope.stage = "shared_raw_inference"
         clocks = SelectionSignalDayV1(trade_date, cutoff_date or trade_date, scope.clocks.target_trade_date)
         if clocks.decision_date != scope.clocks.decision_date or (scope.clocks_bound and clocks != scope.clocks):
@@ -211,12 +258,7 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
         # Actual bidirectional path verification, rather than assuming /mnt/x.
         witness = root / "path-witness.txt"
         witness.write_text(scope.run_id, encoding="utf-8")
-        probe = subprocess.run(["wsl", "-d", self.distro, "--", "cat", win_to_wsl_path(str(witness))],
-                               capture_output=True, text=True, timeout=20, check=False,
-                               creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
-        if probe.returncode or probe.stdout != scope.run_id:
-            raise DataUnavailableError("WSL cannot read this LocalSIM X directory",
-                                       context={"reason_code": "LOCALSIM_WSL_X_PATH_UNAVAILABLE"})
+        probe_localsim_wsl_witness(distro=self.distro, witness=witness, run_id=scope.run_id)
         arguments = ["scripts/strategy_package_live_inference.py", "--runtime-workspace", win_to_wsl_path(str(workspace.workspace_path)),
                      "--historical-plan", win_to_wsl_path(str(plan)), "--historical-read-only", "--consumer-scope", "LOCALSIM",
                      "--run-id", scope.run_id, "--temp-root", win_to_wsl_path(str(root)), "--output-path", win_to_wsl_path(str(output))]

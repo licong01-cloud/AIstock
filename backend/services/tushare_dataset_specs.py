@@ -6,8 +6,26 @@ The TushareSyncEngine consumes these specs to replace per-dataset scripts.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+
+def stk_limit_prices_valid(row: Any) -> bool:
+    """Same-day CNY reference and limits, shared by ingestion and monthly SOURCE.
+
+    NULLs remain legal source facts for some non-trading securities, but do not
+    satisfy a consumer's required-price contract. No reference is derived here.
+    """
+    try:
+        raw = [row.get(name) for name in ("pre_close", "up_limit", "down_limit")]
+        if any(value is None or isinstance(value, bool) for value in raw):
+            return False
+        reference, upper, lower = [Decimal(str(value)) for value in raw]
+        return (all(value.is_finite() and value > 0 for value in (reference, upper, lower))
+                and lower <= reference <= upper)
+    except (InvalidOperation, ValueError, TypeError):
+        return False
 
 
 class QueryMode(str, Enum):
@@ -381,6 +399,7 @@ STK_LIMIT = DatasetSpec(
     batch_sleep=0.3,
     rate_per_minute=200,
     trading_day_only=True,
+    fetch_params={"limit": 5000, "max_pages": 10},
 )
 
 SUSPEND_D = DatasetSpec(

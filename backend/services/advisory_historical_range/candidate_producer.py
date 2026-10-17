@@ -616,11 +616,20 @@ def _validate_source_read_receipts_against_catalog(
         if member.source_role == "pit_universe" and member.decision_trade_date == decision_trade_date
     ]
     universe_receipts = [receipt for receipt in normalized if receipt.get("source_role") == "pit_universe"]
+    # Native PIT v2 qualifies its dataset identity with the frozen pool key;
+    # the catalog stores that key separately. Preserve both exact spellings,
+    # not arbitrary suffixes, and leave the original receipts unchanged.
+    universe_dataset_ids = ("market.stock_universe_pit",)
+    if len(universe_members) == 1:
+        universe_key = universe_members[0].bound_parameters.get("universe_key")
+        if isinstance(universe_key, str) and universe_key:
+            universe_dataset_ids += (f"market.stock_universe_pit:{universe_key}",)
     if (
         len(universe_members) != 1
         or not universe_receipts
         or any(
-            receipt.get("dataset_id") != "market.stock_universe_pit"
+            receipt.get("dataset_id") not in universe_dataset_ids
+            or receipt.get("partition_ref") != decision_trade_date.isoformat()
             or receipt.get("content_hash") != universe_members[0].content_hash
             or receipt.get("row_count") != universe_members[0].row_count
             for receipt in universe_receipts
@@ -628,7 +637,13 @@ def _validate_source_read_receipts_against_catalog(
     ):
         raise ArtifactGenerationFailedError(
             "historical PIT universe receipts differ from the frozen catalog",
-            context={"reason_code": "ADVISORY_HR_SOURCE_REVISION_MISMATCH"},
+            context={
+                "reason_code": "ADVISORY_HR_SOURCE_REVISION_MISMATCH",
+                "decision_trade_date": decision_trade_date.isoformat(),
+                "expected_dataset_ids": list(universe_dataset_ids),
+                "actual_dataset_ids": [receipt.get("dataset_id") for receipt in universe_receipts],
+                "actual_partitions": [receipt.get("partition_ref") for receipt in universe_receipts],
+            },
         )
     components = {
         item.component_id: item for item in program.admitted_package_projection.components

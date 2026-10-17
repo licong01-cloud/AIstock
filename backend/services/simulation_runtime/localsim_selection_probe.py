@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 from threading import Event, Thread
 import time
+import traceback
 
 from dotenv import load_dotenv
 import psycopg2
@@ -208,7 +209,7 @@ def main():
         for mode in args.modes:
             repository = CrashOnceWriter()
             provider = LocalSimSharedInferenceProvider(repo_root=source_root, performance_reference=mode == "reference",
-                                                       safe_artifact_roots=(root, Path(args.asset_root)), timeout_seconds=3600)
+                                                       timeout_seconds=3600)
             resolver = LocalSimReferencedAssetResolver(cache_root=root / mode / "assets",
                                                        asset_store=LocalPackageAssetStore(args.asset_root), conn_factory=read_only_connection)
             service = LocalSimSelectionSignalService(repository=repository, temporary_root=root / mode,
@@ -282,6 +283,12 @@ def main():
         return 0 if progress["source_binding"] == "EXACT_PASS" and progress["equivalence"] != "NOT_PROVED" else 1
     except Exception as exc:
         progress.update(status="FAILED", error_type=type(exc).__name__, reason_code=getattr(exc, "context", {}).get("reason_code", type(exc).__name__))
+        # Keep the original throwing location without exception text, locals
+        # or command arguments that could contain credentials.
+        progress["failure_source_frames"] = [
+            {"path": frame.filename, "line": frame.lineno, "function": frame.name}
+            for frame in traceback.extract_tb(exc.__traceback__)[-8:]
+        ]
         _atomic_json(root / "progress.json", progress)
         print(json.dumps({"status": "FAILED", "error_type": type(exc).__name__, "reason_code": progress["reason_code"], "output_root": str(root)}))
         return 1

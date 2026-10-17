@@ -1,0 +1,445 @@
+{
+  "actual": "Historical target pre_close missing while raw price facts exist; current ingestion protection excludes stk_limit and batch quality cannot prove applicable-key completeness.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "noxfile.py",
+    "backend/services/data_sync_targets.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/services/tushare_dataset_specs.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "scripts/repair_stk_limit_pre_close.py",
+    "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
+    "tests/aistock_validation/bugs/20261015_BUG-1906-historical-stk-limit-pre-close-nulls-hide-traded-equity-inputs-and-can-s.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1906",
+  "closed_at": "2026-10-15T03:22:55.558522Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-15T02:05:29.617226Z",
+  "data_repair": {
+    "candidate_write": false,
+    "dev_validation": "passed_5490_keys_and_repeat_apply",
+    "production_apply": "applied_5490_NULL_only_rows",
+    "production_authorization": "user_explicit_exact_SQL_20261015",
+    "production_readback": "passed_5491_traded_equities_invalid_count_0_native_entry_PASS",
+    "profile_write": false,
+    "receipt": "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1906-pre-close-20261015-source1/production-receipt.json",
+    "remaining_source_unresolved_rows": 2089,
+    "remaining_unresolved_with_daily_trades": 0,
+    "replay_state_write": false,
+    "sql_sha256": "9504062a8390a6172b53b40654a439b3a3611023fc422ca6594cec0ba595c8f5",
+    "target": "aistock.market.stk_limit/2026-05-08/pre_close"
+  },
+  "description": "Historical target pre_close missing while raw price facts exist; current ingestion protection excludes stk_limit and batch quality cannot prove applicable-key completeness.",
+  "design_compliance_review": {
+    "no_business_change": "No LocalSIM/QE/HMM consumer or replay state changes; five-day retry tail and positive finite same-day source prices only.",
+    "no_extra_gate": "One requested-date SQL readback; no history scan, percentage threshold, dataset rebuild or new approval stage.",
+    "no_partial_claim": "Production data repair complete; persistent source pending merge/runtime activation; monthly consumer integration tracked separately in BUG-1907.",
+    "no_silent_error": "Invalid traded-key readback remains retry/low_coverage; provider NULL or nonfinite facts never become estimated prices.",
+    "review_rounds": [
+      "RED_to_GREEN_source_NULL_preservation",
+      "exact_DEV_SQL_repeat_and_native_readback",
+      "production_authorization_scope_readback_and_CI_mapping"
+    ]
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261015-0001804817ab",
+      "timestamp": "2026-10-15T02:05:29.617226Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Source-backed historical values recoverable, NULL retries preserve finite data, traded keys cannot silently pass missing pre_close; monthly target-month audit uses the same field validity contract.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/data_sync_targets.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "scripts/repair_stk_limit_pre_close.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1906-historical-stk-limit-pre-close-nulls-hide-traded-equity-inputs-and-can-s.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [
+      "scripts/repair_stk_limit_pre_close.py",
+      "backend/tests/scripts/test_repair_stk_limit_pre_close.py"
+    ],
+    "changed_files": [
+      "backend/services/data_sync_targets.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "scripts/repair_stk_limit_pre_close.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1906-historical-stk-limit-pre-close-nulls-hide-traded-equity-inputs-and-can-s.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/tushare_sync_engine.py",
+        "backend/services/tushare_dataset_specs.py",
+        "backend/services/dataset_release/monthly_frozen_source_audit.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/dataset_release/test_monthly_source_audit.py",
+        "scripts/repair_stk_limit_pre_close.py",
+        "backend/tests/scripts/test_repair_stk_limit_pre_close.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center",
+        "platform.api",
+        "scripts",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/tushare_dataset_specs.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_frozen_source_audit.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/test_tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_source_audit.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "scripts/repair_stk_limit_pre_close.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/tushare_sync_engine.py",
+        "backend/services/tushare_dataset_specs.py",
+        "backend/services/dataset_release/monthly_frozen_source_audit.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/dataset_release/test_monthly_source_audit.py",
+        "scripts/repair_stk_limit_pre_close.py",
+        "backend/tests/scripts/test_repair_stk_limit_pre_close.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/data_sync_targets.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "scripts/repair_stk_limit_pre_close.py",
+      "backend/tests/scripts/test_repair_stk_limit_pre_close.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/data_sync_targets.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/services/tushare_dataset_specs.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "scripts/repair_stk_limit_pre_close.py",
+      "backend/tests/scripts/test_repair_stk_limit_pre_close.py"
+    ]
+  },
+  "first_seen_at": "2026-10-15T02:05:29.617226Z",
+  "fix_branch": null,
+  "fix_commit": "21bbf68444092c8a5a86ce0d4b4e1cdd15c2e3f4",
+  "fixed_at": "2026-10-15T02:43:19Z",
+  "github_issue_number": 6085,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6085",
+  "last_seen_at": "2026-10-15T02:05:29.617226Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6087",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "related_bug_ids": [
+    "BUG-1780",
+    "BUG-1907"
+  ],
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/stk_limit/status",
+    "fresh_process_evidence": [
+      "Fresh AIstock processes: 112 direct tests passed; existing DEV repaired 5490 exact source-backed pre_close keys, repeated SQL passed; provider-NULL retry preserved 001205.SZ/2026-05-08 pre_close=15.30 and unchanged limits; native historical minute-provider gate passed. Production separately applied under exact SQL authorization; no replay/runtime writes.",
+      "Source plan X:/AIstock_dataset_candidates/data_repair_staging/BUG-1906-pre-close-20261015-source1/source-plan.json SHA256 c1f5627b6188bd7c7e5219af5541772dbba63e15b20acfc00a7e5214777e9077; DEV receipt validates all5490 keys; authorized production SQL 9504062a8390a6172b53b40654a439b3a3611023fc422ca6594cec0ba595c8f5 applied with independent readback. Remaining2089 provider-missing/invalid rows have no intersection with 5491 observed traded daily keys. Historical trigger (omitted schema versus delayed publication versus NULL overwrite) is not proven.",
+      "Fresh AIstock process loaded tracked producer changes; source NULL retry preserved DEV15.30; production read-only native consumer and exact5491-key quality readback PASS, no runtime process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "registered_runtime_scope_split_monthly_followup_BUG-1907",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1906\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1906",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8491091005d1a48e12842529dd81fd8f796930f3ad04fc92df4622c1e3a2add",
+      "contract_digest": "378e8ac6f8b6544b5bc25808cfbd5fc150e21d07a220054918ef9e536f058add",
+      "expected_identity": "21bbf68444092c8a5a86ce0d4b4e1cdd15c2e3f4",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-15T03:21:24.073510Z",
+      "mode": "read_only",
+      "observed_identity": "512de1bb52b4e8bfcbf00b8e6d20ff5b60614ebb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "4a57f48f06b2aaa3b9c4715076d6b2c60bcfdb891227d92f4ddb096be928bd1c",
+      "receipt_sha256": "1acef9050542e92aa1a63b58fa20ea748371826e5081e702a83bf8b6dcf01485",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "75a5cee04d2e1c2d02d576924e1cda448621cd4b08c69b9b1d9b6294d6dc897e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": true,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1906",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8960c512164d8e1d",
+    "recorded_at": "2026-10-15T02:51:52.016536Z",
+    "runtime_contract_digest": "378e8ac6f8b6544b5bc25808cfbd5fc150e21d07a220054918ef9e536f058add",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f",
+    "source_merge_commit": "21bbf68444092c8a5a86ce0d4b4e1cdd15c2e3f4",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6087",
+    "validation_evidence": [
+      "validation-receipt: id=95c5156229561491 commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py backend/tests/scripts/test_repair_stk_limit_pre_close.py -q` result=`112 passed`",
+      "validation-receipt: id=23f1aeb91d3ae4fc commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=f08f31a79abd4069 commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=60039c037689ee0f commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=ruff plan=direct status=passed command=`ruff check changed paths` result=`passed`",
+      "validation-receipt: id=d23a62181a43d273 commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "51d669b7d7de0534e42239b897e524f22f58b1e2808a5ae6817a1b4270ff9100"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Historical stk_limit pre_close NULLs hide traded equity inputs and can survive ingestion quality checks",
+  "trigger_condition": {
+    "fingerprint": "0001804817ab025985ffa24e",
+    "source_event_id": "FE-20261015-0001804817ab"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=95c5156229561491 commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_tushare_sync_engine.py backend/tests/scripts/test_repair_stk_limit_pre_close.py -q` result=`112 passed`",
+    "validation-receipt: id=23f1aeb91d3ae4fc commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=f08f31a79abd4069 commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=60039c037689ee0f commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=ruff plan=direct status=passed command=`ruff check changed paths` result=`passed`",
+    "validation-receipt: id=d23a62181a43d273 commit=a5b5ea5bdf31b68e3cc709c7846607f5b1c87f7f kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1906 --target backend-main --expected-identity 512de1bb52b4e8bfcbf00b8e6d20ff5b60614ebb -> passed",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1906 --target backend-main --expected-identity 21bbf68444092c8a5a86ce0d4b4e1cdd15c2e3f4 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy",
+        "qlib_data"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend",
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy",
+          "qlib_data"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend",
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

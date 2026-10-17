@@ -20,6 +20,7 @@ modules. All public methods are thread-safe.
 from __future__ import annotations
 
 import datetime as dt
+import asyncio
 import json
 import os
 import subprocess
@@ -29,8 +30,9 @@ import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, Future
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional, Set, Tuple
 from zoneinfo import ZoneInfo
 
 import psycopg2.extras as pgx
@@ -294,6 +296,19 @@ class _FutureTracker:
             return self._active.get(key)
 
 
+@dataclass
+class _CompletionCallback:
+    datasets: tuple[str, ...]
+    callback: Callable[[], Awaitable[bool | None]]
+    loop: asyncio.AbstractEventLoop
+    future: Future | None = None
+    completed_watermark: str | None = None
+    dispatched_watermark: str | None = None
+    request_version: int = 1
+    completed_version: int = 0
+    dispatched_version: int = 0
+
+
 class TDXScheduler:
     """Coordinates background execution of testing and ingestion jobs."""
 
@@ -309,7 +324,119 @@ class TDXScheduler:
         self._lock = threading.RLock()
         self._tracker = _FutureTracker()
         self._delayed_retry_keys: set[str] = set()
+        self._completion_callbacks: dict[str, _CompletionCallback] = {}
         DEFAULT_TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+    def register_completion_callback(
+        self, name: str, *, datasets: Iterable[str], callback: Callable[[], Awaitable[bool | None]]
+    ) -> None:
+        """Register on the consumer's running loop, without adding schedules.
+
+        The existing refresh sweep observes audit changes, not business cadence.
+        Each registration receives one startup catch-up and is single-flight.
+        The audit watermark is only a wakeup hint: the consumer must validate
+        its own authority. A False result or exception retries on a later sweep.
+        """
+        datasets = tuple(sorted(set(datasets)))
+        if not name or not datasets or any(not isinstance(value, str) or not value for value in datasets):
+            raise ValueError("completion callback requires a name and dataset names")
+        loop = asyncio.get_running_loop()
+        with self._lock:
+            if self._stop_event.is_set():
+                raise RuntimeError("completion callback owner is shut down")
+            existing = self._completion_callbacks.get(name)
+            if existing is not None:
+                if (existing.datasets, existing.callback, existing.loop) == (datasets, callback, loop):
+                    return
+                raise ValueError(f"completion callback already registered: {name}")
+            self._completion_callbacks[name] = _CompletionCallback(datasets, callback, loop)
+
+    def unregister_completion_callback(self, name: str) -> bool:
+        """Stop future dispatch; never interrupt an already running consumer job."""
+        with self._lock:
+            return self._completion_callbacks.pop(name, None) is not None
+
+    def request_completion_check(self, name: str) -> bool:
+        """Wake an existing registration after subscription changes, without I/O."""
+        with self._lock:
+            entry = self._completion_callbacks.get(name)
+            if entry is None:
+                return False
+            entry.request_version += 1
+            return True
+
+    def completion_callback_status(self, name: str) -> dict[str, Any]:
+        """Read-only binding state; never certifies consumer data or model value."""
+        with self._lock:
+            entry = self._completion_callbacks.get(name)
+            return {
+                "registered": entry is not None,
+                "owner_running": bool(self._refresh_thread and self._refresh_thread.is_alive())
+                and not self._stop_event.is_set(),
+                "loop_running": bool(entry and entry.loop.is_running() and not entry.loop.is_closed()),
+                "in_flight": bool(entry and entry.future is not None and not entry.future.done()),
+                "datasets": list(entry.datasets) if entry is not None else [],
+            }
+
+    async def _run_completion_callback(self, name: str, entry: _CompletionCallback) -> bool | None:
+        with self._lock:
+            if self._stop_event.is_set() or self._completion_callbacks.get(name) is not entry:
+                return True
+        return await entry.callback()
+
+    def _dispatch_completion_callbacks(self) -> None:
+        # Existing unit fixtures may construct only the legacy scheduler surface.
+        if not getattr(self, "_completion_callbacks", None):
+            return
+        with self._lock:
+            entries = list(self._completion_callbacks.items())
+        for name, entry in entries:
+            try:
+                with self._lock:
+                    if self._stop_event.is_set() or self._completion_callbacks.get(name) is not entry:
+                        continue
+                    if entry.future is not None:
+                        if not entry.future.done():
+                            continue
+                        future, entry.future = entry.future, None
+                        if future.result() is not False:
+                            entry.completed_watermark = entry.dispatched_watermark
+                            entry.completed_version = entry.dispatched_version
+                        else:
+                            _logger.warning("completion callback pending retry: %s", name)
+                rows = self._fetchall(
+                    """
+                    SELECT latest.* FROM unnest(%s::text[]) AS requested(dataset)
+                    CROSS JOIN LATERAL (
+                        SELECT a.dataset, a.trade_date, a.data_source, a.refreshed_at,
+                               a.status, a.quality_status, a.row_count, a.job_id::text
+                        FROM market.dataset_date_refresh_audit a
+                        WHERE a.dataset=requested.dataset AND a.trade_date<=%s
+                        ORDER BY a.trade_date DESC, a.refreshed_at DESC, a.data_source
+                        LIMIT 1
+                    ) latest ORDER BY latest.dataset
+                    """,
+                    (list(entry.datasets), dt.datetime.now(_CN_TZ).date()),
+                )
+                watermark = _json_dump(rows)
+                with self._lock:
+                    if self._stop_event.is_set() or self._completion_callbacks.get(name) is not entry:
+                        continue
+                    if entry.future is not None:
+                        continue
+                    if watermark == entry.completed_watermark and entry.request_version == entry.completed_version:
+                        continue
+                    coroutine = self._run_completion_callback(name, entry)
+                    try:
+                        entry.future = asyncio.run_coroutine_threadsafe(coroutine, entry.loop)
+                    except Exception:
+                        coroutine.close()
+                        raise
+                    entry.dispatched_watermark = watermark
+                    entry.dispatched_version = entry.request_version
+            except Exception:
+                # Consumer failure must not fail a data sync or another callback.
+                _logger.exception("completion callback dispatch failed: %s", name)
 
     # ------------------------------------------------------------------
     # lifecycle
@@ -337,6 +464,8 @@ class TDXScheduler:
 
     def shutdown(self, wait: bool = False) -> None:
         self._stop_event.set()
+        with self._lock:
+            self._completion_callbacks.clear()
         if self._schedule_thread:
             self._schedule_thread.join(timeout=3)
         if self._refresh_thread:
@@ -857,6 +986,10 @@ class TDXScheduler:
     def refresh_schedules(self) -> None:
         """Reload enabled schedules from database and update in-memory jobs."""
         try:
+            self._reconcile_lost_go_jobs()
+        except Exception:  # noqa: BLE001 - never infer absence from a transport failure.
+            _logger.exception("Go task identity reconciliation failed")
+        try:
             self._reconcile_stale_running_ingestion_jobs()
         except Exception:  # noqa: BLE001 - refresh continues so the next cadence can retry.
             _logger.exception("stale running ingestion job reconciliation failed")
@@ -899,6 +1032,93 @@ class TDXScheduler:
             self._reconcile_due_data_sync_targets()
         except Exception as exc:  # noqa: BLE001
             _logger.warning("data sync target reconciliation failed: %s", exc)
+        self._dispatch_completion_callbacks()
+
+    def _reconcile_lost_go_jobs(self) -> int:
+        """Release only expired jobs whose accepted native task is explicitly gone.
+
+        A Go watcher can vanish during backend restarts, while Go replaces its
+        database summary. Recover its identity from the append-only acceptance
+        log; elapsed time alone is never evidence that an async writer stopped.
+        """
+        now = _now()
+        last = getattr(self, "_last_go_identity_sweep", None)
+        if last is not None and now - last < dt.timedelta(minutes=10):
+            return 0
+        self._last_go_identity_sweep = now
+        rows = self._fetchall("""
+            SELECT j.job_id,j.summary,l.message AS accepted_message
+              FROM market.ingestion_jobs j
+              LEFT JOIN LATERAL (
+                  SELECT message FROM market.ingestion_logs
+                   WHERE job_id=j.job_id AND message LIKE '%%go_task_accepted%%'
+                   ORDER BY ts DESC LIMIT 1
+              ) l ON TRUE
+             WHERE j.status='running' AND j.summary->>'via'='go_init'
+               AND COALESCE(j.started_at,j.created_at)<NOW()-(%s||' minutes')::interval
+             ORDER BY j.created_at LIMIT 20
+            """, (str(_ACTIVE_JOB_LEASE_MINUTES),))
+        count = 0
+        deadline = time.monotonic() + 10
+        base = os.getenv("TDX_API_BASE", "http://localhost:19080").rstrip("/")
+        for row in rows:
+            if time.monotonic() >= deadline:
+                break  # A failed Go endpoint must not monopolize schedule refresh.
+            summary = row.get("summary") or {}
+            if isinstance(summary, str):
+                try:
+                    summary = json.loads(summary)
+                except ValueError:
+                    continue
+            if not isinstance(summary, dict):
+                continue
+            task_id = summary.get("go_task_id")
+            if not task_id and row.get("accepted_message"):
+                try:
+                    accepted = json.loads(row["accepted_message"])
+                    if accepted.get("detail", {}).get("phase") == "go_task_accepted":
+                        task_id = accepted.get("summary", {}).get("go_task_id")
+                except (ValueError, TypeError, AttributeError):
+                    continue
+            try:
+                task_id = str(uuid.UUID(str(task_id)))
+            except (ValueError, TypeError, AttributeError):
+                continue
+            try:
+                response = requests.get(f"{base}/api/tasks/{task_id}", timeout=5)
+                response.raise_for_status()
+                payload = response.json()
+            except (requests.RequestException, ValueError):
+                continue
+            if not isinstance(payload, dict) or payload.get("code") != -1:
+                continue
+            # Older Go builds have a mojibake not-found message. Do not depend
+            # on that text: independently confirm absence in the native list.
+            try:
+                listed = requests.get(f"{base}/api/tasks", timeout=5)
+                listed.raise_for_status()
+                inventory = listed.json()
+            except (requests.RequestException, ValueError):
+                continue
+            if not isinstance(inventory, dict) or inventory.get("code") != 0:
+                continue
+            tasks = inventory.get("data")
+            if not isinstance(tasks, list) or any(
+                not isinstance(task, dict) or not task.get("id") for task in tasks
+            ) or any(task["id"] == task_id for task in tasks):
+                continue
+            patch = {"failure_category": "go_task_identity_lost", "go_task_id": task_id,
+                     "error": "accepted native Go task no longer exists", "reconciled_at": now.isoformat()}
+            # CAS against the complete observed summary: don't overwrite a newer
+            # watcher, completion or concurrently revised job identity.
+            changed = self._fetchall("""UPDATE market.ingestion_jobs
+                SET status='failed',finished_at=NOW(),summary=summary||%s::jsonb
+                WHERE job_id=%s AND status='running' AND summary=%s::jsonb
+                  AND COALESCE(started_at,created_at)<NOW()-(%s||' minutes')::interval
+                RETURNING job_id""", (json.dumps(patch), row["job_id"], json.dumps(summary),
+                                       str(_ACTIVE_JOB_LEASE_MINUTES)))
+            count += len(changed)
+        return count
 
     def _reconcile_go_job_refresh_audit(self) -> None:
         """Self-heal refresh-audit rows for successful Go-engine jobs (BUG-972).
@@ -4883,12 +5103,7 @@ class TDXScheduler:
                 # Provider population, not a strategy stock pool: retain ST and
                 # historical delisted stocks intersecting an explicit window,
                 # but do not request pre-listing dates or unrelated instruments.
-                code_rows = self._fetchall(
-                    "SELECT ts_code FROM market.stock_basic WHERE list_date <= %s "
-                    "AND (delist_date IS NULL OR delist_date >= %s) ORDER BY ts_code",
-                    (end_date, start_date),
-                )
-                codes = [str(row["ts_code"]).strip() for row in code_rows]
+                codes = self._go_provider_codes(start_date, end_date)
                 if not codes:
                     raise RuntimeError("date-valid TDX provider population is unavailable")
             summary.update({
@@ -5145,6 +5360,22 @@ class TDXScheduler:
                     _logger.warning("_extract_job_id_from_cmd: invalid UUID '%s'", cmd[i + 1])
                     return None
         return None
+
+    def _go_provider_codes(self, start_date: dt.date, end_date: dt.date) -> List[str]:
+        # The stock-basic directory may lag an IPO. A real same-window daily
+        # quote is also provider-population evidence, never PIT buy eligibility.
+        rows = self._fetchall(r"""WITH bounds AS (SELECT %s::date AS end_day,%s::date AS start_day)
+            SELECT ts_code FROM market.stock_basic,bounds WHERE list_date<=end_day
+              AND (delist_date IS NULL OR delist_date>=start_day)
+            UNION
+            SELECT DISTINCT k.ts_code FROM market.kline_daily_raw k,bounds
+             WHERE k.trade_date BETWEEN start_day AND end_day AND k.adjust_type='none'
+               AND (k.volume_hand>0 OR k.volume_shares>0)
+               AND (k.ts_code ~ '^(00|20|30)[0-9]{4}\.SZ$'
+                 OR k.ts_code ~ '^(6[0-9]{5}|900[0-9]{3})\.SH$'
+                 OR k.ts_code ~ '^[489][0-9]{5}\.BJ$')
+            ORDER BY ts_code""", (end_date, start_date))
+        return [str(row["ts_code"]).strip() for row in rows]
 
     def _update_ingestion_job_status(
         self, job_id: uuid.UUID, status: str, start_ts: dt.datetime, summary: Dict[str, Any]

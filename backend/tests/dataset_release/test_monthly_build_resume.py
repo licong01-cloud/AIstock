@@ -124,6 +124,33 @@ def test_interrupted_history_commit_keeps_price_exports_and_finishes_without_wri
         assert (scratch / (name + ".before")).read_bytes() == b"original"
     assert recover_history_commit(root=root, journal=journal.path, record=recovered, expected_projection="e" * 64) == proposed
 
+    # A later authorized quote/prev_close amendment has its own file pins and
+    # completion receipt. Reopening an already committed history transaction
+    # must not replay its obsolete writer provenance over that newer journal.
+    later = copy.deepcopy(recovered)
+    price = root / "daily_bin/close.bin"
+    price.write_bytes(b"later verified correction")
+    later["files"]["daily_bin/close.bin"] = _signature(price)
+    later["steps"]["finalize-bins"] = cas.put_json({"later_correction": True}).as_dict()
+    _atomic(journal.path, later)
+    before = journal.path.read_bytes(), journal.path.stat().st_mtime_ns
+    assert recover_history_commit(root=root, journal=journal.path, record=later, expected_projection="e" * 64) == later
+    assert (journal.path.read_bytes(), journal.path.stat().st_mtime_ns) == before
+    assert price.read_bytes() == b"later verified correction"
+
+    forged = copy.deepcopy(later)
+    forged["steps"]["industry-history"] = cas.put_json({"different_projection": True}).as_dict()
+    with pytest.raises(MonthlyBuildResumeError, match="industry commit"):
+        recover_history_commit(root=root, journal=journal.path, record=forged, expected_projection="e" * 64)
+    forged = copy.deepcopy(later)
+    forged["files"]["factor_bundle/sector_data.h5"] = [0, 0, "f" * 64]
+    with pytest.raises(MonthlyBuildResumeError, match="completed industry"):
+        recover_history_commit(root=root, journal=journal.path, record=forged, expected_projection="e" * 64)
+    (factor / "sector_data.h5").write_bytes(b"tampered")
+    with pytest.raises(MonthlyBuildResumeError, match="completed industry"):
+        recover_history_commit(root=root, journal=journal.path, record=later, expected_projection="e" * 64)
+    assert journal.path.read_bytes() == before[0]
+
 
 def test_fresh_process_recovers_completed_export_without_any_writer(tmp_path):
     repo = str(Path(__file__).resolve().parents[3])
