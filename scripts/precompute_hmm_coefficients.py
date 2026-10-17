@@ -53,24 +53,17 @@ def forward_filter_posteriors(hmm: Any, obs: np.ndarray) -> np.ndarray:
     from hmmlearn import _hmmc
 
     log_frameprob = hmm._compute_log_likelihood(obs)
+    if obs.ndim != 2 or not len(obs) or not np.isfinite(obs).all() or not np.isfinite(log_frameprob).all():
+        raise ValueError("hmm_daily_inference_failed: non-finite observations or emission likelihood")
     _, fwd_lattice = _hmmc.forward_log(hmm.startprob_, hmm.transmat_, log_frameprob)
     row_max = np.max(fwd_lattice, axis=1, keepdims=True)
-    row_max = np.where(np.isfinite(row_max), row_max, 0.0)
+    if not np.isfinite(row_max).all():
+        raise ValueError("hmm_daily_inference_failed: invalid forward lattice")
     posteriors = np.exp(fwd_lattice - row_max)
     denom = posteriors.sum(axis=1, keepdims=True)
-    n_states = posteriors.shape[1]
-    posteriors = np.divide(
-        posteriors,
-        denom,
-        out=np.full_like(posteriors, 1.0 / max(n_states, 1)),
-        where=denom > 0,
-    )
-    return np.nan_to_num(
-        posteriors,
-        nan=1.0 / max(n_states, 1),
-        posinf=1.0 / max(n_states, 1),
-        neginf=0.0,
-    )
+    if not np.isfinite(denom).all() or (denom <= 0).any():
+        raise ValueError("hmm_daily_inference_failed: posterior normalization failed")
+    return posteriors / denom
 
 
 def forward_filter_states(hmm: Any, obs: np.ndarray) -> np.ndarray:
@@ -79,10 +72,18 @@ def forward_filter_states(hmm: Any, obs: np.ndarray) -> np.ndarray:
 
 
 def confidence_from_posterior(prob: np.ndarray, scale: float) -> float:
-    prob = np.nan_to_num(prob, nan=0.0, posinf=0.0, neginf=0.0)
+    if (
+        prob.ndim != 1
+        or not len(prob)
+        or not np.isfinite(prob).all()
+        or (prob < 0).any()
+        or not math.isfinite(scale)
+        or scale <= 0
+    ):
+        raise ValueError("invalid HMM posterior/confidence scale")
     total = float(prob.sum())
     if total <= 0:
-        return 0.0
+        raise ValueError("invalid zero-mass HMM posterior")
     prob = prob / total
     ordered = np.sort(prob)
     margin = float(ordered[-1] - ordered[-2]) if len(ordered) > 1 else 1.0
@@ -100,24 +101,30 @@ def utility_from_state_stats(
         total = 0.0
         for horizon, weight in horizon_weights.items():
             vals = np.asarray(
-                [state_stats[str(s)].get(f"{field_prefix}_{horizon}d", 0.0) for s in range(len(prob))],
+                [state_stats[str(s)][f"{field_prefix}_{horizon}d"] for s in range(len(prob))],
                 dtype=np.float64,
             )
+            if not np.isfinite(vals).all() or not math.isfinite(weight):
+                raise ValueError("non-finite frozen HMM state utility")
             total += weight * float(np.dot(prob, vals))
         return total
     if method in {"pup", "pup_z", "pup_rank", "additive_pup"}:
         total = 0.0
         for horizon, weight in horizon_weights.items():
             vals = np.asarray(
-                [state_stats[str(s)].get(f"pup_{horizon}d", 0.5) for s in range(len(prob))],
+                [state_stats[str(s)][f"pup_{horizon}d"] for s in range(len(prob))],
                 dtype=np.float64,
             )
+            if not np.isfinite(vals).all() or not math.isfinite(weight):
+                raise ValueError("non-finite frozen HMM state utility")
             total += weight * float(np.dot(prob, vals))
         return 2.0 * (total - 0.5)
     raise ValueError(f"Unknown dynamic HMM method: {method}")
 
 
 def robust_z_by_date(raw_by_sector: dict[str, float]) -> dict[str, float]:
+    if any(not math.isfinite(v) for v in raw_by_sector.values()):
+        raise ValueError("non-finite HMM cross-section utility")
     values = np.asarray(
         [v for v in raw_by_sector.values() if math.isfinite(v)],
         dtype=np.float64,
@@ -134,6 +141,8 @@ def robust_z_by_date(raw_by_sector: dict[str, float]) -> dict[str, float]:
 
 
 def rank_signal_by_date(raw_by_sector: dict[str, float]) -> dict[str, float]:
+    if any(not math.isfinite(v) for v in raw_by_sector.values()):
+        raise ValueError("non-finite HMM cross-section utility")
     valid = [(k, v) for k, v in raw_by_sector.items() if math.isfinite(v)]
     if len(valid) < 2:
         return {k: 0.0 for k in raw_by_sector}
@@ -298,10 +307,10 @@ def build_horizon_v2_observations(
     market_vol: dict[date, float],
     preprocess: dict[str, Any],
 ) -> tuple[np.ndarray, list[date]]:
-    from hmm_horizon_v2_train import build_observations, preprocess_apply
+    from hmm_horizon_v2_train import build_feature_observations, preprocess_apply
 
     csi300_decimal = {td: pct / 100.0 for td, pct in csi300_pct.items()}
-    obs, dates_out, _ = build_observations(rows, csi300_decimal, market_vol)
+    obs, dates_out = build_feature_observations(rows, csi300_decimal, market_vol)
     if len(obs):
         obs = preprocess_apply(obs, preprocess)
     return obs, dates_out
@@ -983,12 +992,19 @@ def load_frozen_coefficient_inputs(
     }
 
 
-def main() -> None:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--output-path", default=None)
-    args, _ = parser.parse_known_args()
+def generate_coefficient_payload(
+    params: dict[str, Any], *, loaded_inputs: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Shared frozen-model mathematics; the explicit adapter owns input IO.
 
-    params = parse_stdin()
+    Database inputs are passed in memory by the HMM service, never resolved by
+    the file CLI. This function does not publish assets or access a database.
+    """
+    source_mode = params.get("source_mode", "qe_frozen_file")
+    if source_mode not in {"qe_frozen_file", "database_daily"} or (
+        (loaded_inputs is not None) != (source_mode == "database_daily")
+    ):
+        raise ValueError("hmm_daily_input_source_mismatch: explicit validated adapter required")
     model_path = params["model_path"]
     test_start = params["test_start"]
     backtest_end = params["backtest_end"]
@@ -1003,7 +1019,7 @@ def main() -> None:
     config_json = params.get("config_json") if isinstance(params.get("config_json"), dict) else {}
 
     frozen_input_bundle = params.get("frozen_input_bundle")
-    if not isinstance(frozen_input_bundle, dict):
+    if loaded_inputs is None and not isinstance(frozen_input_bundle, dict):
         print(
             "ERROR: frozen_input_bundle is required; market-table fallback is forbidden",
             file=sys.stderr,
@@ -1013,13 +1029,14 @@ def main() -> None:
     print(f"HMM precompute: model={model_path}", file=sys.stderr)
     print(f"  date range: {test_start} ~ {backtest_end}", file=sys.stderr)
     print(f"  preset: {preset_key}, coeffs: {preset_coeffs}", file=sys.stderr)
-    print("  data source: hash-pinned frozen QE release", file=sys.stderr)
+    print(f"  data source: {source_mode}", file=sys.stderr)
 
     expected_model_sha256 = str(params.get("model_sha256") or "").strip().lower()
     if len(expected_model_sha256) != 64:
         print("ERROR: frozen HMM precompute requires model_sha256", file=sys.stderr)
         sys.exit(1)
-    actual_model_sha256 = _sha256_file(Path(model_path))
+    model_bytes = Path(model_path).read_bytes()
+    actual_model_sha256 = hashlib.sha256(model_bytes).hexdigest()
     if actual_model_sha256 != expected_model_sha256:
         print(
             f"ERROR: HMM model sha256 mismatch: expected={expected_model_sha256} actual={actual_model_sha256}",
@@ -1027,8 +1044,7 @@ def main() -> None:
         )
         sys.exit(1)
 
-    with open(model_path, "r", encoding="utf-8") as f:
-        models = json.load(f)
+    models = json.loads(model_bytes)
     if not models:
         print(f"ERROR: empty HMM model file: {model_path}", file=sys.stderr)
         sys.exit(1)
@@ -1073,9 +1089,16 @@ def main() -> None:
     confidence_scale = float(config_json.get("confidence_scale", 1.0))
     neutral_band = float(config_json.get("neutral_band", 0.0))
     confidence_floor = float(config_json.get("confidence_floor", 0.0))
+    if uses_dynamic_coefficients and (
+        not all(
+            math.isfinite(v)
+            for v in (coefficient_lambda, coeff_min, coeff_max, confidence_scale, neutral_band, confidence_floor)
+        )
+        or coeff_min > coeff_max
+        or confidence_scale <= 0
+    ):
+        raise ValueError("invalid frozen dynamic HMM coefficient parameters")
     has_zscore = "zscore_mean" in first
-    zscore_mean = np.asarray(first["zscore_mean"], dtype=np.float64) if has_zscore else None
-    zscore_std = np.asarray(first["zscore_std"], dtype=np.float64) if has_zscore else None
     print(
         f"  features={n_features}, rolling_window={rolling_window}, "
         f"zscore={has_zscore}, horizon_v2_schema={has_horizon_v2_features}, "
@@ -1112,11 +1135,15 @@ def main() -> None:
     history_start = start_d - timedelta(days=int(3.0 * 365 + 30))
 
     try:
-        frozen_loaded = load_frozen_coefficient_inputs(
-            frozen_input_bundle,
-            history_start=history_start,
-            test_start=start_d,
-            backtest_end=end_d,
+        frozen_loaded = (
+            loaded_inputs
+            if loaded_inputs is not None
+            else load_frozen_coefficient_inputs(
+                frozen_input_bundle,
+                history_start=history_start,
+                test_start=start_d,
+                backtest_end=end_d,
+            )
         )
     except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
         print(f"ERROR: frozen HMM input rejected: {exc}", file=sys.stderr)
@@ -1176,11 +1203,21 @@ def main() -> None:
             obs, dates_out = build_horizon_v2_observations(sector_rows[code], csi300, market_vol, info["preprocess"])
         else:
             sorted_dates = sorted(sector_data[code].keys())
+            sector_features = len(info["means"][0])
             obs, dates_out = build_legacy_observations(
-                sector_data[code], sorted_dates, csi300, market_vol, rolling_window, n_features
+                sector_data[code],
+                sorted_dates,
+                csi300,
+                market_vol,
+                int(info.get("rolling_window", rolling_window)),
+                sector_features,
             )
-            if len(obs) and zscore_mean is not None:
-                obs = (obs - zscore_mean) / zscore_std
+            if len(obs) and "zscore_mean" in info:
+                mean = np.asarray(info["zscore_mean"], dtype=np.float64)
+                std = np.asarray(info["zscore_std"], dtype=np.float64)
+                if mean.shape != (sector_features,) or std.shape != mean.shape or (std <= 0).any():
+                    raise ValueError(f"invalid frozen z-score parameters: {code}")
+                obs = (obs - mean) / std
 
         if len(obs) < 20:
             print(
@@ -1188,6 +1225,8 @@ def main() -> None:
                 file=sys.stderr,
             )
             sys.exit(1)
+        if source_mode == "database_daily" and dates_out != frozen_loaded["index_dates"]:
+            raise ValueError(f"hmm_daily_inference_failed: discontinuous feature prefix for {code}")
         expected_features = int(hmm.means_.shape[1])
         if obs.shape[1] != expected_features:
             print(
@@ -1204,8 +1243,7 @@ def main() -> None:
         if uses_dynamic_coefficients:
             state_stats = info.get("state_validation_stats")
             if not isinstance(state_stats, dict) or not state_stats:
-                print(f"  WARNING: missing state_validation_stats {code}", file=sys.stderr)
-                continue
+                raise ValueError(f"missing frozen state_validation_stats {code}")
             for i, td in enumerate(dates_out):
                 if start_d <= td <= end_d:
                     prob = posteriors[i]
@@ -1217,10 +1255,9 @@ def main() -> None:
                             horizon_weights,
                         )
                     except Exception as exc:
-                        print(f"  WARNING: dynamic signal failed {code}: {exc}", file=sys.stderr)
-                        continue
+                        raise ValueError(f"dynamic HMM state utility failed {code}") from exc
                     if not math.isfinite(raw_signal):
-                        raw_signal = 0.0
+                        raise ValueError(f"non-finite dynamic HMM state utility {code}")
                     d = td.isoformat()
                     dynamic_signal_by_date.setdefault(d, {})[code] = float(raw_signal)
                     dynamic_confidence_by_date.setdefault(d, {})[code] = confidence_from_posterior(
@@ -1264,28 +1301,27 @@ def main() -> None:
                 normalized_map = raw_map
             daily_coefficients[d] = {}
             for code, raw_signal in raw_map.items():
-                confidence = dynamic_confidence_by_date.get(d, {}).get(code, 0.0)
+                confidence = dynamic_confidence_by_date[d][code]
                 if dynamic_method in {"er", "er_winsor", "er_median", "pup_z", "pup_rank"}:
-                    normalized_signal = normalized_map.get(code, 0.0)
+                    normalized_signal = normalized_map[code]
                     if not math.isfinite(normalized_signal):
-                        normalized_signal = 0.0
+                        raise ValueError(f"non-finite dynamic HMM signal {code}/{d}")
                     coeff = 1.0 + coefficient_lambda * confidence * normalized_signal
                 elif dynamic_method == "pup":
                     normalized_signal = float(np.clip(raw_signal, -1.0, 1.0))
                     if not math.isfinite(normalized_signal):
-                        normalized_signal = 0.0
+                        raise ValueError(f"non-finite dynamic HMM signal {code}/{d}")
                     coeff = 1.0 + coefficient_lambda * confidence * normalized_signal
                 else:
                     normalized_signal = float(np.clip(raw_signal, -1.0, 1.0))
                     if not math.isfinite(normalized_signal):
-                        normalized_signal = 0.0
+                        raise ValueError(f"non-finite dynamic HMM signal {code}/{d}")
                     coeff = 1.0
                 if confidence < confidence_floor or abs(normalized_signal) < neutral_band:
                     coeff = 1.0
                 coeff = float(np.clip(coeff, coeff_min, coeff_max))
                 if not math.isfinite(coeff):
-                    print(f"  WARNING: non-finite dynamic coefficient {code} {d}", file=sys.stderr)
-                    continue
+                    raise ValueError(f"non-finite dynamic HMM coefficient {code}/{d}")
                 daily_coefficients[d][code] = round(coeff, 8)
     else:
         print(f"  decoded sectors={len(sector_date_labels)}", file=sys.stderr)
@@ -1369,7 +1405,9 @@ def main() -> None:
             frozen_loaded["stock_sector_maps_by_date"],
             daily_coefficients,
             quote_unavailable_sector_codes_by_date=output_quote_unavailable_by_date,
-            output_trade_date=str(output_trade_date) if output_trade_date else None,
+            # DB mapping uses the effective-day facts already known at the
+            # read cutoff. File historical replay retains its existing rule.
+            output_trade_date=str(output_trade_date) if output_trade_date and source_mode == "qe_frozen_file" else None,
             as_of_trade_date=str(as_of_trade_date) if as_of_trade_date else None,
             backtest_end=backtest_end,
         )
@@ -1404,10 +1442,8 @@ def main() -> None:
     }
     result.update(
         {
-            "data_source": "frozen_qe_release",
-            "dataset_root": frozen_loaded["dataset_root"],
-            "dataset_identity": frozen_loaded["dataset_identity"],
-            "input_file_sha256": frozen_loaded["file_sha256"],
+            "data_source": "frozen_qe_release" if source_mode == "qe_frozen_file" else "database_daily",
+            "source_mode": source_mode,
             "model_sha256": expected_model_sha256,
             "sector_code_map_schema": FROZEN_CODE_MAP_SCHEMA,
             "sector_code_map_authority": frozen_loaded["sector_code_map_authority"],
@@ -1427,6 +1463,16 @@ def main() -> None:
             "coefficient_sector_scope": "membership_and_quote_available_by_date",
         }
     )
+    if source_mode == "qe_frozen_file":
+        result.update(
+            {
+                "dataset_root": frozen_loaded["dataset_root"],
+                "dataset_identity": frozen_loaded["dataset_identity"],
+                "input_file_sha256": frozen_loaded["file_sha256"],
+            }
+        )
+    else:
+        result["input_identity"] = frozen_loaded["input_identity"]
     if output_trade_date:
         result["stock_sector_map"] = stock_sector_map_by_date[str(output_trade_date)]
         result.update(
@@ -1434,14 +1480,34 @@ def main() -> None:
                 "generation_mode": params.get("generation_mode") or "daily_asof_prediction_v1",
                 "as_of_trade_date": as_of_trade_date or backtest_end,
                 "effective_trade_date": str(output_trade_date),
-                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "generated_at": (
+                    frozen_loaded["input_identity"]["read_cutoff_at"]
+                    if source_mode == "database_daily"
+                    else datetime.now(timezone.utc).isoformat()
+                ),
                 "snapshot_id": params.get("snapshot_id"),
                 "config_id": params.get("config_id"),
                 "input_data_max_dates": params.get("input_data_max_dates"),
             }
         )
 
-    result_json = json.dumps(result, ensure_ascii=False)
+    return result
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--output-path", default=None)
+    args, _ = parser.parse_known_args()
+    params = parse_stdin()
+    # Reject a DB route before model/file IO; this CLI has no DB fallback.
+    if (
+        params.get("source_mode", "qe_frozen_file") != "qe_frozen_file"
+        or params.get("generation_mode") == "daily_asof_prediction_v1"
+        or params.get("output_trade_date")
+    ):
+        raise ValueError("hmm_daily_input_source_mismatch: frozen-file worker accepts historical qe_frozen_file only")
+    result = generate_coefficient_payload(params)
+    result_json = json.dumps(result, ensure_ascii=False, allow_nan=False)
     print(result_json)
     if args.output_path:
         os.makedirs(os.path.dirname(args.output_path) or ".", exist_ok=True)

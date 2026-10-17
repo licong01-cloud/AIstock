@@ -1092,6 +1092,17 @@ def build_agent_handoff(
         "needs_bug_json": handoff_mode["needs_bug_json"],
         "infra_action": handoff_mode.get("infra_action"),
         "workflow_entrypoints": workflow_entrypoints,
+        "registry_intake": (
+            {
+                "status": "awaiting_local_registry_intake",
+                "owner_role": "local_pipeline_intake",
+                "claim_status": "unclaimed_until_explicit_owner_ack",
+                "repair_module": build_failure_event(summary)["module_guess"],
+                "next_command": workflow_entrypoints["promote"],
+            }
+            if handoff_mode["needs_bug_json"]
+            else None
+        ),
         "next_commands": next_commands,
         "allowed_write_scope": suspected_files,
         "required_verification": required_verification,
@@ -2205,6 +2216,28 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
     if infra_action:
         handoff_prelude.append(f"- infra_action: `{infra_action.get('workflow_gate')}`")
         handoff_prelude.extend([f"- {item}" for item in infra_action.get("next_actions") or []])
+    intake = handoff.get("registry_intake")
+    if intake:
+        lines.extend(
+            [
+                "",
+                "## Local Registry Intake",
+                "",
+                f"- intake_status: `{intake['status']}`",
+                f"- intake_owner_role: `{intake['owner_role']}`",
+                f"- claim_status: `{intake['claim_status']}`",
+                f"- repair_module: `{intake['repair_module']}`",
+                "- Evidence binding: the run, commit and fingerprint in Failure Summary above.",
+                "- An Issue, a successful publisher step or a deferred registry PR is NOT a registered BUG, an owner claim or a repair.",
+                "- The local pipeline intake owner uses local credentials for the command below, records takeover and its registration result on this exact Issue in the same flow, then hands the BUG and Context Pack to the affected module owner.",
+                "- Takeover tracking is traceability, NOT a separate approval, precondition or manual gate.",
+                "- Do not expand Actions permissions, add a PR gate, create duplicate Issues, or blindly repeat a full module matrix.",
+                "",
+                "```bash",
+                intake["next_command"],
+                "```",
+            ]
+        )
     bug_linkage_line = (
         "- BUG ID: not applicable for infra-only issue unless `triage-ci-issue` later reclassifies it."
         if handoff.get("needs_bug_json") is False

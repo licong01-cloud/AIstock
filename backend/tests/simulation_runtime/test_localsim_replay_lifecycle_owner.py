@@ -8,11 +8,16 @@ import pytest
 from backend.services.simulation_runtime.localsim_control import LocalSimControlPlaneService
 from backend.services.simulation_runtime.localsim_product_control import LocalSimHistoricalSourceResolutionV1
 from backend.services.simulation_runtime.localsim_replay import LocalSimHistoricalDayRunner, LocalSimReplayCoordinator
-from backend.services.simulation_runtime.localsim_replay_runtime import LocalSimReplayLifecycleOwner
+from backend.services.simulation_runtime.localsim_replay_runtime import (
+    LocalSimHistoricalReplayDayExecutor, LocalSimReplayLifecycleOwner,
+)
+from backend.services.simulation_runtime.models import SimulationDailyRunStatus
 from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus, LocalSimSafeBoundaryDecisionV1
 from backend.services.simulation_runtime.successor_repository import InMemoryLocalSimSuccessorRepository
 from backend.services.strategy_package.execution_policy import local_sim_twap_only_policy_snapshot
-from backend.services.trading_core.errors import ArtifactGenerationFailedError, InvalidStateTransitionError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError, DataUnavailableError, InvalidStateTransitionError,
+)
 
 
 NOW = datetime(2026, 8, 31, 0, 30, tzinfo=UTC)
@@ -389,3 +394,76 @@ def test_actual_model_artifact_failure_remains_terminal_and_is_not_retried_as_ti
     assert current.status is LocalSimReplayStatus.FAILED_TERMINAL
     assert current.failure_context["reason_code"] == "INVALID_MODEL_ASSET"
     assert owner.tick(as_of_time=NOW)["eligible_job_count"] == 0
+
+
+@pytest.mark.parametrize("status,projected,expected", [
+    ("SUCCEEDED", True, "complete"), ("INTRADAY_RUNNING", False, "pending"),
+    ("SIGNAL_GENERATING", False, "pending"), ("SUCCEEDED", False, "pending"), ("FAILED_TERMINAL", True, "complete"),
+    ("FAILED_TERMINAL", False, "pending"),
+])
+def test_historical_executor_requires_completed_durable_day(status, projected, expected):
+    repo = InMemoryLocalSimSuccessorRepository()
+    _, _, job = _replay(repo)
+    run = SimpleNamespace(status=SimulationDailyRunStatus(status), run_payload_json={
+        "local_sim_persistence": {"status": "PERSISTED_WITH_RESIDUAL"},
+        "local_sim_projection_outbox_v1": {"status": "PROJECTED" if projected else "PENDING"},
+    })
+    item = SimpleNamespace(
+        strategy_id=job.simulation_account_id, binding_id=job.binding_id, run=run,
+        status="LOCALSIM_EXECUTION_RESIDUAL_TERMINAL", error=None, is_success=True,
+    )
+    executor = LocalSimHistoricalReplayDayExecutor(
+        lifecycle_scheduler=SimpleNamespace(run_once=lambda **_kwargs: SimpleNamespace(results=[item])),
+    )
+    if expected == "complete":
+        executor(job, DAYS[0])
+    else:
+        with pytest.raises(DataUnavailableError, match="not completed durable"):
+            executor(job, DAYS[0])
+
+
+def test_historical_submit_window_failure_recovers_original_cursor():
+    repo = InMemoryLocalSimSuccessorRepository()
+    policy, control, job = _replay(repo)
+    failed = repo.transition_replay_job(
+        replay_job_id=job.replay_job_id, expected_version=job.version,
+        update={"status": LocalSimReplayStatus.FAILED_TERMINAL, "failure_code": "RuntimeConfigInvalidError",
+                "failure_context": {"reason_code": "SIMULATION_SUBMIT_OUTSIDE_TRADING_WINDOW",
+                                    "trade_date": DAYS[0].isoformat()}}, updated_at=NOW,
+    )
+    executed = []
+    outcome = _owner(repo, control, policy, eligible=False, executed=executed).tick(as_of_time=NOW)
+    assert outcome["outcomes"][0]["replay_job_id"] == failed.replay_job_id
+    assert executed == list(DAYS[:2])
+    _owner(repo, control, policy, eligible=False, executed=executed).tick(as_of_time=NOW)
+    assert executed == list(DAYS)
+    assert repo.get_replay_job(job.replay_job_id).completed_trade_date == DAYS[-1]
+    assert len(repo.accounts) == 1
+
+
+@pytest.mark.parametrize("update", [
+    {"status": LocalSimReplayStatus.CANCELLED}, {"failure_code": "ArtifactGenerationFailedError"},
+    {"failure_context": {"reason_code": "OTHER_FAILURE", "trade_date": DAYS[0].isoformat()}},
+    {"failure_context": {"reason_code": "SIMULATION_SUBMIT_OUTSIDE_TRADING_WINDOW", "trade_date": "2026-01-01"}},
+])
+def test_submit_window_recovery_rejects_unrelated_failures(update):
+    repo = InMemoryLocalSimSuccessorRepository()
+    _, _, job = _replay(repo)
+    failed = job.model_copy(update={
+        "status": LocalSimReplayStatus.FAILED_TERMINAL, "failure_code": "RuntimeConfigInvalidError",
+        "failure_context": {"reason_code": "SIMULATION_SUBMIT_OUTSIDE_TRADING_WINDOW",
+                            "trade_date": DAYS[0].isoformat()}, **update,
+    })
+    assert not LocalSimReplayCoordinator.is_recoverable_historical_submit_window(failed)
+
+
+def test_paused_replay_waits_without_mutating_cursor_or_recovering_failure():
+    repo = InMemoryLocalSimSuccessorRepository()
+    policy, control, job = _replay(repo)
+    account = repo.get_account(job.simulation_account_id)
+    control.pause_account(account_id=account.account_id, expected_version=account.version)
+    executed = []
+    outcome = _owner(repo, control, policy, eligible=False, executed=executed).tick(as_of_time=NOW)
+    assert outcome["eligible_job_count"] == 0
+    assert executed == []
+    assert repo.get_replay_job(job.replay_job_id) == job

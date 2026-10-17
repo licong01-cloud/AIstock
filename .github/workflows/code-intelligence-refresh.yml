@@ -1,9 +1,9 @@
 name: AIstock Code Intelligence Refresh
+run-name: ${{ github.event_name == 'repository_dispatch' && format('AIstock schedule code-intelligence-refresh.yml {0}', github.event.client_payload.cycle_date) || github.workflow }}
 
 on:
-  schedule:
-    # Finish the daily graph refresh before Nightly starts at 19:07 UTC.
-    - cron: '30 18 * * *'
+  repository_dispatch:
+    types: [aistock_code_intelligence]
   workflow_dispatch:
     inputs:
       run_paid_ua_refresh:

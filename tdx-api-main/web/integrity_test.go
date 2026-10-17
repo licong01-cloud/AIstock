@@ -5,6 +5,7 @@ import (
 	"github.com/injoyai/tdx/protocol"
 	"github.com/jackc/pgx/v5"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -84,6 +85,46 @@ func TestTaskPanicAndSnapshotAreNotSilent(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("panic task did not fail")
+}
+
+type booleanEvidenceRow struct{ value bool }
+
+func (r booleanEvidenceRow) Scan(dest ...any) error { *dest[0].(*bool) = r.value; return nil }
+
+func TestEmptyLunchBoundaryRequiresIndependentSuspensionEvidence(t *testing.T) {
+	start, _ := parseTimeOrDate("2026-10-15")
+	end, _ := boundedEnd("2026-10-15", start)
+	for _, price := range []protocol.Price{0, 10000} {
+		k := &protocol.Kline{Time: time.Date(2026, 10, 15, 13, 0, 0, 0, protocol.ExchangeLocation),
+			Open: price, High: price, Low: price, Close: price}
+		for _, proven := range []bool{false, true} {
+			query := func(_ context.Context, sql string, args ...any) pgx.Row {
+				if len(args) != 2 || args[0] != "002388.SZ" || args[1] != "2026-10-15" {
+					t.Fatal("evidence scope differs")
+				}
+				if !strings.Contains(sql, "suspend_type='R'") || strings.Count(sql, "OR volume_shares<>0") != 2 {
+					t.Fatal("mixed events or sub-hand trades must contradict full-day suspension")
+				}
+				return booleanEvidenceRow{proven}
+			}
+			filtered, err := filterSuspendedMinutePlaceholders(context.Background(), query, "002388.SZ", []*protocol.Kline{k}, start, end)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rows, err := rawRows(filtered, "002388.SZ", start, end, true, "tdx_api")
+			if proven && (err != nil || len(rows) != 0) {
+				t.Fatalf("proven placeholder not suppressed: %v", err)
+			}
+			if !proven && err == nil {
+				t.Fatal("unproven boundary accepted")
+			}
+		}
+		oneShare := int64(1)
+		k.VolumeShares = &oneShare
+		if _, err := rawRows([]*protocol.Kline{k}, "002388.SZ", start, end, true, "tdx_api"); err == nil {
+			t.Fatal("sub-hand economic trade at invalid time was silently discarded")
+		}
+	}
 }
 
 func TestDEVRawWriteReadbackAndIdempotence(t *testing.T) {

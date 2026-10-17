@@ -34,6 +34,41 @@ def _fixture(tmp_path):
     return context, compiled, root, cas, journal
 
 
+def test_sealed_build_receipt_is_bounded_by_complete_reference_not_control_json_cap(tmp_path):
+    from backend.services.dataset_release.monthly_build_resume import load_sealed_build_json
+    from backend.services.dataset_release.cas_store import CASStoreError, CASCorruptionError
+
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    payload = {"verified_output_files": {"inventory": "x" * (17 * 1024 * 1024)}}
+    reference = cas.put_json(payload)
+    assert load_sealed_build_json(cas, reference.as_dict()) == payload
+    with pytest.raises(CASStoreError, match="size is incomplete"):
+        load_sealed_build_json(cas, reference.sha256)
+    with pytest.raises(CASStoreError, match="non-canonical"):
+        load_sealed_build_json(cas, {**reference.as_dict(), "relative_path": "other.json"})
+    with pytest.raises(CASCorruptionError, match="size mismatch"):
+        load_sealed_build_json(cas, {**reference.as_dict(), "size": reference.size - 1})
+    path = cas.root / reference.relative_path
+    raw = path.read_bytes()
+    path.write_bytes(raw[:-1])
+    with pytest.raises(CASCorruptionError, match="size mismatch"):
+        load_sealed_build_json(cas, reference)
+    path.write_bytes(raw.replace(b"x", b"y", 1))
+    with pytest.raises(CASCorruptionError, match="readback mismatch"):
+        load_sealed_build_json(cas, reference)
+
+
+def test_completed_large_export_receipt_resumes_without_rewriting_price_files(tmp_path):
+    context, compiled, root, cas, journal = _fixture(tmp_path)
+    payload = {"verified_output_files": {"inventory": "x" * (17 * 1024 * 1024)}}
+    journal.save("qlib_dump_minute", cas.put_json(payload), roots=("daily_bin",))
+    path = root / "daily_bin/close.bin"
+    before = path.stat()
+    assert journal.get("qlib_dump_minute") == payload
+    assert path.stat().st_mtime_ns == before.st_mtime_ns
+    assert path.read_bytes() == b"accurate"
+
+
 def test_fresh_resume_keeps_exact_bytes_and_reuses_original_staging(tmp_path):
     context, compiled, root, cas, journal = _fixture(tmp_path)
     before = (root / "daily_bin/close.bin").stat()
@@ -88,6 +123,33 @@ def test_interrupted_history_commit_keeps_price_exports_and_finishes_without_wri
         assert (factor / name).read_bytes() == b"repaired"
         assert (scratch / (name + ".before")).read_bytes() == b"original"
     assert recover_history_commit(root=root, journal=journal.path, record=recovered, expected_projection="e" * 64) == proposed
+
+    # A later authorized quote/prev_close amendment has its own file pins and
+    # completion receipt. Reopening an already committed history transaction
+    # must not replay its obsolete writer provenance over that newer journal.
+    later = copy.deepcopy(recovered)
+    price = root / "daily_bin/close.bin"
+    price.write_bytes(b"later verified correction")
+    later["files"]["daily_bin/close.bin"] = _signature(price)
+    later["steps"]["finalize-bins"] = cas.put_json({"later_correction": True}).as_dict()
+    _atomic(journal.path, later)
+    before = journal.path.read_bytes(), journal.path.stat().st_mtime_ns
+    assert recover_history_commit(root=root, journal=journal.path, record=later, expected_projection="e" * 64) == later
+    assert (journal.path.read_bytes(), journal.path.stat().st_mtime_ns) == before
+    assert price.read_bytes() == b"later verified correction"
+
+    forged = copy.deepcopy(later)
+    forged["steps"]["industry-history"] = cas.put_json({"different_projection": True}).as_dict()
+    with pytest.raises(MonthlyBuildResumeError, match="industry commit"):
+        recover_history_commit(root=root, journal=journal.path, record=forged, expected_projection="e" * 64)
+    forged = copy.deepcopy(later)
+    forged["files"]["factor_bundle/sector_data.h5"] = [0, 0, "f" * 64]
+    with pytest.raises(MonthlyBuildResumeError, match="completed industry"):
+        recover_history_commit(root=root, journal=journal.path, record=forged, expected_projection="e" * 64)
+    (factor / "sector_data.h5").write_bytes(b"tampered")
+    with pytest.raises(MonthlyBuildResumeError, match="completed industry"):
+        recover_history_commit(root=root, journal=journal.path, record=later, expected_projection="e" * 64)
+    assert journal.path.read_bytes() == before[0]
 
 
 def test_fresh_process_recovers_completed_export_without_any_writer(tmp_path):

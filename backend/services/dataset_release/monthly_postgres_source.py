@@ -424,6 +424,12 @@ class PostgresMonthlySourceAdapter:
             history = capture_industry_history(connection, current_map=sector_mapping["code_map"])
             if history is not None:
                 sector_mapping = {**sector_mapping, "historical_classification": history.payload}
+                from .monthly_industry_facts import capture_industry_quote_source, predecessor_context_matches
+                prefix = load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile)
+                if prefix is not None and not predecessor_context_matches(prefix, history):
+                    sector_mapping["historical_quote_source"] = capture_industry_quote_source(
+                        connection, cas=self.cas, projection=history,
+                    )
         authority = MonthlyObservedSourceAuthority(
             self.profile,
             self.cas,

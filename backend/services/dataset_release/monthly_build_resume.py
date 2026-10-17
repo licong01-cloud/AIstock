@@ -18,6 +18,21 @@ class MonthlyBuildResumeError(RuntimeError):
     """A retained export cannot be matched to the exact current data inputs."""
 
 
+def load_sealed_build_json(cas: CASStore, reference: CASRef | Mapping[str, Any]) -> Any:
+    """Read producer-owned BUILD metadata using its sealed exact byte bound.
+
+    File inventories scale with the full provider catalog, not JSON control
+    message size. A complete canonical CAS reference supplies the actual bound;
+    neither disk size nor an unpinned digest can enlarge it. The bounded reader
+    still rejects changed bytes, growth, truncation and invalid JSON. SOURCE
+    stream chunk limits and small untrusted control-message caps are unchanged.
+    """
+    ref = cas.validate_reference_metadata(reference)
+    if ref.size <= 0:
+        raise MonthlyBuildResumeError("sealed BUILD receipt is empty")
+    return cas.get_json_bounded(ref, max_bytes=ref.size)
+
+
 def _plain(path: Path) -> None:
     current = Path(path.anchor)
     for part in path.parts[1:]:
@@ -165,6 +180,10 @@ class MonthlyBuildResume:
                         raise MonthlyBuildResumeError("pending history repair has no frozen authority")
                     self.record = dict(recover_history_commit(root=staging_root, journal=self.path,
                         record=self.record, expected_projection=history.sha256))
+                from .monthly_quote_catalog import recover_quote_catalog
+                self.record = recover_quote_catalog(root=staging_root, journal=self.path, record=self.record, cas=cas)
+                from .monthly_prev_close_repair import recover_prev_close
+                self.record = recover_prev_close(root=staging_root, journal=self.path, record=self.record, cas=cas)
                 for relative, expected in self.record["files"].items():
                     if not isinstance(relative, str) or not relative or any(token in relative for token in ("\\", ":", "\x00")) or ".." in Path(relative).parts or Path(relative).is_absolute():
                         raise MonthlyBuildResumeError("retained data file escaped staging")
@@ -183,7 +202,7 @@ class MonthlyBuildResume:
         if ref is None:
             return None
         self.context.checkpoint()
-        value = self.cas.get_json_bounded(ref, max_bytes=64 * 1024 * 1024)
+        value = load_sealed_build_json(self.cas, ref)
         if not isinstance(value, Mapping):
             raise MonthlyBuildResumeError("retained completion receipt is invalid")
         self.context.progress({"phase": "BUILD_REUSE_COMPLETED", "dataset": step})

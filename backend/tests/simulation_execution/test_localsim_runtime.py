@@ -19,6 +19,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
+from contextlib import contextmanager
 from typing import Any
 
 import pytest
@@ -48,6 +49,8 @@ from backend.services.strategy_package.execution_policy import (
     normalize_execution_policy_json,
 )
 from backend.services.simulation_execution.localsim.models import LocalSimMarketMarkV1
+
+
 from backend.services.simulation_data.daily_context import (
     DAILY_LIMIT_AUTHORITY_BY_BROKER_V2,
     DAILY_LIMIT_RESOLVER_BY_BROKER_V2,
@@ -663,10 +666,16 @@ def test_localsim_realtime_submission_persists_waiting_state_before_first_causal
     assert state.last_processed_bar_time is None
 
 
-def test_localsim_limit_up_buy_waits_per_symbol_without_rolling_back_healthy_peer() -> None:
+@pytest.mark.parametrize(("blocked_volume", "expected_reason"), [
+    (100_000, "LIMIT_UP_BUY_BLOCKED"), (0, "ZERO_VOLUME"),
+])
+def test_localsim_limit_up_buy_waits_per_symbol_without_rolling_back_healthy_peer(
+    blocked_volume: int, expected_reason: str,
+) -> None:
     blocked_input = _make_market_input("000001.SZ", bar_count=2)
     first_blocked_bar = blocked_input.minute_bars[0].model_copy(
-        update={"open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0}
+        update={"open": 11.0, "high": 11.0, "low": 11.0, "close": 11.0,
+                "volume": blocked_volume, "amount": float(blocked_volume) * 11.0}
     )
     blocked_input = replace(
         blocked_input,
@@ -708,7 +717,7 @@ def test_localsim_limit_up_buy_waits_per_symbol_without_rolling_back_healthy_pee
     first_states = {state.symbol: state for state in first_snapshot["execution_states"]}
 
     assert first_states["000001.SZ"].runtime_status.value == "WAITING_FOR_MARKET_STATE"
-    assert first_states["000001.SZ"].waiting_reason_code == "LIMIT_UP_BUY_BLOCKED"
+    assert first_states["000001.SZ"].waiting_reason_code == expected_reason
     assert first_states["000001.SZ"].last_processed_bar_time == first_blocked_bar.bar_time
     assert first_states["000001.SZ"].filled_quantity == 0
     assert first_states["000002.SZ"].runtime_status.value == "ACTIVE"
@@ -717,7 +726,7 @@ def test_localsim_limit_up_buy_waits_per_symbol_without_rolling_back_healthy_pee
     assert any(
         event.order_id == first_states["000001.SZ"].order_id
         and event.event_type == OrderEventType.NO_FILL
-        and event.reason == "LIMIT_UP_BUY_BLOCKED"
+        and event.reason == expected_reason
         for event in first_snapshot["events"]
     )
 
@@ -734,8 +743,15 @@ def test_localsim_limit_up_buy_waits_per_symbol_without_rolling_back_healthy_pee
     assert backend.query_status(healthy_handle).state == "filled"
 
 
-def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplicate_fill() -> None:
+@pytest.mark.parametrize("zero_volume_first_bar", [False, True])
+def test_localsim_streaming_schedule_restarts_from_durable_cursor_without_duplicate_fill(
+    zero_volume_first_bar: bool,
+) -> None:
     historical = _make_market_input("000001.SZ", bar_count=4)
+    if zero_volume_first_bar:
+        bars = list(historical.minute_bars)
+        bars[0] = bars[0].model_copy(update={"volume": 0, "amount": 0.0})
+        historical = replace(historical, minute_bars=bars)
     provider = ObservedMarketDataProvider(inputs_by_symbol={"000001.SZ": historical})
     cursor = datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=9, minute=30)
     streaming_policy = {
@@ -2230,3 +2246,208 @@ def test_inmemoryledger_uses_star_board_lot_increment_for_whole_position_sell() 
 
     assert "688720.SH" not in ledger.positions
     assert ledger.cash_entries[-1].notional == Decimal("17017.00")
+
+def _halt_reference(symbol="603616.SH", trade_date=None):
+    from backend.services.simulation_execution.localsim.suspension import REFERENCE_KEY
+    from backend.services.simulation_data.daily_context import canonical_json_sha256
+    from backend.services.strategy_package.reference_prices import REFERENCE_PRICE_CONTRACT
+
+    day = trade_date or date(2026, 1, 21)
+    cutoff = day - timedelta(days=1)
+    evidence = {
+        "schema_version": REFERENCE_KEY, "symbol": symbol, "trade_date": day.isoformat(),
+        "cutoff_date": cutoff.isoformat(), "price_basis": "raw", "reference_close": 6.23,
+        "reference_source": "market.kline_daily_raw", "suspension_source": "market.suspend_d",
+        "suspension_facts": [{"symbol": symbol, "trade_date": day.isoformat(),
+                              "suspend_type": "S", "suspend_timing": None}],
+        "reference_price_availability": {"contract_version": REFERENCE_PRICE_CONTRACT, "state": "EXACT_CLOSE",
+                                         "as_of_date": cutoff.isoformat(), "quote_date": cutoff.isoformat(),
+                                         "suspension_dates": [], "reason_code": None},
+    }
+    evidence["evidence_sha256"] = canonical_json_sha256(evidence)
+    return evidence
+
+
+def test_historical_halt_eligibility_does_not_require_any_price_and_valuation_uses_C():
+    from backend.services.simulation_execution.localsim.suspension import (
+        LocalSimHistoricalSuspensionProvider, REFERENCE_KEY, SUSPENSION_KEY,
+    )
+    from backend.services.strategy_package.reference_prices import ReferencePrices
+
+    day, cutoff = date(2026, 5, 11), date(2026, 5, 8)
+    calls = []
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, query, params):
+            assert "market.suspend_d" in query and params == (day, ["301139.SZ"])
+        def fetchall(self): return [("301139.SZ", day, "S", None)]
+
+    @contextmanager
+    def connection():
+        yield SimpleNamespace(cursor=Cursor)
+
+    def references(**kwargs):
+        calls.append(kwargs)
+        prices = ReferencePrices()
+        prices["301139.SZ"] = 18.45
+        prices.observations["301139.SZ"] = {**_halt_reference()["reference_price_availability"],
+                                            "as_of_date": cutoff.isoformat(), "quote_date": cutoff.isoformat()}
+        return prices
+
+    provider = LocalSimHistoricalSuspensionProvider(conn_factory=connection, reference_loader=references,
+        calendar=SimpleNamespace(snapshot=lambda _: SimpleNamespace(is_trading_day=True, previous_trading_date=cutoff)),
+        limit_provider=SimpleNamespace(get_limit_prices=lambda *_: {"301139.SZ": SimpleNamespace(
+            symbol="301139.SZ", trade_date=day, pre_close=float("nan"), up_limit=22.14, down_limit=14.76)}))
+    status = provider.load_statuses(symbols=["301139.SZ"], trade_date=day)["301139.SZ"]
+    assert status["is_tradable"] is False and SUSPENSION_KEY in status and REFERENCE_KEY not in status
+    assert calls == []
+    valued = provider.load_statuses(symbols=["301139.SZ"], trade_date=day,
+                                    valuation_symbols=["301139.SZ"])["301139.SZ"]
+    assert calls[0]["as_of_date"] == cutoff and valued[REFERENCE_KEY]["reference_close"] == 18.45
+
+
+def test_suspended_reference_mark_is_distinct_and_legacy_hash_serialization_is_unchanged():
+    from backend.services.simulation_data.daily_context import canonical_json_sha256
+
+    old = {"schema_version": "local_sim_market_mark_v1", "symbol": "603616.SH", "price": 5.98,
+           "as_of_time": "2026-01-20T09:33:00+08:00", "source": "market.kline_minute_raw",
+           "provenance": "HISTORICAL_MINUTE_CLOSE", "reuse_reason_code": None,
+           "source_error_reason_code": None, "reused_from_mark_hash": None}
+    old["mark_hash"] = canonical_json_sha256(old)
+    assert LocalSimMarketMarkV1.model_validate(old).model_dump(mode="json") == old
+    new = LocalSimMarketMarkV1(symbol="603616.SH", price=6.23, as_of_time="2026-01-21T15:30:00+08:00",
+        source="market.kline_daily_raw:strategy_package_reference_price_availability_v1",
+        provenance="SUSPENDED_REFERENCE_CLOSE", suspension_reference=_halt_reference())
+    assert new.price == 6.23 and new.suspension_reference["reference_close"] != old["price"]
+    assert "pre_close" not in new.model_dump(mode="json")["suspension_reference"]
+    assert LocalSimMarketMarkV1.model_validate(new.model_dump(mode="json")) == new
+
+
+@pytest.mark.parametrize("mutation", ["future", "wrong_symbol", "partial", "price", "missing_source", "hash"])
+def test_suspended_valuation_rejects_future_partial_wrong_identity_or_tampered_reference(mutation):
+    from backend.services.simulation_data.daily_context import canonical_json_sha256
+    from backend.services.simulation_execution.localsim.suspension import validate_suspension_reference
+
+    evidence = _halt_reference()
+    if mutation == "future":
+        evidence["reference_price_availability"]["quote_date"] = "2026-01-21"
+    elif mutation == "wrong_symbol":
+        evidence["symbol"] = "000001.SZ"
+    elif mutation == "partial":
+        evidence["suspension_facts"][0]["suspend_timing"] = "09:30-10:30"
+    elif mutation == "price":
+        evidence["reference_close"] = float("nan")
+    elif mutation == "missing_source":
+        evidence.pop("reference_source")
+    if mutation != "hash":
+        evidence["evidence_sha256"] = canonical_json_sha256({k: v for k, v in evidence.items() if k != "evidence_sha256"})
+    else:
+        evidence["evidence_sha256"] = "wrong"
+    with pytest.raises(DataUnavailableError):
+        validate_suspension_reference(evidence, symbol="603616.SH", trade_date=date(2026, 1, 21))
+
+
+def test_historical_halt_is_rejected_before_strict_minute_pre_close_loading():
+    from backend.services.simulation_execution.localsim.suspension import SUSPENSION_KEY
+    from backend.services.simulation_data.daily_context import canonical_json_sha256
+
+    backend, provider, _ = _build_backend()
+    evidence = _halt_reference("000001.SZ", TRADE_DATE)
+    fact = {k: evidence[k] for k in ("symbol", "trade_date", "cutoff_date", "suspension_source", "suspension_facts")}
+    fact["schema_version"] = SUSPENSION_KEY
+    fact["evidence_sha256"] = canonical_json_sha256(fact)
+    status = {"suspend_status": {"is_suspended": True}, SUSPENSION_KEY: fact}
+    backend._historical_suspension_provider = SimpleNamespace(load_statuses=lambda **_: {"000001.SZ": status})
+    handle = backend.submit_order_intent(_buy_intent(backend))
+    assert backend.query_status(handle).state == "rejected"
+    assert not provider.calls and backend.query_status(handle).filled_quantity == 0
+
+
+def test_historical_position_valuation_uses_frozen_reference_without_trade_price_or_minute_input():
+    from backend.services.simulation_execution.localsim.suspension import REFERENCE_KEY
+
+    backend, provider, _ = _build_backend(provider=FakeMarketDataProvider(unavailable_symbols={"603616.SH"}))
+    reference = _halt_reference("603616.SH", TRADE_DATE)
+    statuses = {"603616.SH": {"suspend_status": {"is_suspended": True}, REFERENCE_KEY: reference}}
+    marks = backend.load_authoritative_position_marks(symbols=["603616.SH"], trade_date=TRADE_DATE,
+        as_of_time=datetime.combine(TRADE_DATE, datetime.min.time()).replace(hour=15, minute=30),
+        pre_trade_tradability=statuses)
+    assert not provider.calls
+    mark = marks["603616.SH"]
+    assert mark.price == 6.23 and mark.provenance.value == "SUSPENDED_REFERENCE_CLOSE"
+    assert mark.suspension_reference == reference and mark.as_of_time.date() == TRADE_DATE
+
+
+@pytest.mark.parametrize("rows,conflict", [
+    ([("S", "09:30-10:30")], False),
+    ([("S", None), ("R", None)], True),
+    ([("S", None), ("S", None)], True),
+])
+def test_partial_or_conflicting_halts_cannot_use_the_full_day_price_exception(rows, conflict):
+    from backend.services.simulation_execution.localsim.suspension import LocalSimHistoricalSuspensionProvider, REFERENCE_KEY
+
+    day = date(2026, 1, 22)
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, *_): pass
+        def fetchall(self): return [("603616.SH", day, kind, timing) for kind, timing in rows]
+
+    @contextmanager
+    def connection():
+        yield SimpleNamespace(cursor=Cursor)
+
+    # This generic raw-event contract has no disclosure authority. The separate
+    # public-authority suite covers the now-resolved real 603616/01-22 day.
+    provider = LocalSimHistoricalSuspensionProvider(conn_factory=connection,
+        authority={"schema_version": "aistock_suspension_day_authority_v1",
+                   "policy": "provider_events_with_disclosure_resolution_v1", "entries": []},
+        calendar=SimpleNamespace(snapshot=lambda _: SimpleNamespace(is_trading_day=True,
+                                                                    previous_trading_date=date(2026, 1, 21))))
+    if conflict:
+        with pytest.raises(DataUnavailableError) as error:
+            provider.load_statuses(symbols=["603616.SH"], trade_date=day, valuation_symbols=["603616.SH"])
+        assert error.value.context["reason_code"] == "LOCALSIM_SUSPENSION_FACT_CONFLICT"
+    else:
+        status = provider.load_statuses(symbols=["603616.SH"], trade_date=day, valuation_symbols=["603616.SH"])
+        assert status["603616.SH"]["suspend_status"]["is_suspended"] is False
+        assert REFERENCE_KEY not in status["603616.SH"]
+
+
+def test_valid_native_suspended_pre_close_keeps_priority_without_C_reference_substitution():
+    from backend.services.simulation_execution.localsim.suspension import (
+        LocalSimHistoricalSuspensionProvider, NATIVE_PRE_CLOSE_KEY, REFERENCE_KEY,
+    )
+
+    day = TRADE_DATE
+
+    class Cursor:
+        def __enter__(self): return self
+        def __exit__(self, *_): return False
+        def execute(self, *_): pass
+        def fetchall(self): return [("603616.SH", day, "S", None)]
+
+    @contextmanager
+    def connection():
+        yield SimpleNamespace(cursor=Cursor)
+
+    def forbidden_reference(**_):
+        raise AssertionError("valid native pre_close must not be replaced by a C reference")
+
+    provider = LocalSimHistoricalSuspensionProvider(conn_factory=connection, reference_loader=forbidden_reference,
+        calendar=SimpleNamespace(snapshot=lambda _: SimpleNamespace(is_trading_day=True,
+                                                                    previous_trading_date=day - timedelta(days=1))),
+        limit_provider=SimpleNamespace(get_limit_prices=lambda *_: {"603616.SH": SimpleNamespace(
+            symbol="603616.SH", trade_date=day, pre_close=6.17, up_limit=6.79, down_limit=5.55)}))
+    statuses = provider.load_statuses(symbols=["603616.SH"], trade_date=day, valuation_symbols=["603616.SH"])
+    assert REFERENCE_KEY not in statuses["603616.SH"]
+    assert statuses["603616.SH"][NATIVE_PRE_CLOSE_KEY]["pre_close"] == 6.17
+    backend, minute, _ = _build_backend()
+    marks = backend.load_authoritative_position_marks(symbols=["603616.SH"], trade_date=day,
+        as_of_time=datetime.combine(day, datetime.min.time()).replace(hour=15, minute=30),
+        pre_trade_tradability=statuses)
+    assert marks["603616.SH"].price == 6.17 and marks["603616.SH"].provenance.value == "SUSPENDED_PREV_CLOSE"
+    assert not minute.calls

@@ -18,7 +18,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1848",
-  "closed_at": null,
+  "closed_at": "2026-10-13T07:47:03.357745Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,10 +27,10 @@
   "created_at": "2026-10-12T17:00:32.482458Z",
   "description": "月度审计确认：9/17科创板BUY588经TWAP留下无法申报的196股；10/8估值恢复未绑定冻结日上下文；涨跌停或停牌残单被误判失败；早盘终态后未刷新收盘估值；账户详情未解析保留账户lineage。保留行情内容哈希冲突校验及全部交易事实。",
   "design_compliance_review": {
-    "no_partial_delivery": "登记的源码修复均实现；运行激活及历史回写单独记录。",
-    "no_silent_error": "行情hash冲突、程序schedule残单及缺少收盘bar明确报错。",
     "business_semantics": "遵照用户定义，市场约束残单作为成功运行并保留未成交事实；程序和数据失败仍FAILED。",
-    "no_added_approval": "满足CI后按已有授权直接合入，无新增审批。"
+    "no_added_approval": "满足CI后按已有授权直接合入，无新增审批。",
+    "no_partial_delivery": "登记的源码修复均实现；运行激活及历史回写单独记录。",
+    "no_silent_error": "行情hash冲突、程序schedule残单及缺少收盘bar明确报错。"
   },
   "diagnostic_evidence": {
     "market_constrained_days": [
@@ -69,7 +69,6 @@
   "expected": "合法子单不会制造不可买入尾单；恢复绑定冻结日上下文且不重发父单；有明确市场阻挡证据的收盘残单不记程序失败；收盘标价刷新持仓净值；账户详情正确解析lineage。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261012_BUG-1848-localsim-twap.json",
       "backend/execution_algos/twap_algo.py",
       "backend/routers/simulation_runtime.py",
       "backend/services/simulation_execution/localsim/persistence.py",
@@ -81,11 +80,11 @@
       "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
       "backend/tests/trading_core/test_minute_execution.py",
-      "noxfile.py"
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261012_BUG-1848-localsim-twap.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261012_BUG-1848-localsim-twap.json",
       "backend/execution_algos/twap_algo.py",
       "backend/routers/simulation_runtime.py",
       "backend/services/simulation_execution/localsim/persistence.py",
@@ -97,7 +96,8 @@
       "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
       "backend/tests/trading_core/test_minute_execution.py",
-      "noxfile.py"
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261012_BUG-1848-localsim-twap.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -305,8 +305,8 @@
   },
   "first_seen_at": "2026-10-12T17:00:32.482458Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "594ee585db83d96baf4ce226d358523dfb450d9e",
+  "fixed_at": "2026-10-12T17:28:01Z",
   "github_issue_number": 5911,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5911",
   "last_seen_at": "2026-10-12T17:00:32.482458Z",
@@ -314,6 +314,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5912",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -327,25 +328,25 @@
   ],
   "review_rounds": [
     {
+      "result": "passed",
       "round": 1,
-      "scope": "数量合法性、分钟成交量与残单归因",
-      "result": "passed"
+      "scope": "数量合法性、分钟成交量与残单归因"
     },
     {
+      "result": "passed",
       "round": 2,
-      "scope": "冻结上下文恢复、经济幂等及终态不可重开",
-      "result": "passed"
+      "scope": "冻结上下文恢复、经济幂等及终态不可重开"
     },
     {
+      "result": "passed_after_fix",
       "round": 3,
-      "scope": "收盘入口、收盘行情缺失、估值generation及旧分发路径",
-      "result": "passed_after_fix"
+      "scope": "收盘入口、收盘行情缺失、估值generation及旧分发路径"
     }
   ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Fresh pytest loaded persistent task worktree source: 72 passed, followed by four failed-node reruns passing after dispatch fix; no production backend process control."
@@ -354,9 +355,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1848-close-sync-20261012\\tmp\\issue_workflow\\BUG-1848\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1848",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8491091005d1a48e12842529dd81fd8f796930f3ad04fc92df4622c1e3a2add",
+      "contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+      "expected_identity": "594ee585db83d96baf4ce226d358523dfb450d9e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-13T07:45:55.876132Z",
+      "mode": "read_only",
+      "observed_identity": "4ebf1c04658f90f09fbbbecc2d882716f13d00a6",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8ecd33287325fafbefbd06af90d6ef9a13f37c66290a149b99d41b7de15b4d0f",
+      "receipt_sha256": "b8d93bbd7efac90b7829b0ace1d811257419435aebd1e46334e84c91aa3a97f9",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "920752d016b5deeab0f051100b92b76eba0d65417511ff1457a80c36a5d4bf1e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -366,7 +390,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1848",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "581231345c6d0a49",
+    "recorded_at": "2026-10-12T17:28:51.082449Z",
+    "runtime_contract_digest": "4778f8503704ce6adcfc5d5b771cc372c76ed165797ac47df356da2668039fe5",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6d167f1a6006d44a1870b96b057328d5f00d05e7",
+    "source_merge_commit": "594ee585db83d96baf4ce226d358523dfb450d9e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5912",
+    "validation_evidence": [
+      "python -m nox -s validation_catalog_integrity --no-venv -> passed",
+      "python -m pytest backend/tests/trading_core/test_minute_execution.py -> passed"
+    ],
+    "validation_evidence_digest": "4bcbec0eb366fb9ac6dc094cb33fcec7eb90537a0136171d0b334791bdfb4ceb"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -378,7 +424,10 @@
   "validation_evidence": [
     "fresh targeted pytest matrix: 72 passed; failed nodeids after dispatch fix: 4 passed",
     "changed Python ruff check: passed",
-    "git diff --check: passed"
+    "git diff --check: passed",
+    "python -m nox -s validation_catalog_integrity --no-venv -> passed",
+    "python -m pytest backend/tests/trading_core/test_minute_execution.py -> passed",
+    "2026-10-13 post-restart readback: runtime 4ebf1c04658f90f09fbbbecc2d882716f13d00a6 contains source merge; target-owned scheduler verification scope is all local_sim, healthy thread, zero current-day blockers. Original simrun_bcd56e8b3eae017b and both historical Jan-05 runs simrun_9fbe2525127692a1 / simrun_014f7985c59bd019 are SUCCEEDED. Both original replay accounts are ACTIVE version 3, capital 5000000 each. Four replay-owned bindings are excluded from normal daily scheduling; two stale daily runs were canonically CANCELLED with no execution plan or broker effects and original errors retained. Unscoped platform-diagnostics remains DEGRADED due to these retained CANCELLED audit rows; full replay and live activation are not asserted. Exact evidence: F:/Dev/AIstock/tmp/handoff/localsim_new_accounts_resume_20261013.json and localsim_replay_stale_daily_cleanup_20261013.json."
   ],
   "verification_budget": {
     "budget": "standard",

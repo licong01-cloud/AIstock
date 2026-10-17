@@ -71,6 +71,7 @@ REASON_HASH_INVALID = "ADVISORY_HISTORICAL_RANGE_HASH_INVALID"
 REASON_STATE_TRANSITION_INVALID = "ADVISORY_HISTORICAL_RANGE_STATE_TRANSITION_INVALID"
 REASON_IDENTITY_CONFLICT = "ADVISORY_HISTORICAL_RANGE_IDENTITY_CONFLICT"
 REASON_IDEMPOTENCY_CONFLICT = "ADVISORY_HISTORICAL_RANGE_IDEMPOTENCY_CONFLICT"
+REASON_OPERATION_INFLIGHT_CONFLICT = "ADVISORY_HISTORICAL_RANGE_OPERATION_INFLIGHT_CONFLICT"
 REASON_ROW_VERSION_CONFLICT = "ADVISORY_HISTORICAL_RANGE_ROW_VERSION_CONFLICT"
 REASON_DAY_PLAN_CONFLICT = "ADVISORY_HISTORICAL_RANGE_DAY_PLAN_CONFLICT"
 REASON_REPOSITORY_CONFLICT = "ADVISORY_HISTORICAL_RANGE_REPOSITORY_CONFLICT"
@@ -2903,6 +2904,7 @@ class HistoricalRangeOutcomeRefreshRequestV1(_StrictContract):
     max_items_per_slice: int = Field(default=500, ge=1, le=10000)
     max_parallel_runs: int = Field(default=2, ge=1, le=64)
     lease_seconds: int = Field(default=300, ge=30, le=3600)
+    file_source_binding: dict[str, Any] | None = None
     request_hash: str | None = Field(default=None, min_length=64, max_length=64)
 
     @field_validator("policy_bundle_hash", "producer_code_hash", "request_hash")
@@ -2939,7 +2941,14 @@ class HistoricalRangeOutcomeRefreshRequestV1(_StrictContract):
             HistoricalRangeOutcomeRevisionReason.CALCULATION_CORRECTION,
         }:
             raise ValueError("refresh correction reason must be SOURCE or CALCULATION correction")
-        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"request_hash"}))
+        exclusions = {"request_hash"}
+        if self.file_source_binding is None:
+            exclusions.add("file_source_binding")
+        else:
+            source = self.file_source_binding
+            if canonical_json_sha256({key: value for key, value in source.items() if key != "binding_hash"}) != source.get("binding_hash"):
+                raise ValueError("outcome file source binding hash differs")
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude=exclusions))
         if self.request_hash is not None and self.request_hash != digest:
             raise ValueError("request_hash does not match outcome refresh request")
         object.__setattr__(self, "request_hash", digest)

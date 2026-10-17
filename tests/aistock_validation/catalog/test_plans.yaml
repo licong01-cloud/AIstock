@@ -499,8 +499,10 @@ plans:
     level: L3
     command_key: nox_validation_center_ui
     nox_session: validation_center_ui
+    ci_lane: frontend
+    frontend_test_path: tests/validation-center/validation-center.spec.ts
     enabled: true
-    execution_mode: delegated
+    execution_mode: controlled_runner
     requires_backend: false
     requires_frontend: true
     allowed_backend_ports: [8011, 8012]
@@ -508,7 +510,7 @@ plans:
     writes_database: false
     writes_artifacts: true
     writes_business_state: false
-    runner_enabled: false
+    runner_enabled: true
     max_duration_seconds: 600
     evidence_kinds: [playwright]
     mock_api_used: true
