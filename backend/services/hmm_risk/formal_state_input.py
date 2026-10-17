@@ -571,7 +571,9 @@ def _l2_stock_facts(
     return _bounded_l2_stock_facts(frozen, source, start=start, end=end)
 
 
-def _bounded_l2_stock_facts(frozen, source, *, start: date, end: date, prewarm_price_history: bool = False):
+def _bounded_l2_stock_facts(
+    frozen, source, *, start: date, end: date, prewarm_price_history: bool = False, release_binding=None
+):
     """Shared source kernel; public dispatchers retain their distinct frozen boundaries."""
     from backend.services.hmm_risk import rotation_l1_input_bundle as reader
     from backend.services.hmm_risk.formal_state_effect import CALENDAR_SHA, fail
@@ -582,7 +584,7 @@ def _bounded_l2_stock_facts(frozen, source, *, start: date, end: date, prewarm_p
         security_identity_manifest=Path(source["security_identity_manifest"]),
         provider_absence_manifest=Path(source["provider_absence_manifest"]),
         data_window_end=end,
-        frozen_release_binding=frozen_release_binding(),
+        frozen_release_binding=frozen_release_binding() if release_binding is None else release_binding,
     )
     stamps = {key: (path.stat().st_size, path.stat().st_mtime_ns) for key, path in assets["files"].items()}
     if assets["inventory"]["qlib"]["calendar_sha256"] != CALENDAR_SHA:

@@ -12,7 +12,7 @@
     "DESIGN-COMPLIANCE-001: no simplified delivery, no silent fallback, no model/feature/window/threshold change, no new approval/resource gate. Existing immutable identity pins are enforced, not bypassed."
   ],
   "bug_id": "BUG-1960",
-  "closed_at": null,
+  "closed_at": "2026-10-17T11:59:51Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -63,8 +63,8 @@
   },
   "first_seen_at": "2026-10-17T10:34:57.290463Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "7602a0027580bb656457c0150759fff74f0b9825",
+  "fixed_at": "2026-10-17T11:59:51Z",
   "github_issue_number": 6251,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6251",
   "last_seen_at": "2026-10-17T10:34:57.290463Z",
@@ -72,6 +72,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6252",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -90,6 +91,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -99,7 +101,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1960",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "14f6bf9562d96afa",
+    "recorded_at": "2026-10-17T12:02:01.887143Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d98b49542d6b820476a76ea38bc3f0c92e6c2344",
+    "source_merge_commit": "7602a0027580bb656457c0150759fff74f0b9825",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6252",
+    "validation_evidence": [
+      "rtk pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py -q --no-cov -> passed (101 passed; source PR commit-bound receipt e8e22bd0e4ffde71)"
+    ],
+    "validation_evidence_digest": "3d0ca5d914dbfc9d2a415d3ecb4c3409543eac154967ca3387cce55dd368d19f"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -108,6 +131,9 @@
     "fingerprint": "a70a3c34fee4bb0817177131",
     "source_event_id": "FE-20261017-a70a3c34fee4"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/hmm_risk/test_rotation_l1_input_bundle.py -q --no-cov -> passed (101 passed; source PR commit-bound receipt e8e22bd0e4ffde71)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
