@@ -1669,7 +1669,8 @@ class MonthlyReleaseService:
             self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
             return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
 
-    def bind_industry_history(self, operation_id: str, *, principal: str, connection_factory=None, quote_cas=None) -> dict[str, Any]:
+    def bind_industry_history(self, operation_id: str, *, principal: str, connection_factory=None, quote_cas=None,
+                              refresh_quotes: bool = False, quote_provider=None) -> dict[str, Any]:
         """Freeze a targeted history supplement without replacing sealed prices.
 
         Authenticated data-preparation action only. No READY/activation grant,
@@ -1684,6 +1685,7 @@ class MonthlyReleaseService:
         with _exclusive_lock(root / ".writer.lock", blocking=False):
             plan = self.store.read_plan(operation_id)
             existing_history = None
+            existing_quotes = None
             if plan.get("monthly_industry_history_ref") is not None:
                 reference = plan["monthly_industry_history_ref"]
                 value = _read_json(root / reference["id"], label="industry history binding")
@@ -1696,10 +1698,13 @@ class MonthlyReleaseService:
                     if (_read_json(facts_path, label="industry quote binding") != plan.get("monthly_industry_quote_source")
                             or _file_sha256(facts_path) != facts_ref["sha256"]):
                         raise MonthlyReleaseConflict("industry quote binding file changed")
-                    load_frozen_industry_quote_source(None, context_plan=plan,
+                    existing_quotes = load_frozen_industry_quote_source(None, context_plan=plan,
                         build_inputs={"source_bundle_sha256": value["source_bundle_sha256"]}, projection=existing_history)
-                    return {"status": "BOUND", "reference": reference, "projection_sha256": existing_history.sha256,
-                            "quote_source_ref": plan["monthly_industry_quote_source_ref"]}
+                    if not refresh_quotes:
+                        return {"status": "BOUND", "reference": reference, "projection_sha256": existing_history.sha256,
+                                "quote_source_ref": plan["monthly_industry_quote_source_ref"]}
+            if refresh_quotes and existing_quotes is None:
+                raise MonthlyReleaseConflict("quote refresh requires an existing sealed industry binding")
             state = self.store.read_state(operation_id)
             checkpoint = self.store.read_checkpoint(operation_id, "SOURCE")
             if state["status"] != ReleaseState.FAILED.value or state["current_stage"] != "BUILD" or checkpoint is None or any(
@@ -1728,7 +1733,24 @@ class MonthlyReleaseService:
                 projection = existing_history or capture_industry_history(connection, current_map=mapping["code_map"])
                 if projection is None:
                     raise MonthlyReleaseNotReady("versioned industry history authority is unavailable")
-                quote_source = capture_industry_quote_source(connection, cas=quote_cas, projection=projection)
+                if refresh_quotes:
+                    from .index_sources import _default_tushare_provider
+                    from .monthly_quote_repair import assert_additive_quote_refresh
+                    quote_source = capture_industry_quote_source(connection, cas=quote_cas, projection=projection,
+                        repair_provider=quote_provider or _default_tushare_provider())
+                    assert_additive_quote_refresh(quote_cas, existing_quotes, quote_source)
+                    # A retry without any fact/quality change keeps the exact
+                    # prior binding; capture timestamps alone are not a revision.
+                    audit_before, audit_after = (value.get("quote_fact_audit") for value in (existing_quotes, quote_source))
+                    if audit_before is not None and existing_quotes["partitions"] == quote_source["partitions"] and all(
+                        {key: item for key, item in left.items() if key not in {"provider_requests", "repaired_key_count"}} ==
+                        {key: item for key, item in right.items() if key not in {"provider_requests", "repaired_key_count"}}
+                        for left, right in zip(audit_before["partitions"], audit_after["partitions"], strict=True)
+                    ):
+                        return {"status": "UNCHANGED", "reference": reference, "projection_sha256": projection.sha256,
+                                "quote_source_ref": plan["monthly_industry_quote_source_ref"], "quote_fact_audit": audit_before}
+                else:
+                    quote_source = capture_industry_quote_source(connection, cas=quote_cas, projection=projection)
             finally:
                 connection.rollback()
                 connection.close()
@@ -1752,6 +1774,12 @@ class MonthlyReleaseService:
                      "predecessor_manifest_sha256": predecessor["dataset_manifest_sha256"],
                      "projection_sha256": projection.sha256, "quote_source": quote_source,
                      "bound_by": principal, "database_write": False, "activation_authorized": False}
+            if refresh_quotes:
+                from .monthly_quote_repair import quote_source_sha256
+                facts.update(supersedes_quote_binding_ref=plan["monthly_industry_quote_source_ref"],
+                             supersedes_quote_source_sha256=quote_source_sha256(existing_quotes),
+                             rebuild_from_quote_source_sha256=plan["monthly_industry_quote_source"].get(
+                                 "rebuild_from_quote_source_sha256", quote_source_sha256(existing_quotes)))
             facts_relative = f"inputs/industry-quotes-{_digest(facts)}.json"
             facts_path = root / facts_relative
             if facts_path.exists():
@@ -1765,8 +1793,11 @@ class MonthlyReleaseService:
             self.store.replace_plan(operation_id, {**plan, "monthly_industry_history": value,
                 "monthly_industry_history_ref": reference, "monthly_industry_quote_source": facts,
                 "monthly_industry_quote_source_ref": facts_ref})
-            return {"status": "BOUND", "reference": reference, "projection_sha256": projection.sha256,
-                    "quote_source_ref": facts_ref}
+            result = {"status": "BOUND", "reference": reference, "projection_sha256": projection.sha256,
+                      "quote_source_ref": facts_ref}
+            if refresh_quotes:
+                result.update(status="REFRESHED", quote_fact_audit=quote_source.get("quote_fact_audit"))
+            return result
 
     def bind_source_quality_inputs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str) -> dict[str, Any]:
         """Bind finite parity warnings to this operation before SOURCE seals."""
