@@ -1,6 +1,8 @@
 {
   "actual": "Approved L2-RISK-CONTINUOUS zero-fit v18 preparation fails before data construction: direct-v2 state manifest binding is invalid. Frozen v18 state uses shared manifest fields dataset_manifest_sha256/path/sha256/size, but HMM requires legacy deployment_snapshot_id/file_sha256 and equal state/manifest revision, rejecting an immutable successor with pinned unchanged manifest identity. Scope: HMM reader, directly corresponding tests, BUG record only. Preserve explicit frozen identity, strict SHA/readback, no database fallback, no dataset/profile writes, no model/threshold/window change, no services or training. Complete focused RED/GREEN and multi-round author review, then PR only; no merge authorization.",
   "allowed_write_scope": [
+    "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+    "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
     "tests/aistock_validation/bugs/20261017_BUG-1960-hmm-frozen-direct-v2-reader-rejects-shared-v18-manifest-binding-and-inhe.json"
   ],
   "assigned_agent": null,
@@ -22,10 +24,19 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The explicitly approved frozen v18 consumer accepts the shared sha256/size manifest locator and inherited logical revision only when both canonical manifest identity and exact file SHA match its approved six-field frozen binding; legacy active validation remains unchanged.",
+  "root_cause": "The HMM frozen path unconditionally reused an older deployment-specific manifest locator schema and required successor state revision to equal an inherited, independently file-pinned manifest revision.",
+  "author_review_results": [
+    "Round 1: RED reproduced the real state-format rejection; added exact-shape branch for shared locator only under explicit frozen binding, retaining legacy snapshot/revision validation.",
+    "Round 2: verified rejection of hash/size/bool-size/mixed-shape/identity/revision and rehashed-content drift; no active fallback or data/profile write. Direct final reader matrix 101 passed, Ruff/compile/diff and L0 passed.",
+    "DESIGN-COMPLIANCE-001: no simplified delivery, no silent fallback, no model/feature/window/threshold change, no new approval/resource gate. Existing immutable identity pins are enforced, not bypassed."
+  ],
   "file_scope_contract": {
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+    ],
     "changed_files_source": "planned_intake",
     "ownership": {
       "changed_files": [],
@@ -35,9 +46,15 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py"
+    ]
   },
   "first_seen_at": "2026-10-17T10:34:57.290463Z",
   "fix_branch": null,
@@ -191,5 +208,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "workflow_gate": "scope_defined_ready_for_plan"
 }
