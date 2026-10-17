@@ -3,8 +3,14 @@
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { localSimApi } from "@/lib/simulation/localsim/api";
-import type { LocalSimCutoverReadiness, LocalSimReplay, LocalSimRuntimeProfileVersion } from "@/lib/simulation/localsim/types";
+import type { LocalSimRuntimeProfileVersion } from "@/lib/simulation/localsim/types";
+import { useLocalSimReadback } from "@/lib/simulation/localsim/use-readback";
+import { chinaTime } from "@/lib/simulation/localsim/presentation";
+import { LocalSimReadbackStatus } from "../components/readback-status";
+import { LocalSimReplayStatus } from "../components/replay-status";
 import styles from "../localsim.module.css";
+
+const readReplays = (signal: AbortSignal) => localSimApi.listReplays(undefined, signal);
 
 const dateIso = (value: Date) => {
   const year = value.getFullYear();
@@ -14,8 +20,10 @@ const dateIso = (value: Date) => {
 };
 
 export default function LocalSimReplaysPage() {
-  const [replays, setReplays] = useState<LocalSimReplay[]>([]);
-  const [readiness, setReadiness] = useState<LocalSimCutoverReadiness | null>(null);
+  const readiness = useLocalSimReadback(localSimApi.readiness);
+  const scheduler = useLocalSimReadback(localSimApi.schedulerVerification);
+  const replayReadback = useLocalSimReadback(readReplays);
+  const replays = replayReadback.data?.items || [];
   const [packages, setPackages] = useState<Array<{ package_id: string; package_name?: string }>>([]);
   const [versions, setVersions] = useState<LocalSimRuntimeProfileVersion[]>([]);
   const [policies, setPolicies] = useState<Array<{ policy_id: string; policy_name: string; algo_code: string }>>([]);
@@ -33,14 +41,12 @@ export default function LocalSimReplaysPage() {
     try {
       const yesterday = new Date(); yesterday.setDate(yesterday.getDate() - 1);
       const sixMonthsAgo = new Date(); sixMonthsAgo.setMonth(sixMonthsAgo.getMonth() - 6);
-      const [replayPage, packageRows, nextReadiness, endCalendar, startCalendar] = await Promise.all([
-        localSimApi.listReplays(),
+      const [packageRows, endCalendar, startCalendar] = await Promise.all([
         localSimApi.listPackages(),
-        localSimApi.readiness(),
         localSimApi.tradingCalendarStatus(dateIso(yesterday)),
         localSimApi.tradingCalendarStatus(dateIso(sixMonthsAgo)),
       ]);
-      setReplays(replayPage.items); setPackages(packageRows); setReadiness(nextReadiness);
+      setPackages(packageRows);
       const queryPackage = new URLSearchParams(window.location.search).get("package_id") || "";
       setPackageId((current) => current || queryPackage || packageRows[0]?.package_id || "");
       setFinishDate((current) => current || endCalendar.latest_completed_trading_day || "");
@@ -73,15 +79,18 @@ export default function LocalSimReplaysPage() {
         start_trade_date: startDate,
         end_trade_date: finishDate,
       });
-      await load();
+      await Promise.all([replayReadback.refresh(), readiness.refresh()]);
     } catch (exc) { setError(exc instanceof Error ? exc.message : String(exc)); }
     finally { setBusy(false); }
   }
 
   return <main className={styles.shell}>
-    <header className={styles.header}><div><h1>LocalSIM 历史回放</h1><p>独立账户、独立账本与 writer scope；追赶完成后由生命周期 owner 自动准备切入实时运行。</p></div><nav className={styles.nav}><Link href="/simulation/localsim">账户与配置</Link></nav></header>
+    <header className={styles.header}><div><h1>LocalSIM 历史回放</h1><p>使用独立账户和账本回放历史交易；追赶完成后，在安全时点接续实时模拟盘。</p></div><nav className={styles.nav}><Link href="/simulation/localsim">账户与配置</Link></nav></header>
     {error && <div className={styles.error}>{error}</div>}
-    <div className={readiness?.ready ? styles.ready : styles.blocked}>{readiness?.ready ? `回放范围必须追赶到最新完成交易日 ${finishDate || "-"}。` : `切流尚未就绪：${readiness?.blockers?.join("；") || "正在读取"}`}</div>
+    <LocalSimReadbackStatus readiness={readiness} scheduler={scheduler} onRefresh={() => {
+      void Promise.all([readiness.refresh(), scheduler.refresh(), replayReadback.refresh()]);
+    }} />
+    <p className={styles.muted}>新回放范围需追赶到最新完成交易日 {finishDate || "读取中"}；现有任务继续使用各自冻结的回放范围。</p>
     <div className={styles.grid}>
       <section className={styles.card}><h2>创建回放</h2><div className={styles.form}>
         <label className={styles.field}>策略包<select value={packageId} onChange={(e) => setPackageId(e.target.value)}>{packages.map((item) => <option key={item.package_id} value={item.package_id}>{item.package_name || item.package_id}</option>)}</select></label>
@@ -91,8 +100,13 @@ export default function LocalSimReplaysPage() {
         <label className={styles.field}>开始交易日<input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label>
         <label className={styles.field}>结束交易日<input type="date" value={finishDate} onChange={(e) => setFinishDate(e.target.value)} /></label>
         <label className={styles.field}>初始资金<input value={capital} onChange={(e) => setCapital(e.target.value)} /></label>
-      </div><div className={styles.actions}><button className={styles.button} disabled={busy || !readiness?.ready || !profileVersionId || !policyId || !startDate || !finishDate} onClick={createReplay}>原子创建回放</button></div></section>
-      <section className={styles.card}><h2>回放任务</h2><table className={styles.table}><thead><tr><th>任务</th><th>范围</th><th>进度</th><th>状态</th></tr></thead><tbody>{replays.map((item) => <tr key={item.replay_job_id}><td><Link href={`/simulation/localsim/replays/${item.replay_job_id}`}>{item.replay_job_id}</Link></td><td>{item.start_trade_date} → {item.end_trade_date}</td><td>{item.completed_trade_date || "未开始"}</td><td><span className={styles.badge}>{item.status}</span></td></tr>)}</tbody></table></section>
+      </div><div className={styles.actions}><button className={styles.button} disabled={busy || readiness.stale || !!readiness.error || !readiness.data?.ready || !profileVersionId || !policyId || !startDate || !finishDate} onClick={createReplay}>原子创建回放</button></div></section>
+      <section className={styles.card}><h2>回放任务</h2>
+        {replayReadback.error && <p role="alert" className={styles.error}>回放列表读取失败：{replayReadback.error}；下方为上次成功读取的记录。</p>}
+        {replayReadback.stale && <p className={styles.muted}>回放列表尚未获得最新核验，请刷新运行状态。</p>}
+        <p className={styles.muted}>列表最近读取：{chinaTime(replayReadback.updatedAt)}</p>
+        <table className={styles.table}><thead><tr><th>任务 / 账户</th><th>范围</th><th>进度</th><th>状态 / 原因</th></tr></thead><tbody>{replays.map((item) => <tr key={item.replay_job_id}><td><Link href={`/simulation/localsim/replays/${item.replay_job_id}`}>{item.replay_job_id}</Link><div><Link href={`/simulation/localsim/accounts/${item.simulation_account_id}`}>{item.simulation_account_id}</Link></div></td><td>{item.start_trade_date} → {item.end_trade_date}</td><td><p>已完成：{item.completed_trade_date || "未开始"}</p><p>下一交易日：{item.next_trade_date || "无"}</p></td><td><LocalSimReplayStatus replay={item} /></td></tr>)}</tbody></table>
+      </section>
     </div>
   </main>;
 }

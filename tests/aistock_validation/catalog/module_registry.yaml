@@ -190,6 +190,7 @@ modules:
     ui_routes: [/simulation/localsim]
     test_plans:
       required_on_change: [l0, simulation_core_l2, localsim_successor_core_dev_db]
+      recommended: [localsim_control_plane_ui]
   - module_id: simulation.layer_foundation
     display_name: Simulation data signal execution layer foundation
     parent_module: simulation_runtime
