@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from contextlib import contextmanager
 from datetime import date
 import hashlib
 import os
 from pathlib import Path
+from threading import BoundedSemaphore, Lock
 from typing import Any
 
 import psycopg2
 import psycopg2.extras
+from psycopg2.pool import ThreadedConnectionPool
 from pydantic import ValidationError
 
 from backend.services.strategy_package.advisory_input_projection import (
@@ -30,6 +33,14 @@ from backend.services.strategy_package.selection_signal_preparation import (
 )
 
 from .artifact_store import HistoricalRangeArtifactStore
+from .outcome_file_source import FileHistoricalRangeOutcomeSourceProvider, freeze_outcome_file_binding
+from .outcome_file_inputs import (
+    FileHistoricalRangeCandidateProjectionLoader,
+    FileHistoricalRangeOutcomeSubjectInputProvider,
+    FileHistoricalRangeSummaryContextProvider,
+    FrozenHistoricalRangeOutcomeInputs,
+    HistoricalRangeOutcomeReadCache,
+)
 from .candidate_producer import HistoricalRangeCandidateProducer
 from .batch_inference_provider import AdvisoryBatchInferenceProvider
 from .catalog_postgres import PostgresHistoricalRangeSourceRevisionVerifier
@@ -282,6 +293,8 @@ def build_historical_range_outcome_application_service(
     outcome_contract_version: str,
     subject_input_provider: HistoricalRangeOutcomeSubjectInputProvider | None = None,
     summary_coordinator: HistoricalRangeSummaryCoordinator | None = None,
+    file_source_provider: FileHistoricalRangeOutcomeSourceProvider | None = None,
+    artifact_read_cache: HistoricalRangeOutcomeReadCache | None = None,
 ) -> HistoricalRangeOutcomeApplicationService:
     """Compose the real R4 read/write boundary from explicit dependencies.
 
@@ -293,12 +306,12 @@ def build_historical_range_outcome_application_service(
         raise ValueError("R4 outcome composition requires explicit DB and artifact dependencies")
     if policy_provider is None:
         raise ValueError("R4 outcome composition requires a frozen policy provider")
-    artifact_store = HistoricalRangeArtifactStore(root=artifact_root)
+    artifact_store = artifact_read_cache or HistoricalRangeOutcomeReadCache(root=artifact_root)
     repository = PostgresHistoricalRangeRepository(
         conn_factory=conn_factory,
         artifact_store=artifact_store,
     )
-    source_provider = PostgresHistoricalRangeOutcomeSourceProvider(
+    source_provider = file_source_provider or PostgresHistoricalRangeOutcomeSourceProvider(
         conn_factory=historical_read_only_connection_factory(conn_factory)
     )
     subject_provider = subject_input_provider or PostgresHistoricalRangeOutcomeSubjectInputProvider(
@@ -359,10 +372,12 @@ def build_historical_range_summary_coordinator(
     dataset_store_root: Path | None = None,
     dataset_store_identity: dict[str, Any] | None = None,
     winner_definitions: tuple[Phase1WinnerDefinitionV1, ...] = (),
+    context_provider: Any | None = None,
+    artifact_read_cache: HistoricalRangeOutcomeReadCache | None = None,
 ) -> HistoricalRangeSummaryCoordinatorService:
     """Compose exact-outcome summary refresh with decision-T-only context reads."""
 
-    artifact_store = HistoricalRangeArtifactStore(root=artifact_root)
+    artifact_store = artifact_read_cache or HistoricalRangeOutcomeReadCache(root=artifact_root)
     repository = PostgresHistoricalRangeRepository(
         conn_factory=conn_factory,
         artifact_store=artifact_store,
@@ -371,7 +386,7 @@ def build_historical_range_summary_coordinator(
     source_provider = PostgresHistoricalRangeOutcomeSourceProvider(
         conn_factory=read_only_factory
     )
-    context_provider = PostgresHistoricalRangeSummaryContextProvider(
+    context_provider = context_provider or PostgresHistoricalRangeSummaryContextProvider(
         conn_factory=read_only_factory,
         artifact_store=artifact_store,
         source_provider=source_provider,
@@ -671,15 +686,43 @@ def build_explicit_historical_range_r5_runtime_factory(
         outcome_requests = HistoricalRangeR5OutcomeRequestFactory(
             policy_registry=policy_registry,
             identities=identities,
+            file_binding_factory=freeze_outcome_file_binding,
         )
 
         def outcome_service_factory(request: Any) -> HistoricalRangeOutcomeApplicationService:
+            read_cache = HistoricalRangeOutcomeReadCache(root=artifact_root)
+            source = None
+            subject = None
+            context = None
+            if request.file_source_binding is not None:
+                inputs = FrozenHistoricalRangeOutcomeInputs(
+                    conn_factory=historical_read_only_connection_factory(conn_factory),
+                    artifact_store=read_cache,
+                    range_run_ids=request.range_run_ids,
+                )
+                source = FileHistoricalRangeOutcomeSourceProvider(
+                    binding=request.file_source_binding,
+                    start_trade_date=inputs.start_trade_date,
+                    label_as_of_trade_date=request.label_as_of_trade_date,
+                )
+                projection = FileHistoricalRangeCandidateProjectionLoader(
+                    inputs=inputs, artifact_store=read_cache, policy_provider=policy_provider,
+                )
+                subject = FileHistoricalRangeOutcomeSubjectInputProvider(
+                    inputs=inputs, source_provider=source, policy_provider=policy_provider,
+                    candidate_projection_loader=projection,
+                )
+                context = FileHistoricalRangeSummaryContextProvider(
+                    inputs=inputs, artifact_store=read_cache, source_provider=source,
+                )
             summary = build_historical_range_summary_coordinator(
                 conn_factory=conn_factory,
                 artifact_root=artifact_root,
                 policy=outcome_requests.summary_policy(request),
                 label_as_of_trade_date=request.label_as_of_trade_date,
                 producer_code_hash=identities.summary_producer_hash,
+                context_provider=context,
+                artifact_read_cache=read_cache,
             )
             return build_historical_range_outcome_application_service(
                 conn_factory=conn_factory,
@@ -688,6 +731,9 @@ def build_explicit_historical_range_r5_runtime_factory(
                 producer_code_hash=identities.outcome_producer_hash,
                 outcome_contract_version=R5_OUTCOME_CONTRACT_VERSION,
                 summary_coordinator=summary,
+                subject_input_provider=subject,
+                file_source_provider=source,
+                artifact_read_cache=read_cache,
             )
 
         outcome = build_historical_range_outcome_application_service(
@@ -809,6 +855,54 @@ def build_environment_historical_range_r5_application_service(
     )
 
 
+_OUTCOME_POOLS: dict[tuple[int, str], "_HistoricalRangeConnectionPool"] = {}
+_OUTCOME_POOLS_LOCK = Lock()
+
+
+class _HistoricalRangeConnectionPool:
+    """Bounded, process-local Advisory control-plane pool, not a shared DB policy."""
+
+    def __init__(self, *, dsn: str, capacity: int = 8) -> None:
+        self._dsn = dsn
+        self._capacity = capacity
+        self._slots = BoundedSemaphore(capacity)
+        self._lock = Lock()
+        self._pool: ThreadedConnectionPool | None = None
+
+    @contextmanager
+    def connection(self):
+        if not self._slots.acquire(timeout=30):
+            raise psycopg2.OperationalError("Advisory control-plane connection capacity exhausted")
+        conn = None
+        pool = None
+        discard = False
+        try:
+            with self._lock:
+                if self._pool is None:
+                    self._pool = ThreadedConnectionPool(1, self._capacity, dsn=self._dsn)
+                pool = self._pool
+            conn = pool.getconn()
+            try:
+                with conn:
+                    yield conn
+            finally:
+                if conn.closed:
+                    discard = True
+                else:
+                    try:
+                        conn.rollback()
+                        conn.set_session(readonly=False, autocommit=False, isolation_level="READ COMMITTED")
+                    except psycopg2.Error:
+                        discard = True
+                        raise
+        finally:
+            try:
+                if conn is not None and pool is not None:
+                    pool.putconn(conn, close=discard)
+            finally:
+                self._slots.release()
+
+
 def explicit_historical_range_connection_factory() -> Callable[[], Any]:
     missing = [key for key in _R5_DB_ENV_KEYS if os.getenv(key) is None]
     if missing:
@@ -839,13 +933,22 @@ def explicit_historical_range_connection_factory() -> Callable[[], Any]:
         "connect_timeout": 5,
     }
 
+    dsn = psycopg2.extensions.make_dsn(**config)
+
     def connect() -> Any:
-        return psycopg2.connect(**config)
+        # Resolve after fork; a child must never reuse a parent's socket/pool.
+        key = (os.getpid(), dsn)
+        with _OUTCOME_POOLS_LOCK:
+            pool = _OUTCOME_POOLS.get(key)
+            if pool is None:
+                pool = _HistoricalRangeConnectionPool(dsn=dsn)
+                _OUTCOME_POOLS[key] = pool
+        return pool.connection()
 
     setattr(
         connect,
         "_aistock_process_worker_dsn",
-        psycopg2.extensions.make_dsn(**config),
+        dsn,
     )
     return connect
 

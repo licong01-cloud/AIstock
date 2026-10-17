@@ -926,9 +926,9 @@ def test_margin_suspended_quote_nulls_require_independent_zero_turnover(defect):
     gate = GateCounter("financial_moneyflow")
     audit_margin_publication(day=DAY, rows=values, receipt=receipt, gate=gate,
                             suspend_rows=suspension, daily_rows=daily, suspend_authority_sha256=authority)
-    assert gate.status == ("PASS" if defect in {None,"resume_and_suspend_zero"} else "BLOCKED")
+    assert gate.status == ("PASS" if defect is None else "BLOCKED")
     assert values[0]["rzrqye"] is None  # Never synthesize the published value.
-    if defect in {None,"resume_and_suspend_zero"}:
+    if defect is None:
         assert gate.expected_count == 2 and gate.observed_count == 1 and gate.explained_count == 1
         assert gate.exceptions[0].field == "rqye,rzrqye"
         assert gate.exceptions[0].symbol == SYMBOL
@@ -952,8 +952,6 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
     )
 
     codes = [f"801{i:03d}.SI" for i in range(131)]
-    monkeypatch.setattr(policy, "_NEVER_QUOTED", frozenset({codes[0]}))
-    monkeypatch.setattr(policy, "_LAST_PUBLISHED", {})
     monkeypatch.setattr(policy, "SW2021_L2_TAXONOMY_DIGEST", policy.taxonomy_digest(codes))
     data = rows()
     data.update(
@@ -973,7 +971,8 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
                 }
                 for pool in P0_POOL_IDS
             ],
-            "sw_index_classify": [{"index_code": code, "level": "L2"} for code in codes],
+            "sw_index_classify": [{"index_code": code, "level": "L2", "src": "SW2021",
+                                   "is_pub": "0" if code == codes[0] else "1"} for code in codes],
             "sw_index_member": [
                 {
                     "ts_code": SYMBOL if i == 1 else f"{10000 + i:06d}.SZ",
@@ -1086,7 +1085,7 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
     daily_gate = next(gate for gate in gates if gate.gate == "daily_price")
     assert daily_gate.expected_count == 1
     assert daily_gate.unexplained_missing_count == int(missing)
-    assert len(artifacts) == (21 if old_partition else 22)
+    assert len(artifacts) == (22 if old_partition else 23)
     readback = json.loads((tmp_path / daily_gate.readback_ref).read_text())
     assert readback["unexplained_missing_count"] == int(missing)
     assert readback["database_write_performed"] is False

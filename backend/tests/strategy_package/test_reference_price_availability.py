@@ -77,7 +77,8 @@ class _Market:
             symbols, start, end = params
             self.rows = [
                 (symbol, day, kind, timing)
-                for (symbol, day), (kind, timing) in self.suspensions.items()
+                for (symbol, day), events in self.suspensions.items()
+                for kind, timing in (events if isinstance(events, list) else [events])
                 if symbol in symbols and start <= day <= end
             ]
         elif "market.trading_calendar" in sql:
@@ -115,6 +116,61 @@ def test_legal_full_day_suspension_preserves_last_real_quote_and_score():
     assert availability["state"] == "SUSPENSION_LAST_OBSERVED_CLOSE"
     assert availability["quote_date"] == P.isoformat()
     assert availability["as_of_date"] == C.isoformat()
+
+
+def test_official_mixed_events_preserve_real_quote_with_continuous_bounded_proof():
+    symbol, cutoff, quote = "603616.SH", date(2026, 1, 22), date(2026, 1, 20)
+    market = _Market(
+        quotes={(symbol, quote): 6230, (symbol, cutoff + timedelta(days=1)): 99999},
+        suspensions={(symbol, date(2026, 1, 21)): ("S", None),
+                     (symbol, cutoff): [("R", None), ("S", None)]},
+    )
+    rows = _scores(market, [{"symbol": symbol, "score": .4, "rank": 1}], cutoff=cutoff)
+    assert (rows[0]["reference_price"], rows[0]["score"], rows[0]["rank"]) == (6.23, .4, 1)
+    proof = rows[0]["component_scores"]["reference_price_availability"]
+    assert proof["quote_date"] == quote.isoformat() and proof["as_of_date"] == cutoff.isoformat()
+    assert proof["suspension_dates"] == ["2026-01-21", "2026-01-22"]
+    authority = proof["suspension_day_authority"]
+    assert authority["usage"] == "C_EFFECTIVE_SUSPENSION_REFERENCE"
+    assert authority["historical_publication_time_proven"] is False
+    day = authority["projected_days"][-1]
+    assert (day["state"], day["basis"], day["raw_event_count"]) == ("FULL_DAY_SUSPENDED", "OFFICIAL_DISCLOSURE", 2)
+    assert day["announcement_id"] == "2026-003"
+    assert len(authority["policy_identity"]["implementation_sha256"]) == 64
+    assert all(value <= cutoff for _sql, params in market.reads for value in params if isinstance(value, date))
+    receipt = build_reference_price_source_receipt(symbols=[symbol], trade_date=cutoff,
+        price_by_symbol={symbol: 6.23}, observations=reference_price_observations_from_rows(rows))
+    changed = reference_price_observations_from_rows(rows)
+    from copy import deepcopy
+    changed = deepcopy(changed)
+    changed[symbol]["suspension_day_authority"]["policy_identity"]["authority_sha256"] = "0" * 64
+    assert receipt["content_hash"] != build_reference_price_source_receipt(
+        symbols=[symbol], trade_date=cutoff, price_by_symbol={symbol: 6.23}, observations=changed)["content_hash"]
+
+
+@pytest.mark.parametrize("events", [
+    [("S", None), ("S", None)], [("S", None), ("R", None), ("S", None)],
+    [("S", "09:30-10:30"), ("R", None)], [("X", None)],
+])
+def test_disclosure_does_not_override_malformed_or_conflicting_raw_events(events):
+    symbol, cutoff = "603616.SH", date(2026, 1, 22)
+    market = _Market(quotes={(symbol, date(2026, 1, 21)): 6230}, suspensions={(symbol, cutoff): events})
+    with pytest.raises(DataUnavailableError, match="reference prices are missing"):
+        _scores(market, [{"symbol": symbol, "score": .4, "rank": 1}], cutoff=cutoff)
+
+
+def test_mixed_events_without_official_resolution_are_not_carried():
+    market = _Market(quotes={(SYMBOL, P): 44980}, suspensions={(SYMBOL, C): [("S", None), ("R", None)]})
+    with pytest.raises(DataUnavailableError, match="reference prices are missing"):
+        _scores(market)
+
+
+def test_disclosure_after_cutoff_cannot_prove_reference_before_publication_date():
+    symbol, cutoff = "688005.SH", date(2026, 1, 15)
+    market = _Market(quotes={(symbol, cutoff - timedelta(days=1)): 12340},
+                     suspensions={(symbol, cutoff): [("S", None), ("R", None)]})
+    with pytest.raises(DataUnavailableError, match="reference prices are missing"):
+        _scores(market, [{"symbol": symbol, "score": .4, "rank": 1}], cutoff=cutoff)
 
 
 def test_tradable_stock_missing_close_is_still_an_explicit_error():

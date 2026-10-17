@@ -53,6 +53,13 @@ def test_bind_prev_close_uses_single_existing_operator_api_without_resume(tmp_pa
     assert calls[0]["body"]["inputs"] == json.loads(path.read_text())
 
 
+def test_bind_suspension_captures_only_approved_shared_authority_without_resume(monkeypatch):
+    calls = _capture(monkeypatch)
+    assert cli.main(["bind-suspension", "--operation-id", OPERATION_ID]) == 0
+    assert len(calls) == 1 and calls[0]["suffix"] == f"/{OPERATION_ID}/suspension-authority"
+    assert calls[0]["body"] == {"schema_version": "dataset_release_command_request_v1"}
+
+
 def test_plan_calls_the_single_backend_api_without_activation(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

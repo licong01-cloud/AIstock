@@ -1616,6 +1616,59 @@ class MonthlyReleaseService:
             self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
             return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
 
+    def bind_suspension_authority(self, operation_id: str, *, principal: str, cas=None) -> dict[str, Any]:
+        """Pin approved disclosures to an idle sealed SOURCE; never resume it."""
+        from .monthly_prev_close_repair import SUPPLEMENT_KEYS
+        from .monthly_suspension_repair import BINDING, SCHEMA, capture_approved_authority
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing = plan.get(BINDING)
+            if existing is not None:
+                ref = plan[BINDING + "_ref"]
+                path = root / ref["id"]
+                if (_read_json(path, label="suspension binding") != existing or _file_sha256(path) != ref["sha256"]
+                        or path.stat().st_size != ref["size"]):
+                    raise MonthlyReleaseConflict("suspension binding changed")
+                return {"status": "BOUND", "reference": ref, "authority_ref": existing["authority_ref"]}
+            state = self.store.read_state(operation_id)
+            source = self.store.read_checkpoint(operation_id, "SOURCE")
+            if (state["status"] != ReleaseState.FAILED.value or state["current_stage"] != "BUILD" or source is None
+                    or any(self.store.read_checkpoint(operation_id, s) is not None for s in STAGES if s != "SOURCE")):
+                raise MonthlyReleaseConflict("suspension binding requires idle, sealed SOURCE and unfinished BUILD")
+            if _file_sha256(self.active_profile) != plan["predecessor"]["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed before suspension binding")
+            bundles = [r for r in source["input_refs"] if Path(r["id"]).name == "frozen-source-bundle.json"]
+            if len(bundles) != 1:
+                raise MonthlyReleaseConflict("suspension binding SOURCE bundle is ambiguous")
+            if cas is None:
+                from .monthly_runtime import MonthlyRuntimeSettings
+                from .cas_store import CASStore
+                cas = CASStore(MonthlyRuntimeSettings.from_env().artifact_root)
+            try:
+                authority = capture_approved_authority()
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                raise MonthlyReleaseRequestInvalid("approved suspension authority is invalid") from exc
+            binding = {"schema_version": SCHEMA, "operation_id": operation_id,
+                "base_plan_digest": _digest({k: v for k, v in plan.items() if k not in SUPPLEMENT_KEYS}),
+                "source_receipt_canonical_sha256": source["canonical_sha256"],
+                "source_bundle_sha256": bundles[0]["sha256"], "target_cutoff": plan["target_cutoff"],
+                "predecessor_manifest_sha256": plan["predecessor"]["dataset_manifest_sha256"],
+                "authority_ref": cas.put_json(authority).as_dict(), "bound_by": principal,
+                "database_write": False, "activation_authorized": False}
+            relative = f"inputs/suspension-{_digest(binding)}.json"
+            path = root / relative
+            if path.exists():
+                if _read_json(path, label="retained suspension binding") != binding:
+                    raise MonthlyReleaseConflict("retained suspension binding changed")
+            else:
+                _write_exclusive(path, binding)
+            ref = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
+            if _file_sha256(self.active_profile) != plan["predecessor"]["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed during suspension binding")
+            self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
+            return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
+
     def bind_industry_history(self, operation_id: str, *, principal: str, connection_factory=None, quote_cas=None) -> dict[str, Any]:
         """Freeze a targeted history supplement without replacing sealed prices.
 
@@ -1966,10 +2019,10 @@ class MonthlyReleaseService:
                     }
                 )
                 from .monthly_prev_close_repair import SUPPLEMENT_KEYS
-                supplement_names = ("monthly_industry_history", "monthly_prev_close_repairs")
+                supplement_names = ("monthly_industry_history", "monthly_prev_close_repairs", "monthly_suspension_authority")
                 source_supplements = [plan[name] for name in supplement_names if plan.get(name) is not None] if stage == "SOURCE" else []
                 if source_supplements:
-                    # Only classification is amended. Verify the ORIGINAL plan,
+                    # Only explicit supplements are amended. Verify the ORIGINAL plan,
                     # SOURCE receipt and all original files; never change that
                     # seal or rerun completed price exports under a new source.
                     base_plan = {key: value for key, value in plan.items() if key not in SUPPLEMENT_KEYS}
