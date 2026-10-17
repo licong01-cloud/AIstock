@@ -27,7 +27,7 @@ EXTRAS = ("801217.SI", "801768.SI", "801786.SI")
 
 @pytest.fixture
 def predecessor(tmp_path, monkeypatch):
-    catalog = set(policy._NEVER_QUOTED) | set(policy._LAST_PUBLISHED)
+    catalog = set()
     for i in range(1000):
         if len(catalog) == 131:
             break
@@ -154,6 +154,7 @@ def test_bound_source_publication_receipt_readback_rejects_cross_mapping(predece
     quote = policy.build_quote_availability_payload(
         code_map=validate_release_sw_l2_code_map(binding["code_map"]),
         required_start=date(2024, 7, 1), cutoff=date(2026, 9, 30),
+        classification_rows=rows, quote_observations=[],
     )
     assert len(quote["entries"]) == 131
     for field, value in [("mapping_policy", "sorted_unique_sw_l2_zero_based_v1"),

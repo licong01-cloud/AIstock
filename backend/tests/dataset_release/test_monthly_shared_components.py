@@ -602,7 +602,7 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
         lambda _cas, _frozen, dataset: tuple(source[dataset]),
     )
 
-    def quote_payload(*, code_map, required_start, cutoff):  # type: ignore[no-untyped-def]
+    def quote_payload(*, code_map, required_start, cutoff, **_kwargs):  # type: ignore[no-untyped-def]
         entries = [
             {
                 "canonical_l2_code": code,
