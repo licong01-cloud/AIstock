@@ -72,6 +72,29 @@ class LocalSimHistoricalReplayDayExecutor:
             and (payload.get("local_sim_projection_outbox_v1") or {}).get("status") == "PROJECTED"
         )
         if not item.is_success:
+            error = item.error if isinstance(item.error, dict) else {}
+            error_context = error.get("context") if isinstance(error.get("context"), dict) else {}
+            retry_backoff = (
+                item.status == "RETRY_BACKOFF"
+                and error.get("schema_version") == "simulation_binding_retry_backoff_v1"
+                and error.get("reason_code") == "SIMULATION_BINDING_RETRY_BACKOFF_NOT_DUE"
+            )
+            if (
+                run is not None and run.status is SimulationDailyRunStatus.FAILED_RETRYABLE
+                and payload.get("broker_side_effect_state") != "UNKNOWN"
+                and error_context.get("broker_side_effect_state") != "UNKNOWN"
+                and (error.get("type") == "DataUnavailableError" or retry_backoff)
+            ):
+                raise DataUnavailableError(
+                    "LocalSIM replay daily engine dependency is not ready",
+                    context={
+                        **error_context,
+                        "reason_code": error_context.get("reason_code") or error.get("reason_code")
+                        or "LOCALSIM_REPLAY_DAILY_DATA_UNAVAILABLE",
+                        "replay_job_id": job.replay_job_id, "trade_date": trade_date.isoformat(),
+                        "binding_id": job.binding_id, "status": item.status, "error": item.error,
+                    },
+                )
             raise InvalidStateTransitionError(
                 "LocalSIM replay daily engine failed",
                 context={

@@ -23,6 +23,11 @@ COMMON_ENV = {
     "PYTHONIOENCODING": "utf-8",
     "PYTHONDONTWRITEBYTECODE": "1",
 }
+# Match HMM's guarded CLI children before pytest imports numpy/scipy.
+HMM_TEST_NUMERIC_ENV = dict.fromkeys((
+    "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS",
+), "1")
 VALIDATION_ENV_FILE_DENYLIST = {
     "MINIQMT_EXECUTION_RUNTIME",
 }
@@ -175,13 +180,10 @@ def _nightly_shared_pytest_args(session_name: str, args: tuple[str, ...]) -> tup
     Coverage invocations retain their full inputs; failed producers, PR/local
     runs, filtered pytest selections and unknown consumers cannot suppress work.
     """
-    consumers = {"validation_workflow_automation", "data_sync_autonomy_backend",
+    consumers = {"data_sync_autonomy_backend",
                  "validation_module_registry_l0", "validation_catalog_integrity"}
     producer = "validation_center_backend"
     shared = {
-        "backend/tests/scripts/test_ci_failure_issue_summary.py",
-        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
         "backend/tests/test_validation_center_api.py",
         "backend/tests/test_validation_execution_runner.py",
         "backend/tests/test_validation_module_ownership.py",
@@ -597,6 +599,12 @@ def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
 
 
 @nox.session(venv_backend="none")
+def localsim_control_plane_ui(session: nox.Session) -> None:
+    """Run the LocalSIM readback and status UI contract with mocked APIs."""
+    _run_mocked_frontend_target(session, "tests/paper-v2/localsim-unified-control-plane.spec.ts")
+
+
+@nox.session(venv_backend="none")
 def frontend_type_lint(session: nox.Session) -> None:
     """Run the direct shared-frontend compile and lint contract."""
 
@@ -777,6 +785,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_build_bridge.py",
         "backend/tests/dataset_release/test_monthly_build_executor.py",
         "backend/tests/dataset_release/test_monthly_build_resume.py",
+        "backend/tests/dataset_release/test_monthly_build_recovery.py",
         "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
         "backend/tests/dataset_release/test_monthly_supervised_build.py",
         "backend/tests/dataset_release/test_wsl_cgroup.py",
@@ -1169,6 +1178,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "compileall",
         "backend/services/tushare_sync_engine.py",
         "backend/services/tushare_dataset_specs.py",
+        "scripts/repair_stk_limit_pre_close.py",
         "backend/services/adj_factor_history_reconciler.py",
         "backend/services/suspend_d_coverage.py",
         "backend/services/stock_universe_pit_service.py",
@@ -1206,6 +1216,8 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/test_stock_universe_pit_service.py",
         "backend/tests/test_stock_universe_pit_spans.py",
         "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
+        "backend/tests/scripts/test_repair_local_sync_incident.py",
         "backend/tests/test_sw_industry_history_store.py",
         "backend/tests/test_etf_share_size_source.py",
         "backend/tests/scripts/test_validate_etf_share_size_source.py",
@@ -3376,6 +3388,8 @@ def nightly_bug_candidate_queue(session: nox.Session) -> None:
 @nox.session(venv_backend="none")
 def validation_center_backend(session: nox.Session) -> None:
     """Run Validation Center API, coverage, and controlled-runner contract tests."""
+    # Workflow-only suites belong to validation_workflow_automation, not this
+    # instrumented backend coverage pass. Keep their execution independent.
     full_tests = (
         "backend/tests/test_validation_center_api.py",
         "backend/tests/test_validation_catalog_integrity.py",
@@ -3396,9 +3410,6 @@ def validation_center_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_validation_failure_event_to_bug.py",
         "backend/tests/scripts/test_bug_github_sync.py",
         "backend/tests/scripts/test_issue_flow.py",
-        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-        "backend/tests/scripts/test_ci_failure_issue_summary.py",
-        "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     )
     pr_targets = None
     if os.environ.get(NIGHTLY_SESSION_RUNNER_ENV) != "1":
@@ -3987,7 +3998,7 @@ def hmm_risk_backend(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-        env=_env({"COVERAGE_FILE": str(coverage_data)}),
+        env=_env({"COVERAGE_FILE": str(coverage_data), **HMM_TEST_NUMERIC_ENV}),
         external=True,
     )
 

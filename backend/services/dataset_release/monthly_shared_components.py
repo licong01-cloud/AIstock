@@ -51,9 +51,13 @@ from .source_authority import FrozenSourceAuthoritySnapshot, load_source_stage_r
 from .sw_l2_quote_policy import (
     QUOTE_PUBLICATION_POLICY_SCHEMA,
     build_quote_availability_payload,
+    publication_quote_observations,
     quote_publication_policy_identity,
 )
 from backend.services.core_index_catalog import P0_POOL_IDS, POOL_DEFINITIONS
+from backend.data_service.suspension_day_authority import (
+    day_value, digest as suspension_digest, load_authority, project_suspension_days,
+)
 
 
 BASE_DATASET_MANIFEST_SCHEMA = "aistock_monthly_base_dataset_manifest_v1"
@@ -292,6 +296,8 @@ def _build_suspend(
     profile: DatasetProfile,
     cutoff: date,
     prefix=None,
+    suspension_authority: Mapping[str, Any] | None = None,
+    suspension_binding: Mapping[str, Any] | None = None,
 ) -> tuple[Path, Path, set[tuple[str, date]], int]:
     import pandas as pd
 
@@ -303,17 +309,22 @@ def _build_suspend(
         pit_by_symbol.setdefault(symbol, []).append((start, end))
     normalized: list[dict[str, Any]] = []
     keys: set[tuple[str, date]] = set()
-    for raw in rows:
-        if str(raw.get("suspend_type", "")).strip().upper() != "S":
+    authority = load_authority(suspension_authority)
+    raw_events = [{"trade_date": day_value(row["trade_date"]).isoformat(), "ts_code": row["ts_code"],
+                   "suspend_type": row.get("suspend_type"), "suspend_timing": row.get("suspend_timing")}
+                  for row in rows if day_value(row["trade_date"]) in calendar_set]
+    by_key = {(row["ts_code"], day_value(row["trade_date"])): row for row in raw_events
+              if row.get("suspend_type") == "S"}
+    resolutions = project_suspension_days(raw_events, authority=authority, required_dates=effective_calendar)
+    for resolution in resolutions:
+        symbol, day = resolution["ts_code"], day_value(resolution["trade_date"])
+        if not any(start <= day <= end for start, end in pit_by_symbol.get(symbol, ())):
             continue
-        symbol = str(raw.get("ts_code", "")).strip().upper()
-        day = _as_date(raw.get("trade_date"), field="suspend trade_date")
-        if prefix is not None and not month_start <= day <= cutoff:
+        if resolution["state"] == "UNRESOLVED":
+            raise MonthlySharedComponentsError(f"unresolved suspension day: {symbol}/{day}")
+        if resolution["state"] == "RESUMED":
             continue
-        if day not in calendar_set or not any(
-            start <= day <= end for start, end in pit_by_symbol.get(symbol, ())
-        ):
-            continue
+        raw = by_key.get((symbol, day), {})
         key = (symbol, day)
         if key in keys:
             raise MonthlySharedComponentsError("suspend_d stock-date is duplicated")
@@ -323,7 +334,7 @@ def _build_suspend(
                 "trade_date": pd.Timestamp(day),
                 "ts_code": symbol,
                 "suspend_type": "S",
-                "suspend_timing": raw.get("suspend_timing"),
+                "suspend_timing": None if resolution["state"] == "FULL_DAY_SUSPENDED" else raw["suspend_timing"],
             }
         )
     normalized.sort(key=lambda item: (item["trade_date"], item["ts_code"]))
@@ -372,6 +383,13 @@ def _build_suspend(
             "daily_row_counts": daily_counts,
             "source_freeze": True,
             "full_history_content_hash": True,
+            "suspension_day_authority": authority,
+            "suspension_day_authority_sha256": suspension_digest(authority),
+            **({"suspension_authority_binding": dict(suspension_binding)} if suspension_binding is not None else {}),
+            "raw_provider_events": raw_events,
+            "raw_provider_events_sha256": suspension_digest(raw_events),
+            "day_resolutions": resolutions,
+            "historical_publication_time_proven": False,
             **lineage,
         },
     )
@@ -409,6 +427,31 @@ def _read_sector_frame(path: Path):
     for column in ("sw2_pct_change", "sw2_vol", "sw2_amount"):
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
     return frame
+
+
+def _build_historical_sector_membership(*, history, enricher, pit_rows, calendar, start, end):
+    """Project an explicit frozen history repair into the current policy window."""
+    # Directory cardinality is not an ID boundary: the frozen map is sparse.
+    current_ids = frozenset(enricher.code_map.values())
+
+    class EffectiveHistoryEnricher:
+        code_map = enricher.code_map
+
+        def enrich(self, payload):
+            day = payload["trade_date"]
+            if date.fromisoformat(history.payload["start_date"]) <= day <= date.fromisoformat(history.payload["end_date"]):
+                id_ = history.resolve(payload["ts_code"], day)
+                if id_ >= 0 and id_ not in current_ids:
+                    raise MonthlySharedComponentsError(
+                        "industry history ID is outside the frozen current L2 code map: "
+                        f"{payload['ts_code']}:{day.isoformat()}:{id_}"
+                    )
+                return {**payload, "l2_code_id": id_}
+            return enricher.enrich(payload)
+
+    return _build_sector_membership(
+        enricher=EffectiveHistoryEnricher(), pit_rows=pit_rows, calendar=calendar, start=start, end=end,
+    )
 
 
 def _build_sector_membership(
@@ -896,6 +939,9 @@ class FrozenMonthlySharedComponentBuilder:
             suspend_meta = adopt("suspend", f"{component}/meta.json", root / component / "meta.json")
             suspend_source_rows = len(suspend_rows)
         else:
+            from .monthly_suspension_repair import build_authority
+            suspension_authority, suspension_binding = build_authority(self.cas, frozen,
+                plan=context.plan, operation_id=context.operation_id, source_bundle_sha256=compiled.source_bundle_sha256)
             suspend_parquet, suspend_meta, _suspended_keys, suspend_source_rows = _build_suspend(
                 root=root,
                 rows=suspend_rows,
@@ -904,6 +950,8 @@ class FrozenMonthlySharedComponentBuilder:
                 profile=self.profile,
                 cutoff=cutoff,
                 prefix=prefix,
+                suspension_authority=suspension_authority,
+                suspension_binding=suspension_binding,
             )
         pool_coverage = {
             pool_id: {
@@ -954,10 +1002,38 @@ class FrozenMonthlySharedComponentBuilder:
             authority_sha256=mapping_authority_sha,
         )
         code_map = validate_release_sw_l2_code_map(code_map_payload)
+        # Project the same frozen quote facts once, before compiling publication
+        # scope. No historical stock scan is added to the native monthly path.
+        sector_root = root / "components" / "sector_context_candidate_v1"
+        sector_root.mkdir(parents=True, exist_ok=False)
+        quote_facts_path = root / QUOTE_FACTS_PATH
+        from .monthly_legacy_prefix import _signature
+
+        source_pin = (
+            physical_authority["verified_output_files"]["factor_bundle/sector_data.h5"] if native
+            else {"sha256": _sha256(sector_h5), "size": sector_h5.stat().st_size,
+                  "signature": list(_signature(sector_h5))}
+        )
+        try:
+            quote_facts = build_sector_quote_facts(
+                source_path=sector_h5, target_path=quote_facts_path,
+                source_pin=source_pin, code_map=code_map, cutoff=cutoff,
+                chunk_rows=self.profile.resource_policy.validation_read_chunk_rows,
+                prefix=prefix,
+                month_range=(physical_authority.get("physical_month_ranges") or {}).get("sector_data"),
+                checkpoint=context.checkpoint, progress=context.progress,
+            )
+        except SectorQuoteFactsError as exc:
+            raise MonthlySharedComponentsError(str(exc)) from exc
+        publication_evidence = {}
         quote_payload = build_quote_availability_payload(
             code_map=code_map,
             required_start=self.sector_membership_start,
             cutoff=cutoff,
+            classification_rows=classify,
+            quote_observations=publication_quote_observations(
+                quote_facts_path, chunk_rows=self.profile.resource_policy.validation_read_chunk_rows),
+            evidence=publication_evidence,
         )
         quote = validate_sector_quote_availability(
             quote_payload, code_map=code_map, required_end=cutoff
@@ -989,18 +1065,8 @@ class FrozenMonthlySharedComponentBuilder:
             if history_proof.get("historical_projection_reused") is not True:
                 # A one-time explicitly requested PIT repair. A normal later
                 # month inherits this sidecar and validates/appends only its tail.
-                class EffectiveHistoryEnricher:
-                    code_map = enricher.code_map
-                    def enrich(self, payload):
-                        day = payload["trade_date"]
-                        if date.fromisoformat(history.payload["start_date"]) <= day <= date.fromisoformat(history.payload["end_date"]):
-                            id_ = history.resolve(payload["ts_code"], day)
-                            if id_ >= 131:
-                                raise MonthlySharedComponentsError("SW2014 is outside the current L2 policy window")
-                            return {**payload, "l2_code_id": id_}
-                        return enricher.enrich(payload)
-                sector_membership, repaired_days, _, _ = _build_sector_membership(
-                    enricher=EffectiveHistoryEnricher(), pit_rows=pit_rows, calendar=calendar,
+                sector_membership, repaired_days, _, _ = _build_historical_sector_membership(
+                    history=history, enricher=enricher, pit_rows=pit_rows, calendar=calendar,
                     start=self.sector_membership_start, end=cutoff,
                 )
                 counts = {**counts, "explicit_historical_membership_repair_days": repaired_days}
@@ -1057,8 +1123,6 @@ class FrozenMonthlySharedComponentBuilder:
         )
         base_manifest = json.loads(base_manifest_path.read_bytes())
         sector_sha = base_manifest["files"][sector_h5.relative_to(root).as_posix()]["sha256"]
-        sector_root = root / "components" / "sector_context_candidate_v1"
-        sector_root.mkdir(parents=True, exist_ok=False)
         code_map_path = _write_json(sector_root / "sector_code_map.json", code_map_payload)
         history_path = None
         history_ref = physical_authority.get("industry_history_projection_ref")
@@ -1082,26 +1146,6 @@ class FrozenMonthlySharedComponentBuilder:
         else:
             market.to_parquet(market_path, index=False)
             sector_membership.to_parquet(membership_path, index=False)
-        from .monthly_legacy_prefix import _signature
-
-        quote_facts_path = root / QUOTE_FACTS_PATH
-        source_pin = {
-            "sha256": sector_sha, "size": sector_h5.stat().st_size,
-            "signature": list(_signature(sector_h5)),
-        }
-        if native:
-            source_pin = physical_authority["verified_output_files"]["factor_bundle/sector_data.h5"]
-        try:
-            quote_facts = build_sector_quote_facts(
-                source_path=sector_h5, target_path=quote_facts_path,
-                source_pin=source_pin, code_map=code_map, cutoff=cutoff,
-                chunk_rows=self.profile.resource_policy.validation_read_chunk_rows,
-                prefix=prefix,
-                month_range=(physical_authority.get("physical_month_ranges") or {}).get("sector_data"),
-                checkpoint=context.checkpoint, progress=context.progress,
-            )
-        except SectorQuoteFactsError as exc:
-            raise MonthlySharedComponentsError(str(exc)) from exc
         receipt = {
             "schema_version": SECTOR_CONTEXT_RECEIPT_SCHEMA,
             "source_dataset_manifest_sha256": base_manifest_sha,
@@ -1148,6 +1192,7 @@ class FrozenMonthlySharedComponentBuilder:
                 "mapping_authority": dict(quote.mapping_authority),
                 "publication_policy_schema": QUOTE_PUBLICATION_POLICY_SCHEMA,
                 "publication_policy_identity": quote_publication_policy_identity(),
+                "publication_evidence": publication_evidence,
             },
             "membership": {
                 "schema_version": SECTOR_MEMBERSHIP_SPANS_SCHEMA,

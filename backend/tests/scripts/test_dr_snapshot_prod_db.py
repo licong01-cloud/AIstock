@@ -52,10 +52,12 @@ def test_dry_run_uses_env_container_without_docker(monkeypatch, tmp_path: Path, 
     assert rc == 0
     assert "container         : timescaledb" in out
     assert str(tmp_path / "aistock_pg_20260603.dump") in out
+    assert "compression level : 1" in out
     assert "DR_STAGE " not in out and "DR_SNAPSHOT_RECEIPT " not in out
 
 
-def test_custom_format_pg_dump_does_not_use_parallel_jobs(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("level", [1, 0, 9])
+def test_custom_format_pg_dump_does_not_use_parallel_jobs(monkeypatch, tmp_path: Path, level) -> None:
     calls: list[list[str]] = []
     plan = snapshot.SnapshotPlan(
         container="timescaledb",
@@ -65,6 +67,7 @@ def test_custom_format_pg_dump_does_not_use_parallel_jobs(monkeypatch, tmp_path:
         in_container_path="/tmp/aistock_pg_20260603.dump",
         is_permanent=False,
         snapshot_date=dt.date(2026, 6, 3),
+        compression_level=level,
     )
 
     monkeypatch.setattr(snapshot, "run", lambda cmd, **kwargs: calls.append(list(cmd)))
@@ -73,7 +76,16 @@ def test_custom_format_pg_dump_does_not_use_parallel_jobs(monkeypatch, tmp_path:
 
     assert calls
     assert "--format=custom" in calls[0]
+    assert f"--compress={level}" in calls[0]
     assert not any(arg.startswith("--jobs=") for arg in calls[0])
+
+
+def test_compression_cli_defaults_fast_and_rejects_invalid_levels():
+    assert snapshot.parse_args([]).compression_level == 1
+    assert snapshot.parse_args(["--compression-level", "9"]).compression_level == 9
+    for value in ("-1", "10", "true"):
+        with pytest.raises(SystemExit):
+            snapshot.parse_args(["--compression-level", value])
 
 
 @pytest.mark.parametrize("result", ["valid", "empty", "restore_failed"])
@@ -146,7 +158,7 @@ def test_main_records_stage_timing_without_claiming_restore(monkeypatch, tmp_pat
     for name, function in [("pg_dump", "execute_pg_dump_inside_container"), ("copy", "copy_dump_out"),
                            ("toc", "validate_dump"), ("cleanup", "cleanup_in_container")]:
         monkeypatch.setattr(snapshot, function, stage(name))
-    args = ["--target-dir", str(tmp_path), "--snapshot-date", "2026-10-13"]
+    args = ["--target-dir", str(tmp_path), "--snapshot-date", "2026-10-13", "--compression-level", "9"]
     failed = failed_stage is not None and failed_stage != "cleanup_warning"
     if failed:
         with pytest.raises(SystemExit, match="stage failed"):
@@ -157,6 +169,7 @@ def test_main_records_stage_timing_without_claiming_restore(monkeypatch, tmp_pat
     receipt = json.loads(next(line.removeprefix("DR_SNAPSHOT_RECEIPT ") for line in output
                               if line.startswith("DR_SNAPSHOT_RECEIPT ")))
     assert receipt["status"] == ("failed" if failed else "completed")
+    assert receipt["dump_format"] == "custom" and receipt["dump_compress"] == "9"
     assert set(receipt["stages"]) == set(calls) and calls[-1] == "cleanup"
     assert all(item["duration_seconds"] >= 0 for item in receipt["stages"].values())
     expected = "failed" if failed else "warning" if failed_stage == "cleanup_warning" else "completed"

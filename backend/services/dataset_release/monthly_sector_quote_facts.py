@@ -156,8 +156,8 @@ def build_sector_quote_facts(
             if len(pieces) >= 8:
                 pieces = [_collapse(pd.concat(pieces, ignore_index=True))]
             if time.monotonic() - last_progress >= 2:
-                progress({"phase": "BUILD_SHARED_SECTOR_QUOTE_FACTS", "source_rows_read": source_rows,
-                          "inherited_row_count": 0 if inherited is None else len(inherited)})
+                progress({"phase": "BUILD_SHARED_SECTOR_QUOTE_FACTS", "dataset": "sector_quote_facts",
+                          "physical_rows_read": source_rows})
                 last_progress = time.monotonic()
     if _signature(source_path) != before:
         raise SectorQuoteFactsError("quote source changed during projection")
