@@ -44,29 +44,45 @@
   ],
   "expected": "Bound repeated work and memory, preserve identical financial values and complete identity checks, decouple prompt stage progression from half-hour reporting; old requests/retries remain compatible.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_historical_range/api_models.py",
+      "backend/services/advisory_historical_range/artifact_store.py",
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/services/advisory_historical_range/models.py",
+      "backend/services/advisory_historical_range/outcome_continuation.py",
+      "backend/services/advisory_historical_range/outcome_file_inputs.py",
+      "backend/services/advisory_historical_range/outcome_file_source.py",
+      "backend/services/advisory_historical_range/outcome_service.py",
+      "backend/services/advisory_historical_range/repository.py",
+      "backend/services/advisory_historical_range/runtime_factories.py",
+      "backend/services/advisory_historical_range/service.py",
+      "backend/services/advisory_historical_range/summary_service.py",
+      "backend/tests/advisory_historical_range/test_outcome_optimization.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md",
+      "tests/aistock_validation/bugs/20261017_BUG-1967-advisory-outcome-settlement-repeats-validation-and-full-summaries-and-co.json"
+    ],
     "added_files": [
       "backend/services/advisory_historical_range/outcome_continuation.py",
       "backend/tests/advisory_historical_range/test_outcome_optimization.py"
     ],
     "changed_files": [
+      "backend/services/advisory_historical_range/api_models.py",
       "backend/services/advisory_historical_range/artifact_store.py",
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/services/advisory_historical_range/models.py",
+      "backend/services/advisory_historical_range/outcome_continuation.py",
       "backend/services/advisory_historical_range/outcome_file_inputs.py",
       "backend/services/advisory_historical_range/outcome_file_source.py",
-      "backend/services/advisory_historical_range/summary_service.py",
-      "backend/services/advisory_historical_range/repository.py",
       "backend/services/advisory_historical_range/outcome_service.py",
+      "backend/services/advisory_historical_range/repository.py",
       "backend/services/advisory_historical_range/runtime_factories.py",
-      "backend/services/advisory_historical_range/composition.py",
-      "backend/services/advisory_historical_range/api_models.py",
-      "backend/services/advisory_historical_range/models.py",
       "backend/services/advisory_historical_range/service.py",
-      "backend/tests/advisory_historical_range/test_outcome_file_batch.py",
-      "backend/tests/advisory_historical_range/test_r4_summary_service.py",
-      "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
-      "backend/tests/advisory_historical_range/test_r5_composition.py",
-      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+      "backend/services/advisory_historical_range/summary_service.py",
+      "backend/tests/advisory_historical_range/test_outcome_optimization.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md",
+      "tests/aistock_validation/bugs/20261017_BUG-1967-advisory-outcome-settlement-repeats-validation-and-full-summaries-and-co.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_historical_range/artifact_store.py",
@@ -353,15 +369,19 @@
     "fresh_process_evidence": [
       "Fresh-process direct pytest: 77 related scenarios passed; one strict industry message compatibility issue fixed and exact nodeid passed; client receipt-type and financial-fact cache-equality RED/GREEN additions passed. Total 80 direct scenarios validated without repeating the full matrix; no production refresh, financial append, service control or QE training.",
       "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/bug1967-summary-final-readonly.json: READ_ONLY_PASS; 41700 rows over the 20-day window, setup 145.354s, load 336.653s, calculate 0.678s, total 482.685s; OHLC window reads=0. Covered outcomes, summary input, metrics and coverage hashes equal bug1967-summary-optimized-r1.json. Four source hashes unchanged during measurement. Measurement precedes only the final cache-equality correction; not a final-commit runtime activation or guaranteed speedup.",
-      "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/bug1967-final-source-smoke-r2.json: final-source fresh-process native receipt/outcome/fact identity and typed artifact/equality readback after synchronizing main including #6281; SELECT-only with rollback; no publish/evaluation/service control. Source hashes are explicit. The exact main merge intersection also passed 14 direct file-source/summary-context cases; no shared, QE or LocalSIM edits in this PR diff."
+      "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/bug1967-final-source-smoke-r2.json: final-source fresh-process native receipt/outcome/fact identity and typed artifact/equality readback after synchronizing main including #6281; SELECT-only with rollback; no publish/evaluation/service control. Source hashes are explicit. The exact main merge intersection also passed 14 direct file-source/summary-context cases; no shared, QE or LocalSIM edits in this PR diff.",
+      "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/bug1967-final-source-smoke-r2.json -> READ_ONLY_PASS; current source hashes, native receipt/outcome/DB fact consistency, SELECT rollback only; full input performance measurement separately version-bound."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "planned_target_ids": ["backend-main"],
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
