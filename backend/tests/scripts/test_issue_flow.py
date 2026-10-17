@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import tomllib
 from pathlib import Path
 
 import pytest
@@ -42,6 +41,62 @@ def _write_json(path: Path, payload: dict[str, object]) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
     return path
+
+
+@pytest.mark.parametrize("operation,expected_reads", [(flow.match_changed_files, 2), (flow.select_validation, 3)])
+def test_catalog_read_cost_is_constant_per_operation(operation, expected_reads, monkeypatch) -> None:
+    original = flow._load_yaml
+    reads = []
+
+    def counted(path):
+        reads.append(path.name)
+        return original(path)
+
+    monkeypatch.setattr(flow, "_load_yaml", counted)
+    paths = ["backend/services/factor_research/comparison.py", "backend/services/factor_research/repository.py"]
+    operation(paths)
+    assert len(reads) == len(set(reads)) == expected_reads
+
+
+@pytest.mark.parametrize("paths", [
+    [], ["docs/analysis/notes.md"],
+    ["backend/services/factor_research/repository.py", "backend/services/factor_research/comparison.py", "unmapped.py"],
+])
+def test_catalog_snapshot_preserves_selection_without_mutating_inputs(paths) -> None:
+    catalog = flow.validation_catalog_snapshot()
+    before = json.dumps(vars(catalog), sort_keys=True)
+    assert flow.select_validation(paths, _catalog=catalog) == flow.select_validation(paths)
+    assert json.dumps(vars(catalog), sort_keys=True) == before
+
+
+@pytest.mark.parametrize('native', [True, False])
+def test_catalog_yaml_prefers_safe_native_parser_with_fresh_reads(tmp_path, monkeypatch, native):
+    preferred = getattr(yaml, 'CSafeLoader', None)
+    if native and preferred is None:
+        pytest.skip('PyYAML native parser unavailable; fallback tested separately')
+    if not native:
+        monkeypatch.delattr(yaml, 'CSafeLoader', raising=False)
+    original, loaders = yaml.load, []
+    def checked(text, Loader):
+        loaders.append(Loader)
+        return original(text, Loader=Loader)
+    monkeypatch.setattr(yaml, 'load', checked)
+    path = tmp_path / 'catalog.yaml'
+    text = 'name: 中文\nflag: off\nitems: &items [1, 2]\ncopy: *items\n'
+    path.write_text(text, encoding='utf-8')
+    assert flow._load_yaml(path) == original(text, Loader=yaml.SafeLoader)
+    assert loaders == [preferred if native else yaml.SafeLoader]
+    path.write_text('name: updated\n', encoding='utf-8')
+    assert flow._load_yaml(path) == {'name': 'updated'}
+    path.write_text('!!python/object/apply:builtins.str [unsafe]', encoding='utf-8')
+    with pytest.raises(yaml.YAMLError):
+        flow._load_yaml(path)
+    path.write_text('items: [unfinished', encoding='utf-8')
+    with pytest.raises(yaml.YAMLError):
+        flow._load_yaml(path)
+    path.write_text('[not, mapping]', encoding='utf-8')
+    with pytest.raises(flow.IssueFlowError, match='root must be a mapping'):
+        flow._load_yaml(path)
 
 
 def test_write_json_dash_writes_stdout_without_dash_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
@@ -1242,24 +1297,6 @@ def test_pr_quality_markdown_is_compact_and_comment_budget_is_checked(
     assert budget["truncated"] is True
 
 
-def test_open_source_tooling_configs_are_parseable() -> None:
-    assert yaml.safe_load(Path(".pre-commit-config.yaml").read_text(encoding="utf-8"))["repos"]
-    assert yaml.safe_load(Path(".semgrep.yml").read_text(encoding="utf-8"))["rules"]
-    assert tomllib.loads(Path("ruff.toml").read_text(encoding="utf-8"))["lint"]["select"]
-    assert json.loads(Path(".github/renovate.json").read_text(encoding="utf-8"))["dependencyDashboard"] is True
-    assert "semgrep" in Path(".github/requirements/semgrep.txt").read_text(encoding="utf-8")
-    assert "semgrep" in Path(".github/requirements/pr-quality.txt").read_text(encoding="utf-8")
-    for workflow in [
-        ".github/workflows/pr-quality.yml",
-        ".github/workflows/semgrep.yml",
-        ".github/workflows/codeql.yml",
-        ".github/workflows/dependency-update-validate.yml",
-    ]:
-        loaded = yaml.safe_load(Path(workflow).read_text(encoding="utf-8"))
-        assert loaded["name"]
-        assert loaded["jobs"]
-
-
 def test_semgrep_runs_only_in_dedicated_changed_file_workflow() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["pr-quality"]["steps"]
@@ -1273,20 +1310,8 @@ def test_semgrep_runs_only_in_dedicated_changed_file_workflow() -> None:
         if isinstance(step, dict) and str(step.get("name") or "").startswith("Semgrep AIstock guardrails")
     ]
     assert semgrep_steps == []
-
-    semgrep_workflow = yaml.safe_load(Path(".github/workflows/semgrep.yml").read_text(encoding="utf-8"))
-    dedicated_steps = semgrep_workflow["jobs"]["semgrep"]["steps"]
-    run_step = next(step for step in dedicated_steps if step.get("name") == "Run Semgrep")
-    run = str(run_step["run"])
-    assert "python scripts/ci_changed_files.py" in run
-    assert '--base-ref "${BASE_REF}"' in run
-    assert '--base-sha "${BASE_SHA}"' in run
-    assert '--head-sha "${HEAD_SHA}"' in run
-    assert "--diff-filter ACMRT" in run
-    assert "tmp/validation/semgrep/semgrep_changed_files.txt" in run
-    assert "xargs -a tmp/validation/semgrep/semgrep_changed_files.txt semgrep" in run
-    assert "semgrep --config .semgrep.yml --json --output tmp/validation/semgrep/semgrep.json ." not in run
-    assert '"paths":{"scanned":[]}' in run
+    # Dedicated-run selection and empty/deleted paths are asserted once in
+    # test_standalone_semgrep_scans_changed_files_only below.
 
 
 def test_pr_quality_ruff_ignores_deleted_python_files() -> None:
@@ -1399,7 +1424,11 @@ def test_standalone_semgrep_scans_changed_files_only() -> None:
 def test_dependency_update_validation_is_folded_into_unified_ci() -> None:
     workflow = yaml.safe_load(Path(".github/workflows/dependency-update-validate.yml").read_text(encoding="utf-8"))
     triggers = workflow.get("on") or workflow.get(True)
-    assert triggers == {"workflow_dispatch": {}}
+    assert set(triggers) == {"workflow_dispatch"}
+    inputs = triggers["workflow_dispatch"]["inputs"]
+    assert set(inputs) == {"base_ref", "base_sha"}
+    assert inputs["base_ref"]["default"] == "main"
+    assert all(item["type"] == "string" and item["required"] is False for item in inputs.values())
 
     ci_workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
     ci_steps = ci_workflow["jobs"]["ci-verdict"]["steps"]

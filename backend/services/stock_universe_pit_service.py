@@ -90,9 +90,13 @@ class StockUniversePitService:
         reports_dir: Optional[Path] = None,
         *,
         authority_resolver: CanonicalPitAuthorityResolver | None = None,
+        existing_schema_only: bool = False,
     ) -> None:
+        if not isinstance(existing_schema_only, bool):
+            raise ValueError("existing_schema_only must be boolean")
         self.reports_dir = reports_dir or Path("reports") / "stock_universe_pit"
         self._authority_resolver = authority_resolver or CanonicalPitAuthorityResolver()
+        self._existing_schema_only = existing_schema_only
 
     @staticmethod
     def _preserve_existing_end_date(requested_end: dt.date, state: dict[str, Any]) -> dt.date:
@@ -111,6 +115,11 @@ class StockUniversePitService:
         return requested_end
 
     def ensure_tables(self) -> None:
+        if self._existing_schema_only:
+            state = self.get_status_readonly(universe_key=CANONICAL_PIT_UNIVERSE_KEY)
+            if state.get("reason") == "schema_contract_missing":
+                raise StockUniversePitError("canonical PIT schema contract is missing; schema bootstrap is disabled")
+            return
         with get_conn() as conn:
             with conn.cursor() as cur:
                 cur.execute("CREATE SCHEMA IF NOT EXISTS market;")
@@ -1070,6 +1079,7 @@ class StockUniversePitService:
                     write_all_txt=False,
                     write_mode=write_mode,
                     incremental_from=incremental_from.isoformat() if incremental_from else None,
+                    existing_schema_only=self._existing_schema_only,
                 )
                 summary = pit_builder.build(args)
                 validation = summary.get("validation") or {}

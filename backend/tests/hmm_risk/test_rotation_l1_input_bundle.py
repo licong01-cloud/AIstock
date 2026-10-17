@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import sys
@@ -1872,6 +1873,157 @@ def test_direct_v2_source_binding_keeps_release_cutoff_separate_from_model_windo
     }
 
 
+def test_frozen_successor_binding_does_not_read_or_forge_active_profile(tmp_path, monkeypatch):
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    _stub_direct_source_preflights(monkeypatch)
+    state = json.loads((root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    state.update(generation="approved-frozen-successor", profile=subject.DIRECT_V2_PROFILE)
+    (root / "direct_monthly_state.json").write_text(json.dumps(state), encoding="utf-8")
+    binding = {
+        "generation": state["generation"],
+        "release_id": state["release_id"],
+        "revision": state["revision"],
+        "cutoff": state["cutoff"],
+        "manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "manifest_file_sha256": state["manifest"]["file_sha256"],
+    }
+    before = _ACTIVE_PROFILE_PATH.read_bytes()
+    monkeypatch.setattr(subject, "load_active_hmm_dataset_identity", lambda: pytest.fail("active profile accessed"))
+    loaded = subject.load_rotation_l1_direct_v2_source_assets(
+        root,
+        security_identity_manifest=security,
+        provider_absence_manifest=provider,
+        frozen_release_binding=binding,
+    )
+    identity = loaded["release_identity"]
+    assert identity["frozen_release_generation"] == binding["generation"]
+    assert identity["frozen_release_binding_sha256"] == canonical_sha256(binding)
+    assert not any(key.startswith("active_") for key in identity)
+    assert "active_profile" not in identity["metadata_sha256"]
+    assert _ACTIVE_PROFILE_PATH.read_bytes() == before
+    for key in binding:
+        wrong = {**binding, key: "unapproved"}
+        with pytest.raises(subject.RotationL1InputBundleError):
+            subject._require_frozen_direct_v2_profile(
+                root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, binding=wrong
+            )
+
+
+def test_frozen_binding_cannot_fall_back_to_active_or_accept_rehashed_manifest(tmp_path, monkeypatch):
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state = json.loads((root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    state.update(generation="approved-frozen-successor", profile=subject.DIRECT_V2_PROFILE)
+    binding = {
+        "generation": state["generation"],
+        "release_id": state["release_id"],
+        "revision": state["revision"],
+        "cutoff": state["cutoff"],
+        "manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "manifest_file_sha256": state["manifest"]["file_sha256"],
+    }
+    subject._require_frozen_direct_v2_profile(
+        root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, binding=binding
+    )
+    for change in ("wrong_root", "missing_field", "status", "unknown_schema", "structural", "manifest_content"):
+        changed_state = copy.deepcopy(state)
+        changed_binding = dict(binding)
+        if change == "wrong_root":
+            changed_state["candidate_root"] = str(tmp_path / "old-active")
+        elif change == "missing_field":
+            changed_binding.pop("generation")
+        elif change == "status":
+            changed_state["status"] = "FAILED"
+        elif change == "unknown_schema":
+            changed_state["schema_version"] = "qe_direct_monthly_state_v999"
+        elif change == "structural":
+            changed_state["validation"]["structural"]["checks"]["daily_bin"] = 1
+        else:
+            path = root / "qe_dataset_manifest.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["revision"] = "forged"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            changed_state["revision"] = "forged"
+            changed_state["manifest"]["file_sha256"] = subject._sha256_file(path)
+        with pytest.raises(subject.RotationL1InputBundleError):
+            subject._require_frozen_direct_v2_profile(
+                root=root,
+                state=changed_state,
+                release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+                binding=changed_binding,
+            )
+
+
+def _shared_frozen_successor(tmp_path):
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state = json.loads((root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    manifest_path = root / "qe_dataset_manifest.json"
+    digest = subject._sha256_file(manifest_path)
+    state.update(generation="approved-v18-successor", revision="20261015-successor", profile=subject.DIRECT_V2_PROFILE)
+    state["manifest"] = {
+        "dataset_manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "path": manifest_path.name,
+        "sha256": digest,
+        "size": manifest_path.stat().st_size,
+    }
+    binding = {
+        **{k: state[k] for k in ("generation", "release_id", "revision", "cutoff")},
+        "manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "manifest_file_sha256": digest,
+    }
+    return root, security, provider, state, binding
+
+
+def test_shared_frozen_successor_reads_pinned_manifest_with_inherited_revision(tmp_path, monkeypatch):
+    root, security, provider, state, binding = _shared_frozen_successor(tmp_path)
+    (root / "direct_monthly_state.json").write_text(json.dumps(state), encoding="utf-8")
+    _stub_direct_source_preflights(monkeypatch)
+    monkeypatch.setattr(subject, "load_active_hmm_dataset_identity", lambda: pytest.fail("active profile accessed"))
+    before = {
+        path.name: path.read_bytes() for path in (root / "direct_monthly_state.json", root / "qe_dataset_manifest.json")
+    }
+    assets = subject.load_rotation_l1_direct_v2_source_assets(
+        root, security_identity_manifest=security, provider_absence_manifest=provider, frozen_release_binding=binding
+    )
+    assert assets["release_identity"]["frozen_release_generation"] == binding["generation"]
+    assert assets["release_identity"]["frozen_release_binding_sha256"] == canonical_sha256(binding)
+    assert all((root / name).read_bytes() == content for name, content in before.items())
+
+
+@pytest.mark.parametrize("drift", ("hash", "size", "bool_size", "mixed", "identity", "revision", "rehashed_content"))
+def test_shared_frozen_successor_still_rejects_binding_drift(tmp_path, drift):
+    root, _, _, state, binding = _shared_frozen_successor(tmp_path)
+    if drift == "hash":
+        state["manifest"]["sha256"] = "a" * 64
+    elif drift == "size":
+        state["manifest"]["size"] += 1
+    elif drift == "bool_size":
+        state["manifest"]["size"] = True
+    elif drift == "mixed":
+        state["manifest"]["file_sha256"] = state["manifest"]["sha256"]
+    elif drift == "identity":
+        state["manifest"]["dataset_manifest_sha256"] = "a" * 64
+    elif drift == "revision":
+        state["revision"] = "unapproved"
+    else:
+        path = root / "qe_dataset_manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["revision"] = "forged"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        state["manifest"].update(sha256=subject._sha256_file(path), size=path.stat().st_size)
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._require_frozen_direct_v2_profile(
+            root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, binding=binding
+        )
+
+
+def test_shared_inherited_manifest_requires_explicit_frozen_pins(tmp_path):
+    root, _, _, state, _ = _shared_frozen_successor(tmp_path)
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._require_direct_v2_manifest(
+            root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, release_id=state["release_id"]
+        )
+
+
 def test_direct_v2_selection_universe_may_be_a_pit_subset_of_provider_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -2577,11 +2729,128 @@ def test_suspend_sidecar_uses_only_full_day_rows_and_preserves_intraday_observat
     )
 
 
+@pytest.fixture
+def prior_quote_case(tmp_path: Path):
+    symbol = "600988.SH"
+    calendar = tuple(d.date() for d in pd.bdate_range("2026-03-17", "2026-04-02"))
+    root = tmp_path / "qlib"
+    feature_root = root / "features" / symbol.lower()
+    feature_root.mkdir(parents=True)
+    for field in subject.QLIB_STOCK_FIELDS:
+        values = np.ones(len(calendar), dtype="<f4")
+        if field in {"open", "high", "low", "close", "prev_close", "up_limit_price", "down_limit_price"}:
+            values = np.arange(30, 30 + len(calendar), dtype="<f4")
+        elif field in {"limit_up", "limit_down"}:
+            values[:] = 0
+        np.concatenate((np.array([0.0], dtype="<f4"), values)).tofile(feature_root / f"{field}.day.bin")
+    suspension = frozenset((d, symbol) for d in (date(2026, 3, 19), date(2026, 3, 20)))
+    spans = {symbol: ((calendar[0], calendar[-1]),)}
+    return root, symbol, calendar, spans, suspension
+
+
+def _prior_quotes(case, *, spans=None, suspension=None):
+    root, _, calendar, original_spans, original_suspension = case
+    return subject._strict_prior_price_state(
+        root,
+        calendar=calendar,
+        spans=original_spans if spans is None else spans,
+        suspension_keys=original_suspension if suspension is None else suspension,
+        source_start=calendar[0],
+        window_start=calendar[-1],
+    )
+
+
+def test_prior_quote_context_counts_real_quotes_across_normal_suspension(prior_quote_case):
+    _, symbol, calendar, _, suspension = prior_quote_case
+    state = _prior_quotes(prior_quote_case)
+    span_start, quotes = state[symbol]
+    assert span_start == calendar[0]
+    assert [d for d, _ in quotes] == [d for d in calendar[:-1] if (d, symbol) not in suspension]
+    assert len(quotes) == 10
+    assert quotes[0] == (date(2026, 3, 17), 30.0)
+    assert all(d < calendar[-1] and np.isfinite(value) for d, value in quotes)
+
+
+def test_prior_quote_context_cannot_cross_a_pit_reentry(prior_quote_case):
+    _, symbol, calendar, _, _ = prior_quote_case
+    reentry = date(2026, 3, 23)
+    state = _prior_quotes(
+        prior_quote_case,
+        spans={symbol: ((calendar[0], date(2026, 3, 20)), (reentry, calendar[-1]))},
+    )
+    assert state[symbol][0] == reentry
+    assert len(state[symbol][1]) == 8
+    assert all(d >= reentry for d, _ in state[symbol][1])
+
+
+def test_prior_quote_context_preserves_true_history_shortage(prior_quote_case):
+    root, symbol, calendar, _, _ = prior_quote_case
+    for field in subject.QLIB_STOCK_FIELDS:
+        values = np.fromfile(root / "features" / symbol.lower() / f"{field}.day.bin", dtype="<f4")
+        values[1] = np.nan
+        values.tofile(root / "features" / symbol.lower() / f"{field}.day.bin")
+    quotes = _prior_quotes(prior_quote_case)[symbol][1]
+    assert len(quotes) == 9
+    assert all(d != calendar[0] for d, _ in quotes)
+
+
+def test_prior_quote_context_reaches_real_history_after_a_long_suspension(prior_quote_case):
+    _, symbol, calendar, _, _ = prior_quote_case
+    suspended = frozenset((d, symbol) for d in calendar[1:-1])
+    assert _prior_quotes(prior_quote_case, suspension=suspended)[symbol][1] == ((calendar[0], 30.0),)
+
+
+@pytest.mark.parametrize(
+    "context",
+    (
+        (),
+        (date(2026, 1, 2), ((date(2026, 1, 16), 2.0),)),
+        (date(2026, 1, 2), ((date(2026, 1, 15), 2.0), (date(2026, 1, 14), 3.0))),
+        (date(2026, 1, 2), ((date(2026, 1, 14), np.inf),)),
+        (date(2026, 1, 2), ((date(2026, 1, 14), 2.0),)),
+    ),
+)
+def test_price_carry_rejects_malformed_future_unordered_nonfinite_or_suspended_context(context):
+    symbol = "600988.SH"
+    dates = tuple(d.date() for d in pd.bdate_range("2026-01-02", "2026-01-16"))
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._build_stock_fact_aggregates(
+            month_paths=(),
+            assets={},
+            calendar=dates,
+            spans={symbol: ((dates[0], dates[-1]),)},
+            adapter=None,
+            security=None,
+            provider_absence=None,
+            suspension_keys=frozenset({(date(2026, 1, 14), symbol)}),
+            contributor_eligibility={},
+            window_start=dates[-1],
+            window_end=dates[-1],
+            initial_price_state={symbol: context},
+        )
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
+
+
+@pytest.mark.parametrize(("field", "bad_value"), (("close", np.inf), ("factor", 0.0)))
+def test_prior_quote_context_does_not_hide_invalid_source(prior_quote_case, field, bad_value):
+    root, symbol, _, _, _ = prior_quote_case
+    path = root / "features" / symbol.lower() / f"{field}.day.bin"
+    values = np.fromfile(path, dtype="<f4")
+    values[-2] = bad_value
+    values.tofile(path)
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        _prior_quotes(prior_quote_case)
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
+
+
+@pytest.mark.parametrize("with_price_context", (False, True))
 def test_full_day_suspension_precedes_missing_evidence_and_price_history(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    with_price_context: bool,
 ) -> None:
     dates = (date(2026, 1, 16), date(2026, 1, 19))
+    prior_dates = tuple(d.date() for d in pd.bdate_range(end="2026-01-15", periods=10))
     symbol = "688005.SH"
     source_rows = np.zeros(len(dates), dtype=subject._QLIB_SOURCE_DTYPE)
     for index, day in enumerate(dates):
@@ -2645,22 +2914,29 @@ def test_full_day_suspension_precedes_missing_evidence_and_price_history(
     subject._build_stock_fact_aggregates(
         month_paths=(month_path,),
         assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
-        calendar=dates,
-        spans={symbol: ((dates[0], dates[-1]),)},
+        calendar=(*prior_dates, *dates),
+        spans={symbol: ((prior_dates[0], dates[-1]),)},
         adapter=Adapter(),
         security=Security(),
         provider_absence=ProviderAbsence(),
         suspension_keys=frozenset({(dates[0], symbol)}),
         contributor_eligibility={symbol: True},
+        window_start=dates[0],
+        window_end=dates[-1],
+        initial_price_state=(
+            {symbol: (prior_dates[0], tuple((d, 2.0 + i) for i, d in enumerate(prior_dates)))}
+            if with_price_context
+            else None
+        ),
     )
 
     suspended, resumed = captured
     assert suspended["is_suspended"] is True
     assert suspended["moneyflow_fact_status"] == "not_applicable_suspended"
     assert resumed["is_suspended"] is False
-    assert resumed["prev_close_yuan"] is None
-    assert resumed["prev_close_5_yuan"] is None
-    assert resumed["prev_close_10_yuan"] is None
+    assert resumed["prev_close_yuan"] == (1.0 if with_price_context else None)
+    assert resumed["prev_close_5_yuan"] == (7.0 if with_price_context else None)
+    assert resumed["prev_close_10_yuan"] == (2.0 if with_price_context else None)
 
 
 @pytest.mark.parametrize(

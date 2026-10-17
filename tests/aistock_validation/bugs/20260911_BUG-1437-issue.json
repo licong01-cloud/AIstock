@@ -13,7 +13,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1437",
-  "closed_at": null,
+  "closed_at": "2026-10-01T14:10:57.571191Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -150,8 +150,8 @@
   },
   "first_seen_at": "2026-09-11T05:22:45.501906Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "89982e9889591f07360c2f4404f6e665113c9390",
+  "fixed_at": "2026-09-11T07:10:50Z",
   "github_issue_number": 4534,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4534",
   "last_seen_at": "2026-09-11T05:22:45.501906Z",
@@ -159,6 +159,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4559",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -172,7 +173,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?limit=1",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=16b76e7d-0066-4b34-b652-adca72cf1e08&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "Windows fresh Python imported factor_research full_evaluation, runner and service from the BUG-1437 task worktree; factor_research_backend passed 99 tests with 9 authorized DEV-only skips"
@@ -182,9 +183,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\factor-aftercare-20261001\\verify-BUG-1437.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1437",
+      "business_smoke_semantic": {
+        "contract_id": "factor_metrics_results",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "6aa47962d6e0474b95cdc449365eb0aaec8f0eb2d97235bd85bf1ad4433c1026",
+      "expected_identity": "89982e9889591f07360c2f4404f6e665113c9390",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-01T14:10:48.670564Z",
+      "mode": "read_only",
+      "observed_identity": "3626c1cf5f338a7e6678ca62d737ff06ab1cacb1",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e27efca03b0c363f948f4e4bf286a10ec6d7490ca3b779664527c89cbe9731c7",
+      "receipt_sha256": "279d52da2428e9aefa53f440df0c741e278d74c5979294d2f0a991f4104c960b",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "3f94f7b54061070947018ad0c8df3049d4c2cd690ef2195cf8eb35062ebe1903",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -194,7 +218,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1437",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "c7aacd93f9dda1e4",
+    "recorded_at": "2026-09-11T07:12:05.160314Z",
+    "runtime_contract_digest": "740f1001321a5b38f5471c4a337b7a274687c8832ab09585778448008bdf3401",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f0953a434ae2404994c6dd77483ba2c7fb073f40",
+    "source_merge_commit": "89982e9889591f07360c2f4404f6e665113c9390",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4559",
+    "validation_evidence": [
+      "validation-receipt: id=62693bc3ff3057c9 commit=f0953a434ae2404994c6dd77483ba2c7fb073f40 kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`passed: 99 passed, 9 DEV-only skipped, fresh-process 2 passed`",
+      "validation-receipt: id=ac6950cb875ad42f commit=f0953a434ae2404994c6dd77483ba2c7fb073f40 kind=nox plan=factor_research_dev_db status=passed command=`python -m nox -s factor_research_dev_db` result=`passed: 9 passed against existing DEV`",
+      "validation-receipt: id=c1639c17a4216009 commit=f0953a434ae2404994c6dd77483ba2c7fb073f40 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed: 7 passed, findings 0`",
+      "validation-receipt: id=8823f4f3484877b8 commit=f0953a434ae2404994c6dd77483ba2c7fb073f40 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed: blocking 0`"
+    ],
+    "validation_evidence_digest": "fc53605491347d6495435922e4fe17f4a81493fda389f40e2544c9c0084a37a3"
+  },
+  "status": "verified",
   "suspected_modules": [
     "factor_library.research"
   ],
@@ -203,6 +251,12 @@
     "fingerprint": "96e5b3a27e103d2232212bd7",
     "source_event_id": "FE-20260911-96e5b3a27e10"
   },
+  "validation_evidence": [
+    "validation-receipt: id=62693bc3ff3057c9 commit=f0953a434ae2404994c6dd77483ba2c7fb073f40 kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`passed: 99 passed, 9 DEV-only skipped, fresh-process 2 passed`",
+    "validation-receipt: id=ac6950cb875ad42f commit=f0953a434ae2404994c6dd77483ba2c7fb073f40 kind=nox plan=factor_research_dev_db status=passed command=`python -m nox -s factor_research_dev_db` result=`passed: 9 passed against existing DEV`",
+    "validation-receipt: id=c1639c17a4216009 commit=f0953a434ae2404994c6dd77483ba2c7fb073f40 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed: 7 passed, findings 0`",
+    "validation-receipt: id=8823f4f3484877b8 commit=f0953a434ae2404994c6dd77483ba2c7fb073f40 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed: blocking 0`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

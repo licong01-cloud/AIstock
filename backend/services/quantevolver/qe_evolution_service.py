@@ -16,7 +16,12 @@ from ...db.pg_pool import get_conn
 from ..qe_archive.models import sha256_json
 
 from .factor_official_evaluation_service import CALC_ENGINE
-from .qe_workspace_client import QEWorkspaceClient, QEWorkspaceLogEvent, QELoopWorkspaceCleanupUnavailable
+from .qe_workspace_client import (
+    QEWorkspaceClient,
+    QEWorkspaceLogEvent,
+    QELoopWorkspaceCleanupUnavailable,
+    QEWorkspaceResultReadUnavailable,
+)
 from .qe_log_broker import QELogBrokerSource, get_qe_log_broker
 from .qe_log_store import get_qe_live_log_store
 from .qe_evolution_agents import EvolutionAgents, EvolutionFactorAgent, EvolutionModelAgent, AnalystResult
@@ -3132,6 +3137,9 @@ class AutoEvolutionScheduler:
         except Exception as e:
             import traceback
             tb_str = traceback.format_exc()
+            if isinstance(e, QEWorkspaceResultReadUnavailable):
+                self._defer_completed_result_read(evolution_loop_db_id, e)
+                return False
             logger.error(f"Error processing completed loop {evolution_loop_db_id} for task {task_id}: {e}\n{tb_str}")
             with get_conn() as conn:
                 with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -3150,6 +3158,32 @@ class AutoEvolutionScheduler:
                             cur.execute("UPDATE qe_evolution_tasks SET status = 'failed', updated_at = NOW() WHERE task_id = %s", (task_id,))
                 conn.commit()
             return False
+
+    def _defer_completed_result_read(
+        self, loop_db_id: str, error: QEWorkspaceResultReadUnavailable,
+    ) -> None:
+        """Release only our processing claim for the existing minute reconciler.
+
+        No execution POST, task terminalization, metric substitution or new
+        polling loop. Concurrent cancellation/completion must not be overwritten.
+        """
+        diagnostic = json.dumps({"_result_collection": {
+            "state": "waiting_result_read",
+            "reason_code": error.reason_code,
+            "endpoint": error.endpoint,
+            "error_type": error.error_type,
+        }})
+        with get_conn() as conn:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    UPDATE qe_evolution_loops
+                    SET status = 'running',
+                        agent_analysis = COALESCE(agent_analysis, '{}'::jsonb) || %s::jsonb,
+                        updated_at = NOW()
+                    WHERE loop_id = %s AND status = 'processing'
+                """, (diagnostic, loop_db_id))
+            conn.commit()
+        logger.warning("Completed execution awaiting result reconciliation: loop=%s %s", loop_db_id, error)
 
     async def scan_running_loops(self):
         """
@@ -4260,12 +4294,48 @@ class AutoEvolutionScheduler:
         evolution_loop_db_id = f"{task_id}_Loop{loop_index}"
         loop_id = f"Loop{loop_index}"
         try:
+            replay_result = None
+            if config.get("prediction_replay"):
+                receipt = await client.inspect_loop_submission(task_id, loop_id)
+                if (receipt.task_id, receipt.loop_id, receipt.status) != (task_id, loop_id, "completed"):
+                    raise ValueError("QE_PREDICTION_REPLAY_RESULTS_NOT_COMPLETED")
+                source_ref = await client.get_workspace_file(
+                    task_id, loop_id, "qe_prediction_replay_source_ref.json"
+                )
+                source_sha = config.get("prediction_source_sha256")
+                pinned_source = config.get("prediction_replay_source")
+                if (
+                    not isinstance(source_ref, dict)
+                    or source_ref.get("schema_version") != "qe_prediction_replay_source_ref_v1"
+                    or not isinstance(source_sha, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", source_sha)
+                    or source_ref.get("sha256") != source_sha
+                    or not isinstance(pinned_source, dict)
+                    or any(
+                        pinned_source.get(key) is None or source_ref.get(key) != pinned_source[key]
+                        for key in (
+                            "source_task_id", "source_loop_index", "source_node_id",
+                            "catalog_path", "sha256", "size_bytes",
+                        )
+                    )
+                ):
+                    raise ValueError("QE_PREDICTION_REPLAY_RESULTS_SOURCE_REF_MISMATCH")
+                replay_result = self._validate_prediction_replay_result(
+                    await client.get_workspace_file(task_id, loop_id, "qe_prediction_replay_result.json"),
+                    expected_source_sha256=str(config.get("prediction_source_sha256") or ""),
+                )
             artifacts = await collect_results_only_artifacts(
                 client=client,
                 task_id=task_id,
                 loop_id=loop_id,
                 node_id=effective_node_id,
+                **({
+                    "expected_prediction_panel_sha256": replay_result["executable_prediction_panel_sha256"],
+                    "expected_prediction_rows": replay_result["executable_prediction_rows"],
+                } if replay_result is not None else {}),
             )
+            if replay_result is not None:
+                artifacts.metrics["prediction_replay_result"] = replay_result
             manifest = upload_results_only_prediction_store(
                 artifacts=artifacts,
                 task_id=task_id,
@@ -4476,6 +4546,7 @@ class AutoEvolutionScheduler:
                         UPDATE qe_evolution_loops
                         SET status = 'failed', agent_analysis = %s, updated_at = NOW()
                         WHERE loop_id = %s
+                          AND status IN ('failed', 'cancelled', 'canceled')
                         """,
                         (error_detail, evolution_loop_db_id),
                     )
@@ -4529,7 +4600,7 @@ class AutoEvolutionScheduler:
         if isinstance(config, str):
             config = json.loads(config)
         config = dict(config or {})
-        if bool(config.get("prediction_replay")):
+        if bool(config.get("prediction_replay")) and requested_retry_mode != QE_LOOP_RETRY_MODE_RESULTS_ONLY:
             raise ValueError(
                 "QE_PREDICTION_REPLAY_GENERIC_RETRY_FORBIDDEN: create a new immutable "
                 "prediction-replay loop instead of inferring model or training fallback"
@@ -6201,6 +6272,10 @@ class AutoEvolutionScheduler:
                     cur.execute("""
                         UPDATE qe_evolution_loops
                         SET metrics_json = %s, status = 'completed',
+                            agent_analysis = CASE
+                                WHEN agent_analysis ? '_result_collection'
+                                THEN agent_analysis - '_result_collection'
+                                ELSE agent_analysis END,
                             experiment_id = %s, updated_at = NOW()
                         WHERE loop_id = %s
                     """, (json.dumps(metrics), experiment_id, evolution_loop_db_id))
@@ -6272,6 +6347,9 @@ class AutoEvolutionScheduler:
         except Exception as e:
             import traceback
             tb_str = traceback.format_exc()
+            if isinstance(e, QEWorkspaceResultReadUnavailable):
+                self._defer_completed_result_read(evolution_loop_db_id, e)
+                return False
             logger.error(f"策略演进 Loop {evolution_loop_db_id} 处理失败: {e}\n{tb_str}")
             try:
                 with get_conn() as conn:
@@ -7146,7 +7224,7 @@ class AutoEvolutionScheduler:
         insert_if_missing: bool = False,
         poll_seconds: int = CUSTOM_EVO_PARALLELISM_QUEUE_POLL_SECONDS,
     ) -> Optional[Dict[str, Any]]:
-        """Keep the loop queued until the per-node node_parallelism slot is free."""
+        """Claim only pending/new work; terminal or active work must not be replayed."""
 
         task_id = str(task.get("task_id") or "")
         initial_task_status = str(task.get("status") or "")
@@ -7171,26 +7249,37 @@ class AutoEvolutionScheduler:
                     if slot is None:
                         conn.commit()
                         return None
+                    cur.execute(
+                        "SELECT status, node_id FROM qe_evolution_loops WHERE loop_id = %s",
+                        (loop_db_id,),
+                    )
+                    existing = cur.fetchone()
+                    existing_status = (
+                        str(existing.get("status") or "")
+                        if isinstance(existing, dict)
+                        else str(existing[0] or "") if existing else ""
+                    )
+                    existing_node_id = (
+                        existing.get("node_id")
+                        if isinstance(existing, dict)
+                        else existing[1] if existing and len(existing) > 1 else None
+                    )
+                    if (existing is not None and existing_status != "pending") or (
+                        existing is None and not insert_if_missing
+                    ):
+                        conn.commit()
+                        logger.info(
+                            "Custom evolution Loop %s is not pending; skip automatic claim: "
+                            "task=%s status=%s",
+                            loop_index,
+                            task_id,
+                            existing_status or "missing",
+                        )
+                        return None
                     if slot and not slot.get("available", True):
                         if insert_if_missing:
-                            cur.execute(
-                                "SELECT status, node_id FROM qe_evolution_loops WHERE loop_id = %s",
-                                (loop_db_id,),
-                            )
-                            existing = cur.fetchone()
-                            existing_status = (
-                                str(existing.get("status") or "")
-                                if isinstance(existing, dict)
-                                else str(existing[0] or "") if existing else ""
-                            )
-                            existing_node_id = (
-                                existing.get("node_id")
-                                if isinstance(existing, dict)
-                                else existing[1] if existing and len(existing) > 1 else None
-                            )
                             already_pending = (
-                                existing_status
-                                in {"pending", "running", "processing", "completed"}
+                                existing_status == "pending"
                                 and not (
                                     existing_node_id is None
                                     and target_node_id is not None
@@ -7203,20 +7292,12 @@ class AutoEvolutionScheduler:
                                     (loop_id, task_id, loop_index, status, action_type, node_id)
                                     VALUES (%s, %s, %s, 'pending', %s, %s)
                                     ON CONFLICT (loop_id) DO UPDATE SET
-                                        status = CASE
-                                            WHEN qe_evolution_loops.status IN ('running', 'processing', 'completed')
-                                            THEN qe_evolution_loops.status
-                                            ELSE 'pending'
-                                        END,
                                         node_id = COALESCE(qe_evolution_loops.node_id, EXCLUDED.node_id),
                                         updated_at = NOW()
-                                    WHERE (
-                                        qe_evolution_loops.status NOT IN ('running', 'processing', 'completed')
-                                        AND qe_evolution_loops.status IS DISTINCT FROM 'pending'
-                                    ) OR (
-                                        qe_evolution_loops.node_id IS NULL
+                                    WHERE qe_evolution_loops.status = 'pending'
+                                        AND qe_evolution_loops.node_id IS NULL
                                         AND EXCLUDED.node_id IS NOT NULL
-                                    )
+                                    RETURNING status
                                     """,
                                     (
                                         loop_db_id,
@@ -7226,34 +7307,9 @@ class AutoEvolutionScheduler:
                                         target_node_id,
                                     ),
                                 )
-                        else:
-                            cur.execute(
-                                "SELECT status FROM qe_evolution_loops WHERE loop_id = %s",
-                                (loop_db_id,),
-                            )
-                            existing = cur.fetchone()
-                            existing_status = (
-                                str(existing.get("status") or "")
-                                if isinstance(existing, dict)
-                                else str(existing[0] or "") if existing else ""
-                            )
-                            if existing_status not in {
-                                "pending",
-                                "running",
-                                "processing",
-                                "completed",
-                                "",
-                            }:
-                                cur.execute(
-                                    """
-                                    UPDATE qe_evolution_loops
-                                    SET status = 'pending', updated_at = NOW()
-                                    WHERE loop_id = %s
-                                      AND status NOT IN ('running', 'processing', 'completed')
-                                      AND status IS DISTINCT FROM 'pending'
-                                    """,
-                                    (loop_db_id,),
-                                )
+                                if cur.fetchone() is None:
+                                    conn.commit()
+                                    return None
                         conn.commit()
                     else:
                         if insert_if_missing:
@@ -7266,7 +7322,7 @@ class AutoEvolutionScheduler:
                                     status = 'running',
                                     node_id = COALESCE(qe_evolution_loops.node_id, EXCLUDED.node_id),
                                     updated_at = NOW()
-                                WHERE qe_evolution_loops.status NOT IN ('running', 'processing', 'completed')
+                                WHERE qe_evolution_loops.status = 'pending'
                                 RETURNING status
                                 """,
                                 (loop_db_id, task_id, loop_index, action_type, target_node_id),
@@ -7278,7 +7334,7 @@ class AutoEvolutionScheduler:
                                 UPDATE qe_evolution_loops
                                 SET status = 'running', agent_analysis = NULL, updated_at = NOW()
                                 WHERE loop_id = %s
-                                  AND status NOT IN ('running', 'processing', 'completed')
+                                  AND status = 'pending'
                                 RETURNING status
                                 """,
                                 (loop_db_id,),
@@ -7288,7 +7344,7 @@ class AutoEvolutionScheduler:
                             conn.commit()
                             logger.info(
                                 "Custom evolution Loop %s did not acquire node_parallelism slot because "
-                                "the loop is already active or completed: task=%s node=%s",
+                                "the loop is no longer pending: task=%s node=%s",
                                 loop_index,
                                 task_id,
                                 slot["node_id"] if slot else target_node_id,
@@ -7544,12 +7600,15 @@ class AutoEvolutionScheduler:
                 lock_cm.__exit__(None, None, None)
 
     async def _wait_and_process_custom_evo_loop(self, task_id: str, loop_index: int, loop_id: str) -> None:
-        max_wait = 14400
-        waited = 0
+        # This waiter owns neither the remote execution nor its terminal state.
+        # Capacity queues and early reconciliation wakeups are not failures.
+        # The shared coordinator reads the authoritative remote receipt at its
+        # existing >=60s cadence; only its persisted terminal state ends waiting.
         interval = 60
-        final_status = None
+        clock = asyncio.get_running_loop().time
+        next_warning = clock() + 14400
         wait_generation: int | None = None
-        while waited < max_wait:
+        while True:
             from .qe_reconciliation_coordinator import (
                 QEReconciliationScope,
                 qe_reconciliation_wakeup,
@@ -7562,20 +7621,16 @@ class AutoEvolutionScheduler:
                 timeout_seconds=interval,
                 observed_generation=wait_generation,
             )
-            waited += interval
             final_status = qe_reconciliation_wakeup.loop_state(loop_id)
-            if final_status is None or final_status in ("completed", "failed", "cancelled", "canceled"):
+            if final_status in ("completed", "failed", "cancelled", "canceled"):
                 break
-        if waited >= max_wait:
-            logger.error("Custom evolution Loop %s wait timed out (%ss); marking failed", loop_index, max_wait)
-            with get_conn() as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE qe_evolution_loops SET status = 'failed', updated_at = NOW() WHERE loop_id = %s AND status = 'running'",
-                        (loop_id,),
-                    )
-                conn.commit()
-            return
+            now = clock()
+            if now >= next_warning:
+                logger.warning(
+                    "Custom evolution Loop %s still waiting for authoritative terminal state: task=%s state=%s",
+                    loop_index, task_id, final_status,
+                )
+                next_warning = now + 14400
         if final_status == "completed":
             await self._safe_process_completed_loop(task_id, loop_id)
         else:
@@ -8299,7 +8354,7 @@ class AutoEvolutionScheduler:
                     return
             conn.commit()
 
-        # 过滤已完成的 loop
+        # Automatic recovery is not an explicit retry: only missing/pending work is eligible.
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
@@ -8312,13 +8367,13 @@ class AutoEvolutionScheduler:
         for loop_config in loops_config:
             loop_index = loop_config.get("loop_index")
             status = existing_loops.get(loop_index)
-            if status == "completed":
-                logger.info(f"自定义演进 Loop {loop_index} 已完成，跳过")
+            if loop_index in existing_loops and status != "pending":
+                logger.info("自定义演进 Loop %s 状态为 %s，跳过自动提交", loop_index, status)
                 continue
             loops_to_run.append(loop_config)
 
         if not loops_to_run:
-            logger.info(f"自定义演进任务 {task_id} 所有 Loop 已完成")
+            logger.info(f"自定义演进任务 {task_id} 没有待自动提交的 Loop")
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
@@ -8326,11 +8381,18 @@ class AutoEvolutionScheduler:
                         (task_id,),
                     )
                     status_counts = {status: count for status, count in cur.fetchall()}
+            if any(
+                count and status not in {"completed", "failed", "cancelled", "canceled"}
+                for status, count in status_counts.items()
+            ):
+                # Running work remains owned by reconciliation; do not finalize or resubmit it.
+                return
             final_status = derive_custom_evo_final_status(len(loops_config), status_counts)
             with get_conn() as conn:
                 with conn.cursor() as cur:
                     cur.execute(
-                        "UPDATE qe_evolution_tasks SET status = %s, updated_at = NOW() WHERE task_id = %s",
+                        "UPDATE qe_evolution_tasks SET status = %s, updated_at = NOW() "
+                        "WHERE task_id = %s AND status = 'running'",
                         (final_status, task_id),
                     )
                 conn.commit()

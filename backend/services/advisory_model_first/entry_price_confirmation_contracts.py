@@ -63,6 +63,12 @@ class EntryPriceDataIdentity(_Contract):
     ]
 
 
+class EntryPriceLegacyProvenance(_Contract):
+    source_plan: EvidenceReferenceV1
+    identity_evidence: EvidenceReferenceV1
+    consumer_handoff: EvidenceReferenceV1
+
+
 class EntryPriceConfirmationCriteria(_Contract):
     version: Literal["entry_price_confirmation_v1"] = "entry_price_confirmation_v1"
     minimum_dates: Literal[20] = 20
@@ -123,6 +129,7 @@ class AdvisoryEntryPriceConfirmationRequestV1(_Contract):
     binding_version_id: Nonempty
     scope: EntryPriceScope
     data_identity: EntryPriceDataIdentity
+    legacy_provenance: EntryPriceLegacyProvenance | None = None
     days: tuple[EntryPriceConfirmationDay, ...] = Field(min_length=1)
     # Full exchange calendar freezes continuity, not a retrospectively selected subset.
     target_calendar: tuple[date, ...] = Field(min_length=1)
@@ -152,8 +159,15 @@ class AdvisoryEntryPriceConfirmationRequestV1(_Contract):
         decisions = tuple(day.decision_as_of_trade_date for day in self.days)
         if len(set(decisions)) != len(decisions):
             raise ValueError("confirmation decision dates must be unique")
-        if len(self.days) > 1 and decisions[1:] != targets[:-1]:
-            raise ValueError("confirmation date plan must be consecutive trading sessions")
+        if self.legacy_provenance is not None and (
+            self.study_type != "EXPLORATORY_SCREEN" or self.decision_use != "NAVIGATION_ONLY"
+            or self.evidence_level != "HISTORICAL_REPLAY"
+            or self.data_identity.qualification != "CONSUMED_OR_NON_VINTAGE"
+        ):
+            raise ValueError("legacy provenance is restricted to approved exploratory replay")
+        if self.legacy_provenance is None or self.study_type == "CONFIRMATION":
+            if len(self.days) > 1 and decisions[1:] != targets[:-1]:
+                raise ValueError("confirmation date plan must be consecutive trading sessions")
         if any(len(day.candidate_symbols) > self.scope.target_count for day in self.days):
             raise ValueError("confirmation candidate group exceeds frozen Top20 scope")
         identity = self.data_identity
@@ -192,13 +206,23 @@ class AdvisoryEntryPriceConfirmationRequestV1(_Contract):
         return self
 
     def functional_payload(self) -> dict:
-        return self.model_dump(mode="json", exclude={"request_id", "request_sha256"})
+        excluded = {"request_id", "request_sha256"}
+        if self.legacy_provenance is None:
+            excluded.add("legacy_provenance")  # Preserve all existing v1 artifact identities.
+        return self.model_dump(mode="json", exclude=excluded)
 
 
 def build_entry_price_confirmation_request(**values) -> AdvisoryEntryPriceConfirmationRequestV1:
     # Normalize defaults through field validation before generating the canonical identity.
     from pydantic import TypeAdapter
 
+    if values.get("legacy_provenance") is not None:
+        # The original legacy plan has synthetic historical-summary references,
+        # NOT native receipts. Its immutable source_plan reference preserves them;
+        # they must not be promoted into the native daily contract.
+        values = dict(values, days=[{k: v for k, v in day.items()
+                                   if k != "historical_universe_receipt_sha256"}
+                                  if isinstance(day, dict) else day for day in values["days"]])
     payload = {}
     for name, field in AdvisoryEntryPriceConfirmationRequestV1.model_fields.items():
         if name in {"request_id", "request_sha256"}:
@@ -209,6 +233,8 @@ def build_entry_price_confirmation_request(**values) -> AdvisoryEntryPriceConfir
     unknown = set(values) - set(payload)
     if unknown:
         raise ValueError(f"unknown confirmation request fields: {sorted(unknown)}")
+    if payload.get("legacy_provenance") is None:
+        payload.pop("legacy_provenance", None)
     digest = canonical_json_sha256(payload)
     return AdvisoryEntryPriceConfirmationRequestV1(
         **payload, request_id=f"advepc_{digest[:24]}", request_sha256=digest,

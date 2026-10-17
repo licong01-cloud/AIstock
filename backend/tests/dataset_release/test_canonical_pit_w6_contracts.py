@@ -40,6 +40,283 @@ from backend.services.canonical_equity_pit import (
 SHA = "a" * 64
 
 
+def test_pit_operator_roles_are_exact_and_do_not_downgrade_runtime_sources():
+    from scripts.aistock_issue_workflow import _classify_runtime_impact
+    root = Path(__file__).resolve().parents[3]
+    operators = [f"backend/services/dataset_release/{name}.py" for name in (
+        "canonical_pit_candidate_bundle", "canonical_pit_w8_attestation",
+        "canonical_pit_activation_envelope", "canonical_pit_migration")]
+    assert _classify_runtime_impact(operators, root=root)["runtime_impact"] == "none"
+    mixed = _classify_runtime_impact(operators + ["backend/services/canonical_equity_pit.py"], root=root)
+    assert mixed["runtime_impact"] == "backend"
+    assert mixed["target_ids"] == ["backend-main"]
+    assert _classify_runtime_impact(["backend/services/dataset_release/candidate_validator.py"], root=root)["runtime_impact"] == "worker_scheduler"
+
+
+def _real_bundle_payload():
+    value = _bundle().as_dict()
+    value["candidate_identity"].update(scope="full", production_eligible=True, training_eligible=True)
+    value["rolling_observation"]["row_count"] = 1
+    value["validation_results"]["status"] = "pass"
+    value["consumer_smoke_results"]["status"] = "pass"
+    value["terminal_outcome"] = "CANDIDATE_VALIDATED"
+    value["runtime_real_data_evidence"] = "real_candidate_evidence"
+    return value
+
+
+def test_real_bundle_requires_explicit_real_validation_and_closed_links():
+    value = _real_bundle_payload()
+    with pytest.raises(CanonicalPitCandidateBundleError):
+        validate_candidate_validation_bundle(value)
+    assert validate_candidate_validation_bundle(value, allow_real=True).payload["candidate_identity"]["scope"] == "full"
+    value["frozen_release"]["artifact_root_digest"] = "b" * 64
+    with pytest.raises(CanonicalPitCandidateBundleError, match="identity"):
+        validate_candidate_validation_bundle(value, allow_real=True)
+
+
+def test_real_bundle_cannot_be_made_from_a_fixture_attestation():
+    from backend.services.dataset_release.canonical_pit_migration import seal_real_activation
+
+    bundle = _bundle()
+    receipt = build_fixture_w8_attestation(candidate_bundle=bundle.as_dict(), candidate_bundle_digest=bundle.digest,
+        attestation_id="fixture-w8-2", observed_at=datetime(2026, 8, 19, tzinfo=timezone.utc))
+    with pytest.raises(ValueError):
+        seal_real_activation(bundle.as_dict(), receipt.as_dict(), {})
+
+
+def test_independent_membership_audit_reports_exact_drift_and_duplicates():
+    from backend.services.dataset_release.canonical_pit_migration import audit_eligibility_intervals
+
+    result = audit_eligibility_intervals(
+        [("000001.SZ", "2018-08-01", "2026-08-31")],
+        [("000001.SZ", "2018-08-01", "2026-08-31"), ("000002.SZ", "2018-08-01", "2026-08-31")],
+        start=date(2018, 8, 1), cutoff=date(2026, 8, 31))
+    assert result["status"] == "BLOCKED"
+    assert result["rolling_only"] == [["000002.SZ", "2018-08-01", "2026-08-31"]]
+    duplicate = [("000001.SZ", "2018-08-01", "2026-08-31")] * 2
+    with pytest.raises(ValueError, match="duplicate"):
+        audit_eligibility_intervals(duplicate, duplicate, start=date(2018, 8, 1), cutoff=date(2026, 8, 31))
+
+
+def test_real_asset_readback_rejects_hash_drift(tmp_path):
+    from backend.services.dataset_release.canonical_pit_migration import read_sealed_json
+
+    source = tmp_path / "receipt.json"
+    source.write_text('{"status":"pass"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="digest"):
+        read_sealed_json(source, expected_digest=SHA)
+
+
+def test_sealed_json_readback_ignores_access_time_not_content_drift(tmp_path, monkeypatch):
+    import os
+    from backend.services.dataset_release.canonical_pit_migration import read_sealed_json
+    path = tmp_path / "access.json"
+    path.write_text('{"value":1}', encoding="utf-8")
+    read = Path.read_bytes
+    def access_changed(self):
+        raw = read(self)
+        info = self.stat()
+        os.utime(self, ns=(1, info.st_mtime_ns))
+        return raw
+    monkeypatch.setattr(Path, "read_bytes", access_changed)
+    assert read_sealed_json(path) == {"value": 1}
+    def content_changed(self):
+        raw = read(self)
+        self.write_bytes(b'{"value":22}')
+        return raw
+    monkeypatch.setattr(Path, "read_bytes", content_changed)
+    with pytest.raises(ValueError, match="changed during"):
+        read_sealed_json(path)
+
+
+def test_forward_profile_plan_uses_owner_normalization_without_business_drift(monkeypatch):
+    from types import SimpleNamespace
+    from backend.services.dataset_release.canonical_pit_migration import plan_forward_profiles
+    from backend.services.paper_trading_v2.models import compute_runtime_config_sha256
+    from backend.services.paper_trading_v2 import service as owner
+    from backend.services.paper_trading_v2 import canonical_pit_control as control
+
+    source = {"business": 7, "pit": "legacy"}
+    version = SimpleNamespace(profile_id="p", config_json=source,
+        config_sha256=compute_runtime_config_sha256(source))
+    repo = SimpleNamespace(get_runtime_profile_version=lambda _: version,
+        get_runtime_profile=lambda _: SimpleNamespace(portfolio_id="pf"),
+        get_portfolio=lambda _: SimpleNamespace(frozen_manifest=None))
+    def migrate(config):
+        return {**config, "pit": "canonical"}
+    monkeypatch.setattr(control, "plan_paper_runtime_profile_migration", lambda v: {
+        "action": "CREATE_NEW_CANONICAL_VERSION", "source_config_sha256": v.config_sha256,
+        "target_config_sha256": compute_runtime_config_sha256(migrate(v.config_json)),
+        "target_config_json": migrate(v.config_json)})
+    monkeypatch.setattr(control, "migrate_runtime_config_to_canonical_pointer", migrate)
+    class Normalizer:
+        def __init__(self, repository):
+            pass
+        def _normalize_runtime_profile_config(self, config, *, manifest):
+            return {**config, "owner_default": True}
+    monkeypatch.setattr(owner, "PaperTradingV2PortfolioService", Normalizer)
+    records = [{"profile_id": "p", "current_version_id": "v", "portfolio_id": "pf"}]
+    plan = plan_forward_profiles(repo, records)
+    assert plan["profiles"][0]["target_config_sha256"] == compute_runtime_config_sha256(
+        {"business": 7, "pit": "canonical", "owner_default": True})
+    assert plan["profiles"][0]["owner_normalization_changed"] is True
+    class DriftingNormalizer(Normalizer):
+        def _normalize_runtime_profile_config(self, config, *, manifest):
+            return {**config, "business": 8 if config["pit"] == "canonical" else 7}
+    monkeypatch.setattr(owner, "PaperTradingV2PortfolioService", DriftingNormalizer)
+    with pytest.raises(ValueError, match="business semantics"):
+        plan_forward_profiles(repo, records)
+    version.profile_id = "other"
+    with pytest.raises(ValueError, match="ownership"):
+        plan_forward_profiles(repo, records)
+
+
+@pytest.mark.parametrize("content", ['{"a":1,"a":2}', '{"a":NaN}', '['])
+def test_real_evidence_rejects_ambiguous_or_malformed_json(tmp_path, content):
+    from backend.services.dataset_release.canonical_pit_migration import read_sealed_json
+    source = tmp_path / "ambiguous.json"
+    source.write_text(content, encoding="utf-8")
+    with pytest.raises(ValueError):
+        read_sealed_json(source)
+
+
+def _real_file_bundle(tmp_path, rows=None, *, raw_rows=False):
+    """Test-only files; never emit an independent receipt or production asset."""
+    import hashlib
+    from backend.services.dataset_release.canonical import canonical_json_bytes
+    files = {}
+    def persist(name, value):
+        raw = canonical_json_bytes(value)
+        digest = hashlib.sha256(raw).hexdigest()
+        path = tmp_path / name
+        path.write_bytes(raw + b"\n")
+        files[digest] = path
+        return digest
+    def replace(value, old, new):
+        if isinstance(value, dict):
+            return {key: replace(item, old, new) for key, item in value.items()}
+        if isinstance(value, list):
+            return [replace(item, old, new) for item in value]
+        return new if value == old else value
+    metadata = persist("metadata.json", {"test_only": True})
+    value = replace(_real_bundle_payload(), SHA, metadata)
+    rows = rows if rows is not None else [["000001.SZ", "2018-08-01", "2026-07-31", "IPO_ELIGIBLE", None]]
+    if not raw_rows:
+        from backend.services.dataset_release.pit import freeze_pit_snapshot
+        snapshot = freeze_pit_snapshot(rows, universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+            rule_version=CANONICAL_PIT_RULE_VERSION, scope_start=date(2018, 8, 1),
+            cutoff=date(2026, 7, 31), state_identity=metadata,
+            source_fingerprint_sha256=metadata, parameter_hash=metadata)
+        persist("snapshot.json", snapshot.as_dict())
+        row_digest = snapshot.spans_sha256
+        files[row_digest] = tmp_path / "snapshot.json"
+    else:
+        row_digest = persist("snapshot.json", rows)
+    value["pit_identity"].update(frozen_snapshot_digest=row_digest, rolling_at_cutoff_digest=row_digest)
+    value["frozen_release"]["pit_snapshot_digest"] = row_digest
+    value["rolling_observation"].update(digest=row_digest, row_count=len(rows))
+    value["validation"]["independent_pit_receipt"] = persist("oracle.json", {
+        "status": "PASS", "frozen_snapshot_digest": row_digest,
+        "rolling_cutoff_spans_sha256": row_digest, "row_count": len(rows), "cutoff": "2026-07-31"})
+    return value, files
+
+
+def test_real_bundle_uses_official_snapshot_encoding_with_nullable_reasons(tmp_path):
+    from backend.services.dataset_release.canonical_pit_migration import build_real_candidate_validation_bundle
+    value, files = _real_file_bundle(tmp_path, [["000001.SZ", "2018-08-01", "2026-07-31", None, None]])
+    assert build_real_candidate_validation_bundle(value, evidence_files=files).payload["rolling_observation"]["row_count"] == 1
+
+
+def test_full_pit_audit_cannot_pass_from_projection_or_equal_dates_only(tmp_path):
+    from backend.services.dataset_release.canonical_pit_migration import audit_canonical_pit_readiness
+    rows = [["000001.SZ", "2018-08-01", "2026-07-31", None, None]]
+    value, files = _real_file_bundle(tmp_path, rows)
+    snapshot = json.loads(files[value["pit_identity"]["frozen_snapshot_digest"]].read_bytes())
+    window = {"start": date(2018, 8, 1), "cutoff": date(2026, 7, 31)}
+    assert audit_canonical_pit_readiness(rows, **window)["reason"] == "FULL_FROZEN_PIT_NOT_BOUND"
+    assert audit_canonical_pit_readiness(rows, frozen_snapshot=snapshot, **window)["status"] == "PASS"
+    rows[0][3] = "OTHER_REASON"
+    assert audit_canonical_pit_readiness(rows, frozen_snapshot=snapshot, **window)["reason"] == "FULL_PIT_IDENTITY_DIFFERS"
+
+
+@pytest.mark.parametrize("mutation", ["count", "cutoff", "reason", "identity"])
+def test_real_bundle_rejects_tampered_formal_snapshot(tmp_path, mutation):
+    from backend.services.dataset_release.canonical_pit_migration import build_real_candidate_validation_bundle
+    value, files = _real_file_bundle(tmp_path)
+    path = files[value["pit_identity"]["frozen_snapshot_digest"]]
+    snapshot = json.loads(path.read_bytes())
+    if mutation == "count":
+        snapshot["span_count"] += 1
+    elif mutation == "cutoff":
+        snapshot["spans"][0]["eligible_end"] = "2026-08-31"
+    elif mutation == "reason":
+        snapshot["spans"][0]["entry_reason"] = "OTHER_REASON"
+    else:
+        snapshot["universe_key"] = LEGACY_PIT_UNIVERSE_KEY
+    path.write_text(json.dumps(snapshot), encoding="utf-8")
+    with pytest.raises(ValueError):
+        build_real_candidate_validation_bundle(value, evidence_files=files)
+
+
+def test_real_bundle_reads_full_logical_rows_and_independent_oracle(tmp_path):
+    from backend.services.dataset_release.canonical_pit_migration import build_real_candidate_validation_bundle
+    value, files = _real_file_bundle(tmp_path)
+    assert build_real_candidate_validation_bundle(value, evidence_files=files).payload["rolling_observation"]["row_count"] == 1
+    oracle = files[value["validation"]["independent_pit_receipt"]]
+    oracle.write_text('{"status":"PASS"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="digest"):
+        build_real_candidate_validation_bundle(value, evidence_files=files)
+
+
+@pytest.mark.parametrize("rows", [
+    [["000001.SZ", "2018-08-01", "2026-07-31"]],
+    [["000001.SZ", "2018-08-01", "2026-08-31", "IPO_ELIGIBLE", None]],
+    [["000001.SZ", "2018-08-01", "2026-07-31", "", None]],
+    [["000001.SZ", "2018-08-01", "2026-07-31", "IPO_ELIGIBLE", None]] * 2,
+])
+def test_real_bundle_rejects_incomplete_ambiguous_or_postcutoff_rows(tmp_path, rows):
+    from backend.services.dataset_release.canonical_pit_migration import build_real_candidate_validation_bundle
+    value, files = _real_file_bundle(tmp_path, rows, raw_rows=True)
+    with pytest.raises(ValueError):
+        build_real_candidate_validation_bundle(value, evidence_files=files)
+
+
+def test_real_w8_binds_actual_candidate_subject_not_just_pass_status():
+    from backend.services.dataset_release.canonical_pit_w8_attestation import bind_real_w8_attestation
+    bundle = validate_candidate_validation_bundle(_real_bundle_payload(), allow_real=True)
+    fixture = _bundle()
+    receipt = build_fixture_w8_attestation(candidate_bundle=fixture.as_dict(), candidate_bundle_digest=fixture.digest,
+        attestation_id="test-w8", observed_at=datetime(2026, 8, 19, tzinfo=timezone.utc)).as_dict()
+    receipt.update(candidate_bundle_digest=bundle.digest, attestation_scope="real_candidate",
+        independently_attested=True, outcome="pass", runtime_real_data_evidence="real_candidate_evidence")
+    assert bind_real_w8_attestation(bundle.as_dict(), receipt).payload["outcome"] == "pass"
+    receipt["subject"]["release_id"] = "another-release"
+    with pytest.raises(ValueError, match="subject"):
+        bind_real_w8_attestation(bundle.as_dict(), receipt)
+
+
+def test_initial_legacy_pointer_can_use_null_envelope_but_cannot_self_seal():
+    bundle = _bundle()
+    receipt = build_fixture_w8_attestation(candidate_bundle=bundle.as_dict(), candidate_bundle_digest=bundle.digest,
+        attestation_id="initial-w8", observed_at=datetime(2026, 8, 19, tzinfo=timezone.utc))
+    readback = {"status": "not_run_not_authorized", "digest": SHA}
+    inputs = dict(candidate_bundle_digest=bundle.digest, w8_receipt=receipt.as_dict(),
+        expected_pointer_generation=0, expected_pointer_key=LEGACY_PIT_UNIVERSE_KEY,
+        expected_pointer_envelope_digest=None, expected_source_commit="main",
+        inactive_distribution_readback=readback, node_readback=readback,
+        session_drain_readiness=readback, rollback_target=readback)
+    result = build_activation_envelope(**inputs)
+    assert result.payload["expected_pointer_envelope_digest"] is None
+    inputs["expected_pointer_generation"] = 1
+    with pytest.raises(CanonicalPitActivationEnvelopeError, match="digest"):
+        build_activation_envelope(**inputs)
+    from backend.services.dataset_release.canonical_pit_activation_envelope import validate_activation_envelope
+    tampered = result.as_dict()
+    tampered["status"] = "READY_TO_ACTIVATE"
+    with pytest.raises(CanonicalPitActivationEnvelopeError):
+        validate_activation_envelope(tampered)
+
+
 def _bundle():
     return build_fixture_candidate_validation_bundle(
         candidate_validation_id="fixture-validation-1",

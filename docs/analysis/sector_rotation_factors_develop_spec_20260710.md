@@ -3,7 +3,8 @@
 - 文档类型：F2 因子研发与实验分析蓝图 / 历史批次 `Gate-0` 开发记录（`develop-factor`）
 - 主线：优先找到收益、风险、近期稳定性与可成交性足够好的单腿模型/因子组合，再验证多 Alpha 增量；荐股与模拟盘由各自窗口接入，不由 QE 扩张实现。
 - 初版日期：2026-07-10
-- 当前版本：v6.18（2026-10-01；同步 MA-E24～MA-E32 近端任务状态、MA-E32 三种子强腿真值、active profile v15、标签边界与资产修复的独立状态，预注册 MA-E33 双节点零训练股票池重放）。文档合入、源码生效、实验启动、入仓和资产发布继续分项报告，不把计划写成完成。
+- 当前版本：v6.21（2026-10-15；更新T1/T2、v18行情目录修复和MA-E55九Loop重放，区分已修正结果与旧经济结论）。最新研究事实以2.5.8、活动顺序以9.10为准；源码、实验、入仓和发布分别报告，文档审核不是实验前置。
+- 最新状态核对：2026-10-15；P2 18/18、ID1544原配对6/6、MA-E55修正重放9/9均完成并入仓。T1及ID1544分析已完成，T2剩余修正LSTM分段/互补性；不复验所有历史BUG或宣称它们仍阻断当前研究。
 - 面向：Codex 因子研发 → Tier2/IC 审核 → QE 对照实验
 - 关联：`develop-factor`、`analyze-factor-library`、#1939/#1940/#1941/#1943（`l2_code_id` 链路）、原 F1–F4 规格
 - 多 Alpha 基础研发详细设计：`docs/architecture/multi_alpha_qe_evolution_foundation_f2_design_20260718.md`
@@ -11,8 +12,9 @@
 - 概念板块数据与因子并行研发详细设计：`docs/architecture/qe_concept_sector_data_factor_parallel_f2_design_20260813.md`
 - MA-E19/P0 三联诊断与新 Alpha 统一执行方案：`docs/analysis/ma_e19_p0_triad_and_alpha_execution_plan_20260824.md`
 - QE 统一实验登记、跨节点进度与选择性数仓详细设计：`docs/architecture/qe_unified_experiment_registry_selective_warehouse_f2_design_20260907.md`
+- 当前结果驱动执行计划：[`qe_trend_capture_result_driven_plan_20261014.md`](qe_trend_capture_result_driven_plan_20261014.md)（三批八项，条件触发，不是八项全部必跑）
 
-> **v6.18 唯一活动规则：**目标仍是可成交、成本后有价值的单 Alpha 策略包，再证明多 Alpha 增量。科创50单一池仅 Top20（F-045）。MA-E32 LSTM h60 三种子已完成；下一批 MA-E33 复用这三份不可变预测，优先做全市场 Top20 配对基准、CSI300/CSI500 Top50 与 STAR50 Top20，零训练。HMM 使用旧模型，按用户要求降优先级，不阻断普通 replay。标签边界 BUG-1638 尚未合入，受影响的短 horizon 训练与既有预测不能靠 replay 洗净；本批只使用已核实 h60 来源。资产修复 BUG-1639 source merged，不等于正式单 Alpha 策略包已发布；在发布时完成资产完整性校验，不新增研究审批。所有技术准确、身份完整且非重复的正负结果具备 A/B/C 入仓资格，失败/噪声/精确重复 X 不入仓；写仓按既有用户授权，删除需精确另授权。最新事实见 §2.5.6，排期以本版 §9.10/§12/§17 为准，执行方案 v2.0 与 registry F2 v1.3 只保留不冲突的实现合同。
+> **v6.21唯一活动规则：**先找到可成交、成本后有价值的单腿，再证明多Alpha增量；不把高RankIC、高现金或指数beta冒充趋势捕获。先利用已有P0-D2 oracle、MA-E38季度refit与P2完整分析，再有界诊断“入池→预测→排序→下单→成交→仓位→退出”，按结果选择直接replay、一个配方的针对性refit或最多两个新Alpha假设。科创50单一池仅Top20；纯日频不重测，历史分钟V25仅可作为新TWAP重测的候选线索。HMM降优先级；图模型等待权威PIT输入，不能绕过缺失。准确非重复正负结果按A/B/C入仓，X不入仓；模型资产保持单一权威引用，workspace不长期保存，策略包创建时程序校验，不新增人工资产门禁。环境锁SHA/执行器commit只记录，不冻结依赖、不要求手填。任何新增门禁须用户单独直接授权。本次先完成文档更新审核合入，再按用户授权继续QE主线；不改数据、不控制服务、不干预其他窗口。当前事实见2.5.8，排期见9.10/12/17。
 >
 > **v6.14 必要前瞻实验可观察性历史基线（2026-09-07，保留但由 v6.15 修订保留语义）：**用户明确要求所有新正式 QE 实验，无论来自 UI、Backend/Scheduler、Codex/Claude MCP、WSL 或 `rdagent-node1`，都必须在计算前取得控制面 identity，并在 UI 可查看进度、终态和全部历史；v6.14 当时规定所有终态永久保存轻量研究事实，该项已由 v6.15 的 A/B/C/X 规则取代。只有用户在 UI 选择或明确授权 Codex/Claude 后，高价值 experiment/loop 才进入 QE Archive。本能力是获准的必要基础架构例外，不受 v6.13“禁止 UI/Archive 平台工作”的限制。例外严格限定为前瞻登记、双节点状态收敛、统一历史 UI、价值分级/精确清理和选择性入仓；继续禁止批量旧 Loop 补录、全量 workspace 归档、历史物化、通用平台扩建、数据库数据面和非 QE 修改。
 >
@@ -22,7 +24,7 @@
 >
 > D1D `qe_mae19d1d_rankblend_rolling_4v_20260906_021141_20260831` 使用冻结 prediction、零训练、固定 50/50 日截面 rank blend；四窗 CAGR=`68.28%/74.07%/40.00%/-9.90%`。它在部分窗口降低风险，但 2025H2 低于两腿且把 2026H1 LSTM 的 `36.23%` 抹为负值，不进入固定组合候选。rolling LSTM 同 prediction 的日频 CLOSE companion 为 `40.56%` CAGR，而分钟真值为 `36.23%`，日频乐观约 `4.33pp`，继续只标记 `DAILY_EXECUTION_DIAGNOSTIC_ONLY`。P0-D3 当前只取得 000300 主动收益/IR；冻结 `index_daily.h5` 仅含 12 个指数的 OHLCVA，没有历史成分及板块权重，故完整 Brinson 保持 `NOT_COMPUTABLE_MISSING_FROZEN_BENCHMARK_SECTOR_WEIGHTS`，不得用当前成分回填或伪造 attribution panel。
 >
-> 下一顺序以 §2.5.6/§9.10 为准：更新并合入蓝图 → 当前运行态/来源预测/节点容量核对 → MA-E33 三种子×四交易配置直接重放 → 条件就绪的黑名单×尾盘处理配对 → 分段收益分析 → 按证据选择训练池配对、新 Alpha 或组合。不重复 MA-E32 已完成的全市场 Top50 基准，不等待全量历史归档、HMM 更新或策略包发布。
+> 下一顺序以2.5.8/9.10为准：T1及ID1544已完成，先收口T2修正LSTM分段/互补性 → T3资金使用、T4退出、T5板块软条件化的结果触发replay → T6针对性refit、T7新信号/目标、T8条件图模型。完成过的oracle、池对照和季度refit不机械重跑；没有新证据的分支跳过并说明，不等待全历史补账、9月数据或HMM更新。
 
 > **修订记录（BUG-989，2026-08-06）——数据面零数据库不变量（强制）：QE/多 Alpha 的训练、预测、回测和组合计算数据面不得访问数据库。数据库只用于控制面和结果面。所有计算输入来自具有版本、cutoff 和哈希的冻结 bin/H5/Parquet/sidecar 文件；缺失时 fail closed。**
 >
@@ -30,7 +32,7 @@
 >
 > 关联缺口（已解除，2026-08-06）：停牌输入不再依赖数据库——已构建版本化冻结候选数据集 `suspend_d_daily_candidate_20180801_20260630`（`suspend_d.parquet` + `manifest.json`，含逐交易日完整性回执，离线构建期只读导出自 `market.suspend_d`，`suspend_type='S'`，仅 sh/sz、剔除 BJ），作为冻结 bin 目录的同级 sidecar 同步至全部计算节点；新装配由 `qe_build_frozen_suspend_filter.py` 在计算节点按 `qe_frozen_build_spec.json` 的 suspend 钉（dataset_id/cutoff/universe key/SHA256）重建 `qe_suspend_filter.json`，钉/身份/日期覆盖/字段不符一律 fail closed，无数据库回退。原 `qe_suspend_filter_offline_dataset_gap` 阻断随之解除。
 
-> **历史标题解释：**v6.1～v6.17 及日期早于本版的结果、旧 Phase 和审核记录是当时事实，原始指标不可改写；其中“当前/下一步/权威”不再指定活动排期。当前事实见 §2.5.6，活动规则和排期见 v6.18/§9.10/§12/§17；关联旧执行方案仅作不冲突的实现参考。v6.8 分钟 TWAP 不变量继续有效，旧 Top50 通用参数须按 F-045 科创50例外修订。历史分钟 V25 高收益来源仍可筛选重测，但旧收益不晋级为当前 TWAP 真值；纯日频实验不安排重测。
+> **历史标题解释：**v6.1～v6.20及早于本版的结果、旧Phase和审核记录都是当时事实，不改原始指标；其中“当前/下一步/权威/待重启”不指定本轮排期或运行态。当前事实见2.5.8，活动顺序见v6.21/9.10/12/17。v6.8分钟TWAP与F-045科创50Top20继续有效；历史分钟V25可筛选重测，旧收益不作为当前TWAP真值，纯日频不重测。
 
 > **v6.1 历史活动快照（2026-08-10，已由 v6.2/v6.3/v6.4/v6.5/v6.6/v6.7/v6.8 取代）：**MA-E14 与 MA-E15 均已取得终态真实结果。MA-E14 的 H95/C85 regime overlay 在 full/early/late 三个窗口都降低 CAGR，当时阈值调优分支结束；MA-E15 的 9/9 Loop 显示压缩扩张三因子、增加 breadth 的四因子以及 LSTM 之间存在可继续研究的信号差异，但 `prepare_factors.py` 的 outer-union 令四因子实验额外纳入 1,511 行观测，不能据此归因 breadth 的真实增量。另经源码与任务配置复核，MA-E15 全部使用 V25_1 分钟执行，仍受开放 BUG-852（Issue #2692）的 10D 日频特征零填充问题影响，因此 IC/RankIC、Prediction Store 面板和 Top-K 信号诊断仍是有效证据，CAGR/Sharpe/MDD/Calmar/turnover 只能标记为 `EXECUTION_TRUTH_LIMITED_BY_BUG852`，不能作为新执行策略的真实对照。BUG-1006 是当时唯一阻断下一轮 matched 因子归因的 QE BUG；MA-E16 通过统一使用日频 `CLOSE_PRICE` 执行绕开 BUG-852，不等待或冒充修复 V25_1。该段只保留 v6.1 当时事实，不构成活动 backlog；`CLOSE_PRICE` 从未获得用户对未来任务的统一授权，当前状态与顺序以 v6.8、第 2.5、9.9.2～9.9.4、12、13、15、17 节为准。
 
@@ -169,11 +171,11 @@ v6.0 以 MA-E07～MA-E13 终态结果替代 v5.24 的运行中快照。四腿 so
 
 v6.1 将 MA-E14/MA-E15 纳入终态总账并修正活动顺序。MA-E14 结束当前 H95/C85 threshold-overlay 分支；MA-E15 的 CE3/CE4-B/LSTM 信号结果保留，但因生成脚本 outer-union 改变观测总体，breadth 增量结论撤回为待复验，其 V25_1 组合指标另受开放 BUG-852 限制。BUG-1006 以 opt-in 的显式参考因子交集恢复 matched trial，修复 public compose 的策略参数路由并保留无契约历史语义；运行态生效后以日频 `CLOSE_PRICE` 直接执行 MA-E16。该最小修复由真实 Alpha trial 触发，符合 maintenance-only 边界，不恢复任何平台、UI、Archive 或历史工程。
 
-### 2.5 执行总账（历史证据表与 2026-10-01 增量）
+### 2.5 执行总账（历史证据表与 2026-10-15 增量）
 
-下表及 2.5.1～2.5.5 为截至各自回读日的完成证据，不是新的重跑清单。最新事实和尚未闭合的比较语义统一见 2.5.6。
+下表及 2.5.1～2.5.7 为截至各自回读日的完成证据，不是新的重跑清单。最新事实和尚未闭合的比较语义统一见 2.5.8。
 
-本节分为历史台账与最新增量：2.5.6 是判断当前状态的首要入口；旧收益/BUG/归档只证明对应回读日事实，其“下一步”不产生新的活动任务。历史 receipt 不改写，后续保留/入仓按 9.10。
+本节分为历史台账与最新增量：2.5.8 是判断当前状态的首要入口；旧收益/BUG/归档只证明对应回读日事实，其“下一步”不产生新的活动任务。历史 receipt 不改写，后续保留/入仓按 9.10。
 
 以下MA-E19历史事实核对日为2026-09-06，MA-E20核对日为2026-09-11，MA-E22/23与运行态核对日为2026-09-15，分别见2.5.4～2.5.5。统一文件 release `qe_hmm_full_v2_20260831` 已被 MA-E19R3、D1B、D1C、D1D、D2、MA-E20、MA-E22 和 MA-E23 消费，但 MA-E22/23 的不可变任务身份仍是 v6/r3，不随 active profile v7/r5 自动变化。本文把 source merge、数据可读、节点分发、运行态激活与策略裁决分开记录；文档更新不替代任何一项。
 
@@ -378,7 +380,9 @@ MA-E23A 使用既有 frozen-model/backtest-only 路径做受限股票池 P00 复
 
 本轮用户重启前停止。重启后的唯一顺序是：① 对 backend-main 做 identity、dataset profile、黑名单 executable intersection 和 prediction-replay source/executable SHA readback；② 在 v7/r5 新建一个全市场 P00 精确 canary，优先 MA-E22 Loop3 与 Loop7，确认 active binding、分钟 TWAP、成本和完整指标；③ 只对 MA-E23A 缺失的 LSTM-h60×STAR100 新建 exact retry，不重复五个成功 child；④ 复用同一不可变 prediction 运行 P00/P10/P01/P11 与股票池矩阵；⑤ 只有受限池稳健增量成立才做全市场训练/池内训练配对；⑥ 再按右尾、板块选择和状态适应瓶颈立项新 Alpha，强单腿成立后才进入多 Alpha。
 
-#### 2.5.6 2026-10-01 最新进度、三种子强腿与独立阻断
+#### 2.5.6 2026-10-01 历史快照、三种子强腿与当时阻断
+
+本节只代表当日快照；其中待合入/运行中不是当前状态，最新研究增量见2.5.8。
 
 本节依据当日 backend dataset-profile、custom-evo task/config/metric 和 Prediction Store 的只读回读，以及 GitHub PR/CI 状态。控制端代码已同步 `origin/main`（文档启动基线 `ec92acaa0`）；后端 `/api/v1/runtime-identity` 返回 `ready`、merge_commit=`878f5291fa778b2f647bd7747b6920efb4574550`。该身份属于控制端 main 的祖先；不把它冒称为最新 main 或所有 BUG 的正式 post-restart 业务验收。
 
@@ -416,6 +420,103 @@ MA-E32 全市场 Top50、14 个自定义因子、不含 Alpha158、分钟 TWAP �
 初次尝试 L1 在下载源 prediction 时出现 `httpx.ReadError`、未提交计算节点；L2/L6/L10 的 CSI300 因本批配置漏带此前批准的 BUG-1609 执行数据排除合同，遇到 `601989.SH` 摘牌前22日分钟缺口。该遗漏属于本次任务准备，不是新的HMM故障或重新准备数据集的理由。原失败记录保留；只追加 L13（同配置单次有界传输恢复）与 L14～L16（恢复同一获批执行排除），总计 **12个逻辑比较、16个attempt行**，不自动再次重试。恢复合同引用已完成 MA-E27R `qe_20260928_145652_5e55`：`601989.SH`、full_backtest_window=`2024-07-01..2026-08-28`、reason=`minute_source_gap_confirmed_unfillable`、evidence SHA=`b7624516ad11771c4cde434895e8e0311d4d6e3d26d09870ef71a3d463e5d825`。它不是行业黑名单、不改变canonical PIT membership/模型/因子/seed/窗口，也不伪造报价；CSI300结果必须显示该执行资格限制，与无同样限制的基准比较时不能冒称纯股票池效应。
 
 阶段B的既有政策输入已通过resolver与配置预检，已向同一task追加L17～L25：每seed固定全市场Top50，追加P01+TAIL_BOOST、P00+TAIL_SUBSTITUTE、P01+TAIL_SUBSTITUTE，复用MA-E32的P00+默认TAIL_BOOST。它们不依赖阶段A选出的赢家，不构成测试窗上的追加搜索；按同一队列剩余槽位自动执行。当前总账为**21个非重复逻辑比较、25个attempt行（含4个初次失败）**；登记不等于已运行或成功。黑名单按冻结PIT membership仅从2024-07-01生效，训练/验证区间保持来源；HMM关闭。WSL本批实际4个running，node1本批3个running，另有旧task的1个reconciling reservation占用全局槽，不能把配置4+4写成实际8并行，也不得强制释放非本任务预约。
+
+#### 2.5.7 2026-10-03 结果驱动长任务与实际进度（历史快照）
+
+以下保留10月3～4日事实；其MA-E39/BUG待办不自动延续，当前队列由2.5.8与9.10接管。
+
+工作树代码基线`668a5c75aa90effdc125d183a97e222bde8ac9ad`。active generation=`20260928-v15-unified-moneyflow1`，manifest=`2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc`，cutoff=`2026-08-31`。本轮resolver及两节点dataset-identity再次验证complete=true、manifest一致、六池profile gap_count=0。文件覆盖不等于任意训练年代都存在PIT成员；禁止当前成分回填。
+
+| 批次 | 权威任务 | 实际状态 |
+|---|---|---|
+| MA-E33 | `qe_20261001_052959_a6ab` | 父failed；25 attempt中21 completed/4 failed，成功逻辑结果不重跑 |
+| MA-E35R | `qe_20261002_133336_ac3e` | 9/9 completed且STORED_VALID；XGB25/h20、GRU57/h10、Cat18/h20各三seed，P00/TWAP/TAIL_BOOST |
+| MA-E36R | `qe_20261002_194131_aa4e` | 27/27 completed且STORED_VALID；同预测的全市场Top20、CSI1000 Top50、STAR100 Top50交易域replay，零refit |
+| MA-E37 | `qe_20261003_042009_99b9` | 3/3 failed；冻结STAR100成员最早2023-08-07，train_end=2022-12-30无样本；不自动重试，不回填、不缩窗，X不入仓 |
+| MA-E37B | `qe_20261003_050307_f66c` | 3/3 completed且STORED_VALID；CSI1000 PIT训练→同池Top50，对照MA-E36R L2/L5/L8；三seed平均CAGR20.5007%，低于全市场训练24.4296% |
+| MA-E38 | `qe_20261003_042053_d279` | 18/18 completed且STORED_VALID；GRU h10、LSTM h60，seed42，三季度×旧权重/扩展/三年滑动；季度重置诊断完成，不是连续部署策略 |
+| MA-E39 | GRU+LSTM、GRU+XGB各seed42/2026，4个固定Borda 50/50组合 | 旧4个run在计算前failed，无portfolio结果；原环境pin拒绝已由BUG-1702取消，daily组件误作identity根由BUG-1697修复。未启动新的四组真实组合，不能声称已有组合增益 |
+
+2026-10-04交付核对：BUG-1702源PR #5362与收口PR #5365已合入，registry=verified、Issue #5357 closed；用户重启后health/identity/business探针通过，源与收口任务完成四态清理，权威receipt保留。环境锁SHA与执行器commit现在仅记录，允许环境依赖更新、不要求人工补齐。BUG-1697/PR #5351的消费修复与运行态另列：最终50项身份/控制/恢复测试、真实双节点release根/manifest smoke、L0/Ruff/compile/diff通过；稳定代码HEAD ec4deeef额外QE回归681 passed/1 skipped。未启动新MA-E39，不把测试/合入当组合收益；最新源码合入状态见第17节，必要backend-main重启仍归用户。
+
+已完成强腿：CAGR均值不是ensemble收益。LSTM14/h60全市场Top50=`63.6484%`；GRU57/h10全市场Top50/20=`52.0040%/40.8087%`；XGB25/h20 STAR100/全市场/CSI1000 Top50=`41.3431%/30.9822%/24.4296%`；Cat18/h20全市场Top50=`39.0328%`。GRU Top20的Sharpe/MDD中位数=`1.992/-10.88%`，Top50=`1.809/-16.20%`；不只凭CAGR淘汰Top20。
+
+2026H1/7～8月扣费收益中位数：XGB STAR100=`+13.38%/-2.03%`，GRU全市场Top50=`-5.18%/+12.98%`。跨池日收益相关约0.7707，混有池/beta效应，仅是互补线索；GRU全市场Top20/50相关约0.9575，不是独立Alpha。LSTM h60七八月无成熟标签不等于没有交易收益，不填未来标签。原始结果与入仓质量来自实际API；本轮卡片见`qe_august_result_driven_research_plan_20261003.md`。
+
+MA-E38每季度账户重置，不拼接NAV冒充连续滚动策略。实际季度成交截止后两个交易日仅为qrun信号padding，收益仍截止季度末；当前learn-only成熟处理器按horizon+1隔离标签、保留推理。h60验证区保留一年，h10保留一季度；旧权重臂原训练/验证日期不变。12个新fit比较不是重新跑已完成全窗来源，也不宣称已见历史季度为untouched OOS。
+
+新增21个成功Loop逐一回读Archive：completed、1min、research_valid=true、config_capture_complete=true、metric_count/curve_count>0；与此前36个合计57个有效结果。绝对Sharpe/MDD只取`enhanced_metrics.absolute_returns`；顶层同名字段是主动指标，IR与绝对Sharpe分栏。
+
+MA-E37B三seed42/2024/2026的池内训练CAGR为22.5002%/20.6470%/18.3548%，对应全市场训练27.6918%/24.4702%/21.1269%；平均差−3.9290pp，IC/RankIC/IR三seed均下降，绝对MDD两seed改善、一seed恶化。暂保持该XGB模型的全市场训练；不外推成所有模型/股票池都应排除池内训练。
+
+分段配对补充：池内训练7月三个seed均落后，但8月截至28日seed42/2024为+8.5028%/+13.7845%，分别高于全市场训练+7.8826%/+8.6059%；seed2026仍略低。2026H1两seed落后、一seed改善；不能以全窗平均差替代所有行情阶段判断。完整三seed分段与参数等价证据见本轮研究卡及精确分析文件；参数读取完整custom-evo-config，精简task config缺字段不构成漂移证明。
+
+MA-E38季度扣费累计收益（旧权重/扩展/三年滑动，不用短季度年化冒充全窗收益）：GRU 2025Q4=+7.8899%/+6.1061%/+8.4107%，2026Q1=−1.4361%/+1.1708%/+1.0145%，2026Q2=−5.4079%/−3.5144%/−3.4123%；LSTM依次=+1.5810%/−0.8499%/−4.0830%、+4.9693%/+3.6491%/+5.6586%、−11.6144%/−8.9406%/−7.2802%。2026Q2新fit减轻亏损但不转正，Q4 LSTM新fit变差；单seed结果不支持全面替换旧模型。LSTM Q2新fit RankIC提升仍亏损、GRU Q2新fit RankIC下降但亏损收窄，需继续区分信号质量与收益转化，不归因成唯一陈旧化问题。
+
+PR #5156已于2026-10-02合入，merge=`195eb519828d23f940fdcc12ea4637a395d57d73`；源码状态不代替正式runtime receipt/close-sync，不洗净旧污染模型。六份LSTM/GRU params存在且传输字节一致；MA-E38六个已登记旧权重臂L1/L4/L7/L10/L13/L16均成功，属于研究加载/推理路径证据，不冒称正式发布资产完整或已发布单Alpha包。本轮候选数据写入=0，不改HMM/因子/执行算法/数据生产；新数据日期仍停8月底。
+
+#### 2.5.8 2026-10-15 趋势捕获证据与当前研究状态（当前入口）
+
+**最新回读与修正。**本次基于main `0b29a37d83dd6ddb445cf96551aefac56fdaa193`。MA-E55于10月15日12:55完成；当日task/Archive回读确认9/9 completed、9/9 archived。MA-E54 P2的18条和ID1544原配对6条均为fully_archived；原记录不改绑、不覆盖，也不能因为已入仓就忽略后来发现的经济准确性问题。当前custom_evo运行列表为空只代表本次快照，不代表其他模块或全部节点进程空闲。
+
+| 对象 | 当前已完成 | 真实剩余/解释边界 |
+|---|---|---|
+| T1漏捕路径归因 | 21条代表Loop、99组成熟窗口漏斗和147条分段记录已分析；预测覆盖高，但全市场右尾多数在排名阶段落选 | 是有界代表集合，不是全历史复算；h20/h60右尾定义与成熟区间不同 |
+| 报价目录修复消费 | v18双节点验证000698/002305/002496出池后的持仓估值及合法退出；PIT买入资格未放宽 | 修复分钟报价可用性，不代表BUG-1843历史PIT L2缺口解除 |
+| MA-E55修正重放 | `qe_20261015_100601_fd78`：node1六条ID1544配对、WSL三条LSTM，9/9完成并入仓；冻结预测复用，零训练/零重新预测 | 仅该九条取得修正经济结果；不得外推全部P2/历史净值已修复 |
+| ID1544配对收口 | 原任务`qe_20261014_105052_14f2`六条训练完成；v18同预测配对和分段/成本/不确定性分析完成 | 有配方内增量，不是单因子独立收益、独立新腿或科技趋势问题已解决 |
+| T2角色/互补性 | 原有分析已完成，ID1544修正结论已补齐；LSTM修正全窗指标已取得 | 尚需对新LSTM净值更新分段、风险与共同日期互补性；不得沿用失真旧相关性晋级 |
+| T3～T8 | 尚未执行本计划的新政策/目标分支 | 先收口T2；T3仅补必要TCN Top20修正基准后决定，T4/T5依证据，T6/T7有界训练，T8仍以权威L2交付为条件 |
+
+MA-E55绑定generation=`20261015-v18-unified-quote1`、release=`qe_hmm_full_v2_20260831`、manifest=`f82670728cd6cde06bbc834481187794d081070689648c06b88786a7782e435b`；训练/验证不变，signal/test至2026-08-31、组合至2026-08-28。日线、选股池、因子、指数、停牌相关输入核对未变化，分钟报价目录修正；这是本次新任务身份，不是硬编码未来默认。原任务和retry保持原绑定，新任务仍自动解析active。
+
+下表为**修正后、三seed算术均值**，不是合成账户。全窗CAGR/Sharpe/MDD来自绝对收益口径；分段为扣费累计收益：
+
+| 配方（全市场Top50） | MA-E55 Loop | CAGR | Sharpe | MDD | 2026H1 | 7～8月至28日 |
+|---|---|---:|---:|---:|---:|---:|
+| LGBM F11，ID1544配对B | 1/4/7 | 51.06% | 1.695 | −18.62% | −7.41% | +15.56% |
+| LGBM F11+ID1544，B+F | 2/5/8 | 62.68% | 1.999 | −15.18% | −4.12% | +15.64% |
+| LSTM14/h60 | 3/6/9 | 61.39% | 1.905 | −19.04% | 待本次T2收口 | 待本次T2收口 |
+
+ID1544三seed的CAGR增量分别+6.16/+9.74/+18.95个百分点，平均+11.62个百分点；H1虽均改善但仍亏损，7～8月增量为−0.48/+1.40/−0.65个百分点，没有稳定后段增量。全窗IC/RankIC由0.06217/0.09792升至0.06709/0.11417；h20有效IC截至7月31日，8月未成熟。20/40日block bootstrap中40日区间跨零，三个seed不是三份独立市场样本。保留为横截面配方增量候选，不宣称统计稳健的新独立Alpha。尾部召回弱的问题仍需T5/T7，单纯提高仓位不能找回未进入排名的股票。
+
+**旧经济结论使用限制。**下列10月14日表格保留原快照，但后来发现分钟`all.txt`把PIT买入资格误作持仓报价可用区间，可能造成出池后滞留和冻结估值。旧全市场收益、回撤、现金和相关性不能无保留作为晋级或政策收益基准；误差不能仅靠事后重估推算。已完成技术入仓不等于经济结论仍然有效。三条STAR100代表在H1未发现同类目录外持仓，只支持该有界检查，不是全生命周期免检。只补选中研究所必需的同预测基准，不全仓机械重放。
+
+**以下为10月14日原始分析快照，不再指定当前状态或修正后收益。**
+
+本次文档基线为main `4d70b37e942e4beeb3ec5362333d2240f86f454d`。这里更新研究事实，不把文档HEAD当实验executor身份，不对所有历史BUG重新做运行态验收。完整执行定义与证据范围见[当前执行计划](qe_trend_capture_result_driven_plan_20261014.md)。
+
+| 对象 | 已核实进展 | 尚不能推导的结论 |
+|---|---|---|
+| MA-E54 P2 `qe_20261014_023609_92c2` | 18/18 replay完成且有效入仓；与6条来源Top50构成24套完整分析，未重新训练 | 不是24个独立市场样本，也不是24条独立Alpha |
+| LGBM F11来源 | `qe_20261013_112346_00a6` L1/2/3，seeds42/2024/2026；全市场Top50平均全窗CAGR56.62%、绝对Sharpe1.922、MDD−16.77% | 配方表现不能赋给任一单因子，不能保证未来收益 |
+| TCN F24+Q来源 | `qe_20261013_024708_2cff` L19/21/23，同三seed；Q=`quality_capex_efficiency`，实际25特征、h20 | 不是与LGBM同特征/同面板的纯架构对照，模型名字中的10D不代表本批标签 |
+| ID1544配对批次 | `qe_20261014_105052_14f2`，13:39 CST回读4/6完成、2个运行中；B/B+F各三seed重新训练 | 六Loop未齐，不提前判稳定增量、不启动额外参数搜索；原负号不翻转 |
+| 旧oracle与refit | P0-D2四格已完成；MA-E38共18Loop完成并入仓，结果见2.5.7 | 不能再称“尚未做oracle/重训”，也不能把单seed季度改善推广为全面重训收益 |
+| 图模型 | BUG-1843数据窗口交接：当前历史PIT L2输入NOT_READY，训练/验证/测试覆盖22.5344%/61.9725%/60.8717% | 这是特定图输入缺口，不代表日线/分钟整体无效；不降90%合同、不重跑原失败批次；successor须另行验收 |
+
+P2与来源24套账户/持仓/订单现金流和预测标签已对账；记录是已有分析证据，不等同于对全部训练源重新完成泄漏审计。任务保存的generation=`20260928-v15-unified-moneyflow1`、release=`qe_hmm_full_v2_20260831`、manifest=`2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc`；train=`2018-08-01..2022-12-30`、valid=`2023-01-03..2024-06-28`、test/signal=`2024-07-01..2026-08-31`、backtest至`2026-08-28`。这是来源身份，不是未来全局默认；新批从active resolver取一次绑定，重试沿用原绑定。
+
+下表为三seed算术均值，收益均是分段扣费累计收益，不是CAGR；H1现金是该段日现金占比均值，不是仓位不足的因果贡献：
+
+| 配方/交易池 | 2026H1收益 | 7～8月收益（至8月28日） | H1现金占比 | H1 RankIC |
+|---|---:|---:|---:|---:|
+| LGBM F11全市场Top50 | −0.84% | +12.69% | 3.51% | 0.0405 |
+| TCN F24+Q全市场Top50 | −5.72% | +15.98% | 4.38% | 0.0719 |
+| LGBM F11全市场Top20 | −1.54% | +6.61% | 30.54% | 0.0405 |
+| TCN F24+Q全市场Top20 | −2.31% | +9.27% | 41.91% | 0.0719 |
+| LGBM F11 CSI1000 Top50 | −2.88% | +12.68% | 3.43% | 0.0441 |
+| TCN F24+Q CSI1000 Top50 | −2.93% | +11.55% | 4.77% | 0.0573 |
+| LGBM F11 STAR50 Top20 | +12.00% | −9.17% | 30.18% | −0.0107 |
+| TCN F24+Q STAR50 Top20 | +10.74% | −6.32% | 34.16% | 0.0045 |
+
+P2冻结指数同窗口H1：沪深300+7.55%、CSI1000+15.99%、STAR50+64.25%；7～8月分别−7.44%、−12.54%、−24.72%。本批弱段是H1，不能概括为“7～8月拖累所有腿”。全市场两个Top50日收益/主动收益相关约0.937/0.898；低回撤Top20含现金效应，不直接称独立新Alpha。H1 h20标签116日均成熟；7～8月组合收益完整，但该段h20 IC仅23个7月日期，最终有效日7月31日，8月IC未成熟。
+
+**数仓有界横向核对（13:47 CST）。**1,485条enhanced payload关联run中，347条成功且research_valid、具备2026-01-05..06-30共116日完整净值的记录符合可比口径，全部为分钟TWAP；160条H1为正、73条超过沪深300同期7.548543%，无条目超过外部报告的科创100 62.07%。计数含seed/池/政策与相同收益路径变体，不是独立模型数，不涵盖缺可读完整净值的所有组合。341条训练截止2022-12-30、6条截止2025-05-08，只提示陈旧化风险，不证明它是漏捕的唯一根因。
+
+最高已核对H1收益为LSTM14/h60、STAR100 Top50、seed2024的+48.4958%，H1 MDD−9.4024%；同seed P00/P01及后续重复收益路径不能重复计为新发现。P00代表来源为`qe_20261001_171208_dac6` L4（另一同收益P01为L10）。三seed的同预测STAR100 Top50均值+34.5867%，全市场Top50均值+1.4475%，支持板块/交易域值得研究，但不是随机化纯beta归因；h60 H1 IC仅成熟至6月4日（99日）。科创10062.07%来自交易所披露中期报告，不是本冻结12指数文件的逐日回测基准，不计算伪造逐日IR/Brinson；来源链接见当前计划。
+
+**方向修正。**已有14因子配方含行业动量、板块广度、资金/价格背离，不能写成“从未尝试趋势因子”。当前证据支持排序目标、板块选择、资金使用、退出和模型年龄均需区分；尚未分解出各自损失比例。固定单笔买入上限及存量仓不全量再平衡提供现金机制线索，订单成交率高不等于充分投资；调高上限未获收益证明，也不能用理想满仓收益替代实际replay。不默认重写策略、不把科技暴涨后的赢家反向用于选股或阈值优化。研究从已有制品开始，缺失细分证据列明，不做全历史物化。
 
 ### 2.6 F-014 历史评价资产清单（冻结记录，旧执行顺序已取消）
 
@@ -1276,7 +1377,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 
 截至 2026-07-26，R9S 24/24、R10 51/51、R11A 9/9、R11B 6/6、R12G 1/1 均已完成，R11 的 15 个 Loop 已 fully archived；R12P 原正式 run 的编排失败证据完整保留，append-only recovery 已完成 11 个研究可用 child，equal/orthogonality-aware 和八条 LOO 已形成首次完整比较，10 个原始结果缺口继续保留。后续分为“已完成基础研发”和“可并行科研方向”；基础研发用于提高任务可靠性和操作效率，不构成模型、因子或研究方向的许可门槛，科研仍可在 QE-only 范围按资源继续。
 
-2026-10-01 活动权威为 §2.5.6 与 §9.10：MA-E32 6/6 completed，优先使用三种子 LSTM h60，先做交易池直接重放及近期归因，再按结果投入训练池、新 Alpha 和组合。历史 v6/r3 与当前 v15 任务身份不混写；BUG-1638、BUG-1639 的源码/运行态/发布状态独立，不新增资产研究门禁或全历史归档前置。
+2026-10-01的MA-E32排期保留为历史；当前研究状态见§2.5.8，活动权威为§9.10与当前执行计划T1～T8。历史任务身份不随active改变；源码、运行态、入仓与发布状态独立，不新增资产研究门禁或全历史归档前置。
 
 #### 9.9.1 已完成基础研发：多 Alpha P0-1～P0-4
 
@@ -1303,7 +1404,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 
 **v6.1 历史归因修正，v6.6 继续有效。**MA-E15 不是“breadth 已证伪”。CE4-B 比 CE3 多出的 `m_sector_volume_confirmed_breadth_5d_20d` 同时改变了 outer-union 观测总体；Qlib 后续 Fillna 又把缺失基线特征变成零。共同样本标签一致只能排除标签漂移，不能排除模型对额外零填充样本的排序响应。因此 CE3/CE4-B 的信号差异只能标记为 `CONFOUNDED_BY_PANEL`。同时，MA-E15 的九个 Loop 均使用 V25_1 分钟执行，开放 BUG-852 令其 10D 日频执行特征为零；这不使 Prediction Store 的标签、预测、IC/RankIC 和 Top-K 面板诊断失效，但使组合收益、风险和换手只能标记为 `EXECUTION_TRUTH_LIMITED_BY_BUG852`。MA-E16 使用 `qe_observation_panel_v1`，预先固定参考因子 `m_intraday_range_60d_min_ratio`、`m_turnover_acceleration`、`m_sector_mf_divergence_lg` 的非空交集；候选 breadth 可以在该固定索引内缺失并沿用既有 loader 填充，但不得新增观测行。为获得可解释的组合结果，MA-E16 全部改用既有日频 `CLOSE_PRICE` 执行，不等待或声称修复 BUG-852。
 
-**v6.6历史优先级纠偏（以下P0诊断原设计保留，不代表重新执行）。**v6.5 已把近期弱化认定为首要问题，却把直接识别该问题来源的滚动重训、四格 sector oracle、基准相对归因与 learned gating 放在横截面新专家之后。v6.6 不推翻任何候选公式，只把“先识别瓶颈、再选择算法”设为当前资源顺序。当时P0只包含MA-E16收口与以下三项诊断，现均以2.5.4/9.10排期；诊断是科研任务，不是人工审批、平台门禁或方向停止开关。
+**v6.6历史优先级纠偏（以下P0诊断原设计保留，不代表重新执行）。**v6.5 已把近期弱化认定为首要问题，却把直接识别该问题来源的滚动重训、四格 sector oracle、基准相对归因与 learned gating 放在横截面新专家之后。v6.6保留了“先识别瓶颈、再选择算法”的方法。MA-E16收口、P0-D2与既有refit已形成结果，先复用2.5.4～2.5.8，再按9.10补真实未解问题；诊断是科研任务，不是人工审批、平台门禁或方向停止开关。
 
 **P0-0：MA-E16 12-arm matched matrix 收口。**MA-E14 H95/C85 overlay 在 full/early/late 三个窗口均降低 CAGR，当前阈值扫描分支结束；regime、breadth、残差协同和资金背离继续作为 `CONDITIONING_STATE`，但不再搜索静态阈值。`m_intraday_range_60d_min_ratio` 的官方 h20 IC 在 full/out-sample/recent-6m 为 `0.05566/0.07385/0.05651`，h20 RankIC 为 `0.05652/0.08320/0.06919`，HAC companion 同方向。MA-E16 已于 2026-08-13 完成 12/12；CE4-B 在六组均提高绝对 CAGR，但 RankIC 与 absolute MDD 均为 5/6 恶化，说明 breadth 的组合增量具有模型条件性并伴随风险/排序代价。当前只需完成三窗口、成本、prediction correlation、Top50 overlap 与 matched blend/LOO，12 个 arm 不重训，重复 task 永不恢复。
 
@@ -1401,9 +1502,24 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 - `no_business_semantic_drift`：R12P baseline/equal/orthogonality-aware 数值、四腿来源、QE-only 边界和现有组合公式不变；MA-E01 另立版本化 candidate 做真实对照。
 - `no_unrequested_gate_or_approval`：P0-1～P0-4 和 F-014 完整度不再是前置；唯一允许暂停主线的是实际 trial 的可复现阻断 BUG，未新增人工审批或 research-ready 状态。
 
-### 9.10 v6.18 MA-E33 单腿优先、零训练重放与结果触发（唯一活动计划）
+### 9.10 v6.21 中期趋势捕获与收益转化（唯一活动计划）
 
-本次用户明确授权蓝图审核通过后提交合入，再按规划执行长任务；不包含 backend 重启、数据准备、删除或其他模块开发。执行方案 v2.0 的不冲突合同继续沿用，活动工作包以本节为准。独立失败只阻断对应 arm，不形成必须全量完成的审批链。
+当前事实见2.5.8，精确任务、基准、指标与退出条件见[结果驱动计划](qe_trend_capture_result_driven_plan_20261014.md)。以下是研究优先级，不是依次通过的审批门禁。当前仅文档变更；原已批准任务保持，新实验按既有授权执行。没有证据的分支跳过，不凑时长、不自动补完八项；缺特定资产不阻断其余任务。
+
+| 批次/优先级 | 任务 | 最小新增量与结果要求 |
+|---|---|---|
+| 一/P0，T1 | 已完成有界漏捕路径归因 | 复用21条代表Loop分析与报价目录修复结论，不再次跑漏斗或四格oracle；修正交易路径与预测层缺口分开 |
+| 一/P0，T2 | 修正后角色/互补性收口 | ID1544已完成；读取MA-E55三个LSTM的新净值补分段与相关性，不重新训练、不沿用受影响旧经济结论 |
+| 二/P1，T3 | 资金使用受控replay | 先仅补所选TCN Top20三seed的修正基准；高现金问题仍成立才做最多两个单轴变体×三seed。旧受影响基准不得直接相减，限额/再平衡分开，不为满仓而实验 |
+| 二/P1，T4 | 退出/重入replay | 有卖早证据才选一个现有因果政策变体×三seed；不做持有期网格、不用未来高点交易 |
+| 二/P1，T5 | 简单板块软条件化 | 有板块漏选证据且PIT输入可用时，一个可表达的连续条件变体×三seed；同池/TopK/风险预算，先于复杂图模型 |
+| 三/条件P1，T6 | 针对性refit | 先与MA-E38/D1覆盖去重，至多一个配方三seed；精确vintage另列，成熟标签与连续账户语义保留，不全面重训 |
+| 三/条件P1，T7 | 最多两个新Alpha或目标假设 | 板块lead-lag/扩散、右尾目标、持续性/退出按证据择一轴；新特征或loss必须训练，不堆模型×因子×池网格 |
+| 三/条件P2，T8 | 图模型关系canary | 数据owner交付PIT successor并满足原合同后才有条件执行；先简单基线，不降覆盖、不改数据、不阻断其他方向 |
+
+本轮纯回测请求WSL4/node1 4、每Loop kernels≤4；普通GPU训练WSL最多2、图训练串行且不叠加重GPU训练、CPU训练node1最多2，实际受全局reservation/RAM/IO约束。人工进度检查沿用最近批准的30分钟，不新增后台轮询或本次调度器。新任务自动解析active，配对同身份、retry不变；8月底历史窗口与未来正式月份分开，不将V15写成默认值。HMM保持低优先级，池内训练不默认替代全市场训练。实施缺口只报任务必需最小范围，不借此建设通用平台。
+
+**以下为v6.18 MA-E33历史排期表及发起记录；状态冻结于2026-10-01，现状见2.5.8，不指定当前工作。随后跨期不变量继续有效，但其旧状态与两小时人工检查间隔不覆盖本版活动计划。**
 
 | 优先级 | 工作包 | 产物/结果触发 | 当前状态 |
 |---|---|---|---|
@@ -1436,7 +1552,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 
 **因子库参考。**回测收益属于“模型×因子组合×样本/股票池×政策/成本”的联合效果。因子成员关联仅为组合参与参考，不把组合CAGR/IC分摊为单因子指标；独立IC走因子官方评价，加入/移除对照标条件增量，交互不强分摊。QE只提供组合证据与引用，不修改因子库评分/晋升或其他窗口模块。
 
-**资源和效率。**既有调度按依赖自动填槽，所有计划行先登记。纯 prediction replay 本批请求 WSL=4、node1=4，每 Loop Qlib kernels≤4；不是把训练也放宽为4，非图 GPU 训练最多2、图训练串行且不叠加重 GPU 训练。有效并行取请求、运行态容量、全局 reservation 与 RAM/IO 可用量的实际下限；4+4 是配置上限，不承诺一直有8个活动实验，未满足纯回测同 cohort 判定不得伪造或绕过裁剪。发起后每2小时做一次人工侧进度/资源/结果检查；既有必要后端探测每对象至少60秒、未变不写，无 UI 不新增日志轮询/数据库心跳。正常阶段切换由调度依赖推进，不等待人工检查；不强杀进程，也不控制其他窗口实验。
+**资源和效率（跨期不变量）。**既有调度按依赖自动填槽，所有已确定计划行先登记。纯prediction replay请求WSL4/node1 4，每Loop Qlib kernels≤4；普通GPU训练WSL最多2、图训练串行且不叠加重GPU训练、CPU训练node1最多2。实际并行取请求、运行态容量、全局reservation与RAM/IO可用量的下限，不承诺一直有8个活动实验，不绕过cohort合同。旧批次每2小时人工检查只保留历史，当前沿用最近批准的30分钟；既有必要后端探测每对象至少60秒、未变不写，无UI不新增日志轮询/数据库心跳。正常阶段切换不等待人工检查，不强杀进程、不控制其他窗口实验；本次文档不创建调度器。
 
 
 ## 10. 风险与控制
@@ -1575,11 +1691,11 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 | F-022 | 多 Alpha QE 演进底座 P0 | 已有 task/run/child/attempt/event、状态/event 原子性、重启接管、统一节点占用、暂停/恢复/取消、`not_computable`、子任务恢复、QE 创建器及运行网格满足策略演进需求，现为 maintenance-only；只有真实策略 trial 暴露的可复现阻断 BUG 才允许扩展或修复。 |
 | F-023 | 策略单腿优先与必要QE能力 | 先强单腿再组合；仅完善准确指标、Top20/预测复用合同、统一历史/选择性入仓和精确清理等必要能力，不重建平台，历史全量处理不阻断已确认候选。 |
 | F-024 | Alpha/状态/关系/策略角色分离 | 每个候选声明 `DIRECT_ALPHA`、`CONDITIONING_STATE`、`RELATION_PRIOR`、`PORTFOLIO_POLICY` 或 `NEGATIVE_CONTROL` 主角色；信号、关系和组合改善分别归因，不互相冒充。 |
-| F-025 | 多窗口与 matched-seed 真实性 | 活动候选并列报告 full/early/late；训练型初筛默认使用 seeds 123/314/2718；单次回测、单因子 IC、单最好 seed 和全窗口结果不得覆盖近期失效。最终神经网络候选若三种子区间仍宽，预注册至少 5 seeds 或等价 bootstrap ensemble；不对全部探索机械扩种子。 |
+| F-025 | 多窗口与 matched-seed 真实性 | 活动候选并列报告 full/early/late；早期初筛seeds123/314/2718保留历史，当前配对继承来源42/2024/2026，不为统一名字重跑。单次回测、单因子IC、单最好seed和全窗结果不得覆盖分段差异；最终神经网络候选若三种子区间仍宽，沿用预注册至少5 seeds或适用bootstrap方案，不机械扩全部探索，seed不当独立市场样本。 |
 | F-026 | QE 数据面零数据库扩展 | 新 Alpha、HIST、动态图、hazard 与概念关系只消费钉住的 H5/Parquet/bin/sidecar；实验/composer/worker/qrun 不访问数据库、不在线补齐、不回退。 |
-| F-027 | v6.18活动演进顺序 | MA-E32 6/6 completed；§9.10 为 h60 三种子×四交易配置零训练 replay、批准名单×尾盘处理、分段归因、结果触发训练池/新 Alpha/组合。HMM降优先级，受标签边界影响的短 horizon 不晋级；不重复全市场Top50基准。 |
+| F-027 | v6.21结果驱动演进顺序 | 2.5.8为最新研究入口；先复用P0-D2/MA-E38/P2，按9.10三批T1～T8识别漏捕、资金与退出，再条件触发板块/新目标/针对性refit/图模型。不重跑成功来源，不以文档或数据缺口阻断无关方向；环境来源record-only，不新增门禁。 |
 | F-028 | matched observation panel | 训练型因子归因 trial 在 `model_params` 预先声明 `qe_observation_panel_v1` 和参考因子交集；composer 将其作为生成期 loader contract，禁止透传策略 kwargs；同组 candidate 使用完全相同的观测索引。缺配置因子、缺参考列、空面板或无效声明 fail closed；历史无契约 task 不改写并保留成功因子 partial concat。 |
-| F-029 | QE跨任务主机资源安全 | 纯回测请求WSL4/node1 4，每Loop kernels≤4，实际受全局reservation、RAM/IO和纯回测cohort合同约束；非图GPU训练最多2、图训练串行且不叠加重GPU训练。请求并行不冒称实际活动数，低容量不绕过。 |
+| F-029 | QE跨任务主机资源安全 | 纯回测请求WSL4/node1 4，每Loop kernels≤4，实际受全局reservation、RAM/IO和纯回测cohort合同约束；非图GPU训练WSL最多2、图训练串行且不叠加重GPU训练、CPU训练node1最多2。请求并行不冒称实际活动数，低容量不绕过。 |
 | F-030 | 日频 runner 可靠恢复 | 日频 `qrun_limit.py` 必须在 `qlib.init` 后、`task_train` 前安装与分钟 runner 同语义的 async metric drain barrier 和精确 empty-metric retry；只重试已知落盘竞态，writer 死亡、超时、真实缺制品或其他错误 fail loud。Loop3 已通过恢复路径完成并保留完整指标；禁止 `auto` 回退训练的合同继续有效。 |
 | F-031 | 空闲控制面静默 | 无活动 task/状态变化时不得形成 2 秒级数据库、远端 API 或状态事件风暴；观察器单实例，正常探测至少 60 秒节流，状态/错误变化才持久化，正常心跳留在内存。 |
 | F-032 | QE 实时日志单上游与零 UI 空转 | 每 task/node 只有一个 RD-Agent 上游，由 AIstock broker 共享给 evolution/experiment/multi-node 消费者；cursor 续传且 stale/conflict fail closed；无订阅者、页面隐藏或面板折叠时上游、文件和 DB 工作为零。 |
@@ -1601,7 +1717,7 @@ LOO 的 `marginal_*` 定义为“完整组合指标减去 drop-one 指标”；�
 
 ## 13. Implementation Plan / 实施计划
 
-当前实施顺序唯一见 §9.10。G0-A～H 是历史阶段与方向来源，不表示尚需全部开发；G0-I 引用本版活动计划。MA-E32 已有三种子 h60 强腿来源；MA-E33 已启动、未完成。BUG-1638/1639、入仓、资产发布分别记录，不把设计审查通过、HTTP ready 或父任务状态写成完整运行态/策略交付。
+工作树当前实施顺序见§9.10与结果驱动计划T1～T8，最新状态见§2.5.8。G0-A～H是历史方向来源，不表示尚需全部开发；已完成oracle/refit/P2不重复列为首轮待办。BUG源码、正式runtime receipt、入仓、资产推理和发布分别记录，不能用HTTP/父状态代替完整交付。本次文档仅主蓝图及结果驱动计划两份；用户另已授权合入后继续QE主线，不代表未来政策已实现或实验完成。
 
 ### Phase G0-A：研究设计与证据记录
 
@@ -1664,9 +1780,9 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 4. **P0-4 child observability**：在现有 QE 详情布局增加 child/attempt grid、DB event + workspace/remote log、restart reconciliation 状态和单子任务操作；复用 `LoopDetailPanel`、`EvolutionTrajectory`、`LogsPanel` 和现有 combine diagnostics，不增加另一套页面风格。
 5. backend repository/service/router/startup、additive migration、frontend adapter/components、API/UI/DB 定向测试、restart E2E、并发/取消/恢复/历史回填验证均已完成；P0-3/P0-4 CLI Playwright 为 `8 passed`，父/从属 F2 validator 均通过。后续修改继续禁止简化版、静默错误、隐式 fallback、指标伪造和未经用户确认的门禁/审批。
 
-### Phase G0-I：v6.18 单腿优先与研究资产复用
+### Phase G0-I：v6.21 趋势召回、收益转化与有界新训练
 
-按 §9.10 阶段 A～C 推进：先 h60 三种子直接重放，再条件就绪的名单/尾盘政策，随后分段分析。既有全市场Top50来源不重跑；训练池研究另立 matched 批次，短 horizon 新训练待标签修复，HMM待更新。必要基础研发只修真实阻断，不新增历史平台前置或跨模块工作。
+按§9.10三批八项推进，已有T1及ID1544分析不重复，先收口T2修正LSTM结果，再选择资金/退出/板块的最小replay；已有P0-D2、MA-E38、P2先复用。目标、特征和fit vintage变化才新训练，池/政策replay不自动refit；图输入NOT_READY不绕过，HMM降优先级。新批由active resolver绑定，环境来源只记录；不要求人工补pin、不改历史身份。源码、研究有效性、入仓和正式发布分开，不因本次文档合入冒称新的策略包可用。基础研发仅修真实任务必需缺口，其他窗口模块不在范围。
 
 ## 14. Verification Plan / 验证计划
 
@@ -1725,7 +1841,7 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 
 ## 15. Design Acceptance Matrix / 设计验收矩阵
 
-本矩阵中的 DESIGN_REVIEW_READY 只代表文档审查，不是代码或实验验收；当前待办在2.5.6/9.10/17明确保留，gap“无”仅指文档结构。历史VERIFIED只证明对应旧合同；source merge不证明运行态/UI或策略包已验收。F-027/F-029按v6.18，F-043～F-047沿用不冲突的关联设计；MA-E33运行中、标签修复未合入、资产发布未完成，均不标VERIFIED。
+本矩阵的DESIGN_REVIEW_READY仅代表文档审查，不是代码或实验验收；最新待办见2.5.8/9.10/17。历史VERIFIED只证明旧合同，不代表本轮通过。F-027/F-029按v6.21计划审查，F-043～F-047沿用不冲突的合同；当前T1有界分析、ID1544收口和MA-E55九条重放可报告完成；T2剩余分析、T3～T8未来分支、全仓归因和策略包交付不标全部VERIFIED。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -1755,9 +1871,9 @@ A1–A6、Batch B 和其他候选均可在 QE-only 范围按资源并行使用 `
 | F-024 | 本文 9.9.2 | validation-receipt: 角色表与逐候选 role/归因输出合同 | DESIGN_READY_ROLE_SEPARATION | 无 |
 | F-025 | 本文 2.5、9.9.2～9.9.3 | validation-receipt: MA-E13G matched-seed 先例与 full/early/late + seeds 123/314/2718 输出合同；最终神经网络候选的条件扩 seed/ensemble 规则；当前不重跑历史模型 | DESIGN_READY_MULTI_WINDOW_MATCHED_SEED | 无 |
 | F-026 | 本文顶部不变量、9.7、9.9.3、Phase G0-F/G | validation-receipt: DB-poison/静态扫描、dataset identity/hash、双节点文件一致性 | APPROVED_BY_USER: ZERO_DB_RUNTIME_INVARIANT_ACTIVE | BUG-989 已建立现有链路证据；所有新方向继承并在自身 trial 显式验证，不得回退数据库。 |
-| F-027 | 本文2.5.4、9.10；执行方案v2.0；F2 registry v1.3 | validation-receipt: v6.16跨文档与反例审核；历史证据见各原始日期 | DESIGN_REVIEW_READY | 无 |
+| F-027 | 本文2.5.8、9.10；2026-10-14结果驱动计划 | 文档审查：事实、因果边界及跨文档一致性；实际结果见2.5.8，未来任务不宣称已验证 | DESIGN_REVIEW_READY | T1～T8按条件执行，不是新增实验门禁 |
 | F-028 | `config_composer.py`、生成的 `prepare_factors.py`、BUG-1006、本文 9.9.2～9.9.3 | validation-receipt: canonical contract、matched CE3/CE4 同索引、public in-memory ScoreWeighted/CLOSE_PRICE compose、策略 kwargs 隔离、legacy partial concat、缺结果/缺列/空面板 fail-closed 聚焦测试；合入与运行态不属于设计验收状态 | VERIFIED | 无 |
-| F-029 | 本文2.5.4、9.10；执行方案v2.0；F2 registry v1.3 | validation-receipt: v6.16跨文档与反例审核；历史证据见各原始日期 | DESIGN_REVIEW_READY | 无 |
+| F-029 | 本文9.10与当前计划4.1 | 文档审查：纯回测4+4、GPU训练2/图1、CPU训练2与实际资源分开；本次不启动任务测容量 | DESIGN_REVIEW_READY | 不等于当前有8个活动回测 |
 | F-030 | `scripts/qrun_limit.py`、`test_qrun_mlflow_metric_retry.py`、分钟 runner 既有 BUG-605 合同、BUG-1022、本文 2.5/9.9.3 | validation-receipt: 日频/分钟 runner 共用合同双路径测试；MA-E16 Loop3 在 2026-08-13 completed 且指标完整 | APPROVED_BY_USER: RUNTIME_CONTRACT_CONSUMED_BY_LOOP3 | BUG registry/aftercare 状态由对应 workflow 维护，不再阻断实验 |
 | F-031 | BUG-1023/1024/1026；durable orchestrator、reconcilers、node health/dispatch observers；本文 9.9.3/10/17 | validation-receipt: BUG-1023/1024 merges `d8e80b9f…`/`3a6e3290…` 已包含于 backend identity `0e0afed2…`；BUG-1026 `verified/closed`；单观察器、60 秒探测、变化才写状态测试与 CI | APPROVED_BY_USER: PARTIAL_CLOSE_SYNC | BUG-1023/1024 只补 post-restart receipt/close-sync；BUG-1026 不再是前置 |
 | F-032 | RD-Agent BUG-1030 PR #19；AIstock BUG-1030 PR #3300；BUG-1031 PR #3303；QE log broker/client/routes/frontend lifecycle | validation-receipt: RD merge `795973e1…`、AIstock merge `aee31e67…`、broker/frontend merge `573e5380…`；两节点 `/health=ok`；BUG-1030 `fixed/closed`、BUG-1031 `verified/closed` | APPROVED_BY_USER: RUNTIME_CLOSED | 无；健康不替代未来 release identity，但本批 Issue 不重新打开为实验前置 |
@@ -1867,14 +1983,14 @@ DESIGN-COMPLIANCE-001：①没有把近端抽查冒充全历史盘点或把计�
 
 | 状态项 | 当前结论 | 未推导事项 |
 |---|---|---|
-| 既有基础架构 | active profile=`20260928-v15-unified-moneyflow1`；backend ready身份=`878f5291…` | profile可读不等于节点占用、所有BUG语义或全部UI已验收；旧run不迁移 |
-| 本次docs | v6.18 主蓝图，用户授权审核通过后提交合入并执行长任务 | 文档合入与实验启动分开报告；未启动前不写完成 |
-| 新增代码 | BUG-1638/#5156 OPEN且现有CI失败；BUG-1639/#5161 source merged | 不改流水线、不合入失败PR；正式post-restart、close-sync和策略包发布分别收口 |
-| 实验 | MA-E32 6/6 completed；h60三种子强腿已核对；MA-E33阶段A运行、阶段B已排队；全批21逻辑比较/25attempt行、零训练 | 初次四失败与单次精确恢复分列；不声明全部成功、七八月稳定或策略包可部署，CSI300限制如实标注 |
-| Archive / cleanup | 本次文档0写仓、0删除；来源三预测有warehouse pointer | 后续准确非重复正负结果按既有长任务授权入仓；不推导文件/DB删除、全量历史补录或数据准备权限 |
+| 既有基础架构 | P2来源保存v15身份；本次不重做双节点/runtime验收，未来新任务自动取active | 来源身份不等于当前默认值；旧run不迁移，环境来源缺失不设新门禁 |
+| 本次docs | v6.21及当前计划，基于main 0b29a37d；本轮仅两个普通文档，审查/提交/合入以实际回读为准 | 用户另已授权合入后继续主线；文档合入不等于未来实验完成或允许服务重启 |
+| 新增代码 | 无；runtime impact=none | 不重开历史BUG收口任务，不需要本次backend重启 |
+| 实验 | P2 18条、ID1544原配对6条、MA-E55修正重放9条均完成并入仓，详见2.5.8 | 旧入仓状态不是经济准确性保证；9条重放不是新训练/9条独立Alpha；本轮docs未启动实验 |
+| Archive / cleanup | 文档阶段业务库0写入、实验文件0删除；本轮不包含工作树清理授权 | 原研究工作树与未提交分析保留；后续实验经正式控制面登记，不推导实验删除、历史物化或数据准备权限 |
 | dataset / DDL / dependency | 无变更 | 不接管数据准备、因子库、HMM训练、荐股或模拟盘 |
 | backend / node process control | false | 后端重启仍归用户，本轮节点API也不控制 |
-| 下一步 | MA-E33由调度按4+4纯回测配置继续执行；阶段B既有政策输入已闭合并排队，终态后分段比较 | 不等待HMM/全部历史归档，不重复全市场Top50；不超单次恢复、不自动改参/重训，不恢复通用平台建设 |
+| 下一步 | T2修正LSTM分段/互补性 → T3必要基准与有界政策；T4/T5按证据，T6/T7有条件训练，T8等待权威输入 | 不等待部署pin、9月/HMM或全历史归档；不重训已完成来源、不自动调参或跨模块绕过 |
 
 ## 18. Research Sources / 一手研究来源
 

@@ -12,7 +12,6 @@ from backend.services.advisory_universe import (
     AdvisoryUniverseContractError,
     normalize_advisory_universe_selection,
 )
-from backend.services.strategy_package.models import PackageStatus
 from backend.services.strategy_package.service import StrategyPackageService
 
 
@@ -78,17 +77,8 @@ class AdvisoryDeliveryPreflightService:
         blockers: list[str] = []
         warnings: list[str] = []
         package_status = _enum_value(getattr(record, "package_status", None))
-        if package_status == PackageStatus.RETIRED.value:
-            blockers.append("PACKAGE_RETIRED")
-
-        eligibility = self._package_service.asset_eligibility.summarize(record)
-        eligibility_blockers = [str(value) for value in getattr(eligibility, "blockers", ()) if str(value)]
-        eligibility_warnings = [str(value) for value in getattr(eligibility, "warnings", ()) if str(value)]
-        if not bool(getattr(eligibility, "eligible", False)):
-            blockers.extend(f"PACKAGE_ASSET_INELIGIBLE:{value}" for value in eligibility_blockers)
-            if not eligibility_blockers:
-                blockers.append("PACKAGE_ASSET_INELIGIBLE")
-        warnings.extend(f"PACKAGE_ASSET_WARNING:{value}" for value in eligibility_warnings)
+        # Published package qualification belongs to QE. This consumer only
+        # checks whether the requested inputs describe a consistent computation.
 
         universe_result = _classify_universe(manifest, requested_universe)
         blockers.extend(universe_result.pop("blockers"))
@@ -129,8 +119,11 @@ class AdvisoryDeliveryPreflightService:
                 "package_status": package_status,
                 "source_type": _enum_value(getattr(source, "source_type", None)),
                 "source_id": str(getattr(source, "source_id", "") or ""),
-                "asset_eligible": bool(getattr(eligibility, "eligible", False)),
-                "asset_blockers": eligibility_blockers,
+                # Legacy field: delegated acceptance, not a file-readability claim.
+                "asset_eligible": True,
+                "asset_blockers": [],
+                "qualification_authority": "QE_STRATEGY_PACKAGE",
+                "qualification_rechecked": False,
             },
             "universe_compatibility": universe_result,
             "policy_compatibility": policy_result,
@@ -246,20 +239,6 @@ def _classify_universe(manifest: Any, requested: dict[str, Any]) -> dict[str, An
             "evidence_paths": evidence_paths,
             "evidence_errors": evidence_errors,
             "blockers": ["DELIVERY_UNIVERSE_CONTRACT_INVALID"],
-            "warnings": [],
-        }
-    primary_evidence_present = any(
-        path == "backtest_context.daily_strategy.custom_params.universe_selection"
-        for path, _value in normalized_evidence
-    )
-    if normalized_evidence and not primary_evidence_present:
-        return {
-            "status": UNIVERSE_INCOMPLETE,
-            "requested": requested,
-            "source_declared": None,
-            "evidence_paths": [path for path, _value in normalized_evidence],
-            "evidence_errors": [],
-            "blockers": ["DELIVERY_UNIVERSE_PRIMARY_EVIDENCE_MISSING"],
             "warnings": [],
         }
     if not normalized_evidence:

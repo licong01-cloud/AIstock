@@ -8,8 +8,8 @@ import math
 from pathlib import Path
 import signal
 import sys
-from threading import Event
-from typing import Any, Callable, Mapping, Sequence
+from threading import Event, Thread
+from typing import Any, BinaryIO, Callable, Mapping, Sequence
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -38,10 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--serve", action="store_true")
     parser.add_argument("--max-operations", type=int)
     parser.add_argument("--poll-seconds", type=float, default=5.0)
+    parser.add_argument("--supervised", action="store_true")
     return parser
 
 
 def _validate_args(args: argparse.Namespace) -> None:
+    if args.supervised and not args.serve:
+        raise ValueError("--supervised is valid only with --serve")
     if args.drain:
         if (
             args.max_operations is None
@@ -90,6 +93,28 @@ def _install_signal_handlers(stop_event: Event) -> None:
     signal.signal(signal.SIGTERM, request_stop)
 
 
+def _watch_supervisor(owner_pipe: BinaryIO, stop_event: Event) -> None:
+    """EOF, unexpected input or a broken pipe revokes further task claims."""
+    try:
+        owner_pipe.read(1)
+    except OSError:
+        pass  # A broken owner channel revokes claims just like EOF.
+    finally:
+        stop_event.set()
+
+
+def _bind_supervisor(owner_pipe: BinaryIO, stop_event: Event) -> None:
+    # Avoid holding a BufferedReader lock in a daemon thread at interpreter
+    # shutdown (e.g. a graceful signal while the owner is still alive).
+    owner_pipe = getattr(owner_pipe, "raw", owner_pipe)
+    if owner_pipe.readline(7) != b"START\n":
+        raise RuntimeError("monthly worker supervisor handshake is missing or invalid")
+    Thread(
+        target=_watch_supervisor, args=(owner_pipe, stop_event),
+        name="monthly-worker-owner-lifetime", daemon=True,
+    ).start()
+
+
 def _run_service(
     runtime: MonthlyWorkerRuntime,
     *,
@@ -114,13 +139,15 @@ def main(
     args = build_parser().parse_args(argv)
     try:
         _validate_args(args)
+        stop_event = Event()
+        if args.supervised:
+            _bind_supervisor(sys.stdin.buffer, stop_event)
         runtime = runtime_loader(project_root=PROJECT_ROOT)
         mode = _mode(args)
         if mode == "preflight":
             _emit(runtime.preflight_receipt())
             return 0
         if mode == "serve":
-            stop_event = Event()
             _install_signal_handlers(stop_event)
             results = _run_service(
                 runtime,

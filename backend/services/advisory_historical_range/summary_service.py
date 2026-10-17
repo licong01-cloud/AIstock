@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from datetime import date
 from decimal import Decimal, ROUND_HALF_EVEN
 import json
 import logging
 from statistics import median
-from typing import Any, Iterable, Literal, Mapping, Protocol
+from typing import Any, Callable, Iterable, Literal, Mapping, Protocol
 
 import psycopg2.extras
 
@@ -500,10 +500,20 @@ class HistoricalRangeSummaryContextProvider(Protocol):
     def load(
         self,
         *,
-        fact: HistoricalRangeOutcomeFactV1,
+        fact: HistoricalRangeSummarySubjectIdentityV1,
         artifact: HistoricalRangeOutcomeArtifactV2,
         calculation: OutcomeCalculationResult | None,
     ) -> HistoricalRangeSummaryRowContextV1: ...
+
+
+class HistoricalRangeSummarySubjectIdentityV1(BaseModel):
+    """Query-verified run scope, not a new or modified financial fact."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    range_run_id: str = Field(min_length=1, max_length=160)
+    subject_type: HistoricalRangeOutcomeSubjectType
+    subject_id: str = Field(min_length=1, max_length=160)
 
 
 class HistoricalRangeRecallDenominatorProvider(Protocol):
@@ -991,20 +1001,22 @@ class PostgresHistoricalRangeSummaryContextProvider:
         self._conn_factory = conn_factory
         self._artifact_store = artifact_store
         self._source_provider = source_provider
-        self._metadata_cache: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._metadata_cache: dict[tuple[str, str, str, str], dict[str, Any]] = {}
         self._industry_cache: dict[tuple[str, date], str] = {}
+        self._regime_cache: OrderedDict[str, tuple[str | None, tuple]] = OrderedDict()
 
     def load(
         self,
         *,
-        fact: HistoricalRangeOutcomeFactV1,
+        fact: HistoricalRangeSummarySubjectIdentityV1,
         artifact: HistoricalRangeOutcomeArtifactV2,
         calculation: OutcomeCalculationResult | None,
     ) -> HistoricalRangeSummaryRowContextV1:
         metadata_key = (
+            fact.range_run_id,
             fact.subject_type.value,
             fact.subject_id,
-            artifact.subject_ref.semantic_content_hash,
+            canonical_json_sha256(artifact.subject_ref.model_dump(mode="json")),
         )
         metadata = self._metadata_cache.get(metadata_key)
         if metadata is None:
@@ -1219,20 +1231,33 @@ class PostgresHistoricalRangeSummaryContextProvider:
     def _regime_from_subject_ref(
         self, subject_ref: HistoricalRangeArtifactRefV1
     ) -> str | None:
+        key = canonical_json_sha256(subject_ref.model_dump(mode="json"))
+        cached = self._regime_cache.get(key)
+        if cached is not None:
+            regime, evidence = cached
+            for ref, stamp in evidence:
+                if self._regime_stamp(ref) != stamp:
+                    raise HistoricalRangeSummaryError("sealed regime evidence changed after verification")
+            self._regime_cache.move_to_end(key)
+            return regime
+        before = self._regime_stamp(subject_ref)
         envelope = self._artifact_store.load(subject_ref)
+        evidence = [(subject_ref, before)]
         payload = envelope.payload
         if subject_ref.artifact_kind is HistoricalRangeArtifactKind.DAY_RECEIPT:
             candidate_ref = payload.get("candidate_artifact_ref")
             if isinstance(candidate_ref, dict):
-                envelope = self._artifact_store.load(
-                    HistoricalRangeArtifactRefV1.model_validate(candidate_ref)
-                )
-                payload = envelope.payload
+                ref = HistoricalRangeArtifactRefV1.model_validate(candidate_ref)
+                if ref.artifact_kind is not HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT:
+                    raise HistoricalRangeSummaryError("day regime source must be a candidate artifact")
+                regime = self._regime_from_subject_ref(ref)
+                evidence.extend(self._regime_cache[canonical_json_sha256(ref.model_dump(mode="json"))][1])
+                return self._remember_regime(key, regime, evidence)
         trace = payload.get("stage_trace")
         metadata = trace.get("metadata") if isinstance(trace, dict) else None
         hmm = metadata.get("hmm") if isinstance(metadata, dict) else None
         if not isinstance(hmm, dict):
-            return None
+            return self._remember_regime(key, None, evidence)
         values = {
             str(hmm[key])
             for key in ("market_regime", "regime", "regime_label", "state_label")
@@ -1240,7 +1265,23 @@ class PostgresHistoricalRangeSummaryContextProvider:
         }
         if len(values) > 1:
             raise HistoricalRangeSummaryError("frozen T-date regime evidence is conflicting")
-        return next(iter(values), None)
+        return self._remember_regime(key, next(iter(values), None), evidence)
+
+    def _regime_stamp(self, ref: HistoricalRangeArtifactRefV1) -> tuple:
+        path = (self._artifact_store.root / ref.relative_path).resolve(strict=True)
+        if not path.is_relative_to(self._artifact_store.root):
+            raise HistoricalRangeSummaryError("regime evidence escapes its registered artifact root")
+        stat = path.stat()
+        return (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ino)
+
+    def _remember_regime(self, key, regime, evidence):
+        for ref, stamp in evidence:
+            if self._regime_stamp(ref) != stamp:
+                raise HistoricalRangeSummaryError("sealed regime evidence changed during verification")
+        self._regime_cache[key] = (regime, tuple(evidence))
+        while len(self._regime_cache) > 256:
+            self._regime_cache.popitem(last=False)
+        return regime
 
 
 class PostgresHistoricalRangeSummaryOutcomeSetLoader:
@@ -1294,9 +1335,14 @@ class PostgresHistoricalRangeSummaryOutcomeSetLoader:
                 else OutcomeCalculationResult.model_validate(item)
                 for item in artifact.calculation_results
             )
+            subject_identity = HistoricalRangeSummarySubjectIdentityV1(
+                range_run_id=range_run_id,
+                subject_type=fact.subject_type,
+                subject_id=fact.subject_id,
+            )
             if not calculations:
                 context = self._context_provider.load(
-                    fact=fact,
+                    fact=subject_identity,
                     artifact=artifact,
                     calculation=None,
                 )
@@ -1332,7 +1378,7 @@ class PostgresHistoricalRangeSummaryOutcomeSetLoader:
                 )
             aggregate_calculations = True in aggregate_kinds
             context = self._context_provider.load(
-                fact=fact,
+                fact=subject_identity,
                 artifact=artifact,
                 calculation=(None if aggregate_calculations else calculations[0]),
             )
@@ -1446,12 +1492,20 @@ class HistoricalRangeSummaryCoordinatorService:
         )
         self._calculator = calculator or HistoricalRangeSummaryService()
 
-    def refresh(self, *, range_run_id: str) -> HistoricalRangeArtifactRefV1:
+    def refresh(
+        self, *, range_run_id: str, assert_active: Callable[[], None] | None = None,
+    ) -> HistoricalRangeArtifactRefV1:
+        def check():
+            if assert_active is not None:
+                assert_active()
+
+        check()
         frozen = self._outcome_set_loader.load(
             range_run_id=range_run_id,
             label_as_of_trade_date=self._label_as_of_trade_date,
             policy=self._policy,
         )
+        check()
         if frozen.range_run_id != range_run_id:
             raise HistoricalRangeSummaryError("outcome-set loader returned another range run")
         artifact = self._calculator.calculate(
@@ -1461,6 +1515,7 @@ class HistoricalRangeSummaryCoordinatorService:
             producer_code_hash=self._producer_code_hash,
             recall_denominator_set=frozen.recall_denominator_set,
         )
+        check()
         existing = self._repository.find_summary_by_input(
             range_run_id=range_run_id,
             summary_input_hash=artifact.summary_input_hash,
@@ -1491,6 +1546,7 @@ class HistoricalRangeSummaryCoordinatorService:
         artifact = HistoricalRangeSummaryArtifactV2.model_validate(
             artifact_payload
         )
+        check()
         stored = self._artifact_store.publish_payload(
             artifact_kind=HistoricalRangeArtifactKind.SUMMARY,
             producer_contract_version="advisory_phase1r_r4_summary_v1",
@@ -1515,6 +1571,7 @@ class HistoricalRangeSummaryCoordinatorService:
             summary_version=version,
             predecessor=predecessor,
         )
+        check()
         self._repository.append_summary(fact)
         return stored.ref
 

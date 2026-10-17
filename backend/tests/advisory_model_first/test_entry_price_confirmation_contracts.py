@@ -63,6 +63,31 @@ def test_request_roundtrip_and_result_tampering(tmp_path):
         AdvisoryEntryPriceConfirmationRequestV1.model_validate(payload)
 
 
+def test_old_v1_request_digest_remains_unchanged_when_legacy_is_absent(tmp_path):
+    from backend.services.advisory_model_first.price_range_contracts import canonical_json_sha256
+    request = build_entry_price_confirmation_request(**request_values(tmp_path))
+    old_payload = request.model_dump(mode="json", exclude={"request_id", "request_sha256", "legacy_provenance"})
+    assert canonical_json_sha256(old_payload) == request.request_sha256
+
+
+@pytest.mark.parametrize("formal", [True, False])
+def test_legacy_calendar_exception_is_exploratory_only(tmp_path, formal):
+    values = request_values(tmp_path, formal=formal, dates=3)
+    reference = values["data_identity"]["candidate_provenance"]
+    values["legacy_provenance"] = dict(source_plan=reference, identity_evidence=reference, consumer_handoff=reference)
+    values["days"].pop(1)
+    values["target_calendar"].pop(1)
+    if formal:
+        with pytest.raises(ValidationError, match="legacy provenance"):
+            build_entry_price_confirmation_request(**values)
+    else:
+        request = build_entry_price_confirmation_request(**values)
+        assert len(request.days) == 2
+        # Authority loading additionally requires equality with the entire
+        # original plan. A calendar exception is not permission to shrink it.
+        assert request.decision_use == "NAVIGATION_ONLY"
+
+
 @pytest.mark.parametrize("violation", ["future_fit", "consumed", "missing_day", "duplicate", "shallow", "threshold", "early_replay", "contract_scope"])
 def test_prepare_rejects_leakage_or_changed_contract(tmp_path, violation):
     values = request_values(tmp_path)
