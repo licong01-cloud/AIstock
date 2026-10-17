@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import nullcontext
 from datetime import UTC, date, datetime, time
 from typing import Any, Callable, Protocol
 from zoneinfo import ZoneInfo
@@ -9,6 +10,9 @@ from zoneinfo import ZoneInfo
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 
 from .localsim_control import LocalSimControlPlaneService
+from .localsim_file_inputs import (
+    FILE_BINDING_KEY, FILE_SOURCE_ID, frozen_file_binding, localsim_file_inputs, resolve_replay_source,
+)
 from .localsim_cutover_readiness import LocalSimCutoverReadiness
 from .localsim_product_authority import LocalSimProductAuthority
 from .localsim_product_control import LocalSimHistoricalSourceAuthorityProtocol
@@ -34,10 +38,23 @@ class LocalSimHistoricalReplayDayExecutor:
         self.lifecycle_scheduler = lifecycle_scheduler
 
     def __call__(self, job: LocalSimReplayJobV1, trade_date) -> None:
+        context = nullcontext()
+        source = "DB_HISTORICAL"
+        if job.historical_source_id == FILE_SOURCE_ID:
+            release = self.lifecycle_scheduler.repository.get_strategy_runtime_release(job.release_id)
+            binding = frozen_file_binding(release)
+            if binding is None or binding["binding_hash"] != job.historical_source_sha256:
+                raise DataUnavailableError("LocalSIM replay frozen file source mismatch")
+            context = localsim_file_inputs(binding, run_id=f"{job.replay_job_id}:{trade_date.isoformat()}")
+            source = "DATASET_FILES"
+        with context:
+            return self._run_day(job, trade_date, source)
+
+    def _run_day(self, job, trade_date, source):
         as_of_time = datetime.combine(trade_date, time(15, 30), tzinfo=ZoneInfo("Asia/Shanghai"))
         result = self.lifecycle_scheduler.run_once(
             trade_date=trade_date,
-            data_source="DB_HISTORICAL",
+            data_source=source,
             broker_backend=SimulationBrokerBackend.LOCAL_SIM,
             strategy_id=job.simulation_account_id,
             release_id=job.release_id,
@@ -308,12 +325,8 @@ class LocalSimReplayLifecycleOwner:
 
     def _advance(self, *, job: LocalSimReplayJobV1, as_of_time: datetime) -> LocalSimReplayJobV1:
         current = self.repository.get_replay_job(job.replay_job_id)
-        source = self.historical_source_authority.resolve(
-            historical_source_id=current.historical_source_id,
-            start_trade_date=current.start_trade_date,
-            end_trade_date=current.end_trade_date,
-            require_latest_completed=False,
-        )
+        source = resolve_replay_source(self.historical_source_authority, job=current,
+                                       release=self.repository.get_release(current.release_id))
         if (
             source.historical_source_sha256 != current.historical_source_sha256
             or local_sim_calendar_snapshot_sha256(source.trading_days) != current.calendar_snapshot_sha256
@@ -409,10 +422,10 @@ class LocalSimReplayLifecycleOwner:
     def _create_catchup_successor(
         self, *, job: LocalSimReplayJobV1, latest_completed_trade_date: date, as_of_time: datetime,
     ) -> LocalSimReplayJobV1:
-        source = self.historical_source_authority.resolve(
-            historical_source_id=job.historical_source_id,
-            start_trade_date=job.start_trade_date,
+        source = resolve_replay_source(
+            self.historical_source_authority, job=job, release=self.repository.get_release(job.release_id),
             end_trade_date=latest_completed_trade_date,
+            require_latest_completed=True,
         )
         days = tuple(day for day in source.trading_days if day > job.end_trade_date)
         if (
@@ -452,6 +465,9 @@ class LocalSimReplayLifecycleOwner:
         metadata = {"localsim_runtime_profile_config": resolved.runtime_profile_version.config_json}
         if effective_to is not None:
             metadata["localsim_replay_predecessor_id"] = job.replay_job_id
+            file_binding = frozen_file_binding(historical_release)
+            if file_binding is not None:
+                metadata[FILE_BINDING_KEY] = file_binding
         return self.control.build_successor_release_bundle(
             account_id=account.account_id,
             base_release_id=job.release_id,

@@ -993,6 +993,7 @@ def advisory_historical_range_backend(session: nox.Session) -> None:
     _run_pytest(
         session,
         "backend/tests/advisory_historical_range",
+        "backend/tests/test_inference_engine_historical_readonly.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -1218,6 +1219,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
     )
     _run_pytest(
         session,
+        "backend/tests/data_service/test_frozen_dataset.py",
         "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
         "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
         "backend/tests/scripts/test_backfill_raw_volume_precision.py",

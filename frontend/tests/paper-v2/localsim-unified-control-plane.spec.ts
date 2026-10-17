@@ -195,7 +195,7 @@ test("LocalSIM UI uses only the successor control plane and never calls session 
   const replayCreate = requests.find((item) => item.method === "POST" && item.path.endsWith("/localsim/replays"));
   expect(replayCreate?.body).toMatchObject({
     schema_version: "localsim_replay_create_request_v1",
-    historical_source_id: "market.kline_minute_raw.v1",
+    historical_source_id: "dataset_files.frozen_market.v1",
     end_trade_date: "2026-08-28",
   });
   expect(JSON.stringify(replayCreate?.body)).not.toMatch(/source_sha256|calendar_snapshot|day_engine|cursor|safe_boundary/);

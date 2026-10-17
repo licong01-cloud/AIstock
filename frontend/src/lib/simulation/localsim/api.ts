@@ -194,7 +194,7 @@ export const localSimApi = {
   }): Promise<LocalSimControlResponse> {
     return request("/simulation-runtime/localsim/replays", post({
       schema_version: "localsim_replay_create_request_v1",
-      historical_source_id: "market.kline_minute_raw.v1",
+      historical_source_id: "dataset_files.frozen_market.v1",
       ...payload,
     }));
   },

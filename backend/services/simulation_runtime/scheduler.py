@@ -1124,6 +1124,11 @@ class ProductionSimulationRunContextProvider:
     ) -> dict[str, dict[str, Any]]:
         from backend.services.simulation_execution.localsim.suspension import LocalSimHistoricalSuspensionProvider
 
+        from .localsim_file_inputs import current_file_dataset, historical_suspension_provider
+        dataset = current_file_dataset()
+        if dataset is not None:
+            return historical_suspension_provider(dataset).load_statuses(
+                symbols=symbols, trade_date=trade_date, valuation_symbols=valuation_symbols)
         return LocalSimHistoricalSuspensionProvider(
             conn_factory=self._daily_trading_context_provider.conn_factory,
         ).load_statuses(symbols=symbols, trade_date=trade_date, valuation_symbols=valuation_symbols)
@@ -2700,6 +2705,11 @@ def _default_price_loader(symbols: list[str], trade_date: date) -> dict[str, flo
     unique_symbols = sorted({str(symbol).strip() for symbol in symbols if str(symbol).strip()})
     if not unique_symbols:
         return {}
+    from .localsim_file_inputs import current_file_dataset
+    dataset = current_file_dataset()
+    if dataset is not None:
+        from backend.services.simulation_data.frozen_file_adapters import file_reference_prices
+        return file_reference_prices(dataset, symbols=unique_symbols, as_of_date=trade_date)
     try:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
@@ -12662,7 +12672,8 @@ class SimulationLifecycleScheduler:
         snapshot_time: datetime,
     ) -> tuple[dict[str, float], dict[str, LocalSimMarketMarkV1]]:
         source = str(context.market_data_source or "").strip()
-        if positions and source not in {MinuteDataSource.TDX_REALTIME.value, MinuteDataSource.DB_HISTORICAL.value}:
+        if positions and source not in {MinuteDataSource.TDX_REALTIME.value, MinuteDataSource.DB_HISTORICAL.value,
+                                        MinuteDataSource.DATASET_FILES.value}:
             raise DataUnavailableError(
                 "LocalSim market mark source is missing or unsupported",
                 context={
@@ -12896,7 +12907,7 @@ class SimulationLifecycleScheduler:
         )
 
         keys = [key for key in (NATIVE_PRE_CLOSE_KEY, REFERENCE_KEY) if key in tradability]
-        if source != MinuteDataSource.DB_HISTORICAL.value or len(keys) != 1:
+        if source not in {MinuteDataSource.DB_HISTORICAL.value, MinuteDataSource.DATASET_FILES.value} or len(keys) != 1:
             raise DataUnavailableError(
                 "LocalSim historical suspended mark requires one frozen valuation authority",
                 context={"reason_code": "LOCALSIM_SUSPENDED_MARK_AUTHORITY_CONFLICT", "symbol": record.symbol},
@@ -12906,13 +12917,13 @@ class SimulationLifecycleScheduler:
                 tradability[NATIVE_PRE_CLOSE_KEY], symbol=record.symbol, trade_date=trade_date, price=record.price,
             )
             expected_provenance = LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE
-            expected_source = "market.stk_limit.pre_close:frozen_historical_suspension"
+            expected_source = reference["price_source"] + ":frozen_historical_suspension"
         else:
             reference = validate_suspension_reference(
                 tradability[REFERENCE_KEY], symbol=record.symbol, trade_date=trade_date, price=record.price,
             )
             expected_provenance = LocalSimMarketMarkProvenance.SUSPENDED_REFERENCE_CLOSE
-            expected_source = "market.kline_daily_raw:strategy_package_reference_price_availability_v1"
+            expected_source = reference["reference_source"] + ":strategy_package_reference_price_availability_v1"
         if (
             record.suspension_reference != reference
             or record.provenance != expected_provenance
@@ -15803,7 +15814,7 @@ class SimulationLifecycleScheduler:
             return {}
         daily_loader = getattr(self.context_provider, "load_daily_trading_context", None)
         if (binding.broker_backend == SimulationBrokerBackend.LOCAL_SIM
-                and context.market_data_source == MinuteDataSource.DB_HISTORICAL.value
+                and context.market_data_source in {MinuteDataSource.DB_HISTORICAL.value, MinuteDataSource.DATASET_FILES.value}
                 and getattr(self.context_provider, "provider_mode", None) == "production"):
             return self.context_provider.load_historical_pre_trade_tradability(
                 symbols=symbols, trade_date=trade_date, valuation_symbols=list(context.current_positions),

@@ -7,6 +7,7 @@ from datetime import date
 import hashlib
 from math import isfinite
 from pathlib import Path
+import re
 from typing import Any, Mapping
 
 from backend.data_service import suspension_day_authority as public_suspension
@@ -40,6 +41,14 @@ def _public_rows(facts):
              "suspend_type": f["suspend_type"], "suspend_timing": f["suspend_timing"]} for f in facts]
 
 
+def _evidence_source(value, database_source, file_source):
+    if "file_binding_hash" not in value:
+        return database_source
+    if not re.fullmatch(r"[0-9a-f]{64}", str(value["file_binding_hash"])):
+        raise ValueError("invalid frozen file binding identity")
+    return file_source
+
+
 def _validate_frozen_day_authority(value, *, symbol, trade_date):
     frozen = value[DAY_AUTHORITY_KEY]
     if not all(f.get("symbol") == symbol and f.get("trade_date") == trade_date.isoformat()
@@ -67,7 +76,7 @@ def validate_suspension_fact(evidence: Mapping[str, Any], *, symbol: str, trade_
         valid = (
             value.get("schema_version") in {REFERENCE_KEY, SUSPENSION_KEY, NATIVE_PRE_CLOSE_KEY}
             and value.get("symbol") == symbol and value.get("trade_date") == trade_date.isoformat()
-            and value.get("suspension_source") == "market.suspend_d"
+            and value.get("suspension_source") == _evidence_source(value, "market.suspend_d", "dataset_files.suspend_d")
             and date.fromisoformat(value["cutoff_date"]) < trade_date
             and (_validate_frozen_day_authority(value, symbol=symbol, trade_date=trade_date)
                  if DAY_AUTHORITY_KEY in value else (
@@ -91,7 +100,7 @@ def validate_suspended_native_pre_close(
     try:
         previous, upper, lower = (float(value[k]) for k in ("pre_close", "up_limit", "down_limit"))
         valid = (value.get("schema_version") == NATIVE_PRE_CLOSE_KEY
-                 and value.get("price_source") == "market.stk_limit.pre_close"
+                 and value.get("price_source") == _evidence_source(value, "market.stk_limit.pre_close", "dataset_files.prev_close")
                  and value.get("price_basis") == "raw"
                  and all(isfinite(p) and p > 0 for p in (previous, upper, lower))
                  and lower < previous < upper and (price is None or price == previous))
@@ -118,8 +127,8 @@ def validate_suspension_reference(
             value.get("schema_version") == REFERENCE_KEY
             and value.get("symbol") == symbol and value.get("trade_date") == trade_date.isoformat()
             and value.get("price_basis") == "raw"
-            and value.get("reference_source") == "market.kline_daily_raw"
-            and value.get("suspension_source") == "market.suspend_d"
+            and value.get("reference_source") == _evidence_source(value, "market.kline_daily_raw", "dataset_files.daily_pv")
+            and value.get("suspension_source") == _evidence_source(value, "market.suspend_d", "dataset_files.suspend_d")
             and observation.get("contract_version") == REFERENCE_PRICE_CONTRACT
             and observation.get("as_of_date") == cutoff.isoformat()
             and observation.get("state") in {"EXACT_CLOSE", "SUSPENSION_LAST_OBSERVED_CLOSE"}
@@ -145,12 +154,16 @@ class LocalSimHistoricalSuspensionProvider:
     """Read each D independently; reuse the public reference-price implementation."""
 
     def __init__(self, *, conn_factory=None, calendar=None, reference_loader=None, limit_provider=None,
-                 authority: Mapping[str, Any] | None = None) -> None:
+                 authority: Mapping[str, Any] | None = None, event_loader=None, file_binding_hash=None) -> None:
         self.conn_factory = conn_factory or get_conn
         self.calendar = calendar or TradeCalendarProvider(conn_factory=self.conn_factory)
         self.reference_loader = reference_loader or load_reference_prices
         self.limit_provider = limit_provider or StkLimitPriceProvider(conn_factory=self.conn_factory)
         self.authority = deepcopy(public_suspension.load_authority(_LOADED_AUTHORITY if authority is None else authority))
+        self.event_loader = event_loader
+        self.file_binding_hash = file_binding_hash
+        if (event_loader is None) != (file_binding_hash is None):
+            raise ValueError("file suspension events require an explicit frozen binding")
 
     def load_statuses(self, *, symbols: list[str], trade_date: date,
                       valuation_symbols: list[str] | None = None) -> dict[str, dict[str, Any]]:
@@ -165,16 +178,21 @@ class LocalSimHistoricalSuspensionProvider:
                 context={"reason_code": "LOCALSIM_SUSPENSION_CALENDAR_INVALID"},
             )
         facts: dict[str, list[dict[str, Any]]] = {s: [] for s in normalized}
-        with self.conn_factory() as conn:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT ts_code, trade_date, suspend_type, suspend_timing FROM market.suspend_d "
-                    "WHERE trade_date = %s AND ts_code = ANY(%s) ORDER BY ts_code, suspend_type, suspend_timing",
-                    (trade_date, normalized),
-                )
-                for symbol, day, kind, timing in cur.fetchall():
-                    facts[symbol].append({"symbol": symbol, "trade_date": day.isoformat(),
-                                          "suspend_type": kind, "suspend_timing": timing})
+        if self.event_loader is not None:
+            rows = self.event_loader(normalized, trade_date)
+        else:
+            with self.conn_factory() as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        "SELECT ts_code, trade_date, suspend_type, suspend_timing FROM market.suspend_d "
+                        "WHERE trade_date = %s AND ts_code = ANY(%s) ORDER BY ts_code, suspend_type, suspend_timing",
+                        (trade_date, normalized),
+                    )
+                    rows = cur.fetchall()
+        for symbol, day, kind, timing in rows:
+            facts[symbol].append({"symbol": symbol, "trade_date": day.isoformat(),
+                                  "suspend_type": kind, "suspend_timing": timing})
+        source = "dataset_files.suspend_d" if self.file_binding_hash else "market.suspend_d"
         projected = public_suspension.project_suspension_days(
             _public_rows([row for rows in facts.values() for row in rows]),
             authority=self.authority, required_dates=[trade_date],
@@ -216,24 +234,26 @@ class LocalSimHistoricalSuspensionProvider:
             status: dict[str, Any] = {
                 "symbol": symbol, "trade_date": trade_date.isoformat(), "is_tradable": not suspended,
                 "reason_code": "SUSPENDED_BY_SUSPEND_D" if suspended else "OK",
-                "source": "market.suspend_d",
+                "source": source,
                 DAY_AUTHORITY_KEY: authority_record,
                 "suspend_status": {"is_suspended": suspended, "suspend_type": "S" if suspended else None,
-                                   "suspend_timing": None, "source": "market.suspend_d"},
+                                   "suspend_timing": None, "source": source},
             }
             if suspended:
                 fact = {
                     "schema_version": SUSPENSION_KEY, "symbol": symbol, "trade_date": trade_date.isoformat(),
-                    "cutoff_date": cutoff.isoformat(), "suspension_source": "market.suspend_d",
+                    "cutoff_date": cutoff.isoformat(), "suspension_source": source,
                     "suspension_facts": facts[symbol],
                     DAY_AUTHORITY_KEY: authority_record,
                 }
+                if self.file_binding_hash:
+                    fact["file_binding_hash"] = self.file_binding_hash
                 fact["evidence_sha256"] = canonical_json_sha256(fact)
                 status[SUSPENSION_KEY] = validate_suspension_fact(fact, symbol=symbol, trade_date=trade_date)
             if symbol in native:
                 limit = limits[symbol]
                 evidence = {**status[SUSPENSION_KEY], "schema_version": NATIVE_PRE_CLOSE_KEY,
-                            "price_source": "market.stk_limit.pre_close", "price_basis": "raw",
+                            "price_source": "dataset_files.prev_close" if self.file_binding_hash else "market.stk_limit.pre_close", "price_basis": "raw",
                             "pre_close": float(limit.pre_close), "up_limit": float(limit.up_limit),
                             "down_limit": float(limit.down_limit)}
                 evidence.pop("evidence_sha256")
@@ -246,7 +266,7 @@ class LocalSimHistoricalSuspensionProvider:
                     **status[SUSPENSION_KEY],
                     "schema_version": REFERENCE_KEY, "symbol": symbol, "trade_date": trade_date.isoformat(),
                     "cutoff_date": cutoff.isoformat(), "price_basis": "raw",
-                    "reference_source": "market.kline_daily_raw", "suspension_source": "market.suspend_d",
+                    "reference_source": "dataset_files.daily_pv" if self.file_binding_hash else "market.kline_daily_raw", "suspension_source": source,
                     "suspension_facts": facts[symbol], "reference_close": prices.get(symbol),
                     "reference_price_availability": getattr(prices, "observations", {}).get(symbol, {}),
                 }

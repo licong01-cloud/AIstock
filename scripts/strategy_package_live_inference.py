@@ -34,7 +34,7 @@ import backend.inference_engine as inference_engine_module  # noqa: E402
 from backend.inference_engine import InferenceEngine  # noqa: E402
 from backend.services.advisory_historical_range.factor_input_materialization import FactorInputSession  # noqa: E402
 from backend.services.advisory_historical_range.inference_session import InferenceResourceSession, inference_output_lease, frozen_code_identity  # noqa: E402
-from backend.services.advisory_historical_range.inference_inputs import database_input_session  # noqa: E402
+from backend.services.advisory_historical_range.inference_inputs import database_input_session, file_input_session  # noqa: E402
 from backend.services.advisory_historical_range.inference_features import InferenceFeatureSession  # noqa: E402
 from backend.services.advisory_historical_range.selection_signal_kernel import SelectionSignalDayV1  # noqa: E402
 from backend.services.strategy_package.advisory_input_projection import (  # noqa: E402
@@ -132,6 +132,8 @@ def main() -> int:
     parser.add_argument("--consumer-scope", choices=("ADVISORY", "LOCALSIM"), default="ADVISORY")
     parser.add_argument("--run-id", help="This consumer's independent run identity")
     parser.add_argument("--input-revision", help="Read-only source/revision identity; not a package approval")
+    parser.add_argument("--dataset-binding", help="Frozen file binding JSON, registered by this consumer")
+    parser.add_argument("--dataset-root", help="Verified node locator for the same frozen release, without copying assets")
     parser.add_argument("--resume", action="store_true", help="Resume this same consumer/run's exact input and code only")
     parser.add_argument("--performance-reference", action="store_true", help="Isolated read-only comparison with the pre-optimization algorithms")
     args = parser.parse_args()
@@ -144,6 +146,10 @@ def main() -> int:
     os.environ.setdefault("AISTOCK_INFERENCE_NATURAL_DAY_BUFFER", "20")
     if args.performance_reference and not args.historical_read_only:
         parser.error("--performance-reference is read-only and cannot publish business signals")
+    if args.dataset_binding and not args.historical_read_only:
+        parser.error("--dataset-binding is an explicit historical read-only input")
+    if args.dataset_root and not args.dataset_binding:
+        parser.error("--dataset-root requires --dataset-binding")
     default_temp = ((Path("X:/AIstock_temp") if os.name == "nt" else Path("/mnt/x/AIstock_temp"))
                     / "advisory_inference" / args.consumer_scope / (args.run_id or uuid.uuid4().hex))
     temporary_root = _configure_temporary_root(args.temp_root or str(default_temp))
@@ -160,8 +166,8 @@ def main() -> int:
     with ExitStack() as stack:
         # Same legal DB input adapter for standalone and batch. A standalone
         # session retains no history; there is no shared cache or fresh fit.
-        inputs = database_input_session(consumer_scope=args.consumer_scope, run_id=args.run_id or uuid.uuid4().hex,
-                                        source_identity=args.input_revision or "standalone_read", max_bytes=0)
+        inputs = _input_session(args, run_id=args.run_id or uuid.uuid4().hex,
+                                source_identity=args.input_revision or "standalone_read", max_bytes=0)
         stack.callback(inputs.close)
         engine = InferenceEngine(temp_root=temporary_root, performance_reference=args.performance_reference,
                                  required_window_resolver=_strategy_package_required_window, input_session=inputs)
@@ -201,7 +207,8 @@ def _run_request(
         persist_signals=not historical_read_only,
         universe_ensure=not historical_read_only,
         receipt_admissibility=(
-            "RETROSPECTIVE_DB_CONTENT_HASH"
+            ("RETROSPECTIVE_FILE_CONTENT_HASH" if getattr(getattr(engine, "input_session", None), "file_dataset", None) is not None
+             else "RETROSPECTIVE_DB_CONTENT_HASH")
             if historical_read_only
             else "PROSPECTIVE_FIRST_OBSERVED"
         ),
@@ -301,6 +308,28 @@ def _run_historical_plan(args: argparse.Namespace, runtime_workspace: Path) -> i
         return _run_owned_historical_plan(args, runtime_workspace)
 
 
+def _file_binding(args):
+    value = getattr(args, "dataset_binding", None)
+    if not value:
+        return None
+    path = Path(value)
+    if path.stat().st_size > 2 * 1024**2:
+        raise ValueError("frozen dataset binding exceeds metadata budget")
+    binding = json.loads(path.read_text(encoding="utf-8"))
+    if args.input_revision and args.input_revision != binding.get("binding_hash"):
+        raise ValueError("input revision differs from the registered file binding")
+    return binding
+
+
+def _input_session(args, *, run_id, source_identity, max_bytes):
+    binding = _file_binding(args)
+    if binding is not None:
+        return file_input_session(consumer_scope=args.consumer_scope, run_id=run_id, binding=binding,
+                                  root_override=getattr(args, "dataset_root", None), max_bytes=max_bytes)
+    return database_input_session(consumer_scope=args.consumer_scope, run_id=run_id,
+                                  source_identity=source_identity, max_bytes=max_bytes)
+
+
 def _run_owned_historical_plan(args: argparse.Namespace, runtime_workspace: Path) -> int:
     plan = json.loads(Path(args.historical_plan).read_text(encoding="utf-8"))
     if not isinstance(plan, list) or not plan:
@@ -342,6 +371,9 @@ def _run_owned_historical_plan(args: argparse.Namespace, runtime_workspace: Path
         raise FileExistsError("historical output already exists; use a new task output without overwriting an old run")
     run_id = args.run_id or uuid.uuid4().hex
     source_revision = args.input_revision or f"run_snapshot:{args.consumer_scope}:{run_id}"
+    binding_value = _file_binding(args)
+    if binding_value is not None:
+        source_revision = binding_value["binding_hash"]
     binding = _plan_binding(plan, parsed, args.consumer_scope, run_id, source_revision, args.performance_reference)
     started = time.perf_counter()
     index: dict[str, Any] = {"ok": False, "status": "RUNNING", "execution_mode": "historical_resource_session",
@@ -373,8 +405,8 @@ def _run_owned_historical_plan(args: argparse.Namespace, runtime_workspace: Path
     try:
         session = InferenceResourceSession(max_bytes=args.resource_cache_mib * 1024 * 1024)
         stack.callback(session.close)
-        inputs = database_input_session(consumer_scope=args.consumer_scope, run_id=run_id, source_identity=source_revision,
-                                        max_bytes=0 if args.performance_reference else args.data_cache_mib * 1024**2)
+        inputs = _input_session(args, run_id=run_id, source_identity=source_revision,
+                               max_bytes=0 if args.performance_reference else args.data_cache_mib * 1024**2)
         stack.callback(inputs.close)
         features = InferenceFeatureSession(max_bytes=0 if args.performance_reference else args.feature_cache_mib * 1024**2)
         stack.callback(features.close)
@@ -461,7 +493,7 @@ def _verify_owned_day(path: Path, *, clocks: SelectionSignalDayV1, binding: str,
 
 
 def _plan_binding(plan, parsed, consumer_scope, run_id, source_revision, reference):
-    files = [Path(__file__), Path(inference_engine_module.__file__)]
+    files = [Path(__file__), Path(inference_engine_module.__file__), REPO_ROOT / "backend/data_service/frozen_dataset.py"]
     leaf = REPO_ROOT / "backend/services/advisory_historical_range"
     files += [leaf / (name + ".py") for name in (
         "alpha158_batch", "inference_session", "inference_inputs", "inference_features", "selection_signal_kernel", "factor_input_materialization")]
@@ -520,6 +552,7 @@ if __name__ == "__main__":
         diagnostic = {
             "ok": False,
             "error_type": type(exc).__name__,
+            "reason_code": getattr(exc, "reason_code", type(exc).__name__),
             "message": str(exc),
             "malformed_ts_code_samples": _extract_malformed_ts_code_samples(str(exc)),
         }
