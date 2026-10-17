@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1954",
-  "closed_at": null,
+  "closed_at": "2026-10-17T09:54:34.664967Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -184,10 +184,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/bug1954-post-restart-r1.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1954",
+      "business_smoke_semantic": {
+        "contract_id": "advisory_historical_operation_status_readback",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "cd9c20d0a8445c1c522038a67d9a1c13fc9c336e0975013a997fa01d2b98b212",
+      "expected_identity": "9cf9c0202a5da5035eba3fa032d676162aa2d8a0",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T09:52:51.317377Z",
+      "mode": "read_only",
+      "observed_identity": "6f5cf1efc5361b6c7e2b862c82800cf431e0f77d",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e8b5b92b31127b8c0860bbe55f73fc3c58ce506c9fc6e3f25f69850e52fbaf2c",
+      "receipt_sha256": "0db9f301b392b77be0babbcbc32d2c06bceef27e54cb67f051e43ae229b52cfc",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a279ef04ff385e8a6a48f0e614160c378c92e96ec9bbd60af186bfd2931063f9",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -219,7 +241,7 @@
     ],
     "validation_evidence_digest": "04fda47ca3a61f30c79dfedbd73b44161823b97c42c42966d5034ab6d1e1e693"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory_historical_range"
   ],
