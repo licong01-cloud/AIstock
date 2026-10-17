@@ -325,7 +325,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         "source_audit_contract": source.AUDIT_SCHEMA,
     }
     old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
-    assert adapter.adapter_version == "15"
+    assert adapter.adapter_version == "16"
     assert adapter.contract_sha256 != old_identity
     assert adapter.contract_sha256 == digest_named_fields(
         "aistock_monthly_postgres_source_adapter_v1",
@@ -336,6 +336,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
             "business_validation_scope": "target_calendar_month_only_v1",
             "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
             "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
+            "historical_classification_policy": "immutable_version_qualified_effective_history_v1",
             "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
             "managed_writer_scope_policy": "bounded_post_cutoff_proven_date_writers_v3",
             "repair_input_provenance_policy": "canonical_repair_payload_cas_pin_v1",
@@ -925,9 +926,9 @@ def test_margin_suspended_quote_nulls_require_independent_zero_turnover(defect):
     gate = GateCounter("financial_moneyflow")
     audit_margin_publication(day=DAY, rows=values, receipt=receipt, gate=gate,
                             suspend_rows=suspension, daily_rows=daily, suspend_authority_sha256=authority)
-    assert gate.status == ("PASS" if defect in {None,"resume_and_suspend_zero"} else "BLOCKED")
+    assert gate.status == ("PASS" if defect is None else "BLOCKED")
     assert values[0]["rzrqye"] is None  # Never synthesize the published value.
-    if defect in {None,"resume_and_suspend_zero"}:
+    if defect is None:
         assert gate.expected_count == 2 and gate.observed_count == 1 and gate.explained_count == 1
         assert gate.exceptions[0].field == "rqye,rzrqye"
         assert gate.exceptions[0].symbol == SYMBOL
@@ -951,8 +952,6 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
     )
 
     codes = [f"801{i:03d}.SI" for i in range(131)]
-    monkeypatch.setattr(policy, "_NEVER_QUOTED", frozenset({codes[0]}))
-    monkeypatch.setattr(policy, "_LAST_PUBLISHED", {})
     monkeypatch.setattr(policy, "SW2021_L2_TAXONOMY_DIGEST", policy.taxonomy_digest(codes))
     data = rows()
     data.update(
@@ -972,7 +971,8 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
                 }
                 for pool in P0_POOL_IDS
             ],
-            "sw_index_classify": [{"index_code": code, "level": "L2"} for code in codes],
+            "sw_index_classify": [{"index_code": code, "level": "L2", "src": "SW2021",
+                                   "is_pub": "0" if code == codes[0] else "1"} for code in codes],
             "sw_index_member": [
                 {
                     "ts_code": SYMBOL if i == 1 else f"{10000 + i:06d}.SZ",
@@ -1085,7 +1085,7 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
     daily_gate = next(gate for gate in gates if gate.gate == "daily_price")
     assert daily_gate.expected_count == 1
     assert daily_gate.unexplained_missing_count == int(missing)
-    assert len(artifacts) == (21 if old_partition else 22)
+    assert len(artifacts) == (22 if old_partition else 23)
     readback = json.loads((tmp_path / daily_gate.readback_ref).read_text())
     assert readback["unexplained_missing_count"] == int(missing)
     assert readback["database_write_performed"] is False
@@ -1251,7 +1251,7 @@ def test_only_rule_preparable_limits_can_reach_materialization(tmp_path):
                                    predecessor_cutoff=date(2026, 8, 31), changes=())
 
 
-@pytest.mark.parametrize("defect", [None, "null", "duplicate", "denominator"])
+@pytest.mark.parametrize("defect", [None, "null", "nan", "inf", "out_of_band", "duplicate", "denominator"])
 def test_prepared_limits_close_actual_month_rows_not_raw_nulls(tmp_path, monkeypatch, defect):
     import json
     from types import SimpleNamespace
@@ -1272,6 +1272,10 @@ def test_prepared_limits_close_actual_month_rows_not_raw_nulls(tmp_path, monkeyp
               for day in days for code in codes]
     if defect == "null":
         values[0]["pre_close"] = None
+    elif defect in {"nan", "inf"}:
+        values[0]["pre_close"] = float(defect)
+    elif defect == "out_of_band":
+        values[0]["pre_close"] = "20.00"
     elif defect == "duplicate":
         values.append(dict(values[0]))
     elif defect == "denominator":

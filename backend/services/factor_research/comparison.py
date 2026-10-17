@@ -366,7 +366,9 @@ def _hac(values: list[dict], maxlags: int, calendar: pd.DatetimeIndex) -> dict:
         array = np.asarray([item["value"] for item in segment], dtype=float)
         report: dict[str, Any] = {"start": segment[0]["date"], "end": segment[-1]["date"],
                                   "n_dates": len(segment), "mean": float(array.mean()),
-                                  "hac_maxlags": maxlags}
+                                  "hac_maxlags": maxlags, "mean_ci95_normal": None,
+                                  "serial_correlation_adjusted": maxlags > 0,
+                                  "interval_method": "asymptotic_normal_95_bartlett_hac_no_multiplicity_adjustment"}
         if len(array) <= maxlags + 1 or np.allclose(array, array[0]):
             report.update(standard_error=None, t_value=None, reason="insufficient_or_zero_variance")
         else:
@@ -380,7 +382,9 @@ def _hac(values: list[dict], maxlags: int, calendar: pd.DatetimeIndex) -> dict:
             else:
                 standard_error = float(np.sqrt(lrv / len(array)))
                 report.update(standard_error=standard_error,
-                              t_value=float(array.mean() / standard_error), reason=None)
+                              t_value=float(array.mean() / standard_error), reason=None,
+                              mean_ci95_normal=[float(array.mean() - 1.959963984540054 * standard_error),
+                                                float(array.mean() + 1.959963984540054 * standard_error)])
         reports.append(report)
     return {"status": "computed", "reason": None if len(reports) == 1 else "reported_by_contiguous_segment",
             "segments": reports, "overall_mean": float(np.mean([item["value"] for item in values])),

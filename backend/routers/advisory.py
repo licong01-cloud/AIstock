@@ -1156,13 +1156,30 @@ def list_version_detail(
 
 
 @router.get("/programs/{program_id}/returns")
-def returns(program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service)) -> dict[str, Any]:
+def returns(
+    program_id: str, service: AdvisoryProgramService = Depends(get_advisory_program_service),
+    buy_cost_bps: float | None = Query(default=None, ge=0, lt=10000),
+    sell_cost_bps: float | None = Query(default=None, ge=0, lt=10000),
+) -> dict[str, Any]:
     try:
-        return {
-            "ok": True,
-            "returns": service.return_history(program_id),
-            "metrics": service.program_metrics(program_id),
-        }
+        return {"ok": True, **service.return_snapshot(program_id, buy_cost_bps=buy_cost_bps, sell_cost_bps=sell_cost_bps)}
+    except TradingCoreError as exc:
+        _raise_http(exc)
+
+
+@router.get("/performance-comparison")
+def performance_comparison(
+    start_date: date, end_date: date, program_ids: list[str] | None = Query(default=None),
+    buy_cost_bps: float | None = Query(default=None, ge=0, lt=10000),
+    sell_cost_bps: float | None = Query(default=None, ge=0, lt=10000),
+    benchmark_instrument: str = Query(default="000300.SH", min_length=1, max_length=32),
+    service: AdvisoryProgramService = Depends(get_advisory_program_service),
+) -> dict[str, Any]:
+    try:
+        return {"ok": True, "comparison": service.performance_comparison(
+            start_date=start_date, end_date=end_date, program_ids=program_ids,
+            buy_cost_bps=buy_cost_bps, sell_cost_bps=sell_cost_bps, benchmark_instrument=benchmark_instrument,
+        )}
     except TradingCoreError as exc:
         _raise_http(exc)
 

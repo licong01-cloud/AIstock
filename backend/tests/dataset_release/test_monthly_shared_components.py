@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 import hashlib
+import json
 import shutil
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,7 @@ from backend.services.dataset_release.monthly_shared_components import (
     FrozenMonthlySharedComponentBuilder,
     MonthlySharedComponentsError,
     _build_sector_membership,
+    _build_historical_sector_membership,
     _index_pool_intervals,
     _pit_intervals,
     _append_sector_month_sidecars,
@@ -31,6 +33,11 @@ from backend.services.dataset_release.pit import freeze_pit_snapshot
 from backend.services.dataset_release.sector_enrichment import FrozenSectorEnricher
 from backend.services.dataset_release.shared_sector_context import (
     SECTOR_QUOTE_AVAILABILITY_SCHEMA,
+    build_release_sw_l2_code_map_payload, validate_release_sw_l2_code_map,
+)
+from backend.services.dataset_release.monthly_sector_quote_facts import (
+    QUOTE_FACTS_PATH, QUOTE_FACTS_SCHEMA, SectorQuoteFactsError,
+    build_sector_quote_facts,
 )
 
 
@@ -53,6 +60,132 @@ def _snapshot():  # type: ignore[no-untyped-def]
         source_fingerprint_sha256="a" * 64,
         parameter_hash="b" * 64,
     )
+
+
+def test_native_builder_reads_full_market_inventory_above_small_control_cap(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_shared_components as module
+    from backend.services.dataset_release import monthly_build_bridge
+
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    cutoff = date(2026, 9, 30)
+    source_sha, predecessor_sha = "a" * 64, "b" * 64
+    files = {f"minute_bin/qlib/features/SH{i:06d}/close.1min.bin": {
+        "sha256": "c" * 64, "size": 123456789, "signature": [1, i, 123456789, 1791900000000000000],
+    } for i in range(100_000)}
+    authority = {"schema_version": "aistock_monthly_native_component_authority_v1",
+        "validation_scope": "month_delta", "cutoff": cutoff.isoformat(), "release_id": "september",
+        "source_bundle_sha256": source_sha, "predecessor_manifest_sha256": predecessor_sha,
+        "verified_output_files": files}
+    reference = cas.put_json(authority)
+    assert reference.size > 16 * 1024 * 1024
+    monkeypatch.setattr(module, "load_source_stage_receipt",
+        lambda *args, **kwargs: SimpleNamespace(artifact_ready_contract_ref={"frozen": True}))
+    monkeypatch.setattr(monthly_build_bridge, "load_monthly_predecessor_prefix",
+        lambda **kwargs: SimpleNamespace(manifest_sha256=predecessor_sha))
+    def reached_files(*args, **kwargs):
+        raise RuntimeError("verified authority reached physical files")
+    monkeypatch.setattr(module, "_plain_existing_file", reached_files)
+    profile = SimpleNamespace(start_date=date(2018, 8, 1), profile="fixture")
+    context = SimpleNamespace(stage="BUILD", plan={"target_cutoff": cutoff.isoformat(), "release_id": "september"})
+    compiled = SimpleNamespace(source_stage_receipt_ref=reference, source_bundle_sha256=source_sha,
+        physical_plan={"build_inputs": {"monthly_legacy_predecessor": {"frozen": True}}})
+    builder = FrozenMonthlySharedComponentBuilder(profile, cas, date(2024, 7, 1))
+    with pytest.raises(RuntimeError, match="reached physical files"):
+        builder.execute(context=context, staging_root=tmp_path, compiled=compiled,
+            validation_result={"validation_scope": "month_delta", "validation_ref": reference.as_dict(),
+                "component_artifact_manifest_ref": reference.as_dict(), "verified_output_files": files})
+
+
+@pytest.mark.parametrize("symbol,day,verified", [
+    ("603616.SH", date(2026, 1, 22), True),
+    ("000001.SZ", date(2026, 9, 1), False),
+])
+def test_suspend_export_resolves_only_disclosure_backed_mixed_events(tmp_path, symbol, day, verified):
+    import json
+    from backend.services.dataset_release.monthly_shared_components import MonthlySharedComponentsError
+    kwargs = dict(root=tmp_path, rows=[dict(ts_code=symbol, trade_date=day, suspend_type=kind,
+                  suspend_timing=None) for kind in ("S", "R")], pit_rows=[(symbol, day, day)],
+                  calendar=(day,), profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
+    if not verified:
+        with pytest.raises(MonthlySharedComponentsError, match="unresolved suspension"):
+            _build_suspend(**kwargs)
+        assert not (tmp_path / "components").exists()
+        return
+    parquet, meta, keys, _count = _build_suspend(**kwargs)
+    frame = pd.read_parquet(parquet)
+    evidence = json.loads(meta.read_text())
+    assert len(frame) == 1 and keys == {(symbol, day)}
+    assert frame["suspend_timing"].isna().all()
+    assert len(evidence["raw_provider_events"]) == 2
+    assert evidence["day_resolutions"][0]["basis"] == "OFFICIAL_DISCLOSURE"
+    assert evidence["historical_publication_time_proven"] is False
+
+
+@pytest.mark.parametrize("timing", ["9:34-9:44", "13:13-13:23,13:23-13:33"])
+def test_suspend_export_preserves_explicit_intraday_ranges_with_resume(tmp_path, timing):
+    day, symbol = date(2026, 9, 30), "000001.SZ"
+    rows = [dict(ts_code=symbol, trade_date=day, suspend_type="S", suspend_timing=timing),
+            dict(ts_code=symbol, trade_date=day, suspend_type="R", suspend_timing=None)]
+    parquet, meta, keys, count = _build_suspend(
+        root=tmp_path, rows=rows, pit_rows=[(symbol, day, day)], calendar=(day,),
+        profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
+    frame, evidence = pd.read_parquet(parquet), json.loads(meta.read_bytes())
+    assert count == 2 and keys == {(symbol, day)} and len(frame) == 1
+    assert frame.iloc[0]["suspend_timing"] == timing
+    assert len(evidence["raw_provider_events"]) == 2
+    assert evidence["day_resolutions"][0]["state"] == "INTRADAY_SUSPENDED"
+
+
+@pytest.mark.parametrize("corruption", [None, "source", "cutoff", "predecessor", "binding", "authority", "conflict"])
+def test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallback(tmp_path, corruption):
+    from backend.data_service.suspension_day_authority import digest, load_authority, SCHEMA, POLICY
+    from backend.services.dataset_release.monthly_suspension_repair import BINDING, SCHEMA as BINDING_SCHEMA, build_authority
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    snapshot = SimpleNamespace(source_manifest_ref=cas.put_json({}))
+    day, symbol = date(2026, 9, 15), "601238.SH"
+    empty = {"schema_version": SCHEMA, "policy": POLICY, "entries": []}
+    authority, provenance = build_authority(cas, snapshot, plan={}, operation_id="test", source_bundle_sha256="a" * 64)
+    assert authority == empty and provenance is None  # no checkout fallback
+    kwargs = dict(rows=[dict(ts_code=symbol, trade_date=day, suspend_type=k, suspend_timing=None) for k in ("S", "R")],
+        pit_rows=[(symbol, day, day)], calendar=(day,), profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
+    with pytest.raises(MonthlySharedComponentsError, match="unresolved suspension"):
+        _build_suspend(root=tmp_path / "before", suspension_authority=authority, **kwargs)
+    approved = load_authority()
+    binding = {"schema_version": BINDING_SCHEMA, "operation_id": "test", "source_bundle_sha256": "a" * 64,
+        "target_cutoff": "2026-09-30", "predecessor_manifest_sha256": "b" * 64,
+        "authority_ref": cas.put_json(approved).as_dict()}
+    plan = {BINDING: binding, BINDING + "_ref": {"sha256": digest(binding)},
+        "target_cutoff": "2026-09-30", "predecessor": {"dataset_manifest_sha256": "b" * 64}}
+    if corruption == "source":
+        binding["source_bundle_sha256"] = "c" * 64
+    elif corruption == "cutoff":
+        binding["target_cutoff"] = "2026-10-31"
+    elif corruption == "predecessor":
+        binding["predecessor_manifest_sha256"] = "c" * 64
+    elif corruption == "binding":
+        plan[BINDING + "_ref"]["sha256"] = "c" * 64
+    elif corruption == "authority":
+        binding["authority_ref"]["sha256"] = "c" * 64
+    elif corruption == "conflict":
+        original = json.loads(json.dumps(approved))
+        original["entries"] = [r for r in original["entries"] if r["ts_code"] == symbol]
+        original["entries"][0]["announcement_id"] += "-other"
+        snapshot.source_manifest_ref = cas.put_json({"suspension_day_authority": original})
+    if corruption != "binding":
+        plan[BINDING + "_ref"]["sha256"] = digest(binding)
+    if corruption is not None:
+        with pytest.raises((ValueError, RuntimeError), match="suspension|CAS|blob"):
+            build_authority(cas, snapshot, plan=plan, operation_id="test", source_bundle_sha256="a" * 64)
+        return
+    authority, provenance = build_authority(cas, snapshot, plan=plan, operation_id="test", source_bundle_sha256="a" * 64)
+    assert [(r["ts_code"], r["trade_date"]) for r in authority["entries"]] == [(symbol, day.isoformat())]
+    parquet, meta, keys, _ = _build_suspend(root=tmp_path / "after", suspension_authority=authority,
+        suspension_binding=provenance, **kwargs)
+    assert keys == {(symbol, day)} and len(pd.read_parquet(parquet)) == 1
+    readback = json.loads(meta.read_bytes())
+    assert readback["suspension_authority_binding"] == provenance
+    assert readback["day_resolutions"][0]["basis"] == "OFFICIAL_DISCLOSURE"
+    assert cas.get_json_bounded(snapshot.source_manifest_ref, max_bytes=1024) == {}
 
 
 def test_native_suspend_keeps_pinned_prefix_and_checks_only_new_month(tmp_path):
@@ -346,6 +479,55 @@ def test_sector_membership_compresses_causal_code_transitions() -> None:
     ]
 
 
+@pytest.mark.parametrize("current_id", [0, 131, 132, 133])
+def test_history_membership_resolves_sparse_current_ids_without_densifying(current_id):
+    from backend.services.dataset_release.monthly_industry_history import IndustryHistoryProjection
+
+    codes = [f"801{index:03d}.SI" for index in range(131)]
+    ids = {**dict(zip(codes, range(131))), codes[0]: current_id}
+    current_map = build_release_sw_l2_code_map_payload(
+        code_to_id=ids, member_backed_codes=tuple(ids),
+        authority_id="fixture", authority_sha256="a" * 64,
+    )
+    history = IndustryHistoryProjection.build(
+        [{"canonical_symbol": "000001.SZ", "taxonomy_version": version,
+          "published_l2_code": code, "effective_from": start, "effective_to": end,
+          "known_from": None, "knowledge_time_quality": "FIRST_PUBLICATION_UNVERIFIED",
+          "source_sha256": "a" * 64, "source_row_sha256": "b" * 64}
+         for version, code, start, end in (
+             ("SW2014", "801999.SI", "2018-08-01", "2021-07-29"),
+             ("SW2021", codes[0], "2024-07-01", "2024-07-03"),
+         )], current_map=current_map, authority_sha256="a" * 64,
+    )
+    before = history.sha256
+    source_enricher = FrozenSectorEnricher.build(
+        [{"index_code": code, "level": "L2"} for code in codes],
+        [{"ts_code": "000001.SZ", "in_date": "2024-07-01", "out_date": None, "l2_code": codes[1]}],
+    )
+    enricher = FrozenSectorEnricher(ids, source_enricher.memberships)
+    args = dict(history=history, enricher=enricher)
+    days = (date(2024, 7, 1), date(2024, 7, 2), date(2024, 7, 3))
+    frame, count, _, _ = _build_historical_sector_membership(
+        **args, pit_rows=[("000001.SZ", days[0], days[-1])], calendar=days, start=days[0], end=days[-1],
+    )
+    assert count == 3 and frame["l2_code_id"].tolist() == [current_id]
+    assert history.sha256 == before and dict(enricher.code_map) == ids
+    tail = date(2024, 7, 4)
+    tail_frame, _, _, _ = _build_historical_sector_membership(
+        **args, pit_rows=[("000001.SZ", tail, tail)], calendar=[tail], start=tail, end=tail,
+    )
+    assert tail_frame["l2_code_id"].tolist() == [ids[codes[1]]]
+    old = date(2018, 8, 1)
+    with pytest.raises(MonthlySharedComponentsError, match="outside.*code map"):
+        _build_historical_sector_membership(
+            **args, pit_rows=[("000001.SZ", old, old)], calendar=[old], start=old, end=old,
+        )
+    with pytest.raises(MonthlySharedComponentsError, match="cannot resolve"):
+        _build_historical_sector_membership(
+            **args, pit_rows=[("000002.SZ", days[0], days[-1])], calendar=days, start=days[0], end=days[-1],
+        )
+
+
 def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -399,6 +581,9 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
             "sw2_pct_change": [0.1] * 5,
             "sw2_vol": [100.0] * 5,
             "sw2_amount": [1000.0] * 5,
+            "sw2_mf_net_amt": [10.0] * 5,
+            "sw2_mf_buy_elg_amt": [20.0] * 5,
+            "sw2_mf_sell_elg_amt": [30.0] * 5,
         },
         index=index,
     ).to_hdf(factor_root / "sector_data.h5", key="data", format="table")
@@ -469,7 +654,7 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
         lambda _cas, _frozen, dataset: tuple(source[dataset]),
     )
 
-    def quote_payload(*, code_map, required_start, cutoff):  # type: ignore[no-untyped-def]
+    def quote_payload(*, code_map, required_start, cutoff, **_kwargs):  # type: ignore[no-untyped-def]
         entries = [
             {
                 "canonical_l2_code": code,
@@ -558,6 +743,17 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
         "star100",
     }
     assert all(path.is_file() for path in result.required_files)
+    import json
+
+    sector_receipt = json.loads((staging / "components/sector_context_candidate_v1/component_receipt.json").read_bytes())
+    facts = sector_receipt["sector_quote_facts"]
+    facts_path = staging / "components/sector_context_candidate_v1" / facts["path"]
+    assert facts_path in result.required_files
+    assert facts["source_sha256"] == sector_receipt["sector_data"]["sha256"]
+    assert facts["mapping_authority"] == sector_receipt["sector_code_map"]["authority"]
+    assert facts["classification_table_preserved"] is True
+    assert facts["sha256"] == hashlib.sha256(facts_path.read_bytes()).hexdigest()
+    assert len(pd.read_hdf(facts_path, "data")) == 5
     assert (
         staging
         / "components/sector_context_candidate_v1/sector_membership_spans.parquet"
@@ -613,3 +809,223 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
             assert target.read_bytes() == original.read_bytes()
             assert target.stat().st_ino != (catalog / proofs[domain].record["component_root"] / relative).stat().st_ino
     assert not list(successor.rglob("prepared-component.json"))
+
+
+METRICS = ("sw2_pct_change", "sw2_vol", "sw2_amount", "sw2_mf_net_amt",
+           "sw2_mf_buy_elg_amt", "sw2_mf_sell_elg_amt")
+
+
+def _map():
+    payload = build_release_sw_l2_code_map_payload(
+        code_to_id={f"801{n:03d}.SI": n for n in range(131)},
+        member_backed_codes=tuple(f"801{n:03d}.SI" for n in range(131)),
+        authority_id="frozen-test-source", authority_sha256="a" * 64,
+    )
+    return payload, validate_release_sw_l2_code_map(payload)
+
+
+def _pin(path):
+    stat = path.stat()
+    return {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": stat.st_size,
+            "signature": [stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns]}
+
+
+def _source(path, rows):
+    frame = pd.DataFrame(rows, columns=("datetime", "instrument", "l2_code_id", *METRICS))
+    frame["datetime"] = pd.to_datetime(frame["datetime"])
+    frame = frame.set_index(["datetime", "instrument"])
+    frame.to_hdf(path, key="data", format="table", data_columns=["datetime", "instrument"])
+    return frame
+
+
+def _build(source, target, **kwargs):
+    return build_sector_quote_facts(
+        source_path=source, target_path=target, source_pin=_pin(source),
+        code_map=_map()[1], cutoff=date(2026, 9, 30), chunk_rows=1, **kwargs,
+    )
+
+
+def _quote_stage_control(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_sector_quote_facts
+    from backend.tests.dataset_release.test_monthly_unified_v2 import Pipeline, _request, _service
+
+    release_root = tmp_path / "release"
+    release_root.mkdir()
+    service = _service(release_root, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    service.store.update_state(operation, attempt=1, current_stage="BUILD", status="BUILDING")
+    clock = [0.0]
+    monkeypatch.setattr(monthly_sector_quote_facts.time, "monotonic", lambda: clock[0])
+    checkpoint, progress = service._stage_control(operation, attempt=1, stage="BUILD")
+
+    def slow_chunk():
+        clock[0] += 16
+        checkpoint()
+
+    return slow_chunk, progress, lambda: service.status(operation)
+
+
+def test_bootstrap_separates_real_classification_from_shared_quote_facts(tmp_path, monkeypatch):
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseError
+
+    source = tmp_path / "sector_data.h5"
+    nan = float("nan")
+    _source(source, [
+        ["2021-06-02", "000001.SZ", 156, nan, nan, nan, nan, nan, nan],
+        ["2021-07-30", "000001.SZ", 0, 1., 2., 3., 4., 5., 6.],
+        ["2021-07-30", "000002.SZ", 0, 1., 2., 3., 4., 5., 6.],
+        ["2026-09-01", "000001.SZ", 1, nan, nan, nan, 7., 8., 9.],
+        ["2026-09-01", "000002.SZ", 2, nan, nan, nan, nan, nan, nan],
+    ])
+    before = _pin(source)
+    target = tmp_path / "sector_quote_facts.h5"
+    checkpoint, progress, state = _quote_stage_control(tmp_path, monkeypatch)
+    receipt = _build(source, target, checkpoint=checkpoint, progress=progress)
+    actual = pd.read_hdf(target, "data")
+    assert actual.l2_code_id.tolist() == [0, 1]
+    assert actual.index.get_level_values("instrument").tolist() == ["801000.SI", "801001.SI"]
+    assert actual.iloc[1][list(METRICS[:3])].isna().all()
+    assert actual.iloc[1][list(METRICS[3:])].tolist() == [7., 8., 9.]
+    assert _pin(source) == before
+    assert receipt["schema_version"] == QUOTE_FACTS_SCHEMA
+    assert receipt["classification_only_rows"] == 1
+    assert receipt["row_count"] == 2
+    assert receipt["source_sha256"] == before["sha256"]
+    assert receipt["sha256"] == _pin(target)["sha256"]
+    assert receipt["mapping_authority"] == dict(_map()[1].mapping_authority)
+    assert receipt["historical_business_audit_performed"] is False
+    observation = state()["stage_progress"]
+    assert observation["phase"] == "BUILD_SHARED_SECTOR_QUOTE_FACTS"
+    assert observation["dataset"] == "sector_quote_facts"
+    assert observation["physical_rows_read"] == receipt["source_rows_read"] == 4
+    assert state()["status"] == "BUILDING"
+    assert not any(state()["checkpoints"].values())
+    with pytest.raises(MonthlyReleaseError, match="stage progress fields differ"):
+        progress({"source_rows_read": 4})
+    with pytest.raises(SectorQuoteFactsError, match="exists"):
+        _build(source, target)
+
+
+@pytest.mark.parametrize("change,message", [(99., "contradict"), (float("inf"), "finite")])
+def test_cross_chunk_conflicting_or_infinite_fact_never_succeeds(tmp_path, change, message):
+    source = tmp_path / "sector.h5"
+    _source(source, [["2026-09-01", "000001.SZ", 0, 1., 2., 3., 4., 5., 6.],
+                     ["2026-09-01", "000002.SZ", 0, change, 2., 3., 4., 5., 6.]])
+    with pytest.raises(SectorQuoteFactsError, match=message):
+        _build(source, tmp_path / "quotes.h5")
+
+
+def test_unknown_id_with_real_values_is_not_silently_filtered(tmp_path):
+    source = tmp_path / "sector.h5"
+    _source(source, [["2026-09-01", "000001.SZ", 156, 1., 2., 3., 4., 5., 6.]])
+    with pytest.raises(SectorQuoteFactsError, match="unknown"):
+        _build(source, tmp_path / "quotes.h5")
+
+
+def test_following_month_inherits_small_pinned_facts_and_reads_only_delta(tmp_path, monkeypatch):
+    prior = tmp_path / "august"
+    (prior / Path(QUOTE_FACTS_PATH).parent).mkdir(parents=True)
+    old_source = tmp_path / "old.h5"
+    _source(old_source, [["2026-08-31", "000001.SZ", 0, 1., 2., 3., 4., 5., 6.]])
+    old_facts = prior / QUOTE_FACTS_PATH
+    _build(old_source, old_facts)
+    map_path = old_facts.parent / "sector_code_map.json"
+    map_path.write_text(json.dumps(_map()[0]), encoding="utf-8")
+    components = {"sector_quote_facts": {"path": QUOTE_FACTS_PATH, **_pin(old_facts)},
+                  "sector_code_map": {"path": map_path.relative_to(prior).as_posix(), **_pin(map_path)}}
+    prefix = SimpleNamespace(root=prior, cutoff=date(2026, 8, 31),
+                             manifest={"components": {pin["path"].replace("/", "__"): pin for pin in components.values()}},
+                             manifest_sha256="b" * 64)
+    source = tmp_path / "new.h5"
+    _source(source, [["2026-08-31", "000001.SZ", 999, float("inf"), 2., 3., 4., 5., 6.],
+                     ["2026-09-01", "000001.SZ", 0, 7., 8., 9., 10., 11., 12.]])
+    original = pd.HDFStore.select
+    selected = []
+
+    def bounded(store, key, **kwargs):
+        if Path(store.filename) == source:
+            assert kwargs["start"] == 1 and kwargs["stop"] == 2
+            selected.append(kwargs)
+        return original(store, key, **kwargs)
+
+    monkeypatch.setattr(pd.HDFStore, "select", bounded)
+    target = tmp_path / "new_quotes.h5"
+    checkpoint, progress, state = _quote_stage_control(tmp_path, monkeypatch)
+    receipt = _build(source, target, prefix=prefix, month_range={"start_row": 1, "row_count": 1},
+                     checkpoint=checkpoint, progress=progress)
+    actual = pd.read_hdf(target, "data")
+    assert actual.sw2_pct_change.tolist() == [1., 7.]
+    assert selected and receipt["validation_scope"] == "month_delta"
+    assert receipt["source_rows_read"] == 1
+    assert receipt["inherited_row_count"] == 1
+    assert state()["stage_progress"]["dataset"] == "sector_quote_facts"
+    assert state()["stage_progress"]["physical_rows_read"] == 1
+    assert receipt["predecessor_manifest_sha256"] == prefix.manifest_sha256
+    assert _pin(old_facts)["sha256"] == components["sector_quote_facts"]["sha256"]
+    old_facts.write_bytes(b"drift")
+    with pytest.raises(SectorQuoteFactsError, match="pin"):
+        _build(source, tmp_path / "drifted.h5", prefix=prefix,
+               month_range={"start_row": 1, "row_count": 1})
+
+
+def test_source_signature_drift_is_rejected_before_projection(tmp_path):
+    source = tmp_path / "source.h5"
+    _source(source, [["2026-09-01", "000001.SZ", 0, 1., 2., 3., 4., 5., 6.]])
+    pin = _pin(source)
+    pin["signature"][-1] -= 1
+    with pytest.raises(SectorQuoteFactsError, match="source pin"):
+        build_sector_quote_facts(source_path=source, target_path=tmp_path / "out.h5",
+            source_pin=pin, code_map=_map()[1], cutoff=date(2026, 9, 30), chunk_rows=1)
+
+
+def test_shared_projection_works_with_unchanged_formal_file_only_reader(tmp_path):
+    from backend.tests.hmm_data_source.test_precompute_hmm_coefficients import _write_frozen_input_fixture
+    from scripts.precompute_hmm_coefficients import load_frozen_coefficient_inputs
+
+    bundle = _write_frozen_input_fixture(tmp_path, sector_id=0, code_map_entries=_map()[0]["entries"])
+    root = Path(bundle["dataset_root"])
+    source = root / "sector_data.h5"
+    old = pd.read_hdf(source, "data")
+    classification = old.iloc[:1].copy()
+    classification.index = pd.MultiIndex.from_tuples(
+        [(pd.Timestamp("2021-06-02"), "000001.SZ")], names=old.index.names)
+    classification["l2_code_id"] = 156
+    classification[list(METRICS)] = float("nan")
+    pd.concat([classification, old]).to_hdf(source, "data", mode="w", format="table", data_columns=True)
+    before = _pin(source)
+    bundle["files"]["sector_data_h5"]["sha256"] = before["sha256"]
+    with pytest.raises(ValueError, match="unmapped l2_code_id"):
+        load_frozen_coefficient_inputs(bundle, history_start=date(2021, 6, 2),
+            test_start=date(2026, 6, 1), backtest_end=date(2026, 6, 3))
+    output = root / "sector_quote_facts.h5"
+    code_map = validate_release_sw_l2_code_map(json.loads((root / "sector_code_map.json").read_bytes()), require_member_backed=False)
+    receipt = build_sector_quote_facts(source_path=source, target_path=output, source_pin=before,
+        code_map=code_map, cutoff=date(2026, 6, 3), chunk_rows=2)
+    bundle["files"]["sector_data_h5"] = {"relative_path": output.name, "sha256": receipt["sha256"]}
+    result = load_frozen_coefficient_inputs(bundle, history_start=date(2021, 6, 2),
+        test_start=date(2026, 6, 1), backtest_end=date(2026, 6, 3))
+    assert len(result["sector_data"]["801000.SI"]) == 3
+    assert result["stock_sector_maps_by_date"]["2026-06-01"] == {"000001.SZ": "801000.SI"}
+    assert _pin(source) == before
+
+
+def test_quote_projection_preserves_cancellation_and_observes_source_mutation(tmp_path):
+    import os
+
+    source = tmp_path / "source.h5"
+    _source(source, [["2026-09-01", "000001.SZ", 0, 1., 2., 3., 4., 5., 6.]])
+
+    def changed():
+        current = source.stat()
+        os.utime(source, ns=(current.st_atime_ns, current.st_mtime_ns + 1_000_000_000))
+
+    with pytest.raises(SectorQuoteFactsError, match="source changed"):
+        _build(source, tmp_path / "mutation.h5", checkpoint=changed)
+    assert not (tmp_path / "mutation.h5").exists()
+
+    def cancelled():
+        raise InterruptedError("operation cancelled")
+
+    with pytest.raises(InterruptedError, match="cancelled"):
+        _build(source, tmp_path / "cancel.h5", checkpoint=cancelled)
+    assert not (tmp_path / "cancel.h5").exists()

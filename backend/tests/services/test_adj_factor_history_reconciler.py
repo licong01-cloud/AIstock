@@ -502,6 +502,15 @@ class _TransactionCursor:
         self.connection.in_transaction = True
         self.connection.sql.append(" ".join(sql.split()))
 
+    def fetchall(self):
+        sql = self.connection.sql[-1]
+        # Model the query's provider population, not a strategy eligibility pool.
+        rows = [("000001.SZ", DAY_1), ("302132.SZ", DAY_1), ("600001.SH", DAY_1),
+                ("920196.BJ", DAY_1), ("200011.SZ", DAY_1), ("900901.SH", DAY_1)]
+        if "'^(00|30)[0-9]{4}\\.SZ$'" in sql:
+            return rows[:4]
+        return rows
+
 
 class _TransactionConnection:
     def __init__(self, *, autocommit: bool, in_transaction: bool) -> None:
@@ -533,6 +542,19 @@ class _TransactionConnection:
     def rollback(self) -> None:
         self.rollback_count += 1
         self.in_transaction = False
+
+
+def test_adj_factor_scope_uses_a_share_provider_population_not_all_quotes():
+    conn = _TransactionConnection(autocommit=False, in_transaction=False)
+    scopes = PostgresAdjFactorHistoryRepository(conn).list_symbol_scopes(end_date=DAY_1)
+    assert [scope.symbol for scope in scopes] == ["000001.SZ", "302132.SZ", "600001.SH", "920196.BJ"]
+    assert "stock_universe" not in conn.sql[-1]  # ST, delisted and aliases remain in history.
+
+
+def test_explicit_b_share_adj_factor_request_does_not_silently_skip():
+    conn = _TransactionConnection(autocommit=False, in_transaction=False)
+    with pytest.raises(AdjFactorHistoryReconcileError, match="absent from local price/factor scope"):
+        PostgresAdjFactorHistoryRepository(conn).list_symbol_scopes(end_date=DAY_1, symbols=["200011.SZ"])
 
 
 @pytest.mark.parametrize("initial_autocommit", [False, True])

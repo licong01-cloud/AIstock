@@ -773,6 +773,17 @@ def test_frontend_targets_include_only_automatic_plans(monkeypatch, enabled, run
     assert selected['frontend_test_targets'] == (['tests/example'] if enabled and runner_enabled else [])
 
 
+def test_validation_center_ui_catalog_covers_changed_ui_without_business_plans():
+    paths = ['frontend/src/app/validation-center/page.tsx',
+             'frontend/src/lib/validation/section-loader.ts',
+             'frontend/tests/validation-center/validation-center.spec.ts']
+    selected = classifier._catalog_backend_selection(paths)
+    assert 'tests/validation-center/validation-center.spec.ts' in selected['frontend_test_targets']
+    assert not selected['unmapped_code_files']
+    assert classifier._changed_test_plan_coverage(paths, repo_root=Path(__file__).resolve().parents[3],
+        file_backend_sessions={}, frontend_test_targets=selected['frontend_test_targets'])['unexecuted_test_files'] == []
+
+
 def test_deleted_frontend_test_needs_no_execution(tmp_path):
     (tmp_path / '.git').mkdir()
     result = classifier.classify_changed_files(['frontend/tests/hmm-risk/hmm-risk.spec.ts'], repo_root=tmp_path)
@@ -2051,7 +2062,11 @@ def test_codeql_runs_one_daily_nightly_full_scan() -> None:
     assert not any("uses" in step for step in verdict_steps)
 
     direct_analysis = next(step for step in verdict_steps if step.get("name") == "Run CodeQL CLI analysis")
-    assert "if" not in direct_analysis
+    # The approved scheduled window is the only scan eligibility guard; it
+    # must never become a changed-file, language or PR-risk filter.
+    admitted = "steps.background_window.outputs.background_admitted == 'true'"
+    assert direct_analysis["if"] == admitted
+    assert any(step.get("id") == "background_window" for step in verdict_steps)
     assert direct_analysis["env"]["CODEQL_LANGUAGES"] == '["python","javascript-typescript"]'
     assert direct_analysis["env"]["GITHUB_TOKEN"] == "${{ github.token }}"
     direct_run = direct_analysis["run"]
@@ -2068,7 +2083,7 @@ def test_codeql_runs_one_daily_nightly_full_scan() -> None:
     assert len(verdict["env"]["AISTOCK_CI_CODEQL_BUNDLE_SHA256"]) == 64
 
     final_verdict = next(step for step in verdict_steps if step.get("name") == "Enforce CodeQL result")
-    assert final_verdict["if"] == "always()"
+    assert final_verdict["if"] == f"always() && {admitted}"
     assert final_verdict["env"]["ANALYZE_RESULT"] == "${{ steps.codeql_analysis.outcome }}"
     assert "CodeQL analysis failed" in final_verdict["run"]
 
@@ -2121,8 +2136,8 @@ def test_pr_quality_is_pr_only_and_codeql_is_nightly_only() -> None:
         assert set(triggers) == {"workflow_dispatch"}
 
     codeql = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))[True]
-    assert set(codeql) == {"schedule", "workflow_dispatch"}
-    assert codeql["schedule"] == [{"cron": "27 20 * * *"}]
+    assert set(codeql) == {"repository_dispatch", "workflow_dispatch"}
+    assert codeql["repository_dispatch"] == {"types": ["aistock_codeql"]}
 
 
 def test_pr_quality_and_semgrep_enforcement_share_ci_verdict_runner() -> None:
@@ -2226,7 +2241,7 @@ def test_merge_quality_workflows_do_not_duplicate_close_sync_runner_work() -> No
     codeql_text = Path(".github/workflows/codeql.yml").read_text(encoding="utf-8")
     assert "pull_request:" not in codeql_text
     assert "\n  push:\n" not in codeql_text
-    assert "schedule:" in codeql_text
+    assert "repository_dispatch:" in codeql_text and "schedule:" not in codeql_text
     assert "workflow_dispatch:" in codeql_text
 
     for relative_path in (".github/workflows/semgrep.yml", ".github/workflows/pr-quality.yml"):

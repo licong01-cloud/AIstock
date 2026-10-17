@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 import hashlib
 import json
 import os
@@ -39,6 +39,7 @@ from .monthly_source_quality import (
 from .profile_contract import ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS
 
 
+UTC = timezone.utc
 PRODUCER_EVIDENCE_SCHEMA = "aistock_monthly_release_producer_evidence_v1"
 
 

@@ -3,6 +3,7 @@ rules:
   - rule_id: local_data_tdx_go
     priority: 120
     include:
+      - tdx-api-main/*.go
       - tdx-api-main/**/*.go
       - tdx-api-main/go.mod
       - tdx-api-main/go.sum
@@ -469,6 +470,7 @@ rules:
       - scripts/bug_github_webhook.py
       - scripts/ci/prepare_self_hosted_workspace.py
       - scripts/ci_failure_issue_summary.py
+      - scripts/ci_plan_coverage.py
       - scripts/code_intelligence_adapter.py
       - scripts/configure_aistock_github_runner.ps1
       - scripts/issue_flow.py
@@ -1244,10 +1246,16 @@ rules:
   - rule_id: local_data_tushare_sync_engine
     priority: 97
     include:
+      - scripts/repair_stk_limit_pre_close.py
+      - backend/tests/scripts/test_repair_stk_limit_pre_close.py
       - backend/services/adj_factor_history_reconciler.py
       - backend/services/tushare_sync_engine.py
       - backend/services/tushare_sync.py
       - backend/services/tushare_dataset_specs.py
+      - backend/services/sw_industry_history_store.py
+      - backend/db/migrations/add_sw_industry_history_preservation_v1.sql
+      - scripts/import_sw_industry_history.py
+      - backend/tests/test_sw_industry_history_store.py
       - backend/db/init_tushare_schedules.py
       - backend/db/migrations/add_etf_share_sources_20260923.sql
       - backend/db/migrations/add_etf_share_sources_20260923.rollback.sql
@@ -1350,6 +1358,7 @@ rules:
       - backend/services/sector_data_builder.py
       - backend/services/sector_data_repair.py
       - scripts/build_sector_data_candidate.py
+      - scripts/repair_sw_sector_revision.py
       - scripts/create_sw_sector_tables.py
       - backend/db/migrations/sector_data_pit_identity_*.sql
       - backend/tests/services/test_sector_data_builder.py
@@ -1363,6 +1372,10 @@ rules:
   - rule_id: local_data_pipeline
     priority: 70
     include:
+      - scripts/repair_local_sync_incident.py
+      - backend/tests/scripts/test_repair_local_sync_incident.py
+      - scripts/repair_local_data_daily_sync.py
+      - backend/tests/ingestion/test_daily_sync_recovery.py
       - backend/ingestion/tdx_scheduler.py
       - backend/tests/ingestion/test_repair_minute_via_minute_api.py
       - backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py
@@ -1383,6 +1396,7 @@ rules:
       - backend/tests/scripts/test_repair_suspend_688766.py
       - backend/services/suspend_d_coverage.py
       - scripts/audit_suspend_d_coverage.py
+      - scripts/verify_suspension_day_authority.py
       - backend/tests/services/test_suspend_d_coverage.py
     primary_module: local_data
     impact_modules: [qlib_data, qe.core, paper_v2]
