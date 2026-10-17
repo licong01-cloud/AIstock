@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1952",
-  "closed_at": null,
+  "closed_at": "2026-10-17T10:03:57.261140Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -242,10 +242,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\LOCALSIM\\workflow\\BUG-1952-post-restart-verify-20261017-r1.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1952",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+      "expected_identity": "6398853d7bce66f4eb0c0687b7b1023f89560559",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T09:59:36.437823Z",
+      "mode": "read_only",
+      "observed_identity": "6f5cf1efc5361b6c7e2b862c82800cf431e0f77d",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "ab87728b487672aeb20f18a0d9b39314948c06fdd516771a90989bda1f4b17a5",
+      "receipt_sha256": "063863f9acf1ed9cc57392d594a35513a59abd28714950732bb25bd36c329c3f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "69c088f2e0c3aff73e4f05073a9905d4c1734af9333babf6ccb5ac9b4a66bc05",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -276,7 +298,7 @@
     ],
     "validation_evidence_digest": "f0d10a85cdfb8314d1a0c469df6536bc3b8768846142c020b75ef66493e21ccb"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -286,7 +308,8 @@
     "source_event_id": "FE-20261016-776ba5bab5a0"
   },
   "validation_evidence": [
-    "python -m nox -s localsim_successor_core_dev_db -> passed (7 tests); CI verdict on 495403f -> passed"
+    "python -m nox -s localsim_successor_core_dev_db -> passed (7 tests); CI verdict on 495403f -> passed",
+    "X:/AIstock_temp/LOCALSIM/workflow/LOCALSIM-loaded-repairs-business-acceptance-20261017-r1.json -> passed: actual loaded runtime identity and original-job business acceptance; TCN single native recover plus one durable audit, LSTM Jan22 native Top50/full scoring/authority and successful economics; full historical replay not claimed"
   ],
   "verification_budget": {
     "budget": "standard",
