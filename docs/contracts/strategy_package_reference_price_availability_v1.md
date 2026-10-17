@@ -13,8 +13,12 @@
 - 仅当 C 日无报价、且有明确全天停牌记录时，读取最近一个 `<C` 的真实收盘价。
   必须证明从该报价下一自然日至 C 的日历完整，每个开市日均有全天停牌证据。
   状态为 `SUSPENSION_LAST_OBSERVED_CLOSE`，价格仍属于实际 `quote_date`，`as_of_date=C`。
-- 停牌证明仅接受 `suspend_type=S` 且 `suspend_timing` 为空的全天记录。
+- 停牌证明消费唯一公共 `project_suspension_days` 的 `FULL_DAY_SUSPENDED`，不在消费者中
+  重写 S/R 优先级。既保留原始单 S 全天记录，也接受公共权威已经明确解决的同日 S/R。
+  重复、未知、矛盾事件及没有权威解决的混合事件不能构造连续停牌证明。
   部分时段停牌、缺少停牌证据、断档、缺日历、缺历史真实报价不得无条件前填。
+- 公告解决的 C 日证明还要求 `disclosure_date <= C`；后日公告不提前证明 C 时点的参考价。
+  权威投影是有效市场状态，仍保留 `historical_publication_time_proven=false`，不声称历史信息可得。
 - 所有 SQL 的行情、停牌、日历范围均截止 C；不得在 C 参考价阶段读取 D/T 的停牌或行情。
 - `UNAVAILABLE` 留在完整原始评分内，不能被补价或变成空评分。原始 TopK 必需价格缺失立即失败。
   原生过滤后递补进入有效 TopK 的缺价候选同样在共享计算边界失败，不能拖至下单阶段。
@@ -23,6 +27,8 @@
 ## D/T 时钟：继续使用原生 eligibility
 
 停牌过滤由原生 `TradabilityFilter` 在冻结政策规定的 D 时钟执行。
+`DbSuspendLookupProvider` 读取 D 日全部原始事件并消费同一公共投影；全天/时段停牌保持原生排除，
+复牌保留，不可解决的事件显式失败。不得只读取 S 行而丢弃同日 R，亦不得以缺价猜测停牌。
 共享内核包装层同样必须遵守 [provider 时钟合同 v1](strategy_package_selection_provider_clocks_v1.md)：
 不能把整个 tradability 改成 C；仅 risk/PIT 行业绑定 C，停牌 eligibility 和相关排除证据保留 D。
 启用过滤时，停牌候选按原生 `suspended_by_suspend_d` 排除并递补；关闭过滤时，不擅自替用户打开。
@@ -54,3 +60,14 @@ D 日资格排除和原生递补，并保留旧产物；缓存/断点不得误�
 BUG-1911 已确认 603616.SH/2026-01-21 合法停牌且无权威 pre_close；共享链负责冻结政策下的
 D 日资格过滤，停牌持仓估值、旧计划修订和原回放受控恢复由 LocalSIM owner 处理。
 不得要求补造无权威来源的价格，也不得放宽正常股票及递补候选的真实缺价校验。
+
+## BUG-1959：共享停牌权威接入与运行身份
+
+两个公共消费者经 `selection_center/suspension_provider.py` 薄适配器调用唯一数据投影；
+适配器只冻结已加载权威并生成回执，不拥有账户、评分、递补算法或业务缓存。
+参考价观测及 D 日过滤阶段分别保留 C/D 用途、完整原始事件、投影、权威原文、
+schema/policy、实现 SHA 和 data identity。来源 receipt 的 content hash 包含停牌证明身份。
+LocalSIM 独立请求/断点身份补齐公共参考价、过滤器和薄适配器的源码指纹；进程启动时冻结，
+不能因之后更新工作目录而冒称新实现已加载。新进程加载共享修改后不复用旧过滤断点，
+原冻结账户、政策、manifest、股票池、C/D/T、独立结果和成功账本仍分别保持。
+原 01-20 至 01-22 成功日不重新下单；01-23 是本轮原 LSTM 的运行态验收点。
