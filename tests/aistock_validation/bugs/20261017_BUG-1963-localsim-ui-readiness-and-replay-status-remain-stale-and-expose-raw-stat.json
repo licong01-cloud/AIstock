@@ -22,7 +22,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1963",
-  "closed_at": null,
+  "closed_at": "2026-10-17T13:26:05Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -279,8 +279,8 @@
   },
   "first_seen_at": "2026-10-17T12:51:32.540110Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f26d8ab227d1f9ba1f7b8552729ee9e1c08bc095",
+  "fixed_at": "2026-10-17T13:26:05Z",
   "github_issue_number": 6266,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6266",
   "last_seen_at": "2026-10-17T12:51:32.540110Z",
@@ -288,6 +288,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6268",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -305,6 +306,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
@@ -314,7 +316,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1963",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "76b0890916a7657e",
+    "recorded_at": "2026-10-17T13:27:09.153613Z",
+    "runtime_contract_digest": "d51ba2fa10c2b5f10e3eb2b0d26499735cf84f953e80ec8afe900a899b096ccb",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ccbc0443165763aeb19d24b8061c49fc3913a690",
+    "source_merge_commit": "f26d8ab227d1f9ba1f7b8552729ee9e1c08bc095",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6268",
+    "validation_evidence": [
+      "validation-receipt: id=8f0f9b5e29d5f67b commit=ccbc0443165763aeb19d24b8061c49fc3913a690 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; final receipt X:/AIstock_temp/LOCALSIM/BUG-1963/l0-final-r2.json`",
+      "validation-receipt: id=807a0259faf19246 commit=ccbc0443165763aeb19d24b8061c49fc3913a690 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed; nox-final-r1.json`",
+      "validation-receipt: id=e07f3ee1ec2dbcc9 commit=ccbc0443165763aeb19d24b8061c49fc3913a690 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed; catalog-recheck-r2.json; findings=0`",
+      "validation-receipt: id=49cbd72034fc6bab commit=ccbc0443165763aeb19d24b8061c49fc3913a690 kind=nox plan=frontend_type_lint status=passed command=`python -m nox -s frontend_type_lint` result=`passed; nox-final-r1.json`",
+      "validation-receipt: id=5c25b03ce446c4b7 commit=ccbc0443165763aeb19d24b8061c49fc3913a690 kind=nox plan=localsim_control_plane_ui status=passed command=`python -m nox -s localsim_control_plane_ui` result=`passed; 14 browser tests; nox-final-r1.json`"
+    ],
+    "validation_evidence_digest": "ccc3136579234e13daefa4377f0696be45fd55d2f22a3c9ef14cb3bcd6429e39"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -361,6 +388,13 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "validation-receipt: id=8f0f9b5e29d5f67b commit=ccbc0443165763aeb19d24b8061c49fc3913a690 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; final receipt X:/AIstock_temp/LOCALSIM/BUG-1963/l0-final-r2.json`",
+    "validation-receipt: id=807a0259faf19246 commit=ccbc0443165763aeb19d24b8061c49fc3913a690 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed; nox-final-r1.json`",
+    "validation-receipt: id=e07f3ee1ec2dbcc9 commit=ccbc0443165763aeb19d24b8061c49fc3913a690 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed; catalog-recheck-r2.json; findings=0`",
+    "validation-receipt: id=49cbd72034fc6bab commit=ccbc0443165763aeb19d24b8061c49fc3913a690 kind=nox plan=frontend_type_lint status=passed command=`python -m nox -s frontend_type_lint` result=`passed; nox-final-r1.json`",
+    "validation-receipt: id=5c25b03ce446c4b7 commit=ccbc0443165763aeb19d24b8061c49fc3913a690 kind=nox plan=localsim_control_plane_ui status=passed command=`python -m nox -s localsim_control_plane_ui` result=`passed; 14 browser tests; nox-final-r1.json`"
+  ],
   "verification_budget": {
     "budget": "light_ui",
     "ci_premerge_plans": [],
