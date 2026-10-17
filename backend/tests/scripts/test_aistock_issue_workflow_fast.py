@@ -832,6 +832,42 @@ def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test")
     )
 
 
+@pytest.mark.parametrize("case", ["valid", "no_future", "weekend", "false_ok", "not_calendar", "empty", "duplicate", "reverse",
+                                   "future", "latest", "next", "count", "bounds", "date", "lookback", "query_as_of", "nested"])
+def test_advisory_calendar_defaults_semantics(case):
+    payload = dict(ok=True, calendar_only=True, as_of_date="2026-10-16", lookback_trading_days=10,
+                   latest_trading_day="2026-10-16", next_trading_day="2026-10-19",
+                   trading_days=["2026-10-15", "2026-10-16"], replay_start_date="2026-10-15",
+                   replay_end_date="2026-10-16", available_trading_day_count=2,
+                   trading_day_status=dict(ok=True, as_of_date="2026-10-16", latest_completed_trading_day="2026-10-16",
+                                           next_trading_day="2026-10-19"))
+    changes = {
+        "false_ok": (payload, "ok", False), "not_calendar": (payload, "calendar_only", False),
+        "empty": (payload, "trading_days", []), "duplicate": (payload, "trading_days", ["2026-10-16"] * 2),
+        "reverse": (payload, "trading_days", ["2026-10-16", "2026-10-15"]),
+        "future": (payload, "trading_days", ["2026-10-16", "2026-10-19"]),
+        "latest": (payload, "latest_trading_day", "2026-10-15"), "next": (payload, "next_trading_day", "2026-10-16"),
+        "count": (payload, "available_trading_day_count", True), "bounds": (payload, "replay_start_date", "2026-10-14"),
+        "date": (payload, "as_of_date", "2026-1-1"), "lookback": (payload, "lookback_trading_days", True),
+        "nested": (payload["trading_day_status"], "latest_completed_trading_day", "2026-10-15"),
+    }
+    if case in changes:
+        target, key, value = changes[case]
+        target[key] = value
+    if case == "no_future":
+        payload["next_trading_day"] = payload["trading_day_status"]["next_trading_day"] = None
+    if case == "weekend":
+        payload["as_of_date"] = payload["trading_day_status"]["as_of_date"] = "2026-10-17"
+    url = "http://127.0.0.1:8001/api/v1/advisory/trading-days/defaults?lookback_trading_days=10"
+    if case == "query_as_of":
+        url += "&as_of_date=2026-10-15"
+    result = _business_semantic(url, payload, "a" * 64)
+    assert result["contract_id"] == "advisory_calendar_defaults_only"
+    assert result["verdict"] == ("passed" if case in {"valid", "no_future", "weekend"} else "failed")
+    if result["verdict"] == "passed":
+        assert result["facts"]["market_data_readiness"] == "not_evaluated"
+
+
 def _returns_payload(state="SETTLED", *, reported="2026-10-13T08:00:00+00:00", cutoff="2026-10-13"):
     settled, marked = state == "SETTLED", state == "EXECUTED"
     row = dict(program_id="advp_test", episode_id="ep_test", status="ACTIVE" if marked else "EXITED",

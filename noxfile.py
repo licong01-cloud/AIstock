@@ -641,6 +641,15 @@ def hmm_risk_ui(session: nox.Session) -> None:
 
 
 @nox.session(venv_backend="none")
+def advisory_mocked_ui(session: nox.Session) -> None:
+    """Run only mocked Advisory UI with X-only runner-owned frontend/browser."""
+    if any(not (ROOT / "frontend/node_modules" / path).is_file() for path in FRONTEND_DIRECT_ENTRYPOINTS):
+        session.error("Advisory mocked UI requires prebuilt dependencies; installation is not authorized")
+    session.run("node", "frontend/node_modules/@playwright/test/cli.js", "test",
+                "--config=frontend/tests/advisory-mocked.config.ts", external=True)
+
+
+@nox.session(venv_backend="none")
 def watchlist_ui(session: nox.Session) -> None:
     """Run only the Watchlist mocked UI contract."""
 

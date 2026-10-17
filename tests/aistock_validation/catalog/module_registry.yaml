@@ -1,5 +1,13 @@
 schema_version: aistock_module_registry_v1
 modules:
+  - module_id: advisory.ui
+    display_name: Advisory mocked UI
+    module_type: product_feature
+    risk_level: medium
+    description: Exact Advisory page and mocked browser contracts; no legacy Paper backend chain.
+    description_zh: 荐股页面与隔离模拟 API 的浏览器合同，不运行旧 Paper 后端或数据库测试链。
+    test_plans:
+      required_on_change: [advisory_mocked_ui]
   - module_id: advisory.model_first
     display_name: Advisory model-first WSL training
     module_type: data_pipeline
