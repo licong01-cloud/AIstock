@@ -20,7 +20,52 @@ from backend.services.dataset_release.monthly_source_audit import (
 from backend.services.dataset_release.monthly_unified import SOURCE_GATES
 
 
+def test_user_deferred_margin_is_not_provider_absence_or_generic_exception():
+    from backend.services.dataset_release.monthly_frozen_source_audit import GateCounter, audit_margin_publication
+    counter = GateCounter("financial_moneyflow")
+    audit_margin_publication(day=date(2026, 9, 30), rows=[], receipt={}, gate=counter,
+                             deferred_authority_sha256="a" * 64)
+    assert counter.expected_count == counter.explained_count == 1
+    assert counter.missing_count == counter.invalid_count == 0
+    assert counter.exceptions[0].reason_code == "USER_DEFERRED_COLLECTION"
+    assert counter.exceptions[0].start == counter.exceptions[0].end == "2026-09-30"
+    ordinary = GateCounter("financial_moneyflow")
+    audit_margin_publication(day=date(2026, 9, 29), rows=[], receipt={}, gate=ordinary)
+    assert ordinary.missing_count == 1
+
+
 SHA = "a" * 64
+
+
+@pytest.mark.parametrize("reference,expected_invalid", [(15.3, 0), (None, 1), (float("nan"), 1), (float("inf"), 1), (20, 1)])
+def test_target_month_limit_reference_uses_the_shared_daily_contract(reference, expected_invalid):
+    from backend.services.dataset_release.monthly_frozen_source_audit import GateCounter, audit_month_rows
+    day = date(2026, 5, 8)
+    symbol = "001205.SZ"
+    gates = {name: GateCounter(name) for name in SOURCE_GATES}
+    rows = {"stk_limit": [
+        {"ts_code": symbol, "trade_date": day, "pre_close": reference, "up_limit": 16.83, "down_limit": 13.77},
+        # Unrelated old-month invalid rows must not widen a monthly audit.
+        {"ts_code": symbol, "trade_date": date(2026, 4, 30), "pre_close": None},
+    ]}
+    audit_month_rows(rows, sessions=(day,), pools={"stock_universe": {day: {symbol}}},
+                     gates=gates, authority_sha256=SHA, minute_start=date(2027, 1, 1))
+    gate = gates["suspend_limit"]
+    assert gate.expected_count == 1
+    assert gate.invalid_count == expected_invalid
+
+
+def test_target_month_preserves_authoritative_full_day_suspension_missing_fact():
+    from backend.services.dataset_release.monthly_frozen_source_audit import GateCounter, audit_month_rows
+    day = date(2026, 5, 8)
+    gates = {name: GateCounter(name) for name in SOURCE_GATES}
+    rows = {"stk_limit": [],
+            "suspend_d": [{"ts_code": "001205.SZ", "trade_date": day, "suspend_type": "S", "suspend_timing": None}]}
+    audit_month_rows(rows, sessions=(day,), pools={"stock_universe": {day: {"001205.SZ"}}},
+                     gates=gates, authority_sha256=SHA, minute_start=date(2027, 1, 1))
+    assert gates["suspend_limit"].explained_count == 1
+    assert gates["suspend_limit"].invalid_count == 0
+    assert rows["stk_limit"] == []  # No fabricated quote for a full-day suspension.
 
 
 def _gate(name: str, snapshot: str = "snapshot-1", *, observed: int = 2, unexplained: int = 0) -> SourceGateEvidence:

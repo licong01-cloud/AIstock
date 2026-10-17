@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
 import pytest
+
+from backend.services.dataset_release import monthly_file_identity as identity
 
 from backend.data_service.security_source_identity import (
     DEFAULT_MANIFEST_PATH,
@@ -33,6 +36,119 @@ def _json(path: Path, value: dict[str, Any]) -> Path:
     return path
 
 
+def test_monthly_stages_and_hardlinks_reuse_only_verified_file_bytes(tmp_path, monkeypatch):
+    path = tmp_path / "large.h5"
+    path.write_bytes(b"frozen output")
+    alias = tmp_path / "consumer.h5"
+    os.link(path, alias)
+    calls = []
+    original = Path.open
+
+    def opened(self, mode="r", *args, **kwargs):
+        if self in (path, alias) and mode == "rb":
+            calls.append(self)
+        return original(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", opened)
+    expected = hashlib.sha256(b"frozen output").hexdigest()
+    for module, name in (
+        ("monthly_local_validation", "_sha256"),
+        ("monthly_official_adapters", "_sha256"),
+        ("monthly_worker", "_file_sha256"),
+        ("monthly_immutable_deploy", "_sha256"),
+    ):
+        imported = __import__("backend.services.dataset_release." + module, fromlist=[name])
+        assert getattr(imported, name)(path) == expected
+        assert getattr(imported, name)(alias) == expected
+    assert len(calls) == 1
+
+
+def test_writer_pin_reuse_requires_unchanged_signature(tmp_path, monkeypatch):
+    path = tmp_path / "written.bin"
+    path.write_bytes(b"source output")
+    digest = hashlib.sha256(b"source output").hexdigest()
+    stat = path.stat()
+    signature = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns)
+    identity.remember_verified_file(path, digest, expected_signature=signature)
+    original = Path.open
+
+    def opened(self, mode="r", *args, **kwargs):
+        if self == path and mode == "rb":
+            pytest.fail("unchanged writer output must not be read again")
+        return original(self, mode, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", opened)
+    assert identity.file_sha256(path) == digest
+    path.write_bytes(b"changed output")
+    with pytest.raises(ValueError, match="signature"):
+        identity.remember_verified_file(path, digest, expected_signature=signature)
+
+
+def test_changed_file_is_rehashed_not_trusted_by_path_or_size(tmp_path):
+    path = tmp_path / "data.bin"
+    path.write_bytes(b"one")
+    old = identity.file_sha256(path)
+    path.write_bytes(b"two")
+    stamp = path.stat()
+    os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns + 10_000_000))
+    assert identity.file_sha256(path) == hashlib.sha256(b"two").hexdigest() != old
+
+
+def test_file_changing_while_hashing_is_rejected(tmp_path, monkeypatch):
+    path = tmp_path / "moving.bin"
+    path.write_bytes(b"before")
+    original = identity._stream_sha256
+
+    def changing(target):
+        result = original(target)
+        target.write_bytes(b"after")
+        return result
+
+    monkeypatch.setattr(identity, "_stream_sha256", changing)
+    with pytest.raises(ValueError, match="changed"):
+        identity.file_sha256(path)
+
+
+def test_unknown_pin_and_nonregular_file_are_rejected(tmp_path):
+    with pytest.raises(ValueError):
+        identity.file_sha256(tmp_path)
+    path = tmp_path / "data.bin"
+    path.write_bytes(b"data")
+    with pytest.raises(ValueError):
+        identity.remember_verified_file(path, "not-a-digest", expected_signature=(0, 0, 0, 0))
+
+
+def test_writer_cannot_replace_an_already_computed_digest(tmp_path):
+    path = tmp_path / "output.bin"
+    path.write_bytes(b"real bytes")
+    identity.file_sha256(path)
+    value = path.stat()
+    signature = (value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns)
+    with pytest.raises(ValueError, match="conflicting"):
+        identity.remember_verified_file(path, "f" * 64, expected_signature=signature)
+
+
+def test_bounded_eviction_rehashes_real_bytes(tmp_path, monkeypatch):
+    monkeypatch.setattr(identity, "_MAX_ENTRIES", 1)
+    with identity._LOCK:
+        identity._CACHE.clear()
+    left, right = tmp_path / "left.bin", tmp_path / "right.bin"
+    left.write_bytes(b"left")
+    right.write_bytes(b"right")
+    expected = identity.file_sha256(left)
+    identity.file_sha256(right)
+    calls = []
+    original = identity._stream_sha256
+
+    def streamed(path):
+        calls.append(path)
+        return original(path)
+
+    monkeypatch.setattr(identity, "_stream_sha256", streamed)
+    assert identity.file_sha256(left) == expected
+    assert calls == [left]
+
+
 def _file(path: Path, value: bytes = b"value") -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(value)
@@ -49,6 +165,7 @@ def _fixture(
     gaps: bool = False,
     physical_gaps: bool = False,
     layout_authority_drift: bool = False,
+    sealed_provenance: bool = False,
 ) -> tuple[ProducerContext, str, Path]:
     root = tmp_path / "candidate"
     files = [
@@ -62,6 +179,11 @@ def _fixture(
         _file(root / "components/suspend_d_daily_candidate_v2/suspend_d.parquet"),
         _file(root / "components/sector_context_candidate_v1/sector_code_map.json"),
     ]
+    if sealed_provenance:
+        files.append(_json(root / "provenance/base_dataset_manifest.json", {
+            "schema_version": "aistock_shared_sector_base_dataset_manifest_v1",
+            "cutoff_trade_date": "2026-09-30",
+        }))
     identity_path = root / "components/factor_h5_static_candidate_v2/security_source_identity.json"
     identity_path.write_bytes(DEFAULT_MANIFEST_PATH.read_bytes())
     identity = load_security_source_identity_manifest(identity_path)
@@ -403,6 +525,22 @@ def test_local_validator_emits_manifest_bound_consumer_evidence(tmp_path: Path) 
     assert all(path.is_relative_to(root / "provenance") for path in result.consumer_contracts)
     assert result.dataset_identity_complete is True
     assert result.workload.bytes_transferred == 0
+
+
+def test_local_validator_accepts_build_manifest_pinned_provenance(tmp_path: Path) -> None:
+    context, manifest_sha, root = _fixture(tmp_path, sealed_provenance=True)
+    before = (root / "provenance/base_dataset_manifest.json").read_bytes()
+    executor = MonthlyCandidateLocalValidationExecutor()
+    executor.execute(context, dataset_manifest_sha256=manifest_sha)
+    executor.execute(context, dataset_manifest_sha256=manifest_sha)
+    assert (root / "provenance/base_dataset_manifest.json").read_bytes() == before
+
+
+def test_local_validator_still_rejects_unknown_provenance(tmp_path: Path) -> None:
+    context, manifest_sha, root = _fixture(tmp_path, sealed_provenance=True)
+    _json(root / "provenance/foreign.json", {"status": "PASS"})
+    with pytest.raises(MonthlyLocalValidationError, match="unknown entries"):
+        MonthlyCandidateLocalValidationExecutor().execute(context, dataset_manifest_sha256=manifest_sha)
 
 
 def test_local_validator_is_identical_resume_safe(tmp_path: Path) -> None:

@@ -3,7 +3,6 @@ package tdx
 import (
 	"context"
 	"github.com/injoyai/ios"
-	"github.com/injoyai/ios/module/tcp"
 	"github.com/injoyai/logs"
 	"math/rand"
 	"net"
@@ -15,7 +14,10 @@ func NewTCPDial(addr string) ios.DialFunc {
 	if !strings.Contains(addr, ":") {
 		addr += ":7709"
 	}
-	return tcp.NewDial(addr)
+	return func(ctx context.Context) (ios.ReadWriteCloser, string, error) {
+		conn, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", addr)
+		return conn, addr, err
+	}
 }
 
 func NewHostDial(hosts []string) ios.DialFunc {
@@ -33,7 +35,7 @@ func NewHostDial(hosts []string) ios.DialFunc {
 		if !strings.Contains(addr, ":") {
 			addr += ":7709"
 		}
-		c, err := net.Dial("tcp", addr)
+		c, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", addr)
 		return c, addr, err
 	}
 }
@@ -48,7 +50,7 @@ func NewRandomDial(hosts []string) ios.DialFunc {
 		if !strings.Contains(addr, ":") {
 			addr += ":7709"
 		}
-		c, err := net.Dial("tcp", addr)
+		c, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", addr)
 		return c, addr, err
 	}
 }
@@ -67,14 +69,18 @@ func NewRangeDial(hosts []string) ios.DialFunc {
 			if !strings.Contains(addr, ":") {
 				addr += ":7709"
 			}
-			c, err = net.Dial("tcp", addr)
+			c, err = (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, "tcp", addr)
 			if err == nil {
 				return c, addr, nil
 			}
 			if i < len(hosts)-1 {
 				//最后一个错误返回出去
 				logs.Err(err, "等待2秒后尝试下一个服务地址...")
-				<-time.After(time.Second * 2)
+				select {
+				case <-ctx.Done():
+					return nil, "", ctx.Err()
+				case <-time.After(2 * time.Second):
+				}
 			}
 		}
 		return

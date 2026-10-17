@@ -1,6 +1,6 @@
 # Advisory M1板块条件价格模型：日频消费者 F2 详细设计
 
-2026-10-04；SOURCE_DELIVERED_FAMILY_IMPLEMENTED_FULL_DAILY_API_UI_PENDING，非完整每日业务交付或收益确认。当前以[QE包直接消费合同](advisory_qe_package_direct_consumer_v1_f2_design_20261004.md)为消费者责任边界：进入策略包的组合直接使用，无父时钟、原native或收益确认准入门。复用共享D消费者推进真实日频功能；效果单独报告，不冒称已证盈利。
+2026-10-05；DAILY_ROSTER_API_UI_IMPLEMENTED_UI_AND_EMPTY_FIX_PENDING，非已合入的完整每日业务交付或收益确认。当前以[QE包直接消费合同](advisory_qe_package_direct_consumer_v1_f2_design_20261004.md)为消费者责任边界：进入策略包的组合直接使用，无父时钟、原native或收益确认准入门。复用共享D消费者推进真实日频功能；效果单独报告，不冒称已证盈利。
 
 ## 1. Background / 当前事实与业务目的
 
@@ -20,9 +20,9 @@ R2-M1研究源码#5414已合入且自身清理；冻结开发导航通过，但�
 
 1. 纯D组合与研究查询：#5423已新增`backend/services/advisory_model_first/economic_sector_daily_core_v1.py`、对应同叶测试及F1 Card，原价格函数直接消费兼容已通过；复用common D/sector/math/reader，不改原冻结数学或fit hash，不另排重复实现。
 2. 真实来源适配：#5434已合入70b22daa930eb18cf1724a9d77a7e7db310fb8e9并完成自身官方清理，按[F1详细设计](advisory_sector_daily_source_v1_f1_design_20261004.md)交付`economic_sector_daily_source_v1.py`及17直接测试；复用common source不改，直接按既存`market.sw_daily(trade_date,ts_code,close)`合同读取本批所需21D报价。原20候选真实D读回已通过，详见§8.2；不调用Selection或父包推理生产者，不建新数据集。
-3. 按真实功能需要登记Advisory服务/router/API类型/价格卡片精确范围；复用既有展示，不等待父包时钟、原生训练身份或独立确认。未实现项如实报告，不新建审批/资格系统。
+3. 原daily名单、Advisory服务/router/API类型/价格卡片精确范围已登记于[日频交付F2](advisory_sector_daily_delivery_v1_f2_design_20261005.md)，设计PR #5443已合入；源码已实现，真实单/批日与隔离HTTP验证通过，UI浏览器和当前HEAD CI尚待验收。复用既有展示，不等待父包时钟、原生训练身份或独立确认，不新建审批/资格系统。
 
-第2已交付；第3中的分类/family切片写范围已登记于[显式family F1](advisory_sector_daily_family_v1_f1_design_20261004.md)，精确两源码、同叶两测试、F1、本文及蓝图七文件，不含router/API/UI。该切片真实业务链及27直接测试通过，详见§8.3；原每日候选DB集成/HTTP/UI尚未实现，不称完整每日功能已具备。不再要求先取得额外包资格才实现，不修改QE、Selection、StrategyPackage、HMM、公共数据、Paper/Execution、公共CI或服务；无候选重建、DB写入/DDL、profile/模型激活或依赖安装，后端重启仍用户执行。消费者不替代QE生产者研发。
+第2已交付；第3中的分类/family切片写范围已登记于[显式family F1](advisory_sector_daily_family_v1_f1_design_20261004.md)，精确两源码、同叶两测试、F1、本文及蓝图七文件，不含router/API/UI。该切片PR #5442已合入d04ba01f3f2c2c786d6c99529c06813fc35a11ff并官方清理，真实业务链及27直接测试通过，详见§8.3；随后名单/API/UI的实施与待验收见§8.4，不称完整每日功能已交付。不再要求先取得额外包资格才实现，不修改QE、Selection、StrategyPackage、HMM、公共数据、Paper/Execution、公共CI或服务；无候选重建、DB写入/DDL、profile/模型激活或依赖安装，后端重启仍用户执行。消费者不替代QE生产者研发。
 
 ## 3. Architecture / 明确family，不复制平台
 
@@ -112,6 +112,12 @@ M1日频接入无需独立收益确认、父/组合时钟、原训练native或�
 
 两叶27直接测试、三轮本窗口自审及真实已消费2024-08-01全20候选链通过：公开D分类+只读DB+真实M1生成9价格集合/11UNKNOWN；15D和全部价格区间与原数学一致，source 7 SELECT、最多1491tick、总约8.516秒。原model hash不变，0新收益/label/T行情/sealed/fit/DB写入/QE提交。详见F1；候选仍由调用方提供，原daily候选DB、HTTP和UI未在本切片实现。历史证据披露不升级，不以此结果宣称模型已盈利。
 
+### 8.4 原日频名单、API/UI和同核历史批量实施
+
+[日频交付F2](advisory_sector_daily_delivery_v1_f2_design_20261005.md)PR #5443合入876316279cfb3118664192ea0abc9333b4980c68后，独立最新main树实现名单/服务/GET及显式M1卡片。2026-08-28真实原published list的47项中20原Top20进行模型计算、27旧持仓/WATCH/范围外项原动作保留；8价格集合/12UNKNOWN，完整约14.969秒。已消费08-24/25/28三日共60候选，批量17.813秒、平均5.938秒/日、特征查询7次，单批价格与15D内容SHA一致，peak working set约419MiB、线程上限2。未读取收益/label/T行情/新sealed，fit=0、DB写入=0、QE提交=0。
+
+原指数准入明确0只与Selection原空分开处理，名单适配允许NO_CANDIDATES；没有原声明不能将缺名单伪装为零。BUG-1726三层空输入修复后71相关测试/Ruff/L0通过，真实冻结权重+合成空名单完整family返回NO_CANDIDATES；尚未交付合入，公共新端点smoke语义待流程owner登记。主源码PR #5445历史HEAD e14e3f39c CI37221697583 SUCCESS；恢复后仅本适配器修复LIVE_DB旧ST默认，43同叶测试通过，实际09-02 LIVE_DB/canonical价格来源读回约7.266秒，无未来行情/收益/fit/写库。原20日400候选/576未估值项批量34.719秒，9月分类源诊断见交付F2 §8.1：用既存9月candidate的X测试配置得66/160完整15D特征，不是活动profile或数据激活；94股分类knowledge-time不可证明仍保留未知/预算状态。六项最小UI已编写但未执行浏览器；本次新HEAD检查另核，未合入/用户后端未加载。原生TypeScript和真实冻结M1/DB→ASGI有限JSON200已通过，但不冒称UI、生产HTTP或收益确认，不为旧失败模型追加证据。
+
 ## 9. Design Acceptance Matrix
 
 本表仅详细设计验收；reader、纯组合与真实source子切片已交付，分类/显式family真实原D功能通过，完整daily/API/UI仍未交付；原native不倒补，模型收益未独立确认，这两项不是功能准入条件。不以设计或子切片合入报告整项功能完成。
@@ -139,4 +145,4 @@ DESIGN-COMPLIANCE-001逐项：设计完整不冒充业务完整；正常UNKNOWN�
 
 ## 11. Rollout / Rollback / Production Gates
 
-五文档直接消费方向修订#5428、直接consumer#5429、M5#5432及真实source#5434已合入并完成各自清理。用户重启后/api/v1/runtime-identity返回5c51aac49d7cf951f2835a5e68a04c837f803162，与当时最新main一致；现有QE包只读preflight无blockers且qualification_rechecked=false。新family尚未接HTTP，不以旧后端健康证明新接口启用。调用只读DB、0新fit/QE submission/DDL/DML/profile/依赖/activation/process，不掩盖此前已披露的model-state GET元数据upsert事件。源码merge、原D功能读回、效果、用户重启及配置分别报告，原模型/输入/工件不覆盖。下一项为原daily候选适配及显式API/UI，不等待原native/收益确认或重复父包资格。
+五文档直接消费方向修订#5428、直接consumer#5429、M5#5432、真实source#5434及分类/family#5442已合入并完成各自清理。用户此前重启后/api/v1/runtime-identity返回5c51aac49d7cf951f2835a5e68a04c837f803162，与当时main一致；现有QE包只读preflight无blockers且qualification_rechecked=false。M1 HTTP/UI目前只有本地新源码和隔离测试，尚未合入/用户重启，不以旧后端健康证明新接口启用。调用只读DB、0新fit/QE submission/DDL/DML/profile/依赖/activation/process，不掩盖此前已披露的model-state GET元数据upsert事件。源码merge、原D功能读回、效果、用户重启及配置分别报告，原模型/输入/工件不覆盖。下一项为六场景UI/最新HEAD CI/重复审核，通过后合入及自己清理；不等待原native/收益确认或重复父包资格。

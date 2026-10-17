@@ -103,7 +103,6 @@ def test_build_audit_counts_tracked_code_once_by_primary_owner(tmp_path: Path, m
                                 module_ids=["example"], top_files=1)
     assert selected["modules"] == [rows["example"]]
     assert selected["totals"]["skipped_unselected_module_files"] == 2
-    import pytest
     with pytest.raises(ValueError, match="no executable tracked files"):
         audit.build_audit(repo_root=tmp_path, catalog=catalog, tracked_paths=paths, module_ids=["missing"])
     assert audit.main(["--module", "example", "--fail-test-only-owner", "tests.backend"]) == 2
@@ -149,12 +148,8 @@ def test_only_github_workflow_yaml_counts_as_executable_source() -> None:
 
 
 def test_max_ratio_validation_is_fail_closed(tmp_path: Path) -> None:
-    try:
+    with pytest.raises(ValueError, match="max_ratio"):
         audit.build_audit(repo_root=tmp_path, catalog=_Catalog({}), tracked_paths=[], max_ratio=0)  # type: ignore[arg-type]
-    except ValueError as exc:
-        assert "max_ratio" in str(exc)
-    else:
-        raise AssertionError("invalid max_ratio must fail closed")
 
 
 def test_cli_rejects_explicit_forbidden_test_only_owner(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -196,7 +191,8 @@ def test_cli_rejects_explicit_forbidden_test_only_owner(tmp_path: Path, monkeypa
     assert "forbidden test-only owners: tests.backend" in capsys.readouterr().err
 
 
-def test_repository_has_no_executable_tests_in_generic_backend_bucket() -> None:
+@pytest.fixture(scope="module")
+def repository_catalog():
     root = audit.REPO_ROOT_FOR_IMPORT
     registry = audit.ModuleRegistry(root / "tests/aistock_validation/catalog/module_registry.yaml")
     catalog = audit.FileOwnershipCatalog(
@@ -205,6 +201,11 @@ def test_repository_has_no_executable_tests_in_generic_backend_bucket() -> None:
     )
     registry.load()
     catalog.load()
+    return root, catalog
+
+
+def test_repository_has_no_executable_tests_in_generic_backend_bucket(repository_catalog) -> None:
+    root, catalog = repository_catalog
 
     offenders = [
         path
@@ -217,15 +218,8 @@ def test_repository_has_no_executable_tests_in_generic_backend_bucket() -> None:
     assert offenders == []
 
 
-def test_workflow_automation_has_an_honest_production_denominator() -> None:
-    root = audit.REPO_ROOT_FOR_IMPORT
-    registry = audit.ModuleRegistry(root / "tests/aistock_validation/catalog/module_registry.yaml")
-    catalog = audit.FileOwnershipCatalog(
-        root / "tests/aistock_validation/catalog/file_ownership.yaml",
-        module_registry=registry,
-    )
-    registry.load()
-    catalog.load()
+def test_workflow_automation_has_an_honest_production_denominator(repository_catalog) -> None:
+    root, catalog = repository_catalog
 
     assert catalog.match_path("scripts/aistock_issue_workflow.py").primary_module == (
         "validation.workflow_automation"

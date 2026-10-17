@@ -10,11 +10,12 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 from enum import Enum
 import errno
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -24,7 +25,9 @@ from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
 import uuid
 
 from .canonical import canonical_json_bytes, ensure_sha256
+from .monthly_error_diagnostics import monthly_error_diagnostics, monthly_error_message
 
+UTC = timezone.utc
 
 REQUEST_SCHEMA = "aistock_monthly_release_request_v1"
 PLAN_SCHEMA = "aistock_monthly_release_plan_v2"
@@ -362,9 +365,15 @@ def classify_component_actions(changes: Sequence[SourceChange]) -> dict[str, str
         if dataset in {"industry_classification", "sw_daily", "stock_universe_pit"}:
             promote("sector_context", ComponentAction.SELECTIVE_REBUILD)
         if kind in {"HISTORICAL_REPAIR", "NEW_SECURITY_HISTORY", "PIT_REVISION"}:
-            for component in tuple(actions):
-                if actions[component] == ComponentAction.INCREMENTAL:
-                    actions[component] = ComponentAction.SELECTIVE_REBUILD
+            # A repair is scoped to its own source domain, not every tail
+            # encountered earlier in the batch. Otherwise daily_basic repairs
+            # rebuild unrelated minute/index data and depend on record order.
+            for component in COMPONENTS:
+                if dataset in _component_source_datasets(component) or (
+                    dataset == "stock_universe_pit"
+                    and component in {"day", "minute", "factor", "suspend"}
+                ):
+                    promote(component, ComponentAction.SELECTIVE_REBUILD)
         if kind == "ADJ_DENOMINATOR_CHANGE":
             for component in ("day", "minute", "factor"):
                 promote(component, ComponentAction.SELECTIVE_REBUILD)
@@ -1219,6 +1228,8 @@ class MonthlyReleaseService:
 
         normalized_evidence: list[dict[str, Any]] = []
         schemas: set[str] = set()
+        typed_evidence: dict[str, Mapping[str, Any]] = {}
+        from .monthly_quote_adoption import QUOTE_SCHEMAS, validate_quote_adoption
         for raw in evidence_refs:
             relative = str(raw.get("relative_path") or "")
             relative_path = Path(relative)
@@ -1257,6 +1268,9 @@ class MonthlyReleaseService:
             ):
                 raise MonthlyReleaseNotReady("HMM adoption evidence binds another manifest")
             schemas.add(schema)
+            if schema in QUOTE_SCHEMAS and schema in typed_evidence:
+                raise MonthlyReleaseConflict("adoption evidence schema is duplicated")
+            typed_evidence[schema] = value
             normalized_evidence.append(
                 {
                     "id": relative_path.as_posix(),
@@ -1269,7 +1283,16 @@ class MonthlyReleaseService:
             "qe_moneyflow_alias_coverage_receipt_v1",
             "hmm_risk_rotation_l2_input_bundle_v1",
         }
-        if not required_schemas.issubset(schemas):
+        quote_only = bool(QUOTE_SCHEMAS.intersection(schemas))
+        if quote_only:
+            try:
+                validate_quote_adoption(predecessor_root=Path(predecessor.candidate_root),
+                    predecessor_profile=_read_json(predecessor.path, label="quote predecessor profile"),
+                    candidate=candidate, profile=profile, manifest=manifest,
+                    evidence=typed_evidence, required_nodes=REQUIRED_NODES)
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
+                raise MonthlyReleaseNotReady(f"quote-only adoption proof failed: {exc}") from exc
+        elif not required_schemas.issubset(schemas):
             raise MonthlyReleaseNotReady("adoption evidence does not cover required release gates")
 
         semantic = {
@@ -1306,6 +1329,10 @@ class MonthlyReleaseService:
                     existing.get("product_profile") == product_profile
                     and existing.get("target_cutoff") == target_cutoff.isoformat()
                 ):
+                    if quote_only and existing.get("target_profile_sha256") == expected_predecessor:
+                        previous_state = self.store.read_state(str(existing["operation_id"]))
+                        if previous_state.get("status") == ReleaseState.ACTIVATED_VERIFIED.value:
+                            continue  # Exact activated predecessor, never a competing candidate.
                     raise MonthlyReleaseConflict("target cutoff is already bound to another operation")
 
             operation_id = f"dmr_{uuid.uuid4().hex}"
@@ -1368,7 +1395,8 @@ class MonthlyReleaseService:
                 "node_roots": actual_node_roots,
                 "target_roots": {"controller": str(candidate), **actual_node_roots},
                 "required_consumers": list(REQUIRED_CONSUMERS),
-                "actions": {component: ComponentAction.REUSE.value for component in COMPONENTS},
+                "actions": {component: (ComponentAction.SELECTIVE_REBUILD.value if quote_only and component == "minute"
+                                        else ComponentAction.REUSE.value) for component in COMPONENTS},
                 "adoption_ref": _content_ref(
                     root / "receipts" / "adoption.json", ref_id="receipts/adoption.json"
                 ),
@@ -1480,6 +1508,321 @@ class MonthlyReleaseService:
             last_error=None,
         )
 
+    def bind_repair_inputs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str) -> dict[str, Any]:
+        """Bind exact existing repair assets before SOURCE, never rewrite a seal.
+
+        This is an authenticated preparation command, not an activation grant
+        or READY attestation. The same worker lock serializes it with run().
+        """
+        from .monthly_legacy_prefix import load_legacy_prefix
+        from .monthly_repair_inputs import validate_monthly_repair_inputs
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing = plan.get("monthly_repair_inputs")
+            if existing is not None:
+                if canonical_json_bytes(existing) != canonical_json_bytes(inputs):
+                    raise MonthlyReleaseConflict("monthly repair inputs are already bound to different assets")
+                reference = _require_content_ref(plan["monthly_repair_inputs_ref"], field="monthly repair input binding")
+                path = root / reference["id"]
+                receipt = _read_json(path, label="repair input binding")
+                if path.stat().st_size != reference["size"] or _file_sha256(path) != reference["sha256"] or receipt.get("inputs") != existing:
+                    raise MonthlyReleaseConflict("monthly repair input binding bytes differ")
+                return receipt
+            state = self.store.read_state(operation_id)
+            if state["status"] not in {ReleaseState.PLANNED.value, ReleaseState.FAILED.value,
+                    ReleaseState.SOURCE_BLOCKED.value, ReleaseState.CANCELLED.value} or any(
+                self.store.read_checkpoint(operation_id, stage) is not None for stage in STAGES
+            ) or plan.get("plan_state") != "AWAITING_SOURCE_SNAPSHOT":
+                raise MonthlyReleaseConflict("monthly repair inputs can only bind before any SOURCE seal")
+            predecessor = plan["predecessor"]
+            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed before repair binding")
+            try:
+                prefix = load_legacy_prefix(Path(predecessor["candidate_root"]),
+                    expected_manifest_sha256=predecessor["dataset_manifest_sha256"],
+                    expected_file_sha256=plan["predecessor_manifest_ref"]["sha256"],
+                    expected_cutoff=date.fromisoformat(predecessor["cutoff"]), expected_release_id=predecessor["release_id"])
+                normalized = validate_monthly_repair_inputs(inputs, predecessor=prefix,
+                    target_cutoff=date.fromisoformat(plan["target_cutoff"]))
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
+                raise MonthlyReleaseRequestInvalid("monthly repair input validation failed", context={"cause": str(exc)}) from exc
+            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed during repair binding")
+            digest = _digest(normalized)
+            relative = f"inputs/repair-{digest}.json"
+            path = root / relative
+            receipt = {"schema_version": "aistock_monthly_repair_input_binding_v1", "operation_id": operation_id,
+                "input_sha256": digest, "inputs": normalized, "bound_by": principal,
+                "bound_at": datetime.now(UTC).isoformat(), "database_write": False,
+                "active_profile_write": False, "runtime_action": False, "publication_allowed": False}
+            if path.exists():
+                receipt = _read_json(path, label="existing repair input binding")
+                if receipt.get("inputs") != normalized or receipt.get("operation_id") != operation_id:
+                    raise MonthlyReleaseConflict("existing repair input binding differs")
+            else:
+                _write_exclusive(path, receipt)
+            self.store.replace_plan(operation_id, {**plan, "monthly_repair_inputs": normalized,
+                "monthly_repair_inputs_ref": {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}})
+            return receipt
+
+    def bind_prev_close_repairs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str, cas=None) -> dict[str, Any]:
+        """Amend exact approved provider facts; never replace SOURCE or exports."""
+        from .monthly_prev_close_repair import BINDING, SCHEMA, SUPPLEMENT_KEYS, capture_approved_corrections
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing = plan.get(BINDING)
+            if existing is not None:
+                ref = plan[BINDING + "_ref"]
+                path = root / ref["id"]
+                if (existing.get("inputs") != inputs or _read_json(path, label="prev_close binding") != existing
+                        or _file_sha256(path) != ref["sha256"] or path.stat().st_size != ref["size"]):
+                    raise MonthlyReleaseConflict("prev_close correction binding changed")
+                return {"status": "BOUND", "reference": ref, "authority_ref": existing["authority_ref"]}
+            state = self.store.read_state(operation_id)
+            source = self.store.read_checkpoint(operation_id, "SOURCE")
+            if (state["status"] != ReleaseState.FAILED.value or state["current_stage"] != "BUILD" or source is None
+                    or any(self.store.read_checkpoint(operation_id, s) is not None for s in STAGES if s != "SOURCE")):
+                raise MonthlyReleaseConflict("prev_close correction requires idle, sealed SOURCE and unfinished BUILD")
+            bundles = [r for r in source["input_refs"] if Path(r["id"]).name == "frozen-source-bundle.json"]
+            if len(bundles) != 1:
+                raise MonthlyReleaseConflict("prev_close correction SOURCE bundle is ambiguous")
+            if cas is None:
+                from .monthly_runtime import MonthlyRuntimeSettings
+                from .cas_store import CASStore
+                cas = CASStore(MonthlyRuntimeSettings.from_env().artifact_root)
+            repair_root = Path(plan["candidate_root"]).parent.parent / "data_repair_staging"
+            try:
+                authority = capture_approved_corrections(inputs, repair_root=repair_root,
+                    cutoff=date.fromisoformat(plan["target_cutoff"]))
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                raise MonthlyReleaseRequestInvalid("prev_close correction source is invalid", context={"cause": str(exc)}) from exc
+            binding = {"schema_version": SCHEMA, "operation_id": operation_id, "inputs": dict(inputs),
+                "base_plan_digest": _digest({k: v for k, v in plan.items() if k not in SUPPLEMENT_KEYS}),
+                "source_receipt_canonical_sha256": source["canonical_sha256"],
+                "source_bundle_sha256": bundles[0]["sha256"], "target_cutoff": plan["target_cutoff"],
+                "predecessor_manifest_sha256": plan["predecessor"]["dataset_manifest_sha256"],
+                "authority_ref": cas.put_json(authority).as_dict(), "bound_by": principal,
+                "database_write": False, "activation_authorized": False}
+            relative = f"inputs/prev-close-{_digest(binding)}.json"
+            path = root / relative
+            if path.exists():
+                if _read_json(path, label="retained prev_close binding") != binding:
+                    raise MonthlyReleaseConflict("retained prev_close binding differs")
+            else:
+                _write_exclusive(path, binding)
+            ref = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
+            self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
+            return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
+
+    def bind_suspension_authority(self, operation_id: str, *, principal: str, cas=None) -> dict[str, Any]:
+        """Pin approved disclosures to an idle sealed SOURCE; never resume it."""
+        from .monthly_prev_close_repair import SUPPLEMENT_KEYS
+        from .monthly_suspension_repair import BINDING, SCHEMA, capture_approved_authority
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing = plan.get(BINDING)
+            if existing is not None:
+                ref = plan[BINDING + "_ref"]
+                path = root / ref["id"]
+                if (_read_json(path, label="suspension binding") != existing or _file_sha256(path) != ref["sha256"]
+                        or path.stat().st_size != ref["size"]):
+                    raise MonthlyReleaseConflict("suspension binding changed")
+                return {"status": "BOUND", "reference": ref, "authority_ref": existing["authority_ref"]}
+            state = self.store.read_state(operation_id)
+            source = self.store.read_checkpoint(operation_id, "SOURCE")
+            if (state["status"] != ReleaseState.FAILED.value or state["current_stage"] != "BUILD" or source is None
+                    or any(self.store.read_checkpoint(operation_id, s) is not None for s in STAGES if s != "SOURCE")):
+                raise MonthlyReleaseConflict("suspension binding requires idle, sealed SOURCE and unfinished BUILD")
+            if _file_sha256(self.active_profile) != plan["predecessor"]["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed before suspension binding")
+            bundles = [r for r in source["input_refs"] if Path(r["id"]).name == "frozen-source-bundle.json"]
+            if len(bundles) != 1:
+                raise MonthlyReleaseConflict("suspension binding SOURCE bundle is ambiguous")
+            if cas is None:
+                from .monthly_runtime import MonthlyRuntimeSettings
+                from .cas_store import CASStore
+                cas = CASStore(MonthlyRuntimeSettings.from_env().artifact_root)
+            try:
+                authority = capture_approved_authority()
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                raise MonthlyReleaseRequestInvalid("approved suspension authority is invalid") from exc
+            binding = {"schema_version": SCHEMA, "operation_id": operation_id,
+                "base_plan_digest": _digest({k: v for k, v in plan.items() if k not in SUPPLEMENT_KEYS}),
+                "source_receipt_canonical_sha256": source["canonical_sha256"],
+                "source_bundle_sha256": bundles[0]["sha256"], "target_cutoff": plan["target_cutoff"],
+                "predecessor_manifest_sha256": plan["predecessor"]["dataset_manifest_sha256"],
+                "authority_ref": cas.put_json(authority).as_dict(), "bound_by": principal,
+                "database_write": False, "activation_authorized": False}
+            relative = f"inputs/suspension-{_digest(binding)}.json"
+            path = root / relative
+            if path.exists():
+                if _read_json(path, label="retained suspension binding") != binding:
+                    raise MonthlyReleaseConflict("retained suspension binding changed")
+            else:
+                _write_exclusive(path, binding)
+            ref = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
+            if _file_sha256(self.active_profile) != plan["predecessor"]["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed during suspension binding")
+            self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
+            return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
+
+    def bind_industry_history(self, operation_id: str, *, principal: str, connection_factory=None, quote_cas=None) -> dict[str, Any]:
+        """Freeze a targeted history supplement without replacing sealed prices.
+
+        Authenticated data-preparation action only. No READY/activation grant,
+        no caller SQL and no runtime consumer database fallback.
+        """
+        from .monthly_industry_history import capture_industry_history, IndustryHistoryProjection
+        from .monthly_legacy_prefix import load_legacy_prefix
+        from .monthly_sector_mapping import load_predecessor_sector_mapping
+        from .monthly_industry_facts import capture_industry_quote_source, load_frozen_industry_quote_source
+        from .index_sources import independent_postgres_connection_factory
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing_history = None
+            if plan.get("monthly_industry_history_ref") is not None:
+                reference = plan["monthly_industry_history_ref"]
+                value = _read_json(root / reference["id"], label="industry history binding")
+                if value != plan.get("monthly_industry_history") or _file_sha256(root / reference["id"]) != reference["sha256"]:
+                    raise MonthlyReleaseConflict("industry history binding changed")
+                existing_history = IndustryHistoryProjection.read(value["projection"])
+                if plan.get("monthly_industry_quote_source_ref") is not None:
+                    facts_ref = plan["monthly_industry_quote_source_ref"]
+                    facts_path = root / facts_ref["id"]
+                    if (_read_json(facts_path, label="industry quote binding") != plan.get("monthly_industry_quote_source")
+                            or _file_sha256(facts_path) != facts_ref["sha256"]):
+                        raise MonthlyReleaseConflict("industry quote binding file changed")
+                    load_frozen_industry_quote_source(None, context_plan=plan,
+                        build_inputs={"source_bundle_sha256": value["source_bundle_sha256"]}, projection=existing_history)
+                    return {"status": "BOUND", "reference": reference, "projection_sha256": existing_history.sha256,
+                            "quote_source_ref": plan["monthly_industry_quote_source_ref"]}
+            state = self.store.read_state(operation_id)
+            checkpoint = self.store.read_checkpoint(operation_id, "SOURCE")
+            if state["status"] != ReleaseState.FAILED.value or state["current_stage"] != "BUILD" or checkpoint is None or any(
+                self.store.read_checkpoint(operation_id, stage) is not None for stage in STAGES if stage != "SOURCE"
+            ):
+                raise MonthlyReleaseConflict("industry supplement requires idle, sealed SOURCE and uncompleted BUILD")
+            predecessor = plan["predecessor"]
+            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed before history binding")
+            source = checkpoint  # read_checkpoint already verifies the canonical receipt and file SHA.
+            bundles = [ref for ref in source["input_refs"] if Path(ref["id"]).name == "frozen-source-bundle.json"]
+            if len(bundles) != 1:
+                raise MonthlyReleaseConflict("sealed SOURCE bundle is ambiguous")
+            prefix = load_legacy_prefix(Path(predecessor["candidate_root"]),
+                expected_manifest_sha256=predecessor["dataset_manifest_sha256"],
+                expected_file_sha256=plan["predecessor_manifest_ref"]["sha256"],
+                expected_cutoff=date.fromisoformat(predecessor["cutoff"]), expected_release_id=predecessor["release_id"])
+            mapping = load_predecessor_sector_mapping(prefix)
+            if quote_cas is None:
+                from .monthly_runtime import MonthlyRuntimeSettings
+                from .cas_store import CASStore
+                quote_cas = CASStore(MonthlyRuntimeSettings.from_env().artifact_root)
+            connection = (connection_factory or independent_postgres_connection_factory)()
+            try:
+                connection.set_session(readonly=True, isolation_level="REPEATABLE READ", autocommit=False)
+                projection = existing_history or capture_industry_history(connection, current_map=mapping["code_map"])
+                if projection is None:
+                    raise MonthlyReleaseNotReady("versioned industry history authority is unavailable")
+                quote_source = capture_industry_quote_source(connection, cas=quote_cas, projection=projection)
+            finally:
+                connection.rollback()
+                connection.close()
+            from .monthly_prev_close_repair import SUPPLEMENT_KEYS
+            value = plan.get("monthly_industry_history") or {"schema_version": "aistock_monthly_industry_history_binding_v1", "operation_id": operation_id,
+                "source_bundle_sha256": bundles[0]["sha256"], "target_cutoff": plan["target_cutoff"],
+                "predecessor_manifest_sha256": predecessor["dataset_manifest_sha256"],
+                "base_plan_digest": _digest({k: v for k, v in plan.items() if k not in SUPPLEMENT_KEYS}), "source_receipt_canonical_sha256": source["canonical_sha256"],
+                "projection": projection.payload, "bound_by": principal, "database_write": False,
+                "activation_authorized": False}
+            relative = f"inputs/industry-history-{_digest(value)}.json"
+            path = root / relative
+            if existing_history is None:
+                _write_exclusive(path, value)
+            else:
+                relative = plan["monthly_industry_history_ref"]["id"]
+                path = root / relative
+            reference = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
+            facts = {"schema_version": "aistock_monthly_industry_quote_binding_v1", "operation_id": operation_id,
+                     "source_bundle_sha256": bundles[0]["sha256"], "target_cutoff": plan["target_cutoff"],
+                     "predecessor_manifest_sha256": predecessor["dataset_manifest_sha256"],
+                     "projection_sha256": projection.sha256, "quote_source": quote_source,
+                     "bound_by": principal, "database_write": False, "activation_authorized": False}
+            facts_relative = f"inputs/industry-quotes-{_digest(facts)}.json"
+            facts_path = root / facts_relative
+            if facts_path.exists():
+                if _read_json(facts_path, label="retained industry quote binding") != facts:
+                    raise MonthlyReleaseConflict("retained industry quote binding changed")
+            else:
+                _write_exclusive(facts_path, facts)
+            facts_ref = {"id": facts_relative, "sha256": _file_sha256(facts_path), "size": facts_path.stat().st_size}
+            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed during history capture")
+            self.store.replace_plan(operation_id, {**plan, "monthly_industry_history": value,
+                "monthly_industry_history_ref": reference, "monthly_industry_quote_source": facts,
+                "monthly_industry_quote_source_ref": facts_ref})
+            return {"status": "BOUND", "reference": reference, "projection_sha256": projection.sha256,
+                    "quote_source_ref": facts_ref}
+
+    def bind_source_quality_inputs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str) -> dict[str, Any]:
+        """Bind finite parity warnings to this operation before SOURCE seals."""
+        from .monthly_source_quality import (
+            BINDING_SCHEMA, acceptance_file_sha256, load_bound_source_quality, validate_source_quality_acceptance,
+        )
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            predecessor = plan["predecessor"]
+            try:
+                normalized = validate_source_quality_acceptance(inputs, operation_id=operation_id,
+                    predecessor_manifest_sha256=predecessor["dataset_manifest_sha256"],
+                    target_cutoff=date.fromisoformat(plan["target_cutoff"]))
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                raise MonthlyReleaseRequestInvalid("source quality input validation failed", context={"cause": str(exc)}) from exc
+            existing = plan.get("monthly_source_quality_inputs")
+            if existing is not None or plan.get("monthly_source_quality_inputs_ref") is not None:
+                try:
+                    bound = load_bound_source_quality(plan, operation_id=operation_id, operation_root=root)
+                except (ValueError, KeyError, TypeError, OSError) as exc:
+                    raise MonthlyReleaseConflict("source quality binding bytes differ") from exc
+                if bound != normalized:
+                    raise MonthlyReleaseConflict("source quality inputs are already bound to different observations")
+                return _read_json(root / plan["monthly_source_quality_inputs_ref"]["id"], label="source quality binding")
+            state = self.store.read_state(operation_id)
+            if (state["status"] not in {ReleaseState.PLANNED.value, ReleaseState.FAILED.value,
+                    ReleaseState.SOURCE_BLOCKED.value, ReleaseState.CANCELLED.value}
+                    or any(self.store.read_checkpoint(operation_id, stage) is not None for stage in STAGES)
+                    or plan.get("plan_state") != "AWAITING_SOURCE_SNAPSHOT"):
+                raise MonthlyReleaseConflict("source quality inputs can only bind before any SOURCE seal")
+            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed before quality binding")
+            digest = acceptance_file_sha256(normalized)
+            relative = f"inputs/quality-{digest}.json"
+            path = root / relative
+            receipt = {"schema_version": BINDING_SCHEMA, "operation_id": operation_id,
+                "input_sha256": digest, "inputs": normalized, "bound_by": principal,
+                "bound_at": datetime.now(UTC).isoformat(), "database_write": False,
+                "active_profile_write": False, "runtime_action": False, "publication_allowed": False}
+            if path.exists():
+                receipt = _read_json(path, label="existing source quality binding")
+                if (receipt.get("inputs") != normalized or receipt.get("operation_id") != operation_id
+                        or receipt.get("schema_version") != BINDING_SCHEMA or receipt.get("input_sha256") != digest
+                        or not receipt.get("bound_by")
+                        or any(receipt.get(flag) is not False for flag in ("database_write", "active_profile_write", "runtime_action", "publication_allowed"))):
+                    raise MonthlyReleaseConflict("existing source quality binding differs")
+            else:
+                _write_exclusive(path, receipt)
+            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
+                raise MonthlyReleaseConflict("active predecessor changed during quality binding")
+            self.store.replace_plan(operation_id, {**plan, "monthly_source_quality_inputs": normalized,
+                "monthly_source_quality_binding_path": str(path),
+                "monthly_source_quality_inputs_ref": {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}})
+            return receipt
+
     def _finalize_plan_from_source(
         self,
         operation_id: str,
@@ -1544,11 +1887,20 @@ class MonthlyReleaseService:
     ) -> tuple[Callable[[], None], Callable[[Mapping[str, Any]], None]]:
         # Diagnostic state only. It cannot seal a checkpoint, authorize reuse,
         # or participate in release identity. Never infer totals/ETA from I/O.
+        component_counts = {
+            "instrument_count", "completed_instruments", "total_instruments", "completed_feature_files",
+            "physical_rows_read", "indexed_tail_requests", "inherited_rows_serialized",
+            "inherited_bytes_copied", "month_rows_written",
+        }
+        component_rates = {"component_elapsed_seconds", "instruments_per_second"}
+        component_metrics = component_counts | component_rates
         observation: dict[str, Any] = {
             "phase": stage, "query_id": None, "partition_key": None,
             "rows_validated": None, "rows_sealed": None, "partitions_sealed": None,
+            "dataset": None, "frequency": None, **dict.fromkeys(component_metrics),
         }
         last_write: float | None = None
+        started_at = time.monotonic()
 
         def require_current(state: Mapping[str, Any]) -> None:
             if state.get("attempt") != attempt or state.get("current_stage") != stage:
@@ -1567,11 +1919,21 @@ class MonthlyReleaseService:
                 state = self.store.read_state(operation_id)
                 require_current(state)
                 observed_at = datetime.now(UTC).isoformat()
+                elapsed = max(0.0, now - started_at)
                 state["stage_progress"] = {
                     "schema_version": "aistock_monthly_stage_progress_v1",
                     "operation_id": operation_id, "attempt": attempt, "stage": stage,
                     "observed_at": observed_at, **observation,
                     "total_rows": None, "total_partitions": None,
+                    "elapsed_seconds": round(elapsed, 3),
+                    "rows_validated_per_second": (
+                        observation["rows_validated"] / elapsed
+                        if observation["rows_validated"] is not None and elapsed > 0 else None
+                    ),
+                    "rows_sealed_per_second": (
+                        observation["rows_sealed"] / elapsed
+                        if observation["rows_sealed"] is not None and elapsed > 0 else None
+                    ),
                 }
                 state["updated_at"] = observed_at
                 _replace_json(root / "state.json", state)
@@ -1579,7 +1941,13 @@ class MonthlyReleaseService:
 
         def progress(value: Mapping[str, Any]) -> None:
             nonlocal last_write
-            if not isinstance(value, Mapping) or set(value) - observation.keys():
+            if not isinstance(value, Mapping):
+                raise MonthlyReleaseError("stage progress fields differ")
+            value = dict(value)
+            if "elapsed_seconds" in value:
+                # The writer's duration is not the whole stage's clock.
+                value["component_elapsed_seconds"] = value.pop("elapsed_seconds")
+            if set(value) - observation.keys():
                 raise MonthlyReleaseError("stage progress fields differ")
             for field, item in value.items():
                 if field in {"rows_validated", "rows_sealed", "partitions_sealed"}:
@@ -1587,10 +1955,23 @@ class MonthlyReleaseService:
                         observation[field] is not None and item < observation[field]
                     ):
                         raise MonthlyReleaseError("stage progress counts are invalid")
+                elif field in component_counts:
+                    if type(item) is not int or item < 0:
+                        raise MonthlyReleaseError("stage progress counts are invalid")
+                elif field in component_rates:
+                    if type(item) not in (int, float) or not math.isfinite(item) or item < 0:
+                        raise MonthlyReleaseError("stage progress rate is invalid")
                 elif (item is None and field == "phase") or (
                     item is not None and (not isinstance(item, str) or not item or len(item) > 512)
                 ):
                     raise MonthlyReleaseError("stage progress label is invalid")
+            new_dataset = "dataset" in value and value["dataset"] != observation["dataset"]
+            new_frequency = "frequency" in value and value["frequency"] != observation["frequency"]
+            if new_dataset or new_frequency:
+                observation.update(dict.fromkeys(component_metrics))
+                if new_dataset:
+                    observation["frequency"] = None
+                last_write = None
             if value.get("phase", observation["phase"]) != observation["phase"]:
                 last_write = None  # Flush phase boundaries even for a short stage.
             observation.update(value)
@@ -1637,6 +2018,24 @@ class MonthlyReleaseService:
                         }
                     }
                 )
+                from .monthly_prev_close_repair import SUPPLEMENT_KEYS
+                supplement_names = ("monthly_industry_history", "monthly_prev_close_repairs", "monthly_suspension_authority")
+                source_supplements = [plan[name] for name in supplement_names if plan.get(name) is not None] if stage == "SOURCE" else []
+                if source_supplements:
+                    # Only explicit supplements are amended. Verify the ORIGINAL plan,
+                    # SOURCE receipt and all original files; never change that
+                    # seal or rerun completed price exports under a new source.
+                    base_plan = {key: value for key, value in plan.items() if key not in SUPPLEMENT_KEYS}
+                    for name in supplement_names:
+                        supplement = plan.get(name)
+                        if supplement is None:
+                            continue
+                        ref = plan.get(name + "_ref") or {}
+                        if (_digest(base_plan) != supplement.get("base_plan_digest") or
+                            hashlib.sha256(_canonical_payload(supplement)).hexdigest() != ref.get("sha256")):
+                            raise MonthlyReleaseConflict("source supplement changed the sealed base plan")
+                    plan_digest = source_supplements[0]["base_plan_digest"]
+                    current_producer_digest = None  # Original producer remains recorded in its unmodified checkpoint.
                 existing = self.store.read_checkpoint(
                     operation_id,
                     stage,
@@ -1645,6 +2044,8 @@ class MonthlyReleaseService:
                     producer_digest=current_producer_digest,
                     input_set_digest=current_input_set_digest,
                 )
+                if source_supplements and (existing is None or any(existing["canonical_sha256"] != s["source_receipt_canonical_sha256"] for s in source_supplements)):
+                    raise MonthlyReleaseConflict("source supplement cannot replace or rebuild sealed SOURCE")
                 checkpoint_validator = getattr(self.pipeline, "checkpoint_is_valid", None)
                 if existing is not None and callable(checkpoint_validator):
                     if not checkpoint_validator(stage, existing):
@@ -1732,7 +2133,8 @@ class MonthlyReleaseService:
                         operation_id,
                         status=ReleaseState.FAILED.value,
                         current_stage=stage,
-                        last_error={"code": code, "message": str(exc), "type": type(exc).__name__},
+                        last_error={"code": code, "message": monthly_error_message(exc), "type": type(exc).__name__,
+                                    "exception_chain": monthly_error_diagnostics(exc)},
                     )
             try:
                 ready = self._close_ready(
@@ -1752,8 +2154,9 @@ class MonthlyReleaseService:
                     current_stage="RELEASE_CLOSURE",
                     last_error={
                         "code": code,
-                        "message": str(exc),
+                        "message": monthly_error_message(exc),
                         "type": type(exc).__name__,
+                        "exception_chain": monthly_error_diagnostics(exc),
                     },
                 )
             return self.store.update_state(

@@ -1,0 +1,264 @@
+{
+  "actual": "BUG-1838 source PR5873 merged. Current backend runtime identity is origin/main descendant including78bcc7; exactly one supervised monthly worker is healthy. artifact_ready_build_source.py alone routes to dataset_release_worker_heartbeat because monthly required_source_globs omits this file, reading stale legacy heartbeat c65bc157 instead. Correct exact source probe routing; retain real process/identity checks and legacy dedicated routes. No service restart/data/DB writes.",
+  "allowed_write_scope": [
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "tests/aistock_validation/bugs/20261010_BUG-1839-shared-artifact-ready-build-runtime-verification-selects-stale-legacy-wo.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1839",
+  "closed_at": "2026-10-10T18:40:17Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-10T18:30:02.399638Z",
+  "description": "BUG-1838 source PR5873 merged. Current backend runtime identity is origin/main descendant including78bcc7; exactly one supervised monthly worker is healthy. artifact_ready_build_source.py alone routes to dataset_release_worker_heartbeat because monthly required_source_globs omits this file, reading stale legacy heartbeat c65bc157 instead. Correct exact source probe routing; retain real process/identity checks and legacy dedicated routes. No service restart/data/DB writes.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261010-c5084c8deaf5",
+      "timestamp": "2026-10-10T18:30:02.399638Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261010_BUG-1839-shared-artifact-ready-build-runtime-verification-selects-stale-legacy-wo.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261010_BUG-1839-shared-artifact-ready-build-runtime-verification-selects-stale-legacy-wo.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261010_BUG-1839-shared-artifact-ready-build-runtime-verification-selects-stale-legacy-wo.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-10-10T18:30:02.399638Z",
+  "fix_branch": null,
+  "fix_commit": "4f4fa098b259641b1218ee306357f9599f47ff98",
+  "fixed_at": "2026-10-10T18:40:17Z",
+  "github_issue_number": 5877,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5877",
+  "last_seen_at": "2026-10-10T18:30:02.399638Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5878",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "review_rounds": [
+    {
+      "result": "RED 5 passed/1 failed；精确 catalog 修复后 GREEN 6 passed，保留纯 build_stage.py legacy heartbeat 与已有 monthly 路由。",
+      "round": 1,
+      "scope": "精确单文件路由与既有路由回归"
+    },
+    {
+      "result": "仅将共享 artifact_ready_build_source.py 从 legacy 路由移除并加入 monthly required anchor，避免双路由歧义；runtime impact 仍 worker_scheduler、用户重启和真实身份检查均不放宽。",
+      "round": 2,
+      "scope": "重叠与安全边界"
+    },
+    {
+      "result": "不简化验收、不伪造心跳/身份、不改变数据及业务语义、不新增门禁；仅修正正式探针目标。未启动停止进程、未查写数据库、未切换 profile。",
+      "round": 3,
+      "scope": "四项设计符合性与副作用"
+    }
+  ],
+  "risk_area": "bug",
+  "root_cause": "共享 artifact_ready_build_source.py 已在 monthly process source_globs 中，但缺少 required_source_globs 的独立锚点，单文件修复误匹配旧 direct-v2 heartbeat。",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1839",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3c917b2e98f94272",
+    "recorded_at": "2026-10-10T18:41:57.040551Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a9a6fbcfb80d7eaeba31045c692e83bc7ddc70e4",
+    "source_merge_commit": "4f4fa098b259641b1218ee306357f9599f47ff98",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5878",
+    "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q -k (runtime_catalog or release_sources_select or monthly_release_worker or monthly_worker_process) -> passed; 20 passed",
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed; files=3, findings=0, mapped=3",
+      "ruff check backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "1ec2d80c421b1c7afecd4c931cd7a625b877161ff7673e11f679e630f29f940a"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Shared artifact-ready BUILD runtime verification selects stale legacy worker instead of supervised monthly worker",
+  "trigger_condition": {
+    "fingerprint": "c5084c8deaf5cefec147f404",
+    "source_event_id": "FE-20261010-c5084c8deaf5"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q -k (runtime_catalog or release_sources_select or monthly_release_worker or monthly_worker_process) -> passed; 20 passed",
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed; files=3, findings=0, mapped=3",
+    "ruff check backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+    "git diff --check -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
