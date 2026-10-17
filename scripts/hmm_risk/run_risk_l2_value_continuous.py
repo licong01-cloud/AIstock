@@ -1,4 +1,4 @@
-"""Approved v18 continuous-budget research: two fresh processes, zero fits."""
+"""Run approved v18 continuous-budget research: two fresh processes, zero fits."""
 
 from __future__ import annotations
 

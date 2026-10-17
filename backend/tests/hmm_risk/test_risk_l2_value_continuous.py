@@ -13,7 +13,7 @@ from backend.services.hmm_risk.formal_state_executor import frozen_release_bindi
 from backend.services.hmm_risk.formal_state_model import receipt
 from backend.tests.hmm_risk.test_risk_l2_value_replay import panel
 from backend.tests.hmm_risk.test_rotation_l2_moneyflow_supervised import _calendar
-from scripts.hmm_risk import replay_risk_l2_value_continuous as cli
+from scripts.hmm_risk import run_risk_l2_value_continuous as cli
 
 
 def test_continuous_formula_probability_boundaries_cash_and_two_matched_controls():

@@ -58,7 +58,7 @@
 
 ### 7.1 Implementation Plan
 
-一包实现五臂比较和薄CLI：原risk模型carrier验证抽取为不读取旧numeric release的helper；原source kernel增加显式release binding，旧默认不变；复用固定风险推断并传入本次“已消费”合同，不能继承原历史独立性声明。新模块为`backend/services/hmm_risk/risk_l2_value_continuous.py`，薄CLI为`scripts/hmm_risk/replay_risk_l2_value_continuous.py`。完成聚焦测试、两轮作者审修和提交门禁后，在clean commit执行一次正式研究并给出采用/不采用建议，不另拆小阶段或新增平台。
+一包实现五臂比较和薄CLI：原risk模型carrier验证抽取为不读取旧numeric release的helper；原source kernel增加显式release binding，旧默认不变；复用固定风险推断并传入本次“已消费”合同，不能继承原历史独立性声明。新模块为`backend/services/hmm_risk/risk_l2_value_continuous.py`，薄CLI为`scripts/hmm_risk/run_risk_l2_value_continuous.py`。完成聚焦测试、两轮作者审修和提交门禁后，在clean commit执行一次正式研究并给出采用/不采用建议，不另拆小阶段或新增平台。
 
 ## 8. Verification Plan / Design Acceptance Index
 
@@ -70,7 +70,7 @@ F-011=五臂真实价值口径；F-012=当前文件输入/因果/身份/零fit�
 |---|---|---|---|---|
 | F-011 | backend/services/hmm_risk/risk_l2_value_continuous.py；§3～§5 | test: backend/tests/hmm_risk/test_risk_l2_value_continuous.py；公式、同敞口、时序、NA、漂移/成本、机会成本 | DESIGN_REVIEW_VERIFIED | 无 |
 | F-012 | backend/services/hmm_risk/frozen_l2_history_input.py；backend/services/hmm_risk/formal_state_input.py；backend/services/hmm_risk/frozen_l2_history.py；§2～§3 | test: backend/tests/hmm_risk/test_risk_l2_value_continuous.py；显式v18、原model闭合、无旧回落、fit/DB poison | DESIGN_REVIEW_VERIFIED | 无 |
-| F-013 | scripts/hmm_risk/replay_risk_l2_value_continuous.py；§6～§7 | test: backend/tests/hmm_risk/test_risk_l2_value_continuous.py；child authority、双process、collision、typed失败/终态 | DESIGN_REVIEW_VERIFIED | 无 |
+| F-013 | scripts/hmm_risk/run_risk_l2_value_continuous.py；§6～§7 | test: backend/tests/hmm_risk/test_risk_l2_value_continuous.py；child authority、双process、collision、typed失败/终态 | DESIGN_REVIEW_VERIFIED | 无 |
 
 | 真实执行维度 | 当前状态 |
 |---|---|
@@ -112,3 +112,5 @@ NA归类：40/40均对应冻结`stock_universe.txt`中同日同L2的PIT入池边
 本候选按§7停止，不自动追加候选。建议后续只评审一个小范围的收益参照合同修正：将回放持有期的成分资格与权重冻结在决策时刻，而不把当日新入池股票倒算进昨日持仓；保持20维训练观察域、模型、warning和连续预算公式完全不变。停牌估值、退出成分和真实价格缺失的边界须与该合同一并明确，不得在源码中隐含实现。该修订尚未获批；若批准，只复用现有封存预测做零fit、零新推断重评分，不重建模型或开启第二公式搜索。
 
 第四轮作者审查：核对真实执行、40个NA与正式PIT边界的对应关系，区分过程完成、参考路径不足和模型有效性；审查PR机器可读scope及验证回执，修正描述缺项而不修改CI规则。当前不宣称完整窗口效果或runtime生效。
+
+交付补充审修：CI实际默认选测暴露新CLI的`replay_`前缀没有direct-neighbor映射；改用仓库现有支持的`run_`入口命名，移动原文件并同步直接测试及本文引用，不添加兼容代理、重复测试或全局nox映射。研究公式及执行逻辑不变，03c89377中的已完成结果保留其原入口/源码身份，不重跑研究。后续门禁使用默认选测而非仅以手工posargs证明CI兼容。
