@@ -136,6 +136,58 @@ def test_suspend_export_preserves_explicit_intraday_ranges_with_resume(tmp_path,
     assert evidence["day_resolutions"][0]["state"] == "INTRADAY_SUSPENDED"
 
 
+@pytest.mark.parametrize("corruption", [None, "source", "cutoff", "predecessor", "binding", "authority", "conflict"])
+def test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallback(tmp_path, corruption):
+    from backend.data_service.suspension_day_authority import digest, load_authority, SCHEMA, POLICY
+    from backend.services.dataset_release.monthly_suspension_repair import BINDING, SCHEMA as BINDING_SCHEMA, build_authority
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    snapshot = SimpleNamespace(source_manifest_ref=cas.put_json({}))
+    day, symbol = date(2026, 9, 15), "601238.SH"
+    empty = {"schema_version": SCHEMA, "policy": POLICY, "entries": []}
+    authority, provenance = build_authority(cas, snapshot, plan={}, operation_id="test", source_bundle_sha256="a" * 64)
+    assert authority == empty and provenance is None  # no checkout fallback
+    kwargs = dict(rows=[dict(ts_code=symbol, trade_date=day, suspend_type=k, suspend_timing=None) for k in ("S", "R")],
+        pit_rows=[(symbol, day, day)], calendar=(day,), profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
+    with pytest.raises(MonthlySharedComponentsError, match="unresolved suspension"):
+        _build_suspend(root=tmp_path / "before", suspension_authority=authority, **kwargs)
+    approved = load_authority()
+    binding = {"schema_version": BINDING_SCHEMA, "operation_id": "test", "source_bundle_sha256": "a" * 64,
+        "target_cutoff": "2026-09-30", "predecessor_manifest_sha256": "b" * 64,
+        "authority_ref": cas.put_json(approved).as_dict()}
+    plan = {BINDING: binding, BINDING + "_ref": {"sha256": digest(binding)},
+        "target_cutoff": "2026-09-30", "predecessor": {"dataset_manifest_sha256": "b" * 64}}
+    if corruption == "source":
+        binding["source_bundle_sha256"] = "c" * 64
+    elif corruption == "cutoff":
+        binding["target_cutoff"] = "2026-10-31"
+    elif corruption == "predecessor":
+        binding["predecessor_manifest_sha256"] = "c" * 64
+    elif corruption == "binding":
+        plan[BINDING + "_ref"]["sha256"] = "c" * 64
+    elif corruption == "authority":
+        binding["authority_ref"]["sha256"] = "c" * 64
+    elif corruption == "conflict":
+        original = json.loads(json.dumps(approved))
+        original["entries"] = [r for r in original["entries"] if r["ts_code"] == symbol]
+        original["entries"][0]["announcement_id"] += "-other"
+        snapshot.source_manifest_ref = cas.put_json({"suspension_day_authority": original})
+    if corruption != "binding":
+        plan[BINDING + "_ref"]["sha256"] = digest(binding)
+    if corruption is not None:
+        with pytest.raises((ValueError, RuntimeError), match="suspension|CAS|blob"):
+            build_authority(cas, snapshot, plan=plan, operation_id="test", source_bundle_sha256="a" * 64)
+        return
+    authority, provenance = build_authority(cas, snapshot, plan=plan, operation_id="test", source_bundle_sha256="a" * 64)
+    assert [(r["ts_code"], r["trade_date"]) for r in authority["entries"]] == [(symbol, day.isoformat())]
+    parquet, meta, keys, _ = _build_suspend(root=tmp_path / "after", suspension_authority=authority,
+        suspension_binding=provenance, **kwargs)
+    assert keys == {(symbol, day)} and len(pd.read_parquet(parquet)) == 1
+    readback = json.loads(meta.read_bytes())
+    assert readback["suspension_authority_binding"] == provenance
+    assert readback["day_resolutions"][0]["basis"] == "OFFICIAL_DISCLOSURE"
+    assert cas.get_json_bounded(snapshot.source_manifest_ref, max_bytes=1024) == {}
+
+
 def test_native_suspend_keeps_pinned_prefix_and_checks_only_new_month(tmp_path):
     import json
 
