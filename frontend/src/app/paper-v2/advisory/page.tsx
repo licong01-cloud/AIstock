@@ -739,6 +739,7 @@ function AdvisoryPageContent() {
   const [reviewTradeDate, setReviewTradeDate] = useState("");
   const [reviewDateTouched, setReviewDateTouched] = useState(false);
   const [tradingDefaults, setTradingDefaults] = useState<AdvisoryTradingDayDefaults | null>(null);
+  const [tradingDefaultsError, setTradingDefaultsError] = useState<string | null>(null);
   const [reviewingKey, setReviewingKey] = useState("");
   const [activePool, setActivePool] = useState<AdvisoryEpisode[]>([]);
   const [bindings, setBindings] = useState<AdvisoryStrategyBindingVersion[]>([]);
@@ -782,6 +783,7 @@ function AdvisoryPageContent() {
   const [tdxSyncResult, setTdxSyncResult] = useState<{ display_name: string; count: number } | null>(null);
   const listDetailRef = useRef<HTMLDivElement | null>(null);
   const refreshSeqRef = useRef(0);
+  const tradingDefaultsRequestRef = useRef<Promise<AdvisoryTradingDayDefaults | null> | null>(null);
   const detailsSeqRef = useRef(0);
   const modelShadowSeqRef = useRef(0);
 
@@ -980,22 +982,31 @@ function AdvisoryPageContent() {
   async function refreshAll(nextProgramId?: string, options: { resetReviewDate?: boolean; preserveReviewDate?: boolean } = {}) {
     const requestSeq = ++refreshSeqRef.current;
     const stillCurrent = () => requestSeq === refreshSeqRef.current;
+    let ownedDetailsSeq: number | null = null;
     setLoading(true);
     setLeaderboardLoading(false);
     setDetailsLoading(false);
     setError(null);
+    setTradingDefaults(null);
+    setTradingDefaultsError(null);
+    const tradingDefaultsPromise = advisoryApi.tradingDayDefaults(10)
+      .then((defaults) => {
+        if (stillCurrent()) setTradingDefaults(defaults);
+        return defaults;
+      })
+      .catch((exc) => {
+        if (stillCurrent()) setTradingDefaultsError(exc instanceof Error ? exc.message : String(exc));
+        return null;
+      });
+    tradingDefaultsRequestRef.current = tradingDefaultsPromise;
     try {
-      const [programRows, nextTradingDefaults] = await Promise.all([
-        advisoryApi.programs(false),
-        advisoryApi.tradingDayDefaults(10),
-      ]);
+      const programRows = await advisoryApi.programs(false);
       if (!stillCurrent()) return;
       const placeholderBoardRows = programRows.map((program) => ({ ...program, metric_status: "LOADING" })) as AdvisoryLeaderboardRow[];
       const hydratedPrograms = programRows;
       setPrograms(hydratedPrograms);
       setLeaderboard(placeholderBoardRows);
       setLeaderboardLoading(true);
-      setTradingDefaults(nextTradingDefaults);
       if (options.resetReviewDate) setReviewDateTouched(false);
       const resolvedProgramId = nextProgramId || selectedProgramId || hydratedPrograms[0]?.program_id || "";
       const resolvedProgram = hydratedPrograms.find((item) => item.program_id === resolvedProgramId) || hydratedPrograms[0] || null;
@@ -1019,8 +1030,13 @@ function AdvisoryPageContent() {
         });
       if (resolvedProgramId) {
         setDetailsLoading(true);
-        const versionRows = await loadProgramDetails(resolvedProgramId, 1, reviewPageSize);
-        if (!stillCurrent()) return;
+        const versionsPromise = loadProgramDetails(resolvedProgramId, 1, reviewPageSize);
+        ownedDetailsSeq = detailsSeqRef.current;
+        const versionRows = await versionsPromise;
+        if (!stillCurrent() || ownedDetailsSeq !== detailsSeqRef.current) return;
+        setDetailsLoading(false);
+        const nextTradingDefaults = await tradingDefaultsPromise;
+        if (!stillCurrent() || ownedDetailsSeq !== detailsSeqRef.current || !nextTradingDefaults) return;
         setReviewTradeDate((current) => (
           !options.preserveReviewDate && (options.resetReviewDate || !reviewDateTouched || !current)
             ? defaultReviewTargetDate(nextTradingDefaults, resolvedProgram, versionRows)
@@ -1038,6 +1054,8 @@ function AdvisoryPageContent() {
         setLoadedDetailsProgramId("");
         setListDetailSource("latest");
         setReviewResult(null);
+        const nextTradingDefaults = await tradingDefaultsPromise;
+        if (!stillCurrent() || !nextTradingDefaults) return;
         setReviewTradeDate((current) => (!options.preserveReviewDate && (options.resetReviewDate || !reviewDateTouched || !current) ? defaultReviewTargetDate(nextTradingDefaults) : current));
       }
     } catch (exc) {
@@ -1045,7 +1063,7 @@ function AdvisoryPageContent() {
     } finally {
       if (stillCurrent()) {
         setLoading(false);
-        setDetailsLoading(false);
+        if (ownedDetailsSeq === null || ownedDetailsSeq === detailsSeqRef.current) setDetailsLoading(false);
       }
     }
   }
@@ -1057,14 +1075,20 @@ function AdvisoryPageContent() {
     setLoadedDetailsProgramId("");
     setDetailsLoading(true);
     setError(null);
+    const versionsPromise = loadProgramDetails(programId, 1, reviewPageSize);
+    const requestSeq = detailsSeqRef.current;
     try {
-      const versionRows = await loadProgramDetails(programId, 1, reviewPageSize);
-      const program = programs.find((item) => item.program_id === programId) || null;
-      setReviewTradeDate((current) => (!reviewDateTouched || !current ? defaultReviewTargetDate(tradingDefaults, program, versionRows) : current));
-    } catch (exc) {
-      setError(exc instanceof Error ? exc.message : String(exc));
-    } finally {
+      const versionRows = await versionsPromise;
+      if (requestSeq !== detailsSeqRef.current) return;
       setDetailsLoading(false);
+      const nextTradingDefaults = await (tradingDefaultsRequestRef.current || Promise.resolve(tradingDefaults));
+      if (requestSeq !== detailsSeqRef.current || !nextTradingDefaults) return;
+      const program = programs.find((item) => item.program_id === programId) || null;
+      setReviewTradeDate((current) => (!reviewDateTouched || !current ? defaultReviewTargetDate(nextTradingDefaults, program, versionRows) : current));
+    } catch (exc) {
+      if (requestSeq === detailsSeqRef.current) setError(exc instanceof Error ? exc.message : String(exc));
+    } finally {
+      if (requestSeq === detailsSeqRef.current) setDetailsLoading(false);
     }
   }
 
@@ -1161,6 +1185,7 @@ function AdvisoryPageContent() {
   }
 
   async function runReview(program: AdvisoryProgram, preview: boolean, targetDate?: string, selectionAsOfDate?: string | null) {
+    if (!tradingDefaults) return;
     const programVersions = program.program_id === selectedProgram?.program_id && loadedDetailsProgramId === program.program_id ? listVersions : [];
     const context = reviewActionContext(tradingDefaults, program, programVersions, targetDate || (program.program_id === selectedProgram?.program_id ? reviewTradeDate : ""));
     if (!context.state.canPreview || (!preview && !context.state.canRun)) return;
@@ -1212,6 +1237,7 @@ function AdvisoryPageContent() {
   }
 
   async function runCatchUp(program: AdvisoryProgram, targetDates: string[]) {
+    if (!tradingDefaults) return;
     const programVersions = program.program_id === selectedProgram?.program_id && loadedDetailsProgramId === program.program_id ? listVersions : [];
     const context = reviewActionContext(tradingDefaults, program, programVersions);
     const orderedTargetDates = sortedDates(targetDates).filter((date) => context.progress.missingTargetDates.includes(date));
@@ -1418,7 +1444,7 @@ function AdvisoryPageContent() {
   }
 
   const selectedVersionsForContext = selectedProgram && loadedDetailsProgramId === selectedProgram.program_id ? listVersions : [];
-  const selectedDateContextLoading = Boolean(selectedProgram && loadedDetailsProgramId !== selectedProgram.program_id);
+  const selectedDateContextLoading = Boolean(selectedProgram && (!tradingDefaults || loadedDetailsProgramId !== selectedProgram.program_id));
   const selectedActionContext = selectedProgram
     ? reviewActionContext(tradingDefaults, selectedProgram, selectedVersionsForContext, reviewTradeDate)
     : null;
@@ -1767,6 +1793,15 @@ function AdvisoryPageContent() {
           </div>
         </div>
         {error ? <div className="pv2-error-panel">{error}</div> : null}
+        {tradingDefaultsError ? (
+          <div className="pv2-error-panel" role="alert" data-testid="advisory-calendar-error">
+            交易日暂不可用：{tradingDefaultsError}。已有任务、荐股列表和持有池仍可查看；日期相关复评暂停，请点击“刷新”重试。
+          </div>
+        ) : !tradingDefaults ? (
+          <div className="pv2-readable-panel" role="status" data-testid="advisory-calendar-loading">
+            正在加载权威交易日；已有荐股数据独立加载，交易日就绪前不执行复评。
+          </div>
+        ) : null}
         {loading || leaderboardLoading ? (
           <div className="pv2-readable-panel" data-testid="advisory-fast-loading-status" style={{ marginBottom: 12 }}>
             {loading
@@ -1798,7 +1833,7 @@ function AdvisoryPageContent() {
                 const rowLatestMeta = latestRecommendationMeta(row, rowVersions);
                 const rowActionContext = reviewActionContext(tradingDefaults, row, rowVersions);
                 const rowProgress = rowActionContext.progress;
-                const rowContextLoading = (leaderboardLoading && row.metric_status === "LOADING")
+                const rowContextLoading = !tradingDefaults || (leaderboardLoading && row.metric_status === "LOADING")
                   || (row.program_id === selectedProgram?.program_id && loadedDetailsProgramId !== row.program_id);
                 const state = rowContextLoading ? loadingReviewState("正在加载该任务复评日期上下文，加载完成后按钮状态会固定。") : rowActionContext.state;
                 const previewKey = `${row.program_id}:preview`;
@@ -2026,7 +2061,7 @@ function AdvisoryPageContent() {
               disabled={!selectedProgram || !selectedReviewState?.canPreview || Boolean(reviewingKey)}
               type="button"
             >
-              {reviewingKey === selectedPreviewKey ? "预览中..." : selectedReviewState?.previewLabel || "预览"}
+              {reviewingKey && reviewingKey === selectedPreviewKey ? "预览中..." : selectedReviewState?.previewLabel || "预览"}
             </button>
             <button
               className="pv2-button-primary"
@@ -2035,7 +2070,7 @@ function AdvisoryPageContent() {
               disabled={!selectedProgram || !selectedReviewState?.canRun || Boolean(reviewingKey)}
               type="button"
             >
-              {reviewingKey === selectedRunKey ? "执行中..." : selectedReviewState?.label || "执行复评"}
+              {reviewingKey && reviewingKey === selectedRunKey ? "执行中..." : selectedReviewState?.label || "执行复评"}
             </button>
             <button
               className="pv2-button"
