@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -68,6 +69,7 @@ def test_public_ci_prepares_x_only_temp_before_any_tests():
 @pytest.mark.parametrize("job,execution", [
     ("nightly-l3", "Run selected Nightly sessions once"),
     ("paper-v2-live", "nox -s paper_v2_live"),
+    ("code-intelligence-weekly", "Validate CI/Nightly issue workflow automation"),
 ])
 def test_nightly_prepares_same_x_only_job_storage_before_tests(job, execution):
     import yaml
@@ -81,6 +83,13 @@ def test_nightly_prepares_same_x_only_job_storage_before_tests(job, execution):
     assert "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }" in prep["run"]
     execution_index = next(i for i, step in enumerate(steps) if step.get("name") == execution)
     assert index < execution_index
+    bootstrap_index, bootstrap = next((i, step) for i, step in enumerate(steps)
+                                      if step.get("name") == "Prepare X-only temporary storage before Conda")
+    assert not bootstrap.get("continue-on-error")
+    assert bootstrap["if"] == prep["if"]
+    assert "python scripts/ci_environment_verify.py --prepare-temp-only" in bootstrap["run"]
+    assert "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }" in bootstrap["run"]
+    assert bootstrap_index < next(i for i, step in enumerate(steps) if "conda run" in step.get("run", ""))
     if job == "paper-v2-live":
         assert "conda run -n AIstock-CI python -m nox" in steps[execution_index]["run"]
 
@@ -152,6 +161,26 @@ def test_prebuilt_windows_environment_is_ready_without_installing(tmp_path: Path
     assert payload["status"] == "ready"
     assert payload["environment_name"] == "AIstock-CI"
     assert payload["missing_modules"] == []
+
+
+@pytest.mark.parametrize("storage_available", [True, False])
+def test_temp_bootstrap_precedes_environment_verification_without_attesting_it(tmp_path, monkeypatch, capsys, storage_available):
+    monkeypatch.setattr(ci_env, "TEST_TEMP_ROOT", tmp_path / "ci-temp")
+    monkeypatch.setattr(ci_env, "verify_environment", lambda: pytest.fail("bootstrap must not require activated Conda"))
+    for key, value in _job_env().items():
+        monkeypatch.setenv(key, value)
+    output = tmp_path / "github-env"
+    monkeypatch.setenv("GITHUB_ENV", str(output))
+    if not storage_available:
+        monkeypatch.setattr(ci_env, "prepare_test_temp", lambda _: (_ for _ in ()).throw(PermissionError("X unavailable")))
+    assert ci_env.main(prepare_temp_only=True) == (0 if storage_available else 1)
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["schema_version"] == "aistock_ci_temp_bootstrap_v1" and receipt["environment_verified"] is False
+    assert output.exists() is storage_available
+    if storage_available:
+        assert "PYTEST_DEBUG_TEMPROOT=" in output.read_text(encoding="utf-8")
+    else:
+        assert "X-only" in receipt["failure_reasons"][0]
 
 
 def test_environment_fingerprint_mismatch_fails_closed(tmp_path: Path) -> None:
