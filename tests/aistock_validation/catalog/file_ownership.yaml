@@ -1,5 +1,23 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: advisory_mocked_ui_runner_config
+    priority: 141
+    include: [frontend/tests/advisory-mocked.config.ts]
+    primary_module: advisory.ui
+    impact_modules: []
+    layer: validation
+    risk_level: high
+    ownership_reason: Runner-owned isolated frontend/browser configuration, not Advisory business logic.
+  - rule_id: advisory_mocked_ui
+    priority: 140
+    include:
+      - frontend/src/app/paper-v2/advisory/**
+      - frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts
+    primary_module: advisory.ui
+    impact_modules: []
+    layer: frontend
+    risk_level: medium
+    ownership_reason: Exact Advisory UI boundary, isolated from retired Paper workflows.
   - rule_id: local_data_tdx_go
     priority: 120
     include:

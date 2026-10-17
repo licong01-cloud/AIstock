@@ -2465,6 +2465,19 @@ test("Advisory page exposes initial list generation when a new program has no li
     if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/bindings`) && method === "GET") {
       return json(route, { ok: true, bindings: [newBinding] });
     }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/sector-entry-price`) && method === "GET") {
+      return json(route, { ok: true, schema_version: "economic_sector_daily_service_v1", model_family: "M1_SECTOR_PRICE_VALUE_V1",
+        program_id: newProgramId, requested_target_date: url.searchParams.get("target_trade_date"),
+        requested_list_version_id: url.searchParams.get("list_version_id"), decision_use: "NAVIGATION_ONLY", deployable: false,
+        economic_effectiveness: "NOT_CONFIRMED", database_written: false, outcomes_read: false, package_qualification_rechecked: false,
+        fit_count: 0, status: "NOT_CONFIGURED", candidates: [], unmodeled_items: [] });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/entry-value/status`) && method === "GET") {
+      return json(route, { ok: true, schema_version: "economic_entry_consumer_status_v1", program_id: newProgramId,
+        role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY", status: "NOT_CONFIGURED", target_date: url.searchParams.get("target_trade_date"),
+        evidence_state: "UNCONFIRMED", deployable: false, advice: [], reason_code: "NO_QUALIFIED_ENTRY_VALUE_ROLE_BOUND",
+        qualification_gaps: ["independent_economic_confirmation"], automatic_capture_enabled: false, research_namespace_configured: true });
+    }
     if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/list-versions`) && method === "GET") {
       return json(route, { ok: true, list_versions: currentListVersions });
     }

@@ -885,6 +885,56 @@ def _validate_advisory_entry_price_status(
     )
 
 
+def _validate_advisory_trading_day_defaults(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Attest calendar choices only, never market/minute data readiness."""
+    def failed(reason):
+        return "failed", reason, {}
+
+    def day(value):
+        parsed = datetime.strptime(value, "%Y-%m-%d").date()
+        if parsed.isoformat() != value:
+            raise ValueError("non-canonical calendar date")
+        return parsed
+
+    if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("calendar_only") is not True or payload.get("errors"):
+        return failed("calendar defaults require ok=true and calendar_only=true without errors")
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    try:
+        raw = query.get("lookback_trading_days", ["10"])
+        if len(raw) != 1 or not re.fullmatch(r"[0-9]+", raw[0]):
+            raise ValueError("invalid requested lookback")
+        lookback = int(raw[0])
+        if not 1 <= lookback <= 250 or type(payload.get("lookback_trading_days")) is not int or payload["lookback_trading_days"] != lookback:
+            raise ValueError("lookback identity mismatch")
+        as_of = day(payload.get("as_of_date"))
+        if "as_of_date" in query and query["as_of_date"] != [as_of.isoformat()]:
+            raise ValueError("as-of identity mismatch")
+        values = payload.get("trading_days")
+        if not isinstance(values, list) or not 1 <= len(values) <= lookback:
+            raise ValueError("calendar choices must be nonempty and bounded by lookback")
+        days = [day(value) for value in values]
+        if days != sorted(set(days)) or days[-1] > as_of or day(payload.get("latest_trading_day")) != days[-1]:
+            raise ValueError("calendar choices must be unique, ascending and latest <= as-of")
+        next_value = payload.get("next_trading_day")
+        if next_value is not None and day(next_value) <= as_of:
+            raise ValueError("next trading day must follow as-of")
+        status = payload.get("trading_day_status")
+        if (not isinstance(status, dict) or status.get("ok") is not True
+                or status.get("as_of_date") != as_of.isoformat()
+                or status.get("latest_completed_trading_day") != days[-1].isoformat()
+                or "next_trading_day" not in payload or "next_trading_day" not in status
+                or status.get("next_trading_day") != next_value):
+            raise ValueError("calendar status disagrees with defaults")
+        if (type(payload.get("available_trading_day_count")) is not int or payload["available_trading_day_count"] != len(days)
+                or payload.get("replay_start_date") != values[0] or payload.get("replay_end_date") != values[-1]):
+            raise ValueError("calendar count or replay bounds disagree")
+    except (TypeError, ValueError, OverflowError) as exc:
+        return failed(str(exc))
+    return "passed", None, {"calendar_only": True, "market_data_readiness": "not_evaluated",
+                             "as_of_date": as_of.isoformat(), "latest_trading_day": values[-1],
+                             "next_trading_day": next_value, "trading_day_count": len(days)}
+
+
 def _validate_advisory_returns(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
     """Check the v2 reference-return snapshot, not economic quality or broker fills."""
     def failed(reason):
