@@ -23,7 +23,8 @@ from .qlib_bounded_update import read_calendar
 SCHEMA = "aistock_monthly_prev_close_correction_v1"
 BINDING = "monthly_prev_close_repairs"
 SUPPLEMENT_KEYS = {BINDING, BINDING + "_ref", "monthly_industry_history", "monthly_industry_history_ref",
-                   "monthly_industry_quote_source", "monthly_industry_quote_source_ref"}
+                   "monthly_industry_quote_source", "monthly_industry_quote_source_ref",
+                   "monthly_suspension_authority", "monthly_suspension_authority_ref"}
 
 
 def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):

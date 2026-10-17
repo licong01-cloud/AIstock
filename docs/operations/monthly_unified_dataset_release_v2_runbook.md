@@ -50,6 +50,23 @@ python scripts/monthly_unified_dataset_release.py rollback --operation-id dmr_<3
 - CONSUMER_VALIDATE 失败：记录具体 consumer、节点、窗口和身份；不得静默退回旧路径。
 - 激活并发冲突：CAS 失败且 active 不变；重新读取后决定是否仍需切换。
 
+### 已封存 SOURCE 的正式停牌依据补充（BUG-1961）
+
+新月更会在 SOURCE 中封存共享停牌公告依据。若旧 operation 已封存 SOURCE、
+BUILD 因未携带后续已审核的公告依据失败，使用同一受鉴权入口显式绑定：
+
+```powershell
+python scripts/monthly_unified_dataset_release.py bind-suspension --operation-id dmr_<32hex>
+python scripts/monthly_unified_dataset_release.py resume --operation-id dmr_<32hex>
+```
+
+绑定仅允许空请求，从正式共享 authority 获取依据，不接收调用方填写的停牌结论。
+它固定原 SOURCE receipt、source bundle、前驱和目标截止日，仅补充目标月份内的公告。
+BUILD 从 CAS 读取这份不可变依据，并将绑定及来源 manifest 身份写入停牌组件 metadata，
+由现有组件 receipt/manifest 钉住。原 SOURCE、已完成日线/分钟线/因子输出均保留。
+未绑定时仍按原 SOURCE 判断，不借用当前 checkout；公告冲突、畸形或矛盾的日内事件仍报错。
+绑定不会自动 resume、修改数据库、赋予 READY 或激活权限。
+
 ### 4.1 已接受的来源质量差异（BUG-1815）
 
 缺行/必需字段空值与来源差异不是同一种问题。经用户明确接受的有限值日线—分钟线差异，
