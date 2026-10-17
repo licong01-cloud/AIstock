@@ -155,9 +155,9 @@
   },
   "first_seen_at": "2026-10-17T12:43:14.011399Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "509ebaf0e79fc984335a8a8927ba9456a9a23a9e",
   "fix_summary": "Restore Advisory-owned official-calendar daily defaults and independently load stored task/list/stock data. Calendar errors remain visible; review and catch-up stay disabled until authoritative dates return. No ranking, pricing, policy, model, data or LocalSIM/QE/HMM changes. UI redesign is explicitly deferred.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-17T14:06:10Z",
   "github_issue_number": 6265,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6265",
   "last_seen_at": "2026-10-17T12:43:14.011399Z",
@@ -165,6 +165,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6276",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -193,6 +194,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -204,7 +206,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1962",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2122b03a0ec8311e",
+    "recorded_at": "2026-10-17T14:06:52.308688Z",
+    "runtime_contract_digest": "baa0be84cbfccba3a119706521a5c5aa90daa6ab9e78eb366a293f9e410e1010",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "531b83691a423ce23b1e1b39cd6b3e9a2d3670c1",
+    "source_merge_commit": "509ebaf0e79fc984335a8a8927ba9456a9a23a9e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6276",
+    "validation_evidence": [
+      "python -m pytest backend/tests/watchlist/test_advisory_api.py -q -> passed: 21 targeted API tests; source hashes unchanged.",
+      "python -m nox -s l0 -- backend/routers/advisory.py backend/tests/watchlist/test_advisory_api.py frontend/src/app/paper-v2/advisory/page.tsx frontend/src/lib/api/advisory.ts frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts -> passed: blocking=0; final HEAD 531b83691a423ce23b1e1b39cd6b3e9a2d3670c1 CI run 39038982126 success, including advisory_mocked_ui."
+    ],
+    "validation_evidence_digest": "93b6b175a005afe00f4f98bcc5e5dd7a8013f80503883a97ea3e0649d3a04f61"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "advisory.historical_range"
   ],
@@ -249,6 +273,10 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/watchlist/test_advisory_api.py -q -> passed: 21 targeted API tests; source hashes unchanged.",
+    "python -m nox -s l0 -- backend/routers/advisory.py backend/tests/watchlist/test_advisory_api.py frontend/src/app/paper-v2/advisory/page.tsx frontend/src/lib/api/advisory.ts frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts -> passed: blocking=0; final HEAD 531b83691a423ce23b1e1b39cd6b3e9a2d3670c1 CI run 39038982126 success, including advisory_mocked_ui."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
