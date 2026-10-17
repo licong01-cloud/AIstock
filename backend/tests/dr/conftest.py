@@ -22,7 +22,6 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterator
 
 import pytest
 
@@ -153,7 +152,7 @@ def _docker_pg_container() -> str | None:
 
 @pytest.fixture(scope="session")
 def pg_restore_runner():
-    """Return a callable ``(args, stdin_bytes) -> CompletedProcess`` that
+    """Return a callable accepting dump_path or small negative-test stdin_bytes that
     invokes ``pg_restore`` -- or ``None`` if neither PATH ``pg_restore`` nor
     a canonical docker container is available.
 
@@ -177,29 +176,22 @@ def pg_restore_runner():
     """
     direct = shutil.which("pg_restore") or shutil.which("pg_restore.exe")
     if direct:
-        def _runner(args: list[str], stdin_bytes: bytes | None = None):
-            return subprocess.run(
-                [direct, *args],
-                input=stdin_bytes,
-                capture_output=True,
-                timeout=60,
-            )
-        return _runner
+        command, timeout = [direct], 60
+    else:
+        container = _docker_pg_container()
+        if container is None:
+            return None  # .sql validation remains independent of pg_restore
+        command, timeout = ["docker", "exec", "-i", container, "pg_restore"], 120
 
-    container = _docker_pg_container()
-    if container is None:
-        return None  # explicit None so .sql tests still run
+    def _runner(args: list[str], stdin_bytes: bytes | None = None, *, dump_path: Path | None = None):
+        if dump_path is not None:
+            if stdin_bytes is not None:
+                raise ValueError("dump_path and stdin_bytes are mutually exclusive")
+            if direct:
+                return subprocess.run([*command, *args, str(dump_path)], capture_output=True, timeout=timeout)
+            # Pass a file descriptor, not an in-memory copy of a multi-GB dump.
+            with Path(dump_path).open("rb") as stream:
+                return subprocess.run([*command, *args], stdin=stream, capture_output=True, timeout=timeout)
+        return subprocess.run([*command, *args], input=stdin_bytes, capture_output=True, timeout=timeout)
 
-    def _docker_runner(args: list[str], stdin_bytes: bytes | None = None):
-        # Stream the dump bytes via stdin so the file does not need to
-        # exist inside the container; pg_restore --list on stdin requires
-        # the -i (interactive) docker exec flag.
-        cmd = ["docker", "exec", "-i", container, "pg_restore", *args]
-        return subprocess.run(
-            cmd,
-            input=stdin_bytes,
-            capture_output=True,
-            timeout=120,
-        )
-
-    return _docker_runner
+    return _runner

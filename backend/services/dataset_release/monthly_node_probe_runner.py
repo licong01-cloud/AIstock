@@ -13,6 +13,8 @@ import subprocess
 from types import MappingProxyType
 from typing import Any, Callable, Mapping, Protocol, Sequence
 
+from .monthly_subprocess import headless_process_options
+
 from .canonical import canonical_json_bytes
 from .monthly_consumer_registry import monthly_controller_preflight_probes
 from .monthly_consumer_validation import (
@@ -68,7 +70,7 @@ MONTHLY_CONSUMER_NODES: Mapping[str, str] = MappingProxyType(
     }
 )
 _HMM_PATH_ROLES = {
-    "components/factor_h5_static_candidate_v2/sector_data.h5": "sector_data_h5",
+    "components/sector_context_candidate_v1/sector_quote_facts.h5": "sector_data_h5",
     "components/index_context/index_daily.h5": "index_daily_h5",
     "components/sector_context_candidate_v1/sector_code_map.json": "sector_code_map_json",
     "components/sector_context_candidate_v1/market_context.parquet": "market_context_parquet",
@@ -120,6 +122,7 @@ def _run_subprocess(
         check=False,
         timeout=timeout_seconds,
         shell=False,
+        **headless_process_options(),
     )
 
 
@@ -131,6 +134,7 @@ class CodeOwnedSubprocessNodeProbeRunner:
     runner_version: str = "1"
     timeout_seconds: int = 1_800
     executor: Callable[..., subprocess.CompletedProcess[bytes]] = _run_subprocess
+    command_factory: Callable[[], tuple[str, ...]] | None = None
 
     def __post_init__(self) -> None:
         if self.node_id not in {"wsl2-5080", "rdagent-node1"}:
@@ -148,7 +152,7 @@ class CodeOwnedSubprocessNodeProbeRunner:
     def run(self, request: Mapping[str, Any]) -> Mapping[str, Any]:
         payload = canonical_json_bytes(request) + b"\n"
         completed = self.executor(
-            self.command,
+            self.command_factory() if self.command_factory is not None else self.command,
             payload=payload,
             timeout_seconds=self.timeout_seconds,
         )

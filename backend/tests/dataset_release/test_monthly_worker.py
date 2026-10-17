@@ -40,6 +40,61 @@ SHA = "a" * 64
 MANIFEST = "b" * 64
 
 
+def test_registered_pipeline_delivers_stage_control_and_checks_before_validation(tmp_path):
+    events = []
+
+    def checkpoint():
+        events.append("checkpoint")
+
+    def progress(value):
+        events.append(dict(value))
+
+    def produce(context):
+        context.progress({"phase": "RAW_SOURCE"})
+        context.checkpoint()
+        return {}  # Deliberately invalid evidence; control must run before validation.
+
+    producer = SimpleNamespace(produce=produce)
+    pipeline = RegisteredMonthlyPipeline(
+        {name: producer for name in ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,),
+    )
+    with pytest.raises(MonthlyProducerError, match="evidence fields"):
+        pipeline.run_stage_with_control(
+            stage="SOURCE", operation_id="dmr_" + "1" * 32, attempt=1,
+            request={}, plan={}, prior_receipts={}, checkpoint=checkpoint, progress=progress,
+        )
+    assert events == ["checkpoint", {"phase": "RAW_SOURCE"}, "checkpoint", "checkpoint"]
+
+
+@pytest.mark.parametrize("cancel_at", [1, 2])
+def test_registered_pipeline_does_not_swallow_stage_control_interruption(tmp_path, cancel_at):
+    calls = []
+    checks = 0
+
+    def checkpoint():
+        nonlocal checks
+        checks += 1
+        if checks == cancel_at:
+            raise RuntimeError("controlled cancellation")
+
+    def produce(context):
+        calls.append(context.stage)
+        return {}
+
+    pipeline = RegisteredMonthlyPipeline(
+        {name: SimpleNamespace(produce=produce) for name in
+         ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,),
+    )
+    with pytest.raises(RuntimeError, match="controlled cancellation"):
+        pipeline.run_stage_with_control(
+            stage="SOURCE", operation_id="dmr_" + "1" * 32, attempt=1,
+            request={}, plan={}, prior_receipts={}, checkpoint=checkpoint, progress=lambda _value: None,
+        )
+    assert calls == ([] if cancel_at == 1 else ["SOURCE"])
+
+
 @pytest.mark.parametrize("queue,busy,expected,calls_expected", [
     ((), set(), None, []),
     (("busy",), {"busy"}, None, ["busy"]),

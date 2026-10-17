@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from scripts import nightly_adaptive_scheduler as scheduler
 
 
@@ -243,11 +245,15 @@ def test_nightly_adaptive_scheduler_public_artifact_keeps_llm_consumption_eviden
     assert payload["llm_gate"] == "ready"
 
 
-def test_nightly_adaptive_scheduler_fail_on_llm_error_returns_nonzero(monkeypatch, tmp_path: Path) -> None:
+@pytest.mark.parametrize("changed_file,needle", [
+    ("docs/handoff/notes.md", "429"), ("unowned/path.py", "unmapped executable code"),
+])
+def test_nightly_adaptive_scheduler_fail_on_llm_error_returns_nonzero(monkeypatch, tmp_path: Path, capsys, changed_file, needle) -> None:
     def fake_build(*args, **kwargs):
         raise scheduler.llm_provider_adapter.ProviderAdapterError("deepseek_api inference failed status=429")
 
     monkeypatch.setattr(scheduler.llm_provider_adapter, "build_nightly_scheduler_advice", fake_build)
+    monkeypatch.setenv("GITHUB_RUN_ID", "9001")
 
     output = tmp_path / "scheduler.json"
     exit_code = scheduler.main(
@@ -258,6 +264,8 @@ def test_nightly_adaptive_scheduler_fail_on_llm_error_returns_nonzero(monkeypatc
             "fresh",
             "--invoke-llm",
             "--fail-on-llm-error",
+            "--json", "--head-commit", "a" * 40,
+            "--changed-file", changed_file,
             "--output",
             str(output),
         ]
@@ -268,7 +276,10 @@ def test_nightly_adaptive_scheduler_fail_on_llm_error_returns_nonzero(monkeypatc
     assert payload["workflow_gate"] == "blocked"
     assert payload["llm_gate"] == "degraded"
     assert payload["llm_invoked"] is False
-    assert "429" in payload["error"]
+    assert needle in payload["error"]
+    assert payload["head_commit"] == "a" * 40
+    assert payload["run_id"] == "9001"
+    assert needle in json.loads(capsys.readouterr().out)["error"]
 
 
 def test_nightly_adaptive_scheduler_includes_code_intelligence_refs_in_public_artifact(
@@ -346,6 +357,23 @@ def test_nightly_execution_plan_uses_catalog_and_deduplicates_sessions() -> None
     assert plan["session_positional_args"]["l0"] == ["backend/services/simulation_runtime/ops.py"]
 
 
+def test_nightly_mcp_producer_precedes_only_already_selected_consumers() -> None:
+    consumers = ["research_mcp_contract"]  # Phase 6 is explicitly local/manual-only.
+    producer = "mcp_gateway_manifest_quality"
+    for failed in (consumers, [*consumers, producer]):
+        sessions = scheduler.build_nightly_execution_plan([], retry_context={"failed_sessions": failed})["selected_sessions"]
+        assert set(sessions) == set(failed)
+        if producer in sessions:
+            assert all(sessions.index(producer) < sessions.index(consumer) for consumer in consumers)
+
+
+@pytest.mark.parametrize("name", ["client", "client_bj_code", "dial", "manage", "pagination", "pagination_test", "web/server"])
+def test_nightly_tdx_go_root_and_nested_sources_have_owned_plans(name: str) -> None:
+    path = f"tdx-api-main/{name}.go"
+    plan = scheduler.build_nightly_execution_plan([path])
+    assert "data_sync_autonomy_backend" in plan["selected_sessions"]
+
+
 def test_nightly_execution_plan_retries_only_failed_sessions_plus_new_impact() -> None:
     plan = scheduler.build_nightly_execution_plan(
         ["frontend/src/app/watchlist/page.tsx"],
@@ -394,6 +422,37 @@ def test_nightly_execution_plan_empty_window_without_retry_is_noop() -> None:
     assert plan["selected_sessions"] == []
     assert plan["session_positional_args"] == {}
     assert plan["workflow_gate"] == "passed"
+
+
+@pytest.mark.parametrize("full_run,changed_files,retry", [
+    (True, [], []),
+    (False, ["backend/mcp/profiles.py"], []),
+    (False, [], ["mcp_gateway_phase5_assistant", "mcp_gateway_phase6_resource_monitor", "research_mcp_contract"]),
+])
+def test_nightly_respects_explicit_catalog_automation_prohibition(full_run, changed_files, retry):
+    plans = scheduler.issue_flow._plans_by_key()
+    denied = {key for key, plan in plans.items() if (plan.get("runtime_policy") or {}).get("allow_github_actions") is False}
+    plan = scheduler.build_nightly_execution_plan(changed_files, full_run=full_run, retry_context={"failed_sessions": retry})
+    assert not denied.intersection(plan["selected_plan_keys"])
+    assert set(plan["excluded_automation_plans"]) <= denied
+    assert "mcp_gateway_phase5_assistant" in plan["excluded_automation_plans"]
+    assert all(value == "not_executed: catalog allow_github_actions=false" for value in plan["excluded_automation_plans"].values())
+    assert plan["selected_sessions"]  # Allowed regression still executes.
+    if retry:
+        assert plan["selected_sessions"] == ["research_mcp_contract"]
+    public = scheduler.public_scheduler_report({"nightly_execution": plan})
+    assert public["nightly_execution_exclusions"] == plan["excluded_automation_plans"]
+    assert "not_executed" in scheduler.render_markdown({"nightly_execution": plan})
+
+
+def test_nightly_manual_only_retry_is_reported_without_fake_execution():
+    retry = {"failed_sessions": ["mcp_gateway_phase6_resource_monitor"]}
+    plan = scheduler.build_nightly_execution_plan([], retry_context=retry)
+    assert plan["selected_sessions"] == plan["selected_plan_keys"] == []
+    assert plan["session_timeout_seconds"] == {}
+    assert plan["excluded_automation_plans"] == {"mcp_gateway_phase6_resource_monitor": "not_executed: catalog allow_github_actions=false"}
+    with pytest.raises(ValueError, match="unknown runner sessions"):
+        scheduler.build_nightly_execution_plan([], retry_context={"failed_sessions": ["not_a_registered_plan"]})
 
 
 def _load_retry_fixture(
@@ -528,7 +587,11 @@ def test_nightly_full_run_excludes_changed_file_only_plans() -> None:
     assert "hmm_risk_pr_slice" in plan["excluded_pr_only_plans"]
     assert "hmm_risk_pr_slice" not in plan["selected_sessions"]
     assert "hmm_risk_backend" in plan["selected_sessions"]
-    assert plan["selected_sessions"]
+    assert "dr_validate" not in plan["selected_sessions"]
+    assert plan["selected_sessions"].index("validation_center_backend") < plan["selected_sessions"].index("validation_workflow_automation")
+    retry = scheduler.build_nightly_execution_plan([], retry_context={"failed_sessions": ["dr_validate"]})
+    assert retry["selected_sessions"] == []
+    assert retry["excluded_operational_retry_sessions"] == ["dr_validate"]
 
 
 def test_nightly_replaces_hmm_pr_slice_with_full_coverage_plan() -> None:
@@ -541,6 +604,8 @@ def test_nightly_replaces_hmm_pr_slice_with_full_coverage_plan() -> None:
     assert "hmm_risk_pr_slice" not in plan["selected_sessions"]
     assert "hmm_risk_backend" in plan["selected_plan_keys"]
     assert "hmm_risk_backend" in plan["selected_sessions"]
+    assert plan["session_timeout_seconds"]["hmm_risk_backend"] == 1800
+    assert set(plan["session_timeout_seconds"]) == set(plan["selected_sessions"])
 
 
 def test_nightly_fails_closed_for_invalid_pr_only_replacement(monkeypatch) -> None:
@@ -567,12 +632,8 @@ def test_nightly_fails_closed_for_invalid_pr_only_replacement(monkeypatch) -> No
         },
     )
 
-    try:
+    with pytest.raises(ValueError, match="Nightly replacement plan is invalid"):
         scheduler.build_nightly_execution_plan(["scripts/example.py"])
-    except ValueError as exc:
-        assert "Nightly replacement plan is invalid" in str(exc)
-    else:
-        raise AssertionError("Nightly must fail closed when a PR-only plan lacks a valid replacement")
 
 
 def test_nightly_execution_plan_fails_closed_for_unmapped_code(monkeypatch) -> None:
@@ -582,12 +643,8 @@ def test_nightly_execution_plan_fails_closed_for_unmapped_code(monkeypatch) -> N
         lambda _paths: {"ownership": {"unmatched_files": ["backend/unknown_runtime.py"]}},
     )
 
-    try:
+    with pytest.raises(ValueError, match="unmapped executable code"):
         scheduler.build_nightly_execution_plan(["backend/unknown_runtime.py"])
-    except ValueError as exc:
-        assert "unmapped executable code" in str(exc)
-    else:
-        raise AssertionError("Nightly must fail closed for unmapped executable code")
 
 
 def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
@@ -595,7 +652,9 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
 
     workflow = (scheduler.ROOT / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
     parsed = yaml.safe_load(workflow)
-    dispatch = parsed.get("on", parsed.get(True))["workflow_dispatch"]["inputs"]
+    triggers = parsed.get("on", parsed.get(True))
+    dispatch = triggers["workflow_dispatch"]["inputs"]
+    assert dispatch["llm_triage_mode"]["options"] == ["off", "warning_only", "opt_in_auto_file"]
 
     assert "AISTOCK_LLM_ENV_FILE: F:/Dev/AIstock/.env" in workflow
     assert "--provider github_models" not in workflow
@@ -609,42 +668,41 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "Build Nightly LLM design drift audit" in workflow
     assert "scripts/nightly_design_drift_audit.py --json" in workflow
     assert "--invoke-llm `\n            --fail-on-llm-error `\n            --run-id" in workflow
-    assert "--fail-on-llm-error" in workflow
     assert "design-drift-audit.json" in workflow
     assert "design-drift-audit.md" in workflow
-    assert "LLM design drift audit failed; retrying deterministic fallback." not in workflow
     assert "retrying deterministic fallback" not in workflow
     assert "Build Nightly LLM silent degradation audit" in workflow
     assert "scripts/nightly_silent_degradation_audit.py --json" in workflow
     assert "silent-degradation-audit.json" in workflow
     assert "silent-degradation-audit.md" in workflow
-    assert "LLM silent degradation audit failed; retrying deterministic fallback." not in workflow
     assert 'nightly_discovery_input_pack.py `\n            --run-id "${{ github.run_id }}"' in workflow
     assert '--codegraph-freshness-json "$outDir/codegraph-freshness.json"' in workflow
     assert "Build Nightly BugCandidate draft queue" in workflow
     assert "scripts/nightly_bug_candidate_queue.py --json build" in workflow
     assert "bug-candidates" in workflow
-    assert "Promote ready Nightly BugCandidates to Issue workflow" in workflow
-    assert "github.event_name == 'schedule' ||" in workflow
-    assert "inputs.llm_triage_mode == 'opt_in_auto_file'" in workflow
-    assert "inputs.llm_auto_file_opt_in" in workflow
+    assert "schedule" not in triggers
+    assert triggers["repository_dispatch"]["types"] == ["aistock_nightly"]
+    promotion = next(step for job in parsed["jobs"].values() for step in job.get("steps", [])
+                     if step.get("name") == "Promote ready Nightly BugCandidates to Issue workflow")
+    assert promotion["if"] == (
+        "steps.background_window.outputs.background_admitted == 'true' && "
+        "(github.event_name != 'workflow_dispatch' || (github.event_name == 'workflow_dispatch' && "
+        "inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in))"
+    )
     assert "issues: write" in workflow
     assert "promote-nightly-candidate" in workflow
     assert '$extraArgs = @()' in workflow
     assert "--opt-in-auto-file" in workflow
     assert "--create-registry-worktree" in workflow
     assert "Build Nightly adaptive scheduler warning report" in workflow
-    assert "scripts/nightly_adaptive_scheduler.py --json" in workflow
     assert "scripts/nightly_adaptive_scheduler.py --json `\n            --provider deepseek_api `" in workflow
     assert "--codegraph-freshness-json" in workflow
     assert "--code-intelligence-json" in workflow
-    assert "--invoke-llm" in workflow
     assert "llm-nightly-adaptive-scheduler.json" in workflow
     assert "llm-value-summary" in workflow
     assert "llm-value-summary.md" in workflow
     assert "LLM + Code Intelligence Value" in workflow
     assert 'cat "${LLM_VALUE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"' in workflow
-    assert "full_nightly_run:" in workflow
     assert dispatch["run_nightly_l3"]["default"] is True
     assert dispatch["full_nightly_run"]["default"] is False
     assert "Build receipt-watermark Nightly execution plan" in workflow
@@ -680,6 +738,7 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "No prior scheduled Nightly run with a durable session receipt is available" in workflow
     assert 'if ($env:FULL_NIGHTLY_RUN -eq "true")' in workflow
     assert "--plan-selection-output" in workflow
+    assert '--output "$outDir/scheduler-status.json"' in workflow
     assert "--fail-on-blocked" in workflow
     assert 'git cat-file -e "$watermark^{commit}"' in workflow
     assert "Receipt-bound scheduled Nightly watermark is unavailable locally" in workflow

@@ -229,12 +229,23 @@ class ArtifactReadyBuildSource:
         entries = [
             dict(item)
             for item in manifest["partitions"]
-            if isinstance(item, Mapping) and item.get("dataset") == dataset
+            if isinstance(item, Mapping) and (item.get("dataset") == dataset or (
+                dataset == "adj_factor" and item.get("dataset") == "adj_factor_construction"
+            ))
         ]
         if not entries:
             raise ArtifactReadyBuildSourceError(f"artifact-ready component omits dataset: {component.value}:{dataset}")
         output: list[OrderedMappingPartition] = []
         ranges = tuple(sorted(date_ranges))
+        # SOURCE has already verified construction maxima against the same
+        # snapshot's monthly facts. They remain normalization/boundary evidence,
+        # not a second series partition for dates backed by regular adj_factor.
+        series_ranges = tuple(
+            (_as_date(match.group("start")), _as_date(match.group("end")))
+            for item in entries
+            if dataset == "adj_factor" and item["dataset"] == "adj_factor"
+            if (match := _DATE_PARTITION.fullmatch(str(item["partition_key"]))) is not None
+        )
         selected_codes = frozenset(str(value).upper() for value in instruments)
         minute_buckets = (
             frozenset(_minute_bucket(value, self.profile.minute_code_bucket_count) for value in selected_codes)
@@ -242,7 +253,8 @@ class ArtifactReadyBuildSource:
             else frozenset()
         )
         for entry in sorted(entries, key=lambda item: str(item["partition_key"])):
-            if ranges and not _partition_overlaps_ranges(str(entry["partition_key"]), ranges):
+            construction = entry["dataset"] == "adj_factor_construction"
+            if ranges and not construction and not _partition_overlaps_ranges(str(entry["partition_key"]), ranges):
                 continue
             if minute_buckets:
                 match = _MINUTE_PARTITION.fullmatch(str(entry["partition_key"]))
@@ -253,11 +265,11 @@ class ArtifactReadyBuildSource:
                 raise ArtifactReadyBuildSourceError(f"requested raw dataset has a derived role: {identity}")
             descriptor = self._raw_descriptor(entry)
             rows: Iterable[Mapping[str, Any]] = self._reader.iter_rows(
-                dataset,
+                str(entry["dataset"]),
                 str(entry["partition_key"]),
                 decode_row_payload=True,
             )
-            if effective and dataset == "adj_factor":
+            if effective and dataset == "adj_factor" and not construction:
                 rows = self._effective_adj_rows(component, descriptor, rows)
             elif effective and dataset == "stk_limit" and self.profile.pit_authority_status == "ACTIVE_CANONICAL":
                 rows = self._effective_limit_rows(component, descriptor, rows)
@@ -265,12 +277,13 @@ class ArtifactReadyBuildSource:
                 rows = self._effective_daily_rows(component, descriptor, rows)
             elif effective and dataset == "kline_minute_raw":
                 rows = self._effective_minute_rows(component, descriptor, rows)
-            if ranges or selected_codes:
+            if ranges or selected_codes or (construction and series_ranges):
                 rows = _filter_bounded_rows(
                     rows,
                     dataset=dataset,
                     date_ranges=ranges,
                     instruments=selected_codes,
+                    excluded_date_ranges=series_ranges if construction else (),
                 )
             output.append(OrderedMappingPartition(identity, rows))
         if not output:
@@ -381,9 +394,12 @@ class ArtifactReadyBuildSource:
             raise ArtifactReadyBuildSourceError(f"component effective source evidence is invalid: {component.value}")
         return output
 
-    def factor_partition_plan(self) -> tuple[dict[str, Any], ...]:
+    def factor_partition_plan(self, *, start: date | None = None) -> tuple[dict[str, Any], ...]:
         """Map natural-month outputs to one shared immutable backing partition."""
 
+        range_start = self.profile.start_date if start is None else start
+        if type(range_start) is not date or not self.profile.start_date <= range_start <= self.cutoff:
+            raise ArtifactReadyBuildSourceError("factor partition start is outside the release range")
         datasets = (
             "kline_daily_raw",
             "adj_factor",
@@ -420,10 +436,10 @@ class ArtifactReadyBuildSource:
             intervals[dataset] = sorted(values)
 
         output: list[dict[str, Any]] = []
-        cursor = date(self.profile.start_date.year, self.profile.start_date.month, 1)
+        cursor = range_start.replace(day=1)
         while cursor <= self.cutoff:
             following = date(cursor.year + 1, 1, 1) if cursor.month == 12 else date(cursor.year, cursor.month + 1, 1)
-            start = max(cursor, self.profile.start_date)
+            start = max(cursor, range_start)
             end = min(following - timedelta(days=1), self.cutoff)
             backings: set[str] = set()
             for dataset, values in intervals.items():
@@ -846,6 +862,7 @@ def _filter_bounded_rows(
     dataset: str,
     date_ranges: Sequence[tuple[date, date]],
     instruments: frozenset[str],
+    excluded_date_ranges: Sequence[tuple[date, date]] = (),
 ) -> Iterator[Mapping[str, Any]]:
     date_field = {
         "kline_daily_raw": "trade_date",
@@ -854,14 +871,20 @@ def _filter_bounded_rows(
         "stk_limit": "trade_date",
         "suspend_d": "trade_date",
     }.get(dataset)
-    for row in rows:
-        if instruments and str(row.get("ts_code", "")).upper() not in instruments:
-            continue
-        if date_ranges and date_field is not None:
-            observed = _as_date(row.get(date_field))
-            if not any(start <= observed <= end for start, end in date_ranges):
+    iterator = iter(rows)
+    try:
+        for row in iterator:
+            if instruments and str(row.get("ts_code", "")).upper() not in instruments:
                 continue
-        yield row
+            if (date_ranges or excluded_date_ranges) and date_field is not None:
+                observed = _as_date(row.get(date_field))
+                if date_ranges and not any(start <= observed <= end for start, end in date_ranges):
+                    continue
+                if any(start <= observed <= end for start, end in excluded_date_ranges):
+                    continue
+            yield row
+    finally:
+        _close_iterator(iterator)
 
 
 def _as_datetime(value: Any) -> datetime:

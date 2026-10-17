@@ -15,6 +15,7 @@ from backend.services.dataset_release.monthly_hmm_authority_bootstrap import (
 from backend.services.dataset_release.monthly_production import (
     load_monthly_hmm_authority,
 )
+from scripts.dataset_release_hmm_authority import rebind_monthly_hmm_authority
 
 
 HEX = "a" * 64
@@ -76,6 +77,53 @@ def _inputs(tmp_path: Path, *, dynamic: bool = False) -> dict[str, Path]:
     }
 
 
+@pytest.mark.parametrize(
+    "drift", ["authority-pin", "producer-pin", "model", "config", "source", "receipt", "collision"]
+)
+def test_producer_rebind_fails_closed_on_drift_without_overwriting_approved_package(tmp_path: Path, drift: str) -> None:
+    inputs = _inputs(tmp_path)
+    previous = bootstrap_monthly_hmm_authority(
+        source_coefficients=inputs["coefficients"],
+        model_path=inputs["model"],
+        producer_script=inputs["script"],
+        output_root=inputs["external"] / "old",
+        project_root=inputs["project"],
+        authority_id="hmm-static-v1",
+        asset_id="preset-a-full-window",
+        expected_dataset_manifest_sha256=HEX,
+    )
+    inputs["script"].write_bytes(b"# reviewed new producer\n")
+    target = inputs["external"] / "new"
+    if drift in {"model", "config", "source"}:
+        name = {"model": "models.json", "config": "config.json", "source": "approved_coefficients.json"}[drift]
+        (previous.root / name).write_bytes(b'{"unapproved":true}\n')
+    elif drift == "receipt":
+        value = json.loads(previous.receipt_path.read_bytes())
+        value["preset_key"] = "unapproved"
+        previous.receipt_path.write_bytes(canonical_json_bytes(value) + b"\n")
+    elif drift == "collision":
+        target.mkdir()
+        (target / "keep.txt").write_bytes(b"existing owner content")
+    before = {p.name: p.read_bytes() for p in previous.root.iterdir()}
+    with pytest.raises(MonthlyHMMAuthorityBootstrapError):
+        rebind_monthly_hmm_authority(
+            previous_authority=previous.authority_path,
+            expected_previous_authority_sha256=("f" * 64 if drift == "authority-pin" else previous.authority_sha256),
+            producer_script=inputs["script"],
+            expected_producer_sha256=(
+                "f" * 64 if drift == "producer-pin" else hashlib.sha256(inputs["script"].read_bytes()).hexdigest()
+            ),
+            output_root=target,
+            project_root=inputs["project"],
+            authority_id="hmm-static-v2",
+        )
+    assert {p.name: p.read_bytes() for p in previous.root.iterdir()} == before
+    if drift == "collision":
+        assert (target / "keep.txt").read_bytes() == b"existing owner content"
+    else:
+        assert not target.exists()
+
+
 def test_bootstrap_packages_static_approved_product_create_exclusive(
     tmp_path: Path,
 ) -> None:
@@ -96,9 +144,7 @@ def test_bootstrap_packages_static_approved_product_create_exclusive(
     assert result.root == target
     assert result.authority_path.read_bytes().endswith(b"\n")
     assert (target / "models.json").read_bytes() == inputs["model"].read_bytes()
-    assert (target / "approved_coefficients.json").read_bytes() == inputs[
-        "coefficients"
-    ].read_bytes()
+    assert (target / "approved_coefficients.json").read_bytes() == inputs["coefficients"].read_bytes()
     assert (target / "config.json").read_bytes() == b"{}\n"
     authority = load_monthly_hmm_authority(
         result.authority_path,
@@ -187,9 +233,7 @@ def test_bootstrap_requires_explicit_config_for_dynamic_model(tmp_path: Path) ->
         asset_id="preset-a-full-window",
         expected_dataset_manifest_sha256=HEX,
     )
-    assert (result.root / "config.json").read_bytes() == inputs[
-        "config"
-    ].read_bytes()
+    assert (result.root / "config.json").read_bytes() == inputs["config"].read_bytes()
 
 
 def test_bootstrap_rejects_truncated_daily_window(tmp_path: Path) -> None:
