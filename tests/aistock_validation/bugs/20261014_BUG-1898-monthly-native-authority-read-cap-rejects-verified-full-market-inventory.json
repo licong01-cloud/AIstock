@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1898",
-  "closed_at": null,
+  "closed_at": "2026-10-17T13:26:01.779638Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -227,10 +227,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1898/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1898",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "cb37f16034c92904375e811c1463e3a39e29c37a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T13:16:54.348489Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2dc5d2fe6aaf42aa6320ca0da85c39a1ed12a54c4d61fce74cc973dcab918bd1",
+      "receipt_sha256": "26782cd21a5569583582a04bc25d4e1265c37d957de4ba11a6e9b28b4871a530",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "4fd070ff81f97e11f408f3d108d5f6ed14a7b4f4a5c8d53dce49ca90d1ac7734",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -265,7 +287,7 @@
     ],
     "validation_evidence_digest": "77209773b293ef648fa603712049f5d5c1c2be03a0f6205e1ffbbe17ad896ced"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -279,7 +301,8 @@
     "validation-receipt: id=b6f86d485635830f commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_sector_mapping.py -q` result=`passed, 85 passed, 1 intentional skip; new large-inventory test passed separately`",
     "validation-receipt: id=3de2d1a5da4c0bb3 commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_build_stage.py -q` result=`passed, 5 passed`",
     "validation-receipt: id=f2b23c3963ac1797 commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_shared_components.py backend/services/dataset_release/monthly_build_resume.py backend/services/dataset_release/monthly_industry_history.py backend/services/dataset_release/build_stage.py backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_monthly_build_resume.py` result=`passed`",
-    "validation-receipt: id=4b0a309e09b7d0c7 commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=4b0a309e09b7d0c7 commit=8fecd12bfe25eb7d859cf91ae925afe65518ba87 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "Current runtime identity and business-smoke verified; source validation retained by receipt 341c98778abd9b01"
   ],
   "verification_budget": {
     "budget": "standard",
