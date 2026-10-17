@@ -552,6 +552,105 @@ export type AdvisoryEntryPrice = {
   message: string | null;
 };
 
+export type AdvisorySectorPriceCandidate = {
+  instrument: string;
+  selection_effective_rank: number;
+  status: "ACCEPTABLE_PRICE_SET" | "NO_ACCEPTABLE_PRICE" | "UNKNOWN_INPUT_OR_SUPPORT" | "QUERY_DOMAIN_UNAVAILABLE" | "QUERY_DOMAIN_OVER_BUDGET";
+  legal_node_count: number;
+  unknown_node_count: number;
+  requested_node_count?: number;
+  reference_cny?: number;
+  intervals: {
+    low_cny: number; high_cny: number; tick_cny: number; node_count: number;
+    expected_net_bps_min: number; expected_net_bps_max: number; downside_q90_bps_max: number;
+  }[];
+};
+
+export type AdvisorySectorEntryDaily = {
+  schema_version: "economic_sector_daily_service_v1";
+  model_family: "M1_SECTOR_PRICE_VALUE_V1";
+  program_id: string;
+  requested_target_date: string | null;
+  requested_list_version_id: string | null;
+  status: "NOT_CONFIGURED" | "COMPUTED" | "NO_CANDIDATES";
+  decision_use: "NAVIGATION_ONLY";
+  deployable: false;
+  economic_effectiveness: "NOT_CONFIRMED";
+  database_written: false;
+  outcomes_read: false;
+  package_qualification_rechecked: false;
+  fit_count: 0;
+  decision_date?: string;
+  target_date?: string;
+  model_sha256?: string;
+  bundle_sha256?: string;
+  config_sha256?: string;
+  projection_sha256?: string;
+  source_review_policy_sha256?: string | null;
+  model_parent_policy_identity?: string;
+  model_value_policy_identity?: string;
+  candidate_receipt?: {
+    program_id: string; binding_version_id: string; list_version_id: string; review_run_id: string; selection_run_id: string;
+    decision_date: string; target_date: string; candidate_scope: "ORIGINAL_PUBLISHED_TOP20";
+    candidate_count: number; original_list_item_count: number; candidate_roster_sha256: string;
+    source_policy_state: "DECLARED_ORIGINAL" | "UNKNOWN_POLICY"; source_review_policy_sha256: string | null;
+    source_evidence: string; native_receipt_created: false; universe_selection: AdvisoryUniverseSelection;
+  };
+  candidates: AdvisorySectorPriceCandidate[];
+  unmodeled_items: { instrument: string; rank: number | null; action: string; reason_code: "NOT_ENTRY_CANDIDATE" | "OUTSIDE_MODEL_TOP20_SCOPE" }[];
+};
+
+export type AdvisoryEconomicEntryProjection = {
+  schema_version: "economic_entry_daily_projection_v1";
+  role: "ENTRY_VALUE";
+  objective_contract: "RISK_MANAGED_ADVISORY";
+  decision_use: "NAVIGATION_ONLY" | "ADVISORY_ONLY";
+  deployable: boolean;
+  evidence_state: "RESEARCH_NAVIGATION" | "CONFIRMED_ENTRY_VALUE";
+  role_binding_sha256: string | null;
+  recommendation_status: "ACCEPTABLE_PRICE_SET" | "NO_ACCEPTABLE_PRICE" | "PARTIAL_UNKNOWN" | "UNAVAILABLE" | "QUERY_DOMAIN_UNAVAILABLE" | "RISK_CONTRACT_UNCONFIGURED";
+  availability: "COMPLETE" | "PARTIAL" | "UNAVAILABLE";
+  reason_code: string | null;
+  prediction_input: {
+    program_id: string; binding_version_id: string; run_id: string | null; list_id: string | null;
+    restored_cohort_sha256: string | null; instrument: string; selection_rank: number;
+    decision_date: string; target_date: string; captured_at: string;
+    source_evidence: "RECOVERED_LIMITED" | "NATIVE_COMPLETE"; evidence_limitations: string[];
+    evidence_level: "HISTORICAL_REPLAY" | "PROSPECTIVE_INPUT";
+  };
+  acceptable_price_intervals: Array<{
+    minimum_cny: number; maximum_cny: number; grid_step_cny: number; node_count: number;
+    expected_net_return_min_bps: number; expected_net_return_max_bps: number;
+    entry_net_max_loss_q90_max_bps: number;
+  }>;
+  node_status_counts: Record<string, number>;
+  query_node_count: number;
+  risk_budget: { maximum_loss_bps: number; reference_use: string; configuration_sha256?: string } | null;
+  model_bundle_sha256: string;
+  original_advice_sha256: string;
+  projection_sha256: string;
+};
+
+export type AdvisoryEconomicEntryStatus = {
+  schema_version: "economic_entry_consumer_status_v1";
+  program_id: string; role: "ENTRY_VALUE"; objective_contract: "RISK_MANAGED_ADVISORY";
+  status: "NOT_CONFIGURED" | "DISABLED" | "NOT_EFFECTIVE" | "NOT_CAPTURED" | "PUBLISHED" | "NO_CANDIDATES" | "STALE";
+  reason_code: string | null; target_date: string | null;
+  evidence_state: "UNCONFIRMED" | "CONFIRMED_ENTRY_VALUE"; deployable: boolean; advice: AdvisoryEconomicEntryProjection[];
+  qualification_gaps: string[]; automatic_capture_enabled: boolean; research_namespace_configured: boolean;
+  resolved_target_date?: string | null; decision_date?: string; captured_at?: string; decision_use?: "ADVISORY_ONLY";
+  binding_version_id?: string; bundle_id?: string; role_binding_sha256?: string; pointer_sha256?: string;
+  original_batch_sha256?: string;
+};
+
+export type AdvisoryEconomicEntryResearch = {
+  status: "RESEARCH_NAVIGATION" | "NO_CANDIDATES" | "NOT_CAPTURED";
+  program_id: string; bundle_id: string; target_date: string; decision_date?: string;
+  evidence_state?: "RESEARCH_NAVIGATION"; decision_use?: "NAVIGATION_ONLY";
+  deployable: false; advice: AdvisoryEconomicEntryProjection[];
+  original_batch_sha256?: string; projection_sha256?: string;
+};
+
 export type AdvisoryModelShadowResponse = {
   status: "EXPERIMENTAL_SHADOW" | "MODEL_UNAVAILABLE";
   calibration_state: "UNCALIBRATED" | "NOT_APPLICABLE_RANKING_SCORE";
@@ -573,6 +672,7 @@ export type AdvisoryModelShadowResponse = {
   outcome: AdvisoryOutcomeShadow;
   price_range: AdvisoryPriceRangeShadow;
   entry_price?: AdvisoryEntryPrice;
+  entry_value?: AdvisoryEconomicEntryStatus;
   entry_price_collection?: {
     configured_enabled: boolean;
     last_run_at: string | null;
@@ -1273,7 +1373,7 @@ export const advisoryApi = {
     return data.leaderboard || [];
   },
   async tradingDayDefaults(lookbackTradingDays = 10): Promise<AdvisoryTradingDayDefaults> {
-    return apiFetch<AdvisoryTradingDayDefaults>(`/paper-v2/trading-days/defaults?lookback_trading_days=${lookbackTradingDays}`);
+    return apiFetch<AdvisoryTradingDayDefaults>(`/advisory/trading-days/defaults?lookback_trading_days=${lookbackTradingDays}`);
   },
   async activePool(programId: string): Promise<AdvisoryEpisode[]> {
     const data = await apiFetch<{ active_pool: AdvisoryEpisode[] }>(`/advisory/programs/${encodeURIComponent(programId)}/active-pool`);
@@ -1321,6 +1421,18 @@ export const advisoryApi = {
     return apiFetch<AdvisoryModelShadowResponse>(
       `/advisory/programs/${encodeURIComponent(programId)}/model-shadow?target_trade_date=${encodeURIComponent(targetTradeDate)}&price_contract=${priceContract}${entryListVersionId ? `&entry_list_version_id=${encodeURIComponent(entryListVersionId)}` : ""}`,
     );
+  },
+  async economicEntryStatus(programId: string, targetTradeDate?: string): Promise<AdvisoryEconomicEntryStatus> {
+    return apiFetch<AdvisoryEconomicEntryStatus>(`/advisory/programs/${encodeURIComponent(programId)}/entry-value/status${targetTradeDate ? `?target_trade_date=${encodeURIComponent(targetTradeDate)}` : ""}`);
+  },
+  async sectorEntryPrice(programId: string, targetTradeDate?: string, listVersionId?: string): Promise<AdvisorySectorEntryDaily> {
+    const query = new URLSearchParams();
+    if (targetTradeDate) query.set("target_trade_date", targetTradeDate);
+    if (listVersionId) query.set("list_version_id", listVersionId);
+    return apiFetch<AdvisorySectorEntryDaily>(`/advisory/programs/${encodeURIComponent(programId)}/sector-entry-price${query.size ? `?${query}` : ""}`);
+  },
+  async economicEntryResearch(programId: string, bundleId: string, targetTradeDate: string): Promise<AdvisoryEconomicEntryResearch> {
+    return apiFetch<AdvisoryEconomicEntryResearch>(`/advisory/programs/${encodeURIComponent(programId)}/entry-value/research?bundle_id=${encodeURIComponent(bundleId)}&target_trade_date=${encodeURIComponent(targetTradeDate)}`);
   },
   async forwardRuns(programId: string, limit = 20): Promise<AdvisoryForwardRun[]> {
     const data = await apiFetch<{ forward_runs: AdvisoryForwardRun[] }>(

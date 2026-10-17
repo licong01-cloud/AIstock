@@ -1,10 +1,26 @@
 from __future__ import annotations
 
 import sys
+import subprocess
+import json
 from pathlib import Path
 
 from backend.services.dataset_release.log_store import bounded_tail
 from backend.services.dataset_release.subprocess_runner import run_streamed
+
+
+def test_direct_runner_works_without_backend_database_dependencies(tmp_path: Path) -> None:
+    script = Path(__file__).resolve().parents[2] / "services/dataset_release/subprocess_runner.py"
+    result_path = tmp_path / "result.json"
+    child = subprocess.run([
+        sys.executable, "-S", str(script), "--log-root", str(tmp_path / "logs"), "--cwd", str(tmp_path),
+        "--result-path", str(result_path), "--attempt-id", "explicit-unit-test", "--fence", "1", "--",
+        sys.executable, "-S", "-c", "import sys; print('bounded-direct-runner-ok'); print('bounded-stderr-ok', file=sys.stderr)",
+    ], capture_output=True, text=True, timeout=15, check=False)
+    assert child.returncode == 0, child.stderr
+    receipt = json.loads(result_path.read_bytes())
+    assert receipt["returncode"] == 0 and receipt["attempt_id"] == "explicit-unit-test"
+    assert len(receipt["log_segments"]) == 2
 
 
 def test_runner_streams_large_stdout_and_stderr_to_bounded_segments(tmp_path: Path) -> None:

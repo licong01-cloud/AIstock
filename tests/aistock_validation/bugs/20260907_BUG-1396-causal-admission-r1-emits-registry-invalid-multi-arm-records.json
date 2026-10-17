@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1396",
-  "closed_at": null,
+  "closed_at": "2026-10-02T07:51:45.268367Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -83,8 +83,8 @@
   },
   "first_seen_at": "2026-09-07T11:51:05.625078Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "a317f7c20dc54b020b15692a66a4772a5e6ae3ef",
+  "fixed_at": "2026-09-07T12:02:56Z",
   "github_issue_number": 4403,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4403",
   "last_seen_at": "2026-09-07T11:51:05.625078Z",
@@ -92,6 +92,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4404",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -115,9 +116,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1396\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1396",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "d2bf34010849411b1f7b4bd12d3df5a79319ecabfe512b17a39a0672896d3939",
+      "contract_digest": "0733eddaf2395804c293a15848bcfddd045fc6c81141d0efa0fe5cc30dc1ad9e",
+      "expected_identity": "a317f7c20dc54b020b15692a66a4772a5e6ae3ef",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-02T07:43:19.894378Z",
+      "mode": "read_only",
+      "observed_identity": "04b1968c6f91fede3bfc4a6161cb58125562616e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2512815bf06ab022390cbc9b6229837ee5b91420f85d3257f1423bf01a960094",
+      "receipt_sha256": "2df6c034cec80a06ee95538eeae3b452f45eb0432d54f159ad5bd810d1efdf13",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "94a853ff02b502cb3fc94a6ba19ee7c19ce91d1998535a54186759ce03071f6e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -127,7 +151,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "advisory_modeling"
   ],
@@ -136,6 +160,9 @@
     "fingerprint": "780a7d750003dd6722621e7f",
     "source_event_id": "FE-20260907-780a7d750003"
   },
+  "validation_evidence": [
+    "2026-10-02 current-main six exact Advisory fix-point nodeids -> 6 passed; readonly post-restart-verify -> passed; no DB writes, training or service control"
+  ],
   "verification_budget": {
     "budget": "standard",
     "deferred_nightly_verification": {

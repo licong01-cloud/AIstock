@@ -65,6 +65,26 @@ def test_public_ci_prepares_x_only_temp_before_any_tests():
     assert index < next(i for i, step in enumerate(steps) if step.get("id") == "l0_validation")
 
 
+@pytest.mark.parametrize("job,execution", [
+    ("nightly-l3", "Run selected Nightly sessions once"),
+    ("paper-v2-live", "nox -s paper_v2_live"),
+])
+def test_nightly_prepares_same_x_only_job_storage_before_tests(job, execution):
+    import yaml
+
+    steps = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))["jobs"][job]["steps"]
+    index, prep = next((i, step) for i, step in enumerate(steps)
+                       if step.get("env", {}).get("AISTOCK_CI_TEST_TEMP_REQUIRED") == "1")
+    assert prep["env"]["AISTOCK_CI_ENV_NAME"] == "AIstock-CI"
+    assert not prep.get("continue-on-error")
+    assert "conda run -n AIstock-CI python scripts/ci_environment_verify.py" in prep["run"]
+    assert "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }" in prep["run"]
+    execution_index = next(i for i, step in enumerate(steps) if step.get("name") == execution)
+    assert index < execution_index
+    if job == "paper-v2-live":
+        assert "conda run -n AIstock-CI python -m nox" in steps[execution_index]["run"]
+
+
 @pytest.mark.parametrize("key,value", [("GITHUB_RUN_ID", "2"), ("GITHUB_RUN_ATTEMPT", "2"),
                                       ("GITHUB_JOB", "other-job"), ("GITHUB_REPOSITORY", "other/repo")])
 def test_job_temp_isolation(tmp_path, monkeypatch, key, value):

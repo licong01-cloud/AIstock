@@ -26,10 +26,13 @@ from .artifact_ready_source import (
     ARTIFACT_READY_LIMIT_COVERAGE_SCHEMA,
     ARTIFACT_READY_MINUTE_COVERAGE_SCHEMA,
     _validate_limit_overlay_manifest_contract,
+    _COMPONENT_DATASETS,
+    _effective_partition_projection,
     load_artifact_ready_contract,
 )
 from .a_share_limit_rule import PRICE_LIMIT_RULE_VERSION
 from .cas_store import CASRef, CASStore
+from .canonical import digest_named_fields
 from .contracts import Component
 from .errors import DatasetReleaseError
 from .external_ordered_rows import OrderedMappingPartition
@@ -109,9 +112,7 @@ class ArtifactReadyBuildSource:
             self._validate_component_manifest(component, value)
             self.component_manifests[component] = dict(value)
         self.qfq_authority = loaded.qfq_denominator_authority
-        self.security_source_identity = (
-            security_source_identity or load_default_security_source_identity_manifest()
-        )
+        self.security_source_identity = security_source_identity or load_default_security_source_identity_manifest()
 
     @property
     def artifact_ready_content_root(self) -> str:
@@ -197,7 +198,10 @@ class ArtifactReadyBuildSource:
 
     def trading_days(self) -> tuple[date, ...]:
         values: list[date] = []
-        for partition in self.ordered_partitions(Component.DAILY_BIN, "trading_calendar"):
+        calendar_component = (
+            Component.DAILY_BIN if Component.DAILY_BIN in self.component_manifests else next(iter(self.component_manifests))
+        )
+        for partition in self.ordered_partitions(calendar_component, "trading_calendar"):
             iterator = iter(partition.rows)
             try:
                 for row in iterator:
@@ -225,12 +229,23 @@ class ArtifactReadyBuildSource:
         entries = [
             dict(item)
             for item in manifest["partitions"]
-            if isinstance(item, Mapping) and item.get("dataset") == dataset
+            if isinstance(item, Mapping) and (item.get("dataset") == dataset or (
+                dataset == "adj_factor" and item.get("dataset") == "adj_factor_construction"
+            ))
         ]
         if not entries:
             raise ArtifactReadyBuildSourceError(f"artifact-ready component omits dataset: {component.value}:{dataset}")
         output: list[OrderedMappingPartition] = []
         ranges = tuple(sorted(date_ranges))
+        # SOURCE has already verified construction maxima against the same
+        # snapshot's monthly facts. They remain normalization/boundary evidence,
+        # not a second series partition for dates backed by regular adj_factor.
+        series_ranges = tuple(
+            (_as_date(match.group("start")), _as_date(match.group("end")))
+            for item in entries
+            if dataset == "adj_factor" and item["dataset"] == "adj_factor"
+            if (match := _DATE_PARTITION.fullmatch(str(item["partition_key"]))) is not None
+        )
         selected_codes = frozenset(str(value).upper() for value in instruments)
         minute_buckets = (
             frozenset(_minute_bucket(value, self.profile.minute_code_bucket_count) for value in selected_codes)
@@ -238,7 +253,8 @@ class ArtifactReadyBuildSource:
             else frozenset()
         )
         for entry in sorted(entries, key=lambda item: str(item["partition_key"])):
-            if ranges and not _partition_overlaps_ranges(str(entry["partition_key"]), ranges):
+            construction = entry["dataset"] == "adj_factor_construction"
+            if ranges and not construction and not _partition_overlaps_ranges(str(entry["partition_key"]), ranges):
                 continue
             if minute_buckets:
                 match = _MINUTE_PARTITION.fullmatch(str(entry["partition_key"]))
@@ -249,11 +265,11 @@ class ArtifactReadyBuildSource:
                 raise ArtifactReadyBuildSourceError(f"requested raw dataset has a derived role: {identity}")
             descriptor = self._raw_descriptor(entry)
             rows: Iterable[Mapping[str, Any]] = self._reader.iter_rows(
-                dataset,
+                str(entry["dataset"]),
                 str(entry["partition_key"]),
                 decode_row_payload=True,
             )
-            if effective and dataset == "adj_factor":
+            if effective and dataset == "adj_factor" and not construction:
                 rows = self._effective_adj_rows(component, descriptor, rows)
             elif effective and dataset == "stk_limit" and self.profile.pit_authority_status == "ACTIVE_CANONICAL":
                 rows = self._effective_limit_rows(component, descriptor, rows)
@@ -261,12 +277,13 @@ class ArtifactReadyBuildSource:
                 rows = self._effective_daily_rows(component, descriptor, rows)
             elif effective and dataset == "kline_minute_raw":
                 rows = self._effective_minute_rows(component, descriptor, rows)
-            if ranges or selected_codes:
+            if ranges or selected_codes or (construction and series_ranges):
                 rows = _filter_bounded_rows(
                     rows,
                     dataset=dataset,
                     date_ranges=ranges,
                     instruments=selected_codes,
+                    excluded_date_ranges=series_ranges if construction else (),
                 )
             output.append(OrderedMappingPartition(identity, rows))
         if not output:
@@ -323,8 +340,7 @@ class ArtifactReadyBuildSource:
             )
         buffered: list[Mapping[str, Any]] = []
         requested = {
-            str(value).upper()
-            for value in (instruments or tuple(span.ts_code for span in self.pit_snapshot.spans))
+            str(value).upper() for value in (instruments or tuple(span.ts_code for span in self.pit_snapshot.spans))
         }
         source_requested = (
             set(
@@ -378,9 +394,12 @@ class ArtifactReadyBuildSource:
             raise ArtifactReadyBuildSourceError(f"component effective source evidence is invalid: {component.value}")
         return output
 
-    def factor_partition_plan(self) -> tuple[dict[str, Any], ...]:
+    def factor_partition_plan(self, *, start: date | None = None) -> tuple[dict[str, Any], ...]:
         """Map natural-month outputs to one shared immutable backing partition."""
 
+        range_start = self.profile.start_date if start is None else start
+        if type(range_start) is not date or not self.profile.start_date <= range_start <= self.cutoff:
+            raise ArtifactReadyBuildSourceError("factor partition start is outside the release range")
         datasets = (
             "kline_daily_raw",
             "adj_factor",
@@ -417,10 +436,10 @@ class ArtifactReadyBuildSource:
             intervals[dataset] = sorted(values)
 
         output: list[dict[str, Any]] = []
-        cursor = date(self.profile.start_date.year, self.profile.start_date.month, 1)
+        cursor = range_start.replace(day=1)
         while cursor <= self.cutoff:
             following = date(cursor.year + 1, 1, 1) if cursor.month == 12 else date(cursor.year, cursor.month + 1, 1)
-            start = max(cursor, self.profile.start_date)
+            start = max(cursor, range_start)
             end = min(following - timedelta(days=1), self.cutoff)
             backings: set[str] = set()
             for dataset, values in intervals.items():
@@ -699,6 +718,7 @@ def _merge_stk_limit_completion(
 
     def key(row: Mapping[str, Any]) -> tuple[str, date]:
         return str(row["ts_code"]), _as_date(row["trade_date"])
+
     left = iter(database)
     right = iter(overlay)
     completions = 0
@@ -777,9 +797,7 @@ def _filter_stk_limit_rows_to_pit(
 
     mutable_ranges: dict[str, list[tuple[date, date]]] = {}
     for span in pit_snapshot.spans:
-        mutable_ranges.setdefault(str(span.ts_code).upper(), []).append(
-            (span.eligible_start, span.eligible_end)
-        )
+        mutable_ranges.setdefault(str(span.ts_code).upper(), []).append((span.eligible_start, span.eligible_end))
     ranges_by_code: dict[str, tuple[tuple[date, date], ...]] = {
         code: tuple(sorted(ranges)) for code, ranges in mutable_ranges.items()
     }
@@ -844,6 +862,7 @@ def _filter_bounded_rows(
     dataset: str,
     date_ranges: Sequence[tuple[date, date]],
     instruments: frozenset[str],
+    excluded_date_ranges: Sequence[tuple[date, date]] = (),
 ) -> Iterator[Mapping[str, Any]]:
     date_field = {
         "kline_daily_raw": "trade_date",
@@ -852,14 +871,20 @@ def _filter_bounded_rows(
         "stk_limit": "trade_date",
         "suspend_d": "trade_date",
     }.get(dataset)
-    for row in rows:
-        if instruments and str(row.get("ts_code", "")).upper() not in instruments:
-            continue
-        if date_ranges and date_field is not None:
-            observed = _as_date(row.get(date_field))
-            if not any(start <= observed <= end for start, end in date_ranges):
+    iterator = iter(rows)
+    try:
+        for row in iterator:
+            if instruments and str(row.get("ts_code", "")).upper() not in instruments:
                 continue
-        yield row
+            if (date_ranges or excluded_date_ranges) and date_field is not None:
+                observed = _as_date(row.get(date_field))
+                if date_ranges and not any(start <= observed <= end for start, end in date_ranges):
+                    continue
+                if any(start <= observed <= end for start, end in excluded_date_ranges):
+                    continue
+            yield row
+    finally:
+        _close_iterator(iterator)
 
 
 def _as_datetime(value: Any) -> datetime:
@@ -875,4 +900,164 @@ def _as_datetime(value: Any) -> datetime:
     return parsed.astimezone(_SHANGHAI).replace(tzinfo=None)
 
 
-__all__ = ["ArtifactReadyBuildSource", "ArtifactReadyBuildSourceError"]
+class ArtifactReadyPreparationBuildSource(ArtifactReadyBuildSource):
+    """Explicit private reader; the normal full constructor remains strict.
+
+    Only sealed preparation graphs are accepted. This type is not used by the
+    ordinary SOURCE loader or build-input compiler and cannot publish a release.
+    It reuses the exact effective-row and unit transformations above.
+    """
+
+    def __init__(self, *, cas, profile, snapshot, reference):
+        from .monthly_preparation_source import PreparationSourceSnapshot
+        from .monthly_preparation_artifacts import PREPARATION_ARTIFACT_SCHEMA
+        from .artifact_ready_source import qfq_denominator_authority_from_mapping
+
+        if not isinstance(snapshot, PreparationSourceSnapshot):
+            raise ArtifactReadyBuildSourceError("private build requires a preparation source")
+        ref = _complete_ref(cas, reference)
+        payload = cas.get_json_bounded(ref, max_bytes=32 * 1024 * 1024)
+        fields = {
+            "schema_version",
+            "operation_id",
+            "profile",
+            "cutoff",
+            "preparation_source_manifest_ref",
+            "source_content_root",
+            "pit_snapshot_ref",
+            "pit_snapshot_digest",
+            "component_manifests",
+            "qfq_denominator_authority_ref",
+            "qfq_source_summary",
+            "provider_receipt_refs",
+            "derived_source_receipt_refs",
+            "consistent_input_set_complete",
+            "publication_allowed",
+            "database_write_performed",
+            "canonical_digest",
+        }
+        if not isinstance(payload, Mapping) or set(payload) != fields:
+            raise ArtifactReadyBuildSourceError("private artifact graph fields differ")
+        body = {key: value for key, value in payload.items() if key != "canonical_digest"}
+        if (
+            payload["schema_version"] != PREPARATION_ARTIFACT_SCHEMA
+            or payload["canonical_digest"] != digest_named_fields(PREPARATION_ARTIFACT_SCHEMA, body)
+            or payload["operation_id"] != snapshot.operation_id
+            or payload["profile"] != profile.profile
+            or payload["cutoff"] != snapshot.official_cutoff.isoformat()
+            or payload["preparation_source_manifest_ref"] != snapshot.source_manifest_ref.as_dict()
+            or payload["source_content_root"] != snapshot.source_content_root
+            or payload["pit_snapshot_ref"] != snapshot.pit_snapshot_ref.as_dict()
+            or payload["pit_snapshot_digest"] != snapshot.pit_snapshot_digest
+            or snapshot.official_cutoff != snapshot.pit_snapshot.cutoff
+            or any(
+                payload[field] is not False
+                for field in (
+                    "consistent_input_set_complete",
+                    "publication_allowed",
+                    "database_write_performed",
+                )
+            )
+        ):
+            raise ArtifactReadyBuildSourceError("private artifact graph identity differs")
+        components = payload["component_manifests"]
+        supported = {Component.DAILY_BIN.value, Component.MINUTE_BIN.value, Component.DOMESTIC_INDEX_CONTEXT.value}
+        if not isinstance(components, Mapping) or not components or not set(components) <= supported:
+            raise ArtifactReadyBuildSourceError("private artifact graph component set differs")
+        if not isinstance(payload["qfq_source_summary"], Mapping):
+            raise ArtifactReadyBuildSourceError("private QFQ summary is invalid")
+        if (
+            cas.verify(snapshot.pit_snapshot_ref).sha256
+            != hashlib.sha256(snapshot.pit_snapshot.canonical_bytes()).hexdigest()
+        ):
+            raise ArtifactReadyBuildSourceError("private PIT bytes differ")
+        self.cas, self.profile = cas, profile
+        self.cutoff, self.pit_snapshot = snapshot.official_cutoff, snapshot.pit_snapshot
+        self.source_content_root = snapshot.source_content_root
+        descriptors = tuple(part.as_build_input() for part in snapshot.partitions)
+        self._descriptors = {f"{item['dataset']}:{item['partition_key']}": item for item in descriptors}
+        if not self._descriptors or len(self._descriptors) != len(descriptors):
+            raise ArtifactReadyBuildSourceError("private raw descriptor set differs")
+        self._reader = CASSealedPartitionReader(cas, descriptors, max_partition_rows=1_000_000)
+        self.contract_ref, self.contract = ref, dict(payload)
+        self.component_manifests = {}
+        for key, raw in components.items():
+            component = Component(key)
+            value = cas.get_json_bounded(_complete_ref(cas, raw), max_bytes=32 * 1024 * 1024)
+            if not isinstance(value, Mapping):
+                raise ArtifactReadyBuildSourceError("private component manifest is invalid")
+            self._validate_component_manifest(component, value)
+            partitions = value["partitions"]
+            identities = [entry.get("identity") for entry in partitions]
+            if len(identities) != len(set(identities)) or any(
+                not isinstance(item, str) or not item for item in identities
+            ):
+                raise ArtifactReadyBuildSourceError("private component source identity is duplicated or missing")
+            for entry in partitions:
+                if entry.get("role") == "sealed_database_source":
+                    self._raw_descriptor(entry)
+            if not set(_COMPONENT_DATASETS[component]) <= {entry.get("dataset") for entry in partitions}:
+                raise ArtifactReadyBuildSourceError("private component required datasets are missing")
+            effective = _effective_partition_projection(component, partitions)
+            details = value.get("details")
+            if not isinstance(details, Mapping):
+                raise ArtifactReadyBuildSourceError("private component details are missing")
+            qfq_summary = details.get("qfq_source_summary")
+            effective_root = digest_named_fields(
+                "dataset_release_artifact_ready_component_effective_v1",
+                {
+                    "component": component.value,
+                    "partitions": effective,
+                    "qfq_denominator_authority_digest": qfq_summary.get("qfq_denominator_authority_digest")
+                    if isinstance(qfq_summary, Mapping)
+                    else None,
+                },
+            )
+            provenance_root = digest_named_fields(
+                ARTIFACT_READY_COMPONENT_SCHEMA,
+                {
+                    "component": component.value,
+                    "source_content_root": self.source_content_root,
+                    "partitions": partitions,
+                    "details": dict(details),
+                },
+            )
+            if (
+                value.get("effective_partitions") != effective
+                or value.get("component_content_root") != effective_root
+                or value.get("component_effective_content_root") != effective_root
+                or value.get("component_provenance_root") != provenance_root
+            ):
+                raise ArtifactReadyBuildSourceError("private component content identity differs")
+            self.component_manifests[component] = dict(value)
+        for field in ("provider_receipt_refs", "derived_source_receipt_refs"):
+            if not isinstance(payload[field], list):
+                raise ArtifactReadyBuildSourceError("private source proof refs are invalid")
+            for raw in payload[field]:
+                _complete_ref(cas, raw)
+        self.qfq_authority = None
+        if set(components) & {Component.DAILY_BIN.value, Component.MINUTE_BIN.value}:
+            qfq_ref = _complete_ref(cas, payload["qfq_denominator_authority_ref"])
+            self.qfq_authority = qfq_denominator_authority_from_mapping(
+                cas.get_json_bounded(qfq_ref, max_bytes=32 * 1024 * 1024),
+                expected_cutoff=self.cutoff,
+                expected_pit_spans_sha256=self.pit_snapshot.spans_sha256,
+            )
+            if payload["qfq_source_summary"].get("qfq_denominator_authority_digest") != self.qfq_authority.digest:
+                raise ArtifactReadyBuildSourceError("private QFQ identity differs")
+            for component, manifest in self.component_manifests.items():
+                if component in {Component.DAILY_BIN, Component.MINUTE_BIN} and (
+                    manifest["details"].get("qfq_denominator_authority_ref") != qfq_ref.as_dict()
+                    or manifest["details"].get("qfq_source_summary") != payload["qfq_source_summary"]
+                ):
+                    raise ArtifactReadyBuildSourceError("private component QFQ identity differs")
+        elif payload["qfq_denominator_authority_ref"] is not None:
+            raise ArtifactReadyBuildSourceError("private non-price component includes QFQ authority")
+        self.security_source_identity = load_default_security_source_identity_manifest()
+
+    @property
+    def artifact_ready_content_root(self) -> str:
+        raise ArtifactReadyBuildSourceError("private preparation is not a full artifact-ready graph")
+
+
+__all__ = ["ArtifactReadyBuildSource", "ArtifactReadyBuildSourceError", "ArtifactReadyPreparationBuildSource"]

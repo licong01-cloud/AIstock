@@ -1,7 +1,7 @@
-"""AIstock GeneralPTNN adapter with opt-in date-grouped listwise LTR loss.
+"""AIstock GeneralPTNN adapter with opt-in date-grouped ranking losses.
 
 The default ``mse`` path mirrors Qlib's ``GeneralPTNN`` semantics.  The
-``approx_ndcg_at_k`` path is intentionally fail-loud: listwise LTR needs one
+ranking paths are intentionally fail-loud: LTR needs one
 cross-sectional query group per trading date, so malformed indices, tiny
 groups, all-NaN labels, or degenerate relevance must stop the run instead of
 falling back to regression.
@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.optim as optim
+import torch.nn.functional as F
 from qlib.data.dataset import DatasetH, TSDatasetH
 from qlib.data.dataset.handler import DataHandlerLP
 from qlib.data.dataset.weight import Reweighter
@@ -30,6 +31,23 @@ from torch.optim.lr_scheduler import ReduceLROnPlateau
 from torch.utils.data import DataLoader, Dataset
 
 from qlib.contrib.model.pytorch_utils import count_parameters
+
+
+LTR_LOSS_MODES = frozenset({"log_approx_ndcg_at_k", "ndcg_at_k_pairwise"})
+
+
+def _resolve_loss_mode(loss: str, ltr_loss_mode: str) -> str:
+    # The legacy name is an explicit alias; composed YAML and diagnostics use
+    # the new name. Negative log changes query aggregation, not just precision.
+    modes = {str(value).strip().lower() for value in (loss, ltr_loss_mode)}
+    modes = {"log_approx_ndcg_at_k" if value == "approx_ndcg_at_k" else value for value in modes}
+    modes.discard("mse")
+    if len(modes) > 1 or not modes.issubset(LTR_LOSS_MODES):
+        raise GeneralPTNNLTRError(
+            "general_ptnn_ltr_invalid_loss_mode", "Unsupported or conflicting ranking losses",
+            loss=loss, ltr_loss_mode=ltr_loss_mode,
+        )
+    return next(iter(modes), "mse")
 
 
 class GeneralPTNNLTRError(ValueError):
@@ -236,11 +254,12 @@ def _cross_section_quantile_relevance(label: torch.Tensor, *, bins: int, segment
     return relevance.to(dtype=torch.float32)
 
 
-def approx_ndcg_at_k_loss(
+def ndcg_at_k_loss(
     scores: torch.Tensor,
     labels: torch.Tensor,
     *,
     topk_train_k: int,
+    loss_mode: str = "log_approx_ndcg_at_k",
     temperature: float = 1.0,
     gate_temperature: float = 1.0,
     relevance_mode: str = "cross_section_quantile",
@@ -249,7 +268,18 @@ def approx_ndcg_at_k_loss(
     segment: str = "train",
     date: Any = None,
 ) -> tuple[torch.Tensor, torch.Tensor, int]:
-    """Return ``(loss, exact_ndcg, valid_group_size)`` for one date query group."""
+    """Return ``(loss, exact_ndcg, valid_group_size)`` for one date query.
+
+    Log ApproxNDCG evaluates the original soft rank/gate in log space. This
+    optimizes mean negative log utility across dates, NOT mean negative utility.
+    Pairwise uses detached NDCG@K swap weights, normalized by their sum per date;
+    only pairs touching predicted TopK contribute. Both retain the same graded
+    relevance and exact NDCG diagnostic, not a finer within-bin tail objective.
+    """
+
+    loss_mode = _resolve_loss_mode(loss_mode, "mse")
+    if loss_mode not in LTR_LOSS_MODES:
+        raise GeneralPTNNLTRError("general_ptnn_ltr_invalid_loss_mode", "Expected a ranking loss")
 
     scores = scores.reshape(-1).to(dtype=torch.float32)
     labels = labels.reshape(-1).to(dtype=torch.float32, device=scores.device)
@@ -286,14 +316,6 @@ def approx_ndcg_at_k_loss(
     relevance = _cross_section_quantile_relevance(labels, bins=int(relevance_bins), segment=segment, date=date)
     gains = torch.pow(torch.tensor(2.0, device=scores.device), relevance) - 1.0
 
-    diff = (scores.reshape(1, -1) - scores.reshape(-1, 1)) / float(temperature)
-    pairwise_higher = torch.sigmoid(torch.clamp(diff, min=-20.0, max=20.0))
-    pairwise_higher = pairwise_higher * (1.0 - torch.eye(valid_size, device=scores.device, dtype=torch.float32))
-    approx_rank = 1.0 + pairwise_higher.sum(dim=1)
-    topk_gate = torch.sigmoid((float(topk_train_k) + 0.5 - approx_rank) / float(gate_temperature))
-    discount = 1.0 / torch.log2(1.0 + approx_rank)
-    approx_dcg = torch.sum(gains * discount * topk_gate)
-
     ideal_count = min(int(topk_train_k), valid_size)
     ideal_gains = torch.sort(gains, descending=True).values[:ideal_count]
     ideal_positions = torch.arange(2, ideal_count + 2, device=scores.device, dtype=torch.float32)
@@ -307,18 +329,45 @@ def approx_ndcg_at_k_loss(
             group_size=valid_size,
         )
 
-    loss = -(approx_dcg / ideal_dcg)
+    # Keep the pre-existing exact-NDCG ordering, including its tie semantics.
+    predicted_order = torch.argsort(scores, descending=True)
+    if loss_mode == "log_approx_ndcg_at_k":
+        diff = (scores.reshape(1, -1) - scores.reshape(-1, 1)) / float(temperature)
+        pairwise_higher = torch.sigmoid(torch.clamp(diff, min=-20.0, max=20.0))
+        # Subtract the constant self-comparison rather than allocate an NxN eye.
+        approx_rank = 0.5 + pairwise_higher.sum(dim=1)
+        positive = gains > 0
+        log_terms = (
+            torch.log(gains[positive])
+            - torch.log(torch.log2(1.0 + approx_rank[positive]))
+            + F.logsigmoid((float(topk_train_k) + 0.5 - approx_rank[positive]) / float(gate_temperature))
+        )
+        loss = torch.log(ideal_dcg) - torch.logsumexp(log_terms, dim=0)
+    else:
+        # Sorting and swap weights are constants for the local logistic gradient.
+        # KxN, not NxN: lower-triangle/topK-outside pairs have zero/repeated weight.
+        sorted_scores = scores[predicted_order]
+        sorted_gains = gains[predicted_order]
+        discounts = torch.zeros_like(sorted_gains)
+        discounts[:ideal_count] = 1.0 / torch.log2(ideal_positions)
+        gain_delta = sorted_gains[:ideal_count, None] - sorted_gains[None, :]
+        weights = (gain_delta * (discounts[:ideal_count, None] - discounts[None, :])).abs() / ideal_dcg
+        unique_pairs = torch.arange(valid_size, device=scores.device)[None, :] > torch.arange(
+            ideal_count, device=scores.device
+        )[:, None]
+        weights = (weights * unique_pairs).detach()
+        margins = gain_delta.sign() * (sorted_scores[:ideal_count, None] - sorted_scores[None, :]) / float(temperature)
+        loss = (weights * F.softplus(-margins)).sum() / weights.sum()
     if not torch.isfinite(loss):
         raise GeneralPTNNLTRError(
             "ltr_non_finite_loss",
-            "ApproxNDCG@K loss is NaN or Inf",
+            "NDCG@K ranking loss is NaN or Inf",
             dataset_segment=segment,
             date=date,
             group_size=valid_size,
         )
 
-    predicted_order = torch.argsort(scores, descending=True)[:ideal_count]
-    exact_dcg = torch.sum(gains[predicted_order] / torch.log2(ideal_positions))
+    exact_dcg = torch.sum(gains[predicted_order[:ideal_count]] / torch.log2(ideal_positions))
     exact_ndcg = exact_dcg / ideal_dcg
     if not torch.isfinite(exact_ndcg):
         raise GeneralPTNNLTRError(
@@ -331,8 +380,13 @@ def approx_ndcg_at_k_loss(
     return loss, exact_ndcg.detach(), valid_size
 
 
+def approx_ndcg_at_k_loss(scores: torch.Tensor, labels: torch.Tensor, **kwargs: Any) -> tuple[torch.Tensor, torch.Tensor, int]:
+    """Legacy API alias for the explicitly named negative-log objective."""
+    return ndcg_at_k_loss(scores, labels, loss_mode="log_approx_ndcg_at_k", **kwargs)
+
+
 class AIStockGeneralPTNNLTR(Model):
-    """Qlib-compatible GeneralPTNN adapter with opt-in ApproxNDCG@K."""
+    """Qlib-compatible GeneralPTNN adapter with opt-in date-grouped ranking."""
 
     def __init__(
         self,
@@ -366,10 +420,7 @@ class AIStockGeneralPTNNLTR(Model):
         self.logger = get_module_logger("AIStockGeneralPTNNLTR")
         self.logger.info("AIStockGeneralPTNNLTR pytorch version...")
 
-        if loss == "approx_ndcg_at_k" and ltr_loss_mode == "mse":
-            ltr_loss_mode = "approx_ndcg_at_k"
-        if ltr_loss_mode == "approx_ndcg_at_k" and loss == "mse":
-            loss = "approx_ndcg_at_k"
+        loss = ltr_loss_mode = _resolve_loss_mode(loss, ltr_loss_mode)
         self._validate_ltr_config(
             ltr_loss_mode=ltr_loss_mode,
             topk_train_k=topk_train_k,
@@ -486,7 +537,7 @@ class AIStockGeneralPTNNLTR(Model):
         ltr_relevance_bins: int,
         ltr_min_group_size: int,
     ) -> None:
-        if ltr_loss_mode not in {"mse", "approx_ndcg_at_k"}:
+        if ltr_loss_mode not in {"mse", *LTR_LOSS_MODES}:
             raise GeneralPTNNLTRError(
                 "general_ptnn_ltr_invalid_loss_mode",
                 "Unsupported ltr_loss_mode",
@@ -506,7 +557,7 @@ class AIStockGeneralPTNNLTR(Model):
                 "topk_train_k must be a positive integer",
                 topk_train_k=topk_train_k,
             )
-        if float(ltr_temperature) <= 0 or float(ltr_gate_temperature) <= 0:
+        if any(not math.isfinite(float(value)) or float(value) <= 0 for value in (ltr_temperature, ltr_gate_temperature)):
             raise GeneralPTNNLTRError(
                 "general_ptnn_ltr_invalid_temperature",
                 "LTR temperatures must be positive",
@@ -546,17 +597,8 @@ class AIStockGeneralPTNNLTR(Model):
             weight = torch.ones_like(label)
         if self.loss == "mse":
             return self.mse(pred[mask], label[mask].view(-1, 1), weight[mask])
-        if self.loss == "approx_ndcg_at_k":
-            loss, _, _ = approx_ndcg_at_k_loss(
-                pred,
-                label,
-                topk_train_k=self.topk_train_k,
-                temperature=self.ltr_temperature,
-                gate_temperature=self.ltr_gate_temperature,
-                relevance_mode=self.ltr_relevance_mode,
-                relevance_bins=self.ltr_relevance_bins,
-                min_group_size=self.ltr_min_group_size,
-            )
+        if self.loss in LTR_LOSS_MODES:
+            loss, _, _ = self._ltr_loss_for_group(pred, label, date=None, segment="train")
             return loss
         raise ValueError("unknown loss `%s`" % self.loss)
 
@@ -602,10 +644,11 @@ class AIStockGeneralPTNNLTR(Model):
         date: Any,
         segment: str,
     ) -> tuple[torch.Tensor, torch.Tensor, int]:
-        return approx_ndcg_at_k_loss(
+        return ndcg_at_k_loss(
             pred,
             label,
             topk_train_k=self.topk_train_k,
+            loss_mode=self.ltr_loss_mode,
             temperature=self.ltr_temperature,
             gate_temperature=self.ltr_gate_temperature,
             relevance_mode=self.ltr_relevance_mode,
@@ -708,13 +751,13 @@ class AIStockGeneralPTNNLTR(Model):
         if not isinstance(dataset, TSDatasetH):
             raise GeneralPTNNLTRError(
                 "general_ptnn_ltr_requires_timeseries_dataset",
-                "ApproxNDCG@K requires TSDatasetH so query groups preserve datetime/instrument",
+                "Date-grouped ranking requires TSDatasetH to preserve datetime/instrument",
                 loss_mode=self.ltr_loss_mode,
             )
         if reweighter is not None:
             raise GeneralPTNNLTRError(
                 "general_ptnn_ltr_invalid_loss_mode",
-                "ApproxNDCG@K does not support reweighter in the first implementation",
+                "Date-grouped ranking does not support reweighter",
                 loss_mode=self.ltr_loss_mode,
             )
 
@@ -858,7 +901,7 @@ class AIStockGeneralPTNNLTR(Model):
         save_path: str | None = None,
         reweighter: Any = None,
     ) -> None:
-        if self.ltr_loss_mode == "approx_ndcg_at_k":
+        if self.ltr_loss_mode in LTR_LOSS_MODES:
             self._fit_ltr(dataset, evals_result, save_path, reweighter)
             return
         self._fit_mse(dataset, evals_result, save_path, reweighter)

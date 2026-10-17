@@ -13,6 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import os
 import posixpath
 import re
@@ -280,9 +281,9 @@ def _requires_qe_custom_loaders(
     disable_alpha158: bool,
     custom_params: Optional[Dict[str, Any]],
 ) -> bool:
-    """Return whether the generated workspace needs qe_custom_loaders.py."""
-    label_horizon = normalize_label_horizon((custom_params or {}).get("label_horizon"))
-    return (has_custom_factors and disable_alpha158) or label_horizon >= 30
+    """Every generated learning path needs the label-boundary processor."""
+    normalize_label_horizon((custom_params or {}).get("label_horizon"))
+    return True
 
 
 def _is_gpu_qe_node(node_id: Optional[str]) -> bool:
@@ -355,6 +356,9 @@ def _coerce_optional_json_object(value: Any, *, field_name: str, reason_code: st
     )
 
 
+_GENERAL_PTNN_RANKING_LOSSES = {"log_approx_ndcg_at_k", "ndcg_at_k_pairwise"}
+
+
 def _requests_general_ptnn_ltr(params: Optional[Dict[str, Any]]) -> bool:
     if not isinstance(params, dict):
         return False
@@ -362,7 +366,9 @@ def _requests_general_ptnn_ltr(params: Optional[Dict[str, Any]]) -> bool:
     if raw_mode is not None and str(raw_mode).strip().lower() != "mse":
         return True
     raw_loss = params.get("loss")
-    return raw_loss is not None and str(raw_loss).strip().lower() == "approx_ndcg_at_k"
+    return raw_loss is not None and str(raw_loss).strip().lower() in {
+        "approx_ndcg_at_k", *_GENERAL_PTNN_RANKING_LOSSES,
+    }
 
 
 def _validate_positive_int_param(value: Any, *, name: str, reason_code: str) -> int:
@@ -382,7 +388,7 @@ def _validate_positive_float_param(value: Any, *, name: str) -> float:
         raise ValueError(
             f"reason_code=general_ptnn_ltr_invalid_temperature: {name} must be positive, got {value!r}"
         ) from exc
-    if parsed <= 0:
+    if not math.isfinite(parsed) or parsed <= 0:
         raise ValueError(f"reason_code=general_ptnn_ltr_invalid_temperature: {name} must be positive, got {value!r}")
     return parsed
 
@@ -395,20 +401,21 @@ def _finalize_general_ptnn_ltr_routing(
     model_dataset_cls: str,
     model_name: str,
 ) -> tuple[str, str, Dict[str, Any]]:
-    """Switch opt-in GeneralPTNN listwise requests to the AIstock LTR adapter."""
+    """Switch opt-in ranking requests; serialize the actual objective name."""
 
     if model_class not in _GENERAL_PTNN_MODEL_CLASSES:
         return model_class, model_module, model_kwargs
 
     updated_kwargs = dict(model_kwargs)
-    requested_mode = str(updated_kwargs.get("ltr_loss_mode") or updated_kwargs.get("loss") or "mse").strip()
-    if updated_kwargs.get("loss") == "approx_ndcg_at_k":
-        requested_mode = "approx_ndcg_at_k"
-    if requested_mode not in {"mse", "approx_ndcg_at_k"}:
+    modes = {str(updated_kwargs.get(key) or "mse").strip().lower() for key in ("loss", "ltr_loss_mode")}
+    modes = {"log_approx_ndcg_at_k" if value == "approx_ndcg_at_k" else value for value in modes}
+    modes.discard("mse")
+    if len(modes) > 1 or not modes.issubset(_GENERAL_PTNN_RANKING_LOSSES):
         raise ValueError(
             "reason_code=general_ptnn_ltr_invalid_loss_mode: "
-            f"model={model_name} requested unsupported ltr_loss_mode={requested_mode!r}"
+            f"model={model_name} requested unsupported or conflicting losses={sorted(modes)!r}"
         )
+    requested_mode = next(iter(modes), "mse")
 
     if requested_mode == "mse":
         updated_kwargs["loss"] = "mse"
@@ -422,8 +429,8 @@ def _finalize_general_ptnn_ltr_routing(
             f"model={model_name} requested ltr_loss_mode={requested_mode!r} with dataset={model_dataset_cls}"
         )
 
-    updated_kwargs["ltr_loss_mode"] = "approx_ndcg_at_k"
-    updated_kwargs["loss"] = "approx_ndcg_at_k"
+    updated_kwargs["ltr_loss_mode"] = requested_mode
+    updated_kwargs["loss"] = requested_mode
     updated_kwargs["topk_train_k"] = _validate_positive_int_param(
         updated_kwargs.get("topk_train_k", 25),
         name="topk_train_k",
@@ -467,8 +474,9 @@ def _finalize_general_ptnn_ltr_routing(
             "ltr_fail_on_degenerate_group=false is not supported for QE listwise LTR"
         )
     logger.info(
-        "GeneralPTNN LTR opt-in: model=%s class=AIStockGeneralPTNNLTR topk_train_k=%s relevance_bins=%s",
+        "GeneralPTNN LTR opt-in: model=%s class=AIStockGeneralPTNNLTR loss=%s topk_train_k=%s relevance_bins=%s",
         model_name,
+        requested_mode,
         updated_kwargs["topk_train_k"],
         updated_kwargs["ltr_relevance_bins"],
     )
@@ -3698,6 +3706,11 @@ class ConfigComposer:
         结构与 RDAgent conf_baseline.yaml 完全一致，确保在 WSL 环境中
         使用相同的数据集、模型超参数、策略配置执行实验。
         """
+        feature_processing = self._normalize_feature_processing(
+            custom_params,
+            [f["factor_name"] for f in factors_info if f.get("code_text")],
+        )
+        clip_outlier_yaml = str(feature_processing.get("clip_outlier", True)).lower()
         # ── 模型配置 ──
         # 与 RDAgent model_runner.py 完全一致的模型选择逻辑：
         # - 有源代码的自定义模型 → GeneralPTNN + pt_model_uri: "model.model_cls"
@@ -3764,11 +3777,11 @@ class ConfigComposer:
                         # Preserve the request long enough for the authoritative
                         # local-WSL contract below to accept it or fail closed.
                         model_kwargs[loader_key] = thp[loader_key]
-                if str(thp.get("ltr_loss_mode", "mse")) != "mse" or thp.get("loss") == "approx_ndcg_at_k":
+                if _requests_general_ptnn_ltr(thp):
                     model_kwargs.update(
                         {
-                            "ltr_loss_mode": thp.get("ltr_loss_mode", "approx_ndcg_at_k"),
-                            "loss": thp.get("loss", "approx_ndcg_at_k"),
+                            "ltr_loss_mode": thp.get("ltr_loss_mode", "mse"),
+                            "loss": thp.get("loss", "mse"),
                             "topk_train_k": thp.get("topk_train_k", 25),
                             "ltr_temperature": thp.get("ltr_temperature", 1.0),
                             "ltr_gate_temperature": thp.get("ltr_gate_temperature", 1.0),
@@ -4157,7 +4170,8 @@ class ConfigComposer:
         _SEED_ALIAS_KEYS = {"random_seed", "seed", "loop_seed", "random_state", "torch_seed", "numpy_seed"}
         _LGB_HP_KEYS = {
             "learning_rate", "max_depth", "num_leaves", "lambda_l1", "lambda_l2",
-            "colsample_bytree", "subsample", "n_estimators", "min_child_samples",
+            "colsample_bytree", "subsample", "n_estimators", "min_child_samples", "num_threads",
+            "device_type", "max_bin",
         }
         _XGB_HP_KEYS = {
             "n_estimators", "num_boost_round", "early_stopping_rounds",
@@ -4202,6 +4216,7 @@ class ConfigComposer:
             "archive_reason",
             "archive_allow_override",
             "observation_panel",     # Matched-factor data-loader contract, not a strategy kwarg
+            "feature_processing",    # Input projection / normalization, not model or strategy HP
             "backtest_freq",        # 回测频率（已在上层提取）
             "execution_algo",       # 执行算法（已在上层提取到 inner_strategy）
             "execution_algo_params",  # 执行算法参数（已在上层提取到 inner_strategy）
@@ -4242,6 +4257,9 @@ class ConfigComposer:
             PRECOMPUTED_HMM_COEFF_JSON_PARAM,
             "_precomputed_hmm_coefficients_artifact_binding",
         } | _SEED_ALIAS_KEYS | _PTNN_HP_KEYS | _LGB_HP_KEYS | _XGB_HP_KEYS | _CATBOOST_HP_KEYS | _TABPFN_HP_KEYS | _LINEAR_HP_KEYS | _EFFICIENT_GATS_HP_KEYS | _REMOVED_GATS_RESOURCE_OPTIONS
+        # Preserve non-LGBM strategies that already own these constructor arguments.
+        if model_class != "LGBModel":
+            _NON_STRATEGY_PARAMS.difference_update({"num_threads", "device_type", "max_bin"})
 
         if custom_params:
             # ── 模型超参透传: 从 custom_params 中提取模型超参 → model_kwargs ──
@@ -4346,7 +4364,7 @@ class ConfigComposer:
         if _requests_general_ptnn_ltr(custom_params) and (
             model_class != "AIStockGeneralPTNNLTR"
             or model_module != "aistock_models.general_ptnn_ltr"
-            or model_kwargs.get("ltr_loss_mode") != "approx_ndcg_at_k"
+            or model_kwargs.get("ltr_loss_mode") not in _GENERAL_PTNN_RANKING_LOSSES
         ):
             raise ValueError(
                 "reason_code=ltr_loss_mode_injection_failed: "
@@ -4593,11 +4611,7 @@ class ConfigComposer:
         _label_horizon = normalize_label_horizon((custom_params or {}).get("label_horizon"))
         _label_field = _LABEL_FIELDS[_label_type]
         _label_formula = f"Ref({_label_field}, -{_label_horizon + 1}) / Ref({_label_field}, -1) - 1"
-        _requires_label_maturity_purge = _label_horizon >= 30
-
         def _append_label_maturity_purge() -> None:
-            if not _requires_label_maturity_purge:
-                return
             lines.append("        - class: LongHorizonLabelMaturityPurge")
             lines.append("          module_path: qe_custom_loaders")
             lines.append("          kwargs:")
@@ -4687,7 +4701,7 @@ class ConfigComposer:
             lines.append("        - class: RobustZScoreNorm")
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
-            lines.append("              clip_outlier: true")
+            lines.append(f"              clip_outlier: {clip_outlier_yaml}")
             lines.append(f"              fit_start_time: {data_split['train_start']}")
             lines.append(f"              fit_end_time: {data_split['valid_end']}")
             lines.append("        - class: Fillna")
@@ -4715,7 +4729,7 @@ class ConfigComposer:
             lines.append("        - class: RobustZScoreNorm")
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
-            lines.append("              clip_outlier: true")
+            lines.append(f"              clip_outlier: {clip_outlier_yaml}")
             lines.append(f"              fit_start_time: {data_split['train_start']}")
             lines.append(f"              fit_end_time: {data_split['valid_end']}")
             lines.append("        - class: Fillna")
@@ -4739,7 +4753,7 @@ class ConfigComposer:
             lines.append("        - class: RobustZScoreNorm")
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
-            lines.append("              clip_outlier: true")
+            lines.append(f"              clip_outlier: {clip_outlier_yaml}")
             lines.append("        - class: Fillna")
             lines.append("          kwargs:")
             lines.append("              fields_group: feature")
@@ -5064,6 +5078,40 @@ class ConfigComposer:
         }
 
     @staticmethod
+    def _normalize_feature_processing(
+        custom_params: Optional[Dict[str, Any]], factor_names: List[str],
+    ) -> Dict[str, Any]:
+        """Separate computed factors from model inputs without changing the panel."""
+        if custom_params is None or "feature_processing" not in custom_params:
+            return {}
+        raw = custom_params["feature_processing"]
+        prefix = "qe_feature_processing_invalid: "
+        if not isinstance(raw, dict) or set(raw) - {"exclude_from_model", "clip_outlier"}:
+            raise ValueError(prefix + "expected exclude_from_model/clip_outlier object")
+        if custom_params.get("disable_alpha158") is not True or not factor_names:
+            raise ValueError(prefix + "requires custom factors and disable_alpha158=true")
+        excluded = raw.get("exclude_from_model", [])
+        clip = raw.get("clip_outlier", True)
+        if type(clip) is not bool:
+            raise ValueError(prefix + "clip_outlier must be boolean")
+        if (
+            not isinstance(excluded, list)
+            or any(not isinstance(name, str) or not name for name in excluded)
+            or len(set(excluded)) != len(excluded)
+            or set(excluded) - set(factor_names)
+        ):
+            raise ValueError(prefix + "exclude_from_model must name unique computed factors")
+        selected = [name for name in factor_names if name not in excluded]
+        if not selected:
+            raise ValueError(prefix + "cannot exclude all model features")
+        return {
+            "computed_factor_names": list(factor_names),
+            "model_feature_names": selected,
+            "exclude_from_model": list(excluded),
+            "clip_outlier": clip,
+        }
+
+    @staticmethod
     def _normalize_observation_panel_contract(
         custom_params: Optional[Dict[str, Any]],
         factor_names: List[str],
@@ -5177,6 +5225,7 @@ class ConfigComposer:
             custom_params,
             factor_names,
         )
+        feature_processing = self._normalize_feature_processing(custom_params, factor_names)
         formal_dataset_binding = _formal_dataset_binding(custom_params)
         direct_v2_dataset_binding = _direct_v2_dataset_binding(custom_params)
         metadata_kwargs: Dict[str, Any] = {
@@ -5249,6 +5298,8 @@ class ConfigComposer:
         lines.append(
             "QE_OBSERVATION_PANEL_CONTRACT = " + repr(observation_panel_contract)
         )
+        if feature_processing:
+            lines.append(f"QE_FEATURE_PROCESSING = {feature_processing!r}")
         lines.append("")
         lines.append("")
         lines.append("def _validate_factor_data_dataset_contract():")
@@ -5745,7 +5796,7 @@ class ConfigComposer:
         lines.append("")
         lines.append("")
         lines.append("def _select_factor_results(factor_names, factor_results):")
-        lines.append("    if QE_OBSERVATION_PANEL_CONTRACT:")
+        lines.append("    if QE_OBSERVATION_PANEL_CONTRACT" + (" or QE_FEATURE_PROCESSING:" if feature_processing else ":"))
         lines.append("        _require_factor_results(factor_names, factor_results)")
         lines.append("        return [factor_results[name] for name in factor_names]")
         lines.append("    # Preserve the historical no-contract behavior: a failed custom factor is")
@@ -5853,13 +5904,24 @@ class ConfigComposer:
         lines.append("        combined = combined.sort_index()")
         lines.append("")
         lines.append("    combined = _apply_observation_panel(combined)")
+        if feature_processing:
+            lines.append("    # Project only the run-local model input, after the unchanged reference mask.")
+            lines.append("    combined = combined.loc[:, QE_FEATURE_PROCESSING['model_feature_names']].copy()")
         lines.append("")
         lines.append("    # 添加 'feature' 多级列索引（与 RDAgent factor_runner.py 一致）")
         lines.append("    new_columns = pd.MultiIndex.from_product([['feature'], combined.columns])")
         lines.append("    combined.columns = new_columns")
         lines.append("")
         lines.append("    output_path = os.path.join(script_dir, 'combined_factors_df.parquet')")
-        lines.append("    combined.to_parquet(output_path, engine='pyarrow')")
+        if feature_processing:
+            lines.append("    import pyarrow as pa")
+            lines.append("    import pyarrow.parquet as pq")
+            lines.append("    table = pa.Table.from_pandas(combined)")
+            lines.append("    metadata = dict(table.schema.metadata or {})")
+            lines.append("    metadata[b'qe_feature_processing'] = _json.dumps(QE_FEATURE_PROCESSING, sort_keys=True).encode('utf-8')")
+            lines.append("    pq.write_table(table.replace_schema_metadata(metadata), output_path, compression='snappy')")
+        else:
+            lines.append("    combined.to_parquet(output_path, engine='pyarrow')")
         lines.append("    logger.info(f'Saved combined_factors_df.parquet: shape={combined.shape}')")
         lines.append("")
         lines.append("    # 计算 num_features：根据 conf.yaml 中的 data_loader 类型决定")
@@ -6237,7 +6299,7 @@ class ConfigComposer:
         """
         env_lines = []
         # Every generated workspace may contain QE-owned runtime modules such as
-        # the long-horizon label maturity processor.  Keep the workspace import
+        # the label maturity processor.  Keep the workspace import
         # path explicit instead of relying on the launcher's current directory.
         quoted_wsl_path = _quote_qe_shell_path(wsl_path, field_name="wsl_path")
         env_lines.append(

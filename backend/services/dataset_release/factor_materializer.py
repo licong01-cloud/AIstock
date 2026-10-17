@@ -43,6 +43,7 @@ from .canonical import digest_named_fields, ensure_sha256
 from .canonical_stock_transformer import QfqDenominatorAuthority
 from .errors import DatasetReleaseError
 from .pit import FrozenPitSnapshot, filter_frame_to_pit_spans
+from .source_fact_history import SOURCE_HISTORY_CONTRACT, filter_source_fact_history
 from .streaming_artifacts import (
     ArtifactChunkTooLarge,
     ArtifactSchemaDrift,
@@ -158,6 +159,7 @@ FACTOR_H5_DENSITY_CONTRACTS: dict[str, str] = {
     dataset: ("dense_exact_pit_trading_day_keys_v1" if dataset == "daily_pv" else "sparse_unique_subset_of_pit_keys_v1")
     for dataset in FACTOR_H5_DATASETS
 }
+FACTOR_H5_DENSITY_CONTRACTS["daily_basic"] = SOURCE_HISTORY_CONTRACT
 FACTOR_SOURCE_SCHEMAS: dict[str, tuple[str, ...]] = {
     "daily_basic": tuple(_AUX_RENAMES["daily_basic"]),
     "moneyflow": tuple(MONEYFLOW_FIELD_MAP),
@@ -902,12 +904,18 @@ class FactorPartitionProducer:
                 read_chunk_rows=spec.row_group_rows,
             )
             frame = _normalize_aux_frame(raw_frame, dataset=dataset)
+            source_history = (
+                filter_source_fact_history(
+                    frame, codes=(span.ts_code for span in spec.pit_snapshot.spans),
+                    start=partition.start, end=partition.end,
+                ) if dataset == "daily_basic" else None
+            )
             frame, pit_receipts[dataset] = filter_frame_to_pit_spans(frame, spec.pit_snapshot)
             frame = frame.sort_index() if not frame.empty else frame
             artifact_frame = (
                 _moneyflow_source_identity_frame(frame, raw_frame)
                 if dataset == "moneyflow"
-                else frame
+                else source_history if source_history is not None else frame
             )
             static_frame, tail = _static_asof_frame(
                 dataset,
@@ -923,7 +931,11 @@ class FactorPartitionProducer:
                 source=dataset,
             )
             slow_tails[dataset] = tail
-            artifact_rows[dataset] = int(len(frame))
+            artifact_rows[dataset] = int(len(artifact_frame))
+            if source_history is not None:
+                pit_receipts[dataset]["source_history_contract"] = SOURCE_HISTORY_CONTRACT
+                pit_receipts[dataset]["source_history_rows"] = len(source_history)
+                pit_receipts[dataset]["outside_eligibility_fact_rows"] = len(source_history) - len(frame)
             artifact_receipts[dataset] = _write_produced_artifact(
                 working,
                 dataset=dataset,
@@ -937,7 +949,8 @@ class FactorPartitionProducer:
                 peak_retained_source_rows,
                 len(daily)
                 + sum(len(value) for value in retained_aux.values())
-                + (0 if dataset in retained_aux else len(frame)),
+                + (0 if dataset in retained_aux else len(frame))
+                + (len(source_history) if source_history is not None else 0),
             )
             if peak_retained_source_rows > spec.max_source_partition_rows * 4:
                 raise FactorMaterializationError("factor retained source rows exceed hard memory contract")
@@ -1310,7 +1323,10 @@ def _build_qfq_daily(
         raise FactorMaterializationError(
             f"daily_raw source schema is incomplete: {sorted(required.difference(daily.columns))}"
         )
-    daily = daily.loc[:, sorted(required)].copy()
+    from .canonical_stock_transformer import PRECISION_FIELDS, raw_volume_shares
+
+    optional = set(PRECISION_FIELDS).intersection(daily.columns)
+    daily = daily.loc[:, sorted(required | optional)].copy()
     daily["ts_code"] = daily["ts_code"].astype(str).str.upper()
     daily["trade_date"] = pd.to_datetime(daily["trade_date"], errors="raise").dt.date
     if daily.duplicated(["ts_code", "trade_date"]).any():
@@ -1398,9 +1414,18 @@ def _build_qfq_daily(
             values[target][positions] = (
                 pd.to_numeric(group[source], errors="raise").to_numpy(dtype=float) / 1000.0 * qfq
             )
-        values["volume"][positions] = (
-            pd.to_numeric(group["volume_hand"], errors="raise").to_numpy(dtype=float) * 100.0 / qfq
-        )
+        share_values = pd.to_numeric(group["volume_hand"], errors="raise").to_numpy(dtype=float) * 100.0
+        # Keep the legacy vectorized path; inspect only supplied precision.
+        # DataFrame NULL cells in mixed precision/legacy rows are not facts.
+        if optional:
+            supplied = group[list(optional)].notna().any(axis=1).to_numpy()
+            for local in np.flatnonzero(supplied):
+                fact = group.iloc[local].to_dict()
+                try:
+                    share_values[local] = raw_volume_shares(fact)
+                except ValueError as exc:
+                    raise FactorMaterializationError(f"daily_raw share precision is invalid: {code}") from exc
+        values["volume"][positions] = share_values / qfq
         values["amount"][positions] = pd.to_numeric(group["amount_li"], errors="raise").to_numpy(dtype=float) / 1000.0
         values["factor"][positions] = qfq
     while current_adj is not None:
@@ -1542,12 +1567,16 @@ def _static_asof_frame(
     target_index: pd.MultiIndex,
     previous_tail: pd.DataFrame,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    if dataset == "moneyflow":
+    if dataset in {"moneyflow", "daily_basic", "sector_data"}:
+        # daily_basic is an exact-date provider fact, including nullable
+        # dividend yields. Carrying yesterday's yield into a source NULL
+        # silently fabricates data and makes H5/static snapshots diverge.
+        # Industry quotes/flows are also exact-date facts. Membership is
+        # resolved separately by the frozen PIT authority, not by carrying an
+        # old id or quote across a missing day, taxonomy change or suspension.
         return current, pd.DataFrame()
     slow_columns: list[str] = []
-    if dataset == "daily_basic":
-        slow_columns = [value for value in ("db_dv_ratio", "db_dv_ttm") if value in current.columns]
-    elif dataset in {"bak_basic", "cyq_perf", "sector_data", "margin_detail"}:
+    if dataset in {"bak_basic", "cyq_perf", "margin_detail"}:
         slow_columns = list(current.columns)
     if not slow_columns:
         return current, _tail_by_instrument(current, 1)

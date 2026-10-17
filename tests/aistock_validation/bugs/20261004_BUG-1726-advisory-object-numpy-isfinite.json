@@ -1,0 +1,273 @@
+{
+  "actual": "object空Series经过map仍object，np.isclose内部isfinite抛TypeError并被包装为source query failed",
+  "allowed_write_scope": [
+    "backend/services/advisory_model_first/economic_daily_feature_core_v1.py",
+    "backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py",
+    "backend/services/advisory_model_first/economic_sector_daily_core_v1.py",
+    "backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py",
+    "backend/services/advisory_model_first/economic_sector_daily_family_v1.py",
+    "backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py",
+    "tests/aistock_validation/bugs/20261004_BUG-1726-advisory-object-numpy-isfinite.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1726",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-04T17:27:39.740201Z",
+  "description": "正常零荐股空Series经过map仍object，np.isclose内部isfinite抛TypeError；完整M1续验另暴露板块core空日期键merge的datetime64/object不一致，以及family对无候选空键dtype误判身份冲突。仅修复正常空表处理，保留全部原非空数学、输入校验及身份合同。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261004-42014df42cd0",
+      "timestamp": "2026-10-04T17:27:39.740201Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/frozen_family_empty_smoke.py"
+  ],
+  "expected": "合法零候选通过相同内核返回空特征及NO_CANDIDATES；非空数学/异常合同不变",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_model_first/economic_daily_feature_core_v1.py",
+      "backend/services/advisory_model_first/economic_sector_daily_core_v1.py",
+      "backend/services/advisory_model_first/economic_sector_daily_family_v1.py",
+      "backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py",
+      "backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py",
+      "backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py",
+      "tests/aistock_validation/bugs/20261004_BUG-1726-advisory-object-numpy-isfinite.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_model_first/economic_daily_feature_core_v1.py",
+      "backend/services/advisory_model_first/economic_sector_daily_core_v1.py",
+      "backend/services/advisory_model_first/economic_sector_daily_family_v1.py",
+      "backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py",
+      "backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py",
+      "backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py",
+      "tests/aistock_validation/bugs/20261004_BUG-1726-advisory-object-numpy-isfinite.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_model_first/economic_daily_feature_core_v1.py",
+        "backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py"
+      ],
+      "impacted_modules": [
+        "advisory.model_first"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_model_first/economic_daily_feature_core_v1.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        },
+        {
+          "file": "backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py",
+          "impact_modules": [],
+          "primary_module": "advisory.model_first",
+          "risk_level": "high",
+          "rule_id": "advisory_model_first_training"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_model_first/economic_daily_feature_core_v1.py",
+        "backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_model_first/economic_daily_feature_core_v1.py",
+      "backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_model_first/economic_daily_feature_core_v1.py",
+      "backend/tests/advisory_model_first/test_economic_daily_feature_core_v1.py"
+    ]
+  },
+  "first_seen_at": "2026-10-04T17:27:39.740201Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 5446,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5446",
+  "last_seen_at": "2026-10-04T17:27:39.740201Z",
+  "module": "advisory.model_first",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "C:/Users/lc999/miniconda3/envs/AIstock/python.exe X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/frozen_family_empty_smoke.py",
+  "required_verification": [
+    "l0",
+    "advisory_modeling_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/programs/advp_3126dd77f9774d94850f37ad012f640f/sector-entry-price?target_trade_date=2026-08-28&list_version_id=advlv_b5c9584f3e1020e6ef9b8947475f5254",
+    "fresh_process_evidence": [
+      "新Python进程定向pytest test_empty_original_roster_preserves_schema_and_no_candidate_state[True] 修复前isfinite TypeError、修复后PASS；未启动用户后端，不是生产运行态验收",
+      "完整冻结M1空链组合源码验证：本BUG的core/sector/family加未合入#5445 service；真实冻结权重和合成空名单返回NO_CANDIDATES，fit=0、outcomes_read=false、database_written=false。不是原published空名单证明，也不是已合入或生产运行态验收。"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion": {
+    "additional_files": [
+      "backend/services/advisory_model_first/economic_sector_daily_core_v1.py",
+      "backend/tests/advisory_model_first/test_economic_sector_daily_core_v1.py",
+      "backend/services/advisory_model_first/economic_sector_daily_family_v1.py",
+      "backend/tests/advisory_model_first/test_economic_sector_daily_family_v1.py"
+    ],
+    "evidence_ref": "X:/AIstock_temp/advisory/daily-price-delivery-18h-20261005/frozen_family_empty_smoke.py",
+    "module_boundary": "仅Advisory；不修改公共流程、QE、Selection或数据库",
+    "reason": "实际冻结M1空名单链在修复数值dtype后，又暴露板块层空日期键merge失败和family空键dtype误判；同一正常空名单合同，非数据或模型缺口。"
+  },
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory.model_first"
+  ],
+  "title": "Advisory日频空荐股的object数值列触发NumPy isfinite错误",
+  "trigger_condition": {
+    "fingerprint": "42014df42cd02aec55c4f8c2",
+    "source_event_id": "FE-20261004-42014df42cd0"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory.model_first",
+        "advisory_modeling"
+      ],
+      "plans": [
+        "advisory_modeling_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory.model_first",
+          "advisory_modeling"
+        ],
+        "plans": [
+          "advisory_modeling_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

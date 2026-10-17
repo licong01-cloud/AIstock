@@ -1,5 +1,40 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: advisory_mocked_ui_runner_config
+    priority: 141
+    include: [frontend/tests/advisory-mocked.config.ts]
+    primary_module: advisory.ui
+    impact_modules: []
+    layer: validation
+    risk_level: high
+    ownership_reason: Runner-owned isolated frontend/browser configuration, not Advisory business logic.
+  - rule_id: advisory_mocked_ui
+    priority: 140
+    include:
+      - frontend/src/app/paper-v2/advisory/**
+      - frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts
+    primary_module: advisory.ui
+    impact_modules: []
+    layer: frontend
+    risk_level: medium
+    ownership_reason: Exact Advisory UI boundary, isolated from retired Paper workflows.
+  - rule_id: local_data_tdx_go
+    priority: 120
+    include:
+      - tdx-api-main/*.go
+      - tdx-api-main/**/*.go
+      - tdx-api-main/go.mod
+      - tdx-api-main/go.sum
+      - tdx-api-main/web/go.mod
+      - tdx-api-main/web/go.sum
+      - tdx-api-main/web/start.bat
+      - scripts/start_tdx_go_backend.py
+      - backend/tests/scripts/test_start_tdx_go_backend.py
+    primary_module: local_data
+    impact_modules: []
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: TDX protocol, Go service and its direct tests produce shared raw market facts; business consumers remain separately owned.
   - rule_id: factor_research_p1
     priority: 132
     include:
@@ -447,11 +482,13 @@ rules:
     include:
       - scripts/aistock_feature_workflow.py
       - scripts/aistock_issue_workflow.py
+      - scripts/aistock_runtime_semantics.py
       - scripts/aistock_runner_health.py
       - scripts/bug_github_sync.py
       - scripts/bug_github_webhook.py
       - scripts/ci/prepare_self_hosted_workspace.py
       - scripts/ci_failure_issue_summary.py
+      - scripts/ci_plan_coverage.py
       - scripts/code_intelligence_adapter.py
       - scripts/configure_aistock_github_runner.ps1
       - scripts/issue_flow.py
@@ -562,6 +599,15 @@ rules:
     layer: dev_quality_tooling
     risk_level: high
     ownership_reason: Open-source CI/CD and local quality tool configs define issue workflow automation gates.
+  - rule_id: ci_changed_files_test_owner
+    priority: 110
+    include:
+      - backend/tests/scripts/test_ci_changed_files.py
+    primary_module: validation.guardrails
+    impact_modules: [validation.runner, validation.center, platform.config]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Changed-file ancestry and scope tests execute scripts/ci_changed_files.py, owned by validation.guardrails, rather than generic workflow orchestration.
   - rule_id: ci_change_classifier_test_owner
     priority: 110
     include:
@@ -571,6 +617,15 @@ rules:
     layer: backend_test
     risk_level: high
     ownership_reason: The classifier regression suite belongs to the same guardrail subsystem as its production classifier and overrides broader workflow-test catch-alls.
+  - rule_id: ci_workflow_policy_test_owner
+    priority: 110
+    include:
+      - backend/tests/scripts/test_ci_workflow_policy_scan.py
+    primary_module: validation.guardrails
+    impact_modules: [validation.runner, validation.center, platform.config]
+    layer: backend_test
+    risk_level: high
+    ownership_reason: Policy contract tests execute the guardrail-owned ci_workflow_policy_scan.py and override generic workflow test rules.
   - rule_id: mcp_gateway_platform
     priority: 90
     include:
@@ -868,6 +923,8 @@ rules:
       - backend/tests/scripts/test_localsim_product_validation.py
       - backend/tests/scripts/test_prepare_localsim_successor_cutover.py
       - frontend/src/app/simulation/localsim/**
+      - frontend/src/lib/simulation/localsim/**
+      - frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts
     primary_module: simulation.localsim_successor_core
     impact_modules: [simulation_runtime, platform.db, paper_v2, strategy_package]
     layer: trading_runtime
@@ -963,6 +1020,7 @@ rules:
     priority: 80
     include:
       - backend/services/strategy_package/**
+      - scripts/strategy_package_asset_backfill.py
       - backend/routers/strategy_package*.py
       - backend/tests/strategy_package/**
       - frontend/src/app/strategy-package-governance/**
@@ -1187,6 +1245,7 @@ rules:
       - scripts/monthly_unified_dataset_release_worker.py
       - scripts/build_dataset_release_successor.py
       - scripts/repair_qe_adj_factor_candidate.py
+      - scripts/repair_qe_daily_basic_history.py
       - scripts/build_shared_sector_context_component.py
       - scripts/update_backtest_dataset_monthly.py
       - scripts/export_qe_qlib_candidate.py
@@ -1207,10 +1266,16 @@ rules:
   - rule_id: local_data_tushare_sync_engine
     priority: 97
     include:
+      - scripts/repair_stk_limit_pre_close.py
+      - backend/tests/scripts/test_repair_stk_limit_pre_close.py
       - backend/services/adj_factor_history_reconciler.py
       - backend/services/tushare_sync_engine.py
       - backend/services/tushare_sync.py
       - backend/services/tushare_dataset_specs.py
+      - backend/services/sw_industry_history_store.py
+      - backend/db/migrations/add_sw_industry_history_preservation_v1.sql
+      - scripts/import_sw_industry_history.py
+      - backend/tests/test_sw_industry_history_store.py
       - backend/db/init_tushare_schedules.py
       - backend/db/migrations/add_etf_share_sources_20260923.sql
       - backend/db/migrations/add_etf_share_sources_20260923.rollback.sql
@@ -1244,6 +1309,16 @@ rules:
     layer: data_pipeline
     risk_level: high
     ownership_reason: The audited daily-basic ingestion and repair operators plus their direct tests form one local_data data-quality boundary and must select the focused data sync plan instead of remaining unmapped generic scripts.
+  - rule_id: local_data_raw_volume_precision_operator
+    priority: 96
+    include:
+      - scripts/backfill_raw_volume_precision.py
+      - backend/tests/scripts/test_backfill_raw_volume_precision.py
+    primary_module: local_data
+    impact_modules: [qlib_data]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: The bounded pinned-provider raw share precision operator and its direct tests are local_data source repairs, not business consumers or dataset activation.
   - rule_id: local_data_pt_next_018_source_repair
     priority: 96
     include:
@@ -1303,6 +1378,7 @@ rules:
       - backend/services/sector_data_builder.py
       - backend/services/sector_data_repair.py
       - scripts/build_sector_data_candidate.py
+      - scripts/repair_sw_sector_revision.py
       - scripts/create_sw_sector_tables.py
       - backend/db/migrations/sector_data_pit_identity_*.sql
       - backend/tests/services/test_sector_data_builder.py
@@ -1316,6 +1392,10 @@ rules:
   - rule_id: local_data_pipeline
     priority: 70
     include:
+      - scripts/repair_local_sync_incident.py
+      - backend/tests/scripts/test_repair_local_sync_incident.py
+      - scripts/repair_local_data_daily_sync.py
+      - backend/tests/ingestion/test_daily_sync_recovery.py
       - backend/ingestion/tdx_scheduler.py
       - backend/tests/ingestion/test_repair_minute_via_minute_api.py
       - backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py
@@ -1336,6 +1416,7 @@ rules:
       - backend/tests/scripts/test_repair_suspend_688766.py
       - backend/services/suspend_d_coverage.py
       - scripts/audit_suspend_d_coverage.py
+      - scripts/verify_suspension_day_authority.py
       - backend/tests/services/test_suspend_d_coverage.py
     primary_module: local_data
     impact_modules: [qlib_data, qe.core, paper_v2]
@@ -2284,13 +2365,21 @@ rules:
     priority: 95
     include:
       - backend/tests/dr/**
-      - scripts/dr_snapshot_prod_db.py
-      - scripts/dr_cleanup_old_snapshots.py
     primary_module: validation.dr
     impact_modules: [platform.db, validation.runner]
     layer: backend_test
     risk_level: high
-    ownership_reason: Stage 7.4 DR validation + the snapshot/cleanup scripts they exercise; failures here surface backup-restoration risk before any production rollout.
+    ownership_reason: Stage 7.4 DR assertions and fixtures prove backup-restoration contracts.
+  - rule_id: validation_dr_operational_scripts
+    priority: 95
+    include:
+      - scripts/dr_snapshot_prod_db.py
+      - scripts/dr_cleanup_old_snapshots.py
+    primary_module: validation.dr
+    impact_modules: [platform.db, validation.runner]
+    layer: script
+    risk_level: high
+    ownership_reason: DR snapshot and cleanup are executable operational tooling, not assertion fixtures; ownership and production authorization remain unchanged.
   - rule_id: scripts_default
     priority: 10
     include:
