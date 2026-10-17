@@ -3,8 +3,123 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from types import SimpleNamespace
+from threading import Event
+import time
+
+import pytest
 
 from backend.services.validation.pipeline_center import ValidationPipelineCenterService
+from backend.services.validation.overview_snapshot import OverviewSnapshot
+
+
+def test_overview_snapshot_is_nonblocking_shared_and_source_isolated(tmp_path):
+    release = Event()
+    calls = []
+
+    def slow():
+        calls.append(1)
+        assert release.wait(3)
+        return {'count': 2}, 'slow-source'
+
+    snapshot = OverviewSnapshot(tmp_path, {'slow': slow, 'fast': lambda: ({'count': 1}, 'fast-source')})
+    try:
+        start = time.monotonic()
+        snapshot.read()
+        assert time.monotonic() - start < .2
+        for _ in range(100):
+            result = snapshot.read()['sections']
+            if result['fast']['state'] == 'available':
+                break
+            time.sleep(.005)
+        assert result['fast']['data']['count'] == 1
+        assert result['slow']['state'] == 'loading'
+        assert len(calls) == 1
+        snapshot._started['slow'] -= 21
+        assert snapshot.read()['sections']['slow']['state'] == 'timeout'
+        assert len(calls) == 1  # A timeout does not spawn another blocked worker.
+        release.set()
+        snapshot._pending['slow'].result(timeout=2)
+        result = snapshot.read()['sections']['slow']
+        assert result['data'] == {'count': 2}
+        assert result['collected_at'] and result['source'] == 'slow-source'
+        result['data']['count'] = 99
+        assert snapshot.read()['sections']['slow']['data']['count'] == 2
+    finally:
+        release.set()
+        snapshot._pool.shutdown(wait=True)
+
+
+def test_overview_unavailable_does_not_fabricate_zero_or_leak_stderr(tmp_path):
+    def failed():
+        raise ValueError('private credential should never reach browser')
+
+    snapshot = OverviewSnapshot(tmp_path, {'failed': failed})
+    try:
+        snapshot.read()
+        snapshot._pending['failed'].result(timeout=2)
+        result = snapshot.read()['sections']['failed']
+        assert result['state'] == 'unavailable' and result['data'] is None
+        assert 'private credential' not in json.dumps(result)
+    finally:
+        snapshot._pool.shutdown(wait=True)
+
+
+def test_overview_reads_only_own_registry_and_separates_pending_runtime(tmp_path):
+    registry = tmp_path / 'tests/aistock_validation/bugs'
+    registry.mkdir(parents=True)
+    (registry / '.bug_id_allocator.json').write_text('{"last_id": 100}')
+    for number, status in enumerate(['open', 'verified', 'fixed_source_pending_user_restart']):
+        (registry / f'{number}.json').write_text(json.dumps({'bug_id': f'BUG-{number}', 'status': status}))
+    snapshot = OverviewSnapshot(tmp_path, {})
+    assert snapshot._bugs()[0]['pending'] == 2
+    (registry / 'bad.json').write_text('broken')
+    with pytest.raises(ValueError):
+        snapshot._bugs()
+
+
+def test_overview_read_sources_preserve_roles_states_and_bounded_counts(tmp_path):
+    snapshot = OverviewSnapshot(tmp_path, {})
+    payload = {'runners': [
+        {'id': 1, 'name': 'ordinary', 'labels': [{'name': 'aistock-ci'}], 'status': 'online', 'busy': True},
+        {'id': 2, 'name': 'security', 'labels': [{'name': 'aistock-ci-security'}], 'status': 'offline', 'busy': False},
+    ]}
+    snapshot._github = lambda _: payload
+    assert [runner['role'] for runner in snapshot._runners()[0]['items']] == ['ci', 'security']
+    assert snapshot._runners()[0]['missing_roles'] == []
+    payload = {'workflow_runs': [{'id': 42, 'status': 'completed', 'conclusion': 'failure'}]}
+    assert snapshot._nightly()[0]['latest_run']['conclusion'] == 'failure'
+    payload = {'workflow_runs': []}
+    with pytest.raises(ValueError):
+        snapshot._nightly()
+    payload = {'workflow_runs': [{'id': 42, 'status': 'completed'}]}
+    with pytest.raises(ValueError):
+        snapshot._nightly()
+    payload = {'runners': [{'id': 1, 'labels': [{'name': 'aistock-ci'}], 'status': 'online'}]}
+    with pytest.raises(ValueError):
+        snapshot._runners()
+    payload = {'workflow_runs': [], 'total_count': 0}
+    assert snapshot._ci()[0]['queued']['total'] == 0
+
+
+def test_overview_expiry_singleflight_and_stale_visibility(tmp_path):
+    release = Event()
+
+    def slow():
+        assert release.wait(3)
+        return {'count': 2}, 'source'
+
+    snapshot = OverviewSnapshot(tmp_path, {'item': slow})
+    snapshot._entries['item'] = {'state': 'available', 'data': {'count': 1}, 'source': 'source',
+                                 'collected_at': 'old', '_at': time.monotonic() - 61}
+    try:
+        result = snapshot.read()['sections']['item']
+        assert result['stale'] and result['refreshing'] and result['data']['count'] == 1
+        future = snapshot._pending['item']
+        snapshot.read()
+        assert snapshot._pending['item'] is future
+    finally:
+        release.set()
+        snapshot._pool.shutdown(wait=True)
 
 
 class _FakeFindingStore:

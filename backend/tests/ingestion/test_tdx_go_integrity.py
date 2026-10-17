@@ -21,10 +21,12 @@ def test_snapshot_uses_current_close_not_previous_close(monkeypatch):
 
 def run_scheduler(monkeypatch, reply, options):
     obj = object.__new__(scheduler.TDXScheduler)
+    obj._latest_completed_trading_day = Mock(return_value=dt.date(2026, 10, 7))
     obj._fetchall = Mock(side_effect=lambda sql, *args: [{'latest': dt.date(2026, 10, 7)}]
                         if 'latest' in sql else [{'mx': dt.date(2026, 10, 7)}]
                         if ' AS mx' in sql else [{'nt': dt.date(2026, 10, 8)}]
-                        if ' AS nt' in sql else [{'status': 'success'}])
+                        if ' AS nt' in sql else [{'ts_code': '688526.SH'}]
+                        if 'stock_basic' in sql else [{'status': 'success'}])
     obj._execute = Mock()
     obj._log_ingestion_run = Mock()
     obj._update_ingestion_schedule = Mock()
@@ -59,6 +61,9 @@ def test_partial_latest_day_is_replayed_not_skipped(monkeypatch):
     obj, post = run_scheduler(monkeypatch, {'code': 0, 'data': {'task_id': 'exact'}}, {})
     assert post.call_count == 1
     assert post.call_args.kwargs['json']['start_time'].startswith('2026-10-07')
+    assert post.call_args.kwargs['json']['end_time'] == '2026-10-07'
+    assert post.call_args.kwargs['json']['codes'] == ['688526.SH']
+    obj._latest_completed_trading_day.assert_called_once_with()
 
 
 def test_minute_missing_price_is_not_fabricated_zero(monkeypatch):

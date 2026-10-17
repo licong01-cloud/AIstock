@@ -1953,6 +1953,77 @@ def test_frozen_binding_cannot_fall_back_to_active_or_accept_rehashed_manifest(t
             )
 
 
+def _shared_frozen_successor(tmp_path):
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state = json.loads((root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    manifest_path = root / "qe_dataset_manifest.json"
+    digest = subject._sha256_file(manifest_path)
+    state.update(generation="approved-v18-successor", revision="20261015-successor", profile=subject.DIRECT_V2_PROFILE)
+    state["manifest"] = {
+        "dataset_manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "path": manifest_path.name,
+        "sha256": digest,
+        "size": manifest_path.stat().st_size,
+    }
+    binding = {
+        **{k: state[k] for k in ("generation", "release_id", "revision", "cutoff")},
+        "manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "manifest_file_sha256": digest,
+    }
+    return root, security, provider, state, binding
+
+
+def test_shared_frozen_successor_reads_pinned_manifest_with_inherited_revision(tmp_path, monkeypatch):
+    root, security, provider, state, binding = _shared_frozen_successor(tmp_path)
+    (root / "direct_monthly_state.json").write_text(json.dumps(state), encoding="utf-8")
+    _stub_direct_source_preflights(monkeypatch)
+    monkeypatch.setattr(subject, "load_active_hmm_dataset_identity", lambda: pytest.fail("active profile accessed"))
+    before = {
+        path.name: path.read_bytes() for path in (root / "direct_monthly_state.json", root / "qe_dataset_manifest.json")
+    }
+    assets = subject.load_rotation_l1_direct_v2_source_assets(
+        root, security_identity_manifest=security, provider_absence_manifest=provider, frozen_release_binding=binding
+    )
+    assert assets["release_identity"]["frozen_release_generation"] == binding["generation"]
+    assert assets["release_identity"]["frozen_release_binding_sha256"] == canonical_sha256(binding)
+    assert all((root / name).read_bytes() == content for name, content in before.items())
+
+
+@pytest.mark.parametrize("drift", ("hash", "size", "bool_size", "mixed", "identity", "revision", "rehashed_content"))
+def test_shared_frozen_successor_still_rejects_binding_drift(tmp_path, drift):
+    root, _, _, state, binding = _shared_frozen_successor(tmp_path)
+    if drift == "hash":
+        state["manifest"]["sha256"] = "a" * 64
+    elif drift == "size":
+        state["manifest"]["size"] += 1
+    elif drift == "bool_size":
+        state["manifest"]["size"] = True
+    elif drift == "mixed":
+        state["manifest"]["file_sha256"] = state["manifest"]["sha256"]
+    elif drift == "identity":
+        state["manifest"]["dataset_manifest_sha256"] = "a" * 64
+    elif drift == "revision":
+        state["revision"] = "unapproved"
+    else:
+        path = root / "qe_dataset_manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["revision"] = "forged"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        state["manifest"].update(sha256=subject._sha256_file(path), size=path.stat().st_size)
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._require_frozen_direct_v2_profile(
+            root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, binding=binding
+        )
+
+
+def test_shared_inherited_manifest_requires_explicit_frozen_pins(tmp_path):
+    root, _, _, state, _ = _shared_frozen_successor(tmp_path)
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._require_direct_v2_manifest(
+            root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, release_id=state["release_id"]
+        )
+
+
 def test_direct_v2_selection_universe_may_be_a_pit_subset_of_provider_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

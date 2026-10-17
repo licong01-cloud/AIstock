@@ -1,5 +1,23 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: advisory_mocked_ui_runner_config
+    priority: 141
+    include: [frontend/tests/advisory-mocked.config.ts]
+    primary_module: advisory.ui
+    impact_modules: []
+    layer: validation
+    risk_level: high
+    ownership_reason: Runner-owned isolated frontend/browser configuration, not Advisory business logic.
+  - rule_id: advisory_mocked_ui
+    priority: 140
+    include:
+      - frontend/src/app/paper-v2/advisory/**
+      - frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts
+    primary_module: advisory.ui
+    impact_modules: []
+    layer: frontend
+    risk_level: medium
+    ownership_reason: Exact Advisory UI boundary, isolated from retired Paper workflows.
   - rule_id: local_data_tdx_go
     priority: 120
     include:
@@ -905,6 +923,8 @@ rules:
       - backend/tests/scripts/test_localsim_product_validation.py
       - backend/tests/scripts/test_prepare_localsim_successor_cutover.py
       - frontend/src/app/simulation/localsim/**
+      - frontend/src/lib/simulation/localsim/**
+      - frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts
     primary_module: simulation.localsim_successor_core
     impact_modules: [simulation_runtime, platform.db, paper_v2, strategy_package]
     layer: trading_runtime
@@ -1246,6 +1266,8 @@ rules:
   - rule_id: local_data_tushare_sync_engine
     priority: 97
     include:
+      - scripts/repair_stk_limit_pre_close.py
+      - backend/tests/scripts/test_repair_stk_limit_pre_close.py
       - backend/services/adj_factor_history_reconciler.py
       - backend/services/tushare_sync_engine.py
       - backend/services/tushare_sync.py
@@ -1370,6 +1392,10 @@ rules:
   - rule_id: local_data_pipeline
     priority: 70
     include:
+      - scripts/repair_local_sync_incident.py
+      - backend/tests/scripts/test_repair_local_sync_incident.py
+      - scripts/repair_local_data_daily_sync.py
+      - backend/tests/ingestion/test_daily_sync_recovery.py
       - backend/ingestion/tdx_scheduler.py
       - backend/tests/ingestion/test_repair_minute_via_minute_api.py
       - backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py
@@ -1390,6 +1416,7 @@ rules:
       - backend/tests/scripts/test_repair_suspend_688766.py
       - backend/services/suspend_d_coverage.py
       - scripts/audit_suspend_d_coverage.py
+      - scripts/verify_suspension_day_authority.py
       - backend/tests/services/test_suspend_d_coverage.py
     primary_module: local_data
     impact_modules: [qlib_data, qe.core, paper_v2]

@@ -1,0 +1,278 @@
+{
+  "actual": "Stock eligibility truncation hides genuine quotes needed for existing holdings; monthly increment and validator reproduce the same clipping.",
+  "allowed_write_scope": [
+    "backend/qlib_exporter/authoritative_bin_exporter.py",
+    "backend/tests/test_qlib_export_stock_universe_filters.py",
+    "backend/qlib_exporter/quote_catalog.py",
+    "tests/aistock_validation/bugs/20261014_BUG-1902-minute-quote-catalog-clips-authentic-holding-quotes-to-pit-buy-eligibili.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1902",
+  "closed_at": "2026-10-17T13:26:30.671094Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-14T17:53:36.171411Z",
+  "description": "Shared physical minute quote catalog and immutable catalog-only successor repair. Monthly worker call sites/validator are a separate follow-up BUG because backend-main and worker-scheduler require distinct runtime verification. PIT buy eligibility remains unchanged.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261014-e7fefa32be9f",
+      "timestamp": "2026-10-14T17:53:36.171411Z"
+    },
+    {
+      "action": "scope_split_by_runtime_target",
+      "actor": "Codex",
+      "note": "BUG-1902 owns shared quote catalog/legacy exporter/candidate-only repair; monthly worker integration is a separate BUG. One shared successor, no process control.",
+      "timestamp": "2026-10-14T17:59:00.860Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:\\Dev\\AIstock_worktrees\\qe-new-recipes-20h-20261013\\tmp\\handoff\\t1_t2_20261014\\supplemental_evidence.json"
+  ],
+  "expected": "Quote catalog follows real frozen physical quote coverage independently of PIT buy eligibility; selection pools retain their exact spans.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/qlib_exporter/quote_catalog.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1902-minute-quote-catalog-clips-authentic-holding-quotes-to-pit-buy-eligibili.json"
+    ],
+    "added_files": [
+      "backend/qlib_exporter/quote_catalog.py"
+    ],
+    "changed_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/qlib_exporter/quote_catalog.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1902-minute-quote-catalog-clips-authentic-holding-quotes-to-pit-buy-eligibili.json"
+    ],
+    "changed_files_source": "git_finish",
+    "planned_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "backend/qlib_exporter/quote_catalog.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "backend/qlib_exporter/quote_catalog.py"
+    ]
+  },
+  "first_seen_at": "2026-10-14T17:53:36.171411Z",
+  "fix_branch": null,
+  "fix_commit": "a404be483b8440d69b4cbccf06dd4d63058b53df",
+  "fixed_at": "2026-10-14T18:41:52Z",
+  "github_issue_number": 6072,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6072",
+  "last_seen_at": "2026-10-14T17:53:36.171411Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6073",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/config",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "RED: native minute rewrite incorrectly queried PIT selection. GREEN: new process validates authentic quote catalog with unchanged bins and unchanged PIT stock pools; successor builder rejects source pin drift and active overwrite. Production backend restart remains user-owned and pending.",
+      "Fresh Python loaded tracked quote catalog and immutable successor producer; 5144 physical quote boundaries validated; 125180 unchanged files reused by inode; database/profile/runtime writes zero. Backend restart pending user."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1902/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1902",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "0854e026b51220f2404ae04468126d0d0eefd4e3b2e90f54c475ae885819bfb0",
+      "expected_identity": "a404be483b8440d69b4cbccf06dd4d63058b53df",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T13:16:58.268694Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "0d93c49a25ab42082675e912063f6f8b12bfe18a029fb4ccbea1164155393b50",
+      "receipt_sha256": "bef916d181678480a3037953077e71749f087b81c40c8ad8a5631cfa0be60585",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c61b1b915dbc4cefdb8ed0ac85a92098e7b0bc6c4b4d220bdd27e2f79d8b041b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1902",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ec11088f8eae65e1",
+    "recorded_at": "2026-10-14T18:42:31.627109Z",
+    "runtime_contract_digest": "0854e026b51220f2404ae04468126d0d0eefd4e3b2e90f54c475ae885819bfb0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "884ecae54b8b85df822c9a9d1f142d9b4ef60e3f",
+    "source_merge_commit": "a404be483b8440d69b4cbccf06dd4d63058b53df",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6073",
+    "validation_evidence": [
+      "python -m pytest backend/tests/test_qlib_export_stock_universe_filters.py -q -> 40 passed"
+    ],
+    "validation_evidence_digest": "ee50ed7816d2e2eb5e0d9235382676d303c1f3ff536f3b15b78358b81699446e"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Minute quote catalog clips authentic holding quotes to PIT buy eligibility",
+  "trigger_condition": {
+    "fingerprint": "e7fefa32be9faa14bc8b668e",
+    "source_event_id": "FE-20261014-e7fefa32be9f"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_qlib_export_stock_universe_filters.py -q -> 40 passed",
+    "Current runtime identity and business-smoke verified; source validation retained by receipt ec11088f8eae65e1"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

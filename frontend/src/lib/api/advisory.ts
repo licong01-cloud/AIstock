@@ -1373,7 +1373,7 @@ export const advisoryApi = {
     return data.leaderboard || [];
   },
   async tradingDayDefaults(lookbackTradingDays = 10): Promise<AdvisoryTradingDayDefaults> {
-    return apiFetch<AdvisoryTradingDayDefaults>(`/paper-v2/trading-days/defaults?lookback_trading_days=${lookbackTradingDays}`);
+    return apiFetch<AdvisoryTradingDayDefaults>(`/advisory/trading-days/defaults?lookback_trading_days=${lookbackTradingDays}`);
   },
   async activePool(programId: string): Promise<AdvisoryEpisode[]> {
     const data = await apiFetch<{ active_pool: AdvisoryEpisode[] }>(`/advisory/programs/${encodeURIComponent(programId)}/active-pool`);

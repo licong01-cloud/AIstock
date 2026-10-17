@@ -556,34 +556,33 @@ class HistoricalRangeDayExecutor:
                 if (claim.range_run_id, trade_date) not in self._prefetched_candidates:
                     missing_dates.append(trade_date)
         if missing_dates:
-            with ThreadPoolExecutor(max_workers=len(missing_dates)) as pool:
-                futures = {
-                    pool.submit(
-                        self._candidate_producer.produce,
-                        request_payload=request_payload,
-                        research_program_id=claim.research_program_id,
-                        decision_trade_date=trade_date,
-                        request_artifact_ref=claim.request_ref,
-                    ): trade_date
-                    for trade_date in missing_dates
-                }
-                produced: dict[Any, HistoricalRangeArtifactRefV1] = {}
-                for future in as_completed(futures):
-                    trade_date = futures[future]
-                    try:
-                        result = future.result()
-                    except Exception as exc:
-                        if trade_date == claim.decision_trade_date:
-                            raise
-                        LOGGER.warning(
-                            "R3 candidate prefetch failed without changing current-day execution "
-                            "range_run_id=%s decision_trade_date=%s error_type=%s",
-                            claim.range_run_id,
-                            trade_date,
-                            type(exc).__name__,
-                        )
-                        continue
-                    produced[trade_date] = result.candidate_artifact_ref
+            batch_produce = getattr(self._candidate_producer, "produce_dates", None)
+            if callable(batch_produce):
+                results = batch_produce(request_payload=request_payload, research_program_id=claim.research_program_id,
+                                        decision_trade_dates=tuple(missing_dates), current_trade_date=claim.decision_trade_date,
+                                        request_artifact_ref=claim.request_ref)
+                produced = {day: result.candidate_artifact_ref for day, result in results.items()}
+            else:
+                # Compatibility for explicitly supplied legacy providers. The
+                # production factory above uses the bounded shared node batch.
+                with ThreadPoolExecutor(max_workers=len(missing_dates)) as pool:
+                    futures = {
+                        pool.submit(self._candidate_producer.produce, request_payload=request_payload,
+                                    research_program_id=claim.research_program_id, decision_trade_date=trade_date,
+                                    request_artifact_ref=claim.request_ref): trade_date for trade_date in missing_dates
+                    }
+                    produced = {}
+                    for future in as_completed(futures):
+                        trade_date = futures[future]
+                        try:
+                            result = future.result()
+                        except Exception as exc:
+                            if trade_date == claim.decision_trade_date:
+                                raise
+                            LOGGER.warning("R3 candidate prefetch future day failed range_run_id=%s date=%s error_type=%s",
+                                           claim.range_run_id, trade_date, type(exc).__name__)
+                            continue
+                        produced[trade_date] = result.candidate_artifact_ref
             with self._prefetch_lock:
                 for trade_date, ref in produced.items():
                     existing = self._prefetched_candidates.setdefault((claim.range_run_id, trade_date), ref)

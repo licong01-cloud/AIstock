@@ -178,8 +178,10 @@ def prepare_database_daily_inputs(
     effective: date,
     calendar: list[date],
     shared_code_to_id: dict[str, int],
+    classification_rows: list[dict[str, Any]],
     membership_rows: list[dict[str, Any]],
     sector_rows: list[dict[str, Any]],
+    official_quote_rows: list[dict[str, Any]],
     index_rows: list[tuple[date, Any]],
     volume_rows: list[tuple[date, Any]],
 ) -> dict[str, Any]:
@@ -190,6 +192,7 @@ def prepare_database_daily_inputs(
         validate_release_sw_l2_code_map,
     )
     from backend.services.dataset_release.sw_l2_quote_policy import (
+        SWL2QuotePolicyError,
         build_quote_availability_payload,
         quote_publication_policy_identity,
     )
@@ -242,7 +245,51 @@ def prepare_database_daily_inputs(
         authority_sha256=authority_sha,
     )
     code_map = validate_release_sw_l2_code_map(payload)
-    quote_payload = build_quote_availability_payload(code_map=code_map, required_start=history_start, cutoff=effective)
+    # A frozen-release coefficient scope is not a prohibition on authentic
+    # historical DB facts. Verify them against the official series in this
+    # same read snapshot; never turn excluded context into coefficient eligibility.
+    official_quotes = {}
+    canonical_quotes = []
+    for raw in official_quote_rows:
+        if not isinstance(raw, dict) or not {"sector_code", "trade_date", *QUOTE_COLUMNS}.issubset(raw):
+            _fail("incomplete official quote record")
+        code, day = raw["sector_code"], raw["trade_date"]
+        if code not in catalog or day not in calendar:
+            _fail(f"official quote outside canonical prefix/taxonomy {code}/{day}")
+        key = code, day
+        if key in official_quotes:
+            _fail(f"duplicate official quote {code}/{day}")
+        values = tuple(
+            _number(raw[field], key=f"official/{code}/{day}/{field}", optional=True) for field in QUOTE_COLUMNS
+        )
+        if any(v is not None for v in values) and any(v is None for v in values):
+            _fail(f"incomplete official quote {code}/{day}")
+        if any(v is not None and v < 0 for v in values[1:]):
+            _fail(f"negative official quote quantity {code}/{day}")
+        official_quotes[key] = values
+        canonical_quotes.append(
+            {"sector_code": code, "trade_date": day.isoformat(), **dict(zip(QUOTE_COLUMNS, values))}
+        )
+    canonical_quotes.sort(key=lambda r: (r["sector_code"], r["trade_date"]))
+    # The shared authority consumes the publication catalog and positive dated
+    # evidence. Never infer an unpublished industry's next-day eligibility from
+    # yesterday's authentic quote, or use membership as publication evidence.
+    if not isinstance(classification_rows, list) or any(not isinstance(r, dict) for r in classification_rows):
+        _fail("invalid publication catalog records")
+    publication_evidence: dict[str, Any] = {}
+    try:
+        quote_payload = build_quote_availability_payload(
+            code_map=code_map,
+            required_start=history_start,
+            cutoff=effective,
+            classification_rows=classification_rows,
+            quote_observations=[
+                {"l2_code_id": code_map.code_to_id[r["sector_code"]], **r} for r in canonical_quotes
+            ],
+            evidence=publication_evidence,
+        )
+    except SWL2QuotePolicyError as exc:
+        _fail(f"publication authority invalid: {exc}")
     availability = {
         row["canonical_l2_code"]: tuple(
             (date.fromisoformat(s["start_date"]), date.fromisoformat(s["end_date"])) for s in row["availability_spans"]
@@ -256,6 +303,7 @@ def prepare_database_daily_inputs(
         _fail("no quote-available output industries")
     sectors: dict[str, dict[date, dict[str, Any]]] = {}
     canonical_sectors = []
+    excluded_context_cells = 0
     for raw in sector_rows:
         code, day = raw["sector_code"], raw["trade_date"]
         if code not in catalog or day not in calendar or day > as_of:
@@ -266,11 +314,17 @@ def prepare_database_daily_inputs(
         record: dict[str, Any] = {"trade_date": day}
         for field in (*QUOTE_COLUMNS, *MONEYFLOW_COLUMNS):
             value = _number(raw[field], key=f"{code}/{day}/{field}", optional=not available)
-            if not available and field in QUOTE_COLUMNS and value is not None:
-                _fail(f"quote value outside publication authority {code}/{day}/{field}")
             if field in {"sw2_vol", "sw2_amount"} and value is not None and value < 0:
                 _fail(f"negative quote quantity {code}/{day}/{field}")
             record[field] = value
+        values = tuple(record[field] for field in QUOTE_COLUMNS)
+        official = official_quotes.get((code, day))
+        if official is None and any(v is not None for v in values):
+            _fail(f"quote value outside official source authority {code}/{day}")
+        if official is not None and values != official:
+            _fail(f"official quote mismatch {code}/{day}")
+        if not available and any(v is not None for v in values):
+            excluded_context_cells += 1
         sectors[code][day] = record
         canonical_sectors.append({"sector_code": code, **record, "trade_date": day.isoformat()})
     for code in quoted:
@@ -307,6 +361,8 @@ def prepare_database_daily_inputs(
             "market_volume": [[d.isoformat(), volumes[d]] for d in calendar],
             "mapping_sha256": authority_sha,
             "quote_availability": quote_payload,
+            "publication_catalog_sha256": publication_evidence["classification_catalog_digest"],
+            "official_sw_daily": canonical_quotes,
         }
     )
     identity = {
@@ -321,6 +377,10 @@ def prepare_database_daily_inputs(
         "completion_statuses": completion["completion_statuses"],
         "mapping_authority": dict(code_map.mapping_authority),
         "quote_policy_sha256": quote_publication_policy_identity(),
+        "publication_catalog_sha256": publication_evidence["classification_catalog_digest"],
+        "official_quote_authority": "market.sw_daily",
+        "official_quote_sha256": fingerprint(canonical_quotes),
+        "excluded_coefficient_quote_context_cells": excluded_context_cells,
         "knowledge_mode": "forward_current_read_snapshot",
         "historical_as_known_verified": False,
         "market_volume_definition": "sum_market_sw_daily_vol_all_rows_v1",
@@ -381,6 +441,11 @@ def read_database_daily_inputs(
         )
         calendar = [row[0] for row in cur.fetchall()]
         cur.execute(
+            "SELECT index_code,src,level,is_pub FROM market.sw_index_classify "
+            "WHERE src='SW2021' AND level='L2' ORDER BY index_code"
+        )
+        classification_rows = [dict(zip(("index_code", "src", "level", "is_pub"), row)) for row in cur.fetchall()]
+        cur.execute(
             "SELECT ts_code,l2_code,in_date,out_date FROM market.sw_index_member WHERE in_date<=%s AND (out_date IS NULL OR out_date>=%s) ORDER BY ts_code,in_date,l2_code",
             (effective, start),
         )
@@ -395,6 +460,12 @@ def read_database_daily_inputs(
             (start, as_of),
         )
         volume_rows = cur.fetchall()
+        cur.execute(
+            "SELECT ts_code,trade_date,pct_change,vol,amount FROM market.sw_daily "
+            "WHERE ts_code=ANY(%s) AND trade_date BETWEEN %s AND %s ORDER BY ts_code,trade_date",
+            (sorted({row["l2_code"] for row in members}), start, as_of),
+        )
+        official_quote_rows = [dict(zip(("sector_code", "trade_date", *QUOTE_COLUMNS), row)) for row in cur.fetchall()]
         columns = (*QUOTE_COLUMNS, *MONEYFLOW_COLUMNS)
         projections = ",".join(f"MIN(sd.{c}),MAX(sd.{c}),COUNT(sd.{c})" for c in columns)
         cur.execute(
@@ -443,8 +514,10 @@ def read_database_daily_inputs(
         effective=effective,
         calendar=calendar,
         shared_code_to_id=load_sw_l2_code_map(connection),
+        classification_rows=classification_rows,
         membership_rows=members,
         sector_rows=rows,
+        official_quote_rows=official_quote_rows,
         index_rows=index_rows,
         volume_rows=volume_rows,
     )

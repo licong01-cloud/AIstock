@@ -563,6 +563,62 @@ def _validate_tdx_raw_kline(payload: Any) -> tuple[str, str | None, dict[str, An
     return 'passed', None, {'row_count': len(rows), 'first_time': rows[0]['Time'], 'last_time': rows[-1]['Time']}
 
 
+def _validate_pipeline_overview(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Verify truthful partial observations, not the health of unrelated businesses."""
+    if not isinstance(payload, dict) or payload.get('status') != 'success':
+        return 'failed', 'overview success envelope missing', {}
+    data = payload.get('data')
+    if not isinstance(data, dict) or data.get('schema_version') != 'aistock_pipeline_overview_v1':
+        return 'failed', 'overview schema missing', {}
+    sections = data.get('sections')
+    keys = {'ci', 'runners', 'nightly', 'bugs', 'prs', 'worktrees'}
+    if not isinstance(sections, dict) or set(sections) != keys or data.get('read_only') is not True:
+        return 'failed', 'overview source set or read-only boundary invalid', {}
+    available = 0
+    for key, source in sections.items():
+        if not isinstance(source, dict) or source.get('state') not in {'loading', 'available', 'unavailable', 'timeout'}:
+            return 'failed', f'{key} source state invalid', {}
+        if not isinstance(source.get('stale'), bool) or not isinstance(source.get('refreshing'), bool):
+            return 'failed', f'{key} freshness metadata missing', {}
+        if source['state'] == 'available':
+            if not isinstance(source.get('data'), dict) or not source.get('source') or not source.get('collected_at'):
+                return 'failed', f'{key} observation identity missing', {}
+            age = source.get('age_seconds')
+            if isinstance(age, bool) or not isinstance(age, (int, float)) or not math.isfinite(age) or age < 0:
+                return 'failed', f'{key} observation age invalid', {}
+            if not source['stale']:
+                available += 1
+            observed = source['data']
+            def count(value):
+                return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+            valid = False
+            if key == 'bugs':
+                valid = count(observed.get('pending')) and count(observed.get('total')) and observed['pending'] <= observed['total']
+            elif key == 'worktrees':
+                valid = count(observed.get('total')) and count(observed.get('task_worktrees')) and observed['total'] > observed['task_worktrees']
+            elif key == 'ci':
+                valid = all(isinstance(observed.get(state), dict) and count(observed[state].get('total'))
+                            and isinstance(observed[state].get('items'), list) for state in ['queued', 'in_progress'])
+            elif key == 'prs':
+                valid = count(observed.get('observed_open')) and isinstance(observed.get('items'), list) and isinstance(observed.get('truncated'), bool)
+            elif key == 'runners':
+                valid = isinstance(observed.get('items'), list) and observed.get('expected_roles') == ['ci', 'security'] and isinstance(observed.get('missing_roles'), list)
+            elif key == 'nightly':
+                run = observed.get('latest_run')
+                valid = isinstance(run, dict) and bool(run.get('id')) and run.get('status') in {'queued', 'in_progress', 'completed', 'waiting', 'requested', 'pending'}
+                if valid:
+                    valid = bool(run.get('conclusion')) == (run['status'] == 'completed')
+            if not valid:
+                return 'failed', f'{key} observed payload invalid', {}
+        elif source['state'] in {'unavailable', 'timeout'} and not source.get('error'):
+            return 'failed', f'{key} failure is not explicit', {}
+        elif source['state'] == 'loading' and source.get('data') is not None:
+            return 'failed', f'{key} loading source fabricates data', {}
+    if not available:
+        return 'pending', 'no fresh independent source has completed yet', {'available_sources': 0}
+    return 'passed', None, {'available_sources': available, 'scope': 'read-only pipeline observations, not business readiness'}
+
+
 def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """Object endpoints must return a non-error object or array payload."""
     if isinstance(payload, list):
@@ -579,6 +635,202 @@ def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, 
         if isinstance(value, str) and value.strip().upper() in _RUN_STATUS_FAILURE:
             return "failed", f"object payload reports failure {field}={value.strip()}", {}
     return "passed", None, {"kind": "object"}
+
+
+def _validate_advisory_historical_operations(
+    payload: Any, *, url: str,
+) -> tuple[str, str | None, dict[str, Any]]:
+    """Validate the public operation projection, never infer replay completion.
+
+    The query deliberately redacts worker_id and lease_token. Only its public
+    expiry/fencing identity is checked; no secrets, DB reads or artifact IO.
+    A consistent QUEUED/failed row is evidence of status readback, not success
+    of that operation, recovery of a stranded operation, or batch completion.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    match = re.fullmatch(r"/api/v1/advisory/historical-range-batches/([^/]+)/operations", parsed.path)
+    if match is None:
+        return "failed", "operation probe requires an exact batch path", {}
+    batch_id = urllib.parse.unquote(match[1])
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    pinned = query.get("expected_operation_id")
+    if pinned is not None and (len(pinned) != 1 or not pinned[0].strip()):
+        return "failed", "expected_operation_id must be one non-empty identity", {}
+    if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("errors"):
+        return "failed", "operations require ok=true without envelope errors", {}
+    data, page = payload.get("data"), payload.get("page")
+    rows = data.get("operations") if isinstance(data, dict) else None
+    if not isinstance(rows, list) or not rows or not isinstance(page, dict):
+        return "failed", "operations require a non-empty list and pagination", {}
+    limit, more, cursor = page.get("limit"), page.get("has_more"), page.get("next_cursor")
+    if type(limit) is not int or not 1 <= limit <= 500 or len(rows) > limit or type(more) is not bool:
+        return "failed", "operations pagination limit/count is invalid", {}
+    if (more and (len(rows) != limit or not isinstance(cursor, str) or not cursor.strip())) or (
+        not more and cursor is not None
+    ):
+        return "failed", "operations pagination cursor contradicts has_more", {}
+    if "limit" in query and query["limit"] != [str(limit)]:
+        return "failed", "operations page limit differs from probe", {}
+
+    receipt_kinds = {
+        "CREATE": "SOURCE_REQUIREMENT_PLAN", "BUILD_SOURCE_CATALOG": "SOURCE_CATALOG_CHECKPOINT",
+        "RESUME": "RANGE_RECEIPT", "CANCEL": "RANGE_RECEIPT",
+        "REFRESH_OUTCOMES": "OUTCOME_REFRESH_RECEIPT", "REFRESH_OUTCOMES_RUN": "OUTCOME_REFRESH_RECEIPT",
+        "BUILD_DATASET_BRIDGE": "DATASET_BRIDGE_RECEIPT", "BUILD_DATASET_BRIDGE_RUN": "DATASET_BRIDGE_RECEIPT",
+    }
+    statuses = {"QUEUED", "RUNNING", "WAITING_INPUT", "COMPLETED", "RETRYABLE_FAILED", "FAILED"}
+    ids, keys, running_types = set(), set(), set()
+    observed: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            return "failed", "operation must be an object", {}
+        operation_id, key = row.get("operation_id"), row.get("operation_idempotency_key")
+        kind, status = row.get("operation_type"), row.get("status")
+        if any(not isinstance(value, str) or not value.strip() or len(value) > 200
+               for value in (operation_id, key, kind, status)):
+            return "failed", "operation identity/type/status is missing or invalid", {}
+        if row.get("batch_id") != batch_id or operation_id in ids or (kind, key) in keys:
+            return "failed", "operation batch identity mismatch or duplicate operation/idempotency identity", {}
+        if kind not in receipt_kinds or status not in statuses:
+            return "failed", "operation type/status is unknown", {}
+        planning = kind in {"CREATE", "BUILD_SOURCE_CATALOG"}
+        identity_hash = row.get("planning_identity_hash" if planning else "request_payload_sha256")
+        if not isinstance(identity_hash, str) or re.fullmatch(r"[0-9a-f]{64}", identity_hash) is None:
+            return "failed", "operation request/planning identity hash is invalid", {}
+        if planning and row.get("request_payload_sha256") is not None:
+            return "failed", "planning operation cannot claim a sealed request hash", {}
+        if not planning and (type(row.get("expected_row_version")) is not int or row["expected_row_version"] < 1):
+            return "failed", "sealed operation requires expected batch row version", {}
+        if any(name in query and row[field] not in query[name]
+               for name, field in (("status", "status"), ("operation_type", "operation_type"))):
+            return "failed", "operation does not match requested filters", {}
+        ids.add(operation_id)
+        keys.add((kind, key))
+        attempt, version, fencing = row.get("attempt_no"), row.get("row_version"), row.get("fencing_token")
+        if type(attempt) is not int or attempt < 0 or type(version) is not int or version < 1:
+            return "failed", "operation attempt/row version is invalid", {}
+        if fencing is not None and (type(fencing) is not int or fencing < 1):
+            return "failed", "operation fencing identity is invalid", {}
+        times = {}
+        for field in ("created_at", "started_at", "finished_at", "lease_expires_at"):
+            if field not in row:
+                return "failed", f"operation is missing {field}", {}
+            value = row[field]
+            if value is None and field != "created_at":
+                times[field] = None
+                continue
+            try:
+                stamp = datetime.fromisoformat(value) if isinstance(value, str) else None
+                if stamp is None or stamp.utcoffset() is None:
+                    raise ValueError("timestamp must be timezone-aware")
+            except (ValueError, OverflowError):
+                return "failed", f"operation {field} must be an aware timestamp", {}
+            times[field] = stamp
+        created, started, finished, expiry = (times[name] for name in (
+            "created_at", "started_at", "finished_at", "lease_expires_at",
+        ))
+        if (started is not None and started < created) or (
+            finished is not None and (started is None or finished < started)
+        ):
+            return "failed", "operation timestamps contradict lifecycle ordering", {}
+        expired = row.get("lease_expired")
+        if type(expired) is not bool:
+            return "failed", "operation lease_expired must be boolean", {}
+        if status == "RUNNING":
+            if expiry is None or started is None or attempt < 1 or fencing is None or kind in running_types:
+                return "failed", "RUNNING operation requires a unique type and public lease identity", {}
+            if expiry <= started:
+                return "failed", "operation lease expiry must follow its start", {}
+            running_types.add(kind)
+        # CREATE's atomic planning insert retains historical lease columns;
+        # the public query reports lease_expired=false outside RUNNING.
+        elif expired or (expiry is not None and not (
+            kind == "CREATE" and status == "COMPLETED" and fencing is not None and attempt >= 1
+            and started is not None and expiry > started
+        )):
+            return "failed", "non-running operation retains a lease", {}
+        if (status in {"COMPLETED", "FAILED"}) != (finished is not None):
+            return "failed", "operation status and terminal timestamp contradict", {}
+        if status == "QUEUED" and (attempt != 0 or started is not None or fencing is not None):
+            return "failed", "QUEUED operation cannot claim an execution attempt", {}
+        error = row.get("error_json")
+        dispatch_schema = "advisory_historical_range_background_dispatch_failure_v1"
+        if isinstance(error, dict) and error.get("schema_version") == dispatch_schema:
+            command = {"RESUME": "EXECUTION_RESUME", "BUILD_SOURCE_CATALOG": "CATALOG_EXECUTE"}.get(kind, kind)
+            if (error.get("operation_id") != operation_id or error.get("batch_id") != batch_id
+                    or error.get("retryable") is not True or error.get("command") != command
+                    or not isinstance(error.get("stage"), str)
+                    or error.get("stage") not in {"RUNTIME_RECONSTRUCTION", "REQUEST_RECONSTRUCTION", "CLAIM_AND_EXECUTION"}
+                    or any(not isinstance(error.get(name), str) or not error[name].strip()
+                           for name in ("reason_code", "error_type"))):
+                return "failed", "background dispatch error contradicts operation identity", {}
+            try:
+                recorded = error.get("recorded_at")
+                if not isinstance(recorded, str) or datetime.fromisoformat(recorded).utcoffset() is None:
+                    raise ValueError("dispatch failure requires an aware recorded_at")
+            except (ValueError, OverflowError):
+                return "failed", "background dispatch error recorded_at is invalid", {}
+        # The failure recorder may fail before a worker ever claims the row.
+        dispatch_failure = (
+            status == "RETRYABLE_FAILED" and attempt == 0 and started is None and fencing is None
+            and isinstance(error, dict)
+            and error.get("schema_version") == dispatch_schema
+            and error.get("operation_id") == operation_id and error.get("batch_id") == batch_id
+            and error.get("retryable") is True
+        )
+        if status != "QUEUED" and not dispatch_failure and (attempt < 1 or started is None):
+            return "failed", "executed operation requires attempt/start evidence", {}
+        if "error_json" not in row:
+            return "failed", "operation error field is missing", {}
+        if status in {"FAILED", "RETRYABLE_FAILED"}:
+            if not isinstance(error, dict) or not error:
+                return "failed", "failed operation requires structured error evidence", {}
+        elif error is not None:
+            return "failed", "non-failed operation carries contradictory error evidence", {}
+        if "result_ref" not in row or "result_hash" not in row:
+            return "failed", "operation result fields are missing", {}
+        ref, digest = row["result_ref"], row["result_hash"]
+        publishes = status in {"WAITING_INPUT", "COMPLETED", "FAILED"}
+        if publishes != isinstance(ref, dict) or (not publishes and (ref is not None or digest is not None)):
+            return "failed", "operation status contradicts published result", {}
+        if publishes:
+            if ref.get("schema_version") != "advisory_historical_range_artifact_ref_v1":
+                return "failed", "operation result reference schema is invalid", {}
+            if ref.get("artifact_kind") != receipt_kinds[kind] or digest != ref.get("semantic_content_hash"):
+                return "failed", "operation result kind/hash differs from its operation", {}
+            if any(not isinstance(ref.get(name), str) or re.fullmatch(r"[0-9a-f]{64}", ref[name]) is None
+                   for name in ("semantic_content_hash", "payload_sha256", "file_sha256")):
+                return "failed", "operation result hashes are invalid", {}
+            path = ref.get("relative_path")
+            if (not isinstance(path, str) or not path.strip() or path.startswith(("/", "\\"))
+                    or ":" in path or ".." in path.replace("\\", "/").split("/")):
+                return "failed", "operation result path must be contained", {}
+            if any(not isinstance(ref.get(name), str) or not ref[name].strip()
+                   for name in ("producer_contract_version", "payload_schema_version")):
+                return "failed", "operation result contract identity is missing", {}
+        result_version, result_status = row.get("result_row_version"), row.get("result_status")
+        if result_version is not None and (type(result_version) is not int or result_version < 1):
+            return "failed", "operation result row version is invalid", {}
+        if result_status is not None and (not isinstance(result_status, str) or not result_status.strip()):
+            return "failed", "operation result status is invalid", {}
+        if not publishes and (result_version is not None or result_status is not None):
+            return "failed", "non-publishing operation claims result status/version", {}
+        if status == "COMPLETED" and kind in {"RESUME", "CANCEL"} and (
+            result_version is None or result_status not in {
+                "PLANNING", "QUEUED", "RUNNING", "PARTIAL", "WAITING_INPUT", "COMPLETED",
+                "FAILED", "CANCELLING", "CANCELLED",
+            }
+        ):
+            return "failed", "completed execution operation requires batch result status/version", {}
+        observed.append({"operation_id": operation_id, "status": status, "lease_expired": expired,
+                         "operation_completed": status == "COMPLETED", "result_status": result_status,
+                         "lease_reported_active": status == "RUNNING" and not expired})
+    if pinned is not None and pinned[0] not in ids:
+        return "failed", "requested operation identity is absent from this page", {}
+    return "passed", None, {
+        "batch_id": batch_id, "operations": observed, "has_more": more,
+        "verification_scope": "operation_status_readback_only", "execution_completed": False,
+    }
 
 
 def _validate_advisory_entry_price_status(
@@ -631,6 +883,56 @@ def _validate_advisory_entry_price_status(
             "database_written": database_written,
         },
     )
+
+
+def _validate_advisory_trading_day_defaults(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Attest calendar choices only, never market/minute data readiness."""
+    def failed(reason):
+        return "failed", reason, {}
+
+    def day(value):
+        parsed = datetime.strptime(value, "%Y-%m-%d").date()
+        if parsed.isoformat() != value:
+            raise ValueError("non-canonical calendar date")
+        return parsed
+
+    if not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("calendar_only") is not True or payload.get("errors"):
+        return failed("calendar defaults require ok=true and calendar_only=true without errors")
+    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
+    try:
+        raw = query.get("lookback_trading_days", ["10"])
+        if len(raw) != 1 or not re.fullmatch(r"[0-9]+", raw[0]):
+            raise ValueError("invalid requested lookback")
+        lookback = int(raw[0])
+        if not 1 <= lookback <= 250 or type(payload.get("lookback_trading_days")) is not int or payload["lookback_trading_days"] != lookback:
+            raise ValueError("lookback identity mismatch")
+        as_of = day(payload.get("as_of_date"))
+        if "as_of_date" in query and query["as_of_date"] != [as_of.isoformat()]:
+            raise ValueError("as-of identity mismatch")
+        values = payload.get("trading_days")
+        if not isinstance(values, list) or not 1 <= len(values) <= lookback:
+            raise ValueError("calendar choices must be nonempty and bounded by lookback")
+        days = [day(value) for value in values]
+        if days != sorted(set(days)) or days[-1] > as_of or day(payload.get("latest_trading_day")) != days[-1]:
+            raise ValueError("calendar choices must be unique, ascending and latest <= as-of")
+        next_value = payload.get("next_trading_day")
+        if next_value is not None and day(next_value) <= as_of:
+            raise ValueError("next trading day must follow as-of")
+        status = payload.get("trading_day_status")
+        if (not isinstance(status, dict) or status.get("ok") is not True
+                or status.get("as_of_date") != as_of.isoformat()
+                or status.get("latest_completed_trading_day") != days[-1].isoformat()
+                or "next_trading_day" not in payload or "next_trading_day" not in status
+                or status.get("next_trading_day") != next_value):
+            raise ValueError("calendar status disagrees with defaults")
+        if (type(payload.get("available_trading_day_count")) is not int or payload["available_trading_day_count"] != len(days)
+                or payload.get("replay_start_date") != values[0] or payload.get("replay_end_date") != values[-1]):
+            raise ValueError("calendar count or replay bounds disagree")
+    except (TypeError, ValueError, OverflowError) as exc:
+        return failed(str(exc))
+    return "passed", None, {"calendar_only": True, "market_data_readiness": "not_evaluated",
+                             "as_of_date": as_of.isoformat(), "latest_trading_day": values[-1],
+                             "next_trading_day": next_value, "trading_day_count": len(days)}
 
 
 def _validate_advisory_returns(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
@@ -1222,6 +1524,116 @@ def _validate_hmm_research_records(payload: Any, *, url: str) -> tuple[str, str 
         return "failed", "HMM research readback contains duplicate canonical records", {}
     return "passed", None, {"experiment_id": experiment, "source_task_id": tasks[0], "record_count": len(rows),
                             "scope": "existing record readback, not authorization or proof of a new write"}
+
+
+def _validate_selection_artifacts(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
+    """Read one declared native artifact; not proof of scoring or suspension behavior.
+
+    expected_* parameters bind local verification, not server-side list filters.
+    The route deliberately omits full scores; only its header/preview is verified.
+    """
+    parsed = urllib.parse.urlsplit(url)
+    match = re.fullmatch(r"/api/v1/strategy-packages/([^/]+)/selection-artifacts", parsed.path)
+    if match is None:
+        return "failed", "selection artifact probe path is invalid", {}
+    package_id = urllib.parse.unquote(match[1])
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    expected: dict[str, str] = {}
+    for field in ("artifact_id", "manifest_sha256", "runtime_config_hash", "trade_date", "data_source"):
+        values = query.get("expected_" + field, [])
+        if len(values) != 1 or not values[0].strip():
+            return "failed", f"selection artifact probe requires one non-empty expected_{field}", {}
+        expected[field] = values[0]
+    for field in ("manifest_sha256", "runtime_config_hash"):
+        if re.fullmatch(r"[0-9a-f]{64}", expected[field]) is None:
+            return "failed", f"selection artifact expected_{field} must be SHA-256", {}
+    try:
+        if datetime.strptime(expected["trade_date"], "%Y-%m-%d").date().isoformat() != expected["trade_date"]:
+            raise ValueError("non-canonical date")
+    except ValueError:
+        return "failed", "selection artifact expected_trade_date must be an ISO date", {}
+    if (not isinstance(payload, dict) or payload.get("ok") is not True or payload.get("success") is False
+            or payload.get("package_id") != package_id or payload.get("error") or payload.get("errors")):
+        return "failed", "selection artifact envelope must report ok=true and the requested package", {}
+    rows = payload.get("artifacts")
+    if not isinstance(rows, list) or not rows:
+        return "failed", "selection artifact readback must not be empty", {}
+    ids: set[str] = set()
+    for item in rows:
+        if (not isinstance(item, dict) or not isinstance(item.get("artifact_id"), str)
+                or not item["artifact_id"].strip() or item["artifact_id"] in ids
+                or item.get("package_id") != package_id or item.get("manifest_sha256") != expected["manifest_sha256"]):
+            return "failed", "selection artifact rows have duplicate or conflicting identities", {}
+        ids.add(item["artifact_id"])
+    matches = [row for row in rows if row["artifact_id"] == expected["artifact_id"]]
+    if len(matches) != 1 or any(matches[0].get(key) != value for key, value in expected.items()):
+        return "failed", "declared selection artifact identity is absent or mismatched", {}
+    row = matches[0]
+    facts = {"package_id": package_id, **expected, "status": row.get("status"),
+             "acceptance_scope": "native_artifact_header_preview_readback_only; BUG-specific behavior requires separate evidence"}
+    if row.get("status") != "SUCCEEDED" or "error_json" not in row or row["error_json"] is not None:
+        # A correctly read FAILED record is still failure, never business success.
+        error = row.get("error_json")
+        facts["error_code"] = error.get("error_code") if isinstance(error, dict) else None
+        return "failed", "selection artifact status/error_json does not prove successful native generation", facts
+    metadata = row.get("metadata")
+    if (not isinstance(metadata, dict) or metadata.get("authority_scope") != "authoritative_selection"
+            or metadata.get("source_type") not in ("live_qe_model_inference_v1", "live_multi_alpha_inference_v1")):
+        return "failed", "selection artifact must have native authoritative inference provenance, not diagnostic data", facts
+    count, universe, preview = row.get("score_count"), row.get("universe_count"), row.get("score_preview")
+    if (type(count) is not int or type(universe) is not int or not 0 <= count <= universe
+            or not isinstance(preview, list) or len(preview) != min(count, 10)):
+        return "failed", "selection artifact counts and score_preview are inconsistent", facts
+    symbols: set[str] = set()
+    for score in preview:
+        if (not isinstance(score, dict) or not isinstance(score.get("symbol"), str) or not score["symbol"].strip()
+                or score["symbol"] in symbols or type(score.get("score")) not in {int, float}
+                or abs(score["score"]) > sys.float_info.max or not math.isfinite(score["score"])):
+            return "failed", "selection artifact preview contains malformed/duplicate scores", facts
+        symbols.add(score["symbol"])
+    if row.get("top_score_symbol") != (preview[0]["symbol"] if preview else None):
+        return "failed", "selection artifact top symbol contradicts its preview", facts
+    version = row.get("artifact_contract_version")
+    hash_fields = ["artifact_sha256"]
+    if version == "selection_score_artifact_v2":
+        hash_fields += ["artifact_payload_sha256", "artifact_input_context_hash", "source_revision_set_hash", "asset_closure_hash"]
+        if (metadata.get("provider_semantics_id") != "strategy_package_live_inference_v2"
+                or not isinstance(metadata.get("provider_semantics_hash"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", metadata["provider_semantics_hash"]) is None):
+            return "failed", "selection artifact v2 provider identity is incomplete", facts
+        outcome = metadata.get("candidate_outcome")
+        if (outcome != ("CANDIDATES_PRESENT" if count else "VALID_NO_CANDIDATE")
+                or (not count and (universe <= 0 or metadata.get("empty_stage") != "alpha_raw"))):
+            return "failed", "selection artifact v2 candidate outcome contradicts native counts", facts
+    elif version is not None or count == 0:
+        return "failed", "unsupported artifact version or unproven empty legacy artifact", facts
+    if any(not isinstance(row.get(field), str) or re.fullmatch(r"[0-9a-f]{64}", row[field]) is None for field in hash_fields):
+        return "failed", "selection artifact persisted digest identity is incomplete", facts
+    # When GET returns every score, verify the score digest too. For >10 scores,
+    # never pretend that the truncated preview verifies the full ranking payload.
+    if count <= 10:
+        try:
+            encoded = json.dumps(preview, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()
+        except (TypeError, ValueError):
+            return "failed", "selection artifact preview is not canonical JSON", facts
+        if hashlib.sha256(encoded).hexdigest() != row["artifact_sha256"]:
+            return "failed", "selection artifact score digest mismatch", facts
+    if version is not None:
+        parity_hash = metadata.get("multi_alpha_parent_parity_hash")
+        if parity_hash is not None and (not isinstance(parity_hash, str) or re.fullmatch(r"[0-9a-f]{64}", parity_hash) is None):
+            return "failed", "selection artifact parent parity identity is malformed", facts
+        # Exact writer canonical_v2_header; full scores are intentionally not returned by GET.
+        header = {key: row.get(key) for key in (
+            "package_id", "manifest_sha256", "trade_date", "data_source", "runtime_config_hash", "artifact_sha256",
+            "score_count", "universe_count", "top_score_symbol", "status", "artifact_input_context_hash",
+            "source_revision_set_hash", "asset_closure_hash")}
+        header.update(schema_version=version)
+        header.update({key: metadata.get(key) for key in ("authority_scope", "candidate_outcome", "provider_semantics_id",
+                                                       "provider_semantics_hash", "multi_alpha_parent_parity_hash")})
+        digest = hashlib.sha256(json.dumps(header, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+        if row["artifact_payload_sha256"] != digest:
+            return "failed", "selection artifact v2 header digest mismatch", facts
+    return "passed", None, {**facts, "artifact_sha256": row["artifact_sha256"], "score_count": count, "universe_count": universe}
 
 
 def _validate_qe_dataset_profile(payload: Any) -> tuple[str, str | None, dict[str, Any]]:

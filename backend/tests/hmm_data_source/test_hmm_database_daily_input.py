@@ -15,6 +15,7 @@ from backend.services.hmm_data_source.daily_input import (
     QUOTE_COLUMNS,
     MONEYFLOW_COLUMNS,
     prepare_database_daily_inputs,
+    read_database_daily_inputs,
     read_database_daily_completion,
     snapshot_inference_origin,
 )
@@ -202,7 +203,7 @@ def input_facts(monkeypatch):
     calendar = [date(2026, 9, 1) + timedelta(days=i) for i in range(32)]
     origin = {"history_start": calendar[0].isoformat(), "origin_authority": "fixture"}
     rows = []
-    unavailable = {"801011.SI", "801019.SI", "801117.SI", "801207.SI", "801216.SI", "801961.SI", "801983.SI"}
+    unavailable = {"801019.SI", "801117.SI", "801207.SI", "801216.SI", "801961.SI", "801983.SI"}
     for code in codes:
         for i, day in enumerate(calendar):
             rows.append(
@@ -224,11 +225,20 @@ def input_facts(monkeypatch):
         "effective": date(2026, 10, 3),
         "calendar": calendar,
         "shared_code_to_id": {c: 1000 + i * 7 for i, c in enumerate(codes)},
+        "classification_rows": [
+            {"index_code": c, "src": "SW2021", "level": "L2", "is_pub": int(c not in unavailable)}
+            for c in codes
+        ],
         "membership_rows": [
             {"ts_code": f"{i:06d}.SZ", "l2_code": c, "in_date": calendar[0], "out_date": None}
             for i, c in enumerate(codes)
         ],
         "sector_rows": rows,
+        "official_quote_rows": [
+            {key: row[key] for key in ("sector_code", "trade_date", *QUOTE_COLUMNS)}
+            for row in rows
+            if row["sw2_pct_change"] is not None
+        ],
         "index_rows": [(d, 1000.0 + i) for i, d in enumerate(calendar)],
         "volume_rows": [(d, 1000.0) for d in calendar],
     }
@@ -237,7 +247,8 @@ def input_facts(monkeypatch):
 def test_database_adapter_preserves_sparse_shared_ids_and_finite_unpublished_moneyflow(input_facts):
     loaded = prepare_database_daily_inputs(**input_facts)
     assert len(loaded["ordered_sector_codes"]) == 131
-    assert len(loaded["coefficient_sector_codes"]) == 124
+    assert len(loaded["coefficient_sector_codes"]) == 125
+    assert "801011.SI" in loaded["coefficient_sector_codes"]
     day = input_facts["as_of"]
     assert loaded["sector_data"]["801019.SI"][day]["sw2_pct_change"] is None
     assert loaded["sector_data"]["801019.SI"][day]["sw2_mf_net_amt"] == 0.01
@@ -245,7 +256,165 @@ def test_database_adapter_preserves_sparse_shared_ids_and_finite_unpublished_mon
     reverse = deepcopy(input_facts)
     reverse["sector_rows"].reverse()
     reverse["membership_rows"].reverse()
+    reverse["official_quote_rows"].reverse()
+    reverse["classification_rows"].reverse()
     assert prepare_database_daily_inputs(**reverse)["input_identity"] == loaded["input_identity"]
+
+
+def test_authentic_historical_quote_context_does_not_enable_unpublished_coefficients(input_facts):
+    # Publication is explicit same-read catalog evidence, not an HMM stop date.
+    facts = deepcopy(input_facts)
+    next(r for r in facts["classification_rows"] if r["index_code"] == "801011.SI")["is_pub"] = 0
+    calendar = [date(2023, 1, 30) + timedelta(days=i) for i in range(32)]
+    remap = dict(zip(facts["calendar"], calendar))
+    facts.update(calendar=calendar, as_of=calendar[-1], effective=calendar[-1] + timedelta(days=1))
+    facts["origin"]["history_start"] = calendar[0].isoformat()
+    facts["completion"]["read_cutoff_at"] = f"{facts['effective']}T00:00:00+00:00"
+    for member in facts["membership_rows"]:
+        member["in_date"] = calendar[0]
+    for row in facts["sector_rows"]:
+        row["trade_date"] = remap[row["trade_date"]]
+        row.update(dict(zip(QUOTE_COLUMNS, (1.38, 8269.43, 32835.1393))))
+    facts["index_rows"] = [(remap[d], value) for d, value in facts["index_rows"]]
+    facts["volume_rows"] = [(remap[d], value) for d, value in facts["volume_rows"]]
+    facts["official_quote_rows"] = [
+        {key: row[key] for key in ("sector_code", "trade_date", *QUOTE_COLUMNS)} for row in facts["sector_rows"]
+    ]
+    loaded = prepare_database_daily_inputs(**facts)
+    assert loaded["sector_data"]["801011.SI"][calendar[0]]["sw2_pct_change"] == 1.38
+    assert "801011.SI" not in loaded["coefficient_sector_codes"]
+    assert "801011.SI" in loaded["quote_unavailable_sector_codes_by_date"][str(facts["as_of"])]
+    assert loaded["input_identity"]["official_quote_authority"] == "market.sw_daily"
+    # Positive historical facts are available on their own dates under the
+    # current shared policy, but cannot license the next effective date.
+    assert loaded["input_identity"]["excluded_coefficient_quote_context_cells"] == 0
+    changed = deepcopy(facts)
+    for source in (changed["sector_rows"], changed["official_quote_rows"]):
+        next(r for r in source if r["sector_code"] == "801011.SI")["sw2_pct_change"] += 0.01
+    revised = prepare_database_daily_inputs(**changed)
+    assert revised["coefficient_sector_codes"] == loaded["coefficient_sector_codes"]
+    assert revised["input_identity"]["input_sha256"] != loaded["input_identity"]["input_sha256"]
+
+
+@pytest.mark.parametrize("corruption", ["missing", "duplicate", "unknown_flag", "wrong_source"])
+def test_publication_catalog_corruption_fails_closed(input_facts, corruption):
+    facts = deepcopy(input_facts)
+    row = facts["classification_rows"][0]
+    if corruption == "missing":
+        facts["classification_rows"].remove(row)
+    elif corruption == "duplicate":
+        facts["classification_rows"].append(deepcopy(row))
+    elif corruption == "unknown_flag":
+        row["is_pub"] = None
+    else:
+        row["src"] = "SW2014"
+    with pytest.raises(RuntimeError, match="hmm_database_daily_input_unavailable:.*publication"):
+        prepare_database_daily_inputs(**facts)
+
+
+def test_publication_fact_is_identity_bound_and_never_extrapolates_nonpublished_quotes(input_facts):
+    first = prepare_database_daily_inputs(**input_facts)
+    facts = deepcopy(input_facts)
+    next(r for r in facts["classification_rows"] if r["index_code"] == "801783.SI")["is_pub"] = 0
+    second = prepare_database_daily_inputs(**facts)
+    assert "801783.SI" not in second["coefficient_sector_codes"]
+    assert second["sector_data"]["801783.SI"][facts["as_of"]]["sw2_vol"] is not None
+    assert second["input_identity"]["publication_catalog_sha256"] != first["input_identity"]["publication_catalog_sha256"]
+    assert second["input_identity"]["input_sha256"] != first["input_identity"]["input_sha256"]
+
+
+def test_database_reader_passes_publication_and_quotes_from_same_connection(input_facts, monkeypatch):
+    facts = input_facts
+    calls = []
+
+    class Connection:
+        def cursor(self):
+            return self
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def execute(self, query, parameters=None):
+            assert query.lstrip().startswith("SELECT")
+            self.query = query
+            calls.append((query, parameters))
+
+        def fetchall(self):
+            q = self.query
+            if "market.sw_index_classify" in q:
+                return [tuple(r[k] for k in ("index_code", "src", "level", "is_pub")) for r in facts["classification_rows"]]
+            if "market.trading_calendar" in q:
+                return [(d,) for d in facts["calendar"]]
+            if "SELECT ts_code,l2_code" in q:
+                return [tuple(r[k] for k in ("ts_code", "l2_code", "in_date", "out_date")) for r in facts["membership_rows"]]
+            if "market.index_daily" in q:
+                return facts["index_rows"]
+            if "SUM(vol)" in q:
+                return facts["volume_rows"]
+            if "SELECT ts_code,trade_date" in q:
+                return [tuple(r[k] for k in ("sector_code", "trade_date", *QUOTE_COLUMNS)) for r in facts["official_quote_rows"]]
+            assert "market.sector_data" in q
+            return [
+                (r["sector_code"], r["trade_date"], 1, 1, *[v for k in (*QUOTE_COLUMNS, *MONEYFLOW_COLUMNS) for v in (r[k], r[k], int(r[k] is not None))])
+                for r in facts["sector_rows"]
+            ]
+
+    connection = Connection()
+
+    def completion(conn, **kwargs):
+        assert conn is connection
+        return facts["as_of"], facts["completion"]
+
+    monkeypatch.setattr("backend.services.hmm_data_source.daily_input.read_database_daily_completion", completion)
+    monkeypatch.setattr("backend.services.industry_code_map.load_sw_l2_code_map", lambda conn: facts["shared_code_to_id"])
+    loaded, _ = read_database_daily_inputs(
+        connection, as_of=facts["as_of"], effective=facts["effective"], origin=facts["origin"], cutoff=facts["as_of"]
+    )
+    assert loaded["input_identity"] == prepare_database_daily_inputs(**facts)["input_identity"]
+    assert len([q for q, _ in calls if "market.sw_index_classify" in q]) == 1
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    ["missing", "mismatch", "duplicate", "future", "nonfinite", "partial", "negative", "missing_field", "unknown_code"],
+)
+def test_official_quote_authority_rejects_missing_or_corrupted_source(input_facts, corruption):
+    facts = deepcopy(input_facts)
+    row = next(r for r in facts["official_quote_rows"] if r["sector_code"] == "801783.SI")
+    if corruption == "missing":
+        facts["official_quote_rows"].remove(row)
+    elif corruption == "mismatch":
+        row["sw2_pct_change"] += 0.01
+    elif corruption == "duplicate":
+        facts["official_quote_rows"].append(deepcopy(row))
+    elif corruption == "future":
+        row["trade_date"] = facts["effective"]
+    elif corruption == "nonfinite":
+        row["sw2_pct_change"] = float("inf")
+    elif corruption == "partial":
+        row["sw2_vol"] = None
+    elif corruption == "negative":
+        row["sw2_vol"] = -1
+    elif corruption == "missing_field":
+        del row["sw2_vol"]
+    elif corruption == "unknown_code":
+        row["sector_code"] = "unknown"
+    with pytest.raises(RuntimeError, match="hmm_database_daily_input_unavailable:.*official"):
+        prepare_database_daily_inputs(**facts)
+
+
+def test_quote_source_identity_changes_even_when_coefficient_scope_does_not(input_facts):
+    first = prepare_database_daily_inputs(**input_facts)
+    changed = deepcopy(input_facts)
+    for source in (changed["sector_rows"], changed["official_quote_rows"]):
+        next(r for r in source if r["sector_code"] == "801783.SI")["sw2_pct_change"] += 0.01
+    second = prepare_database_daily_inputs(**changed)
+    assert second["coefficient_sector_codes"] == first["coefficient_sector_codes"]
+    assert second["input_identity"]["official_quote_sha256"] != first["input_identity"]["official_quote_sha256"]
+    assert second["input_identity"]["input_sha256"] != first["input_identity"]["input_sha256"]
 
 
 @pytest.mark.parametrize(
@@ -253,7 +422,7 @@ def test_database_adapter_preserves_sparse_shared_ids_and_finite_unpublished_mon
     [
         ("published_missing", "missing numeric input"),
         ("published_nonfinite", "non-finite numeric"),
-        ("unpublished_quote", "outside publication"),
+        ("unpublished_quote", "outside official source"),
         ("duplicate", "duplicate sector/date"),
         ("prefix_gap", "continuous inference prefix missing"),
         ("future", "outside the canonical prefix"),
@@ -442,7 +611,7 @@ def test_database_service_infers_publishes_and_recovers_registration_failure_wit
     assert registered[0]["coefficient_sha256"] == result["artifact_sha256"]
     assert registered[0]["source_mode"] == "database_daily" and "dataset_manifest_identity" not in registered[0]
     payload = json.loads(first)
-    assert len(payload["daily_coefficients"][plan["effective_trade_date"]]) == 124
+    assert len(payload["daily_coefficients"][plan["effective_trade_date"]]) == 125
     assert len(payload["stock_sector_map"]) == 131
 
 
