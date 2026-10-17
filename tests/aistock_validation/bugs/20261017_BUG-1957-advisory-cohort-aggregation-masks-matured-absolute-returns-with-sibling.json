@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1957",
-  "closed_at": null,
+  "closed_at": "2026-10-17T11:58:37.826367Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -93,8 +93,8 @@
   },
   "first_seen_at": "2026-10-17T10:21:01.572269Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "557491abf45c98c1beca1cc7188e6b9e7bb39c67",
+  "fixed_at": "2026-10-17T10:32:32Z",
   "github_issue_number": 6246,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6246",
   "last_seen_at": "2026-10-17T10:21:01.572269Z",
@@ -102,6 +102,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6249",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -126,9 +127,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/bug1957-post-restart-r1.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1957",
+      "business_smoke_semantic": {
+        "contract_id": "advisory_historical_operation_status_readback",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "cd9c20d0a8445c1c522038a67d9a1c13fc9c336e0975013a997fa01d2b98b212",
+      "expected_identity": "557491abf45c98c1beca1cc7188e6b9e7bb39c67",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T11:57:57.692913Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8a51f3c8520ab915dbe4a50320bc04750f5d593efbac633fc3aba020fd5bd79d",
+      "receipt_sha256": "9c8bb8c7ba521534806790f99af7b0cda78ef357b32f444f6a4d05fe96ca4c04",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "145108143f50f6bc685351f4b900df8d2aebce081dd3bc3116b87a9b1fdc5961",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -138,7 +162,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1957",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "64622bdc6e895798",
+    "recorded_at": "2026-10-17T10:33:16.013732Z",
+    "runtime_contract_digest": "cd9c20d0a8445c1c522038a67d9a1c13fc9c336e0975013a997fa01d2b98b212",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a8b2c05def6b9b719faaa1e204f02381662daa6e",
+    "source_merge_commit": "557491abf45c98c1beca1cc7188e6b9e7bb39c67",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6249",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "python -m pytest backend/tests/advisory_historical_range/test_r4_outcome_evaluator.py backend/tests/advisory_historical_range/test_r4_outcome_service.py backend/tests/advisory_historical_range/test_r4_summary_service.py -q -> 41 passed"
+    ],
+    "validation_evidence_digest": "64e88443b0b0843a77b82d72e8614d230972a0873096e5763d291af20c8de47b"
+  },
+  "status": "verified",
   "suspected_modules": [
     "advisory"
   ],
@@ -152,7 +198,10 @@
     "python -m pytest backend/tests/advisory_historical_range/test_r4_outcome_evaluator.py backend/tests/advisory_historical_range/test_r4_outcome_service.py backend/tests/advisory_historical_range/test_r4_summary_service.py -q -> 41 passed; Ruff and diff check passed; nox l0 passed.",
     "Review 1: reuse native map_historical_range_maturity, preserve complete frozen child denominator and arithmetic mean, propagate actual reasons, fail closed on non-bijective projection children. Review 2: mixed complete/pending result refresh dates use only incomplete projections consistently in both constructor and validator; fixed stored canonical decimal precision expectation in the test, not the financial formula.",
     "DESIGN-COMPLIANCE-001: (1) complete precise fix plus real native frozen-cohort smoke, not mock-only; (2) missing benchmark stays null/pending, missing/duplicate child is explicit conflict, no default or partial mean; (3) approved per-projection maturity restored without changing prices, costs, universe, PIT, policy or portfolio meaning; existing producer/correction identity is respected; (4) no new gate/approval or cross-module implementation. Backend restart is user-owned; source/CI, loading, persisted P2 and profitability are separate states.",
-    "Broader Advisory backend regression delegated to CI; no UI blocker, data backfill, QE/LocalSIM/shared-selection edits, model training, production replay or manual database writes."
+    "Broader Advisory backend regression delegated to CI; no UI blocker, data backfill, QE/LocalSIM/shared-selection edits, model training, production replay or manual database writes.",
+    "python -m nox -s l0 -> passed",
+    "python -m pytest backend/tests/advisory_historical_range/test_r4_outcome_evaluator.py backend/tests/advisory_historical_range/test_r4_outcome_service.py backend/tests/advisory_historical_range/test_r4_summary_service.py -q -> 41 passed",
+    "canonical post-restart-verify backend-main -> passed; loaded runtime 0f68d56f2259d1e67d81d92d1852c6efdfa6bae7 contains source merge 557491abf45c98c1beca1cc7188e6b9e7bb39c67"
   ],
   "verification_budget": {
     "budget": "standard",
