@@ -40,7 +40,7 @@ def _parser() -> argparse.ArgumentParser:
         if name == "run":
             command.add_argument("--activate", action="store_true")
             command.add_argument("--authorization-ref")
-    for name in ("status", "receipts", "resume", "cancel"):
+    for name in ("status", "receipts", "resume", "cancel", "bind-suspension"):
         command = commands.add_parser(name)
         command.add_argument("--operation-id", required=True)
     for name in ("activate", "rollback"):
@@ -291,11 +291,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             body=None,
             idempotency=None,
         )
-    elif args.command in {"resume", "cancel"}:
+    elif args.command in {"resume", "cancel", "bind-suspension"}:
+        endpoint = "suspension-authority" if args.command == "bind-suspension" else args.command
         result = _call(
             root=args.api_root,
             method="POST",
-            suffix=f"/{urllib.parse.quote(args.operation_id, safe='')}/{args.command}",
+            suffix=f"/{urllib.parse.quote(args.operation_id, safe='')}/{endpoint}",
             body={"schema_version": "dataset_release_command_request_v1"},
             idempotency=None,
         )

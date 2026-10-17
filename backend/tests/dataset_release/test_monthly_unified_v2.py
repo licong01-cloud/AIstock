@@ -290,7 +290,7 @@ def _request(*, key: str = "monthly-202609") -> MonthlyReleaseRequest:
     )
 
 
-@pytest.mark.parametrize("supplement_name", ["monthly_industry_history", "monthly_prev_close_repairs"])
+@pytest.mark.parametrize("supplement_name", ["monthly_industry_history", "monthly_prev_close_repairs", "monthly_suspension_authority"])
 @pytest.mark.parametrize("drift", [None, "base_plan", "binding", "source_receipt"])
 def test_history_supplement_keeps_sealed_source_across_producer_upgrade(tmp_path, drift, supplement_name):
     from backend.services.dataset_release.monthly_unified import _digest
@@ -393,8 +393,11 @@ def test_history_binding_uses_readonly_snapshot_and_never_changes_source(tmp_pat
 
 
 @pytest.mark.parametrize("sealed", [False, True])
-def test_prev_close_binding_retains_source_and_is_idempotent(tmp_path, monkeypatch, sealed):
+@pytest.mark.parametrize("kind", ["prev_close", "suspension"])
+def test_prev_close_binding_retains_source_and_is_idempotent(tmp_path, monkeypatch, sealed, kind):
     from backend.services.dataset_release import monthly_prev_close_repair as correction
+    if kind == "suspension":
+        from backend.services.dataset_release import monthly_suspension_repair as correction
     class SourcePipeline(Pipeline):
         def run_stage(self, **kwargs):
             value = dict(super().run_stage(**kwargs))
@@ -407,22 +410,43 @@ def test_prev_close_binding_retains_source_and_is_idempotent(tmp_path, monkeypat
     service.run(operation)
     before = service.store.read_checkpoint(operation, "SOURCE")
     calls = []
-    def capture(inputs, **kwargs):
+    def capture(inputs=None, **kwargs):
         calls.append(inputs)
         return {"schema_version": correction.SCHEMA, "facts": []}
-    monkeypatch.setattr(correction, "capture_approved_corrections", capture)
+    monkeypatch.setattr(correction, "capture_approved_corrections" if kind == "prev_close" else "capture_approved_authority", capture)
     cas = type("CAS", (), {"put_json": lambda self, value: type("Ref", (), {"as_dict": lambda self: {"sha256": HEX, "size": 1, "relative_path": "fact"}})()})()
+    def bind():
+        if kind == "suspension":
+            return service.bind_suspension_authority(operation, principal="operator:test", cas=cas)
+        return service.bind_prev_close_repairs(operation, inputs={"exact": True}, principal="operator:test", cas=cas)
     if not sealed:
         with pytest.raises(MonthlyReleaseConflict):
-            service.bind_prev_close_repairs(operation, inputs={"exact": True}, principal="operator:test", cas=cas)
+            bind()
         assert calls == []
         return
-    result = service.bind_prev_close_repairs(operation, inputs={"exact": True}, principal="operator:test", cas=cas)
+    result = bind()
     assert result["status"] == "BOUND" and len(calls) == 1
-    assert service.bind_prev_close_repairs(operation, inputs={"exact": True}, principal="operator:test", cas=cas) == result
+    assert bind() == result
     assert len(calls) == 1 and service.store.read_checkpoint(operation, "SOURCE") == before
-    with pytest.raises(MonthlyReleaseConflict, match="binding changed"):
-        service.bind_prev_close_repairs(operation, inputs={"exact": False}, principal="operator:test", cas=cas)
+    if kind == "prev_close":
+        with pytest.raises(MonthlyReleaseConflict, match="binding changed"):
+            service.bind_prev_close_repairs(operation, inputs={"exact": False}, principal="operator:test", cas=cas)
+    else:
+        plan = service.store.read_plan(operation)
+        assert plan[correction.BINDING]["database_write"] is False
+        assert plan[correction.BINDING]["activation_authorized"] is False
+        assert service.status(operation)["status"] == "FAILED"
+        path = service.store.operation_root(operation) / plan[correction.BINDING + "_ref"]["id"]
+        path.write_bytes(path.read_bytes() + b" ")
+        with pytest.raises(MonthlyReleaseConflict, match="binding changed"):
+            bind()
+        path.write_bytes(monthly_subject._canonical_payload(plan[correction.BINDING]))
+        # Real orchestration resume must adopt the unchanged sealed SOURCE,
+        # not merely prove that the binding endpoint returned BOUND.
+        service.resume(operation)
+        service.run(operation)
+        assert service.status(operation)["status"] == "READY_TO_ACTIVATE"
+        assert service.store.read_checkpoint(operation, "SOURCE") == before
 
 
 def _adoptable_successor(

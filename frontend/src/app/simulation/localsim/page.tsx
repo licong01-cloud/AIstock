@@ -3,9 +3,10 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { localSimApi } from "@/lib/simulation/localsim/api";
+import { useLocalSimReadback } from "@/lib/simulation/localsim/use-readback";
+import { chinaTime } from "@/lib/simulation/localsim/presentation";
+import { LocalSimReadbackStatus } from "./components/readback-status";
 import type {
-  LocalSimAccount,
-  LocalSimCutoverReadiness,
   LocalSimRuntimeProfile,
   LocalSimRuntimeProfileVersion,
   RuntimeProfileConfigRequest,
@@ -13,6 +14,7 @@ import type {
 import styles from "./localsim.module.css";
 
 const errorText = (value: unknown) => value instanceof Error ? value.message : String(value);
+const readAccounts = (signal: AbortSignal) => localSimApi.listAccounts({ limit: 100, signal });
 
 function chinaClock() {
   const parts = new Intl.DateTimeFormat("en-CA", {
@@ -32,8 +34,10 @@ function chinaClock() {
 }
 
 export default function LocalSimHomePage() {
-  const [readiness, setReadiness] = useState<LocalSimCutoverReadiness | null>(null);
-  const [accounts, setAccounts] = useState<LocalSimAccount[]>([]);
+  const readiness = useLocalSimReadback(localSimApi.readiness);
+  const scheduler = useLocalSimReadback(localSimApi.schedulerVerification);
+  const accountReadback = useLocalSimReadback(readAccounts);
+  const accounts = accountReadback.data?.items || [];
   const [packages, setPackages] = useState<Array<{ package_id: string; package_name?: string; package_status: string }>>([]);
   const [profiles, setProfiles] = useState<LocalSimRuntimeProfile[]>([]);
   const [versions, setVersions] = useState<LocalSimRuntimeProfileVersion[]>([]);
@@ -58,19 +62,15 @@ export default function LocalSimHomePage() {
   const [error, setError] = useState<string | null>(null);
 
   const selectedProfile = useMemo(() => profiles.find((item) => item.profile_id === profileId), [profiles, profileId]);
-  const ready = readiness?.ready === true;
+  const ready = readiness.data?.ready === true && !readiness.stale && !readiness.error;
 
   const load = useCallback(async () => {
     setError(null);
     try {
-      const [nextReadiness, nextAccounts, nextPackages, calendar] = await Promise.all([
-        localSimApi.readiness(),
-        localSimApi.listAccounts({ limit: 100 }),
+      const [nextPackages, calendar] = await Promise.all([
         localSimApi.listPackages(),
         localSimApi.tradingCalendarStatus(),
       ]);
-      setReadiness(nextReadiness);
-      setAccounts(nextAccounts.items);
       setPackages(nextPackages);
       const query = typeof window === "undefined" ? new URLSearchParams() : new URLSearchParams(window.location.search);
       const queryPackage = query.get("package_id") || "";
@@ -173,7 +173,7 @@ export default function LocalSimHomePage() {
         execution_policy_version_id: policyId,
         effective_from: effectiveFrom,
       });
-      setAccounts((await localSimApi.listAccounts({ limit: 100 })).items);
+      await Promise.all([accountReadback.refresh(), readiness.refresh()]);
     } catch (exc) { setError(errorText(exc)); } finally { setBusy(false); }
   }
 
@@ -183,9 +183,9 @@ export default function LocalSimHomePage() {
       <nav className={styles.nav}><Link href="/simulation/localsim/replays">历史回放</Link></nav>
     </header>
     {error && <div className={styles.error}>{error}</div>}
-    <div className={readiness?.ready ? styles.ready : styles.blocked}>
-      {readiness?.ready ? "切流前置条件已闭合，可以创建新 LocalSIM 账户。" : `切流尚未就绪：${readiness?.blockers?.join("；") || "正在读取"}`}
-    </div>
+    <LocalSimReadbackStatus readiness={readiness} scheduler={scheduler} onRefresh={() => {
+      void Promise.all([readiness.refresh(), scheduler.refresh(), accountReadback.refresh()]);
+    }} />
     <div className={styles.grid} style={{ marginTop: 18 }}>
       <section className={`${styles.card} ${styles.half}`}><h2>1. 选择策略包与配置档案</h2>
         <div className={styles.form}>
@@ -215,7 +215,10 @@ export default function LocalSimHomePage() {
         </div><div className={styles.actions}><button className={styles.button} disabled={!ready || busy || !profileVersionId || !policyId || !effectiveFrom} onClick={createAccount}>原子创建 LocalSIM</button></div>
       </section>
       <section className={styles.card}><h2>现有账户</h2>
-        <table className={styles.table}><thead><tr><th>账户</th><th>策略包</th><th>资金</th><th>状态</th><th>更新时间</th></tr></thead><tbody>{accounts.map((item) => <tr key={item.account_id}><td><Link href={`/simulation/localsim/accounts/${item.account_id}`}>{item.account_name}</Link><div className={`${styles.muted} ${styles.code}`}>{item.account_id}</div></td><td className={styles.code}>{item.package_id}</td><td>{item.initial_capital.toLocaleString()}</td><td><span className={styles.badge}>{item.status}</span></td><td>{new Date(item.updated_at).toLocaleString()}</td></tr>)}</tbody></table>
+        {accountReadback.error && <p role="alert" className={styles.error}>账户列表读取失败：{accountReadback.error}；下方为上次成功读取的记录。</p>}
+        {accountReadback.stale && <p className={styles.muted}>账户列表尚未获得最新核验，请刷新运行状态。</p>}
+        <p className={styles.muted}>列表最近读取：{chinaTime(accountReadback.updatedAt)}</p>
+        <table className={styles.table}><thead><tr><th>账户</th><th>策略包</th><th>初始资金</th><th>账户状态</th><th>更新时间</th></tr></thead><tbody>{accounts.map((item) => <tr key={item.account_id}><td><Link href={`/simulation/localsim/accounts/${item.account_id}`}>{item.account_name}</Link><div className={`${styles.muted} ${styles.code}`}>{item.account_id}</div></td><td className={styles.code}>{item.package_id}</td><td>{item.initial_capital.toLocaleString()}</td><td><span className={styles.badge}>{{ ACTIVE: "启用", PAUSED: "暂停", RETIRED: "退役" }[item.status] || item.status}</span></td><td>{chinaTime(item.updated_at)}</td></tr>)}</tbody></table>
       </section>
     </div>
   </main>;

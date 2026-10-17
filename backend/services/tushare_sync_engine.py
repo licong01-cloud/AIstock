@@ -188,6 +188,20 @@ def _stk_limit_publication_quality(
     }
 
 
+def _stk_limit_source_prices_valid(reference, upper, lower) -> bool:
+    """Validate raw source facts, not a consumer's executable-limit contract.
+
+    Tushare publishes a zero lower boundary on unlimited sessions (e.g. BJ IPO
+    day). Preserve that fact, never invent a positive lower limit. Consumers
+    retain their separate strict positive-limit / applicability checks.
+    """
+    if stk_limit_prices_valid({"pre_close": reference, "up_limit": upper, "down_limit": lower}):
+        return True
+    return (all(_is_finite_number(value) for value in (reference, upper, lower))
+            and float(reference) > 0 and float(upper) >= float(reference)
+            and float(lower) == 0)
+
+
 _logger = logging.getLogger(__name__)
 
 _DIVIDEND_ECONOMIC_COLUMNS = (
@@ -719,12 +733,17 @@ class TushareSyncEngine:
 
         values = []
         for r in rows:
+            if (spec.name == "stk_limit" and all(r.get(c) is not None for c in
+                    ("pre_close", "up_limit", "down_limit"))
+                    and not _stk_limit_source_prices_valid(r["pre_close"], r["up_limit"], r["down_limit"])):
+                raise ValueError("stk_limit.pre_close/up_limit/down_limit: invalid provider price relation")
             vals = []
             for c in col_names:
                 v = r.get(c)
                 if (spec.name in LATE_PUBLICATION_TAIL_DAYS and col_types[c] == "numeric"
                         and v is not None and (not _is_finite_number(v)
-                            or (spec.name == "stk_limit" and float(v) <= 0))):
+                            or (spec.name == "stk_limit" and
+                                (float(v) < 0 or (c != "down_limit" and float(v) == 0))))):
                     raise ValueError(f"{spec.name}.{c}: non-finite provider fact")
                 if v is not None and col_types[c] == "date":
                     v = _parse_ymd(v)
@@ -1336,10 +1355,14 @@ class TushareSyncEngine:
                 ORDER BY k.ts_code""", (trade_date,))
             rows = cur.fetchall()
         invalid = [code for code, reference, upper, lower in rows
-                   if not stk_limit_prices_valid({"pre_close": reference, "up_limit": upper, "down_limit": lower})]
+                   if not _stk_limit_source_prices_valid(reference, upper, lower)]
         receipt = {"schema_version": "stk_limit_traded_readback_v1", "scope": "requested_date_only",
                    "trade_date": trade_date.isoformat(), "required_traded_equity_count": len(rows),
-                   "invalid_count": len(invalid), "invalid_sample": invalid[:10]}
+                   "invalid_count": len(invalid), "invalid_sample": invalid[:10],
+                   "source_zero_lower_bound_count": sum(
+                       _is_finite_number(lower) and float(lower) == 0
+                       and _stk_limit_source_prices_valid(reference, upper, lower)
+                       for _, reference, upper, lower in rows)}
         quality = {"quality_status": "ok"} if not invalid else {
             "quality_status": "low_coverage", "failure_category": "traded_equity_limit_fact_incomplete"}
         return receipt, quality

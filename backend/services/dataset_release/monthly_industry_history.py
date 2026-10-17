@@ -24,6 +24,7 @@ from .shared_sector_context import validate_release_sw_l2_code_map
 
 SCHEMA = "aistock_release_versioned_sw_l2_history_v1"
 BOUNDARY = date(2021, 7, 30)
+STATIC_SECTOR_CONTRACT = "frozen_sector_exact_date_static_v1"
 ROW_FIELDS = ("canonical_symbol", "taxonomy_version", "published_l2_code", "effective_from",
               "effective_to", "known_from", "knowledge_time_quality", "source_sha256", "source_row_sha256")
 
@@ -210,6 +211,116 @@ def _history_scratch_paths(root: Path, projection_sha: str, context_sha: str | N
             root.parent / f".{root.name}.industry-history-{projection_sha}{suffix}")
 
 
+def _align_sector_tail(frame: pd.DataFrame, facts: pd.DataFrame, *, after: str) -> pd.DataFrame:
+    """Exact-date industry facts outside an explicitly rebuilt history window.
+
+    A stock's previous quote, cash flow or classification is never evidence
+    for a new date. An absent source row retains explicit NA, without an
+    invented assignment. Historical rows and non-sector columns are untouched.
+    """
+    selected = frame.index.get_level_values("datetime") > pd.Timestamp(after)
+    if not selected.any():
+        return frame
+    columns = [name for name in frame if name == "l2_code_id" or name.startswith("sw2_")]
+    if facts.index.has_duplicates or set(columns).difference(facts):
+        raise SourceManifestError("exact-date sector source keys or fields differ")
+    actual = frame.copy()
+    aligned = facts[columns].reindex(frame.index[selected])
+    for name in columns:
+        values = aligned[name]
+        if name == "l2_code_id":
+            values = values.fillna(-1)
+        if np.isinf(values.to_numpy(dtype=float)).any():
+            raise SourceManifestError("exact-date sector source is infinite")
+        actual.loc[selected, name] = values.to_numpy().astype(frame[name].dtype)
+    return actual
+
+
+def _materialize_static_tail(root: Path, *, projection: IndustryHistoryProjection,
+                             context_identity: Mapping[str, Any], after: str,
+                             max_rows=100_000, checkpoint=lambda: None,
+                             progress=lambda _value: None):
+    """Correct a completed old writer's static tail; never rewrite sector/prices."""
+    import json
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from .monthly_build_resume import _plain, _signature
+    from .monthly_file_identity import file_sha256
+
+    if not 0 < max_rows <= 100_000:
+        raise SourceManifestError("static sector repair row bound differs")
+    factor = root / "factor_bundle"
+    _plain(root)
+    if (root / "qe_dataset_manifest.json").exists():
+        raise SourceManifestError("static sector repair cannot change a published candidate")
+    inputs = {name: _signature(factor / name) for name in ("sector_data.h5", "static_factors.parquet")}
+    context_sha = hashlib.sha256(canonical_json_bytes(context_identity)).hexdigest()
+    scratch = _history_scratch_paths(root, projection.sha256, context_sha)[0]
+    _plain(scratch)
+    receipt = scratch / "projection_receipt.json"
+    target = scratch / "static_factors.parquet"
+    if scratch.exists():
+        _plain(receipt)
+        if not receipt.is_file() or receipt.stat().st_size > 1024 * 1024:
+            raise SourceManifestError("incomplete static sector output retained")
+        result = json.loads(receipt.read_bytes())
+        if (result.get("context_identity") != dict(context_identity)
+                or result.get("input_signatures") != inputs
+                or result.get("static_sector_join_contract") != STATIC_SECTOR_CONTRACT
+                or result.get("files", {}).get("static_factors.parquet", {}).get("target_signature") != _signature(target)):
+            raise SourceManifestError("retained static sector output identity differs")
+        return result
+    scratch.mkdir(exist_ok=False)
+    changed_cells = aligned_rows = 0
+    with pd.HDFStore(factor / "sector_data.h5", "r") as sector, pq.ParquetFile(factor / "static_factors.parquet") as source:
+        with pq.ParquetWriter(target, source.schema_arrow) as writer:
+            for batch in source.iter_batches(batch_size=max_rows):
+                checkpoint()
+                frame = pa.Table.from_batches([batch]).to_pandas()
+                days = frame.index.get_level_values("datetime")
+                selected = days > pd.Timestamp(after)
+                actual = frame
+                if selected.any():
+                    columns = [name for name in frame if name == "l2_code_id" or name.startswith("sw2_")]
+                    left, right = str(days[selected].min().date()), str(days[selected].max().date())
+                    facts = sector.select("data", where=[f"datetime >= {left!r}", f"datetime <= {right!r}"], columns=columns)
+                    actual = _align_sector_tail(frame, facts, after=after)
+                    before, updated = frame[columns], actual[columns]
+                    changed_cells += int((~(before.eq(updated) | (before.isna() & updated.isna()))).to_numpy().sum())
+                    aligned_rows += int(selected.sum())
+                    unrelated = [name for name in frame if name not in columns]
+                    pd.testing.assert_frame_equal(frame[unrelated], actual[unrelated], check_exact=True)
+                writer.write_table(pa.Table.from_pandas(actual, schema=source.schema_arrow, preserve_index=True))
+                progress({"phase": "SECTOR_STATIC_EXACT_DATE_REPAIR", "dataset": "static_factors",
+                          "rows_validated": aligned_rows, "rows_sealed": changed_cells})
+    if any(_signature(factor / name) != value for name, value in inputs.items()):
+        raise SourceManifestError("static sector repair input changed")
+    # Read the affected month back through the real Parquet reader. This is
+    # not a historical business audit or a price re-export.
+    with pq.ParquetFile(target) as verified:
+        columns = [name for name in verified.schema_arrow.names if name == "l2_code_id" or name.startswith("sw2_")]
+    check = pq.read_table(target, columns=["datetime", "instrument", *columns],
+                          filters=[("datetime", ">", pd.Timestamp(after))]).to_pandas()
+    if not check.empty:
+        left = str(check.index.get_level_values("datetime").min().date())
+        right = str(check.index.get_level_values("datetime").max().date())
+        with pd.HDFStore(factor / "sector_data.h5", "r") as sector:
+            facts = sector.select("data", where=[f"datetime >= {left!r}", f"datetime <= {right!r}"], columns=columns)
+        pd.testing.assert_frame_equal(check, _align_sector_tail(check, facts, after=after), check_exact=True)
+    if any(_signature(factor / name) != value for name, value in inputs.items()):
+        raise SourceManifestError("static sector repair input changed during readback")
+    result = {"static_sector_join_contract": STATIC_SECTOR_CONTRACT,
+              "context_identity": dict(context_identity), "input_signatures": inputs,
+              "after": after, "aligned_rows": aligned_rows, "changed_cells": changed_cells,
+              "files": {"static_factors.parquet": {
+                  "sha256": file_sha256(target), "size": target.stat().st_size,
+                  "target_signature": _signature(target), "original_signature": inputs["static_factors.parquet"],
+                  "context_sha256": context_sha, "scratch_relative_path": target.relative_to(root.parent).as_posix()}}}
+    with receipt.open("xb") as writer:
+        writer.write(canonical_json_bytes(result) + b"\n")
+    return result
+
+
 def materialize_history_files(root: Path, projection: IndustryHistoryProjection, *, max_rows=100_000,
                               checkpoint=lambda: None, progress=lambda _value: None,
                               context_rebuilder=None, context_identity=None):
@@ -282,13 +393,13 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
         Never cross a date or taxonomy boundary. Missing facts remain NA.
         """
         if context_rebuilder is not None:
-            return context_rebuilder(frame)
+            return _align_sector_tail(context_rebuilder(frame), original, after=projection.payload["end_date"])
         if any(name.startswith("sw2_mf_") for name in frame):
             raise SourceManifestError("industry membership repair requires frozen PIT-cohort moneyflow and official quotes")
         actual = projection.project(frame)
         columns = [name for name in frame if name.startswith("sw2_")]
         if not columns:
-            return actual
+            return _align_sector_tail(actual, original, after=projection.payload["end_date"])
         facts = original.reset_index()[["datetime", "l2_code_id", *columns]].drop_duplicates()
         if facts.duplicated(["datetime", "l2_code_id"]).any():
             raise SourceManifestError("frozen industry reference facts disagree for the same date/code")
@@ -299,7 +410,7 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
         resolved = lookup.reindex(keys)
         for column in columns:
             actual.loc[selected, column] = resolved[column].to_numpy().astype(frame[column].dtype)
-        return actual
+        return _align_sector_tail(actual, original, after=projection.payload["end_date"])
     try:
         with pd.HDFStore(factor / "sector_data.h5", "r") as old, pd.HDFStore(factor / "daily_pv.h5", "r") as price, pd.HDFStore(sector_target, "w") as new:
             template = old.select("data", start=0, stop=1)
@@ -381,6 +492,7 @@ def materialize_history_files(root: Path, projection: IndustryHistoryProjection,
                 "sector_row_count": total, **counts, "database_write": False, "price_components_exported": False,
                 "unrelated_static_columns_unchanged": True, "published_candidate_write": False,
                 "context_identity": context_identity,
+                "static_sector_join_contract": STATIC_SECTOR_CONTRACT,
                 "industry_context_contract": None if context_identity is None else context_identity["contract"],
                 "input_signatures": {name: list(signature) for name, signature in originals.items()}}
         with (scratch / "projection_receipt.json").open("xb") as writer:
@@ -418,7 +530,7 @@ def recover_history_commit(*, root: Path, journal: Path, record: Mapping[str, An
     if proposed["binding"] != record["binding"] or proposed["binding_digest"] != record["binding_digest"]:
         raise MonthlyBuildResumeError("industry commit cannot replace the original data binding")
     files = value["files"]
-    if set(files) != {"sector_data.h5", "static_factors.parquet"}:
+    if set(files) not in ({"sector_data.h5", "static_factors.parquet"}, {"static_factors.parquet"}):
         raise MonthlyBuildResumeError("industry commit would change an unrelated component")
     changed = {f"factor_bundle/{name}" for name in files}
     completion_ref = proposed["steps"].get("industry-history")
@@ -503,7 +615,7 @@ def factor_file_receipts(receipt: Mapping[str, Any]) -> dict[str, Mapping[str, A
 def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
     """Amend factor receipts only; completed day/minute/index remain untouched."""
     import copy
-    from .monthly_build_resume import _atomic, MonthlyBuildResumeError, load_sealed_build_json
+    from .monthly_build_resume import MonthlyBuildResumeError, load_sealed_build_json
     from .monthly_industry_facts import CONTRACT, FrozenIndustryContext, load_frozen_industry_quote_source, predecessor_context_matches
 
     projection = load_frozen_history(cas, context_plan=context.plan, build_inputs=compiled.physical_plan.get("build_inputs", {}))
@@ -520,7 +632,28 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
                 expected = hashlib.sha256(canonical_json_bytes(source)).hexdigest()
                 if prior.get("context_identity", {}).get("quote_source_sha256") != expected:
                     raise MonthlyBuildResumeError("retained industry context differs from frozen quote source")
-            return prepare
+            if prior.get("static_sector_join_contract") == STATIC_SECTOR_CONTRACT:
+                return prepare
+            # Upgrade the old writer's month only. Retain the already verified
+            # historical projection, sector H5, source snapshot and price bins.
+            nested = copy.deepcopy(load_sealed_build_json(cas, prepare["prepare_receipt_ref"]))
+            factor = copy.deepcopy(load_sealed_build_json(cas, nested["refs"]["factor_receipt"]))
+            entries = factor_file_receipts(factor)
+            from .monthly_build_resume import _signature
+            for name in ("sector_data.h5", "static_factors.parquet"):
+                if entries[name].get("target_signature") != _signature(resume.root / "factor_bundle" / name):
+                    raise MonthlyBuildResumeError("static sector repair lost its pinned inputs")
+            cutoff = date.fromisoformat(context.plan["target_cutoff"])
+            after = (cutoff.replace(day=1) - date.resolution).isoformat()
+            identity = {"contract": STATIC_SECTOR_CONTRACT, "after": after,
+                        "sector_sha256": entries["sector_data.h5"]["sha256"],
+                        "static_sha256": entries["static_factors.parquet"]["sha256"]}
+            tail = _materialize_static_tail(resume.root, projection=projection, context_identity=identity,
+                after=after, checkpoint=context.checkpoint, progress=context.progress)
+            result = {**prior, "files": tail["files"], "static_sector_join_contract": STATIC_SECTOR_CONTRACT,
+                      "static_sector_tail": {key: value for key, value in tail.items() if key != "files"}}
+            return _commit_history_result(resume, result=result, projection=projection, nested=nested,
+                                          factor=factor, entries=entries, prepare=prepare, cas=cas)
         # An earlier verified ID-only repair is retained as an input. Replace
         # only sector/static context under new pins, never re-export prices.
     if resume.path is None:
@@ -557,7 +690,8 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
                     "status": "PASS", "projection": projection.payload, "projection_sha256": projection.sha256,
                     "historical_projection_reused": True, "predecessor_history_file_sha256": pin["sha256"],
                     "sector_row_count": sector_entry["inherited_rows"] + sector_entry["month_rows"],
-                    "database_write": False, "classification_cells_changed": 0, "industry_context_contract": CONTRACT})
+                    "database_write": False, "classification_cells_changed": 0, "industry_context_contract": CONTRACT,
+                    "static_sector_join_contract": STATIC_SECTOR_CONTRACT})
                 factor["industry_history_projection_ref"] = proof_ref.as_dict()
                 nested["refs"]["factor_receipt"] = cas.put_json(factor).as_dict()
                 prepared = {**prepare, "prepare_receipt_ref": cas.put_json(nested).as_dict()}
@@ -585,6 +719,21 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
         moneyflow_path=moneyflow, pit=frozen.pit_snapshot, identity=identity)
     result = materialize_history_files(resume.root, projection, checkpoint=context.checkpoint, progress=context.progress,
                                        context_rebuilder=rebuilder.remap, context_identity=context_identity)
+    prepared = _commit_history_result(resume, result=result, projection=projection, nested=nested,
+                                      factor=factor, entries=entries, prepare=prepare, cas=cas)
+    # An older worker may have sealed, but not committed, its private history
+    # output. Adopt it first, then upgrade its month in this same invocation.
+    if result.get("static_sector_join_contract") != STATIC_SECTOR_CONTRACT:
+        return apply_retained_history(resume, context=context, compiled=compiled,
+                                      prepare=prepared, cas=cas, profile=profile)
+    return prepared
+
+
+def _commit_history_result(resume, *, result, projection, nested, factor, entries, prepare, cas):
+    """Use the existing crash-safe factor transaction for one or both outputs."""
+    import copy
+    from .monthly_build_resume import _atomic, MonthlyBuildResumeError
+
     proof_ref = cas.put_json(result)
     for name, entry in entries.items():
         if name not in result["files"]:

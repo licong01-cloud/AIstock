@@ -8,6 +8,8 @@ writes ordinary Selection, Advisory, Paper, simulation, QE, or QMT tables.
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from collections import OrderedDict
+from pathlib import Path
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -279,7 +281,8 @@ class PostgresHistoricalRangeRepository:
             raise ValueError("artifact_store is required")
         self._conn_factory = conn_factory
         self._artifact_store = artifact_store
-        self._validated_upstream_closures: set[tuple[str, str, str | None, str | None, str | None]] = set()
+        self._validated_upstream_closures: OrderedDict[tuple, tuple] = OrderedDict()
+        self._outcome_subject_identities: OrderedDict[tuple[str, str, str], tuple[str, str, str | None]] = OrderedDict()
 
     def create_planning_batch(
         self,
@@ -3688,6 +3691,7 @@ class PostgresHistoricalRangeRepository:
         finished_at: datetime | None = None,
         attempt: HistoricalRangeOperationAttemptV1 | None = None,
         expired_attempt: HistoricalRangeOperationAttemptV1 | None = None,
+        finalize_lease: Callable[[], Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
         resolved_request_hash = self._get_operation_artifact_identity(operation_id)
         operation_type = self._get_operation_type(operation_id)
@@ -3713,6 +3717,15 @@ class PostgresHistoricalRangeRepository:
             )
         elif result_ref is not None:
             raise ValueError("operation status cannot publish result_ref")
+        if finalize_lease is not None:
+            # Expensive immutable-artifact validation runs while the parent
+            # heartbeat is still renewing. Stop/join only at the CAS boundary.
+            claim = finalize_lease()
+            if (str(claim["operation_id"]) != operation_id or int(claim["attempt_no"]) != attempt_no
+                    or int(claim["fencing_token"]) != fencing_token or attempt is None
+                    or claim.get("worker_id") != attempt.worker_id or claim.get("lease_token") != attempt.lease_token):
+                raise ValueError("operation finalization claim identity differs")
+            expected_row_version = int(claim["row_version"])
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 current = self._lock_row(
@@ -5188,6 +5201,11 @@ class PostgresHistoricalRangeRepository:
         subject_id: str,
         subject_ref: HistoricalRangeArtifactRefV1,
     ) -> tuple[str, str, str | None]:
+        cache_key = (subject_type, subject_id, canonical_json_sha256(subject_ref.model_dump(mode="json")))
+        cached = self._outcome_subject_identities.get(cache_key)
+        if cached is not None:
+            self._outcome_subject_identities.move_to_end(cache_key)
+            return cached
         relation = {
             "CANDIDATE": (
                 "app.advisory_historical_range_candidate AS subject "
@@ -5252,11 +5270,15 @@ class PostgresHistoricalRangeRepository:
                 subject_id=subject_id,
             )
         row = rows[0]
-        return (
+        result = (
             str(row["range_run_id"]),
             str(row["request_payload_sha256"]),
             (str(row["day_run_id"]) if row["day_run_id"] is not None else None),
         )
+        self._outcome_subject_identities[cache_key] = result
+        if len(self._outcome_subject_identities) > 4096:
+            self._outcome_subject_identities.popitem(last=False)
+        return result
 
     def _validate_day_attempt_artifacts(
         self,
@@ -5395,6 +5417,7 @@ class PostgresHistoricalRangeRepository:
                             ),
                         ),
                     )
+                self._assert_upstream_snapshot_unchanged()
             elif operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE or (
                 operation_type is HistoricalRangeOperationType.BUILD_DATASET_BRIDGE_RUN
             ):
@@ -5459,6 +5482,7 @@ class PostgresHistoricalRangeRepository:
         resolved_request_hash: str,
         operation_type: HistoricalRangeOperationType,
     ) -> None:
+        self._assert_upstream_snapshot_unchanged()
         if ref.artifact_kind is not self._operation_receipt_kind(operation_type):
             raise ValueError("operation result receipt kind differs from operation type")
         envelope = self._artifact_store.load(ref)
@@ -5471,6 +5495,7 @@ class PostgresHistoricalRangeRepository:
             day_run_id=None,
             visited={ref.semantic_content_hash},
         )
+        self._assert_upstream_snapshot_unchanged()
 
     @staticmethod
     def _operation_receipt_kind(operation_type: HistoricalRangeOperationType) -> HistoricalRangeArtifactKind:
@@ -6446,15 +6471,22 @@ class PostgresHistoricalRangeRepository:
                 typed_predecessor_day_run_id = str(predecessor.day_run_id)
         for upstream_ref in envelope.upstream_refs:
             closure_key = (
-                upstream_ref.semantic_content_hash,
+                canonical_json_sha256(upstream_ref.model_dump(mode="json")),
                 resolved_request_hash,
                 range_run_id,
                 day_run_id,
                 allow_direct_predecessor_day_run_id,
             )
-            if closure_key in self._validated_upstream_closures:
+            stamp = self._upstream_file_stamp(upstream_ref)
+            cached_stamp = self._validated_upstream_closures.get(closure_key)
+            if cached_stamp is not None:
+                if cached_stamp != stamp:
+                    raise ValueError("sealed upstream artifact changed after closure verification")
+                self._validated_upstream_closures.move_to_end(closure_key)
                 continue
             upstream = self._artifact_store.load(upstream_ref)
+            if self._upstream_file_stamp(upstream_ref) != stamp:
+                raise ValueError("sealed upstream artifact changed during closure verification")
             if upstream.resolved_request_hash != resolved_request_hash:
                 raise ValueError("upstream artifact resolved_request_hash differs from its consumer")
             if range_run_id is not None and upstream.range_run_id not in {None, range_run_id}:
@@ -6465,6 +6497,11 @@ class PostgresHistoricalRangeRepository:
             if day_run_id is not None and upstream.day_run_id not in allowed_day_ids:
                 raise ValueError("upstream artifact belongs to a different day run")
             if upstream_ref.semantic_content_hash in visited:
+                # This node was already traversed in another day context. Its
+                # new incoming edge has now passed every request/range/day
+                # check above. Remember it too, rather than reloading a ~30MB
+                # candidate for every outcome in the final receipt.
+                self._remember_upstream_closure(closure_key, stamp)
                 continue
             visited.add(upstream_ref.semantic_content_hash)
             next_day_run_id = day_run_id
@@ -6509,7 +6546,30 @@ class PostgresHistoricalRangeRepository:
                 visited=visited,
                 allow_direct_predecessor_day_run_id=next_predecessor_day_run_id,
             )
-            self._validated_upstream_closures.add(closure_key)
+            self._remember_upstream_closure(closure_key, stamp)
+
+    def _upstream_file_stamp(self, ref: HistoricalRangeArtifactRefV1) -> tuple:
+        path = (self._artifact_store.root / ref.relative_path).resolve(strict=True)
+        if not path.is_relative_to(self._artifact_store.root):
+            raise ValueError("upstream artifact escapes its registered root")
+        stat = path.stat()
+        return (str(path), stat.st_size, stat.st_mtime_ns, stat.st_ino)
+
+    def _remember_upstream_closure(self, key: tuple, stamp: tuple) -> None:
+        self._validated_upstream_closures[key] = stamp
+        while len(self._validated_upstream_closures) > 65_536:
+            self._validated_upstream_closures.popitem(last=False)
+
+    def _assert_upstream_snapshot_unchanged(self) -> None:
+        # Scan small fingerprints, not giant payloads, once at finalization.
+        # A cached parent must not conceal a changed descendant. Do not do
+        # this O(V) scan on every one of the O(V) financial fact appends.
+        for stamp in set(self._validated_upstream_closures.values()):
+            path = Path(stamp[0])
+            stat = path.stat()
+            observed = (str(path.resolve(strict=True)), stat.st_size, stat.st_mtime_ns, stat.st_ino)
+            if observed != stamp:
+                raise ValueError("sealed upstream snapshot changed before finalization")
 
     @staticmethod
     def _require_exact_upstream_refs(

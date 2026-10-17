@@ -48,17 +48,26 @@ from .shared_sector_context import (
     validate_market_context_frame,
     validate_membership_frame,
 )
-from .sw_l2_quote_policy import build_quote_availability_payload
+from .sw_l2_quote_policy import build_quote_availability_payload, publication_quote_observations
 from .monthly_worker import ProducerContext
 
 
 PRIVATE_SHARED_DOMAIN_SCHEMA = "aistock_monthly_private_shared_domain_v1"
+_QUOTE_FIELDS = ("sw2_pct_change", "sw2_vol", "sw2_amount")
 _GATES = {
     "stock_pools": frozenset({"calendar_lifecycle", "pit_stock_pools"}),
     "benchmark": frozenset({"calendar_lifecycle", "daily_price", "adj_factor_history"}),
     "suspend": frozenset({"calendar_lifecycle", "suspend_limit"}),
     "sector_context": frozenset({"calendar_lifecycle", "pit_stock_pools", "sector_authority"}),
 }
+
+
+def _sector_quote_error(message, *, reason, row, day, code, fields):
+    # Formatting belongs to the failing row only, not every row of a large H5.
+    return ComponentPreparationError(
+        f"{message}: {reason} instrument={row.instrument} trade_date={day.isoformat()} "
+        f"canonical_l2_code={code} l2_code_id={int(row.l2_code_id)} fields={fields}"
+    )
 
 
 def shared_preparation_identity(
@@ -408,8 +417,12 @@ def _sector_context_files(
         authority_sha256=authority,
     )
     code_map = validate_release_sw_l2_code_map(code_payload)
+    publication_evidence = {}
     quote_payload = build_quote_availability_payload(
-        code_map=code_map, required_start=start, cutoff=snapshot.official_cutoff
+        code_map=code_map, required_start=start, cutoff=snapshot.official_cutoff,
+        classification_rows=classify,
+        quote_observations=publication_quote_observations(root / "facts" / "sector_data.h5", chunk_rows=bound),
+        evidence=publication_evidence,
     )
     quote = validate_sector_quote_availability(quote_payload, code_map=code_map, required_end=snapshot.official_cutoff)
     membership, market, counts = summarize_sector_context(
@@ -425,7 +438,7 @@ def _sector_context_files(
     return [
         "facts/sector_data.h5", "sector_code_map.json", "sector_quote_availability.json",
         "sector_membership_spans.parquet", "market_context.parquet",
-    ], {"sector_facts": facts, **counts}
+    ], {"sector_facts": facts, "publication_evidence": publication_evidence, **counts}
 
 
 def summarize_sector_context(
@@ -483,19 +496,33 @@ def summarize_sector_context(
                 if sector_id not in code_map.id_to_code:
                     raise ComponentPreparationError("private sector has an unknown code ID")
                 used_ids.add(sector_id)
+                code = code_map.id_to_code[sector_id]
                 triple = (row.sw2_pct_change, row.sw2_vol, row.sw2_amount)
                 if np.isinf(triple).any():
-                    raise ComponentPreparationError("sector quote is infinite")
+                    fields = [name for name, value in zip(_QUOTE_FIELDS, triple) if np.isinf(value)]
+                    raise _sector_quote_error(
+                        "sector quote is infinite", reason="SW_L2_QUOTE_NONFINITE",
+                        row=row, day=day, code=code, fields=fields,
+                    )
                 normalized_quote = tuple(None if pd.isna(value) else float(value) for value in triple)
                 if quotes.setdefault(sector_id, normalized_quote) != normalized_quote:
                     raise ComponentPreparationError("private sector quote fields conflict")
                 if day >= start:
-                    code = code_map.id_to_code[sector_id]
                     available = any(left <= day <= right for left, right in quote.entries[code])
                     if available and not np.isfinite(triple).all():
-                        raise ComponentPreparationError("private quote-available stock row lacks facts")
+                        fields = [name for name, value in zip(_QUOTE_FIELDS, triple) if not np.isfinite(value)]
+                        raise _sector_quote_error(
+                            "private quote-available stock row lacks facts: "
+                            "publication expectation is not proof of a frozen quote fact",
+                            reason="SW_L2_QUOTE_FACTS_MISSING", row=row, day=day, code=code, fields=fields,
+                        )
                     if not available and not pd.isna(list(triple)).all():
-                        raise ComponentPreparationError("private stopped sector has unexpected quote facts")
+                        fields = [name for name, value in zip(_QUOTE_FIELDS, triple) if not pd.isna(value)]
+                        raise _sector_quote_error(
+                            "private stopped sector has unexpected quote facts: "
+                            "historical observations do not authorize extending publication spans",
+                            reason="SW_L2_QUOTE_OUTSIDE_AUTHORITY", row=row, day=day, code=code, fields=fields,
+                        )
                 if np.isfinite(row.sw2_vol):
                     prior = volumes.setdefault(sector_id, float(row.sw2_vol))
                     if prior != float(row.sw2_vol) or prior < 0:

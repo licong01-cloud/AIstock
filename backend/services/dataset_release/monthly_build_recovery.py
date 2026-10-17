@@ -15,8 +15,8 @@ from pathlib import Path
 from .canonical import digest_named_fields
 from .monthly_build_resume import _plain, _read_record, _signature
 from .monthly_unified import MonthlyOperationStore, _digest, _exclusive_lock, _file_sha256 as _sha, _write_exclusive
-from .shared_sector_context import validate_release_sw_l2_code_map
-from .sw_l2_quote_policy import build_quote_availability_payload, quote_publication_policy_identity
+from .shared_sector_context import validate_release_sw_l2_code_map, validate_sector_quote_availability
+from .sw_l2_quote_policy import quote_publication_policy_identity
 
 LEGACY_POLICY_ID = "958c6438d6ec320b301e7272a94f6635293391dd04ed6dc5801a32421631e7f9"
 
@@ -143,12 +143,13 @@ def recover_unpublished_quote_policy(*, store, operation_id, cas, active_profile
         starts = [span["start_date"] for row in old["entries"] for span in row["availability_spans"]]
         _require(bool(starts), "quote authority has no publication window")
         start = min(starts)
-        proposed = build_quote_availability_payload(code_map=mapping, required_start=date.fromisoformat(start),
-                                                    cutoff=date.fromisoformat(plan["target_cutoff"]))
+        validate_sector_quote_availability(old, code_map=mapping, required_end=date.fromisoformat(plan["target_cutoff"]))
         before = {r["canonical_l2_code"]: r["availability_spans"] for r in old["entries"]}
-        after = {r["canonical_l2_code"]: r["availability_spans"] for r in proposed["entries"]}
-        _require(set(before) == set(after) and [code for code in before if before[code] != after[code]] == ["801011.SI"]
-                 and before["801011.SI"] == [], "publication correction exceeds BUG-1935 scope")
+        # This tool only invalidates unpublished packaging, never compiles its
+        # replacement availability. The ordinary builder now binds the full
+        # frozen catalog and dated facts (BUG-1951). A single source proof is
+        # not permission to extrapolate 801011 through the release cutoff.
+        _require(before.get("801011.SI") == [], "publication correction exceeds BUG-1935 scope")
         proof_sha = _source_proof(plan, cas, start)
         for relative_file, signature in journal["files"].items():
             path = Path(relative_file)

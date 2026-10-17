@@ -905,6 +905,8 @@ rules:
       - backend/tests/scripts/test_localsim_product_validation.py
       - backend/tests/scripts/test_prepare_localsim_successor_cutover.py
       - frontend/src/app/simulation/localsim/**
+      - frontend/src/lib/simulation/localsim/**
+      - frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts
     primary_module: simulation.localsim_successor_core
     impact_modules: [simulation_runtime, platform.db, paper_v2, strategy_package]
     layer: trading_runtime
@@ -1372,6 +1374,8 @@ rules:
   - rule_id: local_data_pipeline
     priority: 70
     include:
+      - scripts/repair_local_sync_incident.py
+      - backend/tests/scripts/test_repair_local_sync_incident.py
       - scripts/repair_local_data_daily_sync.py
       - backend/tests/ingestion/test_daily_sync_recovery.py
       - backend/ingestion/tdx_scheduler.py
