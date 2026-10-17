@@ -6,11 +6,13 @@ from datetime import date, timedelta
 from math import isfinite
 from typing import Any, Callable, Mapping, Sequence
 
+from backend.data_service.suspension_day_authority import day_value
 from backend.services.market_data.instrument_validator import (
     DEFAULT_SQL_CHUNK_SIZE,
     load_chunks_with_logging,
     normalize_and_validate_ts_codes,
 )
+from backend.services.selection_center.suspension_provider import project_selection_suspension_days
 
 REFERENCE_PRICE_CONTRACT = "strategy_package_reference_price_availability_v1"
 
@@ -62,8 +64,23 @@ def _positive_price(close_li: Any) -> float | None:
     return value if isfinite(value) and value > 0 else None
 
 
-def _full_day(kind: str, timing: Any) -> bool:
-    return kind == "S" and (timing is None or not str(timing).strip())
+def _suspension_proof(rows, *, symbols, dates):
+    return project_selection_suspension_days(
+        [dict(zip(("ts_code", "trade_date", "suspend_type", "suspend_timing"), row)) for row in rows],
+        symbols=symbols, required_dates=dates, usage="C_EFFECTIVE_SUSPENSION_REFERENCE",
+    )
+
+
+def _full_day_before_cutoff(resolution, receipt, cutoff):
+    if resolution is None or resolution["state"] != "FULL_DAY_SUSPENDED":
+        return False
+    # A later disclosure may describe an earlier effective day, but cannot
+    # supply a C-bounded reference proof before its own disclosure date.
+    if resolution["basis"] == "OFFICIAL_DISCLOSURE":
+        entry = next(e for e in receipt["authority_payload"]["entries"]
+                     if e["ts_code"] == resolution["ts_code"] and day_value(e["trade_date"]).isoformat() == resolution["trade_date"])
+        return day_value(entry["disclosure_date"]) <= cutoff
+    return True
 
 
 def load_reference_prices(
@@ -118,13 +135,14 @@ def load_reference_prices(
                        WHERE ts_code = ANY(%s) AND trade_date >= %s AND trade_date <= %s""",
                     (missing, as_of_date, as_of_date),
                 )
-                current_suspensions: dict[str, list[tuple[str, Any]]] = {}
-                for symbol, _day, kind, timing in cur.fetchall():
-                    current_suspensions.setdefault(str(symbol), []).append((kind, timing))
+                current_days, current_receipt = _suspension_proof(cur.fetchall(), symbols=missing, dates=[as_of_date])
+                current_suspensions = {row["ts_code"]: row for row in current_days}
+                for symbol in missing:
+                    prices.observations[symbol]["suspension_day_authority"] = current_receipt
                 suspended = [
                     symbol
                     for symbol in missing
-                    if current_suspensions.get(symbol) and all(_full_day(*item) for item in current_suspensions[symbol])
+                    if _full_day_before_cutoff(current_suspensions.get(symbol), current_receipt, as_of_date)
                 ]
                 if not suspended:
                     return []
@@ -152,17 +170,19 @@ def load_reference_prices(
                        WHERE ts_code = ANY(%s) AND trade_date >= %s AND trade_date <= %s""",
                     (list(usable), start, as_of_date),
                 )
-                proof: dict[tuple[str, date], list[tuple[str, Any]]] = {}
-                for symbol, day, kind, timing in cur.fetchall():
-                    proof.setdefault((str(symbol), day), []).append((kind, timing))
+                proof_rows = cur.fetchall()
+                dates = [start + timedelta(days=i) for i in range((as_of_date - start).days + 1)]
+                projected, receipt = _suspension_proof(proof_rows, symbols=list(usable), dates=dates)
+                proof = {(row["ts_code"], date.fromisoformat(row["trade_date"])): row for row in projected}
                 for symbol, (quote_day, price) in usable.items():
+                    prices.observations[symbol]["suspension_day_authority"] = receipt
                     gap = [quote_day + timedelta(days=offset) for offset in range(1, (as_of_date - quote_day).days + 1)]
                     if any(day not in calendar for day in gap) or calendar.get(as_of_date) is not True:
                         prices.observations[symbol]["reason_code"] = "REFERENCE_CALENDAR_INCOMPLETE"
                         continue
                     open_days = [day for day in gap if calendar[day]]
                     if any(
-                        not proof.get((symbol, day)) or not all(_full_day(*item) for item in proof[(symbol, day)])
+                        not _full_day_before_cutoff(proof.get((symbol, day)), receipt, as_of_date)
                         for day in open_days
                     ):
                         prices.observations[symbol]["reason_code"] = "REFERENCE_SUSPENSION_GAP_UNPROVEN"
