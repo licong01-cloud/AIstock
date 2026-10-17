@@ -20,6 +20,12 @@
   ],
   "created_at": "2026-10-17T12:43:14.011399Z",
   "description": "Retired paper-v2 endpoint HTTP 404 makes entire Advisory page appear empty despite real stored tasks and recommendations.",
+  "design_compliance_001_review": {
+    "business_semantics_unchanged": "PASS: native ranking, TopK, quote/model data, review payloads and D/C context stay unchanged; calendar choices are not a market-data readiness claim.",
+    "no_silent_errors": "PASS: calendar errors are explicit and stored results remain readable; unavailable calendar cannot authorize review or invent dates.",
+    "no_simplified_delivery": "PASS: full current-page task, stored list, active pool and existing review paths tested; public CI and production activation remain separately pending, not claimed complete.",
+    "no_unapproved_gate": "PASS: no new business/research/approval gate; only preserve existing authoritative-date requirements for mutations."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -31,15 +37,24 @@
   "evidence_uris": [],
   "expected": "Existing tasks, recommendation versions and active stocks render independently of calendar availability; Advisory uses its own official-calendar defaults; failed calendar is visible and review writes remain disabled.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/advisory.py",
+      "backend/tests/watchlist/test_advisory_api.py",
+      "frontend/src/app/paper-v2/advisory/page.tsx",
+      "frontend/src/lib/api/advisory.ts",
+      "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+      "tests/aistock_validation/bugs/20261017_BUG-1962-advisory-ui-blank-after-retired-paper-v2-trading-day-defaults-returns-40.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/routers/advisory.py",
       "backend/tests/watchlist/test_advisory_api.py",
       "frontend/src/app/paper-v2/advisory/page.tsx",
       "frontend/src/lib/api/advisory.ts",
-      "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts"
+      "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+      "tests/aistock_validation/bugs/20261017_BUG-1962-advisory-ui-blank-after-retired-paper-v2-trading-day-defaults-returns-40.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/routers/advisory.py",
@@ -142,12 +157,6 @@
   "fix_branch": null,
   "fix_commit": null,
   "fix_summary": "Restore Advisory-owned official-calendar daily defaults and independently load stored task/list/stock data. Calendar errors remain visible; review and catch-up stay disabled until authoritative dates return. No ranking, pricing, policy, model, data or LocalSIM/QE/HMM changes. UI redesign is explicitly deferred.",
-  "design_compliance_001_review": {
-    "no_simplified_delivery": "PASS: full current-page task, stored list, active pool and existing review paths tested; public CI and production activation remain separately pending, not claimed complete.",
-    "no_silent_errors": "PASS: calendar errors are explicit and stored results remain readable; unavailable calendar cannot authorize review or invent dates.",
-    "business_semantics_unchanged": "PASS: native ranking, TopK, quote/model data, review payloads and D/C context stay unchanged; calendar choices are not a market-data readiness claim.",
-    "no_unapproved_gate": "PASS: no new business/research/approval gate; only preserve existing authoritative-date requirements for mutations."
-  },
   "fixed_at": null,
   "github_issue_number": 6265,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6265",
@@ -171,17 +180,21 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/trading-days/defaults?lookback_trading_days=10",
     "fresh_process_evidence": [
       "READ_ONLY_PASS: new isolated Python TestClient loaded this worktree's persistent Advisory router and real TradingCalendarStatusService using existing canonical official cache, returning 10 dates through 2026-10-16 and next=2026-10-19. Initial isolated attempt without environment/cache correctly failed closed; it is not PASS evidence. No service startup, database writes, price data mutation or task submission.",
       "READ_ONLY_UI_PASS: isolated frontend 3192 displayed real GET-only production tasks (including LSTM and TCN), 16 active-stock rows and persisted list identity with the fresh-source calendar response injected only for the not-yet-loaded new endpoint. This is source integration evidence, NOT production 3000/8001 activation. Playwright 10 distinct focused scenarios and API 21 tests passed; TypeScript, Ruff, focused ESLint and L0 passed."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
