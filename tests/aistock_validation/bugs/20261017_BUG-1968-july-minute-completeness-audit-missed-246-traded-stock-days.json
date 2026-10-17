@@ -21,7 +21,13 @@
       "timestamp": "2026-10-17T18:14:02.165423Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/minute-july-full-audit-20261018-r1/bulk-dev-receipt.json#sha256=a42212334bda7773a23ae90ce12c1571981f66aed7dfa40a41004f138fb0a495",
+    "X:/AIstock_dataset_candidates/data_repair_staging/minute-july-full-audit-20261018-r1/production-receipt.json#sha256=c3563603ee26f0c45fea955270d6bad8f7f19c02ccc73710370bb873ab1440af",
+    "X:/AIstock_dataset_candidates/data_repair_staging/minute-july-full-audit-20261018-r1/audit-after.json#sha256=c582ef348189f8c2c8814e743db03034c00388fdfe0072c4fd626ad677749b95",
+    "X:/AIstock_dataset_candidates/data_repair_staging/minute-july-full-audit-20261018-r1/frozen-file-readback.json#sha256=977c4d854b0947f0bac198c7b76b44b1b4556117c9d7f5d8e0f1002509795d66",
+    "X:/AIstock_dataset_candidates/data_repair_staging/minute-july-full-audit-20261018-r1/monthly-resume-readback.json#sha256=6661f5b09e61806500e95bfae04a6e831e8f1f3fa039ef68797362db8c166acd"
+  ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "added_files": [],
