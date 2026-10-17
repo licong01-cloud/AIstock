@@ -26,6 +26,7 @@ from backend.services.selection_center.models import SelectionCandidate, Selecti
 from backend.services.selection_center.prospective_evidence import SelectionStageTrace
 from backend.services.selection_center.prospective_evidence_assembler import ProspectiveSelectionEvidenceAssembler
 from backend.services.simulation_signal.contracts import DailySelectionEvidence, canonical_json_sha256
+from backend.services.simulation_execution.localsim.suspension import localsim_suspension_policy_identity
 from backend.services.simulation_signal.strategy_package_selection import (
     StrategyPackageSelectionResult, StrategyPackageSelectionService,
 )
@@ -192,6 +193,7 @@ class LocalSimDailyEvidenceWriter:
         projection = json.loads((scope.root / "projection.json").read_text(encoding="utf-8"))
         payload["localsim_signal_run"] = {
             "schema_version": "localsim_selection_signal_run_v1", "consumer_scope": "LOCALSIM", "run_id": scope.run_id,
+            "suspension_policy_identity": localsim_suspension_policy_identity(),
             "clocks": scope.clocks.to_dict(), "semantic_identity": common.semantic_identity,
             "storage_identity": common.storage_identity, "membership_status": common.membership_status[evidence.package_id],
             "unscored_members": list(common.unscored_members[evidence.package_id]),
@@ -289,6 +291,7 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
             "selection_computation", "selection_artifact", "selection_signal_preparation", "live_inference", "runtime", "multi_alpha_live"))
         code_paths += (Path(__file__).resolve().parents[1] / "simulation_signal/strategy_package_selection.py",)
         identity = canonical_json_sha256({"packages": identities, "date": trade_date.isoformat(), "source": kwargs["data_source"],
+                                          "localsim_suspension_policy": localsim_suspension_policy_identity(),
                                          "ordered_package_ids": kwargs["package_ids"],
                                          "config": config, "mode": kwargs["mode"].value,
                                          "release": getattr(release, "release_hash", None),

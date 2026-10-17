@@ -258,6 +258,36 @@ def test_failed_day_preserves_prefix_and_retry_has_a_new_run(tmp_path, monkeypat
     assert not list(tmp_path.rglob("checkpoint.json"))
 
 
+def test_public_suspension_policy_change_cannot_reuse_old_localsim_projection(tmp_path, monkeypatch):
+    from backend.services.simulation_runtime import localsim_selection_signal as module
+
+    service = LocalSimSelectionSignalService.__new__(LocalSimSelectionSignalService)
+    service.temporary_root = tmp_path
+    service.native_repository = InMemorySimulationRuntimeRepository()
+    service.package_repository = SimpleNamespace(get=lambda _: SimpleNamespace(manifest_sha256="a" * 64))
+    roots = []
+    old_result = object()
+
+    def recover(root, identity, **_):
+        roots.append(root)
+        return old_result if root == roots[0] else None
+
+    def fresh(**_):
+        raise DataUnavailableError("new independent computation required")
+
+    service._recover = recover
+    monkeypatch.setattr(StrategyPackageSelectionService, "run_selection", lambda _self, **kw: fresh(**kw))
+    kwargs = dict(package_ids=["arbitrary-native-package"], mode=SelectionMode.SINGLE_PACKAGE,
+                  trade_date=TRADE_DATE, data_source="DB_HISTORICAL", runtime_config={})
+    assert service.run_selection(**kwargs) is old_result
+    previous = module.localsim_suspension_policy_identity()
+    monkeypatch.setattr(module, "localsim_suspension_policy_identity",
+                        lambda: {**previous, "authority_sha256": "f" * 64})
+    with pytest.raises(DataUnavailableError, match="new independent computation"):
+        service.run_selection(**kwargs)
+    assert roots[0] != roots[1]
+
+
 def test_foreign_native_evidence_and_corrupt_own_artifact_fail_loudly(tmp_path):
     scope, computed, program, _ = _computed(tmp_path)
     repository = InMemorySimulationRuntimeRepository()
