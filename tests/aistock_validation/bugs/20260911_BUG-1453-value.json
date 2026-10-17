@@ -1,0 +1,299 @@
+{
+  "actual": "full_evaluation 对官方 value 列调用候选 load_values(path, factor_name)，抛出缺少声明因子列，5,341股全量评价无法开始。",
+  "allowed_write_scope": [
+    "backend/services/factor_research/full_evaluation.py",
+    "backend/tests/factor_research/test_full_evaluation.py",
+    "tests/aistock_validation/bugs/20260911_BUG-1453-value.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1453",
+  "closed_at": "2026-10-01T14:17:21.254028Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-11T08:01:17.970966Z",
+  "description": "full_evaluation 对官方 value 列调用候选 load_values(path, factor_name)，抛出缺少声明因子列，5,341股全量评价无法开始。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260911-c0eeb4add0c2",
+      "timestamp": "2026-09-11T08:01:17.970947Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:\\AIstock_factor_research\\full-reevaluation-20260911\\benchmark_spec.json"
+  ],
+  "expected": "候选工件继续严格要求声明因子列；官方 reference_value_artifacts 通过专用加载路径严格读取唯一 value 列并重命名为声明因子名。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1453-value.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1453-value.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/factor_research/full_evaluation.py",
+        "backend/tests/factor_research/test_full_evaluation.py"
+      ],
+      "impacted_modules": [
+        "factor_library.research"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/factor_research/full_evaluation.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_full_evaluation.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/factor_research/full_evaluation.py",
+        "backend/tests/factor_research/test_full_evaluation.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/tests/factor_research/test_full_evaluation.py"
+    ]
+  },
+  "first_seen_at": "2026-09-11T08:01:17.970966Z",
+  "fix_branch": null,
+  "fix_commit": "4460fd049484c2a0a51798bab0c6a05877a2963c",
+  "fixed_at": "2026-09-11T08:10:49Z",
+  "github_issue_number": 4576,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4576",
+  "last_seen_at": "2026-09-11T08:01:17.970966Z",
+  "module": "factor_library.research",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4579",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python /mnt/x/AIstock_factor_research/full-reevaluation-20260911/scripts/run_direct_readonly.py --spec /mnt/x/AIstock_factor_research/full-reevaluation-20260911/benchmark_spec.json --target production",
+  "required_verification": [
+    "l0",
+    "factor_research_backend"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-metrics/results?factor_name=m_md_net_repay_rate_10d_tminus1&calc_batch_id=16b76e7d-0066-4b34-b652-adca72cf1e08&eval_window=full&expected_snapshot_date=2026-08-31&expected_universe=aistock_equity_pit_canonical_v2&expected_return_horizon=1d&limit=1&offset=0",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Windows and WSL rdagent-gpu fresh processes loaded official CORD10 value artifact: 8,143,190 rows, unique datetime/instrument index -> passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\factor-aftercare-20261001\\verify-BUG-1453.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1453",
+      "business_smoke_semantic": {
+        "contract_id": "factor_metrics_results",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "6aa47962d6e0474b95cdc449365eb0aaec8f0eb2d97235bd85bf1ad4433c1026",
+      "expected_identity": "4460fd049484c2a0a51798bab0c6a05877a2963c",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-01T14:17:14.858464Z",
+      "mode": "read_only",
+      "observed_identity": "3626c1cf5f338a7e6678ca62d737ff06ab1cacb1",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e27efca03b0c363f948f4e4bf286a10ec6d7490ca3b779664527c89cbe9731c7",
+      "receipt_sha256": "9016d3b1ecdb9d8b4dce1a0c47ead84057db7be7901a4ca59f619fcda437ae14",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "83249435d4ef4a297cc9d5b6ecaf65ac000e102c1655ca6b9744947cfa5f1c78",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1453",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4b157f262b0581f1",
+    "recorded_at": "2026-09-11T08:12:39.535130Z",
+    "runtime_contract_digest": "740f1001321a5b38f5471c4a337b7a274687c8832ab09585778448008bdf3401",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "fea79941a54093cf8b7255f5e3ffaa227edf09d0",
+    "source_merge_commit": "4460fd049484c2a0a51798bab0c6a05877a2963c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4579",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed, blocking 0; python -m nox -s factor_research_backend -> passed, 100 passed, 9 skipped"
+    ],
+    "validation_evidence_digest": "cc93499eb177d8eb9abc259422cae946016becaef5a13ba2d2432a42365b376e"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "factor_library.research"
+  ],
+  "title": "完整因子评价无法读取官方单因子 value 列契约",
+  "trigger_condition": {
+    "fingerprint": "c0eeb4add0c2ab5a52f5e6a4",
+    "source_event_id": "FE-20260911-c0eeb4add0c2"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed, blocking 0; python -m nox -s factor_research_backend -> passed, 100 passed, 9 skipped"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "factor_library.research",
+        "factor_research"
+      ],
+      "plans": [
+        "factor_research_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "factor_library.research",
+          "factor_research"
+        ],
+        "plans": [
+          "factor_research_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

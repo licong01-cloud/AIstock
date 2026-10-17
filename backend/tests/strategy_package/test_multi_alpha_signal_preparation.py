@@ -60,6 +60,15 @@ def test_historical_multi_alpha_preparation_uses_frozen_weights_and_forwards_rea
         "new_FUNDGROWTH_h20": "2024-03-01",
     }
     assert {
+        item["input_context"]["pit_mode"]
+        for item in artifacts[0].metadata["component_artifacts"].values()
+    } == {"stock_universe_pit_v1"}
+    assert all(
+        item["input_context"]["calendar_identity_hash"]
+        and item["input_context"]["universe_input_hash"]
+        for item in artifacts[0].metadata["component_artifacts"].values()
+    )
+    assert {
         call["cache_namespace"] for call in provider.runtime_asset_resolver.load_calls
     } == {f"historical_{TRADE_DATE.isoformat()}"}
     assert {

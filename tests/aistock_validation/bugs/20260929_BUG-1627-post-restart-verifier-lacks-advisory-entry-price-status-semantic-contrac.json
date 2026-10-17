@@ -1,0 +1,277 @@
+{
+  "actual": "BUG-1623 source PR #5099 is merged and the user restarted backend-main. Health and runtime identity pass; the read-only Entry Price endpoint returns ok=true, schema_version=advisory_entry_price_status_v1, configured=false, status=NOT_CONFIGURED, database_written=false. post-restart-verify still blocks because /api/v1/advisory/programs/{program_id}/entry-price/status has no target-owned business-smoke semantic contract. Add one exact fail-closed semantic validator and direct tests; do not change Advisory business behavior, backend runtime, database, or QE code.",
+  "allowed_write_scope": [
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "tests/aistock_validation/bugs/20260929_BUG-1627-post-restart-verifier-lacks-advisory-entry-price-status-semantic-contrac.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1627",
+  "closed_at": "2026-09-29T19:59:49Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-29T19:43:42.424476Z",
+  "description": "BUG-1623 source PR #5099 is merged and the user restarted backend-main. Health and runtime identity pass; the read-only Entry Price endpoint returns ok=true, schema_version=advisory_entry_price_status_v1, configured=false, status=NOT_CONFIGURED, database_written=false. post-restart-verify still blocks because /api/v1/advisory/programs/{program_id}/entry-price/status has no target-owned business-smoke semantic contract. Add one exact fail-closed semantic validator and direct tests; do not change Advisory business behavior, backend runtime, database, or QE code.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260929-4fec11e81ae6",
+      "timestamp": "2026-09-29T19:43:42.424392Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "The post-restart verifier accepts only a schema-valid Entry Price status response for the requested program, records configured/status/database_written facts, and remains fail-closed for wrong program, schema, status, booleans, errors, or write claims.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260929_BUG-1627-post-restart-verifier-lacks-advisory-entry-price-status-semantic-contrac.json",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260929_BUG-1627-post-restart-verifier-lacks-advisory-entry-price-status-semantic-contrac.json",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "scripts/aistock_issue_workflow.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      ],
+      "impacted_modules": [
+        "validation.workflow_automation",
+        "validation.runner",
+        "validation.guardrails"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/aistock_issue_workflow.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_scripts"
+        },
+        {
+          "file": "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_test_override"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "scripts/aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+    ]
+  },
+  "first_seen_at": "2026-09-29T19:43:42.424476Z",
+  "fix_branch": null,
+  "fix_commit": "175f71307daa588252da93d29ce479ccad7bfcd5",
+  "fixed_at": "2026-09-29T19:59:49Z",
+  "github_issue_number": 5108,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5108",
+  "last_seen_at": "2026-09-29T19:43:42.424476Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5109",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/aistock_issue_workflow.py post-restart-verify --issue-json tests/aistock_validation/bugs/20260929_BUG-1623-entry-price-corporate-action-projection-diverges-from-frozen-adjusted-la.json --target backend-main --expected-identity ad6d73e591a1666490cffae84f6518d8c2694efd --output-format full-json",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1627",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d5c5623342c2230d",
+    "recorded_at": "2026-09-29T20:01:17.766690Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ef9e01c6862078ddf6d7808b48a4a3060eb42315",
+    "source_merge_commit": "175f71307daa588252da93d29ce479ccad7bfcd5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5109",
+    "validation_evidence": [
+      "validation-receipt: id=cb2be99bc3aceb14 commit=ef9e01c6862078ddf6d7808b48a4a3060eb42315 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q` result=`65 passed`",
+      "validation-receipt: id=e777342e93cbb87d commit=ef9e01c6862078ddf6d7808b48a4a3060eb42315 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+    ],
+    "validation_evidence_digest": "c20602ea4fd3258c2f726220453216acb0242021c47d177ff41e0903023a585f"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Post-restart verifier lacks Advisory Entry Price status semantic contract",
+  "trigger_condition": {
+    "fingerprint": "4fec11e81ae6bed96102c4a0",
+    "source_event_id": "FE-20260929-4fec11e81ae6"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=cb2be99bc3aceb14 commit=ef9e01c6862078ddf6d7808b48a4a3060eb42315 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -q` result=`65 passed`",
+    "validation-receipt: id=e777342e93cbb87d commit=ef9e01c6862078ddf6d7808b48a4a3060eb42315 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

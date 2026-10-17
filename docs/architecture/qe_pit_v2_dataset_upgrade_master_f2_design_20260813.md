@@ -897,3 +897,30 @@ survivorship limitation，不得把v1重新声明为长期权威。
 | Review-11A | W5 manifest不可变性与持久化首轮 | 初版v2 builder沿用旧`package_id`，会被package主键和immutable manifest保护正确拒绝；仅换`package_version`不能形成可并存记录 | 强制新`package_id`和新`package_version`，新manifest冻结旧package id/version/hash迁移来源；内存仓库直接证明v1/v2共存且旧hash不变；legacy runtime manifest禁止静默转alpha-core v2 | resolved |
 | Review-11B | W5 schema双读与Advisory数据边界复审 | 历史provider/cache仍可能用缺字段默认旧key；Pydantic当前版本不支持`Field(exclude_if=...)`，会让旧projection序列化出现新null字段；decision mark与model-first feature source未传递包/Selection binding | provider和cache缺显式key时typed fail；legacy projection用wrap serializer保持旧JSON/hash，新v2 projection携带完整frozen binding；decision mark、historical source和model-first feature source分别使用包snapshot或已验证Selection rolling lease | resolved |
 | Review-11C | W5相邻兼容与模块级最终复审 | model-first测试替身缺少真实`SelectionRun.runtime_config`字段，首次全模块矩阵暴露8个同根测试失败；未发现生产实现回归 | 修正测试替身以匹配正式SelectionRun契约，补rolling lease传播直接测试；最终StrategyPackage、Advisory historical range与Advisory model-first矩阵1087项均获通过证据（同步最终main后的两轮矩阵各仅遇到1个Windows WinError 10055事件循环setup资源错误，两个受影响用例精确重跑均PASS）；F2 30/30、Ruff、compile、catalog、ownership及相对origin/main新增guardrail均PASS；不访问生产DB/数据集、不执行进程控制 | pass_final_head_gates |
+> 2026-09-02 主控变更：数据准备 P0 已收敛为“PIT 更新 + 数据补齐 + 直接候选重导”。本文中 W7 source-freeze、全历史 source hash、source attestation、五/六股 sample、2026-07-31 v2 full 前置和与消费者并行窗口有关的旧编排均降为历史说明，不再参与当前或未来月更。
+
+## 0A. 当前唯一目标与阶段
+
+### 0A.1 目标
+
+以 `aistock_equity_pit_canonical_v2 / shsz_a_252td_st_delist_asof_v2` 作为唯一权威股票池，把独立 `qe_hmm_full_v2` 候选更新到目标月末。当前目标 cutoff 为 `2026-08-31`。
+
+7 月分钟线在旧候选生成后发生补录，当前候选必须重新导出分钟组件并包含 8 月新增数据。既有 2026-07-31 数据集继续只读保留，在用户另行确认生产替换前不得覆盖、删除或激活新候选。
+
+### 0A.2 P0 阶段
+
+1. **R0-1 合同修复**：移除 source-freeze、全历史内容哈希、发布前复扫和依赖这些证据的等待/阻断；不得新增替代门禁。
+2. **R0-2 Authority readback**：只读确认 canonical PIT、industry/P3A 和数据库补数覆盖目标 cutoff；已有 PASS 结果直接复用。
+3. **R0-3 直接重导**：复用未失效组件，重建受 7 月分钟补录影响的分钟组件，追加 8 月尾部，并选择性重建 PIT/补录实际影响的证券或月份。
+4. **R0-4 一次验收**：执行全量结构检查、分层数值抽样、股票池/PIT一致性和 QE/HMM producer smoke。
+5. **R0-5 停止**：形成独立候选结果后停止；生产激活、训练和消费者切换另行授权。
+
+R0 不再等待 QE、HMM、Selection、Paper、Advisory 或其他业务窗口。除真实数据依赖或同一月更代码文件冲突外，其他开发与实验不构成前置。
+
+### 0A.3 长期每月目标
+
+以后每月固定执行：
+
+`PIT 更新/readback → 数据补齐 → 识别实际失效组件 → 直接增量/选择性重导 → 独立候选 → 一次验收 → 停止`
+
+禁止恢复 source-freeze、全历史源哈希、source re-attestation、全历史复扫、资源门禁、重复 sample 或为流程证明而重导无关历史组件。

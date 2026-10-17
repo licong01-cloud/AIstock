@@ -13,6 +13,10 @@ import json
 import os
 import sys
 import uuid
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -20,6 +24,8 @@ import psycopg2
 import psycopg2.extras as pgx
 import requests
 from requests import exceptions as req_exc
+
+from backend.services.minute_data_session_contract import guard_minute_values
 
 pgx.register_uuid()
 
@@ -237,12 +243,13 @@ def upsert_minute(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, 
         high_li = row.get("High") or row.get("high")
         low_li = row.get("Low") or row.get("low")
         close_li = row.get("Close") or row.get("close") or row.get("Price") or row.get("price")
-        volume_hand = row.get("Volume") or row.get("volume") or 0
-        amount_li = row.get("Amount") or row.get("amount") or 0
+        volume_hand = row["Volume"] if "Volume" in row else row.get("volume")
+        amount_li = row["Amount"] if "Amount" in row else row.get("amount")
         if trade_time_iso is None or close_li is None:
             continue
         last_ts = trade_time_iso if last_ts is None or trade_time_iso > last_ts else last_ts
         values.append((trade_time_iso, ts_code, "1m", open_li, high_li, low_li, close_li, volume_hand, amount_li, "none", "tdx_api"))
+    values = guard_minute_values(conn, ts_code, trade_date, values)
     if not values:
         return 0, None
     with conn.cursor() as cur:
@@ -267,12 +274,13 @@ def insert_minute_init(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[
         high_li = row.get("High") or row.get("high")
         low_li = row.get("Low") or row.get("low")
         close_li = row.get("Close") or row.get("close") or row.get("Price") or row.get("price")
-        volume_hand = row.get("Volume") or row.get("volume") or 0
-        amount_li = row.get("Amount") or row.get("amount") or 0
+        volume_hand = row["Volume"] if "Volume" in row else row.get("volume")
+        amount_li = row["Amount"] if "Amount" in row else row.get("amount")
         if trade_time_iso is None or close_li is None:
             continue
         last_ts = trade_time_iso if last_ts is None or trade_time_iso > last_ts else last_ts
         values.append((trade_time_iso, ts_code, "1m", open_li, high_li, low_li, close_li, volume_hand, amount_li, "none", "tdx_api"))
+    values = guard_minute_values(conn, ts_code, trade_date, values)
     if not values:
         return 0, None
     with conn.cursor() as cur:

@@ -1,8 +1,8 @@
 """Immutable W6 validation bundle for a future canonical PIT v2 candidate.
 
-The W6 builder is intentionally fixture-only.  W7 publishes its real release
-through the durable control catalog and terminal receipt; this module cannot
-manufacture real-data evidence or a production/training-eligible receipt.
+The W6 fixture builder stays fixture-only. Real asset validation is explicit;
+the data-owned migration producer reads immutable files and independent
+receipts. Neither validator can manufacture real-data or independent PASS.
 """
 
 from __future__ import annotations
@@ -174,6 +174,7 @@ def validate_candidate_validation_bundle(
     value: Mapping[str, Any],
     *,
     expected_digest: str | None = None,
+    allow_real: bool = False,
 ) -> CanonicalPitCandidateValidationBundle:
     """Validate exact fields and return a detached immutable representation."""
 
@@ -204,11 +205,12 @@ def validate_candidate_validation_bundle(
         raise CanonicalPitCandidateBundleError("candidate identity fields are invalid")
     _identifier(candidate["candidate_id"], "candidate_id")
     _identifier(candidate["release_id"], "release_id")
-    if (
-        candidate["scope"] != "fixture"
-        or candidate["production_eligible"] is not False
-        or candidate["training_eligible"] is not False
-    ):
+    real = allow_real and candidate["scope"] == "full"
+    if real:
+        if candidate["production_eligible"] is not True or candidate["training_eligible"] is not True:
+            raise CanonicalPitCandidateBundleError("real full bundle must have exact eligible flags")
+    elif (candidate["scope"] != "fixture" or candidate["production_eligible"] is not False
+          or candidate["training_eligible"] is not False):
         raise CanonicalPitCandidateBundleError("W6 bundles must remain fixture/non-production/non-training")
     cutoff = payload["cutoff"]
     if not isinstance(cutoff, dict) or set(cutoff) != {"requested", "effective"}:
@@ -247,7 +249,7 @@ def validate_candidate_validation_bundle(
     _date_text(observation["cutoff"], "rolling_observation.cutoff")
     if observation["ordered_span_encoding_version"] != "canonical_pit_spans_v2" or type(observation["row_count"]) is not int or observation["row_count"] < 0:
         raise CanonicalPitCandidateBundleError("rolling observation encoding/count is invalid")
-    if observation["row_count"] != 0:
+    if (real and observation["row_count"] <= 0) or (not real and observation["row_count"] != 0):
         raise CanonicalPitCandidateBundleError("W6 fixture rolling observation must not claim rows")
     _sha(observation["digest"], "rolling_observation.digest")
     _sha(observation["state_source_digest"], "rolling_observation.state_source_digest")
@@ -269,7 +271,7 @@ def validate_candidate_validation_bundle(
         raise CanonicalPitCandidateBundleError("moneyflow unit contract differs from canonical")
     _sha(payload["instrument_universe_digest"], "instrument_universe_digest")
     for field in _RESULT_SECTIONS:
-        _result_map(payload[field], field)
+        _result_map(payload[field], field, real=real)
     validation = payload["validation"]
     if not isinstance(validation, dict) or set(validation) != _VALIDATION_FIELDS:
         raise CanonicalPitCandidateBundleError("validation receipt fields are invalid")
@@ -278,10 +280,31 @@ def validate_candidate_validation_bundle(
     _sha(payload["resource_receipt_digest"], "resource_receipt_digest")
     _path_proof(payload["no_external_path_dependency_proof"])
     _sha(payload["historical_baseline_immutability_digest"], "historical_baseline_immutability_digest")
-    if payload["terminal_outcome"] != "fixture_schema_validated":
+    if payload["terminal_outcome"] != ("CANDIDATE_VALIDATED" if real else "fixture_schema_validated"):
         raise CanonicalPitCandidateBundleError("fixture bundle cannot claim a real candidate outcome")
-    if payload["runtime_real_data_evidence"] != W6_REAL_DATA_EVIDENCE:
+    if payload["runtime_real_data_evidence"] != ("real_candidate_evidence" if real else W6_REAL_DATA_EVIDENCE):
         raise CanonicalPitCandidateBundleError("W6 real-data evidence status is invalid")
+    if real:
+        pairs = (
+            (payload["source_commit"], source_runtime["source_commit"]),
+            (profile["profile_digest"], source_runtime["profile_digest"]),
+            (payload["toolchain_sha"], source_runtime["toolchain_digest"]),
+            (candidate["candidate_id"], frozen_release["candidate_identity"]),
+            (candidate["release_id"], frozen_release["release_id"]),
+            (payload["artifact_root_identity"]["root_id"], frozen_release["allowlisted_root_id"]),
+            (payload["artifact_root_digest"], frozen_release["artifact_root_digest"]),
+            (frozen, frozen_release["pit_snapshot_digest"]),
+            (rolling, observation["digest"]),
+            (cutoff["requested"], cutoff["effective"]),
+            (cutoff["effective"], observation["cutoff"]),
+            (payload["resource_receipt_digest"], validation["resource_receipt"]),
+            (payload["validation_results"]["receipt_digest"], validation["component_receipt"]),
+            (payload["consumer_smoke_results"]["receipt_digest"], validation["consumer_shadow_receipt"]),
+        )
+        if any(first != second for first, second in pairs):
+            raise CanonicalPitCandidateBundleError("real candidate nested identity differs")
+        if not re.fullmatch(r"[0-9a-f]{40}", payload["source_commit"]):
+            raise CanonicalPitCandidateBundleError("real candidate source identity must be full commit SHA")
     digest = hashlib.sha256(encoded).hexdigest()
     if expected_digest is not None and digest != _sha(expected_digest, "expected_digest"):
         raise CanonicalPitCandidateBundleError("candidate bundle digest differs from immutable reference")
@@ -319,10 +342,10 @@ def _path_proof(value: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _result_map(value: Mapping[str, Any], field: str) -> dict[str, Any]:
+def _result_map(value: Mapping[str, Any], field: str, *, real: bool = False) -> dict[str, Any]:
     if not isinstance(value, Mapping) or set(value) != {"status", "receipt_digest"}:
         raise CanonicalPitCandidateBundleError(f"{field} fields are invalid")
-    if value["status"] not in {"pass_fixture", "not_run_not_authorized"}:
+    if value["status"] not in ({"pass"} if real else {"pass_fixture", "not_run_not_authorized"}):
         raise CanonicalPitCandidateBundleError(f"{field} cannot claim production PASS in W6")
     return {"status": value["status"], "receipt_digest": _sha(value["receipt_digest"], f"{field}.receipt_digest")}
 

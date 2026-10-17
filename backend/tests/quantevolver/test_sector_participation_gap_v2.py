@@ -168,11 +168,20 @@ def test_compute_factor_rejects_worktree_output_path(tmp_path: Path) -> None:
         )
 
 
-def test_bounded_file_read_preserves_rolling_warmup(tmp_path: Path) -> None:
+@pytest.mark.parametrize("hdf_format", ["fixed", "table"])
+def test_bounded_file_read_preserves_rolling_warmup(
+    tmp_path: Path,
+    hdf_format: str,
+) -> None:
     sector, membership = _inputs(days=35)
     data_dir = tmp_path / "data"
     data_dir.mkdir()
-    sector.to_hdf(data_dir / "sector_data.h5", key="data", mode="w")
+    sector.to_hdf(
+        data_dir / "sector_data.h5",
+        key="data",
+        mode="w",
+        format=hdf_format,
+    )
     membership.to_parquet(data_dir / "static_factors.parquet")
     dates = sector.index.get_level_values("datetime").unique()
     start_date = dates[24]
@@ -194,6 +203,26 @@ def test_bounded_file_read_preserves_rolling_warmup(tmp_path: Path) -> None:
         )
     ]
     pd.testing.assert_frame_equal(actual, expected)
+
+
+def test_table_file_with_unsorted_datetime_fails_loud(tmp_path: Path) -> None:
+    sector, membership = _inputs(days=35)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    shuffled = sector.sample(frac=1.0, random_state=42)
+    shuffled.to_hdf(
+        data_dir / "sector_data.h5",
+        key="data",
+        mode="w",
+        format="table",
+    )
+    membership.to_parquet(data_dir / "static_factors.parquet")
+
+    with pytest.raises(ValueError, match="datetime values must be sorted"):
+        MODULE.compute_factor(
+            data_dir=data_dir,
+            output_path=tmp_path / "result.h5",
+        )
 
 
 def test_compute_factor_rejects_reversed_date_window(tmp_path: Path) -> None:

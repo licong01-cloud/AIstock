@@ -7,6 +7,7 @@ instead of being treated as zero fills or skipped orders.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from .errors import DataUnavailableError, RiskRuleError
@@ -35,12 +36,7 @@ class RiskEngine:
         order: Order,
         minute_bars: list[MinuteBar],
     ) -> RiskDecision:
-        if not minute_bars:
-            raise DataUnavailableError(
-                "minute bars are required for risk validation",
-                context={"order_id": order.order_id, "symbol": order.symbol},
-            )
-        limit_price = self._resolve_limit_price(order, minute_bars)
+        limit_price = self.validate_order_market_data(order=order, minute_bars=minute_bars)
         executable_bars = [
             bar for bar in minute_bars
             if not bar.is_suspended and bar.volume > 0
@@ -51,21 +47,17 @@ class RiskEngine:
                 context={"order_id": order.order_id, "symbol": order.symbol},
             )
 
-        for bar in minute_bars:
-            self._validate_bar_limit_consistency(order, bar, limit_price)
-
-        if order.order_type == OrderType.LIMIT and order.limit_price is not None:
-            self._validate_limit_order_price(order, limit_price)
-
         if order.side == OrderSide.BUY and not any(
             not self._is_limit_up(bar, limit_price) for bar in executable_bars
         ):
             raise RiskRuleError(
                 "buy order is blocked because all executable bars are at limit up",
                 context={
+                    "reason_code": "LIMIT_UP_BUY_BLOCKED",
                     "order_id": order.order_id,
                     "symbol": order.symbol,
                     "trade_date": executable_bars[0].bar_time.date().isoformat(),
+                    "bar_time": executable_bars[0].bar_time.isoformat(),
                     "up_limit": limit_price.up_limit,
                 },
             )
@@ -75,13 +67,46 @@ class RiskEngine:
             raise RiskRuleError(
                 "sell order is blocked because all executable bars are at limit down",
                 context={
+                    "reason_code": "LIMIT_DOWN_SELL_BLOCKED",
                     "order_id": order.order_id,
                     "symbol": order.symbol,
                     "trade_date": executable_bars[0].bar_time.date().isoformat(),
+                    "bar_time": executable_bars[0].bar_time.isoformat(),
                     "down_limit": limit_price.down_limit,
                 },
             )
         return RiskDecision(passed=True, reason="order execution context passed")
+
+    def validate_order_market_data(
+        self, *, order: Order, minute_bars: list[MinuteBar],
+    ) -> DailyLimitPrice:
+        """Validate observed facts without asserting that liquidity is available.
+
+        This is also required before a capability-owned no-fill minute. The
+        normal execution check still rejects contexts with no executable bars.
+        """
+        if not minute_bars:
+            raise DataUnavailableError(
+                "minute bars are required for risk validation",
+                context={"order_id": order.order_id, "symbol": order.symbol},
+            )
+        limit_price = self._resolve_limit_price(order, minute_bars)
+        for bar in minute_bars:
+            prices = (bar.open, bar.high, bar.low, bar.close, bar.limit_up, bar.limit_down)
+            if (
+                any(value is not None and (not math.isfinite(value) or value <= 0) for value in prices)
+                or not bar.low <= bar.open <= bar.high
+                or not bar.low <= bar.close <= bar.high
+            ):
+                raise DataUnavailableError(
+                    "minute bar has invalid authoritative price data",
+                    context={"order_id": order.order_id, "symbol": bar.symbol,
+                             "bar_time": bar.bar_time.isoformat()},
+                )
+            self._validate_bar_limit_consistency(order, bar, limit_price)
+        if order.order_type == OrderType.LIMIT and order.limit_price is not None:
+            self._validate_limit_order_price(order, limit_price)
+        return limit_price
 
     def validate_step_fill(
         self,

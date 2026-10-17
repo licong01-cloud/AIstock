@@ -105,6 +105,7 @@ def _write_spec(
     start="2021-01-04",
     end="2021-01-08",
     suspend_section: dict | None = None,
+    execution_data_exclusions: list[dict] | None = None,
     schema_version: str = suspend_builder.SPEC_SCHEMA_VERSION,
 ) -> Path:
     if suspend_section is None:
@@ -124,6 +125,7 @@ def _write_spec(
         "end_date": end,
         "pins": {"calendar_sha256": pins["calendar_sha256"]},
         "suspend": suspend_section,
+        "execution_data_exclusions": execution_data_exclusions or [],
     }
     workspace.mkdir(parents=True, exist_ok=True)
     spec_path = workspace / suspend_builder.SPEC_FILE
@@ -203,6 +205,70 @@ def test_artifact_feeds_strict_runtime_filter_end_to_end(tmp_path):
     # A date outside the artifact window is a missing key -> strict raise.
     with pytest.raises(RuntimeError, match="no entry for trade date 2021-01-11"):
         runtime.suspended_symbols("2021-01-11")
+
+
+def test_full_window_execution_data_exclusion_is_pinned_and_filters_before_ranking(tmp_path):
+    provider_dir, suspend_dir, pins, workspace = _make_workspace(tmp_path)
+    exclusion = {
+        "schema_version": "qe_execution_data_exclusion_v1",
+        "instrument": "601989.SH",
+        "scope": "full_backtest_window",
+        "start_date": "2021-01-04",
+        "end_date": "2021-01-08",
+        "reason_code": "minute_source_gap_confirmed_unfillable",
+        "evidence_sha256": "a" * 64,
+    }
+    _write_spec(
+        workspace,
+        provider_dir,
+        suspend_dir,
+        pins,
+        execution_data_exclusions=[exclusion],
+    )
+
+    artifact = suspend_builder.ensure_frozen_suspend_filter_artifact(
+        cwd=workspace, print_fn=lambda *_a, **_k: None
+    )
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    runtime = QESuspendFilter(enabled=True, suspend_filter_file=str(artifact), strict=True)
+    scores = pd.Series([3.0, 2.0, 1.0], index=["601989.SH", "000001.SZ", "000002.SZ"])
+
+    filtered = runtime.filter_scores(scores, "2021-01-06")
+
+    assert payload["execution_data_exclusions"] == [exclusion]
+    assert payload["execution_data_exclusion_count"] == 1
+    assert len(payload["execution_data_exclusion_contract_sha256"]) == 64
+    assert list(filtered.index) == ["000001.SZ", "000002.SZ"]
+    assert runtime.is_suspended("SH601989", "2021-01-06") is True
+
+
+def test_execution_data_exclusion_must_cover_exact_run_window(tmp_path):
+    provider_dir, suspend_dir, pins, workspace = _make_workspace(tmp_path)
+    _write_spec(
+        workspace,
+        provider_dir,
+        suspend_dir,
+        pins,
+        execution_data_exclusions=[
+            {
+                "schema_version": "qe_execution_data_exclusion_v1",
+                "instrument": "601989.SH",
+                "scope": "full_backtest_window",
+                "start_date": "2021-01-05",
+                "end_date": "2021-01-08",
+                "reason_code": "minute_source_gap_confirmed_unfillable",
+                "evidence_sha256": "a" * 64,
+            }
+        ],
+    )
+
+    with pytest.raises(
+        suspend_builder.FrozenSuspendFilterBuildError,
+        match="reason_code=qe_execution_data_exclusion_window_mismatch",
+    ):
+        suspend_builder.ensure_frozen_suspend_filter_artifact(
+            cwd=workspace, print_fn=lambda *_a, **_k: None
+        )
 
 
 def test_window_subrange_only_emits_days_inside_window(tmp_path):

@@ -1,0 +1,375 @@
+{
+  "actual": "Only the bounded 688766.SH repair exists; there is no generic detector or scheduled fail-closed coverage receipt.",
+  "allowed_write_scope": [
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/db/init_tushare_schedules.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "noxfile.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/services/suspend_d_coverage.py",
+    "scripts/audit_suspend_d_coverage.py",
+    "backend/tests/services/test_suspend_d_coverage.py",
+    "tests/aistock_validation/bugs/20260916_BUG-1559-suspend-d-sparse-intervals-evade-full-market-coverage-audit.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1559",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-16T15:20:03.356883Z",
+  "description": "Only the bounded 688766.SH repair exists; there is no generic detector or scheduled fail-closed coverage receipt.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260916-ec718688d74b",
+      "timestamp": "2026-09-16T15:20:03.356866Z"
+    }
+  ],
+  "evidence_uris": [
+    "BUG-1558/PR-4877; production read-only audit: 3852 bracketed gaps, 14 partial and 20 no-suspend runs"
+  ],
+  "expected": "A deterministic read-only audit classifies every listed trading day without positive daily bars against full-day suspend_d and minute evidence, daily rolling and weekly historical scheduler jobs fail closed on unresolved gaps, and no row is auto-filled without authority.",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/suspend_d_coverage.py",
+      "scripts/audit_suspend_d_coverage.py",
+      "backend/tests/services/test_suspend_d_coverage.py"
+    ],
+    "changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/db/init_tushare_schedules.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/db/init_tushare_schedules.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "noxfile.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/suspend_d_coverage.py",
+        "scripts/audit_suspend_d_coverage.py",
+        "backend/tests/services/test_suspend_d_coverage.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "platform.db",
+        "qe.archive",
+        "selection_center",
+        "strategy_package",
+        "validation.center",
+        "validation.runner",
+        "validation.guardrails",
+        "validation.module_quality",
+        "tests.backend",
+        "tests.frontend",
+        "tests.validation_history",
+        "platform.api",
+        "scripts"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/ingestion/tdx_scheduler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/db/init_tushare_schedules.py",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        },
+        {
+          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        },
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "backend/services/suspend_d_coverage.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "scripts/audit_suspend_d_coverage.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/services/test_suspend_d_coverage.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/ingestion/tdx_scheduler.py",
+        "backend/db/init_tushare_schedules.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "noxfile.py",
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "backend/services/suspend_d_coverage.py",
+        "scripts/audit_suspend_d_coverage.py",
+        "backend/tests/services/test_suspend_d_coverage.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/db/init_tushare_schedules.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/services/suspend_d_coverage.py",
+      "scripts/audit_suspend_d_coverage.py",
+      "backend/tests/services/test_suspend_d_coverage.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/db/init_tushare_schedules.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "noxfile.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/services/suspend_d_coverage.py",
+      "scripts/audit_suspend_d_coverage.py",
+      "backend/tests/services/test_suspend_d_coverage.py"
+    ]
+  },
+  "first_seen_at": "2026-09-16T15:20:03.356883Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4878,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4878",
+  "last_seen_at": "2026-09-16T15:20:03.356883Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/audit_suspend_d_coverage.py --target-db production --start-date 2018-08-01 --end-date 2026-08-31",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "data_sync_autonomy_backend",
+    "validation_catalog_integrity",
+    "platform_api_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/schedules",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "fresh Python process at implementation HEAD fb73e02cdf5011cc0ee98ad85be6756cb60d81d2 imported backend.services.suspend_d_coverage and backend.ingestion.tdx_scheduler, classified a partial authority gap fail-closed, and resolved the Saturday full-history cadence",
+      "python -c fresh process import backend.services.suspend_d_coverage and backend.ingestion.tdx_scheduler at fb73e02cdf5011cc0ee98ad85be6756cb60d81d2 -> passed"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "suspend_d sparse intervals evade full-market coverage audit",
+  "trigger_condition": {
+    "fingerprint": "ec718688d74b15207869c9db",
+    "source_event_id": "FE-20260916-ec718688d74b"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy",
+        "platform_api"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend",
+        "platform_api_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy",
+          "platform_api"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend",
+          "platform_api_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

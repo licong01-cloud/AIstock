@@ -1042,8 +1042,8 @@ def _write_ordered_stock_csvs(
                 "rows": current_rows,
                 "sha256": digest,
                 "size_bytes": int(target.stat().st_size),
-                "start": first_time.isoformat(sep=" "),
-                "end": last_time.isoformat(sep=" "),
+                "start": (first_time.date().isoformat() if dataset == "daily_bin" else first_time.isoformat(sep=" ")),
+                "end": (last_time.date().isoformat() if dataset == "daily_bin" else last_time.isoformat(sep=" ")),
             }
         )
         ranges[current_code] = [

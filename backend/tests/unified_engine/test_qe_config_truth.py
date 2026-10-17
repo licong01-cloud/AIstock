@@ -1,5 +1,7 @@
 
+import hashlib
 import json
+import shlex
 import sys
 import asyncio
 import base64
@@ -29,6 +31,7 @@ from backend.services.quantevolver import qe_reconciliation_coordinator as qerc
 from backend.execution_algos.v25_two_stage_algo import V25TwoStageAlgo, V25TwoStageUnavailableError
 from backend.services.trading_core.execution_algo_retirement import ExecutionAlgoRetiredError
 from backend.services.quantevolver.config_composer import (
+    EXECUTION_DATA_EXCLUSIONS_PARAM,
     PRECOMPUTED_HMM_COEFF_JSON_PARAM,
     ConfigComposer,
     QE_DEFAULT_BACKTEST_END,
@@ -120,6 +123,141 @@ def test_custom_evo_zombie_recovery_is_single_flight(monkeypatch) -> None:
     asyncio.run(scenario())
 
 
+def test_custom_evo_capacity_recovery_is_exact_loop_single_flight(monkeypatch) -> None:
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    scheduler._custom_evo_capacity_resume_tasks = {}
+    started = asyncio.Event()
+    release = asyncio.Event()
+    calls = []
+
+    async def fake_resume(*, task_id: str, loop_index: int, loop_db_id: str) -> None:
+        calls.append((task_id, loop_index, loop_db_id))
+        started.set()
+        await release.wait()
+
+    monkeypatch.setattr(scheduler, "_safe_resume_custom_evo_capacity_loop", fake_resume)
+
+    async def scenario() -> None:
+        kwargs = {
+            "loop_db_id": "qe_capacity_task_Loop3",
+            "task_id": "qe_capacity_task",
+            "loop_index": 3,
+        }
+        assert scheduler._schedule_custom_evo_capacity_recovery(**kwargs) is True
+        await asyncio.wait_for(started.wait(), timeout=1)
+        assert scheduler._schedule_custom_evo_capacity_recovery(**kwargs) is False
+        assert calls == [("qe_capacity_task", 3, "qe_capacity_task_Loop3")]
+        release.set()
+        await asyncio.gather(*tuple(scheduler._custom_evo_capacity_resume_tasks.values()))
+        await asyncio.sleep(0)
+        assert scheduler._custom_evo_capacity_resume_tasks == {}
+
+        started.clear()
+        release.clear()
+        assert scheduler._schedule_custom_evo_capacity_recovery(**kwargs) is True
+        await asyncio.wait_for(started.wait(), timeout=1)
+        release.set()
+        await asyncio.gather(*tuple(scheduler._custom_evo_capacity_resume_tasks.values()))
+        assert calls == [
+            ("qe_capacity_task", 3, "qe_capacity_task_Loop3"),
+            ("qe_capacity_task", 3, "qe_capacity_task_Loop3"),
+        ]
+
+    asyncio.run(scenario())
+
+
+def test_custom_evo_capacity_recovery_submits_only_matching_persisted_loop(monkeypatch) -> None:
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    submissions = []
+
+    async def fake_submit(task_id: str, loop_index: int):
+        submissions.append((task_id, loop_index))
+        return f"{task_id}_Loop{loop_index}"
+
+    monkeypatch.setattr(scheduler, "submit_custom_evo_loop", fake_submit)
+
+    async def scenario() -> None:
+        await scheduler._safe_resume_custom_evo_capacity_loop(
+            task_id="qe_capacity_task",
+            loop_index=5,
+            loop_db_id="qe_capacity_task_Loop5",
+        )
+        await scheduler._safe_resume_custom_evo_capacity_loop(
+            task_id="qe_capacity_task",
+            loop_index=6,
+            loop_db_id="qe_other_task_Loop6",
+        )
+
+    asyncio.run(scenario())
+    assert submissions == [("qe_capacity_task", 5)]
+
+
+def test_scan_recovers_persisted_custom_evo_capacity_wait_without_zombie_replay(monkeypatch) -> None:
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    scheduler._retry_resume_tasks = {}
+    sql_seen = []
+    capacity_rows = [
+        {
+            "loop_id": "qe_restart_capacity_Loop3",
+            "task_id": "qe_restart_capacity",
+            "loop_index": 3,
+        }
+    ]
+
+    class Cursor:
+        def __init__(self):
+            self.rows = []
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def execute(self, sql, _params=None):
+            normalized = " ".join(str(sql).split())
+            sql_seen.append(normalized)
+            self.rows = capacity_rows if "t.task_type = 'custom_evo'" in normalized else []
+
+        def fetchall(self):
+            return list(self.rows)
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def cursor(self, *_args, **_kwargs):
+            return Cursor()
+
+    scheduled = []
+
+    def fake_schedule(**kwargs):
+        scheduled.append(dict(kwargs))
+        return True
+
+    monkeypatch.setattr(qes, "get_conn", lambda: Conn())
+    monkeypatch.setattr(scheduler, "_schedule_custom_evo_capacity_recovery", fake_schedule)
+
+    asyncio.run(scheduler.scan_running_loops())
+
+    assert scheduled == [
+        {
+            "loop_db_id": "qe_restart_capacity_Loop3",
+            "task_id": "qe_restart_capacity",
+            "loop_index": 3,
+        }
+    ]
+    zombie_sql = next(sql for sql in sql_seen if "SELECT t.task_id" in sql)
+    capacity_sql = next(sql for sql in sql_seen if "t.task_type = 'custom_evo'" in sql)
+    assert "agent_analysis #>> '{_qe_execution_capacity,state}' = 'waiting_capacity'" in zombie_sql
+    assert "l.status = 'pending'" in capacity_sql
+    assert "NOT COALESCE(l.config_json ? %s, false)" in capacity_sql
+    assert "ORDER BY l.updated_at, l.loop_id" in capacity_sql
+
+
 def _load_qrun_minute_module(monkeypatch):
     qlib = types.ModuleType("qlib")
     qlib_model = types.ModuleType("qlib.model")
@@ -149,8 +287,10 @@ def _load_qrun_minute_module(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _stub_execution_algo_catalog(monkeypatch):
-    """Keep config-truth tests independent from the local DB catalog."""
+def _isolate_config_environment_and_catalog(monkeypatch):
+    """Legacy config contracts must not consume an external active profile."""
+
+    monkeypatch.delenv("AISTOCK_ACTIVE_DATASET_PROFILE_PATH", raising=False)
 
     monkeypatch.setattr(
         ConfigComposer,
@@ -215,6 +355,247 @@ def test_hmm_coefficients_read_local_artifact_without_legacy_wsl_fallback(monkey
 
     payload = json.loads(result)
     assert payload["daily_coefficients"]["2024-07-01"]["801010.SI"] == 1.0
+
+
+def test_hmm_coefficients_validator_accepts_complete_pit_membership() -> None:
+    ConfigComposer._validate_hmm_coefficients_json(
+        json.dumps(
+            {
+                "daily_coefficients": {"2026-07-16": {"801010.SI": 1.0}},
+                "stock_sector_map_by_date": {
+                    "2026-07-16": {"000001.SZ": "801010.SI"},
+                },
+                "stock_sector_membership_spans": {
+                    "000001.SZ": [
+                        {
+                            "start_date": "2026-07-16",
+                            "end_date": "2026-07-16",
+                            "sector_code": "801010.SI",
+                        }
+                    ]
+                },
+            }
+        )
+    )
+
+
+def test_hmm_coefficients_selects_exact_active_release_artifact(monkeypatch, tmp_path) -> None:
+    import backend.services.quantevolver.config_composer as composer_module
+    from unittest.mock import MagicMock, patch
+
+    project_root = tmp_path / "project"
+    model_path = project_root / "backend" / "data" / "hmm_models" / "snap" / "models.json"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text("{}", encoding="utf-8")
+    active_summary = {
+        "generation": "20260920-v14-unified",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "profile_sha256": "4" * 64,
+        "dataset_manifest_sha256": "3" * 64,
+        "dataset_manifest_file_sha256": "2" * 64,
+    }
+    payload = {
+        "dataset_identity": {
+            "generation": active_summary["generation"],
+            "release_id": active_summary["release_id"],
+            "active_profile_sha256": active_summary["profile_sha256"],
+            "dataset_manifest_sha256": active_summary["dataset_manifest_sha256"],
+            "dataset_manifest_file_sha256": active_summary["dataset_manifest_file_sha256"],
+        },
+        "daily_coefficients": {"2024-07-01": {"801010.SI": 1.0}},
+        "stock_sector_membership_spans": {
+            "000001.SZ": [
+                {"start_date": "2024-07-01", "end_date": "2026-08-28", "sector_code": "801010.SI"}
+            ]
+        },
+    }
+    content = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    filename = "coefficients_preset_A_2024-07-01_2026-08-28__v14.json"
+    coeff_path = model_path.parent / filename
+    coeff_path.write_text(content, encoding="utf-8")
+    sha256 = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    svc = MagicMock()
+    svc.get_snapshot.return_value = {"snapshot_id": "snap", "config_id": "cfg"}
+    svc.get_config.return_value = {
+        "config_json": {
+            "strict_no_leakage": True,
+            "coefficient_windows": [
+                {
+                    "preset": "preset_A",
+                    "test_start": "2024-07-01",
+                    "backtest_end": "2026-08-28",
+                    "strict_no_leakage": True,
+                    "dataset_generation": active_summary["generation"],
+                    "release_id": active_summary["release_id"],
+                    "active_profile_sha256": active_summary["profile_sha256"],
+                    "dataset_manifest_identity": active_summary["dataset_manifest_sha256"],
+                    "dataset_manifest_file_sha256": active_summary["dataset_manifest_file_sha256"],
+                    "coefficient_filename": filename,
+                    "coefficient_sha256": sha256,
+                    "coefficient_bytes": len(content.encode("utf-8")),
+                }
+            ],
+        }
+    }
+    monkeypatch.setattr(composer_module, "AISTOCK_PROJECT_ROOT", project_root)
+
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        result = ConfigComposer()._precompute_hmm_coefficients(
+            {
+                "sector_hmm_model_path": str(model_path),
+                "hmm_model_version_id": "snap",
+                "hmm_signal_preset": "preset_A",
+                "_qe_active_dataset_summary": active_summary,
+            },
+            {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+        )
+
+    assert json.loads(result)["dataset_identity"]["generation"] == active_summary["generation"]
+
+    coeff_path.write_text(content + "\n", encoding="utf-8")
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="SHA-256 differs"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": str(model_path),
+                    "hmm_model_version_id": "snap",
+                    "hmm_signal_preset": "preset_A",
+                    "_qe_active_dataset_summary": active_summary,
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+            )
+
+    stale_payload = json.loads(content)
+    stale_payload["dataset_identity"]["generation"] = "20260918-v11"
+    stale_content = json.dumps(stale_payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    coeff_path.write_text(stale_content, encoding="utf-8")
+    window = svc.get_config.return_value["config_json"]["coefficient_windows"][0]
+    window["coefficient_sha256"] = hashlib.sha256(stale_content.encode("utf-8")).hexdigest()
+    window["coefficient_bytes"] = len(stale_content.encode("utf-8"))
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="dataset identity differs"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": str(model_path),
+                    "hmm_model_version_id": "snap",
+                    "hmm_signal_preset": "preset_A",
+                    "_qe_active_dataset_summary": active_summary,
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+            )
+
+
+def test_hmm_coefficients_rejects_stale_release_registration(monkeypatch, tmp_path) -> None:
+    import backend.services.quantevolver.config_composer as composer_module
+    from unittest.mock import MagicMock, patch
+
+    model_path = tmp_path / "project" / "backend" / "data" / "hmm_models" / "snap" / "models.json"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text("{}", encoding="utf-8")
+    svc = MagicMock()
+    svc.get_snapshot.return_value = {"snapshot_id": "snap", "config_id": "cfg"}
+    svc.get_config.return_value = {
+        "config_json": {
+            "strict_no_leakage": True,
+            "coefficient_windows": [
+                {
+                    "preset": "preset_A",
+                    "test_start": "2024-07-01",
+                    "backtest_end": "2026-08-28",
+                    "strict_no_leakage": True,
+                    "dataset_generation": "20260918-v11",
+                    "release_id": "qe_hmm_full_v2_20260831",
+                    "active_profile_sha256": "1" * 64,
+                    "dataset_manifest_identity": "1" * 64,
+                    "dataset_manifest_file_sha256": "1" * 64,
+                }
+            ],
+        }
+    }
+    monkeypatch.setattr(composer_module, "AISTOCK_PROJECT_ROOT", tmp_path / "project")
+
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="not registered for the active dataset identity"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": str(model_path),
+                    "hmm_model_version_id": "snap",
+                    "hmm_signal_preset": "preset_A",
+                    "_qe_active_dataset_summary": {
+                        "generation": "20260920-v14-unified",
+                        "release_id": "qe_hmm_full_v2_20260831",
+                        "profile_sha256": "4" * 64,
+                        "dataset_manifest_sha256": "3" * 64,
+                        "dataset_manifest_file_sha256": "2" * 64,
+                    },
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+            )
+
+
+def test_hmm_coefficients_rejects_active_window_without_immutable_file_binding(
+    monkeypatch, tmp_path
+) -> None:
+    import backend.services.quantevolver.config_composer as composer_module
+    from unittest.mock import MagicMock, patch
+
+    model_path = tmp_path / "project" / "backend" / "data" / "hmm_models" / "snap" / "models.json"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text("{}", encoding="utf-8")
+    active_summary = {
+        "generation": "20260920-v14-unified",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "profile_sha256": "4" * 64,
+        "dataset_manifest_sha256": "3" * 64,
+        "dataset_manifest_file_sha256": "2" * 64,
+    }
+    svc = MagicMock()
+    svc.get_snapshot.return_value = {"snapshot_id": "snap", "config_id": "cfg"}
+    svc.get_config.return_value = {
+        "config_json": {
+            "strict_no_leakage": True,
+            "coefficient_windows": [
+                {
+                    "preset": "preset_A",
+                    "test_start": "2024-07-01",
+                    "backtest_end": "2026-08-28",
+                    "strict_no_leakage": True,
+                    "dataset_generation": active_summary["generation"],
+                    "release_id": active_summary["release_id"],
+                    "active_profile_sha256": active_summary["profile_sha256"],
+                    "dataset_manifest_identity": active_summary["dataset_manifest_sha256"],
+                    "dataset_manifest_file_sha256": active_summary["dataset_manifest_file_sha256"],
+                }
+            ],
+        }
+    }
+    monkeypatch.setattr(composer_module, "AISTOCK_PROJECT_ROOT", tmp_path / "project")
+
+    with patch("backend.services.hmm_training_service.HMMTrainingService", return_value=svc):
+        with pytest.raises(ValueError, match="missing immutable artifact binding"):
+            ConfigComposer()._precompute_hmm_coefficients(
+                {
+                    "sector_hmm_model_path": str(model_path),
+                    "hmm_model_version_id": "snap",
+                    "hmm_signal_preset": "preset_A",
+                    "_qe_active_dataset_summary": active_summary,
+                },
+                {"test_start": "2024-07-01", "backtest_end": "2026-08-28"},
+            )
+
+
+def test_hmm_coefficients_validator_rejects_missing_pit_membership_date() -> None:
+    with pytest.raises(RuntimeError, match="missing coefficient dates"):
+        ConfigComposer._validate_hmm_coefficients_json(
+            json.dumps(
+                {
+                    "daily_coefficients": {"2026-07-16": {"801010.SI": 1.0}},
+                    "stock_sector_map_by_date": {
+                        "2026-07-15": {"000001.SZ": "801010.SI"},
+                    },
+                }
+            )
+        )
 
 
 def test_hmm_linux_worker_model_path_is_not_converted_to_windows(monkeypatch):
@@ -486,6 +867,71 @@ def _base_yaml(**kwargs):
     return ConfigComposer()._compose_conf_yaml(**params)
 
 
+@pytest.mark.parametrize("explicit_model", [False, True])
+@pytest.mark.parametrize(("device_type", "max_bin"), [("cpu", 63), ("gpu", 255)])
+def test_lgbm_explicit_device_and_bins_are_model_only(explicit_model, device_type, max_bin):
+    model_info = (
+        {"model_id": "__seed_LGBModel_conservative_v1__", "model_type": "LGBM"}
+        if explicit_model else None
+    )
+    strategy_info = {
+        "strategy_id": "score_weighted_topk_v2",
+        "source_code": "class ScoreWeightedTopkStrategyV2:\n    pass\n",
+        "portfolio_config": {"class": "ScoreWeightedTopkStrategyV2", "kwargs": {}},
+    }
+    common_params = {
+        "topk": 50, "learning_rate": 0.05, "num_threads": 12,
+        "random_seed": 42, "filter_suspended_on_signal": True,
+    }
+    baseline = _base_yaml(
+        model_info=model_info, strategy_info=strategy_info, custom_params=common_params,
+    )
+    expected = yaml.safe_load(baseline)
+    expected["task"]["model"]["kwargs"].update(device_type=device_type, max_bin=max_bin)
+
+    actual = yaml.safe_load(_base_yaml(
+        model_info=model_info,
+        strategy_info=strategy_info,
+        custom_params={**common_params, "device_type": device_type, "max_bin": max_bin},
+    ))
+
+    assert actual == expected
+    assert actual["task"]["model"]["class"] == "LGBModel"
+    strategy = actual["port_analysis_config"]["strategy"]
+    assert strategy["class"] == "SuspendFilterScoreWeightedTopkStrategyV2"
+    assert not {"device_type", "max_bin", "num_threads"} & strategy["kwargs"].keys()
+    assert _base_yaml(
+        model_info=model_info, strategy_info=strategy_info, custom_params=common_params,
+    ) == baseline
+
+
+def test_non_lgbm_custom_strategy_keeps_same_named_constructor_parameters():
+    strategy_params = {"device_type": "strategy_owned", "max_bin": 127, "num_threads": 3}
+    actual = yaml.safe_load(_base_yaml(
+        model_info={"model_type": "LINEAR"},
+        strategy_info={
+            "strategy_id": "database_custom",
+            "source_code": "class DatabaseCustomStrategy:\n    pass\n",
+            "portfolio_config": {"class": "DatabaseCustomStrategy", "kwargs": {}},
+        },
+        custom_params=strategy_params,
+    ))
+
+    assert actual["task"]["model"]["class"] == "LinearModel"
+    assert not strategy_params.keys() & actual["task"]["model"]["kwargs"].keys()
+    assert strategy_params.items() <= actual["port_analysis_config"]["strategy"]["kwargs"].items()
+
+
+@pytest.mark.parametrize(
+    ("model_info", "bad_key"),
+    [(None, "max_bni"), ({"model_type": "LINEAR"}, "device_type"),
+     ({"model_type": "LINEAR"}, "max_bin")],
+)
+def test_model_parameter_routing_preserves_strict_strategy_validation(model_info, bad_key):
+    with pytest.raises(ValueError, match=bad_key):
+        _base_yaml(model_info=model_info, custom_params={bad_key: 123})
+
+
 def _slice_yaml_between(yaml_text: str, start_marker: str, end_marker: str) -> str:
     start = yaml_text.index(start_marker)
     end = yaml_text.index(end_marker, start)
@@ -560,6 +1006,24 @@ def test_qe_exchange_can_receive_wider_quote_universe_codes_for_forced_exit():
     assert "- 000001.SZ" in exchange
     assert "- 600000.SH" in exchange
     assert "contract: stock_event_risk_policy_v1" in yaml_text
+
+
+def test_qe_exchange_defaults_to_configured_market_instead_of_all_catalog():
+    yaml_text = _base_yaml(
+        execution_algo="TWAP",
+        execution_algo_params={},
+        custom_params={"stock_pool": "stock_universe"},
+    )
+    exchange = _slice_yaml_between(
+        yaml_text,
+        "        exchange_kwargs:",
+        "task:",
+    )
+
+    assert "market: &market stock_universe" in yaml_text
+    assert "codes: *market" in exchange
+    parsed = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+    assert parsed["port_analysis_config"]["backtest"]["exchange_kwargs"]["codes"] == "stock_universe"
 
 
 def test_qe_risk_policy_wraps_outer_strategy_and_emits_runtime_kwargs():
@@ -682,7 +1146,63 @@ def test_qe_frozen_risk_policy_spec_pins_frozen_dataset_without_db(monkeypatch):
     assert spec["pins"]["meta_export_sha256"] == QE_FROZEN_META_EXPORT_SHA256
 
 
-def test_qe_frozen_risk_policy_spec_requires_provider_uri():
+def test_qe_frozen_spec_pins_explicit_full_window_execution_data_exclusion():
+    exclusion = {
+        "schema_version": "qe_execution_data_exclusion_v1",
+        "instrument": "601989.SH",
+        "scope": "full_backtest_window",
+        "start_date": DATA_SPLIT["test_start"],
+        "end_date": DATA_SPLIT["backtest_end"],
+        "reason_code": "minute_source_gap_confirmed_unfillable",
+        "evidence_sha256": "c" * 64,
+    }
+    spec = json.loads(
+        ConfigComposer()._build_qe_frozen_risk_policy_spec(
+            DATA_SPLIT,
+            {
+                "risk_policy": {"enabled": True, "providers": ["st_pit"]},
+                EXECUTION_DATA_EXCLUSIONS_PARAM: [exclusion],
+            },
+            qlib_data_path="/frozen/bin",
+        )
+    )
+
+    assert spec[EXECUTION_DATA_EXCLUSIONS_PARAM] == [exclusion]
+    assert ConfigComposer._is_suspend_filter_enabled(
+        {EXECUTION_DATA_EXCLUSIONS_PARAM: [exclusion]}
+    ) is True
+
+
+def test_qe_execution_data_exclusion_rejects_partial_window_or_untyped_reason():
+    base = {
+        "schema_version": "qe_execution_data_exclusion_v1",
+        "instrument": "601989.SH",
+        "scope": "full_backtest_window",
+        "start_date": DATA_SPLIT["test_start"],
+        "end_date": DATA_SPLIT["backtest_end"],
+        "reason_code": "minute_source_gap_confirmed_unfillable",
+        "evidence_sha256": "d" * 64,
+    }
+    for update in (
+        {"start_date": "2021-07-02"},
+        {"reason_code": "ignore_missing_data"},
+    ):
+        invalid = {**base, **update}
+        with pytest.raises(ValueError):
+            ConfigComposer()._build_qe_frozen_risk_policy_spec(
+                DATA_SPLIT,
+                {
+                    "risk_policy": {"enabled": True, "providers": ["st_pit"]},
+                    EXECUTION_DATA_EXCLUSIONS_PARAM: [invalid],
+                },
+                qlib_data_path="/frozen/bin",
+            )
+
+
+def test_qe_frozen_risk_policy_spec_requires_provider_uri(monkeypatch):
+    import backend.services.quantevolver.config_composer as composer_module
+
+    monkeypatch.setattr(composer_module, "QLIB_DATA_PATH_WSL", "")
     with pytest.raises(RuntimeError, match="reason_code=qe_frozen_build_spec_invalid"):
         ConfigComposer()._build_qe_frozen_risk_policy_spec(
             DATA_SPLIT,
@@ -746,6 +1266,27 @@ def test_qe_risk_policy_suspend_filter_wires_frozen_artifact():
     assert artifact is None
     assert custom_params["suspend_filter_file"] == "qe_suspend_filter.json"
     assert custom_params["suspend_filter_strict"] is True
+
+
+def test_execution_data_exclusion_is_control_metadata_not_qlib_kwarg():
+    exclusion = {
+        "schema_version": "qe_execution_data_exclusion_v1",
+        "instrument": "601989.SH",
+        "scope": "full_backtest_window",
+        "start_date": DATA_SPLIT["test_start"],
+        "end_date": DATA_SPLIT["backtest_end"],
+        "reason_code": "minute_source_gap_confirmed_unfillable",
+        "evidence_sha256": "f" * 64,
+    }
+
+    yaml_text = _base_yaml(
+        custom_params={EXECUTION_DATA_EXCLUSIONS_PARAM: [exclusion]}
+    )
+
+    outer_strategy = _slice_yaml_between(yaml_text, "    strategy:", "    model:")
+    assert "class: SuspendFilterTopkDropoutStrategy" in outer_strategy
+    assert "filter_suspended_on_signal: true" in outer_strategy
+    assert EXECUTION_DATA_EXCLUSIONS_PARAM not in yaml_text
 
 
 def test_hmm_precomputed_coefficients_skip_runtime_precompute(monkeypatch):
@@ -865,7 +1406,9 @@ def test_custom_evo_builder_accepts_persisted_factor_list():
     assert cfg.model_source_loop_index == 26
 
 
-def test_custom_evo_general_ptnn_ltr_model_params_reaches_composed_conf(monkeypatch):
+@pytest.mark.parametrize("field", ["ltr_loss_mode", "loss"])
+@pytest.mark.parametrize("mode", ["approx_ndcg_at_k", "log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_custom_evo_general_ptnn_ltr_model_params_reaches_composed_conf(monkeypatch, field, mode):
     composer = ConfigComposer()
     monkeypatch.setattr(composer, "_get_factors_info", lambda *_args, **_kwargs: [])
     monkeypatch.setattr(
@@ -895,7 +1438,7 @@ def test_custom_evo_general_ptnn_ltr_model_params_reaches_composed_conf(monkeypa
             label_horizon=20,
             runtime_flags={"random_seed": 42},
             model_params={
-                "ltr_loss_mode": "approx_ndcg_at_k",
+                field: mode,
                 "topk_train_k": 25,
                 "ltr_temperature": 0.8,
             },
@@ -931,8 +1474,9 @@ def test_custom_evo_general_ptnn_ltr_model_params_reaches_composed_conf(monkeypa
     model_kwargs = model_cfg["kwargs"]
     assert model_cfg["class"] == "AIStockGeneralPTNNLTR"
     assert model_cfg["module_path"] == "aistock_models.general_ptnn_ltr"
-    assert model_kwargs["loss"] == "approx_ndcg_at_k"
-    assert model_kwargs["ltr_loss_mode"] == "approx_ndcg_at_k"
+    expected_mode = "log_approx_ndcg_at_k" if mode == "approx_ndcg_at_k" else mode
+    assert model_kwargs["loss"] == expected_mode
+    assert model_kwargs["ltr_loss_mode"] == expected_mode
     assert model_kwargs["topk_train_k"] == 25
     assert model_kwargs["ltr_temperature"] == 0.8
     assert "aistock_models/general_ptnn_ltr.py" in result["experiment_files"]
@@ -947,6 +1491,9 @@ def test_custom_evo_general_ptnn_ltr_model_params_reaches_composed_conf(monkeypa
         {"custom_params": {"ltr_loss_mode": "approx_ndcg_at_k"}},
         {"ltr_loss_mode": "approx_ndcg_at_k"},
         {"strategy_params": {"ltr_loss_mode": "approx_ndcg_at_k"}},
+        {"custom_params": {"loss": "log_approx_ndcg_at_k"}},
+        {"loss": "ndcg_at_k_pairwise"},
+        {"strategy_params": {"loss": "ndcg_at_k_pairwise"}},
     ],
 )
 def test_custom_evo_general_ptnn_ltr_misplaced_request_fails_loud(bad_patch):
@@ -1096,8 +1643,20 @@ class _CustomEvoQueueCursor:
         self.sql = " ".join(str(sql).split())
         self.state["sql"].append(self.sql)
         self.state["params"].append(params)
+        self.rowcount = 1
+        if "RETURNING status" in self.sql and self.state.get("claim_race"):
+            # A terminal transition after the SELECT must defeat the SQL claim.
+            self.state["existing_loop"] = (self.state["claim_race"], "node-a")
+            self.state["transitioned"] = not (
+                "WHERE qe_evolution_loops.status = 'pending'" in self.sql
+                or "AND status = 'pending'" in self.sql
+            )
 
     def fetchone(self):
+        if self.sql.startswith("SELECT * FROM qe_evolution_tasks"):
+            return self.state["task"]
+        if self.sql.startswith("SELECT status FROM qe_evolution_tasks"):
+            return {"status": "running"}
         if self.sql.startswith("SELECT status, node_id FROM qe_evolution_loops"):
             return self.state.get("existing_loop")
         if self.sql.startswith("SELECT status FROM qe_evolution_loops"):
@@ -1106,6 +1665,13 @@ class _CustomEvoQueueCursor:
         if "RETURNING status" in self.sql and self.state.get("transitioned", True):
             return ("running",)
         return None
+
+    def fetchall(self):
+        statuses = self.state["statuses"]
+        if self.sql.startswith("SELECT loop_index, status"):
+            return [{"loop_index": index, "status": status} for index, status in statuses.items()]
+        counts = {status: list(statuses.values()).count(status) for status in set(statuses.values())}
+        return list(counts.items())
 
 
 class _CustomEvoQueueConn:
@@ -1188,15 +1754,6 @@ def test_retry_loop_queues_until_custom_evo_parallelism_before_executor_submit()
     submit_idx = source.index("result = await executor.submit")
 
     assert queue_idx < submit_idx
-
-
-def test_custom_evo_parallelism_queue_helper_marks_pending_then_running():
-    source = inspect.getsource(AutoEvolutionScheduler._mark_custom_evo_loop_running_when_slot_available)
-
-    assert "ELSE 'pending'" in source
-    assert "status = 'running'" in source
-    assert "wait_for_qe_reconciliation" in source
-    assert "await asyncio.sleep(poll_seconds)" not in source
 
 
 def test_custom_evo_parallelism_queue_helper_waits_then_runs(monkeypatch):
@@ -1314,6 +1871,7 @@ def test_custom_evo_parallelism_queue_helper_does_not_resubmit_active_loop(monke
         "enters": 0,
         "exits": 0,
         "transitioned": False,
+        "existing_loop": ("running", "node-a"),
     }
 
     def fake_enforce(cur, *, task, loop_index, target_node_id, loop_db_id):
@@ -1340,8 +1898,113 @@ def test_custom_evo_parallelism_queue_helper_does_not_resubmit_active_loop(monke
     )
 
     assert slot is None
-    assert any("RETURNING status" in sql for sql in state["sql"])
+    assert all(sql.startswith("SELECT ") for sql in state["sql"])
     assert not any("UPDATE qe_evolution_tasks SET status = 'running'" in sql for sql in state["sql"])
+
+
+@pytest.mark.parametrize("status", ["failed", "cancelled", "canceled", "completed", "running", "processing", "unknown", None])
+@pytest.mark.parametrize("available", [False, True])
+@pytest.mark.parametrize("insert_if_missing", [False, True])
+def test_custom_evo_queue_preserves_existing_outcomes(monkeypatch, status, available, insert_if_missing):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    state = {"sql": [], "params": [], "commits": 0, "enters": 0, "exits": 0, "existing_loop": (status, None)}
+    monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
+    monkeypatch.setattr(scheduler, "_enforce_custom_evo_node_parallelism_slot", lambda *args, **kwargs: {
+        "node_id": "node-a", "available": available, "active_count": int(not available), "limit": 1,
+    })
+
+    async def forbid_wait(*args, **kwargs):
+        pytest.fail("A non-pending Loop must not enter the capacity queue")
+
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", forbid_wait)
+    result = asyncio.run(scheduler._mark_custom_evo_loop_running_when_slot_available(
+        task=_custom_evo_task_for_parallelism(), loop_index=2, target_node_id="node-a",
+        loop_db_id="qe_parallel_task_Loop2", action_type="evolve", insert_if_missing=insert_if_missing,
+    ))
+    assert result is None
+    assert state["existing_loop"] == (status, None)
+    assert all(sql.startswith("SELECT ") for sql in state["sql"])
+
+
+@pytest.mark.parametrize("race", ["failed", "cancelled", "running"])
+@pytest.mark.parametrize("insert_if_missing", [False, True])
+def test_custom_evo_claim_loses_to_concurrent_transition(monkeypatch, race, insert_if_missing):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    state = {"sql": [], "params": [], "commits": 0, "enters": 0, "exits": 0,
+             "existing_loop": ("pending", "node-a"), "claim_race": race}
+    monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
+    monkeypatch.setattr(scheduler, "_enforce_custom_evo_node_parallelism_slot", lambda *args, **kwargs: {
+        "node_id": "node-a", "available": True,
+    })
+    assert asyncio.run(scheduler._mark_custom_evo_loop_running_when_slot_available(
+        task=_custom_evo_task_for_parallelism(), loop_index=2, target_node_id="node-a",
+        loop_db_id="qe_parallel_task_Loop2", action_type="retry", insert_if_missing=insert_if_missing,
+    )) is None
+    assert state["existing_loop"][0] == race
+    assert not any(sql.startswith("UPDATE qe_evolution_tasks") for sql in state["sql"])
+
+
+@pytest.mark.parametrize("insert_if_missing", [False, True])
+def test_custom_evo_queued_loop_stops_when_outcome_changes(monkeypatch, insert_if_missing):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    state = {"sql": [], "params": [], "commits": 0, "enters": 0, "exits": 0,
+             "existing_loop": ("pending", "node-a")}
+    monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
+    monkeypatch.setattr(scheduler, "_enforce_custom_evo_node_parallelism_slot", lambda *args, **kwargs: {
+        "node_id": "node-a", "available": False, "active_count": 1, "limit": 1,
+    })
+
+    async def finish_while_waiting(*args, **kwargs):
+        assert kwargs["timeout_seconds"] >= 60
+        state["existing_loop"] = ("failed", "node-a")
+        return 1
+
+    monkeypatch.setattr(qerc, "wait_for_qe_reconciliation", finish_while_waiting)
+    assert asyncio.run(scheduler._mark_custom_evo_loop_running_when_slot_available(
+        task=_custom_evo_task_for_parallelism(), loop_index=2, target_node_id="node-a",
+        loop_db_id="qe_parallel_task_Loop2", action_type="retry", insert_if_missing=insert_if_missing,
+    )) is None
+    assert state["existing_loop"][0] == "failed"
+    assert state["enters"] == state["exits"] == 2
+    assert all(sql.startswith("SELECT ") for sql in state["sql"])
+
+
+@pytest.mark.parametrize("statuses,expected", [
+    ({1: "completed", 2: "failed", 3: "cancelled", 4: "canceled", 5: "running", 6: "processing", 7: "pending", 8: None}, [7, 9]),
+    ({1: "running", 2: "processing"}, []),
+    ({1: "completed", 2: "failed"}, []),
+    ({1: "completed", 2: "completed"}, []),
+])
+def test_custom_evo_automatic_dispatch_preserves_outcomes(monkeypatch, statuses, expected):
+    scheduler = AutoEvolutionScheduler.__new__(AutoEvolutionScheduler)
+    task = _custom_evo_task_for_parallelism(limit=2)
+    count = 9 if expected else len(statuses)
+    task["strategy_evo_config"]["loops"] = [{"loop_index": i, "node_id": "node-a"} for i in range(1, count + 1)]
+    state = {"sql": [], "params": [], "commits": 0, "enters": 0, "exits": 0, "task": task, "statuses": dict(statuses)}
+    monkeypatch.setattr(qes, "get_conn", lambda: _CustomEvoQueueConn(state))
+    monkeypatch.setattr(scheduler, "_get_task_status", lambda _: "running")
+    submitted, waited = [], []
+
+    async def submit(task_id, index, **kwargs):
+        submitted.append(index)
+        state["statuses"][index] = "completed"
+        return f"{task_id}_Loop{index}"
+
+    async def wait(task_id, index, loop_id):
+        waited.append(index)
+
+    monkeypatch.setattr(scheduler, "submit_custom_evo_loop", submit)
+    monkeypatch.setattr(scheduler, "_wait_and_process_custom_evo_loop", wait)
+    asyncio.run(scheduler.submit_custom_evo_all_loops(task["task_id"]))
+    assert submitted == waited == expected
+    assert all(state["statuses"][i] == status for i, status in statuses.items() if i not in expected)
+    terminal_updates = [params[0] for sql, params in zip(state["sql"], state["params"])
+                        if sql.startswith("UPDATE qe_evolution_tasks SET status = %s")]
+    if any(status in {"running", "processing", None} for status in statuses.values()):
+        assert terminal_updates == []
+    else:
+        assert terminal_updates == ["completed" if set(statuses.values()) == {"completed"} else "failed"]
+    assert task["strategy_evo_config"]["node_parallelism"] == {"node-a": 2}
 
 
 def test_gpu_phase_waiter_releases_before_loop_terminal_after_lifecycle_event(monkeypatch):
@@ -1421,11 +2084,19 @@ def test_scheduler_resolves_model_aware_gpu_training_policy(monkeypatch):
         "gat-model": {"model_id": "gat-model", "model_config": {"class": "EfficientGATs"}},
         "lstm-model": {"model_id": "lstm-model", "model_name": "LSTM"},
     }
-    monkeypatch.setattr(ConfigComposer, "_get_model_info", lambda _self, model_id: model_rows[model_id])
+    monkeypatch.setattr(
+        ConfigComposer,
+        "_get_model_info",
+        lambda _self, model_id: model_rows.get(model_id),
+    )
 
     assert AutoEvolutionScheduler._resolve_model_gpu_training_policy("gat-model") == "exclusive"
     assert AutoEvolutionScheduler._resolve_model_gpu_training_policy("lstm-model") == "parallel"
     assert AutoEvolutionScheduler._resolve_model_gpu_training_policy(None) == "parallel"
+    assert AutoEvolutionScheduler._resolve_model_gpu_training_contract("missing-model") == (
+        "parallel",
+        False,
+    )
 
 
 def test_scheduler_forces_durable_phase_tracking_for_exclusive_full_train(monkeypatch):
@@ -1435,31 +2106,60 @@ def test_scheduler_forces_durable_phase_tracking_for_exclusive_full_train(monkey
 
     def _resolve(model_id):
         calls.append(model_id)
-        return policies[model_id]
+        return policies[model_id], True
 
-    monkeypatch.setattr(scheduler, "_resolve_model_gpu_training_policy", _resolve)
+    monkeypatch.setattr(scheduler, "_resolve_model_gpu_training_contract", _resolve)
 
     assert scheduler._resolve_gpu_execution_contract(
         model_id="gat-model",
         requested_phase_pipeline=False,
         full_train=True,
-    ) == ("exclusive", True)
+        allow_parallel_training=True,
+    ) == ("exclusive", True, False)
     assert scheduler._resolve_gpu_execution_contract(
         model_id="lstm-model",
         requested_phase_pipeline=False,
         full_train=True,
-    ) == ("parallel", False)
+        allow_parallel_training=True,
+    ) == ("parallel", False, True)
     assert scheduler._resolve_gpu_execution_contract(
         model_id="lstm-model",
         requested_phase_pipeline=True,
         full_train=True,
-    ) == ("parallel", True)
+        allow_parallel_training=True,
+    ) == ("parallel", True, True)
     assert scheduler._resolve_gpu_execution_contract(
         model_id="gat-model",
         requested_phase_pipeline=True,
         full_train=False,
-    ) == ("parallel", False)
-    assert calls == ["gat-model", "lstm-model", "lstm-model"]
+        allow_parallel_training=True,
+    ) == ("parallel", False, False)
+    assert scheduler._resolve_gpu_execution_contract(
+        model_id="lstm-model",
+        requested_phase_pipeline=False,
+        full_train=True,
+        allow_parallel_training=False,
+    ) == ("parallel", False, False)
+    assert calls == ["gat-model", "lstm-model", "lstm-model", "lstm-model"]
+
+
+def test_custom_evo_submission_propagates_proven_parallel_training_capacity():
+    source = inspect.getsource(AutoEvolutionScheduler._submit_custom_evo_loop_unified)
+
+    assert '"parallel_training_eligible": parallel_training_eligible' in source
+    assert 'submission_node_capacity=int(slot["limit"])' in source
+    assert "parallel_training_eligible=parallel_training_eligible" in source
+    assert "parallel_training_eligible=False" in source
+
+
+def test_custom_evo_retry_persists_parallel_training_capacity_before_submit():
+    source = inspect.getsource(AutoEvolutionScheduler.retry_loop)
+
+    persist_idx = source.index('config["parallel_training_eligible"]')
+    submit_idx = source.index("result = await executor.submit")
+    assert persist_idx < submit_idx
+    assert 'int(slot["limit"]) if slot is not None else None' in source
+    assert "parallel_training_eligible=retry_parallel_training_eligible" in source
 
 
 def test_scheduler_atomically_reserves_policy_specific_gpu_phase_sessions(monkeypatch):
@@ -1920,6 +2620,33 @@ def _custom_timeseries_lstm_model_info(training_hp=None):
         },
         "code_text": "class LSTMModel: pass\nmodel_cls = LSTMModel\n",
     }
+
+
+def test_custom_timeseries_general_ptnn_receives_explicit_fixed_seed():
+    yaml_text = _base_yaml(
+        model_info=_custom_timeseries_lstm_model_info(),
+        custom_params={"random_seed": 123},
+    )
+    parsed = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+
+    assert parsed["task"]["model"]["class"] == "GeneralPTNN"
+    assert parsed["task"]["model"]["kwargs"]["seed"] == 123
+    assert parsed["qe_runtime"]["random_seed"] == 123
+
+
+def test_custom_timeseries_ltr_adapter_receives_explicit_fixed_seed():
+    yaml_text = _base_yaml(
+        model_info=_custom_timeseries_lstm_model_info(),
+        custom_params={
+            "random_seed": 314,
+            "ltr_loss_mode": "approx_ndcg_at_k",
+        },
+    )
+    parsed = _parse_conf_yaml_with_jinja_placeholders(yaml_text)
+
+    assert parsed["task"]["model"]["class"] == "AIStockGeneralPTNNLTR"
+    assert parsed["task"]["model"]["kwargs"]["seed"] == 314
+    assert parsed["qe_runtime"]["random_seed"] == 314
 
 
 def _builtin_transformer_model_info():
@@ -3415,6 +4142,8 @@ def test_efficient_gats_gpu_resident_predict_uses_lifecycle_without_resource_que
     model.device = torch.device("cuda:0")
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.cuda, "empty_cache", lambda: calls.append("empty_cache"))
+    # This fixture emulates CUDA with CPU tensors; do not touch real hardware.
+    monkeypatch.setattr(torch.cuda, "synchronize", lambda device: calls.append("synchronize"))
     monkeypatch.setattr(
         efficient_gats,
         "_finalize_gpu_phase_lifecycle",
@@ -3440,7 +4169,8 @@ def test_efficient_gats_gpu_resident_predict_uses_lifecycle_without_resource_que
     monkeypatch.setattr(model, "_can_activate_gpu_resident", _assert_empty_cache_already_called)
     preds = model.predict(dataset)
 
-    assert calls == ["empty_cache", "lifecycle"]
+    daily_queries = len(dataset.prepare("test").get_index().get_level_values("datetime").unique())
+    assert calls == ["empty_cache", *(["synchronize"] * daily_queries), "lifecycle"]
     assert not preds.empty
 
 
@@ -4105,6 +4835,34 @@ def test_general_ptnn_default_mse_path_stays_on_qlib_adapter():
     assert "class: TSDatasetH" in yaml_text
 
 
+@pytest.mark.parametrize("mode", ["log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_ranking_changes_only_objective_and_adapter(mode):
+    # Whole generated config equality preserves dates/labels/pool/seed, all
+    # model hyperparameters, strategy/cost/execution and dataset wiring.
+    base = _parse_conf_yaml_with_jinja_placeholders(_base_yaml(model_info=_custom_timeseries_lstm_model_info()))
+    ranked = _parse_conf_yaml_with_jinja_placeholders(_base_yaml(
+        model_info=_custom_timeseries_lstm_model_info(), custom_params={"ltr_loss_mode": mode},
+    ))
+    model = ranked["task"]["model"]
+    for key in list(model["kwargs"]):
+        if key.startswith("ltr_") or key == "topk_train_k":
+            del model["kwargs"][key]
+    model["kwargs"]["loss"] = "mse"
+    model["class"] = base["task"]["model"]["class"]
+    model["module_path"] = base["task"]["model"]["module_path"]
+    assert ranked == base
+
+
+@pytest.mark.parametrize("field", ["loss", "ltr_loss_mode"])
+@pytest.mark.parametrize("mode", ["log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_ranking_catalog_training_hyperparameters_reach_yaml(field, mode):
+    model = _parse_conf_yaml_with_jinja_placeholders(_base_yaml(
+        model_info=_custom_timeseries_lstm_model_info(training_hp={field: mode}),
+    ))["task"]["model"]
+    assert model["class"] == "AIStockGeneralPTNNLTR"
+    assert model["kwargs"]["loss"] == model["kwargs"]["ltr_loss_mode"] == mode
+
+
 def test_general_ptnn_local_wsl_uses_host_safe_single_process_loader():
     parsed = _parse_conf_yaml_with_jinja_placeholders(
         _base_yaml(
@@ -4151,11 +4909,12 @@ def test_general_ptnn_local_wsl_rejects_unsafe_catalog_loader_override():
         _base_yaml(model_info=model_info, node_id="wsl2-5080")
 
 
-def test_general_ptnn_ltr_custom_params_selects_adapter_and_passes_hp():
+@pytest.mark.parametrize("mode", ["approx_ndcg_at_k", "log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_general_ptnn_ltr_custom_params_selects_adapter_and_passes_hp(mode):
     yaml_text = _base_yaml(
         model_info=_custom_timeseries_lstm_model_info(),
         custom_params={
-            "ltr_loss_mode": "approx_ndcg_at_k",
+            "ltr_loss_mode": mode,
             "topk_train_k": "25",
             "ltr_temperature": "0.8",
             "ltr_gate_temperature": "1.2",
@@ -4166,8 +4925,9 @@ def test_general_ptnn_ltr_custom_params_selects_adapter_and_passes_hp():
 
     assert "class: AIStockGeneralPTNNLTR" in yaml_text
     assert "module_path: aistock_models.general_ptnn_ltr" in yaml_text
-    assert "loss: approx_ndcg_at_k" in yaml_text
-    assert "ltr_loss_mode: approx_ndcg_at_k" in yaml_text
+    expected_mode = "log_approx_ndcg_at_k" if mode == "approx_ndcg_at_k" else mode
+    assert f"loss: {expected_mode}" in yaml_text
+    assert f"ltr_loss_mode: {expected_mode}" in yaml_text
     assert "topk_train_k: 25" in yaml_text
     assert "ltr_temperature: 0.8" in yaml_text
     assert "ltr_gate_temperature: 1.2" in yaml_text
@@ -4179,17 +4939,29 @@ def test_general_ptnn_ltr_custom_params_selects_adapter_and_passes_hp():
     assert "topk_train_k" not in strategy_section
 
 
-def test_general_ptnn_ltr_loss_alias_selects_adapter():
+@pytest.mark.parametrize("mode", ["approx_ndcg_at_k", "log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_general_ptnn_ltr_loss_alias_selects_adapter(mode):
     yaml_text = _base_yaml(
         model_info=_custom_timeseries_lstm_model_info(),
-        custom_params={"loss": "approx_ndcg_at_k", "topk_train_k": 25},
+        custom_params={"loss": mode, "topk_train_k": 25},
     )
 
     assert "class: AIStockGeneralPTNNLTR" in yaml_text
     assert "module_path: aistock_models.general_ptnn_ltr" in yaml_text
-    assert "loss: approx_ndcg_at_k" in yaml_text
+    expected_mode = "log_approx_ndcg_at_k" if mode == "approx_ndcg_at_k" else mode
+    assert f"loss: {expected_mode}" in yaml_text
     strategy_section = _slice_yaml_between(yaml_text, "    strategy:", "    model:")
-    assert "loss: approx_ndcg_at_k" not in strategy_section
+    assert f"loss: {expected_mode}" not in strategy_section
+
+
+@pytest.mark.parametrize("params", [
+    {"ltr_loss_mode": "log_approx_ndcg_at_k", "loss": "ndcg_at_k_pairwise"},
+    {"ltr_loss_mode": "ndcg_at_k_pairwise", "ltr_temperature": float("nan")},
+    {"ltr_loss_mode": "log_approx_ndcg_at_k", "ltr_gate_temperature": float("inf")},
+])
+def test_general_ptnn_ltr_conflicting_or_non_finite_parameters_fail(params):
+    with pytest.raises(ValueError, match="general_ptnn_ltr_invalid"):
+        _base_yaml(model_info=_custom_timeseries_lstm_model_info(), custom_params=params)
 
 
 def test_general_ptnn_ltr_invalid_config_fails_fast():
@@ -4212,7 +4984,8 @@ def test_general_ptnn_ltr_invalid_config_fails_fast():
         )
 
 
-def test_general_ptnn_ltr_request_on_non_ptnn_model_fails_loud_not_mse():
+@pytest.mark.parametrize("mode", ["approx_ndcg_at_k", "log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_general_ptnn_ltr_request_on_non_ptnn_model_fails_loud_not_mse(mode):
     with pytest.raises(ValueError, match="reason_code=ltr_loss_mode_injection_failed"):
         _base_yaml(
             model_info={
@@ -4220,7 +4993,7 @@ def test_general_ptnn_ltr_request_on_non_ptnn_model_fails_loud_not_mse():
                 "model_name": "lgbm",
                 "model_type": "LGBM",
             },
-            custom_params={"ltr_loss_mode": "approx_ndcg_at_k"},
+            custom_params={"ltr_loss_mode": mode},
         )
 
 
@@ -4381,6 +5154,11 @@ def test_auto_wsl_command_scrubs_credentials_and_bounds_local_threads(monkeypatc
         node_id="wsl2-5080",
         prediction_store_base_url="http://prediction-store:9000",
     )
+    cd_command, launch_command = full_command.split(" && ", 1)
+    assert shlex.split(cd_command) == ["cd", "--", "/tmp/qe-host-safe"]
+    launch_argv = shlex.split(launch_command)
+    assert launch_argv[:5] == ["exec", "/bin/bash", "--noprofile", "--norc", "-c"]
+    assert launch_argv[5].startswith('if [ -z "${BASH_VERSION:-}" ]')
     scrub_marker = "for __qe_credvar in $(compgen -e)"
     scrub_positions = [
         index for index in range(len(full_command)) if full_command.startswith(scrub_marker, index)
@@ -4421,6 +5199,21 @@ def test_auto_remote_command_does_not_apply_local_wsl_thread_cap():
     assert "export OMP_NUM_THREADS=4" not in core_parts
     assert core_parts[0].startswith('if [ -z "${BASH_VERSION:-}" ]')
 
+    command = composer._generate_wsl_command(
+        "/tmp/qe-remote",
+        mode="auto",
+        node_id="rdagent-node1",
+        factor_cache_dir="/home/lc999/data/factor_values",
+    )
+    _cd_command, launch_command = command.split(" && ", 1)
+    assert shlex.split(launch_command)[:5] == [
+        "exec",
+        "/bin/bash",
+        "--noprofile",
+        "--norc",
+        "-c",
+    ]
+
 
 @pytest.mark.parametrize(
     "workspace_path",
@@ -4439,9 +5232,12 @@ def test_qe_wsl_command_shell_quotes_workspace_path(workspace_path: str):
         node_id="wsl2-5080",
     )
 
-    assert command.startswith("cd -- ")
-    assert f"cd -- {workspace_path}" not in command
-    assert " && if [ -z \"${BASH_VERSION:-}\" ]" in command
+    cd_command, launch_command = command.split(" && ", 1)
+    assert shlex.split(cd_command) == ["cd", "--", workspace_path]
+    launch_argv = shlex.split(launch_command)
+    assert launch_argv[:5] == ["exec", "/bin/bash", "--noprofile", "--norc", "-c"]
+    inner_command = launch_argv[5]
+    assert inner_command.startswith('if [ -z "${BASH_VERSION:-}" ]')
 
 
 def test_qe_wsl_command_rejects_multiline_workspace_path():
@@ -4696,6 +5492,28 @@ def test_remote_stock_pool_install_command_is_injected_after_cd():
     assert "conda activate env && python qrun_limit_minute.py conf.yaml" in command
 
 
+def test_remote_stock_pool_install_preserves_generated_bash_boundary():
+    inner = "if [[ -z ${BASH_VERSION:-} ]]; then exit 70; fi && python qrun_limit_minute.py conf.yaml"
+    generated = (
+        "cd -- /home/node/qe_workspace/task/Loop1"
+        f" && exec /bin/bash --noprofile --norc -c {shlex.quote(inner)}"
+    )
+
+    command = inject_stock_pool_install_command(
+        generated,
+        "test -f filtered_pool_x.txt",
+    )
+
+    before_bash, bash_tail = command.split(" && exec /bin/bash", 1)
+    assert before_bash == (
+        "cd -- /home/node/qe_workspace/task/Loop1 && test -f filtered_pool_x.txt"
+    )
+    argv = shlex.split(f"exec /bin/bash{bash_tail}")
+    assert argv[:5] == ["exec", "/bin/bash", "--noprofile", "--norc", "-c"]
+    assert "if [[ -z ${BASH_VERSION:-} ]]; then exit 70; fi" in argv[5]
+    assert "python qrun_limit_minute.py conf.yaml" in argv[5]
+
+
 def test_remote_stock_pool_sync_fails_fast_when_local_cache_missing(monkeypatch, tmp_path):
     pool_root = tmp_path / "stock_pools"
     monkeypatch.setenv("STOCK_POOL_OUTPUT_DIR", str(pool_root))
@@ -4811,3 +5629,125 @@ def test_qrun_portfolio_seed_aggregation_matches_offline_equal_weight_proxy(monk
     assert second["000002.SZ"]["weight"] == pytest.approx(0.195)
     assert merged_report.loc[dates[1], "account"] == pytest.approx(1050.0)
     assert merged_report.loc[dates[1], "return"] == pytest.approx(0.05)
+
+
+@pytest.fixture
+def ranking_runtime():
+    torch = pytest.importorskip("torch")
+    pytest.importorskip("qlib")
+    models_root = PROJECT_ROOT / "aistock_models"
+    if str(models_root) not in sys.path:
+        sys.path.insert(0, str(models_root))
+    import aistock_models.general_ptnn_ltr as ltr
+    return torch, ltr
+
+
+@pytest.mark.parametrize("mode", ["log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+@pytest.mark.parametrize("group_size,score_span", [(512, 0.0), (4500, 0.1)])
+def test_market_scale_ltr_has_informative_gradients(group_size: int, score_span: float, mode: str, ranking_runtime) -> None:
+    torch, ltr = ranking_runtime
+    # One real-sized daily query, without datasets, services, CUDA or model training.
+    previous_threads = torch.get_num_threads()
+    torch.set_num_threads(1)
+    try:
+        labels = torch.linspace(-0.2, 0.2, group_size)
+        scores = torch.linspace(score_span, -score_span, group_size).requires_grad_()
+        loss, ndcg, size = ltr.ndcg_at_k_loss(scores, labels, topk_train_k=50, min_group_size=50, loss_mode=mode)
+        loss.backward()
+        assert size == group_size
+        assert torch.isfinite(loss) and torch.isfinite(ndcg)
+        assert torch.isfinite(scores.grad).all()
+        assert torch.count_nonzero(scores.grad) > group_size // 2
+        # Gradient descent must raise high-relevance scores relative to low ones.
+        assert scores.grad[-group_size // 5 :].mean() < scores.grad[: group_size // 5].mean()
+    finally:
+        torch.set_num_threads(previous_threads)
+
+
+@pytest.mark.parametrize("mode", ["log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_ranking_loss_matches_independent_reference_and_gradient(mode, ranking_runtime):
+    torch, ltr = ranking_runtime
+    # Five distinct labels map to gains 0,1,3,7,15; no tied score boundary.
+    labels = torch.arange(5, dtype=torch.float32)
+    scores = torch.tensor([0.2, -0.7, 0.5, 0.1, 0.9], requires_grad=True)
+    loss, ndcg, _ = ltr.ndcg_at_k_loss(scores, labels, topk_train_k=3, loss_mode=mode)
+    ref_scores = scores.detach().clone().requires_grad_()
+    gains = torch.tensor([0., 1., 3., 7., 15.])
+    ideal = sum(gains[4 - i] / np.log2(i + 2) for i in range(3))
+    order = torch.argsort(ref_scores, descending=True).tolist()
+    if mode == "log_approx_ndcg_at_k":
+        dcg = 0
+        for i in range(5):
+            rank = 1 + sum(torch.sigmoid(ref_scores[j] - ref_scores[i]) for j in range(5) if i != j)
+            dcg = dcg + gains[i] * torch.sigmoid(3.5 - rank) / torch.log2(1 + rank)
+        ref_loss = -torch.log(dcg / ideal)
+    else:
+        total, denominator = 0, 0
+        for i in range(5):
+            for j in range(i + 1, 5):
+                ri, rj = order.index(i), order.index(j)
+                di = 1 / np.log2(ri + 2) if ri < 3 else 0
+                dj = 1 / np.log2(rj + 2) if rj < 3 else 0
+                weight = abs((gains[i] - gains[j]) * (di - dj)) / ideal
+                margin = torch.sign(gains[i] - gains[j]) * (ref_scores[i] - ref_scores[j])
+                total = total + weight * torch.nn.functional.softplus(-margin)
+                denominator = denominator + weight
+        ref_loss = total / denominator
+    torch.testing.assert_close(loss, ref_loss)
+    torch.testing.assert_close(
+        torch.autograd.grad(loss, scores)[0], torch.autograd.grad(ref_loss, ref_scores)[0],
+    )
+    exact = sum(gains[order[i]] / np.log2(i + 2) for i in range(3)) / ideal
+    torch.testing.assert_close(ndcg, exact)
+    perm = torch.tensor([4, 2, 0, 3, 1])
+    permuted, _, _ = ltr.ndcg_at_k_loss(scores[perm] + 7, labels[perm], topk_train_k=3, loss_mode=mode)
+    torch.testing.assert_close(permuted, loss)
+
+
+@pytest.mark.parametrize("mode", ["log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_adapter_dispatch_diagnostics_and_fail_closed(mode, ranking_runtime):
+    torch, ltr = ranking_runtime
+    # Exercise the real constructor/epoch interface on CPU, no fit or data read.
+    model = ltr.AIStockGeneralPTNNLTR(
+        loss=mode, GPU=-1, n_jobs=0, topk_train_k=3, ltr_min_group_size=3,
+        pt_model_uri="torch.nn.Linear", pt_model_kwargs={"in_features": 1, "out_features": 1},
+    )
+    scores = torch.tensor([0.2, 0.1, 0.3, 0.7, 0.5])
+    labels = torch.arange(5, dtype=torch.float32)
+    expected, _, _ = ltr.ndcg_at_k_loss(scores, labels, topk_train_k=3, loss_mode=mode)
+    torch.testing.assert_close(model.loss_fn(scores, labels), expected)
+    assert model.loss == model.ltr_loss_mode == mode
+    diag = model.test_ltr_epoch([(scores[:, None], labels, "2024-01-02", [])], segment="valid")
+    assert diag["loss_mode"] == mode and diag["query_count"] == 1
+    for invalid_labels, reason in [(torch.zeros(5), "ltr_degenerate_relevance"),
+                                   (torch.full((5,), float("nan")), "ltr_query_all_nan_label")]:
+        with pytest.raises(ltr.GeneralPTNNLTRError, match=reason):
+            model.loss_fn(scores, invalid_labels)
+    with pytest.raises(ltr.GeneralPTNNLTRError, match="ltr_query_too_small"):
+        model.loss_fn(scores[:2], labels[:2])
+    with pytest.raises(ltr.GeneralPTNNLTRError, match="general_ptnn_ltr_invalid_loss_mode"):
+        ltr.AIStockGeneralPTNNLTR(loss=mode, ltr_loss_mode=next(iter(ltr.LTR_LOSS_MODES - {mode})))
+
+
+@pytest.mark.parametrize("mode", ["log_approx_ndcg_at_k", "ndcg_at_k_pairwise"])
+def test_ranking_optimizer_updates_and_mse_is_unchanged(mode, ranking_runtime):
+    torch, ltr = ranking_runtime
+    from qlib.contrib.model.pytorch_general_nn import GeneralPTNN
+
+    kwargs = dict(GPU=-1, n_jobs=0, seed=42, pt_model_uri="torch.nn.Linear",
+                  pt_model_kwargs={"in_features": 1, "out_features": 1})
+    # qrun applies the runtime seed before construction for every arm.
+    torch.manual_seed(42)
+    mse = GeneralPTNN(**kwargs)
+    torch.manual_seed(42)
+    ranking = ltr.AIStockGeneralPTNNLTR(loss=mode, topk_train_k=3, ltr_min_group_size=3, **kwargs)
+    torch.testing.assert_close(mse.dnn_model.weight, ranking.dnn_model.weight)
+    scores, labels = torch.arange(5, dtype=torch.float32)[:, None], torch.arange(5, dtype=torch.float32)
+    before = ranking.dnn_model.weight.detach().clone()
+    diag = ranking.train_ltr_epoch([(scores, labels, "2024-01-02", [])])
+    assert diag["loss_mode"] == mode and diag["query_count"] == 1
+    assert torch.isfinite(ranking.dnn_model.weight).all()
+    assert not torch.equal(before, ranking.dnn_model.weight)
+    legacy = ltr.AIStockGeneralPTNNLTR(**kwargs)
+    labels[0] = float("nan")
+    torch.testing.assert_close(legacy.loss_fn(scores, labels), mse.loss_fn(scores, labels))

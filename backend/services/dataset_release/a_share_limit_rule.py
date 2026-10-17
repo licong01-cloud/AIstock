@@ -84,7 +84,7 @@ def classify_a_share_board(ts_code: str) -> AShareBoard:
             return AShareBoard.STAR
         if digits.startswith(("600", "601", "603", "605")):
             return AShareBoard.SH_MAIN
-    elif digits.startswith(("300", "301")):
+    elif digits.startswith(("300", "301", "302")):
         return AShareBoard.CHINEXT
     elif digits.startswith(("000", "001", "002", "003")):
         return AShareBoard.SZ_MAIN

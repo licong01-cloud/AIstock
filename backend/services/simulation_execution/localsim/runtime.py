@@ -82,6 +82,7 @@ from backend.services.trading_core.models import (
     Fill,
     Order,
     OrderEvent,
+    OrderEventType,
     OrderIntent,
     OrderSide,
     OrderStatus,
@@ -106,6 +107,13 @@ from backend.services.simulation_execution.broker import (
 
 
 _REALTIME_SNAPSHOT_MAX_WORKERS = 16
+_MARKET_STATE_NO_FILL_REASONS = frozenset(
+    {
+        "LIMIT_UP_BUY_BLOCKED",
+        "LIMIT_DOWN_SELL_BLOCKED",
+        "ZERO_VOLUME",
+    }
+)
 
 
 _BACKEND_ID: BackendId = "local_sim"
@@ -163,6 +171,7 @@ class LocalSimBackend(BrokerBackend):
         initial_available_cash: float | None = None,
         initial_positions: Mapping[str, PositionLot] | None = None,
         scheduler_as_of_time: datetime | None = None,
+        historical_suspension_provider: Any | None = None,
     ) -> None:
         if not portfolio_id:
             raise ValueError("portfolio_id is required")
@@ -182,6 +191,16 @@ class LocalSimBackend(BrokerBackend):
         )
         self._data_source = data_source
         self._market_data_provider = market_data_provider or SimulationMinuteMarketDataProvider()
+        from .suspension import LocalSimHistoricalSuspensionProvider
+
+        self._historical_suspension_provider = historical_suspension_provider
+        if self._data_source == MinuteDataSource.DB_HISTORICAL and self._historical_suspension_provider is None and isinstance(
+            self._market_data_provider, SimulationMinuteMarketDataProvider,
+        ):
+            self._historical_suspension_provider = LocalSimHistoricalSuspensionProvider(
+                conn_factory=self._market_data_provider.conn_factory,
+            )
+        self._historical_suspension_statuses: dict[str, dict[str, Any]] = {}
         self._oms = oms or OMS()
         self._execution_engine = execution_engine or MinuteExecutionEngine(oms=self._oms)
         self._ledger = InMemoryLedger(
@@ -212,6 +231,7 @@ class LocalSimBackend(BrokerBackend):
         self._runtime_binding_id: str | None = None
         self._market_snapshot: LocalSimMarketSnapshotV1 | LocalSimMarketSnapshotV2 | None = None
         self._daily_trading_context: DailyTradingContextV1 | DailyTradingContextV2 | None = None
+        self._historical_terminalization_plan_id: str | None = None
 
     # ----- Read accessors used by adapter / tests -----
     @property
@@ -229,6 +249,28 @@ class LocalSimBackend(BrokerBackend):
     @property
     def scheduler_as_of_time(self) -> datetime | None:
         return self._scheduler_as_of_time
+
+    @property
+    def historical_terminalization_plan_id(self) -> str | None:
+        """Return the exact plan currently bound to non-economic historical closure."""
+
+        return self._historical_terminalization_plan_id
+
+    def clear_historical_terminalization_scope(self, *, plan_id: str) -> None:
+        """Release an exact historical-closure scope after persistence finishes."""
+
+        exact_plan_id = str(plan_id or "").strip()
+        with self._lock:
+            if not exact_plan_id or self._historical_terminalization_plan_id not in {None, exact_plan_id}:
+                raise BrokerSubmitError(
+                    "LocalSim historical terminalization scope cannot be cleared by another plan",
+                    context={
+                        "reason_code": "LOCALSIM_HISTORICAL_RESIDUAL_SCOPE_CONFLICT",
+                        "plan_id": exact_plan_id or None,
+                        "historical_terminalization_plan_id": self._historical_terminalization_plan_id,
+                    },
+                )
+            self._historical_terminalization_plan_id = None
 
     def _provider_requires_frozen_daily_context(self) -> bool:
         """Distinguish the strict production feed from explicit test doubles.
@@ -264,7 +306,10 @@ class LocalSimBackend(BrokerBackend):
             self._runtime_run_id = run_id
             self._runtime_binding_id = binding_id
 
-    def restore_execution_state(self, *, order: Order, state: LocalSimExecutionStateV1) -> OrderHandle:
+    def restore_execution_state(
+        self, *, order: Order, state: LocalSimExecutionStateV1,
+        cumulative_notional: Decimal | None = None, charged_fee: Decimal | None = None,
+    ) -> OrderHandle:
         """Restore one order without replaying already applied bars."""
         self._ensure_alive()
         with self._lock:
@@ -337,6 +382,30 @@ class LocalSimBackend(BrokerBackend):
                     "LocalSim durable state was restored more than once",
                     context={"reason_code": "LOCALSIM_RESTORE_DUPLICATE_INTENT", "state_id": state.state_id},
                 )
+            history_required = (
+                order.filled_quantity > 0
+                and not state.is_terminal
+                and self._historical_terminalization_plan_id is None
+            )
+            if (
+                (cumulative_notional is None) != (charged_fee is None)
+                or (history_required and cumulative_notional is None)
+            ):
+                raise BrokerSubmitError(
+                    "LocalSim filled order continuation requires actual order fee history",
+                    context={"reason_code": "LOCALSIM_RESTORE_ORDER_FEE_HISTORY_MISSING", "order_id": order.order_id},
+                )
+            if cumulative_notional is not None and charged_fee is not None:
+                try:
+                    self._ledger.restore_order_fee_state(
+                        order_id=order.order_id, symbol=order.symbol, side=order.side,
+                        cumulative_notional=cumulative_notional, charged_fee=charged_fee,
+                    )
+                except ValueError as exc:
+                    raise BrokerSubmitError(
+                        "LocalSim order fee history is invalid or conflicting",
+                        context={"reason_code": "LOCALSIM_RESTORE_ORDER_FEE_HISTORY_INVALID", "order_id": order.order_id},
+                    ) from exc
             handle = OrderHandle(
                 handle_id=f"lsh_{state.state_id[-32:]}",
                 backend_id=self.backend_id,
@@ -353,6 +422,126 @@ class LocalSimBackend(BrokerBackend):
             )
             self._intent_index[state.intent_id] = handle.handle_id
             return handle
+
+    def terminalize_historical_residuals(
+        self,
+        *,
+        plan_id: str,
+        orders: Iterable[Order],
+        states: Iterable[LocalSimExecutionStateV1],
+        residual_classifications: Mapping[str, str],
+        as_of_time: datetime,
+    ) -> tuple[OrderHandle, ...]:
+        """Close an exact prior-day durable generation without replaying market data.
+
+        The lifecycle scheduler owns the cross-day decision and proves the
+        predecessor economic/projection receipts before calling this method.
+        The execution backend remains the sole owner of per-intent state
+        transitions.  No order, fill, cash, position or market-data operation
+        is performed here; only the still-active durable states advance once
+        to an audited residual terminal state.
+        """
+
+        self._ensure_alive()
+        exact_plan_id = str(plan_id or "").strip()
+        if not exact_plan_id or as_of_time.time() < time(15, 0):
+            raise BrokerSubmitError(
+                "LocalSim historical residual terminalization requires an exact plan after market close",
+                context={
+                    "reason_code": "LOCALSIM_HISTORICAL_RESIDUAL_SCOPE_INVALID",
+                    "plan_id": exact_plan_id or None,
+                    "as_of_time": as_of_time.isoformat(),
+                },
+            )
+        exact_orders = tuple(orders)
+        exact_states = tuple(states)
+        orders_by_intent = {order.intent_id: order for order in exact_orders}
+        states_by_intent = {state.intent_id: state for state in exact_states}
+        expected_intents = set(states_by_intent)
+        allowed_classifications = {
+            "CAPITAL_RESIDUAL",
+            "SCHEDULE_RESIDUAL_AT_HISTORICAL_CLOSE",
+        }
+        if (
+            not exact_states
+            or len(orders_by_intent) != len(exact_orders)
+            or len(states_by_intent) != len(exact_states)
+            or set(orders_by_intent) != expected_intents
+            or set(residual_classifications) != {
+                state.intent_id for state in exact_states if not state.is_terminal
+            }
+            or any(value not in allowed_classifications for value in residual_classifications.values())
+            or any(
+                state.plan_id != exact_plan_id
+                or state.trade_date != as_of_time.date()
+                or state.run_id != self._runtime_run_id
+                or state.binding_id != self._runtime_binding_id
+                for state in exact_states
+            )
+        ):
+            raise BrokerSubmitError(
+                "LocalSim historical residual inputs do not close over the durable generation",
+                context={
+                    "reason_code": "LOCALSIM_HISTORICAL_RESIDUAL_IDENTITY_CONFLICT",
+                    "plan_id": exact_plan_id,
+                    "order_intent_ids": sorted(orders_by_intent),
+                    "state_intent_ids": sorted(states_by_intent),
+                    "classification_intent_ids": sorted(residual_classifications),
+                },
+            )
+
+        with self._lock:
+            if self._batch_snapshot is not None or self._bound_plan_id not in {None, exact_plan_id}:
+                raise BrokerSubmitError(
+                    "LocalSim historical residual terminalization conflicts with an active runtime scope",
+                    context={
+                        "reason_code": "LOCALSIM_HISTORICAL_RESIDUAL_RUNTIME_CONFLICT",
+                        "plan_id": exact_plan_id,
+                        "bound_plan_id": self._bound_plan_id,
+                        "active_batch_plan_id": self._batch_plan_id,
+                    },
+                )
+            # Rebuild the non-economic in-process records from the exact durable
+            # predecessor on every attempt.  This keeps a retry idempotent if a
+            # later persistence/projection step failed after this transition.
+            self._records = {}
+            self._intent_index = {}
+            self._bound_plan_id = exact_plan_id
+            self._scheduler_as_of_time = as_of_time
+            self._historical_terminalization_plan_id = exact_plan_id
+            handles: list[OrderHandle] = []
+            for intent_id in sorted(expected_intents):
+                order = orders_by_intent[intent_id]
+                state = states_by_intent[intent_id]
+                handle = self.restore_execution_state(order=order, state=state)
+                record = self._records[handle.handle_id]
+                if not state.is_terminal:
+                    sequence = state.sequence + 1
+                    payload = state.model_dump(mode="python")
+                    payload.update(
+                        {
+                            "runtime_status": LocalSimExecutionRuntimeStatus.EXPIRED_WITH_RESIDUAL,
+                            "terminal_reason": "HISTORICAL_MARKET_SESSION_CLOSED_WITH_REMAINING_QUANTITY",
+                            "residual_classification": residual_classifications[intent_id],
+                            "waiting_reason_code": None,
+                            "waiting_context": None,
+                            "sequence": sequence,
+                            "idempotency_key": canonical_json_sha256(
+                                [
+                                    "localsim_state_transition_v1",
+                                    state.state_id,
+                                    sequence,
+                                    "HISTORICAL_EXPIRED_WITH_RESIDUAL",
+                                    residual_classifications[intent_id],
+                                ]
+                            ),
+                            "state_hash": "",
+                            "updated_at": datetime.now(UTC),
+                        }
+                    )
+                    record.execution_state = LocalSimExecutionStateV1.model_validate(payload)
+                handles.append(handle)
+            return tuple(handles)
 
     def advance_realtime_execution(self, *, as_of_time: datetime) -> tuple[OrderHandle, ...]:
         """Apply each newly observed causal minute exactly once to restored states."""
@@ -483,6 +672,11 @@ class LocalSimBackend(BrokerBackend):
                             fills=fills,
                             events=events,
                         )
+                        market_state_wait = self._market_state_wait_from_events(events=events, bars=new_bars)
+                        runtime_wait = self._resolve_execution_wait(
+                            capital_wait=capital_wait,
+                            market_state_wait=market_state_wait,
+                        )
                         if capital_wait is not None and not fills:
                             record.order = final_order
                             record.status = self._build_status(record.handle.handle_id, final_order)
@@ -502,15 +696,9 @@ class LocalSimBackend(BrokerBackend):
                                 order=final_order,
                                 bars=new_bars,
                                 fill_count=len(fills),
-                                runtime_status_override=(
-                                    LocalSimExecutionRuntimeStatus.WAITING_FOR_CAPITAL
-                                    if capital_wait is not None
-                                    else None
-                                ),
-                                waiting_reason_code=(
-                                    "LOCALSIM_WAITING_FOR_SELL_PROCEEDS" if capital_wait is not None else None
-                                ),
-                                waiting_context=capital_wait,
+                                runtime_status_override=runtime_wait[0],
+                                waiting_reason_code=runtime_wait[1],
+                                waiting_context=runtime_wait[2],
                             )
                     elif (
                         not market_input.minute_bars
@@ -550,6 +738,20 @@ class LocalSimBackend(BrokerBackend):
     def bind_execution_plan(self, *, plan: Any, as_of_time: datetime) -> None:
         """Bind the immutable scheduler cursor used to prevent look-ahead fills."""
         if self._data_source != MinuteDataSource.TDX_REALTIME:
+            from .suspension import REFERENCE_KEY, SUSPENSION_KEY, validate_suspension_fact, validate_suspension_reference
+
+            statuses = {}
+            for decision in getattr(plan, "trading_rule_decisions", ()):
+                status = decision.price_limit_rule.get("pre_trade_tradability")
+                if isinstance(status, dict) and REFERENCE_KEY in status:
+                    validate_suspension_reference(status[REFERENCE_KEY], symbol=decision.symbol,
+                                                  trade_date=plan.target_trade_date)
+                if isinstance(status, dict) and SUSPENSION_KEY in status:
+                    validate_suspension_fact(status[SUSPENSION_KEY], symbol=decision.symbol,
+                                             trade_date=plan.target_trade_date)
+                if isinstance(status, dict):
+                    statuses[decision.symbol] = deepcopy(status)
+            self._historical_suspension_statuses = statuses
             return
         payload = getattr(plan, "plan_payload_json", {}).get("local_sim_execution_causality")
         if not isinstance(payload, dict) or not payload.get("eligible_bar_after"):
@@ -721,6 +923,19 @@ class LocalSimBackend(BrokerBackend):
                     context={"intent_id": intent.intent_id},
                 )
 
+            historical_suspended = False
+            if self._data_source == MinuteDataSource.DB_HISTORICAL:
+                status = self._historical_suspension_statuses.get(intent.symbol)
+                if status is None and self._historical_suspension_provider is not None:
+                    status = self._historical_suspension_provider.load_statuses(
+                        symbols=[intent.symbol], trade_date=intent.target_trade_date,
+                    ).get(intent.symbol)
+                historical_suspended = pre_trade_tradability_is_suspended(status, symbol=intent.symbol)
+                if historical_suspended:
+                    from .suspension import SUSPENSION_KEY, validate_suspension_fact
+
+                    validate_suspension_fact((status or {}).get(SUSPENSION_KEY, {}), symbol=intent.symbol,
+                                             trade_date=intent.target_trade_date)
             market_input = None
             market_data_error: BrokerConnectivityError | None = None
             try:
@@ -749,7 +964,7 @@ class LocalSimBackend(BrokerBackend):
                             causal_bar_count=len(causal_bars),
                         ),
                     )
-                else:
+                elif not historical_suspended:
                     market_input = self._market_data_provider.load_symbol_input(
                         symbol=intent.symbol,
                         trade_date=intent.target_trade_date,
@@ -818,6 +1033,14 @@ class LocalSimBackend(BrokerBackend):
                             fills=fills,
                             events=events,
                         )
+                        market_state_wait = self._market_state_wait_from_events(
+                            events=events,
+                            bars=list(market_input.minute_bars),
+                        )
+                        runtime_wait = self._resolve_execution_wait(
+                            capital_wait=capital_wait,
+                            market_state_wait=market_state_wait,
+                        )
                         if capital_wait is not None and not fills:
                             execution_state = self._waiting_execution_state(
                                 state=execution_state,
@@ -832,15 +1055,9 @@ class LocalSimBackend(BrokerBackend):
                                 order=final_order,
                                 bars=list(market_input.minute_bars),
                                 fill_count=len(fills),
-                                runtime_status_override=(
-                                    LocalSimExecutionRuntimeStatus.WAITING_FOR_CAPITAL
-                                    if capital_wait is not None
-                                    else None
-                                ),
-                                waiting_reason_code=(
-                                    "LOCALSIM_WAITING_FOR_SELL_PROCEEDS" if capital_wait is not None else None
-                                ),
-                                waiting_context=capital_wait,
+                                runtime_status_override=runtime_wait[0],
+                                waiting_reason_code=runtime_wait[1],
+                                waiting_context=runtime_wait[2],
                             )
                     else:
                         final_order, fills, events = order, [], []
@@ -872,6 +1089,9 @@ class LocalSimBackend(BrokerBackend):
                             as_of_time=self._scheduler_as_of_time,
                             increment_sequence=not bool(market_input.minute_bars),
                         )
+                elif historical_suspended:
+                    final_order, event = self._oms.reject_order(order, "SUSPENDED_BY_SUSPEND_D")
+                    fills, events = [], [event]
                 else:
                     final_order, fills, events = self._execution_engine.execute_order(
                         order=order,
@@ -1184,19 +1404,86 @@ class LocalSimBackend(BrokerBackend):
             )
         records: dict[str, LocalSimMarketMarkV1] = {}
         normalized_symbols = sorted({str(item or "").strip() for item in symbols if str(item or "").strip()})
+        if self._historical_terminalization_plan_id is not None and normalized_symbols:
+            previous = dict(previous_marks or {})
+            if set(previous) != set(normalized_symbols):
+                raise DataUnavailableError(
+                    "LocalSim historical terminalization requires the exact predecessor market marks",
+                    context={
+                        "reason_code": "LOCALSIM_HISTORICAL_RESIDUAL_MARKS_MISSING",
+                        "plan_id": self._historical_terminalization_plan_id,
+                        "expected_symbols": normalized_symbols,
+                        "actual_symbols": sorted(previous),
+                    },
+                )
+            try:
+                records = {
+                    symbol: LocalSimMarketMarkV1.model_validate(previous[symbol])
+                    for symbol in normalized_symbols
+                }
+            except Exception as exc:
+                raise DataUnavailableError(
+                    "LocalSim historical terminalization predecessor marks are invalid",
+                    context={
+                        "reason_code": "LOCALSIM_HISTORICAL_RESIDUAL_MARKS_INVALID",
+                        "plan_id": self._historical_terminalization_plan_id,
+                    },
+                ) from exc
+            if any(record.as_of_time.date() != trade_date for record in records.values()):
+                raise DataUnavailableError(
+                    "LocalSim historical terminalization predecessor marks have the wrong trade date",
+                    context={
+                        "reason_code": "LOCALSIM_HISTORICAL_RESIDUAL_MARK_DATE_CONFLICT",
+                        "plan_id": self._historical_terminalization_plan_id,
+                        "trade_date": trade_date.isoformat(),
+                    },
+                )
+            return records
         if self._data_source == MinuteDataSource.TDX_REALTIME and normalized_symbols:
             self._prepare_realtime_market_snapshot(
                 symbols=normalized_symbols,
                 trade_date=trade_date,
                 as_of_time=as_of_time,
             )
+        statuses = dict(pre_trade_tradability)
+        if self._data_source == MinuteDataSource.DB_HISTORICAL and self._historical_suspension_provider is not None:
+            missing = [symbol for symbol in normalized_symbols if symbol not in statuses]
+            if missing:
+                statuses.update(self._historical_suspension_provider.load_statuses(
+                    symbols=missing, trade_date=trade_date, valuation_symbols=missing,
+                ))
         for symbol in normalized_symbols:
-            tradability = pre_trade_tradability.get(symbol)
+            tradability = statuses.get(symbol)
             suspended = pre_trade_tradability_is_suspended(
                 tradability,
                 symbol=symbol,
             )
             if suspended:
+                from .suspension import (
+                    NATIVE_PRE_CLOSE_KEY, REFERENCE_KEY, validate_suspended_native_pre_close,
+                    validate_suspension_reference,
+                )
+
+                if isinstance(tradability, Mapping) and NATIVE_PRE_CLOSE_KEY in tradability:
+                    native = validate_suspended_native_pre_close(tradability[NATIVE_PRE_CLOSE_KEY],
+                                                                symbol=symbol, trade_date=trade_date)
+                    records[symbol] = LocalSimMarketMarkV1(
+                        symbol=symbol, price=native["pre_close"], as_of_time=as_of_time,
+                        source="market.stk_limit.pre_close:frozen_historical_suspension",
+                        provenance=LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE,
+                        suspension_reference=native,
+                    )
+                    continue
+                if isinstance(tradability, Mapping) and REFERENCE_KEY in tradability:
+                    reference = validate_suspension_reference(tradability[REFERENCE_KEY], symbol=symbol,
+                                                              trade_date=trade_date)
+                    records[symbol] = LocalSimMarketMarkV1(
+                        symbol=symbol, price=reference["reference_close"], as_of_time=as_of_time,
+                        source="market.kline_daily_raw:strategy_package_reference_price_availability_v1",
+                        provenance=LocalSimMarketMarkProvenance.SUSPENDED_REFERENCE_CLOSE,
+                        suspension_reference=reference,
+                    )
+                    continue
                 daily_reference = tradability.get("daily_trading_context") if isinstance(tradability, Mapping) else None
                 raw_fact = daily_reference.get("symbol_fact") if isinstance(daily_reference, Mapping) else None
                 schema_version = daily_reference.get("schema_version") if isinstance(daily_reference, Mapping) else None
@@ -1858,6 +2145,55 @@ class LocalSimBackend(BrokerBackend):
         )
         return LocalSimExecutionStateV1.model_validate(payload)
 
+    @staticmethod
+    def _market_state_wait_from_events(
+        *,
+        events: Iterable[OrderEvent],
+        bars: Iterable[Any],
+    ) -> tuple[str, dict[str, Any]] | None:
+        latest_bar_time = max((bar.bar_time for bar in bars), default=None)
+        if latest_bar_time is None:
+            return None
+        for event in reversed(list(events)):
+            reason = str(event.reason or "").strip().upper()
+            if (
+                event.event_type != OrderEventType.NO_FILL
+                or event.event_time != latest_bar_time
+                or reason not in _MARKET_STATE_NO_FILL_REASONS
+            ):
+                continue
+            metadata = dict(event.metadata or {})
+            raw_context = metadata.get("no_fill_context")
+            context = dict(raw_context) if isinstance(raw_context, Mapping) else {}
+            context.update(
+                {
+                    "bar_time": latest_bar_time.isoformat(),
+                    "reason_code": reason,
+                }
+            )
+            return reason, context
+        return None
+
+    @staticmethod
+    def _resolve_execution_wait(
+        *,
+        capital_wait: dict[str, Any] | None,
+        market_state_wait: tuple[str, dict[str, Any]] | None,
+    ) -> tuple[LocalSimExecutionRuntimeStatus | None, str | None, dict[str, Any] | None]:
+        if capital_wait is not None:
+            return (
+                LocalSimExecutionRuntimeStatus.WAITING_FOR_CAPITAL,
+                "LOCALSIM_WAITING_FOR_SELL_PROCEEDS",
+                capital_wait,
+            )
+        if market_state_wait is not None:
+            return (
+                LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_STATE,
+                market_state_wait[0],
+                market_state_wait[1],
+            )
+        return None, None, None
+
     def _waiting_execution_state(
         self,
         *,
@@ -2123,6 +2459,12 @@ class LocalSimBackend(BrokerBackend):
         payload = state.model_dump(mode="python")
         sequence = state.sequence + (1 if increment_sequence else 0)
         suspended_without_close = latest_bar_time is None or latest_bar_time.time() < time(15, 0)
+        market_blocked = (
+            state.runtime_status == LocalSimExecutionRuntimeStatus.WAITING_FOR_MARKET_STATE
+            and state.waiting_reason_code in _MARKET_STATE_NO_FILL_REASONS
+            and state.last_processed_bar_time == latest_bar_time
+            and (state.side != OrderSide.BUY or state.remaining_quantity >= board_lot_rule(state.symbol)[0])
+        )
         payload.update(
             {
                 "runtime_status": LocalSimExecutionRuntimeStatus.EXPIRED_WITH_RESIDUAL,
@@ -2132,10 +2474,14 @@ class LocalSimBackend(BrokerBackend):
                     else "MARKET_SESSION_CLOSED_WITH_REMAINING_QUANTITY"
                 ),
                 "residual_classification": (
-                    "SUSPENDED_AT_CLOSE" if suspended_without_close else "SCHEDULE_RESIDUAL_AT_CLOSE"
+                    "SUSPENDED_AT_CLOSE"
+                    if suspended_without_close
+                    else "MARKET_STATE_RESIDUAL_AT_CLOSE"
+                    if market_blocked
+                    else "SCHEDULE_RESIDUAL_AT_CLOSE"
                 ),
                 "waiting_reason_code": None,
-                "waiting_context": None,
+                "waiting_context": state.waiting_context if market_blocked or suspended_without_close else None,
                 "sequence": sequence,
                 "idempotency_key": canonical_json_sha256(
                     ["localsim_state_transition_v1", state.state_id, sequence, "EXPIRED_WITH_RESIDUAL"]

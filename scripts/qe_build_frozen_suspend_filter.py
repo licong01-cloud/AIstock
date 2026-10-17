@@ -41,8 +41,13 @@ SPEC_SCHEMA_VERSION = "qe_frozen_build_spec_v1"
 SUSPEND_PARQUET_NAME = "suspend_d.parquet"
 SUSPEND_MANIFEST_NAME = "manifest.json"
 MANIFEST_SCHEMA_VERSION = "suspend_d_dataset_manifest_v1"
+DIRECT_METADATA_NAME = "meta.json"
+DIRECT_METADATA_SCHEMA_VERSION = "qe_direct_suspend_d_v1"
 CANONICAL_TS_CODE_RE = re.compile(r"^[0-9]{6}\.(SH|SZ)$")
 REQUIRED_PARQUET_COLUMNS = ("trade_date", "ts_code", "suspend_type")
+EXECUTION_DATA_EXCLUSIONS_PARAM = "execution_data_exclusions"
+EXECUTION_DATA_EXCLUSION_SCHEMA = "qe_execution_data_exclusion_v1"
+EXECUTION_DATA_EXCLUSION_REASON = "minute_source_gap_confirmed_unfillable"
 
 
 class FrozenSuspendFilterBuildError(RuntimeError):
@@ -120,8 +125,14 @@ def _verify_suspend_dataset(
     suspend_spec: dict[str, Any],
 ) -> tuple[Path, dict[str, Any]]:
     parquet_path = suspend_dir / SUSPEND_PARQUET_NAME
-    manifest_path = suspend_dir / SUSPEND_MANIFEST_NAME
-    for path in (parquet_path, manifest_path):
+    metadata_name = str(suspend_spec.get("metadata_name") or SUSPEND_MANIFEST_NAME)
+    if metadata_name not in {SUSPEND_MANIFEST_NAME, DIRECT_METADATA_NAME}:
+        raise FrozenSuspendFilterBuildError(
+            "reason_code=qe_frozen_build_spec_invalid: "
+            f"unsupported suspend metadata_name={metadata_name!r}"
+        )
+    metadata_path = suspend_dir / metadata_name
+    for path in (parquet_path, metadata_path):
         if not path.is_file():
             raise FrozenSuspendFilterBuildError(
                 "reason_code=qe_frozen_suspend_file_missing: "
@@ -129,7 +140,11 @@ def _verify_suspend_dataset(
             )
     expected_hashes = {
         parquet_path: suspend_spec.get("parquet_sha256"),
-        manifest_path: suspend_spec.get("manifest_sha256"),
+        metadata_path: (
+            suspend_spec.get("metadata_sha256")
+            if metadata_name == DIRECT_METADATA_NAME
+            else suspend_spec.get("manifest_sha256")
+        ),
     }
     for path, expected in expected_hashes.items():
         if not expected:
@@ -145,21 +160,45 @@ def _verify_suspend_dataset(
                 "the frozen suspend dataset does not match the deployed contract pins"
             )
 
-    with manifest_path.open("r", encoding="utf-8") as handle:
+    with metadata_path.open("r", encoding="utf-8") as handle:
         manifest = json.load(handle)
-    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+    expected_schema = str(
+        suspend_spec.get("metadata_schema_version") or MANIFEST_SCHEMA_VERSION
+    )
+    if manifest.get("schema_version") != expected_schema:
         raise FrozenSuspendFilterBuildError(
             "reason_code=qe_frozen_suspend_identity_mismatch: "
             f"manifest schema_version={manifest.get('schema_version')!r} "
-            f"expected={MANIFEST_SCHEMA_VERSION!r}"
+            f"expected={expected_schema!r}"
         )
-    for key in ("dataset_id", "universe_key", "source_contract"):
-        expected_value = str(suspend_spec.get(key) or "")
-        actual_value = str(
-            manifest.get(key)
-            if key != "source_contract"
-            else (manifest.get("source") or {}).get("contract") or ""
-        )
+    if expected_schema == DIRECT_METADATA_SCHEMA_VERSION:
+        expected_identity = {
+            "dataset_id": str(suspend_spec.get("dataset_id") or ""),
+            "component": "suspend_d",
+            "universe_key": str(suspend_spec.get("universe_key") or ""),
+            "source_contract": str(suspend_spec.get("source_contract") or ""),
+            "suspend_type": "S",
+        }
+        actual_identity = {
+            "dataset_id": suspend_dir.name,
+            "component": str(manifest.get("component") or ""),
+            "universe_key": str(manifest.get("universe_key") or ""),
+            "source_contract": str(manifest.get("source_table") or ""),
+            "suspend_type": str(manifest.get("suspend_type") or ""),
+        }
+    else:
+        expected_identity = {
+            "dataset_id": str(suspend_spec.get("dataset_id") or ""),
+            "universe_key": str(suspend_spec.get("universe_key") or ""),
+            "source_contract": str(suspend_spec.get("source_contract") or ""),
+        }
+        actual_identity = {
+            "dataset_id": str(manifest.get("dataset_id") or ""),
+            "universe_key": str(manifest.get("universe_key") or ""),
+            "source_contract": str((manifest.get("source") or {}).get("contract") or ""),
+        }
+    for key, expected_value in expected_identity.items():
+        actual_value = actual_identity.get(key, "")
         if not expected_value or actual_value != expected_value:
             raise FrozenSuspendFilterBuildError(
                 "reason_code=qe_frozen_suspend_identity_mismatch: "
@@ -197,6 +236,77 @@ def _load_suspend_frame(parquet_path: Path):
             f"required={list(REQUIRED_PARQUET_COLUMNS)}"
         )
     return frame
+
+
+def _validated_execution_data_exclusions(
+    spec: dict[str, Any],
+    *,
+    start: date,
+    end: date,
+) -> list[dict[str, str]]:
+    raw = spec.get(EXECUTION_DATA_EXCLUSIONS_PARAM, [])
+    if not isinstance(raw, list):
+        raise FrozenSuspendFilterBuildError(
+            "reason_code=qe_execution_data_exclusion_invalid: exclusions must be a list"
+        )
+    normalized: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(raw):
+        if not isinstance(item, dict):
+            raise FrozenSuspendFilterBuildError(
+                "reason_code=qe_execution_data_exclusion_invalid: "
+                f"index={index} exclusion must be an object"
+            )
+        instrument = str(item.get("instrument") or "").strip().upper()
+        evidence_sha256 = str(item.get("evidence_sha256") or "").strip().lower()
+        if item.get("schema_version") != EXECUTION_DATA_EXCLUSION_SCHEMA:
+            raise FrozenSuspendFilterBuildError(
+                "reason_code=qe_execution_data_exclusion_invalid: "
+                f"index={index} schema_version mismatch"
+            )
+        if not CANONICAL_TS_CODE_RE.fullmatch(instrument):
+            raise FrozenSuspendFilterBuildError(
+                "reason_code=qe_execution_data_exclusion_invalid: "
+                f"index={index} instrument={instrument!r}"
+            )
+        if item.get("scope") != "full_backtest_window":
+            raise FrozenSuspendFilterBuildError(
+                "reason_code=qe_execution_data_exclusion_invalid: "
+                f"index={index} scope must be full_backtest_window"
+            )
+        if item.get("start_date") != start.isoformat() or item.get("end_date") != end.isoformat():
+            raise FrozenSuspendFilterBuildError(
+                "reason_code=qe_execution_data_exclusion_window_mismatch: "
+                f"index={index} required={start.isoformat()}..{end.isoformat()}"
+            )
+        if item.get("reason_code") != EXECUTION_DATA_EXCLUSION_REASON:
+            raise FrozenSuspendFilterBuildError(
+                "reason_code=qe_execution_data_exclusion_invalid: "
+                f"index={index} unsupported exclusion reason"
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", evidence_sha256):
+            raise FrozenSuspendFilterBuildError(
+                "reason_code=qe_execution_data_exclusion_invalid: "
+                f"index={index} evidence_sha256 is invalid"
+            )
+        if instrument in seen:
+            raise FrozenSuspendFilterBuildError(
+                "reason_code=qe_execution_data_exclusion_invalid: "
+                f"duplicate instrument={instrument}"
+            )
+        seen.add(instrument)
+        normalized.append(
+            {
+                "schema_version": EXECUTION_DATA_EXCLUSION_SCHEMA,
+                "instrument": instrument,
+                "scope": "full_backtest_window",
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "reason_code": EXECUTION_DATA_EXCLUSION_REASON,
+                "evidence_sha256": evidence_sha256,
+            }
+        )
+    return sorted(normalized, key=lambda value: value["instrument"])
 
 
 def build_suspend_filter_payload(spec: dict[str, Any]) -> dict[str, Any]:
@@ -238,6 +348,11 @@ def build_suspend_filter_payload(spec: dict[str, Any]) -> dict[str, Any]:
             "reason_code=qe_frozen_build_spec_invalid: "
             f"end_date={end.isoformat()} earlier than start_date={start.isoformat()}"
         )
+    execution_data_exclusions = _validated_execution_data_exclusions(
+        spec,
+        start=start,
+        end=end,
+    )
 
     pins = spec.get("pins")
     if not isinstance(pins, dict):
@@ -318,6 +433,14 @@ def build_suspend_filter_payload(spec: dict[str, Any]) -> dict[str, Any]:
         suspended_by_date[key] = symbols
         total_rows += len(symbols)
 
+    exclusion_contract_sha256 = hashlib.sha256(
+        json.dumps(
+            execution_data_exclusions,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
     return {
         "enabled": True,
         "source": "frozen:suspend_d.parquet",
@@ -329,7 +452,14 @@ def build_suspend_filter_payload(spec: dict[str, Any]) -> dict[str, Any]:
         "trade_date_count": len(calendar_days),
         "suspended_row_count": total_rows,
         "suspend_d_parquet_sha256": str(suspend_spec.get("parquet_sha256") or ""),
-        "suspend_d_manifest_sha256": str(suspend_spec.get("manifest_sha256") or ""),
+        "suspend_d_manifest_sha256": str(
+            suspend_spec.get("metadata_sha256")
+            or suspend_spec.get("manifest_sha256")
+            or ""
+        ),
+        EXECUTION_DATA_EXCLUSIONS_PARAM: execution_data_exclusions,
+        "execution_data_exclusion_count": len(execution_data_exclusions),
+        "execution_data_exclusion_contract_sha256": exclusion_contract_sha256,
         "suspended_by_date": suspended_by_date,
     }
 

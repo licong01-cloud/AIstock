@@ -599,6 +599,8 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         "stk_limit",
         "suspend_d",
         "margin_detail",
+        "etf_share_size",
+        "etf_basic_snapshots",
         *FINANCIAL_EVENT_RAW_DATASETS,
     }:
         return "tushare"
@@ -1492,6 +1494,11 @@ class BatchCreateSchedulesRequest(BaseModel):
     items: List[BatchScheduleItem]
 
 
+def _validate_dataset_schedule_mode(dataset: str, mode: str) -> None:
+    if dataset == "etf_basic_snapshots" and mode != "init":
+        raise HTTPException(status_code=400, detail="etf_basic_snapshots only supports init mode")
+
+
 def _suspend_d_refresh_options() -> Dict[str, Any]:
     return {
         "date_strategy": "current_and_next_trading_day",
@@ -1516,6 +1523,11 @@ def batch_create_ingestion_schedules(payload: BatchCreateSchedulesRequest) -> Di
     for item in payload.items:
         if item.mode not in SUPPORTED_INGESTION_MODES:
             results.append({"dataset": item.dataset, "error": f"invalid mode: {item.mode}"})
+            continue
+        try:
+            _validate_dataset_schedule_mode(item.dataset, item.mode)
+        except HTTPException as exc:
+            results.append({"dataset": item.dataset, "error": str(exc.detail)})
             continue
         options: Dict[str, Any] = {}
         if item.at:
@@ -1576,6 +1588,8 @@ _DAILY_PRESETS = [
     ("sw_sector", "incremental"),
     ("sector_data", "incremental"),
     ("cyq_perf", "incremental"),
+    ("etf_share_size", "incremental"),
+    ("etf_basic_snapshots", "init"),
 ]
 
 
@@ -1901,6 +1915,14 @@ def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="margin_detail init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="margin_detail init requires end_date")
+    elif dataset == "etf_share_size":
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="etf_share_size init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="etf_share_size init requires end_date")
+    elif dataset == "etf_basic_snapshots":
+        if mode != "init":
+            raise HTTPException(status_code=400, detail="etf_basic_snapshots only supports init mode")
     elif dataset in FINANCIAL_EVENT_RAW_DATASETS:
         if mode == "init" and not options.get("start_date"):
             raise HTTPException(status_code=400, detail=f"{dataset} init requires start_date")
@@ -2037,6 +2059,7 @@ def list_ingestion_schedules() -> Dict[str, Any]:
 @router.post("/ingestion/schedule")
 def upsert_ingestion_schedule(payload: IngestionScheduleUpsertRequest) -> Dict[str, Any]:
     payload.validate_mode()
+    _validate_dataset_schedule_mode(payload.dataset, payload.mode)
     schedule_id = payload.schedule_id
     if schedule_id is None:
         rows = _fetchall(
@@ -2365,7 +2388,8 @@ def list_data_stats() -> Dict[str, Any]:
                    trade_date AS audit_ready_date,
                    row_count AS audit_row_count,
                    refreshed_at AS audit_refreshed_at,
-                   quality_status AS audit_quality_status
+                   quality_status AS audit_quality_status,
+                   data_max_at AS audit_data_max_at
               FROM market.dataset_date_refresh_audit
              WHERE status = 'success'
              ORDER BY dataset, trade_date DESC, refreshed_at DESC
@@ -2383,7 +2407,8 @@ def list_data_stats() -> Dict[str, Any]:
                la.audit_ready_date,
                la.audit_row_count,
                la.audit_refreshed_at,
-               la.audit_quality_status
+               la.audit_quality_status,
+               la.audit_data_max_at
           FROM market.data_stats ds
           LEFT JOIN latest_audit la ON la.dataset = ds.data_kind
          ORDER BY ds.data_kind
@@ -2406,10 +2431,20 @@ def list_data_stats() -> Dict[str, Any]:
         row["ready_date"] = _date_iso(audit_ready_date)
         row["audit_ready_date"] = _date_iso(audit_ready_date)
         row["stats_max_date"] = _date_iso(stats_max_date)
-        row["physical_max_date"] = _date_iso(stats_max_date)
+        # A cached MAX is not a live physical probe. Batch readback is a
+        # separately named lower-bound observation, not full-table MAX either.
+        row["physical_max_date"] = None
+        row["physical_max_date_source"] = "not_probed"
+        row["audit_data_max_at"] = _isoformat(row.get("audit_data_max_at"))
+        row["stats_date_source"] = "data_stats_cache"
         row["cache_state"] = cache_state
         row["readiness_source"] = "dataset_date_refresh_audit"
         row["operator_action_required"] = False
+        row["readiness_status"] = (
+            "unknown" if not audit_ready_date else
+            "quality_blocked" if row.get("audit_quality_status") in {"error", "empty_invalid", "low_coverage", "unproven"}
+            else "audit_success"
+        )
         row["audit_refreshed_at"] = _isoformat(row.get("audit_refreshed_at"))
         row["stats_scope"] = extra_info.get("stats_scope") or "full_table"
         row["stats_window_months"] = extra_info.get("window_months")

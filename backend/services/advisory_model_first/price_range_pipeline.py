@@ -11,7 +11,7 @@ import tempfile
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import numpy as np
 import pandas as pd
@@ -31,16 +31,23 @@ from backend.services.advisory_model_first.outcome_pipeline import (
 )
 from backend.services.advisory_model_first.outcome_split import fixed_406_outcome_split
 from backend.services.advisory_model_first.prediction_source import sha256_file
-from backend.services.advisory_model_first.price_range_bundle import publish_price_range_bundle
+from backend.services.advisory_model_first.price_range_bundle import (
+    publish_daily_price_envelope_bundle,
+    publish_price_range_bundle,
+)
 from backend.services.advisory_model_first.price_range_contracts import (
     FrozenAdvisoryPriceRangeTrainingRequestV1,
+    FrozenAdvisoryPriceRangeTrainingRequestV2,
 )
 from backend.services.advisory_model_first.price_range_labels import (
     PriceRangeLabelBuildResult,
+    apply_daily_price_envelope_split,
     apply_price_range_split,
+    build_daily_price_envelope_labels,
     build_price_range_labels,
 )
 from backend.services.advisory_model_first.price_range_training import (
+    train_daily_price_envelope_models,
     train_price_range_models,
 )
 from backend.services.advisory_model_first.qe_file_source import (
@@ -89,6 +96,10 @@ class PriceRangeTrainingProgress:
 
 
 LABEL_DECISION_BATCH_SIZE = 32
+PriceRangeTrainingRequest = (
+    FrozenAdvisoryPriceRangeTrainingRequestV1
+    | FrozenAdvisoryPriceRangeTrainingRequestV2
+)
 
 
 def run_price_range_training_pipeline(request_path: str | Path) -> dict[str, Any]:
@@ -218,12 +229,144 @@ def run_price_range_training_pipeline(request_path: str | Path) -> dict[str, Any
     return receipt
 
 
+def run_daily_price_envelope_training_pipeline(
+    request_path: str | Path,
+) -> dict[str, Any]:
+    request = FrozenAdvisoryPriceRangeTrainingRequestV2.model_validate_json(
+        Path(request_path).read_text(encoding="utf-8")
+    )
+    environment_report = _verify_price_range_training_environment(request)
+    progress = PriceRangeTrainingProgress(limit_bytes=request.resource_max_rss_bytes)
+    run_root = Path(request.output_root).resolve() / "price_range_runs" / request.request_id
+    run_root.mkdir(parents=True, exist_ok=True)
+
+    started = time.monotonic()
+    parent_bundle_path, parent_request, feature_schema = _validate_parent_identity(request)
+    outcome_bundle_path, outcome_request, split = _validate_outcome_identity(request)
+    candidates = _read_bound_parquet(request.candidates_artifact)
+    features = _read_bound_parquet(request.features_artifact)
+    decision_dates = (
+        pd.DatetimeIndex(pd.to_datetime(candidates["decision_as_of_trade_date"]))
+        .normalize()
+        .sort_values()
+        .unique()
+    )
+    recomputed = fixed_406_outcome_split(decision_dates)
+    if split.as_dict() != recomputed.as_dict():
+        raise AdvisoryModelFirstError(
+            "daily price envelope split differs from the frozen outcome split",
+            reason_code="ADVISORY_PRICE_RANGE_OUTCOME_IDENTITY_MISMATCH",
+        )
+    if (
+        decision_dates[0].date().isoformat() != request.decision_date_start
+        or decision_dates[-1].date().isoformat() != request.decision_date_end
+    ):
+        raise AdvisoryModelFirstError(
+            "daily price envelope decision range differs from its request",
+            reason_code="ADVISORY_PRICE_RANGE_BUNDLE_IDENTITY_MISMATCH",
+        )
+    progress.stage(
+        "daily_price_envelope_input_identity",
+        started,
+        parent_bundle_path=str(parent_bundle_path),
+        outcome_bundle_path=str(outcome_bundle_path),
+        parent_request_id=parent_request.request_id,
+        outcome_request_id=outcome_request.request_id,
+        feature_schema_hash=feature_schema["feature_schema_hash"],
+        candidate_row_count=len(candidates),
+        feature_row_count=len(features),
+        decision_date_count=len(decision_dates),
+    )
+
+    started = time.monotonic()
+    initialize_qlib(request.qlib_daily_root)
+    calendar = load_trading_calendar("2024-03-01", request.data_cutoff)
+    label_result, projection_stats = _build_labels_in_date_batches(
+        candidates=candidates,
+        trading_calendar=calendar,
+        suspend_data_root=request.suspend_data_root,
+        scratch_parent=run_root,
+        label_builder=build_daily_price_envelope_labels,
+    )
+    progress.stage("daily_price_envelope_file_projection", started, **projection_stats)
+
+    started = time.monotonic()
+    labels = apply_daily_price_envelope_split(label_result.labels, split)
+    labels.to_parquet(run_root / "daily_price_envelope_labels.parquet", index=False)
+    _write_json(
+        run_root / "daily_price_envelope_label_coverage.json",
+        label_result.coverage.to_dict("records"),
+    )
+    _write_json(run_root / "daily_price_envelope_split.json", split.as_dict())
+    progress.stage(
+        "daily_price_envelope_labels",
+        started,
+        label_row_count=len(labels),
+        gap_modelable_count=int(labels["gap_modelable"].sum()),
+        not_applicable_count=int(
+            labels["entry_gap_label_status"].eq("NOT_APPLICABLE").sum()
+        ),
+        unavailable_count=int(
+            labels["entry_gap_label_status"].eq("UNAVAILABLE").sum()
+        ),
+    )
+
+    gc.collect()
+    started = time.monotonic()
+    training = train_daily_price_envelope_models(
+        features=features,
+        labels=labels,
+        seed=request.trainer_seed,
+    )
+    progress.stage(
+        "daily_price_envelope_heads",
+        started,
+        model_count=len(training.models),
+        test_row_count=len(training.test_predictions),
+        test_date_count=training.metrics["test_date_count"],
+    )
+
+    started = time.monotonic()
+    resource_report = progress.report()
+    bundle_id, bundle_path, manifest = publish_daily_price_envelope_bundle(
+        model_root=request.output_root,
+        request=request,
+        split=split,
+        training=training,
+        environment_report=environment_report,
+        resource_report=resource_report,
+    )
+    progress.stage(
+        "daily_price_envelope_bundle_publish",
+        started,
+        price_range_bundle_id=bundle_id,
+        bundle_path=str(bundle_path),
+    )
+    receipt = {
+        "status": "trained",
+        "output_schema_version": "advisory_daily_price_envelope_v1",
+        "request_id": request.request_id,
+        "request_sha256": request.request_sha256,
+        "parent_bundle_id": request.parent_bundle_id,
+        "outcome_bundle_id": request.outcome_bundle_id,
+        "price_range_bundle_id": bundle_id,
+        "bundle_path": str(bundle_path),
+        "manifest": manifest,
+        "metrics": training.metrics,
+        "resource_report": progress.report(),
+        "price_range_binding_activated": False,
+    }
+    _write_json(run_root / "daily_price_envelope_training_receipt.json", receipt)
+    return receipt
+
+
 def _build_labels_in_date_batches(
     *,
     candidates: pd.DataFrame,
     trading_calendar: pd.DatetimeIndex,
     suspend_data_root: str,
     scratch_parent: Path,
+    label_builder: Callable[..., PriceRangeLabelBuildResult] = build_price_range_labels,
 ) -> tuple[PriceRangeLabelBuildResult, dict[str, int]]:
     decision_values = pd.to_datetime(candidates["decision_as_of_trade_date"]).dt.normalize()
     decision_dates = pd.DatetimeIndex(decision_values.sort_values().unique())
@@ -270,7 +413,7 @@ def _build_labels_in_date_batches(
                 end=projection_end,
                 instruments=symbols,
             )
-            result = build_price_range_labels(
+            result = label_builder(
                 candidates=batch_candidates,
                 daily=daily,
                 suspend_rows=suspend,
@@ -326,7 +469,7 @@ def _build_labels_in_date_batches(
 
 
 def _validate_parent_identity(
-    request: FrozenAdvisoryPriceRangeTrainingRequestV1,
+    request: PriceRangeTrainingRequest,
 ) -> tuple[Path, FrozenAdvisoryTrainingRequestV1, dict[str, Any]]:
     parent_request_path = Path(request.parent_training_request_path).resolve()
     feature_schema_path = Path(request.parent_feature_schema_path).resolve()
@@ -371,7 +514,7 @@ def _validate_parent_identity(
 
 
 def _validate_outcome_identity(
-    request: FrozenAdvisoryPriceRangeTrainingRequestV1,
+    request: PriceRangeTrainingRequest,
 ) -> tuple[Path, FrozenAdvisoryOutcomeTrainingRequestV1, Any]:
     outcome_request_path = Path(request.outcome_training_request_path).resolve()
     split_path = Path(request.outcome_split_path).resolve()
@@ -466,7 +609,7 @@ def _read_bound_parquet(descriptor: Any) -> pd.DataFrame:
 
 
 def _verify_price_range_training_environment(
-    request: FrozenAdvisoryPriceRangeTrainingRequestV1,
+    request: PriceRangeTrainingRequest,
 ) -> dict[str, Any]:
     release = platform.release().lower()
     if os.name == "nt" or "microsoft" not in release:

@@ -14,18 +14,21 @@ Execution modes:
 """
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 import time
 import uuid
-from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from ...db.pg_pool import get_conn
-from .experiment_config import ExperimentConfig, MultiAlphaConfig, AlphaGroup
-from .meta_model import MetaModelCombiner
-from .multi_alpha_resource_planner import plan_assignments, GroupAssignment
+from .experiment_config import AlphaGroup, ExperimentConfig
+from .multi_alpha_resource_planner import plan_assignments
+from .qe_active_dataset_profile import (
+    QE_ACTIVE_PROFILE_SUMMARY_PARAM,
+    QEActiveDatasetProfile,
+    resolve_and_apply_active_qe_dataset,
+)
+from .qe_run_registry import QERunRegistry, attach_qe_run_registration
 
 logger = logging.getLogger("aistock.quantevolver.multi_alpha_engine")
 
@@ -44,6 +47,11 @@ class MultiAlphaEngine:
         experiment_config: ExperimentConfig,
         composer: Any = None,
         available_nodes: list[dict[str, Any]] | None = None,
+        active_dataset_profile: QEActiveDatasetProfile | None = None,
+        universe_selection: dict[str, Any] | None = None,
+        registration_context: dict[str, Any] | None = None,
+        parent_multi_alpha_id: str | None = None,
+        parent_custom_params: dict[str, Any] | None = None,
     ):
         if experiment_config.alpha_mode != "multi":
             raise ValueError("MultiAlphaEngine requires alpha_mode='multi'")
@@ -54,6 +62,29 @@ class MultiAlphaEngine:
         self.ma_config = experiment_config.multi_alpha_config
         self.composer = composer
         self.available_nodes = available_nodes
+        self.active_dataset_profile = active_dataset_profile
+        self.universe_selection = universe_selection
+        self.registration_context = dict(registration_context or {})
+        self.parent_multi_alpha_id = parent_multi_alpha_id
+        self.parent_custom_params = dict(parent_custom_params or {})
+
+    def _resolve_node_dataset(
+        self,
+        *,
+        node_id: str,
+        custom_params: dict[str, Any],
+    ) -> tuple[dict[str, str] | None, dict[str, Any], dict[str, Any] | None]:
+        active_profile = getattr(self, "active_dataset_profile", None)
+        if active_profile is None:
+            return self.config.data_split, custom_params, None
+        return resolve_and_apply_active_qe_dataset(
+            node_id=node_id,
+            data_split=self.config.data_split,
+            universe_selection=getattr(self, "universe_selection", None),
+            custom_params=custom_params,
+            label_horizon=int(self.config.label_horizon or 1),
+            profile=active_profile,
+        )
 
     def run(self) -> dict[str, Any]:
         """Run the full Multi-Alpha pipeline.
@@ -82,6 +113,69 @@ class MultiAlphaEngine:
         logger.info(
             f"Multi-Alpha resource plan: {len(assignments)} groups, "
             f"mode={self.ma_config.execution_mode}"
+        )
+
+        for assignment in assignments:
+            group = assignment.group
+            reuse_mode = group.reuse_mode or "retrain"
+            if reuse_mode == "reuse_model":
+                raise ValueError(
+                    f"Group {group.group_name}: reuse_model is not supported because model-only prediction reuse is not implemented"
+                )
+            if reuse_mode == "reuse_prediction" and not group.model_source_experiment_id:
+                raise ValueError(
+                    f"Group {group.group_name}: reuse_prediction requires model_source_experiment_id"
+                )
+            if reuse_mode not in {"retrain", "reuse_prediction"}:
+                raise ValueError(
+                    f"Group {group.group_name}: unsupported reuse_mode={reuse_mode}"
+                )
+
+        # Reserve the parent and every planned group before any workspace or
+        # executable file is materialized.  A failed readback aborts dispatch.
+        parent_id = self.config.experiment_name or str(uuid.uuid4())[:12]
+        all_factor_names = [
+            factor_name
+            for group in self.ma_config.alpha_groups
+            for factor_name in group.factor_names
+        ]
+        parent_params = getattr(self, "parent_custom_params", None) or self.config.build_custom_params()
+        active_dataset_profile = getattr(self, "active_dataset_profile", None)
+        if active_dataset_profile is not None:
+            parent_params[QE_ACTIVE_PROFILE_SUMMARY_PARAM] = active_dataset_profile.summary()
+        parent_params = attach_qe_run_registration(
+            parent_params,
+            run_kind="multi_alpha",
+            consumer_id=getattr(self, "registration_context", {}).get("consumer_id"),
+            source_type=getattr(self, "registration_context", {}).get("source_type"),
+            created_by_name=getattr(self, "registration_context", {}).get("created_by_name"),
+            purpose=getattr(self, "registration_context", {}).get("purpose"),
+            node_id=self.config.node_id,
+            model_id=(
+                self.ma_config.alpha_groups[0].model_id
+                if self.ma_config.alpha_groups
+                else None
+            ),
+            factor_names=all_factor_names,
+            strategy_id=self.config.strategy_id,
+            data_split=self.config.data_split,
+            parent_id=getattr(self, "parent_multi_alpha_id", None),
+        )
+        QERunRegistry(connection_factory=get_conn).reserve_multi_alpha(
+            parent_experiment_id=parent_id,
+            experiment_name=self.config.experiment_name or parent_id,
+            factor_names=all_factor_names,
+            model_id=(
+                self.ma_config.alpha_groups[0].model_id
+                if self.ma_config.alpha_groups
+                else None
+            ),
+            strategy_id=self.config.strategy_id,
+            data_split=self.config.data_split,
+            custom_params=parent_params,
+            multi_alpha_config=self.ma_config.model_dump(),
+            assignments=assignments,
+            parent_multi_alpha_id=getattr(self, "parent_multi_alpha_id", None),
         )
 
         # ── Step B: Generate sub-experiment files ──────────────────
@@ -173,10 +267,6 @@ class MultiAlphaEngine:
         # 需要在根目录有: qrun_limit_minute.py, read_exp_res.py, conf.yaml, 策略依赖
         self._add_root_backtest_files(all_experiment_files, group_configs)
 
-        # ── Step D: Store group assignments to DB ──────────────────
-        parent_id = self.config.experiment_name or str(uuid.uuid4())[:12]
-        self._store_group_records(parent_id, assignments)
-
         elapsed = time.time() - start_time
         logger.info(f"Multi-Alpha setup complete in {elapsed:.1f}s: {len(assignments)} groups")
 
@@ -218,13 +308,17 @@ class MultiAlphaEngine:
         # 多Alpha默认禁用Alpha158（除非实验配置中显式启用）
         if "disable_alpha158" not in custom_params:
             custom_params["disable_alpha158"] = True
+        resolved_split, custom_params, _resolved_summary = self._resolve_node_dataset(
+            node_id=node_id,
+            custom_params=custom_params,
+        )
 
         # 统一回测模式：所有组 train_only=True，不传 execution_algo（从节点不需要v24）
         result = self.composer.compose_experiment_in_memory(
             factor_names=group.factor_names,
             model_id=group.model_id,
             strategy_id=self.config.strategy_id,
-            data_split=self.config.data_split,
+            data_split=resolved_split,
             custom_params=custom_params,
             experiment_name=f"{self.config.experiment_name or 'malpha'}_{group.group_name}",
             skip_db_save=True,
@@ -301,19 +395,28 @@ class MultiAlphaEngine:
         custom_params = self.config.build_custom_params()
         if "disable_alpha158" not in custom_params:
             custom_params["disable_alpha158"] = True
+        primary_node_id = str(
+            group_configs[0].get("node_id")
+            or getattr(self.config, "node_id", None)
+            or "wsl2-5080"
+        )
+        resolved_split, custom_params, _resolved_summary = self._resolve_node_dataset(
+            node_id=primary_node_id,
+            custom_params=custom_params,
+        )
 
         result = self.composer.compose_experiment_in_memory(
             factor_names=first_group_obj.factor_names,
             model_id=first_group_obj.model_id,
             strategy_id=self.config.strategy_id,
-            data_split=self.config.data_split,
+            data_split=resolved_split,
             custom_params=custom_params,
             experiment_name=f"{self.config.experiment_name or 'malpha'}_unified_backtest",
             skip_db_save=True,
             execution_algo=self.config.execution_algo,
             execution_algo_params=self.config.execution_algo_params,
             strategy_params=self.config.build_strategy_params(),
-            node_id=None,
+            node_id=primary_node_id,
             train_only=False,
         )
         files = result.get("experiment_files") or {}
@@ -803,51 +906,3 @@ if __name__ == "__main__":
                         "status": row[6],
                     }
         return None
-
-    def _store_group_records(
-        self,
-        parent_experiment_id: str,
-        assignments: list[GroupAssignment],
-    ) -> None:
-        """Store group records to qe_multi_alpha_groups table.
-
-        失败时抛出异常，不静默吞噬。组记录丢失会导致 ResultCollector 无法工作。
-        """
-        with get_conn() as conn:
-            with conn.cursor() as cur:
-                for a in assignments:
-                    g = a.group
-                    cur.execute("""
-                        INSERT INTO qe_multi_alpha_groups
-                            (parent_experiment_id, group_name, factor_names,
-                             model_id, dataset_type, model_params,
-                             compute_resource, assigned_node_id, qe_loop_id, status,
-                             model_source_experiment_id, model_source_group_name,
-                             reuse_mode)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending',
-                                %s, %s, %s)
-                        ON CONFLICT (parent_experiment_id, group_name)
-                        DO UPDATE SET
-                            factor_names = EXCLUDED.factor_names,
-                            model_id = EXCLUDED.model_id,
-                            assigned_node_id = EXCLUDED.assigned_node_id,
-                            qe_loop_id = EXCLUDED.qe_loop_id,
-                            model_source_experiment_id = EXCLUDED.model_source_experiment_id,
-                            model_source_group_name = EXCLUDED.model_source_group_name,
-                            reuse_mode = EXCLUDED.reuse_mode,
-                            status = 'pending'
-                    """, (
-                        parent_experiment_id,
-                        g.group_name,
-                        json.dumps(g.factor_names),
-                        g.model_id,
-                        g.dataset_type,
-                        json.dumps(g.model_params) if g.model_params else None,
-                        g.compute_resource,
-                        a.node_id,
-                        None,
-                        g.model_source_experiment_id,
-                        g.model_source_group_name,
-                        g.reuse_mode or "retrain",
-                    ))
-            conn.commit()

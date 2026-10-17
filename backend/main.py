@@ -29,6 +29,7 @@ from .routers import (
     cloud_screening,
     config_env,
     dataset_releases,
+    monthly_dataset_releases,
     execution_policy,
     external_research,
     strategy_governance,
@@ -42,6 +43,7 @@ from .routers import (
     monitor,
     news,
     portfolio,
+    position_timing,
     qmt,
     qmt_strategy_ledger,
     qe_archive,
@@ -75,6 +77,7 @@ from .routers import (
     rdagent_llm_config_v2,
     rdagent_llm_config_endpoints,
     dispatch,
+    hmm_risk,
     hmm_training,
     tdx_blocks,
 )
@@ -445,6 +448,23 @@ async def _lifespan(app: FastAPI):
             exc_info=True,
         )
 
+    # Unified monthly dataset releases use one code-owned child worker.  It is
+    # opt-in because an enabled worker must have the complete immutable path,
+    # node and HMM authority configuration.  Explicit enablement fails startup
+    # closed if preflight cannot bind that authority; builds never run in the
+    # request thread.
+    from .services.dataset_release.monthly_worker_supervisor import (
+        build_monthly_worker_supervisor_from_env,
+    )
+
+    monthly_release_worker_supervisor = build_monthly_worker_supervisor_from_env(
+        project_root=PROJECT_ROOT,
+    )
+    monthly_worker_start = monthly_release_worker_supervisor.start()
+    logging.getLogger(
+        "aistock.dataset_release.monthly_worker_supervisor"
+    ).info("Monthly release worker lifecycle: %s", monthly_worker_start)
+
     try:
         yield  # ── 应用运行中 ──
     except asyncio.CancelledError:
@@ -464,6 +484,13 @@ async def _lifespan(app: FastAPI):
             await _cancel_background_task(
                 multi_alpha_durable_task,
                 task_name="multi-alpha-durable-orchestrator",
+            )
+        try:
+            monthly_release_worker_supervisor.stop()
+        except Exception as exc:
+            _report_nonfatal_lifecycle_failure(
+                "MONTHLY_RELEASE_WORKER_SHUTDOWN_FAILED",
+                exc,
             )
         # ── 先停所有后台线程（它们可能持有 DB 连接）──
         try:
@@ -553,11 +580,13 @@ def create_app() -> FastAPI:
     app.include_router(qmt_strategy_ledger.router, prefix="/api/v1")
     app.include_router(strategies.router)
     app.include_router(portfolio.router, prefix="/api/v1")
+    app.include_router(position_timing.router, prefix="/api/v1")
     app.include_router(sector_strategy.router, prefix="/api/v1")
     app.include_router(news.router, prefix="/api/v1")
     app.include_router(settings.router, prefix="/api/v1")
     app.include_router(config_env.router, prefix="/api/v1")
     app.include_router(dataset_releases.router, prefix="/api/v1")
+    app.include_router(monthly_dataset_releases.router, prefix="/api/v1")
     app.include_router(smart_monitor.router, prefix="/api/v1")
     app.include_router(rdagent.router, prefix="/api/v1")
     app.include_router(rdagent_templates.router, prefix="/api/v1")
@@ -593,6 +622,7 @@ def create_app() -> FastAPI:
     app.include_router(simulation_runtime.router, prefix="/api/v1")
     app.include_router(validation.router, prefix="/api/v1")
     app.include_router(prometheus_admin.router, prefix="/api/v1")
+    app.include_router(hmm_risk.router, prefix="/api/v1")
     app.include_router(hmm_training.router, prefix="/api/v1")
     app.include_router(tdx_blocks.router, prefix="/api/v1")
     app.include_router(llm_config.router)

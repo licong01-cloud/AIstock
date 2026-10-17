@@ -1,0 +1,267 @@
+{
+  "actual": "On 2026-09-04 run simrun_555075b03708358f, the LocalSIM mark loader correctly builds a frozen pre_close mark for suspended 002998.SZ with SUSPENDED_PREV_CLOSE provenance, but the scheduler misinterprets the mark valuation as_of_time as the source-effective date and rejects the current snapshot timestamp. The resulting LOCALSIM_SUSPENDED_PREV_CLOSE_UNPROVEN aborts the whole portfolio batch, leaving 89 healthy execution states at observed_until 09:30:51 with zero fills while TDX has current bars. The durable recovery path then reports recovery without advancing in the same tick, temporarily clearing runtime health without causal progress.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "tests/aistock_validation/bugs/20260904_BUG-1346-localsim-suspended-holding-current-day-tdx-placeholder-aborts-the-entire.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1346",
+  "closed_at": "2026-09-04T05:52:00.187126Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-04T03:27:26.972359Z",
+  "description": "On 2026-09-04 run simrun_555075b03708358f, frozen daily context correctly marks 002998.SZ suspended and the LocalSIM loader builds the previous-close price with SUSPENDED_PREV_CLOSE provenance. The scheduler nevertheless rejects that valid mark because it conflates the current valuation as_of_time with the previous-close source-effective date. The whole portfolio batch aborts, leaving 89 healthy execution states at observed_until 09:30:51 with zero fills. Durable recovery also returns before attempting causal progress, creating alternating false-green recovery and FAILED_RETRYABLE ticks.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260904-b7bab0e1edab",
+      "timestamp": "2026-09-04T03:27:26.972336Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "A suspended position is valued at the frozen authoritative pre_close with SUSPENDED_PREV_CLOSE provenance at the current snapshot time, remains an explicit no-fill market state, and cannot block healthy symbols from advancing. A safe durable recovery must continue the same scheduler tick into the causal minute loop; it may clear the current-day blocker only after that continuation succeeds or reaches a legitimate waiting state.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py"
+    ]
+  },
+  "first_seen_at": "2026-09-04T03:27:26.972359Z",
+  "fix_branch": null,
+  "fix_commit": "11a032c622eac6bdb7befd50d194b1868f242732",
+  "fixed_at": "2026-09-04T05:36:36Z",
+  "github_issue_number": 4247,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4247",
+  "last_seen_at": "2026-09-04T03:27:26.972359Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4251",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/status",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest processes loaded the task worktree scheduler source and passed the five-case LocalSIM matrix covering V1/V2 suspended previous-close marks, healthy-peer mark isolation, synthetic TDX mark rejection, durable recovery causal progress, and suspended no-fill behavior; no backend process control.",
+      "Fresh nox processes loaded the task worktree scheduler source and passed l0, validation_module_registry_l0 (8 passed), and simulation_core_l2 (767 passed, 3 skipped plus 63 passed, 1 skipped); no backend process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1346-close-sync-20260904\\tmp\\BUG-1346-post-restart-receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1346",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "482a415b14088acc5e1386ba087e4f2a791cb0a122626973cf9b64fdcad9e31b",
+      "contract_digest": "66affd3423a977dcbd5e4498c624d902f5ddd496a5a079cf883940e6d9c8f392",
+      "expected_identity": "11a032c622eac6bdb7befd50d194b1868f242732",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-04T05:50:59.008127Z",
+      "mode": "read_only",
+      "observed_identity": "11a032c622eac6bdb7befd50d194b1868f242732",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e0038463de902724f652035070353bd7f09f781b4ece00f384f45b7027f8eeb6",
+      "receipt_sha256": "96aaf030979fd82d85f7b6f5285b74dd823fcb24066f94282d0711b89925200e",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "68cd423ebcc7f0ddcab960e70ba1e6c5be96f92a3f268348e00e7ff3e351fd99",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1346",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d06eca59a85c55bf",
+    "recorded_at": "2026-09-04T05:37:33.146666Z",
+    "runtime_contract_digest": "66affd3423a977dcbd5e4498c624d902f5ddd496a5a079cf883940e6d9c8f392",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a64deb7aaf53f1f3c844c954e201a9d38a777241",
+    "source_merge_commit": "11a032c622eac6bdb7befd50d194b1868f242732",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4251",
+    "validation_evidence": [
+      "validation-receipt: id=bec17b22b0beff21 commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_localsim_mark_does_not_fall_back_to_plan_prices backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_suspended_previous_close_mark_keeps_current_snapshot_and_healthy_peer backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovers_failed_localsim_only_from_exact_durable_active_state backend/tests/simulation_execution/test_localsim_runtime.py::test_localsim_suspended_without_minute_bars_waits_then_terminalizes_residual -q -p no:cacheprovider` result=`5 passed`",
+      "validation-receipt: id=df33acfa99259a11 commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; ownership mapped=14/14`",
+      "validation-receipt: id=2f35809a9c1f13af commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`767 passed, 3 skipped; 63 passed, 1 skipped`"
+    ],
+    "validation_evidence_digest": "df36b69b3447942fe9e7f5c34446fcdb6467d40a6cb1c3e5698e5d1886894779"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM suspended holding current-day TDX placeholder aborts the entire causal execution batch",
+  "trigger_condition": {
+    "fingerprint": "b7bab0e1edab3b850ba8a1a3",
+    "source_event_id": "FE-20260904-b7bab0e1edab"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=bec17b22b0beff21 commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_localsim_mark_does_not_fall_back_to_plan_prices backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_localsim_broker_loads_realtime_and_suspended_marks_with_true_provenance backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_suspended_previous_close_mark_keeps_current_snapshot_and_healthy_peer backend/tests/simulation_runtime/test_lifecycle_scheduler.py::test_scheduler_recovers_failed_localsim_only_from_exact_durable_active_state backend/tests/simulation_execution/test_localsim_runtime.py::test_localsim_suspended_without_minute_bars_waits_then_terminalizes_residual -q -p no:cacheprovider` result=`5 passed`",
+    "validation-receipt: id=df33acfa99259a11 commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed; ownership mapped=14/14`",
+    "validation-receipt: id=2f35809a9c1f13af commit=a64deb7aaf53f1f3c844c954e201a9d38a777241 kind=nox plan=simulation_core_l2 status=passed command=`python -m nox -s simulation_core_l2` result=`767 passed, 3 skipped; 63 passed, 1 skipped`",
+    "python -m pytest backend/tests/simulation_runtime/test_lifecycle_scheduler.py -k suspended_current_day_tdx_placeholder -> 5 passed",
+    "python -m nox -s validation_module_registry_l0 -> 8 passed",
+    "python -m nox -s simulation_core_l2 -> 767 passed, 3 skipped"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

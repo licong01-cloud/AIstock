@@ -25,7 +25,6 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
 import psycopg2
-import psycopg2.extras as pgx
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +44,7 @@ LIGHT_TIER = TierConfig(
     name="light",
     tables=[
         "adj_factor", "stk_limit", "suspend_d", "stock_st", "bak_basic",
-        "index_daily", "sw_daily", "margin_detail", "cyq_perf",
+        "index_daily", "sw_daily", "margin_detail", "cyq_perf", "etf_share_size",
         "stock_basic", "sector_data",
     ],
     count_days=1,
@@ -103,6 +102,7 @@ DATASET_TABLE_MAP: Dict[str, Tuple[str, str]] = {
     "sw_daily":             ("market.sw_daily",             "trade_date"),
     "margin_detail":        ("market.margin_detail",        "trade_date"),
     "cyq_perf":             ("market.cyq_perf",             "trade_date"),
+    "etf_share_size":       ("market.etf_share_size",       "trade_date"),
     "stock_basic":          ("market.stock_basic",          "list_date"),
     "sw_index_member":      ("market.sw_index_member",      "in_date"),
     "sector_data":          ("market.sector_data",          "trade_date"),
@@ -336,6 +336,11 @@ class DataCompletenessChecker:
         """Compute expected row count for one trading day."""
         if dataset in NO_COUNT_TABLES:
             return None
+        if dataset == "etf_share_size":
+            # ETF rows are a fund subset and cannot use the listed-equity
+            # denominator. Freshness, trading-day gaps and non-empty writes
+            # remain enforced by the existing paths.
+            return None
         listed = self._get_listed_stocks()
         if dataset in {"sw_daily", "sector_data"}:
             return self._get_sw_l2_count()
@@ -381,10 +386,8 @@ class DataCompletenessChecker:
 
                 # 2) Row counts (skip for no-count tables)
                 if ds not in NO_COUNT_TABLES:
-                    counts, cnt_ms = self._check_row_counts(table_name, date_col, recent_days, cfg.timeout)
+                    counts, _ = self._check_row_counts(table_name, date_col, recent_days, cfg.timeout)
                     result.row_counts = counts
-                else:
-                    cnt_ms = 0.0
 
                 # 3) Expected rows
                 expected = self._expected_rows(ds)
@@ -394,10 +397,8 @@ class DataCompletenessChecker:
                 if gap_days and ds not in NO_GAP_TABLES:
                     gap_start = gap_days[-1]  # oldest
                     gap_end = gap_days[0]     # newest
-                    gaps, gap_ms = self._check_gaps(table_name, date_col, gap_start, gap_end, cfg.timeout)
+                    gaps, _ = self._check_gaps(table_name, date_col, gap_start, gap_end, cfg.timeout)
                     result.gaps = gaps
-                else:
-                    gap_ms = 0.0
 
                 # 5) Determine status
                 if mx is None:

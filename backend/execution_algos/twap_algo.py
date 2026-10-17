@@ -5,16 +5,21 @@ import math
 from typing import Any, Dict, Optional
 
 from .base_algo import BaseExecutionAlgo, OrderState, StepResult
+from .board_lot import board_lot_rule
 from .registry import register
 
 
 @register
 class TWAPAlgo(BaseExecutionAlgo):
     ALGO_CODE = "TWAP"
+    HANDLES_LIMIT_STATE = True
+    HANDLES_ZERO_VOLUME = True
 
     def __init__(self, config: Dict[str, Any] | None = None) -> None:
         super().__init__(config)
         self.split_count = self.config.get("split_count", 6)
+        self._last_no_fill_reason: str | None = None
+        self._last_no_fill_context: dict[str, Any] = {}
 
     def compute_step(
         self,
@@ -22,6 +27,8 @@ class TWAPAlgo(BaseExecutionAlgo):
         bar_data: Dict[str, Any],
         market_context: Dict[str, Any],
     ) -> Optional[StepResult]:
+        self._last_no_fill_reason = None
+        self._last_no_fill_context = {}
         if self.is_complete(state):
             return None
 
@@ -43,6 +50,11 @@ class TWAPAlgo(BaseExecutionAlgo):
         if not math.isfinite(volume) or volume < 0 or volume != int(volume):
             raise ValueError("TWAP requires finite non-negative integral minute volume")
         available_volume = int(volume)
+        if available_volume == 0:
+            self._last_no_fill_reason = "ZERO_VOLUME"
+            self._last_no_fill_context = {"symbol": state.symbol, "volume": 0}
+            state.step += 1
+            return None
 
         # 最后一步：强制执行全部剩余
         is_final_step = state.step >= self.split_count - 1
@@ -62,6 +74,12 @@ class TWAPAlgo(BaseExecutionAlgo):
         )
         step_qty = min(step_qty, remaining)
 
+        # A legal BUY child must also leave a legal BUY remainder.  STAR's
+        # one-share increment otherwise permits 392 of 588, stranding 196.
+        if state.side == "BUY" and 0 < remaining - step_qty < board_lot_rule(state.symbol)[0]:
+            minimum, _ = board_lot_rule(state.symbol)
+            step_qty = self._round_lot(remaining - minimum, symbol=state.symbol, side=state.side)
+
         if step_qty <= 0:
             state.step += 1
             return None
@@ -71,10 +89,31 @@ class TWAPAlgo(BaseExecutionAlgo):
         if state.executed_quantity >= state.total_quantity:
             state.is_complete = True
 
+        if state.step <= self.split_count:
+            reason = f"TWAP step {state.step}/{self.split_count}"
+        else:
+            residual_attempt = state.step - self.split_count
+            reason = (
+                f"TWAP residual completion attempt {residual_attempt} "
+                f"after {self.split_count} planned steps"
+            )
+
         return StepResult(
             symbol=state.symbol,
             side=state.side,
             quantity=step_qty,
             price=price,
-            reason=f"TWAP step {state.step}/{self.split_count}",
+            reason=reason,
         )
+
+    def handle_limit_state_no_fill(
+        self,
+        state: OrderState,
+        *,
+        reason: str,
+        context: dict[str, Any],
+    ) -> None:
+        self._last_no_fill_reason = reason
+        self._last_no_fill_context = context
+        state.step += 1
+        return None

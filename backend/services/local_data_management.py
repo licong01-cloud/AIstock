@@ -88,13 +88,19 @@ class LocalDataManagementService:
         sync_targets = list(targets.get("items") or [])
         counts = self._fetch_overview_counts()
 
-        stale_count = sum(1 for item in datasets if str(item.get("cache_state") or "") in {"stale", "audit_missing", "unknown"})
+        stale_count = sum(1 for item in datasets if item.get("cache_state") == "stale")
+        unknown_count = sum(1 for item in datasets if item.get("readiness_status") == "unknown")
+        quality_blocked_count = sum(1 for item in datasets if item.get("readiness_status") == "quality_blocked")
         blocked_count = counts["blocked_target_count"]
         retry_count = counts["retry_target_count"]
         running_count = counts["active_job_count"]
         has_error_alert = any(item.get("severity") in {"error", "critical"} for item in active_alerts)
-        status = "red" if blocked_count or has_error_alert else ("yellow" if stale_count or retry_count or active_alerts else "green")
+        status = "red" if blocked_count or has_error_alert or quality_blocked_count else ("yellow" if stale_count or unknown_count or retry_count or active_alerts else "green")
         summary = self._health_summary(status, stale_count, blocked_count, retry_count, len(active_alerts))
+        if unknown_count:
+            summary += f" {unknown_count} 个数据集 readiness 尚无审计证据（不等于行情缺失）。"
+        if quality_blocked_count:
+            summary += f" {quality_blocked_count} 个数据集存在质量阻断。"
         return self._response(
             operation="local_data_health_overview",
             risk_level="read_only",
@@ -105,6 +111,9 @@ class LocalDataManagementService:
                 "summary": summary,
                 "dataset_count": len(datasets),
                 "stale_dataset_count": stale_count,
+                "stale_stats_cache_count": stale_count,
+                "readiness_unknown_count": unknown_count,
+                "quality_blocked_dataset_count": quality_blocked_count,
                 "running_job_count": running_count,
                 "active_alert_count": len(active_alerts),
                 "blocked_target_count": blocked_count,
@@ -130,7 +139,11 @@ class LocalDataManagementService:
         latest_job_id = self._fetch_latest_job_id(dataset_key)
         last_job = self.source.get_ingestion_job(job_id=latest_job_id) if latest_job_id else None
         targets = self._fetch_targets(dataset=dataset_key, limit=20)
-        label = STATUS_LABELS.get(str(row.get("cache_state") or "unknown"), "未知")
+        readiness = row.get("readiness_status")
+        label = {"audit_success": "审计成功", "quality_blocked": "质量阻断", "unknown": "待核验"}.get(
+            readiness, STATUS_LABELS.get(str(row.get("cache_state") or "unknown"), "未知"))
+        if row.get("operator_action_required"):
+            label = "需要处理同步阻断"
         return self._response(
             operation="local_data_get_dataset_status",
             risk_level="read_only",
@@ -754,7 +767,7 @@ class LocalDataManagementService:
             return "本地数据管理状态正常，暂未发现需要处理的阻断项。"
         parts = []
         if stale:
-            parts.append(f"{stale} 个数据集缓存滞后或状态未知")
+            parts.append(f"{stale} 个统计缓存滞后（不等于真实数据缺失）")
         if blocked:
             parts.append(f"{blocked} 个同步目标最终阻断")
         if retry:
@@ -774,7 +787,7 @@ class LocalDataManagementService:
     def _next_actions(stale: int, blocked: int, retry: int, alerts: int) -> list[str]:
         actions = []
         if stale:
-            actions.append("生成修复计划，先计算缺口和自动补齐区间。")
+            actions.append("刷新统计缓存；仅缓存滞后时不要重新抓取或补录行情，数据缺口须独立核验。")
         if retry:
             actions.append("检查 retry target 的最近 attempt 和下一次重试时间。")
         if blocked:

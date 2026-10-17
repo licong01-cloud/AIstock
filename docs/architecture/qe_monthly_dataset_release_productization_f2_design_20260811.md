@@ -21,10 +21,14 @@ P0 只交付一个结果：在独立 X 盘目录生成并签收 cutoff=`2026-08-
 
 1. 使用现有 canonical PIT monthly operator，把 `aistock_equity_pit_canonical_v2` 更新并 readback 到
    `2026-08-31`；DEV 验证和 production DML 仍是独立授权，但不再增加额外 rollback、NO_OP 或重复验证阶段。
-2. 直接构建并 readback `2026-08-31` 的 industry/P3A **full** authority；不再构建或要求五股、六股 sample。
+2. 直接构建并 readback `2026-08-31` 的股票行业分类 PIT **full** candidate；不再构建或要求五股、六股
+   sample。申万行业指数成员进出 authority 与股票分类 authority 保持独立，但前者仅服务成分研究，不能作为
+   股票 sector published 特征逐日覆盖的发布前置。
 3. 只提交一次 `monthly --candidate-only`。planner 必须复用 2026-07-31 已有有效组件，并仅追加 8 月尾部、
    新增 v2 历史退市证券及 PIT/复权/行业变化实际失效的分区；禁止为了流程证明重新导出八年全市场。
-4. 对最终 candidate 执行一次全量结构/identity/分母闭合和分层数值抽样，再运行 QE/HMM producer smoke。
+4. 对最终 candidate 执行一次结构/范围检查和分层数值抽样，再运行 QE/HMM producer contract smoke。
+   数据发布只验证所需数据可读取且代表字段非空；85% 覆盖率、IC、信号天数和组合收益属于模型/策略验收，
+   不得阻断数据集发布。
 
 ### 0.1 禁止过度工程化
 
@@ -46,10 +50,23 @@ P0 只交付一个结果：在独立 X 盘目录生成并签收 cutoff=`2026-08-
 - 分批 SQL、流式 row processing、按股票/月切片、Parquet row group 和单次有界日志继续保留；它们是算法实现方式，
   不是资源准入或阻断门禁，且不得减少股票、日期、字段、指数或验证范围。
 
+### 0.2A BUG-1336 月更关键路径裁剪
+
+- `qe_hmm_full_v2 monthly/status` 直接解析交易日 cutoff 和 X 盘 candidate，不打开旧 control store，也不加载继承
+  profile 中已停用的 source-freeze/resource 合同。
+- 更早 validated baseline 是可选上下文，不是创建首个 canonical v2 candidate 的前置。
+- 失败候选按小型 component metadata 恢复。已 PASS 的 daily/minute/index 原样复用；仅当组件输出 schema 确实
+  改变时才重新打开该组件。本次 factor 输出写入新的 `factor_h5_static_candidate_v2`，不覆盖旧文件。
+- sector published 日线由股票分类 PIT 的 L2 code 映射 `market.sw_index_classify` 后读取 `market.sw_daily`；
+  sector moneyflow 由同一分类 PIT 独立聚合。两条来源互不作为对方的 `published` 条件。
+- P3A 双 authority resolver、membership unavailable denominator 和全量 row/hash ledger 保留给 HMM/指数成分研究，
+  但不再位于每月 QE/HMM 数据候选的执行或签收关键路径。
+
 ### 0.3 P0 完成与停止
 
-仅当 cutoff、PIT、industry/P3A、daily/minute、QFQ、ST/stk_limit、H5/static、12-index、sector、QE/HMM smoke
-全部签收，且 candidate marker/catalog/receipt identity 一致，才报告完成。production activation、pointer、node1、DB repair、
+仅当 cutoff、PIT、股票行业分类 PIT、daily/minute、QFQ、ST/stk_limit、H5/static、12-index、sector、QE/HMM contract smoke
+全部签收，且 candidate 自身 `direct_monthly_state.json` 为 `CANDIDATE_READY`，才报告完成。旧 control
+marker/catalog/receipt 不参与直接月更验收。production activation、pointer、node1、DB repair、
 backend restart 和 cleanup 继续分别报告为 `not_requested`。完成后自动停止，不进入消费者迁移或下一轮产品化。
 
 ## Appendix A. 已废弃的 2026-09-01 P0 重排历史
@@ -1562,3 +1579,68 @@ hard-cap、真实全量性能或 production activation 已执行。`pending_real
 | 17A | lineage integrity independent audit | self-signed current lineage、丢失旧事件、未声明 namespace/tombstone、junction 和 scope drift 可绕过 validator | durable baseline CAS replay、exact action/scope/namespace、logical-path lstat、实际 receipt CAS authority 与 adversarial fixtures | resolved_fixture_only |
 | 17B | long-horizon capacity audit | production-shape component/lineage 元数据在数月到约三年内触发 32 MiB hard reader limit | component manifest storage v2、canonical lineage v3、legacy dual-reader/early migration 与 6000×36 容量门禁 | resolved_fixture_only_real_scale_pending |
 | 17C | integrated resource/I-O audit | FULL 批次可能漂回20、H5兼容字段被误报为有效降压、source recheck重复写CAS、顶层receipt缺snapshot证据 | parent rung binding、H5语义显式标记、hash-only exact recheck、BUILD_RECEIPT透传 artifact snapshot；统一回归743 PASS、Windows+WSL smoke PASS | resolved_fixture_and_platform_only_real_data_pending |
+> 2026-09-02 现行合同：以下“直接月更合同”取代本文中所有与 source-freeze、全历史源内容哈希、发布前全值复扫、source-drift re-attestation、首次 v2 sample 或 2026-07-31 v2 full 前置有关的旧段落。旧段落仅用于解释历史实现，不得再作为代码、测试、Skill、Runbook 或 operator 的执行依据。
+
+## 0A. 直接月更合同（唯一现行 P0）
+
+### 0A.1 业务目标
+
+每月只交付一个结果：以“上一个月最后一个已完成交易日”为 cutoff，在独立候选目录生成可供 QE/HMM 只读使用的数据集。月更只负责：
+
+1. 更新并 readback 唯一权威 PIT 股票池；
+2. 补齐目标 cutoff 前数据库缺失数据；
+3. 重新导出实际受新增或补录影响的组件；
+4. 生成新的 candidate-only 目录；
+5. 完成结构检查、分层数值抽样和 QE/HMM producer smoke 后停止。
+
+生产激活、消费者迁移、训练、node1、后端重启、DDL、清理和历史数据删除都不属于月更任务。
+
+### 0A.2 2026-08-31 本轮重导范围
+
+2026-07-31 导出后，7 月分钟线已经在数据库补录，因此旧候选的分钟组件不再代表当前数据库事实。本轮必须生成新的 2026-08-31 独立候选：
+
+- 现有 2026-07-31 数据集只读保留，不覆盖、不原地追加；
+- PIT、日线、因子、指数、行业等输入未变化的组件可以复用；
+- 8 月新增尾部必须导出；
+- 7 月分钟补录影响的股票/日期必须重新导出；
+- 如果没有完整、可靠的 7 月分钟补录影响清单，则重建整个分钟组件，但不得因此重导所有无关组件或八年全市场静态矩阵；
+- PIT 新增历史证券或其他确定性补录只触发对应证券/月份/组件的选择性重建。
+
+### 0A.3 永久取消的工作
+
+月更链不得再执行或恢复以下工作：
+
+- source-freeze 子任务；
+- 对全部历史日线、分钟线、因子行执行内容哈希；
+- 为证明“源没有变化”而再次扫描全部历史数据；
+- publish 前 source recheck 或 source-drift 等待；
+- 依赖全历史 source hash 的 NO_OP、re-attestation、reuse gate；
+- 以 revision ledger、fingerprint、checksum、Merkle root 或其他名称重新引入等价的全量扫描门禁；
+- 资源准入、压力梯度、重复小样本或新增人工审批点。
+
+候选仍使用独立目录、不可覆盖写入和明确 cutoff；这些是写入安全边界，不是冻结或哈希任务。
+
+### 0A.4 直接构建与验收
+
+planner 只根据 cutoff、PIT、数据库补录范围和既有候选组件决定 `REUSE / INCREMENTAL / SELECTIVE_REBUILD / COMPONENT_REBUILD`。验收不再要求全数据内容 digest 闭合，只要求：
+
+- PIT coverage、股票生命周期和唯一键正确；
+- daily/minute/H5/static/index/sector 文件齐全且日期覆盖到 cutoff；
+- 分钟物理文件覆盖 7 月补录和 8 月新增范围；
+- ST、涨跌停、复权、QFQ、moneyflow、12 指数和行业数据按分层抽样与数据库一致；
+- 股票池、PIT、H5/static 和 Qlib instruments 范围一致；
+- QE/HMM producer smoke PASS；
+- production writes、production pointer changes 和既有候选覆盖均为零。
+
+完成上述一次验收即停止，不再运行附加证明任务。
+
+### 0A.5 BUG-1322 设计验收索引
+
+| 条款 | 设计要求 | 实现/验证证据 | 当前状态 |
+|---|---|---|---|
+| BUG1322-D1 | 月更不启动 source-freeze、全历史内容哈希或发布前复扫 | `resolution_processor.py`、`build_processor.py` 定向测试；fresh-process Worker smoke | 用户已批准设计，待实现 |
+| BUG1322-D2 | 7月分钟补录进入新候选；影响清单不完整时重建分钟组件 | 分钟 build plan 测试；新候选7月/8月物理覆盖验证 | 用户已批准设计，待实现 |
+| BUG1322-D3 | 未受影响组件复用，分钟重建不扩散为全数据集重导 | component action plan 测试；candidate receipt | 用户已批准设计，待实现 |
+| BUG1322-D4 | 新候选独立存放，不覆盖7月候选或production | 路径保护测试；production writes/pointer changes=0 | 用户已批准设计，待实现 |
+| BUG1322-D5 | 只执行结构、分层抽样和QE/HMM smoke，不做全量内容哈希 | validator测试；真实candidate validation receipt | 用户已批准设计，待实现 |
+| BUG1322-D6 | 不新增资源、等待、sample或替代哈希门禁 | 代码审核；workflow/Skill/Runbook一致性扫描 | 用户已批准设计，待实现 |

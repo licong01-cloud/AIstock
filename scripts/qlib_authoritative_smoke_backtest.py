@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 from typing import Sequence
 
-import numpy as np
 import pandas as pd
 
 
@@ -109,18 +108,35 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--drop", type=int, default=1)
     parser.add_argument("--account", type=float, default=1_000_000)
     parser.add_argument("--output", required=True)
+    parser.add_argument(
+        "--contract-smoke-only",
+        action="store_true",
+        help="Validate minute provider readability and bar/field presence without portfolio backtest.",
+    )
     return parser
+
+
+def minute_contract_failures(minute: pd.DataFrame) -> tuple[list[str], dict[str, int]]:
+    if minute.empty:
+        return ["minute provider returned no rows"], {}
+    non_null = {column: int(minute[column].notna().sum()) for column in minute.columns}
+    failures = [f"minute field has no values: {column}" for column, count in non_null.items() if count == 0]
+    if minute.index.duplicated().any():
+        failures.append("minute provider contains duplicate datetime/instrument keys")
+    keys = minute.index.to_frame(index=False)
+    keys.columns = ["datetime", "instrument"]
+    keys["trade_date"] = pd.to_datetime(keys["datetime"]).dt.normalize()
+    bars = keys.groupby(["trade_date", "instrument"], sort=False).size()
+    if bars.empty or int(bars.max()) < 240:
+        failures.append("minute provider has no complete 240-bar stock-day")
+    return failures, non_null
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
     import qlib
-    from qlib.backtest import backtest as qlib_backtest
-    from qlib.backtest.executor import NestedExecutor, SimulatorExecutor
     from qlib.config import C
-    from qlib.contrib.strategy.rule_strategy import TWAPStrategy
-    from qlib.contrib.strategy.signal_strategy import TopkDropoutStrategy
     from qlib.data import D
 
     minute_provider = Path(args.minute_provider_uri)
@@ -129,8 +145,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     codes = [code for code in requested if code in available]
     if not codes:
         codes = available[: args.num_stocks]
-    if len(codes) < 2:
-        raise RuntimeError(f"need at least two instruments for smoke backtest, got {codes}")
+    minimum_codes = 1 if args.contract_smoke_only else 2
+    if len(codes) < minimum_codes:
+        raise RuntimeError(f"need at least {minimum_codes} instruments for smoke, got {codes}")
 
     C["kernels"] = 1
     qlib.init(
@@ -150,10 +167,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
     )
     minute_nan = {col: int(minute[col].isna().sum()) for col in minute.columns}
-    bad_minute_nan = {k: v for k, v in minute_nan.items() if v > 0}
+    bad_minute_nan = {key: value for key, value in minute_nan.items() if value > 0}
     dates = sorted(pd.to_datetime(minute.index.get_level_values("datetime")).normalize().unique())
-    if len(dates) < 2:
+    if not dates:
+        raise RuntimeError("minute provider returned no dates")
+    if not args.contract_smoke_only and len(dates) < 2:
         raise RuntimeError(f"not enough minute dates for smoke backtest: {dates}")
+
+    if args.contract_smoke_only:
+        failures, non_null = minute_contract_failures(minute)
+        result = {
+            "ok": not failures,
+            "validation_mode": "contract_smoke",
+            "codes": codes,
+            "start": args.start,
+            "end": args.end,
+            "minute_rows": int(len(minute)),
+            "minute_dates": [pd.Timestamp(d).strftime("%Y-%m-%d") for d in dates],
+            "minute_non_null": non_null,
+            "failures": failures,
+            "portfolio_summary": {"skipped": True, "reason": "contract_smoke_only"},
+        }
+        output = Path(args.output)
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result["ok"] else 3
+
+    from qlib.backtest import backtest as qlib_backtest
+    from qlib.backtest.executor import NestedExecutor, SimulatorExecutor
+    from qlib.contrib.strategy.rule_strategy import TWAPStrategy
+    from qlib.contrib.strategy.signal_strategy import TopkDropoutStrategy
 
     signal_rows = []
     for date_value in dates:

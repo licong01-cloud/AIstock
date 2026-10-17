@@ -1,0 +1,277 @@
+{
+  "actual": "分钟组件已PASS且覆盖2026-08-31，但组合回测在calendar_index+1越界，candidate状态FAILED。",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/direct_monthly.py",
+    "scripts/qlib_authoritative_smoke_backtest.py",
+    "backend/tests/dataset_release/test_direct_monthly.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow.py",
+    "tests/aistock_validation/bugs/20260903_BUG-1337-issue.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1337",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-03T10:54:19.436577Z",
+  "description": "分钟组件已PASS且覆盖2026-08-31，但组合回测在calendar_index+1越界，candidate状态FAILED。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260903-8ec1d8328516",
+      "timestamp": "2026-09-03T10:54:19.436564Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260831-qe_hmm_full_v2-direct-20260902-candidate/reports/consumer_smoke/wsl_smoke.log"
+  ],
+  "expected": "分钟验收只读取少量股票、少量日期的day/1min必要字段并确认非空、日期范围和240 bars，不执行策略、订单模拟或组合收益门禁。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/qlib_authoritative_smoke_backtest.py",
+      "tests/aistock_validation/bugs/20260903_BUG-1337-issue.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/direct_monthly.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/qlib_authoritative_smoke_backtest.py",
+      "tests/aistock_validation/bugs/20260903_BUG-1337-issue.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/direct_monthly.py",
+        "scripts/qlib_authoritative_smoke_backtest.py",
+        "backend/tests/dataset_release/test_direct_monthly.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "factor_library",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/direct_monthly.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "scripts/qlib_authoritative_smoke_backtest.py",
+          "impact_modules": [
+            "qe.core",
+            "factor_library",
+            "paper_v2"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_data_pipeline"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_direct_monthly.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/direct_monthly.py",
+        "scripts/qlib_authoritative_smoke_backtest.py",
+        "backend/tests/dataset_release/test_direct_monthly.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/direct_monthly.py",
+      "scripts/qlib_authoritative_smoke_backtest.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/direct_monthly.py",
+      "scripts/qlib_authoritative_smoke_backtest.py",
+      "backend/tests/dataset_release/test_direct_monthly.py",
+      "scripts/aistock_issue_workflow.py",
+      "backend/tests/scripts/test_aistock_issue_workflow.py"
+    ]
+  },
+  "first_seen_at": "2026-09-03T10:54:19.436577Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 4234,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4234",
+  "last_seen_at": "2026-09-03T10:54:19.436577Z",
+  "module": "aistock_backend",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/update_backtest_dataset_monthly.py --profile qe_hmm_full_v2 monthly --candidate-only",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "aistock_backend"
+  ],
+  "title": "月度数据集分钟验收误用组合回测并在日历末端越界",
+  "trigger_condition": {
+    "fingerprint": "8ec1d83285162fcc47be2e54",
+    "source_event_id": "FE-20260903-8ec1d8328516"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "aistock_backend",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "aistock_backend",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

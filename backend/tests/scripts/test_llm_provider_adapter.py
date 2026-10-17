@@ -392,9 +392,11 @@ def test_test_plan_advice_cli_uses_compact_success_output(capsys, tmp_path):
     assert exit_code == 0
     assert '"check": "test-plan-advice"' in captured.out
     assert '"workflow_gate": "passed"' not in captured.out
-    assert '"advised_plan_count": 1' in captured.out
     assert '"llm_invoked": false' in captured.out
     assert output.exists()
+    compact = json.loads(captured.out)
+    assert compact["advised_plan_count"] == compact["allowed_plan_count"]
+    assert compact["advised_plan_count"] > 0
 
 
 

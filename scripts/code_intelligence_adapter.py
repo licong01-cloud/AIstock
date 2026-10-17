@@ -22,6 +22,8 @@ from scripts import nightly_discovery_input_pack  # noqa: E402
 
 WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
 DEFAULT_CODEGRAPH_VERSION = "0.9.4"
+# Installed CodeGraph 0.9.4 skips source files above this extraction limit.
+CODEGRAPH_MAX_SOURCE_BYTES = 1024 * 1024
 DEFAULT_UNDERSTAND_ANYTHING_VERSION = "v2.7.6"
 UNDERSTAND_ANYTHING_REPO = "Lum1104/Understand-Anything"
 CATALOG_PATH = REPO_ROOT / "tests" / "aistock_validation" / "catalog" / "code_intelligence.yaml"
@@ -31,6 +33,7 @@ DEFAULT_CODEGRAPH_CRITICAL_FILES = [
     "scripts/llm_provider_adapter.py",
     "scripts/nightly_adaptive_scheduler.py",
     "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_runtime_semantics.py",
     ".github/workflows/nightly.yml",
 ]
 GRAPH_SOURCE_ROOT_ENV = "AISTOCK_CODE_INTELLIGENCE_GRAPH_SOURCE_ROOT"
@@ -1120,7 +1123,16 @@ def sync_codegraph_index(*, root: Path | None = None, output_dir: Path | None = 
     output_dir = output_dir or root / "tmp" / "validation" / "code-intelligence" / "graph-refresh"
     command = _codegraph_command()
     action = "sync" if _codegraph_index_path(root).exists() else "index"
-    if not command:
+    oversized = [
+        {"file": relative, "bytes": (root / relative).stat().st_size, "limit": CODEGRAPH_MAX_SOURCE_BYTES}
+        for relative in _codegraph_critical_files(root)
+        if (root / relative).stat().st_size > CODEGRAPH_MAX_SOURCE_BYTES
+    ]
+    if oversized:
+        result = {"ok": False, "returncode": None, "stdout": "",
+                  "stderr": "Critical source exceeds CodeGraph extraction limit; use LF checkout or split oversized source: "
+                  + ", ".join(item["file"] for item in oversized)}
+    elif not command:
         result = {"ok": False, "returncode": None, "stdout": "", "stderr": "CodeGraph CLI is unavailable"}
     else:
         result = _run_command([command, action, str(root)], cwd=root, timeout=900)
@@ -1150,6 +1162,9 @@ def sync_codegraph_index(*, root: Path | None = None, output_dir: Path | None = 
         "freshness": freshness,
         "publish_ready": gate == "ready",
     }
+    if oversized:
+        payload["failure_kind"] = "critical_source_size_limit"
+        payload["oversized_critical_files"] = oversized
     if recovery_reason:
         payload["recovery_reason"] = recovery_reason
         payload["sync_command_result"] = _compact_command_result(

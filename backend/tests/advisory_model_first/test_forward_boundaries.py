@@ -113,29 +113,37 @@ class _Programs:
 
     def prepare_forward_selection(self, *_args, **_kwargs):
         binding = SimpleNamespace(binding_version_id="advb-test", package_ids=self.program.package_ids)
-        candidate = SimpleNamespace(
-            symbol="000001.SZ",
-            rank=1,
-            score=0.9,
-            reference_price=None,
-            previous_close=None,
-            selection_entry_price=None,
-            current_price=None,
-            component_scores={},
-            stock_name=None,
-            selection_entry_price_time=None,
-        )
+        def candidate(symbol: str, rank: int):
+            return SimpleNamespace(
+                symbol=symbol,
+                rank=rank,
+                score=1.0 - rank / 10,
+                reference_price=None,
+                previous_close=None,
+                selection_entry_price=None,
+                current_price=None,
+                component_scores={},
+                stock_name=None,
+                selection_entry_price_time=None,
+            )
         run = SimpleNamespace(
             run_id="sel-test",
             data_source="DB_HISTORICAL",
             trade_date=date(2026, 8, 17),
             runtime_config={},
-            aggregate_results=[candidate],
+            aggregate_results=[candidate("000001.SZ", 1), candidate("000002.SZ", 2)],
         )
         return self.program, binding, run, {}
 
     def active_episode_objects(self, _program_id: str):
         return []
+
+    def apply_universe_admission(self, candidates, *, trade_date, runtime_config):
+        assert trade_date == date(2026, 8, 17)
+        return candidates[:1], {
+            **dict(runtime_config),
+            "advisory_universe_receipt": {"output_candidate_count": 1},
+        }
 
     def load_forward_market_marks(self, **_kwargs):
         raise AssertionError("publication must not read target-date market data")
@@ -156,6 +164,7 @@ def test_publication_does_not_read_target_market_and_model_unavailable_does_not_
     assert result["results"][0]["status"] == "PUBLISHED"
     assert result["results"][0]["model_status"] == "UNAVAILABLE"
     assert repository.observation.status == "UNAVAILABLE"
+    assert [item["symbol"] for item in repository.run["run_payload_json"]["items"]] == ["000001.SZ"]
 
 
 def test_one_program_failure_does_not_block_another_program() -> None:

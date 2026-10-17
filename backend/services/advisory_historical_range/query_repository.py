@@ -25,6 +25,33 @@ from .models import (
 )
 
 
+_NON_DAILY_RECALL_METRICS_JSONPATH = (
+    '$[*] ? (!(@.metric_key like_regex '
+    '"^(strategy|conditional)_recall@[0-9]+:[0-9]{4}-[0-9]{2}-[0-9]{2}:"))'
+)
+
+# Read-only recovery of the exact persisted attempt's reason codes. This does
+# not rewrite legacy operation/attempt rows or infer a new exception type.
+_OUTCOME_FAILURE_ATTEMPT_SQL = """
+    (SELECT jsonb_build_object(
+        'operation_id', failure.operation_id, 'attempt_id', failure.attempt_id,
+        'attempt_no', failure.attempt_no, 'fencing_token', failure.fencing_token,
+        'status', failure.status, 'input_hash', failure.input_hash,
+        'attempt_receipt_hash', failure.attempt_receipt_hash,
+        'reason_codes_json', failure.reason_codes_json
+    )
+    FROM app.advisory_historical_range_operation_attempt failure
+    WHERE operation.operation_type = 'REFRESH_OUTCOMES'
+      AND operation.status = 'RETRYABLE_FAILED' AND operation.error_json IS NULL
+      AND failure.operation_id = operation.operation_id
+      AND failure.attempt_no = operation.attempt_no
+      AND failure.fencing_token = operation.fencing_token
+      AND failure.status = operation.status
+      AND failure.input_hash = operation.request_payload_sha256
+    LIMIT 1) AS _failure_attempt
+"""
+
+
 class HistoricalRangeQueryError(ValueError):
     def __init__(self, reason_code: str, message: str, *, context: Mapping[str, Any] | None = None) -> None:
         super().__init__(message)
@@ -245,6 +272,106 @@ class PostgresHistoricalRangeQueryRepository:
         )
         return _one(rows, "run", range_run_id)
 
+    def get_comparison_facts(self, range_run_ids: Sequence[str]) -> list[dict[str, Any]]:
+        """Return only the latest-summary fields needed by the comparison view."""
+
+        identities = tuple(dict.fromkeys(range_run_ids))
+        if len(identities) != 2 or any(not isinstance(item, str) or not item for item in identities):
+            raise HistoricalRangeQueryError(
+                "ADVISORY_HR_COMPARISON_RUNS_INVALID",
+                "historical-range comparison requires two distinct run identities",
+            )
+        rows = self._rows(
+            """
+            SELECT run.range_run_id,
+                   run.batch_id,
+                   run.research_program_id,
+                   run.package_id,
+                   run.package_version,
+                   run.manifest_sha256,
+                   run.status,
+                   summary.summary_id,
+                   summary.summary_version,
+                   summary.summary_artifact_hash,
+                   summary.summary_json->>'summary_policy_hash' AS summary_policy_hash,
+                   summary.summary_json->>'producer_code_hash' AS producer_code_hash,
+                   summary.metrics,
+                   summary.unavailable_metrics,
+                   summary.metric_total_count,
+                   summary.unavailable_metric_total_count,
+                   COALESCE(day_support.status_counts, '{}'::jsonb) AS day_status_counts
+            FROM app.advisory_historical_range_run run
+            LEFT JOIN LATERAL (
+                SELECT latest.summary_id,
+                       latest.summary_version,
+                       latest.summary_artifact_hash,
+                       latest.summary_json,
+                       CASE WHEN latest.summary_json ? 'metrics' THEN jsonb_path_query_array(
+                           COALESCE(latest.summary_json->'metrics', '[]'::jsonb), %s::jsonpath
+                       ) END AS metrics,
+                       CASE WHEN latest.summary_json ? 'unavailable_metrics'
+                           THEN jsonb_path_query_array(
+                               COALESCE(latest.summary_json->'unavailable_metrics', '[]'::jsonb),
+                               %s::jsonpath
+                           ) END AS unavailable_metrics,
+                       CASE WHEN latest.summary_json ? 'metrics' THEN jsonb_array_length(
+                           COALESCE(latest.summary_json->'metrics', '[]'::jsonb)
+                       ) END AS metric_total_count,
+                       CASE WHEN latest.summary_json ? 'unavailable_metrics' THEN jsonb_array_length(
+                           COALESCE(latest.summary_json->'unavailable_metrics', '[]'::jsonb)
+                       ) END AS unavailable_metric_total_count
+                FROM app.advisory_historical_range_summary latest
+                WHERE latest.range_run_id = run.range_run_id
+                ORDER BY latest.summary_version DESC, latest.summary_id DESC
+                LIMIT 1
+            ) summary ON TRUE
+            LEFT JOIN LATERAL (
+                SELECT jsonb_object_agg(counted.status, counted.day_count) AS status_counts
+                FROM (
+                    SELECT day_run.status, count(*)::integer AS day_count
+                    FROM app.advisory_historical_range_day_run day_run
+                    WHERE day_run.range_run_id = run.range_run_id
+                    GROUP BY day_run.status
+                ) counted
+            ) day_support ON TRUE
+            WHERE run.range_run_id = ANY(%s)
+            ORDER BY run.range_run_id
+            """,
+            (
+                _NON_DAILY_RECALL_METRICS_JSONPATH,
+                _NON_DAILY_RECALL_METRICS_JSONPATH,
+                list(identities),
+            ),
+        )
+        for row in rows:
+            metric_total = row.pop("metric_total_count", None)
+            unavailable_total = row.pop("unavailable_metric_total_count", None)
+            if row.get("summary_id") is None:
+                row["omitted_metric_counts"] = None
+                continue
+            metrics = row.get("metrics")
+            unavailable_metrics = row.get("unavailable_metrics")
+            if (
+                isinstance(metric_total, bool)
+                or not isinstance(metric_total, int)
+                or isinstance(unavailable_total, bool)
+                or not isinstance(unavailable_total, int)
+                or not isinstance(metrics, list)
+                or not isinstance(unavailable_metrics, list)
+                or metric_total < len(metrics)
+                or unavailable_total < len(unavailable_metrics)
+            ):
+                raise HistoricalRangeQueryError(
+                    "ADVISORY_HR_COMPARISON_SUMMARY_INVALID",
+                    "historical-range summary metric counts are invalid",
+                    context={"range_run_id": row.get("range_run_id")},
+                )
+            row["omitted_metric_counts"] = {
+                "available_daily_recall": metric_total - len(metrics),
+                "unavailable_daily_recall": unavailable_total - len(unavailable_metrics),
+            }
+        return rows
+
     def list_operations(
         self,
         *,
@@ -280,6 +407,7 @@ class PostgresHistoricalRangeQueryRepository:
         rows = self._rows(
             f"""
             SELECT operation.*,
+                   {_OUTCOME_FAILURE_ATTEMPT_SQL},
                    (operation.status = 'RUNNING' AND operation.lease_expires_at <= clock_timestamp()) AS lease_expired
             FROM app.advisory_historical_range_operation operation
             WHERE {' AND '.join(where)}
@@ -292,8 +420,9 @@ class PostgresHistoricalRangeQueryRepository:
 
     def get_operation(self, operation_id: str) -> dict[str, Any]:
         rows = self._rows(
-            """
+            f"""
             SELECT operation.*,
+                   {_OUTCOME_FAILURE_ATTEMPT_SQL},
                    (operation.status = 'RUNNING' AND operation.lease_expires_at <= clock_timestamp()) AS lease_expired
             FROM app.advisory_historical_range_operation operation
             WHERE operation.operation_id = %s
@@ -676,7 +805,46 @@ _SENSITIVE_KEYS = frozenset(
 
 
 def _public_row(row: Mapping[str, Any]) -> dict[str, Any]:
-    result = {key: json_ready(value) for key, value in row.items() if key not in _SENSITIVE_KEYS}
+    result = {
+        key: json_ready(value) for key, value in row.items()
+        if key not in _SENSITIVE_KEYS and key != "_failure_attempt"
+    }
+    evidence = row.get("_failure_attempt")
+    if (row.get("operation_type") == "REFRESH_OUTCOMES"
+            and row.get("status") == "RETRYABLE_FAILED"
+            and row.get("error_json") is None
+            and isinstance(evidence, Mapping)
+            and isinstance(row.get("operation_id"), str) and row["operation_id"].strip()
+            and all(type(row.get(key)) is int and row[key] > 0 for key in ("attempt_no", "fencing_token"))
+            and all(evidence.get(key) == row.get(key) for key in (
+                "operation_id", "attempt_no", "fencing_token", "status",
+            ))
+            and isinstance(row.get("request_payload_sha256"), str)
+            and len(row["request_payload_sha256"]) == 64
+            and all(c in "0123456789abcdef" for c in row["request_payload_sha256"])
+            and evidence.get("input_hash") == row.get("request_payload_sha256")
+            and isinstance(evidence.get("attempt_id"), str) and evidence["attempt_id"].strip()
+            and isinstance(evidence.get("attempt_receipt_hash"), str)
+            and len(evidence["attempt_receipt_hash"]) == 64
+            and all(c in "0123456789abcdef" for c in evidence["attempt_receipt_hash"])
+            and isinstance(evidence.get("reason_codes_json"), list)
+            and evidence["reason_codes_json"]
+            and all(isinstance(reason, str) and reason.strip() for reason in evidence["reason_codes_json"])):
+        result["error_json"] = {
+            "schema_version": "advisory_historical_legacy_failure_readback_v1",
+            "evidence_origin": "PERSISTED_OPERATION_ATTEMPT_REASON_CODES",
+            "stored_error_json_missing": True,
+            "reason_codes": list(evidence["reason_codes_json"]),
+            **{key: evidence[key] for key in (
+                "operation_id", "attempt_id", "attempt_no", "fencing_token", "attempt_receipt_hash",
+            )},
+        }
+        if (row.get("result_status") == "RETRYABLE_FAILED"
+                and all(row.get(key) is None for key in ("result_ref", "result_hash", "result_row_version"))):
+            # This was an attempt outcome, not a published operation result.
+            # Keep the stored value visible in the explicit legacy evidence.
+            result["error_json"]["stored_result_status"] = row["result_status"]
+            result["result_status"] = None
     if result.get("lease_expires_at") and "lease_expired" not in result:
         result["lease_expired"] = False
     return result

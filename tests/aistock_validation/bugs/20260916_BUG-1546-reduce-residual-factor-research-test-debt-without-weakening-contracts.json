@@ -1,0 +1,298 @@
+{
+  "actual": "The module reports 747 test SLOC (29.65 percent), including backend/tests/factor_research/dev_cases.py which has zero tests and is not executed by any current test plan.",
+  "allowed_write_scope": [
+    "backend/tests/factor_research/dev_cases.py",
+    "backend/tests/factor_research/test_repository_dev.py",
+    "docs/architecture/factor_research_p1_detailed_design_20260908.md",
+    "tests/aistock_validation/bugs/20260916_BUG-1546-reduce-residual-factor-research-test-debt-without-weakening-contracts.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1546",
+  "closed_at": "2026-09-16T05:30:38Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-16T05:21:31.860911Z",
+  "description": "The module reports 747 test SLOC (29.65 percent), including backend/tests/factor_research/dev_cases.py which has zero tests and is not executed by any current test plan.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260916-5d000eafc3f0",
+      "timestamp": "2026-09-16T05:21:31.860892Z"
+    }
+  ],
+  "evidence_uris": [
+    "docs/architecture/factor_research_p1_detailed_design_20260908.md#F-111"
+  ],
+  "expected": "Only recurring and unique contract tests remain; ordinary and DEV plans keep their required semantics; test debt falls materially below the 30 percent ceiling.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260916_BUG-1546-reduce-residual-factor-research-test-debt-without-weakening-contracts.json",
+      "backend/tests/factor_research/dev_cases.py",
+      "backend/tests/factor_research/test_repository_dev.py",
+      "docs/architecture/factor_research_p1_detailed_design_20260908.md"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20260916_BUG-1546-reduce-residual-factor-research-test-debt-without-weakening-contracts.json",
+      "backend/tests/factor_research/dev_cases.py",
+      "backend/tests/factor_research/test_repository_dev.py",
+      "docs/architecture/factor_research_p1_detailed_design_20260908.md"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/factor_research/dev_cases.py",
+        "backend/tests/factor_research/test_repository_dev.py",
+        "docs/architecture/factor_research_p1_detailed_design_20260908.md"
+      ],
+      "impacted_modules": [
+        "factor_library.research",
+        "docs.architecture",
+        "validation.module_quality"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/factor_research/dev_cases.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_repository_dev.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "docs/architecture/factor_research_p1_detailed_design_20260908.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/tests/factor_research/dev_cases.py",
+        "backend/tests/factor_research/test_repository_dev.py",
+        "docs/architecture/factor_research_p1_detailed_design_20260908.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/factor_research/dev_cases.py",
+      "backend/tests/factor_research/test_repository_dev.py",
+      "docs/architecture/factor_research_p1_detailed_design_20260908.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/factor_research/dev_cases.py",
+      "backend/tests/factor_research/test_repository_dev.py",
+      "docs/architecture/factor_research_p1_detailed_design_20260908.md"
+    ]
+  },
+  "first_seen_at": "2026-09-16T05:21:31.860911Z",
+  "fix_branch": null,
+  "fix_commit": "8c27d3919b8bc8f2582a648f9866228472c388c5",
+  "fixed_at": "2026-09-16T05:30:38Z",
+  "github_issue_number": 4844,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4844",
+  "last_seen_at": "2026-09-16T05:21:31.860911Z",
+  "module": "factor_library.research",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4849",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/aistock_validation_budget.py --json",
+  "required_verification": [
+    "l0",
+    "factor_research_backend",
+    "factor_research_dev_db"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1546",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ad10600235904225",
+    "recorded_at": "2026-09-16T05:32:01.028662Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "986b2f16a431bb3408597407547b1d0278fc8493",
+    "source_merge_commit": "8c27d3919b8bc8f2582a648f9866228472c388c5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4849",
+    "validation_evidence": [
+      "validation-receipt: id=144a150933643a63 commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`passed: 28 passed, 8 skipped, fresh-process 2 passed`",
+      "validation-receipt: id=f71483aa149003a4 commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=factor_research_dev_db status=passed command=`python -m nox -s factor_research_dev_db` result=`passed: 8 passed on existing aistock_dev`",
+      "validation-receipt: id=9640a8b95d0c159c commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed: 8 passed, unmapped=0 ambiguous=0`",
+      "validation-receipt: id=4b1698e9d74597c7 commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed: blocking=0`",
+      "validation-receipt: id=700ea27c5e3d3cfc commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=compile plan=direct status=passed command=`python -m py_compile backend/tests/factor_research/test_repository_dev.py; git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "782fde4f4825021599d8f37f0b3d4de4c973c8f5a7e6f1720419392a616a5d00"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "factor_library.research"
+  ],
+  "title": "Reduce residual factor research test debt without weakening contracts",
+  "trigger_condition": {
+    "fingerprint": "5d000eafc3f029071b490cb2",
+    "source_event_id": "FE-20260916-5d000eafc3f0"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=144a150933643a63 commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=factor_research_backend status=passed command=`python -m nox -s factor_research_backend` result=`passed: 28 passed, 8 skipped, fresh-process 2 passed`",
+    "validation-receipt: id=f71483aa149003a4 commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=factor_research_dev_db status=passed command=`python -m nox -s factor_research_dev_db` result=`passed: 8 passed on existing aistock_dev`",
+    "validation-receipt: id=9640a8b95d0c159c commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed: 8 passed, unmapped=0 ambiguous=0`",
+    "validation-receipt: id=4b1698e9d74597c7 commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed: blocking=0`",
+    "validation-receipt: id=700ea27c5e3d3cfc commit=986b2f16a431bb3408597407547b1d0278fc8493 kind=compile plan=direct status=passed command=`python -m py_compile backend/tests/factor_research/test_repository_dev.py; git diff --check` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "factor_library.research",
+        "factor_research",
+        "factor_research_dev_db"
+      ],
+      "plans": [
+        "factor_research_backend",
+        "factor_research_dev_db"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "factor_library.research",
+          "factor_research",
+          "factor_research_dev_db"
+        ],
+        "plans": [
+          "factor_research_backend",
+          "factor_research_dev_db"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}

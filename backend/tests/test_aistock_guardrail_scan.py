@@ -41,6 +41,64 @@ def _unified_controls(catalog: dict) -> dict[str, dict]:
     return controls
 
 
+@pytest.mark.parametrize("source,expected", [
+    ("requests.post(\n url, timeout=30,\n)", False),
+    ("requests.post(url, timeout=configured_timeout)", False),
+    ("requests.post(url)", True),
+    ("requests.post(url, timeout=None)", True),
+    ("import requests as http\nhttp.get(url)", True),
+    ("import requests as http\nhttp.get(url, timeout=5)", False),
+    ("requests.post(\n url,\n)", True),
+    ("requests.post(\n url, timeout=30,", True),  # Invalid syntax keeps conservative regex fallback.
+    ("subprocess.Popen(args)", True),
+    ("p = subprocess.Popen(args)\np.communicate(timeout=3)", True),
+    ("p = subprocess.Popen(args)\ntry:\n p.communicate(timeout=3)\nexcept subprocess.TimeoutExpired:\n p.kill()\n p.communicate(timeout=1)", False),
+    ("p = subprocess.Popen(args)\ntry:\n p.communicate()\nexcept subprocess.TimeoutExpired:\n p.kill()\n p.wait(timeout=1)", True),
+    ("p = subprocess.Popen(args)\ntry:\n p.communicate(timeout=3)\nexcept subprocess.TimeoutExpired:\n other.kill()\n p.wait(timeout=1)", True),
+    ("p = subprocess.Popen(args)\ndef unrelated():\n try:\n  p.communicate(timeout=3)\n except subprocess.TimeoutExpired:\n  p.kill()\n  p.wait(timeout=1)", True),
+    ("p = subprocess.Popen(args)\np = other\ntry:\n p.communicate(timeout=3)\nexcept subprocess.TimeoutExpired:\n p.kill()\n p.wait(timeout=1)", True),
+    ("p = subprocess.Popen(args)\ntry:\n p.communicate(timeout=3)\nexcept subprocess.TimeoutExpired:\n cleanup(p)\n p.wait(timeout=1)\ndef cleanup(proc):\n pass", True),
+    ("def cleanup(proc):\n proc.kill()\np = subprocess.Popen(args)\ntry:\n p.communicate(timeout=3)\nexcept subprocess.TimeoutExpired:\n cleanup(p)\n p.wait(timeout=1)", False),
+    ("p = subprocess.Popen(args)\ntry:\n p.communicate(timeout=3)\nexcept subprocess.TimeoutExpired:\n p.wait(timeout=1)\n p.kill()", True),
+    ("p = subprocess.Popen(args)\ntry:\n p.communicate(timeout=3)\nexcept subprocess.TimeoutExpired:\n if False:\n  p.kill()\n p.wait(timeout=1)", True),
+    ("def cleanup(proc):\n return\n proc.kill()\np = subprocess.Popen(args)\ntry:\n p.communicate(timeout=3)\nexcept subprocess.TimeoutExpired:\n cleanup(p)\n p.wait(timeout=1)", True),
+    ("try:\n def run():\n  p = subprocess.Popen(args)\n  p.communicate(timeout=3)\nexcept subprocess.TimeoutExpired:\n p.kill()\n p.wait(timeout=1)", True),
+    ("def cleanup(proc):\n proc.kill()\ndef run(cleanup):\n p = subprocess.Popen(args)\n try:\n  p.communicate(timeout=3)\n except subprocess.TimeoutExpired:\n  cleanup(p)\n  p.wait(timeout=1)", True),
+])
+def test_resource_timeout_contract_is_structural(tmp_path, source, expected):
+    scanner = _load_module()
+    rule = next(r for r in scanner.compile_rules(scanner.load_catalog(CATALOG_PATH)) if r.rule_id == "RESOURCE-TIMEOUT-001")
+    path = tmp_path / "backend/services/sample.py"
+    path.parent.mkdir(parents=True)
+    path.write_text(source, encoding="utf-8")
+    findings = scanner.scan_files([path], [rule], tmp_path)
+    assert bool(findings) is expected
+    assert all(f.severity == "P2" and f.effect == "warn" for f in findings)
+
+
+def test_scanner_reads_text_only_once_across_rules(tmp_path, monkeypatch):
+    scanner = _load_module()
+    path = tmp_path / "backend/services/sample.py"
+    path.parent.mkdir(parents=True)
+    path.write_text("requests.post(\n url,\n)", encoding="utf-8")
+    rules = scanner.compile_rules(scanner.load_catalog(CATALOG_PATH))
+    original, reads = Path.read_text, []
+    def capture(self, *args, **kwargs):
+        reads.append(self)
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(Path, "read_text", capture)
+    scanner.scan_files([path], rules, tmp_path)
+    assert reads == [path]
+
+
+def test_resource_contract_uses_actual_bounded_call_sites():
+    scanner = _load_module()
+    cases = {"scripts/aistock_issue_workflow.py", "scripts/ci_changed_files.py",
+             "backend/services/quantevolver/factor_cache_remote_sync_service.py"}
+    rule = next(r for r in scanner.compile_rules(scanner.load_catalog(CATALOG_PATH)) if r.rule_id == "RESOURCE-TIMEOUT-001")
+    assert scanner.scan_files([ROOT / p for p in cases], [rule], ROOT) == []
+
+
 def test_catalog_loads_and_compiles_regex_rules() -> None:
     scanner = _load_module()
 
@@ -240,8 +298,12 @@ def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
     assert runtime_catalog["targets"]["backend-main"]["isolated_validation_ports"] == [8011, 8012]
     assert "start_all_ai_stock.bat" in runtime_catalog["targets"]["backend-main"]["source_globs"]
     assert {
+        "backend/services/validation/catalog_integrity.py",
+        "backend/services/validation/plan_catalog.py",
         "scripts/aistock_runner_health.py",
         "scripts/configure_aistock_github_runner.ps1",
+        "scripts/start_aistock_github_runner.ps1",
+        "scripts/supervise_aistock_github_runner.ps1",
     } <= set(runtime_catalog["non_runtime_source_paths"])
 
 
