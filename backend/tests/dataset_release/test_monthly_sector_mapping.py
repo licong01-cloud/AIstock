@@ -292,6 +292,62 @@ def test_history_materialization_rebinds_reference_facts_and_preserves_prices(pr
     assert {path.name: path.stat().st_mtime_ns for path in factor.iterdir()} == signatures
 
 
+def test_completed_static_tail_is_corrected_without_rewriting_sector_or_history(predecessor, tmp_path):
+    import numpy as np
+    import pandas as pd
+    from backend.services.dataset_release import monthly_industry_history as subject
+
+    mapping = load_predecessor_sector_mapping(predecessor)["code_map"]
+    row = {"canonical_symbol": "000663.SZ", "taxonomy_version": "SW2021",
+           "published_l2_code": mapping["entries"][0]["canonical_l2_code"],
+           "effective_from": "2021-07-30", "effective_to": "2026-08-31",
+           "known_from": None, "knowledge_time_quality": "FIRST_PUBLICATION_UNVERIFIED",
+           "source_sha256": "a" * 64, "source_row_sha256": "b" * 64}
+    projection = subject.IndustryHistoryProjection.build([row], current_map=mapping, authority_sha256="c" * 64)
+    root = tmp_path / "candidate.building"
+    factor = root / "factor_bundle"
+    factor.mkdir(parents=True)
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2026-08-31", "2026-09-01", "2026-09-02"]), ["000663.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    facts = pd.DataFrame({"l2_code_id": np.array([0, 0, 0], dtype=np.int16),
+                          "sw2_close": np.array([2064.19, np.nan, 2000], dtype=np.float32),
+                          "sw2_mf_net_amt": np.array([10, 20, np.nan], dtype=np.float32)}, index=index)
+    facts.to_hdf(factor / "sector_data.h5", key="data", format="table", data_columns=["datetime", "instrument"])
+    original = facts.assign(unrelated=np.array([1, 2, 3], dtype=np.float32))
+    original.loc[index[1], "sw2_close"] = np.float32(2064.19)
+    original.loc[index[2], "sw2_mf_net_amt"] = np.float32(20)
+    original.to_parquet(factor / "static_factors.parquet")
+    signatures = {p.name: (p.stat().st_size, p.stat().st_mtime_ns) for p in factor.iterdir()}
+    events = []
+    kwargs = {"projection": projection, "context_identity": {"contract": subject.STATIC_SECTOR_CONTRACT},
+              "after": "2026-08-31", "max_rows": 1, "progress": events.append}
+    result = subject._materialize_static_tail(root, **kwargs)
+    output = root.parent / result["files"]["static_factors.parquet"]["scratch_relative_path"]
+    repaired = pd.read_parquet(output)
+    pd.testing.assert_frame_equal(repaired[facts.columns], facts)
+    pd.testing.assert_series_equal(repaired.unrelated, original.unrelated)
+    assert result["aligned_rows"] == 2 and result["changed_cells"] == 2
+    assert {p.name: (p.stat().st_size, p.stat().st_mtime_ns) for p in factor.iterdir()} == signatures
+    assert subject._materialize_static_tail(root, **kwargs) == result
+    assert events[-1]["phase"] == "SECTOR_STATIC_EXACT_DATE_REPAIR"
+    # An absent fact never inherits a current/previous industry's values.
+    missing = subject._align_sector_tail(original, facts.iloc[:1], after="2026-08-31")
+    assert missing.loc[index[1:], "l2_code_id"].eq(-1).all()
+    assert missing.loc[index[1:], ["sw2_close", "sw2_mf_net_amt"]].isna().all().all()
+    # Inf, duplicate keys and a published root are not repairable via fallback.
+    with pytest.raises(SourceManifestError, match="keys or fields"):
+        subject._align_sector_tail(original, pd.concat([facts, facts]), after="2026-08-31")
+    invalid = facts.copy()
+    invalid.loc[index[1], "sw2_close"] = np.inf
+    with pytest.raises(SourceManifestError, match="infinite"):
+        subject._align_sector_tail(original, invalid, after="2026-08-31")
+    (root / "qe_dataset_manifest.json").write_text("{}")
+    with pytest.raises(SourceManifestError, match="published"):
+        subject._materialize_static_tail(root, **kwargs)
+
+
 def test_history_supplement_is_bound_to_original_source_and_current_release(predecessor):
     import hashlib
     from backend.services.dataset_release.canonical import canonical_json_bytes
@@ -463,7 +519,8 @@ def test_industry_scratch_names_are_portable_and_bind_full_input_identity(tmp_pa
     assert compact.is_dir()
 
 
-@pytest.mark.parametrize("interruption", [None, "backup", "publish", "journal", "legacy_projection", "legacy_scratch", "long_name"])
+@pytest.mark.parametrize("interruption", [None, "backup", "publish", "journal", "legacy_projection", "legacy_scratch", "long_name",
+                                           "static_backup", "static_publish", "static_journal", "legacy_uncommitted"])
 def test_native_factor_receipt_survives_real_history_repair_and_retry(predecessor, tmp_path, monkeypatch, interruption):
     import json
     from pathlib import Path
@@ -544,7 +601,23 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
         resume.record = subject.recover_history_commit(root=root, journal=resume.path, record=resume.record,
                                                        expected_projection=history.sha256)
         assert pending.exists()
-    elif interruption in {None, "legacy_projection", "long_name"}:
+    elif interruption == "legacy_uncommitted":
+        materialize = subject.materialize_history_files
+        with monkeypatch.context() as legacy:
+            legacy.setattr(subject, "materialize_history_files", lambda *args, **kwargs: {
+                key: value for key, value in materialize(*args, **kwargs).items()
+                if key != "static_sector_join_contract"})
+            actual = apply()
+        upgraded = resume.get("industry-history")
+        assert upgraded["static_sector_join_contract"] == subject.STATIC_SECTOR_CONTRACT
+        assert set(upgraded["files"]) == {"static_factors.parquet"}
+        assert upgraded["sector_row_count"] == 2
+        pins = {path.name: _signature(path) for path in factor_root.iterdir()}
+        assert subject.apply_retained_history(resume, context=context, compiled=compiled,
+            prepare=actual, cas=cas, profile=profile) == actual
+        assert pins == {path.name: _signature(path) for path in factor_root.iterdir()}
+        return
+    elif interruption in {None, "legacy_projection", "long_name", "static_backup", "static_publish", "static_journal"}:
         actual = apply()
     else:
         rename = Path.rename
@@ -619,6 +692,51 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
     bad = {**repaired, "industry_history_projection_ref": cas.put_json({**proof, "sector_row_count": 99}).as_dict()}
     with pytest.raises(build_stage.CandidateBuildStageError, match="row count"):
         validate(bad)
+
+    if interruption is None or interruption.startswith("static_"):
+        # A previous worker completed the historical repair, but its monthly
+        # static writer still used ffill. Upgrade only that Parquet, including
+        # every real backup/publish/journal crash boundary.
+        legacy = {key: value for key, value in proof.items() if key != "static_sector_join_contract"}
+        resume.record["steps"]["industry-history"] = cas.put_json(legacy).as_dict()
+        monthly_build_resume._atomic(resume.path, resume.record)
+        preserved = {p.name: _signature(p) for p in factor_root.iterdir() if p.name != "static_factors.parquet"}
+        monkeypatch.setattr(monthly_build_bridge, "load_monthly_predecessor_prefix", lambda **kwargs: None)
+        rename, atomic = Path.rename, monthly_build_resume._atomic
+        def stop_static_rename(path, target):
+            result = rename(path, target)
+            name = "static_factors.parquet.before" if interruption == "static_backup" else "static_factors.parquet"
+            if Path(target).name == name:
+                raise OSError("static-only commit interrupted")
+            return result
+        def stop_static_journal(path, value):
+            atomic(path, value)
+            if path == resume.path:
+                raise OSError("static-only commit interrupted")
+        if interruption is None:
+            actual = subject.apply_retained_history(resume, context=context, compiled=compiled,
+                prepare=actual, cas=cas, profile=profile)
+        else:
+            with monkeypatch.context() as fault:
+                if interruption == "static_journal":
+                    fault.setattr(monthly_build_resume, "_atomic", stop_static_journal)
+                else:
+                    fault.setattr(Path, "rename", stop_static_rename)
+                with pytest.raises(OSError, match="static-only commit"):
+                    subject.apply_retained_history(resume, context=context, compiled=compiled,
+                        prepare=actual, cas=cas, profile=profile)
+            resume.record = json.loads(resume.path.read_bytes())
+            resume.record = subject.recover_history_commit(root=root, journal=resume.path, record=resume.record,
+                expected_projection=history.sha256)
+            actual = resume.get("prepare")
+        assert preserved == {p.name: _signature(p) for p in factor_root.iterdir() if p.name != "static_factors.parquet"}
+        upgraded = resume.get("industry-history")
+        assert upgraded["static_sector_join_contract"] == subject.STATIC_SECTOR_CONTRACT
+        assert set(upgraded["files"]) == {"static_factors.parquet"}
+        pins = {p.name: _signature(p) for p in factor_root.iterdir()}
+        assert subject.apply_retained_history(resume, context=context, compiled=compiled,
+            prepare=actual, cas=cas, profile=profile) == actual
+        assert pins == {p.name: _signature(p) for p in factor_root.iterdir()}
 
 
 def test_history_extends_after_highest_shared_id_without_densifying_catalog(predecessor):
