@@ -663,8 +663,9 @@ def audit_frozen_source(
         or refresh.get("profile") != profile.profile
     ):
         raise MonthlySourceAuditError("frozen refresh audit identity differs")
+    classify = tuple(stream("sw_index_classify"))
     enricher = build_bound_sector_enricher(
-        stream("sw_index_classify"), stream("sw_index_member"),
+        classify, stream("sw_index_member"),
         binding=frozen_sector_mapping_binding(cas, frozen),
     )
     map_payload = build_release_sw_l2_code_map_payload(
@@ -673,10 +674,14 @@ def audit_frozen_source(
         authority_id="dataset_release_source_authority_v1",
         authority_sha256=frozen.source_manifest_ref.sha256,
     )
+    publication_evidence = {}
     quote = build_quote_availability_payload(
         code_map=validate_release_sw_l2_code_map(map_payload),
         required_start=profile.start_date,
         cutoff=frozen.official_cutoff,
+        classification_rows=classify,
+        quote_observations=stream("sector_data", audit_start, frozen.official_cutoff),
+        evidence=publication_evidence,
     )
     availability = {row["canonical_l2_code"]: row["availability_spans"] for row in quote["entries"]}
     reverse_map = {value: code for code, value in enricher.code_map.items()}
@@ -920,6 +925,7 @@ def audit_frozen_source(
                 "source_refresh_audit_ref": frozen.source_audit_ref.as_dict(),
                 "alias_file_sha256": aliases.file_sha256,
                 "quote_availability_digest": quote["quote_availability_digest"],
+                "quote_publication_evidence": publication_evidence,
                 "denominator_rule": "frozen_calendar_intersect_pit_spans_v1",
             },
         )
