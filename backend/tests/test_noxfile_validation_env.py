@@ -43,8 +43,8 @@ def test_budget_contract_is_not_nested_in_catalog_but_remains_in_nightly():
 def test_shared_pytest_reuse_is_successful_same_nightly_and_coverage_safe(monkeypatch, nightly, completed, args, reused):
     monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, nightly)
     monkeypatch.setenv(noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV, completed)
-    target = "backend/tests/scripts/test_ci_failure_issue_summary.py"
-    result = noxfile._nightly_shared_pytest_args("validation_workflow_automation", (target, "-q", *args))
+    target = "backend/tests/test_validation_center_api.py"
+    result = noxfile._nightly_shared_pytest_args("data_sync_autonomy_backend", (target, "-q", *args))
     assert (result is None) is reused
     if args and "backend/tests/missing_test.py" in args:
         assert "backend/tests/missing_test.py" in result
@@ -79,8 +79,31 @@ def test_center_reuse_does_not_assume_unknown_addopts_are_full_execution(monkeyp
     monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1")
     monkeypatch.setenv(noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV, "validation_center_backend")
     monkeypatch.setenv("PYTEST_ADDOPTS", addopts)
-    args = ("backend/tests/scripts/test_ci_failure_issue_summary.py", "-q")
-    assert noxfile._nightly_shared_pytest_args("validation_workflow_automation", args) == args
+    args = ("backend/tests/test_validation_center_api.py", "-q")
+    assert noxfile._nightly_shared_pytest_args("data_sync_autonomy_backend", args) == args
+
+
+def test_center_and_workflow_have_disjoint_targets_without_skipping_workflow(monkeypatch):
+    monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1")
+    monkeypatch.setenv(noxfile.NIGHTLY_COMPLETED_SESSIONS_ENV, "validation_center_backend")
+    monkeypatch.setattr(noxfile, "_env", lambda *_args: {})
+    calls = {}
+    class Session:
+        def __init__(self, name):
+            self.name = name
+        def run(self, *args, **kwargs):
+            calls.setdefault(self.name, []).append(args)
+    for name in ("validation_center_backend", "validation_workflow_automation"):
+        getattr(noxfile, name)(Session(name))
+    center = next(args for args in calls['validation_center_backend'] if 'pytest' in args)
+    workflow = next(args for args in calls['validation_workflow_automation'] if 'pytest' in args)
+    center_tests = {arg for arg in center if arg.startswith('backend/tests/')}
+    workflow_tests = {arg for arg in workflow if arg.startswith('backend/tests/')}
+    assert not center_tests & workflow_tests
+    assert {'backend/tests/scripts/test_ci_failure_issue_summary.py',
+            'backend/tests/scripts/test_aistock_issue_workflow_fast.py',
+            'backend/tests/scripts/test_nightly_adaptive_scheduler.py'} <= workflow_tests
+    assert '--cov=backend.services.validation' in center and '--cov-branch' in center
 
 
 @pytest.mark.parametrize("completed,pytest_count", [("mcp_gateway_manifest_quality", 0), ("", 1)])

@@ -1,9 +1,9 @@
 name: AIstock Nightly CodeQL
+run-name: ${{ github.event_name == 'repository_dispatch' && format('AIstock schedule codeql.yml {0}', github.event.client_payload.cycle_date) || github.workflow }}
 
 on:
-  schedule:
-    # 20:27 UTC = 04:27 China Standard Time (UTC+8), after the main Nightly window.
-    - cron: '27 20 * * *'
+  repository_dispatch:
+    types: [aistock_codeql]
   workflow_dispatch: {}
 
 permissions:

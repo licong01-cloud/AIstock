@@ -194,11 +194,18 @@ def validate_input(bundle: Mapping[str, Any]) -> dict[str, Any]:
     )
     if any(identity.get(k) != reference.get("input_identity", {}).get(k) for k in keys):
         raise fail("reference and candidate do not share source identities")
-    view = bundle["price_features"]
+    validate_price_view(bundle["source"], bundle["price_features"], parsed)
+    validate_numeric_environment(bundle.get("numeric_environment", {}))
+    return parsed
+
+
+def validate_price_view(source: Mapping[str, Any], view: Mapping[str, Any], parsed: Mapping[str, Any]) -> None:
+    """Official price authority, independent of any terminal candidate's pins."""
+    identity = parsed["identity"]
     verify(view, "price_sha256")
     calendar, codes = parsed["calendar"], parsed["catalog_codes"]
     days = {d.isoformat() for d in calendar[:-1]}
-    binding = bundle["source"]["evaluation_source_binding"]
+    binding = source["evaluation_source_binding"]
     if any(
         binding[name].get("sha256") != identity["source_file_hashes"].get(key)
         for name, key in (("sector", "sector_data_h5"), ("index", "index_daily_h5"))
@@ -242,7 +249,9 @@ def validate_input(bundle: Mapping[str, Any]) -> dict[str, Any]:
         benchmark[day] = close
     if set(benchmark) != days:
         raise fail("price benchmark does not cover the frozen calendar")
-    environment = bundle.get("numeric_environment", {})
+
+
+def validate_numeric_environment(environment: Mapping[str, Any]) -> None:
     if (
         environment.get("python") != APPROVED_NUMERIC["python"]
         or environment.get("versions") != APPROVED_NUMERIC["versions"]
@@ -251,7 +260,6 @@ def validate_input(bundle: Mapping[str, Any]) -> dict[str, Any]:
         or any(p.get("num_threads") != 1 for p in environment["thread_pools"])
     ):
         raise fail("request numeric contract differs")
-    return parsed
 
 
 def feature_rows(bundle: Mapping[str, Any]) -> tuple[list[dict[str, Any]], list[date], list[date]]:

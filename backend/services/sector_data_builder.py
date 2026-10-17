@@ -1452,6 +1452,27 @@ ON CONFLICT (trade_date, ts_code) DO UPDATE SET
     sw2_mf_buy_elg_vol  = EXCLUDED.sw2_mf_buy_elg_vol,
     sw2_mf_sell_elg_vol = EXCLUDED.sw2_mf_sell_elg_vol,
     sw2_mf_net_vol      = EXCLUDED.sw2_mf_net_vol
+WHERE (
+    sector_data.sw2_open, sector_data.sw2_high, sector_data.sw2_low, sector_data.sw2_close,
+    sector_data.sw2_pct_change, sector_data.sw2_vol, sector_data.sw2_amount,
+    sector_data.sw2_pe, sector_data.sw2_pb, sector_data.sw2_total_mv,
+    sector_data.sw2_mf_buy_sm_amt, sector_data.sw2_mf_sell_sm_amt,
+    sector_data.sw2_mf_buy_md_amt, sector_data.sw2_mf_sell_md_amt,
+    sector_data.sw2_mf_buy_lg_amt, sector_data.sw2_mf_sell_lg_amt,
+    sector_data.sw2_mf_buy_elg_amt, sector_data.sw2_mf_sell_elg_amt,
+    sector_data.sw2_mf_net_amt, sector_data.sw2_mf_buy_elg_vol,
+    sector_data.sw2_mf_sell_elg_vol, sector_data.sw2_mf_net_vol
+) IS DISTINCT FROM (
+    EXCLUDED.sw2_open, EXCLUDED.sw2_high, EXCLUDED.sw2_low, EXCLUDED.sw2_close,
+    EXCLUDED.sw2_pct_change, EXCLUDED.sw2_vol, EXCLUDED.sw2_amount,
+    EXCLUDED.sw2_pe, EXCLUDED.sw2_pb, EXCLUDED.sw2_total_mv,
+    EXCLUDED.sw2_mf_buy_sm_amt, EXCLUDED.sw2_mf_sell_sm_amt,
+    EXCLUDED.sw2_mf_buy_md_amt, EXCLUDED.sw2_mf_sell_md_amt,
+    EXCLUDED.sw2_mf_buy_lg_amt, EXCLUDED.sw2_mf_sell_lg_amt,
+    EXCLUDED.sw2_mf_buy_elg_amt, EXCLUDED.sw2_mf_sell_elg_amt,
+    EXCLUDED.sw2_mf_net_amt, EXCLUDED.sw2_mf_buy_elg_vol,
+    EXCLUDED.sw2_mf_sell_elg_vol, EXCLUDED.sw2_mf_net_vol
+)
 """
 
 
@@ -1468,8 +1489,14 @@ class SectorDataBuilder:
 
     def build_date(self, trade_date: dt.date) -> int:
         """Build one day atomically and return the inserted or updated row count."""
-        with get_conn() as conn:
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
             with conn.cursor() as cur:
+                # One stable dependency snapshot. Concurrent revisions either stay
+                # pending after this commit or cause serialization failure/retry.
+                cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ", None)
+                # Serialize against the member writer before taking the read
+                # snapshot; a transition cannot slip past first-day invalidation.
+                cur.execute("LOCK TABLE market.sw_index_member IN SHARE MODE", None)
                 params = {
                     "trade_date": trade_date,
                     "live_universe_key": DEFAULT_ST_PIT_UNIVERSE_KEY,
@@ -1514,7 +1541,9 @@ class SectorDataBuilder:
                 cur.execute(_DELETE_STALE_DAY_SQL, params)
                 cur.execute(_BUILD_DAY_SQL, params)
                 rows = cur.rowcount
-            conn.commit()
+                from .sector_data_repair import clear_revision_date
+
+                clear_revision_date(conn, trade_date, rows)
         return rows
 
     def build_range(self, start_date: dt.date, end_date: dt.date) -> int:
@@ -1555,3 +1584,10 @@ class SectorDataBuilder:
             with conn.cursor() as cur:
                 cur.execute(_TRADE_DATES_SQL, {"start": start, "end": end})
                 return [row[0] for row in cur.fetchall()]
+
+    def pending_dates(self, through: dt.date) -> List[dt.date]:
+        """Read the durable revision queue, not a full-history content audit."""
+        from .sector_data_repair import pending_revision_dates
+
+        with get_conn() as conn:
+            return pending_revision_dates(conn, through)

@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1869",
-  "closed_at": null,
+  "closed_at": "2026-10-13T07:47:35.859758Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -221,8 +221,8 @@
   },
   "first_seen_at": "2026-10-13T03:46:58.612191Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2f76cde002a1c2e4ca7440a9711602a9356d5691",
+  "fixed_at": "2026-10-13T04:23:59Z",
   "github_issue_number": 5961,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5961",
   "implementation_plan": [
@@ -236,6 +236,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5972",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -270,7 +271,7 @@
   "root_cause": "selection后台线程600秒超时抛ArtifactGenerationFailedError，replay只将DataUnavailableError归为可重试；线程没有被取消但owner排除终态。真实首日两包约29分钟后生成SUCCEEDED权威分数，任务仍停在1月5日。冻结回放区间在每tick被要求等于漂移的最新完成日，且READY切换前未补齐新完成日。",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/platform-diagnostics",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/scheduler/verification-status?broker_backend=local_sim",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "独立pytest进程加载跟踪源码，25项直接合同测试通过，涵盖超时恢复/真实模型失败/跨日补齐/取消/安全窗口/冻结calendar/source/原子失败与幂等。",
@@ -283,9 +284,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1869-close-sync-20261013\\tmp\\issue_workflow\\BUG-1869\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1869",
+      "business_smoke_semantic": {
+        "contract_id": "scheduler_verification_status",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8491091005d1a48e12842529dd81fd8f796930f3ad04fc92df4622c1e3a2add",
+      "contract_digest": "1b563cf27396d9eb8a1ef7fd917c85cf11d07fa1e5e27eb8fb585d24b802a9e9",
+      "expected_identity": "2f76cde002a1c2e4ca7440a9711602a9356d5691",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-13T07:45:59.845871Z",
+      "mode": "read_only",
+      "observed_identity": "4ebf1c04658f90f09fbbbecc2d882716f13d00a6",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8ecd33287325fafbefbd06af90d6ef9a13f37c66290a149b99d41b7de15b4d0f",
+      "receipt_sha256": "e956cabfb84aa0696167788ec46d393a3fdf7d156b9a160a97a95c2d9f3d349a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "4f06977f4a849d32cc94808a3de194683e0e45965a6646bb08b5ab2299105e9b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -306,7 +330,32 @@
   ],
   "scope_expansion_reason": "复用现有原子replay bundle，在同一个已授权新账户中生成冻结的增量历史release/binding/job；工厂需要可选effective_to，增加现有DEV PostgreSQL真实原子性和资金连续性验证。无需DDL，不修改已冻结原任务身份。",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1869",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2b7dea85e4c629de",
+    "recorded_at": "2026-10-13T04:47:00.153869Z",
+    "runtime_contract_digest": "4778f8503704ce6adcfc5d5b771cc372c76ed165797ac47df356da2668039fe5",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "10723a7f179bce40011f0abe4d2d5eb4ddab0774",
+    "source_merge_commit": "2f76cde002a1c2e4ca7440a9711602a9356d5691",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5972",
+    "validation_evidence": [
+      "validation-receipt: id=d81b2f8e7d29d141 commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=0137dcb65187f929 commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py backend/tests/simulation_runtime/test_localsim_replay_live_transition.py backend/tests/simulation_runtime/test_localsim_product_control_plane.py -q -p no:cacheprovider` result=`passed (25 passed)`",
+      "validation-receipt: id=1c88521a4fc167ad commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=nox plan=localsim_successor_core_dev_db status=passed command=`python -m nox -s localsim_successor_core_dev_db` result=`passed (2 passed)`",
+      "validation-receipt: id=7f8a587921e27f38 commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=ruff plan=direct status=passed command=`rtk ruff check changed Python files` result=`passed`",
+      "validation-receipt: id=f469661ded04770f commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "5d615f32d32caa5778243c60fc72715ae054d23875ba80c2d8c88d9016a81c96"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -315,6 +364,14 @@
     "fingerprint": "b5a87865eb900d2c02c83632",
     "source_event_id": "FE-20261013-b5a87865eb90"
   },
+  "validation_evidence": [
+    "validation-receipt: id=d81b2f8e7d29d141 commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=0137dcb65187f929 commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py backend/tests/simulation_runtime/test_localsim_replay_live_transition.py backend/tests/simulation_runtime/test_localsim_product_control_plane.py -q -p no:cacheprovider` result=`passed (25 passed)`",
+    "validation-receipt: id=1c88521a4fc167ad commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=nox plan=localsim_successor_core_dev_db status=passed command=`python -m nox -s localsim_successor_core_dev_db` result=`passed (2 passed)`",
+    "validation-receipt: id=7f8a587921e27f38 commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=ruff plan=direct status=passed command=`rtk ruff check changed Python files` result=`passed`",
+    "validation-receipt: id=f469661ded04770f commit=10723a7f179bce40011f0abe4d2d5eb4ddab0774 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "2026-10-13 post-restart readback: runtime 4ebf1c04658f90f09fbbbecc2d882716f13d00a6 contains source merge; target-owned scheduler verification scope is all local_sim, healthy thread, zero current-day blockers. Original simrun_bcd56e8b3eae017b and both historical Jan-05 runs simrun_9fbe2525127692a1 / simrun_014f7985c59bd019 are SUCCEEDED. Both original replay accounts are ACTIVE version 3, capital 5000000 each. Four replay-owned bindings are excluded from normal daily scheduling; two stale daily runs were canonically CANCELLED with no execution plan or broker effects and original errors retained. Unscoped platform-diagnostics remains DEGRADED due to these retained CANCELLED audit rows; full replay and live activation are not asserted. Exact evidence: F:/Dev/AIstock/tmp/handoff/localsim_new_accounts_resume_20261013.json and localsim_replay_stale_daily_cleanup_20261013.json."
+  ],
   "validation_results": {
     "direct_contracts": "25 passed",
     "new_existing_dev_atomic_gate": "1 passed; all fixture writes rolled back; no DDL",

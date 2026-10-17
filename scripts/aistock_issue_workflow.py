@@ -1302,7 +1302,11 @@ def _compact_triage_ci_issue(value: Any) -> dict[str, Any] | None:
 def _compact_promote_ci_issue(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    compact = _pick(value, "dry_run")
+    compact = _pick(value, "dry_run", "excluded_scope_paths", "blocking")
+    if isinstance(value.get("registry_pr_capability"), dict):
+        compact["registry_pr_capability"] = _pick(value["registry_pr_capability"], "allowed", "source", "reason")
+    if isinstance(value.get("local_intake"), dict):
+        compact["local_intake"] = _pick(value["local_intake"], "status", "owner_role", "claim_status", "repair_module", "next_command")
     triage = _compact_triage_ci_issue(value.get("triage"))
     if triage:
         compact["triage"] = triage
@@ -2804,6 +2808,8 @@ def build_runtime_contract(
         "backend_restart_owner": "user",
         "target_id": target_id,
         "target_ids": target_ids,
+        # Diagnostic only: excluded from runtime receipt digest and gate decisions.
+        "inferred_runtime_files": list(inferred.get("runtime_files") or []),
         "catalog_ref": catalog_ref,
         "operator_runbook_ref": (target or {}).get("operator_runbook_ref"),
         "expected_identity_ref": (target or {}).get("expected_identity_ref"),
@@ -3406,14 +3412,18 @@ _validate_health_ok = _runtime_semantics._validate_health_ok
 _validate_collection_payload = _runtime_semantics._validate_collection_payload
 _validate_tdx_raw_kline = _runtime_semantics._validate_tdx_raw_kline
 _validate_object_liveness = _runtime_semantics._validate_object_liveness
+_validate_pipeline_overview = _runtime_semantics._validate_pipeline_overview
 _validate_advisory_entry_price_status = _runtime_semantics._validate_advisory_entry_price_status
 _validate_advisory_returns = _runtime_semantics._validate_advisory_returns
+_validate_advisory_historical_operations = _runtime_semantics._validate_advisory_historical_operations
 _validate_advisory_sector_entry_original_list = _runtime_semantics._validate_advisory_sector_entry_original_list
 _validate_hmm_rotation_l2_overview = _runtime_semantics._validate_hmm_rotation_l2_overview
+_validate_hmm_daily_coefficient_jobs = _runtime_semantics._validate_hmm_daily_coefficient_jobs
 _validate_hmm_workers = _runtime_semantics._validate_hmm_workers
 _validate_hmm_risk_l2_overview = _runtime_semantics._validate_hmm_risk_l2_overview
 _validate_research_pipeline_health = _runtime_semantics._validate_research_pipeline_health
 _validate_hmm_research_records = _runtime_semantics._validate_hmm_research_records
+_validate_selection_artifacts = _runtime_semantics._validate_selection_artifacts
 _validate_qe_dataset_profile = _runtime_semantics._validate_qe_dataset_profile
 _validate_openapi_document = _runtime_semantics._validate_openapi_document
 _validate_correlation_status = _runtime_semantics._validate_correlation_status
@@ -3426,6 +3436,12 @@ _validate_monthly_release_ready = _runtime_semantics._validate_monthly_release_r
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/advisory/historical-range-batches/[^/]+/operations$"),
+     "advisory_historical_operation_status_readback", _validate_advisory_historical_operations),
+    (re.compile(r"^/api/v1/strategy-packages/[^/]+/selection-artifacts$"),
+     "strategy_package_selection_artifact_readback", _validate_selection_artifacts),
+    (re.compile(r"^/api/v1/hmm-training/snapshots/[^/]+/daily-coefficients/jobs$"),
+     "hmm_database_daily_coefficient_jobs", _validate_hmm_daily_coefficient_jobs),
     (re.compile(r"^/api/kline-all/tdx$"), "tdx_raw_kline_facts", _validate_tdx_raw_kline),
     (re.compile(r"^/api/v1/hmm-evolution/workers$"), "hmm_worker_liveness", _validate_hmm_workers),
     (re.compile(r"^/api/v1/hmm-risk/risk-l2/overview$"), "hmm_risk_l2_overview", _validate_hmm_risk_l2_overview),
@@ -3498,6 +3514,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/qlib/config$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/runtime-contracts/[^/]+$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/validation/plans/[^/]+$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/api/v1/validation/overview/snapshot$"), "pipeline_overview_observations", _validate_pipeline_overview),
     (re.compile(r"^/openapi\.json$"), "openapi_document", _validate_openapi_document),
 )
 
@@ -3591,6 +3608,7 @@ def _evaluate_business_smoke_semantics(
             return schema, semantic
         verdict, reason, facts = validator(payload, expectation=expectation)
     elif contract_id in {
+        "strategy_package_selection_artifact_readback",
         "hmm_worker_liveness",
         "hmm_risk_l2_overview",
         "hmm_research_records",
@@ -3598,9 +3616,11 @@ def _evaluate_business_smoke_semantics(
         "factor_lifecycle_detail",
         "factor_metrics_results",
         "hmm_rotation_l2_overview",
+        "hmm_database_daily_coefficient_jobs",
         "advisory_entry_price_status",
         "advisory_sector_entry_original_list",
         "advisory_returns_metrics_v2",
+        "advisory_historical_operation_status_readback",
         "local_data_freshness",
         "monthly_release_ready",
     }:
@@ -3986,7 +4006,7 @@ def _git_fetch_with_transport_retry(
     attempts: int = 2,
     timeout: int = 60,
 ) -> str:
-    """Retry only transport-class failures for an idempotent git fetch."""
+    """Bound transport/remote-ref CAS retries to this idempotent fetch only."""
 
     total = max(1, int(attempts))
     for index in range(total):
@@ -3994,7 +4014,12 @@ def _git_fetch_with_transport_retry(
         if result.get("ok"):
             return str(result.get("stdout") or "").strip()
         message = str(result.get("stderr") or result.get("stdout") or "git fetch failed")
-        if not _looks_like_github_transport_failure(message) or index + 1 >= total:
+        ref_race = re.search(
+            r"(?:fetching ref|cannot lock ref) ['\"]?refs/remotes/[^'\"\s:]+['\"]?(?: failed)?: "
+            r"(?:incorrect old value provided|is at [0-9a-f]+ but expected [0-9a-f]+)",
+            message,
+        ) is not None
+        if not (ref_race or _looks_like_github_transport_failure(message)) or index + 1 >= total:
             raise WorkflowError(message)
         time.sleep(0.5 * (index + 1))
     raise AssertionError("unreachable git fetch retry state")
@@ -8522,6 +8547,7 @@ def build_task_card(
             runtime_contract,
             "schema_version",
             "runtime_impact",
+            "inferred_runtime_files",
             "backend_restart_required",
             "backend_restart_owner",
             "target_id",
@@ -8617,6 +8643,11 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- backend_restart_required: `{str(bool(runtime_contract.get('backend_restart_required'))).lower()}`",
         f"- backend_restart_owner: `{runtime_contract.get('backend_restart_owner') or 'user'}`",
         f"- target_id: `{runtime_contract.get('target_id') or 'none'}`",
+        *[f"- runtime_source: `{path}`" for path in (runtime_contract.get("inferred_runtime_files") or [])[:10]],
+        *([f"- runtime_source_count: `{len(runtime_contract['inferred_runtime_files'])}` (at most 10 paths shown; full list in task-card.json)"]
+          if len(runtime_contract.get("inferred_runtime_files") or []) > 10 else []),
+        *(["- source_role_review: inferred source attribution only; suspected offline tools need call-closure review, not health/HTTP-200 substitution or automatic exemption."]
+          if runtime_contract.get("inferred_runtime_files") else []),
         f"- catalog_ref: `{runtime_contract.get('catalog_ref') or 'none'}`",
         f"- operator_runbook_ref: `{runtime_contract.get('operator_runbook_ref') or 'none'}`",
         f"- post_restart_effective_gate: `{runtime_contract.get('post_restart_effective_gate') or 'unknown'}`",
@@ -12672,6 +12703,7 @@ def build_triage_ci_issue_plan(
         context_pack["failure_event"] = failure_event
         handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
         handoff["needs_bug_json"] = False
+        handoff["registry_intake"] = None
         handoff["handoff_mode"] = "triage_only"
         handoff["workflow_entrypoints"] = {
             "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue.get('number')}",
@@ -13205,6 +13237,9 @@ def build_promote_ci_issue_plan(
                 "dry_run": False,
                 "triage": triage,
                 "registry_pr_capability": registry_pr_capability,
+                "local_intake": ci_failure_summary.build_agent_handoff(
+                    triage["summary"], github_issue_number=issue_number
+                )["registry_intake"],
                 "warnings": [
                     "Nightly failure remains an actionable GitHub Issue; BUG allocation is deferred until a registry PR can be persisted"
                 ],
@@ -13219,7 +13254,23 @@ def build_promote_ci_issue_plan(
     failed_tests = first_job.get("failed_tests") or []
     error_signature = first_job.get("error_signature")
     details = ci_failure_summary.render_issue_markdown(summary, github_issue_number=issue_number)
-    changed_files = list(suggested.get("allowed_write_scope") or [])
+    # Diagnostic module roots are context, not permission to recursively edit.
+    # Resolve only the bounded candidate list; submit-bug still validates every
+    # accepted file for repository containment and ownership before allocation.
+    scope = flow._unique_strings(suggested.get("allowed_write_scope") or [])
+    changed_files = [path for path in scope if (REPO_ROOT / path).is_file()]
+    excluded_scope_paths = [path for path in scope if path not in changed_files]
+    if not changed_files:
+        return {
+            "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "blocked_exact_file_scope_required",
+            "dry_run": not apply,
+            "triage": triage,
+            "excluded_scope_paths": excluded_scope_paths,
+            "blocking": ["Diagnostic roots contain no existing exact files; triage must identify the repair files before BUG allocation."],
+            "next_command": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_number}",
+        }
     evidence_refs = flow._unique_strings(
         [
             str(summary.get("run_url") or ""),
@@ -13256,6 +13307,7 @@ def build_promote_ci_issue_plan(
         "dry_run": not apply,
         "triage": triage,
         "submit_bug": plan,
+        "excluded_scope_paths": excluded_scope_paths,
         "next_command": plan.get("next_command"),
     }
 
