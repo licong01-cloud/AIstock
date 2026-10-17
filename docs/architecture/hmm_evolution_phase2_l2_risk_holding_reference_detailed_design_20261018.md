@@ -2,7 +2,7 @@
 
 > v1.0；2026-10-18；F2；HMM owner。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` §1.18。
-> L2-RISK-HOLDING-REFERENCE-D1～D6：**PROPOSED_FOR_USER_APPROVAL**。本文件是收益参照合同提案，不是新模型或第二个消费公式；源码、正式重评分及合入均未执行。
+> L2-RISK-HOLDING-REFERENCE-D1～D6：**PROPOSED_FOR_USER_APPROVAL**。本文件是收益参照合同提案，不是新模型或第二个消费公式；源码实施、正式重评分及源码合入均未执行。
 
 ## 1. Background / Goal / Scope
 
@@ -137,7 +137,7 @@ cohort/outcomes按`(u,canonical_l2_code,canonical_security_code)`排序且键唯
 | 维度 | 当前状态 |
 |---|---|
 | D1～D6新精确参照合同 | PROPOSED_FOR_USER_APPROVAL；未执行 |
-| 源码/直接测试/PR | 未开始；上表路径是后续测试计划，不是已存在或已通过的测试 |
+| 源码/直接测试/源码PR | 未开始；上表路径是后续测试计划，不是已存在或已通过的测试 |
 | 双process重评分 | 未开始，fits=0、新推断=0 |
 | 数据/生产/运行态 | 零变更 |
 
