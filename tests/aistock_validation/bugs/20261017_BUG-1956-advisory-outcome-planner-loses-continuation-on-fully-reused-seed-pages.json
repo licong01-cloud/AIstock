@@ -29,13 +29,20 @@
   ],
   "expected": "Native bounded planner traverses reused/terminal pages, resumes from an auditable cursor and neither omits later pending subjects nor recalculates exact existing facts.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_historical_range/outcome_planner.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_planner.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1956-advisory-outcome-planner-loses-continuation-on-fully-reused-seed-pages.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/advisory_historical_range/outcome_planner.py",
       "backend/tests/advisory_historical_range/test_r4_outcome_planner.py",
-      "backend/tests/advisory_historical_range/test_r4_outcome_service.py"
+      "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1956-advisory-outcome-planner-loses-continuation-on-fully-reused-seed-pages.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_historical_range/outcome_planner.py",
@@ -126,11 +133,15 @@
       "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/bug1956-native-planner-smoke.json -> READ_ONLY_PASS in 121.008338s using the actual 20-day frozen file inputs and original command bd6adc8b4d6bfd7d10d0f6b2cd9510ba1600cfd2267d793ff412c844771ac784. Two fully reused native pages retain strictly increasing cursors, no financial evaluation/claim/append/publication. Loaded planner source SHA256 548f43b9efde1f9f03e26aa326c7968c6bbb36440228d0fb5da089b2432479bc. Original producer 6fa5df375cf6439a0793306127659eb3d80fd130fe3514451cc03085e557a404 diagnosed explicitly under its own identity; new runtime derives 9de0ba10071c733452985d2e0c9c9cf0fb1c550ef24c28048ece4104d4682374. This is not runtime activation or a new production identity PASS."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -138,14 +149,6 @@
       "backend-main"
     ]
   },
-  "validation_evidence": [
-    "RED: seven direct cases reproduced empty reused-page ValidationError and targeted same-subject cursor omission; GREEN: the same seven cases passed.",
-    "python -m pytest backend/tests/advisory_historical_range/test_r4_outcome_planner.py backend/tests/advisory_historical_range/test_r4_outcome_service.py -q --tb=short -p no:cacheprovider --basetemp X:/AIstock_temp/ADVISORY/bug1956-final-related -> 34 passed; native planner/application/artifact tests cover all-reused and later pending work without recalculating or changing preserved facts.",
-    "rtk ruff check (three changed Python files) -> passed; git diff --check -> passed; python -m nox -s l0 -> 0 findings, 0 blocking.",
-    "Review rounds 1/2: cursor truncation versus scanned skip progress; inclusive first targeted subject; cross-check immutable input/revision checks, native lease checkpoint and exact reuse; fixture duplicate hash corrected without relaxing uniqueness validation.",
-    "DESIGN-COMPLIANCE-001 (1) full scoped fix, not mock-only: real planner/application/artifact chain plus frozen-input read-only smoke; (2) no silent success: slice validation and source/producer/correction failures retained; (3) formulas, PIT, policies, candidate ordering and shared selection unchanged, producer identity changes under existing version protocol; (4) no new gate, approval, UI blocker or cross-module work. Source completion, runtime loading, original terminal failures and financial acceptance remain distinct.",
-    "Broader advisory_historical_range_backend regression delegated to required CI plan for the final PR HEAD; no UI journey, backend/database mutation, training or production replay requested."
-  ],
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
@@ -157,6 +160,14 @@
     "fingerprint": "46a34ea70dfc2b62192d1c47",
     "source_event_id": "FE-20261017-46a34ea70dfc"
   },
+  "validation_evidence": [
+    "RED: seven direct cases reproduced empty reused-page ValidationError and targeted same-subject cursor omission; GREEN: the same seven cases passed.",
+    "python -m pytest backend/tests/advisory_historical_range/test_r4_outcome_planner.py backend/tests/advisory_historical_range/test_r4_outcome_service.py -q --tb=short -p no:cacheprovider --basetemp X:/AIstock_temp/ADVISORY/bug1956-final-related -> 34 passed; native planner/application/artifact tests cover all-reused and later pending work without recalculating or changing preserved facts.",
+    "rtk ruff check (three changed Python files) -> passed; git diff --check -> passed; python -m nox -s l0 -> 0 findings, 0 blocking.",
+    "Review rounds 1/2: cursor truncation versus scanned skip progress; inclusive first targeted subject; cross-check immutable input/revision checks, native lease checkpoint and exact reuse; fixture duplicate hash corrected without relaxing uniqueness validation.",
+    "DESIGN-COMPLIANCE-001 (1) full scoped fix, not mock-only: real planner/application/artifact chain plus frozen-input read-only smoke; (2) no silent success: slice validation and source/producer/correction failures retained; (3) formulas, PIT, policies, candidate ordering and shared selection unchanged, producer identity changes under existing version protocol; (4) no new gate, approval, UI blocker or cross-module work. Source completion, runtime loading, original terminal failures and financial acceptance remain distinct.",
+    "Broader advisory_historical_range_backend regression delegated to required CI plan for the final PR HEAD; no UI journey, backend/database mutation, training or production replay requested."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
