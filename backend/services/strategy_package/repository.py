@@ -279,6 +279,7 @@ def _validate_asset_records_for_manifest(
                 "unexpected_assets": unexpected,
             },
         )
+    contracts = _manifest_asset_contracts(manifest)
     for asset in assets:
         if asset.package_id != manifest.package_id:
             raise StrategyPackageValidationError(
@@ -295,9 +296,10 @@ def _validate_asset_records_for_manifest(
             StrategyPackageAssetType.FACTOR_CODE,
             StrategyPackageAssetType.FACTOR_SCHEMA,
             StrategyPackageAssetType.MODEL_CODE,
+            StrategyPackageAssetType.PREPROCESSOR,
         }:
             raise StrategyPackageValidationError(
-                "package freeze only accepts runtime-owned model, factor, schema, and model-code assets",
+                "package freeze only accepts runtime-owned model, factor, schema, model-code, and preprocessor assets",
                 context={
                     "reason_code": "strategy_package_asset_unexpected_type",
                     "package_id": manifest.package_id,
@@ -315,6 +317,71 @@ def _validate_asset_records_for_manifest(
                     "asset_ref": asset.asset_ref,
                 },
             )
+        _validate_manifest_owned_asset(manifest, asset, contracts=contracts)
+
+
+def _manifest_asset_contracts(manifest: StrategyPackageManifest) -> dict[tuple[StrategyPackageAssetType, str], tuple[str, int | None]]:
+    """Return only declared frozen core assets; legacy auxiliary records stay mutable."""
+    contracts: dict[tuple[StrategyPackageAssetType, str], tuple[str, int | None]] = {}
+    typed_assets: list[tuple[StrategyPackageAssetType, Any]] = [
+        (StrategyPackageAssetType.FACTOR_CODE, factor) for factor in manifest.factor_set
+    ]
+    models = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+    for model in models:
+        typed_assets.append((StrategyPackageAssetType.MODEL_WEIGHT, model))
+        typed_assets.extend((StrategyPackageAssetType.MODEL_CODE, code) for code in model.model_code_assets)
+        if model.preprocessor_asset is not None:
+            typed_assets.append((StrategyPackageAssetType.PREPROCESSOR, model.preprocessor_asset))
+    if manifest.runtime_assets is not None and manifest.runtime_assets.alpha158.enabled:
+        typed_assets.append((StrategyPackageAssetType.FACTOR_SCHEMA, manifest.runtime_assets.alpha158))
+    for kind, asset in typed_assets:
+        if not (asset.asset_ref and asset.sha256):
+            continue
+        key = (kind, asset.asset_ref)
+        contract = (asset.sha256, asset.size_bytes)
+        if key in contracts and contracts[key] != contract:
+            raise StrategyPackageValidationError("manifest has conflicting core asset identities", context={"reason_code": "strategy_package_asset_contract_conflict", "asset_ref": asset.asset_ref})
+        contracts[key] = contract
+    return contracts
+
+
+def _validate_manifest_owned_asset(manifest: StrategyPackageManifest, asset: StrategyPackageAssetRecord, *, contracts: dict[tuple[StrategyPackageAssetType, str], tuple[str, int | None]] | None = None) -> bool:
+    contract = (contracts if contracts is not None else _manifest_asset_contracts(manifest)).get((asset.asset_type, asset.asset_ref))
+    if contract is None:
+        return False
+    expected_sha, expected_size = contract
+    if not asset.protected_asset or asset.asset_sha256 != expected_sha or (expected_size is not None and asset.asset_size_bytes != expected_size):
+        raise StrategyPackageValidationError(
+            "manifest-owned assets require immutable SHA, protection and declared byte size",
+            context={"reason_code": "strategy_package_core_asset_integrity_mismatch", "package_id": manifest.package_id, "asset_ref": asset.asset_ref, "expected_sha256": expected_sha, "expected_size_bytes": expected_size, "protected_asset": asset.protected_asset, "observed_size_bytes": asset.asset_size_bytes},
+        )
+    return True
+
+
+def manifest_asset_ledger_covers(manifest: StrategyPackageManifest, rows: list[StrategyPackageAssetRecord]) -> bool:
+    """Check the core rows without interpreting unrelated reports as runtime assets."""
+    expected = _expected_manifest_asset_keys(manifest)
+    contracts = _manifest_asset_contracts(manifest)
+    actual = {(row.asset_type, row.asset_ref, row.asset_sha256): row for row in rows}
+    for key in expected:
+        row = actual.get(key)
+        if row is None or row.package_id != manifest.package_id:
+            return False
+        try:
+            _validate_manifest_owned_asset(manifest, row, contracts=contracts)
+        except StrategyPackageValidationError:
+            return False
+    return bool(expected)
+
+
+def _asset_rows_cover(required: list[StrategyPackageAssetRecord], existing: list[StrategyPackageAssetRecord]) -> bool:
+    actual = {(row.asset_type, row.asset_ref, row.asset_sha256): row for row in existing}
+    return all(
+        (row := actual.get((asset.asset_type, asset.asset_ref, asset.asset_sha256))) is not None
+        and row.protected_asset
+        and (asset.asset_size_bytes is None or row.asset_size_bytes == asset.asset_size_bytes)
+        for asset in required
+    )
 
 
 def _expected_manifest_asset_keys(
@@ -345,6 +412,18 @@ def _expected_manifest_asset_keys(
                 },
             )
         expected.add((StrategyPackageAssetType.MODEL_WEIGHT, model.asset_ref, model.sha256))
+        processor = model.preprocessor_asset
+        if processor is not None:
+            if not (processor.asset_ref and processor.sha256):
+                raise StrategyPackageValidationError(
+                    "manifest preprocessor asset is not frozen",
+                    context={
+                        "reason_code": "strategy_package_assets_incomplete",
+                        "package_id": manifest.package_id,
+                        "model_id": model.model_id,
+                    },
+                )
+            expected.add((StrategyPackageAssetType.PREPROCESSOR, processor.asset_ref, processor.sha256))
         for code_asset in model.model_code_assets:
             if not (code_asset.asset_ref and code_asset.sha256):
                 raise StrategyPackageValidationError(
@@ -871,11 +950,7 @@ class StrategyPackageRepository:
     def _has_package_asset_rows(self, package_id: str, assets: list[StrategyPackageAssetRecord]) -> bool:
         if not assets:
             return True
-        existing = {
-            (asset.asset_type, asset.asset_ref, asset.asset_sha256)
-            for asset in self.list_package_assets(package_id)
-        }
-        return all((asset.asset_type, asset.asset_ref, asset.asset_sha256) in existing for asset in assets)
+        return _asset_rows_cover(assets, self.list_package_assets(package_id))
 
     def find_by_source_version(
         self,
@@ -1665,9 +1740,12 @@ class StrategyPackageRepository:
         return [self._component_from_row(dict(row)) for row in rows]
 
     def save_package_asset(self, asset: StrategyPackageAssetRecord) -> StrategyPackageAssetRecord:
-        self.get(asset.package_id)
+        record = self.get(asset.package_id)
+        core_asset = _validate_manifest_owned_asset(record.current_manifest(), asset)
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                if core_asset:
+                    return self._upsert_package_asset(cur, asset)
                 cur.execute(
                     """
                     INSERT INTO strategy_pkg.package_asset (
@@ -2792,13 +2870,32 @@ class StrategyPackageRepository:
 
     @staticmethod
     def _package_asset_from_row(row: dict[str, Any]) -> StrategyPackageAssetRecord:
+        # Only this exact historical spelling is a known alias. Do not case-fold
+        # arbitrary values or silently classify unknown rows as OTHER.
+        raw_type = row["asset_type"]
+        metadata = dict(row["metadata"] or {})
+        if raw_type == "MODEL_WEIGHT":
+            metadata["legacy_asset_type"] = raw_type
+            raw_type = StrategyPackageAssetType.MODEL_WEIGHT.value
+        try:
+            asset_type = StrategyPackageAssetType(raw_type)
+        except ValueError as exc:
+            raise StrategyPackageValidationError(
+                "strategy package asset type is unsupported",
+                context={
+                    "reason_code": "strategy_package_asset_type_unsupported",
+                    "package_id": row["package_id"],
+                    "asset_id": row["asset_id"],
+                    "asset_type": raw_type,
+                },
+            ) from exc
         return StrategyPackageAssetRecord(
             asset_id=row["asset_id"],
             package_id=row["package_id"],
-            asset_type=StrategyPackageAssetType(row["asset_type"]),
+            asset_type=asset_type,
             asset_ref=row["asset_ref"],
             asset_sha256=row["asset_sha256"],
-            metadata=row["metadata"] or {},
+            metadata=metadata,
             asset_role=row.get("asset_role") or "governed_asset",
             asset_size_bytes=row.get("asset_size_bytes"),
             protected_asset=bool(row.get("protected_asset", True)),
@@ -3101,11 +3198,7 @@ class InMemoryStrategyPackageRepository:
         return self.get(package_id)
 
     def _has_package_asset_rows(self, package_id: str, assets: list[StrategyPackageAssetRecord]) -> bool:
-        existing = {
-            (asset.asset_type, asset.asset_ref, asset.asset_sha256)
-            for asset in self.list_package_assets(package_id)
-        }
-        return all((asset.asset_type, asset.asset_ref, asset.asset_sha256) in existing for asset in assets)
+        return _asset_rows_cover(assets, self.list_package_assets(package_id))
 
     def find_by_source_version(
         self,
@@ -3541,7 +3634,8 @@ class InMemoryStrategyPackageRepository:
         return [event for event in self.events if event.package_id == package_id][:limit]
 
     def save_package_asset(self, asset: StrategyPackageAssetRecord) -> StrategyPackageAssetRecord:
-        self.get(asset.package_id)
+        record = self.get(asset.package_id)
+        _validate_manifest_owned_asset(record.current_manifest(), asset)
         key = (asset.package_id, asset.asset_type, asset.asset_ref)
         existing = self.package_assets.get(key)
         asset_id = existing.asset_id if existing else self._next_package_asset_id

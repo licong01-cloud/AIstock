@@ -22,9 +22,11 @@ from backend.data_service.security_source_identity import (
     load_default_security_source_identity_manifest,
     load_security_source_identity_manifest,
 )
+from backend.services.tushare_dataset_specs import stk_limit_prices_valid
+from backend.data_service.suspension_day_authority import full_day_keys, frozen_authority, project_suspension_days
 
 from .canonical import canonical_json_bytes
-from .canonical_stock_transformer import MINUTE_OPENING_AUCTION_TIME, suspended_zero_turnover_placeholder
+from .canonical_stock_transformer import MINUTE_OPENING_AUCTION_TIME, raw_volume_shares, suspended_zero_turnover_placeholder
 from .monthly_source_audit import (
     MonthlySourceAuditError,
     SourceGateEvidence,
@@ -33,6 +35,7 @@ from .monthly_source_audit import (
     validate_trading_calendar,
 )
 from .monthly_source_producer import SourceArtifact
+from .monthly_source_quality import accepted_parity_warning, read_quality_evidence, source_quality_report
 from .monthly_unified import SOURCE_GATES
 from .sealed_source_reader import CASSealedPartitionReader
 from .monthly_sector_mapping import build_bound_sector_enricher, frozen_sector_mapping_binding
@@ -78,6 +81,10 @@ def _ohlcv(row: Mapping[str, Any]) -> dict[str, float]:
             strict=True,
         )
     }
+    try:
+        values['vol'] = raw_volume_shares(row)
+    except ValueError as exc:
+        raise MonthlySourceAuditError(str(exc)) from exc
     if (
         min(values[key] for key in ("open", "high", "low", "close")) <= 0
         or values["high"] < max(values["open"], values["low"], values["close"])
@@ -99,6 +106,7 @@ class GateCounter:
     invalid_count: int = 0
     duplicate_count: int = 0
     exceptions: list[TypedGap] = field(default_factory=list)
+    quality_warning_refs: list[Mapping[str, Any]] = field(default_factory=list)
     emit: Callable[[Mapping[str, Any]], None] | None = None
     expected_keys: Any = field(default_factory=hashlib.sha256)
 
@@ -252,6 +260,8 @@ def audit_month_rows(
     authority_sha256: str,
     minute_start: date,
     aliases: Any = None,
+    quality_acceptance: Mapping[str, Any] | None = None,
+    suspension_authority: Mapping[str, Any] | None = None,
 ) -> tuple[dict[str, Any], set[tuple[str, date]]]:
     """Audit independent expected stock/date keys; never infer a denominator from rows."""
     dates = set(sessions)
@@ -269,11 +279,18 @@ def audit_month_rows(
                 summaries[key] = MinuteSummary(day)
             summaries[key].add(row)
     expected = {(symbol, day) for day in sessions for symbol in pools["stock_universe"].get(day, ())}
-    suspended = {
-        key
-        for key, values in indexed.get("suspend_d", {}).items()
-        if any(row.get("suspend_type") == "S" and not row.get("suspend_timing") for row in values)
-    }
+    suspended = full_day_keys(
+        (row for values in indexed.get("suspend_d", {}).values() for row in values),
+        authority=suspension_authority, required_dates=sessions,
+    )
+    for resolution in project_suspension_days(
+        (row for values in indexed.get("suspend_d", {}).values() for row in values),
+        authority=suspension_authority, required_dates=sessions,
+    ):
+        key = (resolution["ts_code"], _day(resolution["trade_date"]))
+        if resolution["state"] == "UNRESOLVED" and key in expected:
+            gates["suspend_limit"].invalid_count += 1
+            gates["suspend_limit"].issue(key, "suspension_day_state_unresolved", "suspend_d")
 
     def facts(dataset: str, key: tuple[str, date]) -> list[Mapping[str, Any]]:
         source = (
@@ -329,15 +346,13 @@ def audit_month_rows(
         gates["suspend_limit"].check(
             key,
             limit,
-            valid=lambda row: (
-                all(_finite(row.get(name)) and float(row[name]) > 0 for name in ("pre_close", "up_limit", "down_limit"))
-                and float(row["up_limit"]) >= float(row["down_limit"])
-            ),
+            valid=stk_limit_prices_valid,
             exception=exception("stk_limit"),
             dataset="stk_limit",
             invalid_details={"invalid_fields": sorted({
                 name for row in limit for name in ("pre_close", "up_limit", "down_limit")
                 if not _finite(row.get(name)) or float(row[name]) <= 0
+                or (name == "pre_close" and not stk_limit_prices_valid(row))
             })},
         )
         if key in suspended and (
@@ -354,8 +369,7 @@ def audit_month_rows(
                 and summary.placeholder_1300_count == 1 and not summary.date_mismatch
                 and summary.duplicate_count == 0 and summary.count <= 240
                 and suspended_zero_turnover_placeholder(
-                    full_day_suspend=sum(row.get("suspend_type") == "S" and not row.get("suspend_timing")
-                                         for row in indexed.get("suspend_d", {}).get(key, ())) == 1,
+                    full_day_suspend=key in suspended,
                     has_1300=True, all_minute_turnover_zero=summary.all_turnover_zero, daily_rows=daily,
                 )
             ):
@@ -392,6 +406,11 @@ def audit_month_rows(
                             for name, value in _ohlcv(daily[0]).items()
                             if not math.isclose(value, actual[name], rel_tol=1e-4, abs_tol=1e-4)
                         }}
+                        warning = accepted_parity_warning(quality_acceptance, symbol=key[0],
+                            trade_date=key[1], mismatches=details["mismatches"])
+                        if warning is not None and not summary.duplicate_count and len(daily) == 1:
+                            bad = False
+                            gate.quality_warning_refs.append(warning)
                 if bad:
                     gate.invalid_count += 1
                     gate.issue(key, reason, "kline_minute_raw", details=details)
@@ -418,6 +437,10 @@ def audit_margin_publication(
     gate: GateCounter,
     minimum_rows: int = 0,
     deferred_authority_sha256: str | None = None,
+    suspend_rows: Iterable[Mapping[str, Any]] = (),
+    daily_rows: Iterable[Mapping[str, Any]] = (),
+    suspend_authority_sha256: str | None = None,
+    suspension_authority: Mapping[str, Any] | None = None,
 ) -> None:
     """Independently declared provider denominator, not all-equity eligibility.
 
@@ -444,11 +467,48 @@ def audit_margin_publication(
     expected = next(iter(bounds)) if declared else None
     keys = [str(row.get("ts_code")) for row in rows]
     unique = set(keys)
+    suspended: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    daily: dict[str, list[Mapping[str, Any]]] = defaultdict(list)
+    for row in suspend_rows:
+        if _day(row["trade_date"]) == day:
+            suspended[str(row["ts_code"])].append(row)
+    for row in daily_rows:
+        if _day(row["trade_date"]) == day:
+            daily[str(row["ts_code"])].append(row)
+    explained: list[tuple[str, tuple[str, ...]]] = []
+    invalid_fields: dict[str, list[str]] = {}
+    for row in rows:
+        symbol = str(row.get("ts_code"))
+        missing = tuple(name for name in _MARGIN_DETAIL_VALUES if not _finite(row.get(name)))
+        if not missing:
+            continue
+        suspensions, prices = suspended.get(symbol, []), daily.get(symbol, [])
+        full_suspensions = full_day_keys(suspensions, authority=suspension_authority, required_dates=(day,))
+        eligible = (
+            bool(missing) and set(missing) <= {"rqye", "rzrqye"}
+            and all(row.get(name) is None for name in missing)
+            and isinstance(suspend_authority_sha256, str)
+            and re.fullmatch(r"[0-9a-f]{64}", suspend_authority_sha256) is not None
+            # Same-day S/R requires independently pinned disclosure evidence;
+            # zero turnover alone never proves a full-day halt.
+            and (symbol, day) in full_suspensions
+            and len(prices) == 1
+        )
+        if eligible:
+            try:
+                values = _ohlcv(prices[0])
+                eligible = values["vol"] == values["amount"] == 0
+            except MonthlySourceAuditError:
+                eligible = False
+        if eligible:
+            explained.append((symbol, missing))
+        else:
+            invalid_fields[symbol] = list(missing)
     valid = (
         declared
         and len(unique) >= max(expected, minimum_rows)
         and len(keys) == len(unique)
-        and all(all(_finite(row.get(name)) for name in _MARGIN_DETAIL_VALUES) for row in rows)
+        and not invalid_fields
     )
     reason = (
         "provider_denominator_unproven" if not declared
@@ -457,10 +517,18 @@ def audit_margin_publication(
     )
     gate.check(("margin_detail", day), [{}] if rows else [], valid=lambda _: valid, dataset="margin_detail",
                invalid_reason=reason, invalid_details={"declared_expected_rows": expected,
-                   "minimum_rows": minimum_rows, "observed_unique_rows": len(unique)},
+                   "minimum_rows": minimum_rows, "observed_unique_rows": len(unique),
+                   "invalid_fields_by_symbol": invalid_fields},
                missing_reason=reason, missing_details={"declared_expected_rows": expected,
                    "minimum_rows": minimum_rows, "observed_unique_rows": 0})
     gate.duplicate_count += len(keys) - len(unique)
+    if valid:
+        for symbol, fields in explained:
+            # The fact row remains published and unchanged. Only these NULL
+            # quote-value fields are explained; no financing quantity is filled.
+            gate.check((symbol, day), [], valid=lambda _: False, dataset="margin_detail",
+                exception=TypedGap("margin_detail", symbol, day.isoformat(), day.isoformat(),
+                    ",".join(fields), "SUSPEND_FULL_DAY", suspend_authority_sha256))
 
 
 def audit_prepared_limit_source(*, cas, frozen, profile, raw_gate, input_root, artifact_root,
@@ -507,9 +575,8 @@ def audit_prepared_limit_source(*, cas, frozen, profile, raw_gate, input_root, a
         for index, key in enumerate(expected):
             if index % 1000 == 0:
                 checkpoint()
-            counter.check(key, actual.get(key, []), dataset="stk_limit", exception=allowed.get(key), valid=lambda row:
-                all(_finite(row.get(name)) and float(row[name]) > 0 for name in ("pre_close", "up_limit", "down_limit"))
-                and float(row["up_limit"]) >= float(row["down_limit"]))
+            counter.check(key, actual.get(key, []), dataset="stk_limit", exception=allowed.get(key),
+                          valid=stk_limit_prices_valid)
     # Require the exact same independent PIT denominator as the raw audit.
     original = json.loads((artifact_root / raw_gate.expectation_contract_ref).read_text(encoding="utf-8"))
     if counter.expected_count != raw_gate.expected_count or counter.expected_keys.hexdigest() != original["expected_keys_sha256"]:
@@ -542,6 +609,7 @@ def audit_frozen_source(
     checkpoint: Callable[[], None] = lambda: None,
     audit_causal_history: bool = True,
     deferred_margin_authority_sha256: str | None = None,
+    quality_acceptance: Mapping[str, Any] | None = None,
 ) -> tuple[tuple[SourceGateEvidence, ...], tuple[SourceArtifact, ...]]:
     # The shared builders depend on the build bridge, which imports the SOURCE
     # bundle schema. Load them only after adapter module initialization.
@@ -595,8 +663,9 @@ def audit_frozen_source(
         or refresh.get("profile") != profile.profile
     ):
         raise MonthlySourceAuditError("frozen refresh audit identity differs")
+    classify = tuple(stream("sw_index_classify"))
     enricher = build_bound_sector_enricher(
-        stream("sw_index_classify"), stream("sw_index_member"),
+        classify, stream("sw_index_member"),
         binding=frozen_sector_mapping_binding(cas, frozen),
     )
     map_payload = build_release_sw_l2_code_map_payload(
@@ -605,10 +674,14 @@ def audit_frozen_source(
         authority_id="dataset_release_source_authority_v1",
         authority_sha256=frozen.source_manifest_ref.sha256,
     )
+    publication_evidence = {}
     quote = build_quote_availability_payload(
         code_map=validate_release_sw_l2_code_map(map_payload),
         required_start=profile.start_date,
         cutoff=frozen.official_cutoff,
+        classification_rows=classify,
+        quote_observations=stream("sector_data", audit_start, frozen.official_cutoff),
+        evidence=publication_evidence,
     )
     availability = {row["canonical_l2_code"]: row["availability_spans"] for row in quote["entries"]}
     reverse_map = {value: code for code, value in enricher.code_map.items()}
@@ -622,6 +695,9 @@ def audit_frozen_source(
     aliases = load_security_source_identity_manifest(alias_path)
     quote_path = input_root / "quote-availability.json"
     _write(quote_path, quote)
+    suspension_authority = frozen_authority(cas, frozen)
+    suspension_path = input_root / "suspension-day-authority.json"
+    _write(suspension_path, suspension_authority)
     issues_path = input_root / "source-issues.ndjson"
     counters = {name: GateCounter(name) for name in SOURCE_GATES}
     # Historical repairs are separate operations. They must not expand an
@@ -639,11 +715,9 @@ def audit_frozen_source(
         # facts remain outside executable spans and are streamed once; no
         # database fallback, historical DataFrame or synthesized fact is used.
         if sessions and audit_causal_history:
-            full_day_suspensions = frozenset(
-                (str(row["ts_code"]), _day(row["trade_date"]))
-                for row in stream("suspend_d")
-                if row.get("suspend_type") == "S"
-                and str(row.get("suspend_timing") or "").strip() in {"", "09:30-09:30"}
+            full_day_suspensions = full_day_keys(
+                stream("suspend_d", audit_start, frozen.official_cutoff),
+                authority=suspension_authority, required_dates=sessions,
             )
             def causal_key(symbol: str, day: date, prior: Any) -> None:
                 counters["daily_basic_required_fields"].check(
@@ -696,6 +770,8 @@ def audit_frozen_source(
                 authority_sha256=frozen.source_manifest_ref.sha256,
                 minute_start=profile.minute_start_date,
                 aliases=aliases,
+                quality_acceptance=quality_acceptance,
+                suspension_authority=suspension_authority,
             )
             for day in dates:
                 checkpoint()
@@ -801,11 +877,17 @@ def audit_frozen_source(
                     gate=counters["financial_moneyflow"],
                     minimum_rows=MARGIN_DETAIL.min_expected_rows if day > predecessor_cutoff else 0,
                     deferred_authority_sha256=deferred_margin_authority_sha256 if day == frozen.official_cutoff else None,
+                    suspend_rows=[row for (symbol, row_day), values in indexed.get("suspend_d", {}).items()
+                                  if row_day == day for row in values],
+                    daily_rows=[row for (symbol, row_day), values in indexed.get("kline_daily_raw", {}).items()
+                                if row_day == day for row in values],
+                    suspend_authority_sha256=frozen.source_manifest_ref.sha256,
+                    suspension_authority=suspension_authority,
                 )
     result: list[SourceGateEvidence] = []
     artifacts = [
         SourceArtifact(path.relative_to(artifact_root).as_posix(), path)
-        for path in (alias_path, quote_path, issues_path)
+        for path in (alias_path, quote_path, suspension_path, issues_path)
     ]
     if sessions and audit_causal_history:
         artifacts.append(SourceArtifact(causal_path.relative_to(artifact_root).as_posix(), causal_path))
@@ -826,6 +908,7 @@ def audit_frozen_source(
             counter.duplicate_count,
             counter.invalid_count,
             tuple(counter.exceptions),
+            tuple(counter.quality_warning_refs),
         )
         _write(
             expectation,
@@ -842,6 +925,7 @@ def audit_frozen_source(
                 "source_refresh_audit_ref": frozen.source_audit_ref.as_dict(),
                 "alias_file_sha256": aliases.file_sha256,
                 "quote_availability_digest": quote["quote_availability_digest"],
+                "quote_publication_evidence": publication_evidence,
                 "denominator_rule": "frozen_calendar_intersect_pit_spans_v1",
             },
         )
@@ -858,4 +942,20 @@ def audit_frozen_source(
         artifacts.extend(
             SourceArtifact(path.relative_to(artifact_root).as_posix(), path) for path in (expectation, readback)
         )
+    if quality_acceptance is not None:
+        acceptance_path = input_root / "source-quality-acceptance.json"
+        _write(acceptance_path, quality_acceptance)
+        report_path = input_root / "source-quality-report.json"
+        artifacts.extend(SourceArtifact(path.relative_to(artifact_root).as_posix(), path)
+                         for path in (acceptance_path, report_path))
+        evidence_refs = []
+        for index, reference in enumerate(quality_acceptance["evidence_refs"]):
+            evidence_path = input_root / f"source-quality-evidence-{index}.json"
+            with evidence_path.open("xb") as handle:
+                handle.write(read_quality_evidence(reference))
+            artifacts.append(SourceArtifact(evidence_path.relative_to(artifact_root).as_posix(), evidence_path))
+            evidence_refs.append({"path": evidence_path.name, "sha256": reference["sha256"], "size": reference["size"]})
+        _write(report_path, {**source_quality_report(quality_acceptance,
+            [warning for counter in counters.values() for warning in counter.quality_warning_refs]),
+            "frozen_evidence_refs": evidence_refs})
     return tuple(result), tuple(artifacts)

@@ -126,6 +126,7 @@ class WslResourceGuardian:
         cgroup_reader: CgroupReader = lambda value: read_cgroup_files(value),
         popen_factory: Callable[..., ChildProcess] = subprocess.Popen,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not _IDENTITY.fullmatch(str(attempt_id)) or fence <= 0 or ttl_seconds < 3:
@@ -166,8 +167,11 @@ class WslResourceGuardian:
         self._read_cgroup = cgroup_reader
         self._popen = popen_factory
         self._now = now
+        self._monotonic = monotonic
         self._sleep = sleep
         self._last_counter = -1
+        self._last_progress_at: float | None = None
+        self._counter_advanced = False
         self._telemetry_counter = 0
         self._control_group: str | None = None
         self._wrapper_pid = 0
@@ -178,18 +182,38 @@ class WslResourceGuardian:
             return False
         if heartbeat.counter < self._last_counter:
             return False
-        age = (self._now() - heartbeat.host_utc.astimezone(timezone.utc)).total_seconds()
-        if age < -5 or age > self.ttl_seconds:
-            return False
-        self._last_counter = heartbeat.counter
-        return True
+        # Windows and WSL UTC clocks can drift independently. Liveness is
+        # counter progress measured by this guardian's monotonic clock; UTC
+        # remains audit metadata, never a cross-host timeout clock.
+        observed = self._monotonic()
+        if heartbeat.counter > self._last_counter:
+            self._counter_advanced = self._last_counter >= 0
+            self._last_counter = heartbeat.counter
+            self._last_progress_at = observed
+        return (
+            self._last_progress_at is not None
+            and 0 <= observed - self._last_progress_at < self.ttl_seconds
+        )
+
+    def _assert_live_owner(self) -> None:
+        if not self._pipe():
+            raise GuardianError("parent pipe closed")
+        if not self._heartbeat_is_fresh():
+            raise GuardianError("heartbeat identity, counter or monotonic TTL failed")
 
     def run(self) -> int:
         try:
-            if not self._pipe() or not self._heartbeat_is_fresh():
-                return 72
+            self._assert_live_owner()
+            # A stale file with an open pipe is not enough: observe a real
+            # writer increment before admitting any child. The same TTL
+            # bounds this wait, without trusting either host's wall clock.
+            while not self._counter_advanced:
+                self._sleep(0.1)
+                self._assert_live_owner()
             self._sample_resources()
-        except (GuardianError, OSError, TypeError, ValueError):
+        except (GuardianError, OSError, TypeError, ValueError) as exc:
+            detail = str(exc) if isinstance(exc, GuardianError) else type(exc).__name__
+            print(f"WSL_GUARDIAN_STARTUP_FAILED: {detail}", file=sys.stderr, flush=True)
             return 72
         child_env = {
             key: str(os.environ[key])
@@ -208,10 +232,10 @@ class WslResourceGuardian:
         while True:
             try:
                 self._sample_resources()
-                healthy = self._pipe() and self._heartbeat_is_fresh()
-            except (GuardianError, OSError, TypeError, ValueError):
-                healthy = False
-            if not healthy:
+                self._assert_live_owner()
+            except (GuardianError, OSError, TypeError, ValueError) as exc:
+                detail = str(exc) if isinstance(exc, GuardianError) else type(exc).__name__
+                print(f"WSL_GUARDIAN_OWNER_LOST: {detail}", file=sys.stderr, flush=True)
                 return 73
             status = child.poll()
             if status is not None:

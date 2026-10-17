@@ -26,9 +26,10 @@ MAPPING_FIELD = "monthly_sector_mapping"
 
 def _validate_binding(value: Any) -> Mapping[str, Any]:
     try:
-        if not isinstance(value, Mapping) or set(value) != {
+        required = {
             "schema_version", "predecessor_manifest_sha256", "code_map_file", "code_map",
-        } or value["schema_version"] != MAPPING_SCHEMA:
+        }
+        if not isinstance(value, Mapping) or not required <= set(value) or set(value) - required - {"historical_classification"} or value["schema_version"] != MAPPING_SCHEMA:
             raise ValueError("binding fields differ")
         ensure_sha256(value["predecessor_manifest_sha256"], field="predecessor_manifest_sha256")
         pin = value["code_map_file"]
@@ -42,6 +43,11 @@ def _validate_binding(value: Any) -> Mapping[str, Any]:
         mapping = validate_release_sw_l2_code_map(value["code_map"])
         if len(mapping.code_to_id) != 131 or sw_l2_quote_policy.taxonomy_digest(mapping.code_to_id) != sw_l2_quote_policy.SW2021_L2_TAXONOMY_DIGEST:
             raise ValueError("approved SW L2 taxonomy differs")
+        if "historical_classification" in value:
+            from .monthly_industry_history import IndustryHistoryProjection
+            history = IndustryHistoryProjection.read(value["historical_classification"])
+            if history.payload["current_code_map"] != value["code_map"]:
+                raise ValueError("historical projection reinterprets current shared IDs")
         return value
     except (KeyError, TypeError, ValueError) as exc:
         raise SourceManifestError(f"monthly predecessor sector mapping invalid: {exc}") from exc

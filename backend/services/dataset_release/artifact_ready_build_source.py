@@ -237,6 +237,15 @@ class ArtifactReadyBuildSource:
             raise ArtifactReadyBuildSourceError(f"artifact-ready component omits dataset: {component.value}:{dataset}")
         output: list[OrderedMappingPartition] = []
         ranges = tuple(sorted(date_ranges))
+        # SOURCE has already verified construction maxima against the same
+        # snapshot's monthly facts. They remain normalization/boundary evidence,
+        # not a second series partition for dates backed by regular adj_factor.
+        series_ranges = tuple(
+            (_as_date(match.group("start")), _as_date(match.group("end")))
+            for item in entries
+            if dataset == "adj_factor" and item["dataset"] == "adj_factor"
+            if (match := _DATE_PARTITION.fullmatch(str(item["partition_key"]))) is not None
+        )
         selected_codes = frozenset(str(value).upper() for value in instruments)
         minute_buckets = (
             frozenset(_minute_bucket(value, self.profile.minute_code_bucket_count) for value in selected_codes)
@@ -268,12 +277,13 @@ class ArtifactReadyBuildSource:
                 rows = self._effective_daily_rows(component, descriptor, rows)
             elif effective and dataset == "kline_minute_raw":
                 rows = self._effective_minute_rows(component, descriptor, rows)
-            if ranges or selected_codes:
+            if ranges or selected_codes or (construction and series_ranges):
                 rows = _filter_bounded_rows(
                     rows,
                     dataset=dataset,
                     date_ranges=ranges,
                     instruments=selected_codes,
+                    excluded_date_ranges=series_ranges if construction else (),
                 )
             output.append(OrderedMappingPartition(identity, rows))
         if not output:
@@ -852,6 +862,7 @@ def _filter_bounded_rows(
     dataset: str,
     date_ranges: Sequence[tuple[date, date]],
     instruments: frozenset[str],
+    excluded_date_ranges: Sequence[tuple[date, date]] = (),
 ) -> Iterator[Mapping[str, Any]]:
     date_field = {
         "kline_daily_raw": "trade_date",
@@ -860,14 +871,20 @@ def _filter_bounded_rows(
         "stk_limit": "trade_date",
         "suspend_d": "trade_date",
     }.get(dataset)
-    for row in rows:
-        if instruments and str(row.get("ts_code", "")).upper() not in instruments:
-            continue
-        if date_ranges and date_field is not None:
-            observed = _as_date(row.get(date_field))
-            if not any(start <= observed <= end for start, end in date_ranges):
+    iterator = iter(rows)
+    try:
+        for row in iterator:
+            if instruments and str(row.get("ts_code", "")).upper() not in instruments:
                 continue
-        yield row
+            if (date_ranges or excluded_date_ranges) and date_field is not None:
+                observed = _as_date(row.get(date_field))
+                if date_ranges and not any(start <= observed <= end for start, end in date_ranges):
+                    continue
+                if any(start <= observed <= end for start, end in excluded_date_ranges):
+                    continue
+            yield row
+    finally:
+        _close_iterator(iterator)
 
 
 def _as_datetime(value: Any) -> datetime:

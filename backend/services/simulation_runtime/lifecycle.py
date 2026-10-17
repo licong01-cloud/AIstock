@@ -647,6 +647,7 @@ class SimulationLifecycleOrchestrator:
             binding=binding,
             execution_plan=plan,
             as_of_time=as_of_time,
+            local_broker=local_broker,
         )
         run = self.repository.update_simulation_daily_run(
             run.run_id,
@@ -865,8 +866,24 @@ class SimulationLifecycleOrchestrator:
         binding: SimulationReleaseBinding,
         execution_plan: ExecutionPlan,
         as_of_time: datetime | None,
+        local_broker: BrokerBackend | None = None,
     ) -> None:
         local_as_of = scheduler_time(as_of_time)
+        metadata = binding.binding_config_json.get("metadata") or {}
+        # Closed native historical execution consumes the full persisted session.
+        # Its valuation cursor is after close; it never submits to a real broker.
+        if (
+            binding.broker_backend is SimulationBrokerBackend.LOCAL_SIM
+            and metadata.get("account_schema_version") == "simulation_account_v1"
+            and metadata.get("localsim_account_id") == binding.strategy_id == binding.broker_account_id
+            and binding.effective_from is not None
+            and binding.effective_to is not None
+            and binding.effective_from <= run.trade_date <= binding.effective_to < scheduler_now().date()
+            and local_as_of.date() == run.trade_date
+            and local_as_of.time() >= time(15, 0)
+            and getattr(getattr(local_broker, "data_source", None), "value", None) == "DB_HISTORICAL"
+        ):
+            return
         active_window, windows = active_submit_window(trade_date=run.trade_date, as_of_time=local_as_of)
         if active_window is not None:
             return

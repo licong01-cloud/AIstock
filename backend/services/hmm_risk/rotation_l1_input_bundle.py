@@ -1247,27 +1247,45 @@ def _require_active_direct_v2_profile(
 
 
 def _require_direct_v2_manifest(
-    *, root: Path, state: Mapping[str, Any], release_cutoff: date, release_id: str
+    *,
+    root: Path,
+    state: Mapping[str, Any],
+    release_cutoff: date,
+    release_id: str,
+    frozen_binding: Mapping[str, str] | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     """One manifest validator shared by active and explicitly frozen consumers."""
 
     manifest_binding = state.get("manifest")
-    if not isinstance(manifest_binding, Mapping) or set(manifest_binding) != {
+    legacy_fields = {
         "dataset_manifest_sha256",
         "deployment_snapshot_id",
         "file_sha256",
         "path",
-    }:
+    }
+    shared_fields = {"dataset_manifest_sha256", "path", "sha256", "size"}
+    shared = isinstance(manifest_binding, Mapping) and set(manifest_binding) == shared_fields
+    if not isinstance(manifest_binding, Mapping) or not (
+        set(manifest_binding) == legacy_fields or (shared and frozen_binding is not None)
+    ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 state manifest binding is invalid")
     if manifest_binding.get("path") != "qe_dataset_manifest.json":
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 dataset manifest path differs")
     manifest_path = root / "qe_dataset_manifest.json"
     if _is_indirect_path(manifest_path) or not manifest_path.is_file():
         raise _fail(REASON_SOURCE_COMPONENT_MISSING, "direct-v2 dataset manifest is missing or indirect")
-    if _sha256_file(manifest_path) != _require_sha256(
-        manifest_binding.get("file_sha256"), "direct-v2 manifest file_sha256"
-    ):
+    file_hash = _require_sha256(
+        manifest_binding.get("sha256" if shared else "file_sha256"), "direct-v2 manifest file_sha256"
+    )
+    if _sha256_file(manifest_path) != file_hash:
         raise _fail(REASON_HASH_MISMATCH, "direct-v2 dataset manifest file hash differs")
+    if shared and (
+        type(manifest_binding.get("size")) is not int
+        or manifest_binding["size"] != manifest_path.stat().st_size
+        or file_hash != frozen_binding["manifest_file_sha256"]
+        or manifest_binding["dataset_manifest_sha256"] != frozen_binding["manifest_sha256"]
+    ):
+        raise _fail(REASON_HASH_MISMATCH, "direct-v2 shared manifest differs from approved frozen pins")
     manifest = _read_json_object(manifest_path)
     dataset_manifest_sha256 = _require_sha256(
         manifest_binding.get("dataset_manifest_sha256"), "direct-v2 dataset_manifest_sha256"
@@ -1278,8 +1296,11 @@ def _require_direct_v2_manifest(
         or manifest.get("cutoff_trade_date") != release_cutoff.isoformat()
         or manifest.get("availability_status") != "CANDIDATE_READY"
         or manifest.get("dataset_manifest_sha256") != dataset_manifest_sha256
-        or manifest.get("deployment_snapshot_id") != manifest_binding.get("deployment_snapshot_id")
-        or state.get("revision") != manifest.get("revision")
+        # A shared successor can retain an older logical manifest revision.
+        # Only an explicit frozen identity/file pin permits this shape; the
+        # active/legacy path keeps its existing revision/snapshot checks.
+        or (not shared and manifest.get("deployment_snapshot_id") != manifest_binding.get("deployment_snapshot_id"))
+        or (not shared and state.get("revision") != manifest.get("revision"))
     ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 dataset manifest identity differs")
     return manifest_path, manifest
@@ -1325,11 +1346,11 @@ def _require_frozen_direct_v2_profile(
     ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 frozen state root differs")
     manifest_path, manifest = _require_direct_v2_manifest(
-        root=root, state=state, release_cutoff=release_cutoff, release_id=binding["release_id"]
+        root=root, state=state, release_cutoff=release_cutoff, release_id=binding["release_id"], frozen_binding=binding
     )
     if (
         manifest.get("dataset_manifest_sha256") != binding["manifest_sha256"]
-        or state["manifest"]["file_sha256"] != binding["manifest_file_sha256"]
+        or state["manifest"].get("file_sha256", state["manifest"].get("sha256")) != binding["manifest_file_sha256"]
     ):
         raise _fail(REASON_HASH_MISMATCH, "direct-v2 frozen manifest differs from approved pins")
     return {**binding, "binding_sha256": canonical_sha256(binding)}, manifest_path, manifest
@@ -2602,6 +2623,57 @@ def _build_train_only_contributor_eligibility(
     return eligibility, _receipt_from_body(body)
 
 
+def _strict_prior_price_state(
+    qlib_root: Path,
+    *,
+    calendar: Sequence[date],
+    spans: Mapping[str, Sequence[tuple[date, date]]],
+    suspension_keys: frozenset[tuple[date, str]],
+    source_start: date,
+    window_start: date,
+) -> dict[str, tuple[date, tuple[tuple[date, float], ...]]]:
+    """Carry at most ten real quotes within the current PIT span, never calendar fills."""
+    if source_start > window_start or source_start not in calendar or window_start not in calendar:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "strictly prior price context boundary differs")
+    prior_days = tuple(day for day in calendar if source_start <= day < window_start)
+    state: dict[str, tuple[date, tuple[tuple[date, float], ...]]] = {}
+    for symbol, active_spans in sorted(spans.items()):
+        current = [span for span in active_spans if span[0] <= window_start <= span[1]]
+        if len(current) > 1:
+            raise _fail(REASON_AUTHORITY_AMBIGUOUS, f"prior price PIT span is ambiguous: {symbol}")
+        if not current:
+            continue
+        span_start, span_end = current[0]
+        days = tuple(day for day in prior_days if span_start <= day <= span_end)
+        cursor, batch_size = len(days), 10
+        quotes: list[tuple[date, float]] = []
+        while cursor and len(quotes) < 10:
+            first = max(0, cursor - batch_size)
+            rows = _read_qlib_stock_rows(
+                qlib_root,
+                symbol=symbol,
+                calendar=calendar,
+                active_spans=current,
+                window_start=days[first],
+                window_end=days[cursor - 1],
+            )
+            for raw in reversed(rows):
+                day = _date_from_yyyymmdd(int(raw["trade_date"]), "qlib.trade_date")
+                missing = _qlib_row_is_fully_missing(raw)
+                values = None if missing else _raw_qlib_values(raw)
+                # Match the unchanged forward kernel: suspension and all-field
+                # source NA never append a quote; invalid partial rows fail.
+                if (day, symbol) in suspension_keys or values is None:
+                    continue
+                quotes.append((day, values["close"]))
+                if len(quotes) == 10:
+                    break
+            cursor, batch_size = first, batch_size * 2
+        if quotes:
+            state[symbol] = (span_start, tuple(reversed(quotes)))
+    return state
+
+
 def _build_stock_fact_aggregates(
     *,
     month_paths: Sequence[Path],
@@ -2620,10 +2692,44 @@ def _build_stock_fact_aggregates(
     build_feature_domain_aggregates: bool = True,
     day_rows_callback: Callable[[date, Sequence[Mapping[str, Any]]], None] | None = None,
     initial_circ_state: Mapping[str, tuple[date, float | None, str, str | None]] | None = None,
+    initial_price_state: Mapping[str, tuple[date, tuple[tuple[date, float], ...]]] | None = None,
 ) -> tuple[list[Any], list[Any], dict[tuple[date, str, str], str], dict[str, list[dict[str, Any]]]]:
     history: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=10))
     g2a_history: dict[str, deque[tuple[date, float]]] = defaultdict(lambda: deque(maxlen=20))
     active_span_start: dict[str, date] = {}
+    calendar_position = {day: index for index, day in enumerate(calendar)}
+    for symbol, context in (initial_price_state or {}).items():
+        if not isinstance(context, tuple) or len(context) != 2:
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "invalid strictly prior price context shape")
+        span_start, quotes = context
+        current = [span for span in spans.get(symbol, ()) if span[0] <= window_start <= span[1]]
+        if (
+            len(current) != 1
+            or current[0][0] != span_start
+            or not isinstance(quotes, tuple)
+            or not 0 < len(quotes) <= 10
+        ):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "invalid strictly prior price PIT context")
+        previous = None
+        for quote in quotes:
+            if not isinstance(quote, tuple) or len(quote) != 2:
+                raise _fail(REASON_SOURCE_SCHEMA_INVALID, "invalid strictly prior price quote shape")
+            day, value = quote
+            if (
+                not isinstance(day, date)
+                or not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value <= 0
+                or day not in calendar_position
+                or not max(SOURCE_START, span_start) <= day < window_start
+                or (previous is not None and day <= previous)
+                or (day, symbol) in suspension_keys
+            ):
+                raise _fail(REASON_SOURCE_SCHEMA_INVALID, "invalid strictly prior price quote context")
+            history[symbol].append(value)
+            previous = day
+        active_span_start[symbol] = span_start
     circ_state: dict[str, tuple[date, float | None, str, str | None]] = dict(initial_circ_state or {})
     for source_code, (fact_day, value, status, _) in circ_state.items():
         if (
@@ -2641,7 +2747,6 @@ def _build_stock_fact_aggregates(
     industry_done: list[tuple[str, date, date, tuple[str, ...]]] = []
     status_active: dict[str, tuple[date, date, tuple[str, ...]]] = {}
     status_done: list[tuple[str, date, date, tuple[str, ...]]] = []
-    calendar_position = {day: index for index, day in enumerate(calendar)}
 
     for month_path in month_paths:
         if resource_started is not None:

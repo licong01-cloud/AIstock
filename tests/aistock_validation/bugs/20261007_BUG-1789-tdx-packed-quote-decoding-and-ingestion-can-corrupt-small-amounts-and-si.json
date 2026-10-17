@@ -1,0 +1,367 @@
+{
+  "actual": "13 and 15 decode as 1288 and 1800; minute share remainder is discarded; truncated packets can generate rows; pagination wraps.",
+  "allowed_write_scope": [
+    "tdx-api-main/protocol/unit.go",
+    "tdx-api-main/protocol/types_price.go",
+    "tdx-api-main/protocol/model_kline.go",
+    "tdx-api-main/protocol/model_minute.go",
+    "tdx-api-main/protocol/model_history_minute.go",
+    "tdx-api-main/protocol/frame.go",
+    "tdx-api-main/protocol/integrity_test.go",
+    "tdx-api-main/client.go",
+    "tdx-api-main/client_bj_code.go",
+    "tdx-api-main/manage.go",
+    "tdx-api-main/pagination.go",
+    "tdx-api-main/pagination_test.go",
+    "tdx-api-main/dial.go",
+    "tdx-api-main/extend/pull-kline.go",
+    "tdx-api-main/web/server.go",
+    "tdx-api-main/web/server_api_extended.go",
+    "tdx-api-main/web/minute_init_task.go",
+    "tdx-api-main/web/tasks.go",
+    "tdx-api-main/web/runtime_config.go",
+    "tdx-api-main/web/raw_rows.go",
+    "tdx-api-main/web/integrity_test.go",
+    "docs/operations/tdx_go_runtime_runbook.md",
+    ".github/workflows/test.yml",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "tests/aistock_validation/bugs/20261007_BUG-1789-tdx-packed-quote-decoding-and-ingestion-can-corrupt-small-amounts-and-si.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1789",
+  "closed_at": "2026-10-08T01:58:54.533645Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-07T18:32:18.834441Z",
+  "description": "13 and 15 decode as 1288 and 1800; minute share remainder is discarded; truncated packets can generate rows; pagination wraps.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261007-d775318725d1",
+      "timestamp": "2026-10-07T18:32:18.834441Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Checked protocol decoding preserves facts and errors; bounded idempotent shared ingestion, isolated DEV service and offline tests.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/operations/tdx_go_runtime_runbook.md",
+      "tdx-api-main/client.go",
+      "tdx-api-main/client_bj_code.go",
+      "tdx-api-main/dial.go",
+      "tdx-api-main/extend/pull-kline.go",
+      "tdx-api-main/manage.go",
+      "tdx-api-main/pagination.go",
+      "tdx-api-main/pagination_test.go",
+      "tdx-api-main/protocol/frame.go",
+      "tdx-api-main/protocol/integrity_test.go",
+      "tdx-api-main/protocol/model_history_minute.go",
+      "tdx-api-main/protocol/model_kline.go",
+      "tdx-api-main/protocol/model_minute.go",
+      "tdx-api-main/protocol/types_price.go",
+      "tdx-api-main/protocol/unit.go",
+      "tdx-api-main/web/integrity_test.go",
+      "tdx-api-main/web/minute_init_task.go",
+      "tdx-api-main/web/raw_rows.go",
+      "tdx-api-main/web/runtime_config.go",
+      "tdx-api-main/web/server.go",
+      "tdx-api-main/web/server_api_extended.go",
+      "tdx-api-main/web/tasks.go",
+      "tests/aistock_validation/bugs/20261007_BUG-1789-tdx-packed-quote-decoding-and-ingestion-can-corrupt-small-amounts-and-si.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/operations/tdx_go_runtime_runbook.md",
+      "tdx-api-main/client.go",
+      "tdx-api-main/client_bj_code.go",
+      "tdx-api-main/dial.go",
+      "tdx-api-main/extend/pull-kline.go",
+      "tdx-api-main/manage.go",
+      "tdx-api-main/pagination.go",
+      "tdx-api-main/pagination_test.go",
+      "tdx-api-main/protocol/frame.go",
+      "tdx-api-main/protocol/integrity_test.go",
+      "tdx-api-main/protocol/model_history_minute.go",
+      "tdx-api-main/protocol/model_kline.go",
+      "tdx-api-main/protocol/model_minute.go",
+      "tdx-api-main/protocol/types_price.go",
+      "tdx-api-main/protocol/unit.go",
+      "tdx-api-main/web/integrity_test.go",
+      "tdx-api-main/web/minute_init_task.go",
+      "tdx-api-main/web/raw_rows.go",
+      "tdx-api-main/web/runtime_config.go",
+      "tdx-api-main/web/server.go",
+      "tdx-api-main/web/server_api_extended.go",
+      "tdx-api-main/web/tasks.go",
+      "tests/aistock_validation/bugs/20261007_BUG-1789-tdx-packed-quote-decoding-and-ingestion-can-corrupt-small-amounts-and-si.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/operations/tdx_go_runtime_runbook.md",
+      "tdx-api-main/client.go",
+      "tdx-api-main/client_bj_code.go",
+      "tdx-api-main/dial.go",
+      "tdx-api-main/extend/pull-kline.go",
+      "tdx-api-main/manage.go",
+      "tdx-api-main/pagination.go",
+      "tdx-api-main/pagination_test.go",
+      "tdx-api-main/protocol/frame.go",
+      "tdx-api-main/protocol/integrity_test.go",
+      "tdx-api-main/protocol/model_history_minute.go",
+      "tdx-api-main/protocol/model_kline.go",
+      "tdx-api-main/protocol/model_minute.go",
+      "tdx-api-main/protocol/types_price.go",
+      "tdx-api-main/protocol/unit.go",
+      "tdx-api-main/web/integrity_test.go",
+      "tdx-api-main/web/minute_init_task.go",
+      "tdx-api-main/web/raw_rows.go",
+      "tdx-api-main/web/runtime_config.go",
+      "tdx-api-main/web/server.go",
+      "tdx-api-main/web/server_api_extended.go",
+      "tdx-api-main/web/tasks.go",
+      "tests/aistock_validation/bugs/20261007_BUG-1789-tdx-packed-quote-decoding-and-ingestion-can-corrupt-small-amounts-and-si.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-10-07T18:32:18.834441Z",
+  "fix_branch": null,
+  "fix_commit": "51eabfef650d9c72ff94e14f1696f18b63524ffa",
+  "fixed_at": "2026-10-07T19:41:17Z",
+  "github_issue_number": 5678,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5678",
+  "last_seen_at": "2026-10-07T18:32:18.834441Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5688",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1&start_date=2026-09-01&end_date=2026-09-30",
+    "fresh_process_evidence": [
+      "go -C tdx-api-main/web test -mod=readonly . -count=1 -> passed; import has no external side effects; existing DEV temporary schema write/readback and idempotence passed"
+    ],
+    "health_ref": "http://127.0.0.1:19080/api/health",
+    "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "tdx-go-backend"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1789/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1789",
+      "business_smoke_semantic": {
+        "contract_id": "tdx_raw_kline_facts",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "7c479db929760834c85f88a6a0ab98698e4f7a6d1eda9d6a864c95964e17e702",
+      "contract_digest": "bb10d9e10b41e22c2b7902733402f23150fd83af15367f0fc89787a88f71de78",
+      "expected_identity": "51eabfef650d9c72ff94e14f1696f18b63524ffa",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-08T01:56:44.426182Z",
+      "mode": "read_only",
+      "observed_identity": "d14501365257c39b425d40fe397149d387ad546e",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "286e757dc493831e4821aa3d13f9f11d4cc9f760f4160416dc28e31a80bd040a",
+      "receipt_sha256": "6240e4d172755d56080047925798078134f73eac51a8fd60d964d314cd7e04b2",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c8c5bafd0a58528a9533fba2d4c7db587a24a1181884ec7bc6ccdcec8d12f340",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "tdx-go-backend"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "tdx-go-backend",
+    "target_ids": [
+      "tdx-go-backend"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1789",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7fa18938ada6ccaa",
+    "recorded_at": "2026-10-07T19:41:51.697999Z",
+    "runtime_contract_digest": "bb10d9e10b41e22c2b7902733402f23150fd83af15367f0fc89787a88f71de78",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "70345bd18cb62718440999bff1bb60d523acc82c",
+    "source_merge_commit": "51eabfef650d9c72ff94e14f1696f18b63524ffa",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5688",
+    "validation_evidence": [
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+      "go test -mod=readonly ./protocol -count=1 -> passed",
+      "go test -mod=readonly . -run ^TestPagination -count=1 -> passed",
+      "go test -mod=readonly . -count=1 -> passed",
+      "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -k tdx_ci -q -> passed"
+    ],
+    "validation_evidence_digest": "d97529a866a623add3fa06d368569327b734638e5dfa37603ae92149041c0b59"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "TDX packed quote decoding and ingestion can corrupt small amounts and silently lose precise minute facts",
+  "trigger_condition": {
+    "fingerprint": "d775318725d14715229e4185",
+    "source_event_id": "FE-20261007-d775318725d1"
+  },
+  "validation_evidence": [
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+    "go test -mod=readonly ./protocol -count=1 -> passed",
+    "go test -mod=readonly . -run ^TestPagination -count=1 -> passed",
+    "go test -mod=readonly . -count=1 -> passed",
+    "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -k tdx_ci -q -> passed",
+    "go test -mod=readonly . -run ^TestDEVRawWriteReadbackAndIdempotence$ -count=1 -v -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

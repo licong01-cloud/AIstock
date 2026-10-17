@@ -471,8 +471,9 @@ def _query(
     audit_non_null_values: Sequence[str] | None = None,
     code_column: str | None = None,
     code_policy: str | None = None,
+    default_pit_stock_filter: bool = True,
 ) -> SourceQuerySpec:
-    if code_column is None and keys and keys[0] == "ts_code":
+    if default_pit_stock_filter and code_column is None and keys and keys[0] == "ts_code":
         code_column = "ts_code"
         code_policy = "pit_stock_codes"
     required_columns = tuple(dict.fromkeys((*keys, *values, *required)))
@@ -497,9 +498,11 @@ def _query(
         order_by_source_keys=order_by_source_keys,
         query_version=(
             f"{query_id}_canonical_row_code_major_v3"
+            + (":share_precision_v1" if query_id in {"kline_daily_raw", "kline_minute_raw"} else "")
             + (":derived_l2_v1" if derived_values else "")
             + (":pit_stock_filter_v1" if code_policy == "pit_stock_codes" else "")
             + (":profile_required_from_v1" if code_policy == "profile_index_codes" else "")
+            + (":provider_publication_scope_v1" if not default_pit_stock_filter else "")
             + (":nonfinite_numeric_to_null_v1" if query_id in POSTGRES_NON_FINITE_TO_NULL_COLUMNS else "")
         ),
         audit_dataset=audit_dataset,
@@ -524,6 +527,7 @@ _OHLCV_RAW_VALUES = (
     "volume_hand",
     "amount_li",
 )
+_RAW_PRECISION_VALUES = ("volume_shares", "volume_shares_source", "volume_shares_sha256")
 _DAILY_BASIC_VALUES = (
     "close",
     "turnover_rate",
@@ -649,7 +653,7 @@ _QUERY_SPECS = (
         "kline_daily_raw",
         _ALL_NON_INDEX,
         ("ts_code", "trade_date"),
-        values=_OHLCV_RAW_VALUES,
+        values=(*_OHLCV_RAW_VALUES, *_RAW_PRECISION_VALUES),
         non_null_values=_OHLCV_RAW_VALUES,
         date_expression="source_row.trade_date",
         audit_dataset="kline_daily_raw",
@@ -699,7 +703,7 @@ _QUERY_SPECS = (
         "kline_minute_raw",
         (Component.MINUTE_BIN,),
         ("ts_code", "trade_time", "freq"),
-        values=_OHLCV_RAW_VALUES,
+        values=(*_OHLCV_RAW_VALUES, *_RAW_PRECISION_VALUES),
         non_null_values=_OHLCV_RAW_VALUES,
         date_expression="source_row.trade_time",
         date_range_policy="timestamp_day_half_open",
@@ -768,6 +772,10 @@ _QUERY_SPECS = (
         (Component.FACTOR_H5_STATIC,),
         ("ts_code", "trade_date"),
         values=_MARGIN_DETAIL_VALUES,
+        # Publication counts describe the complete provider domain, including
+        # securities outside executable PIT pools. Keep those facts; this does
+        # not change the independently frozen strategy stock pools.
+        default_pit_stock_filter=False,
         date_expression="source_row.trade_date",
         audit_dataset="margin_detail",
         audit_eligible_sources=("physical_audit_seed", "tushare"),
@@ -1579,6 +1587,7 @@ class FrozenSourceAuthoritySnapshot:
     artifact_ready_provenance_root: str | None = None
     provider_receipt_refs: tuple[CASRef, ...] = ()
     artifact_ready_derived_source_receipt_refs: tuple[CASRef, ...] = ()
+    suspension_day_authority_sha256: str | None = None
 
     @property
     def source_content_root(self) -> str:
@@ -2315,6 +2324,8 @@ class MonthlySourceAuthority:
             sector_receipt_ref,
             core_index_membership_receipt_ref,
         )
+        from backend.data_service.suspension_day_authority import load_authority
+        suspension_day_authority = load_authority()
         manifest_payload = {
             "schema_version": SOURCE_MANIFEST_ARTIFACT_SCHEMA,
             "authority_policy_version": SOURCE_AUTHORITY_POLICY_VERSION,
@@ -2324,6 +2335,7 @@ class MonthlySourceAuthority:
             "source_content_root": manifest.source_content_root,
             "partitions": [item.as_build_input() for item in sorted(sealed, key=lambda value: value.spec.identity)],
             "safety": _zero_safety(),
+            "suspension_day_authority": suspension_day_authority,
             **({"monthly_sector_mapping": dict(self._monthly_sector_mapping)}
                if self._monthly_sector_mapping is not None else {}),
         }
@@ -2444,6 +2456,7 @@ class MonthlySourceAuthority:
             snapshot_tokens=tokens,
             observation_provenance_root=observation_provenance_root,
             source_cas_usage=budget.as_dict(),
+            suspension_day_authority_sha256=sha256_hex(canonical_json_bytes(suspension_day_authority)),
         )
 
     def _capture_control_snapshot(
@@ -3771,6 +3784,11 @@ def load_source_stage_receipt(
     ):
         raise SourceAuditIncomplete("source-stage referenced receipt graph is inconsistent")
     content_rows = manifest_payload.get("partitions")
+    from backend.data_service.suspension_day_authority import load_authority
+    suspension_payload = manifest_payload.get("suspension_day_authority")
+    suspension_sha = None
+    if suspension_payload is not None:
+        suspension_sha = sha256_hex(canonical_json_bytes(load_authority(suspension_payload)))
     reuse_rows = reuse_payload.get("partitions")
     if not isinstance(content_rows, list) or not isinstance(reuse_rows, list):
         raise SourceAuditIncomplete("source-stage partition manifests are invalid")
@@ -4079,6 +4097,7 @@ def load_source_stage_receipt(
         artifact_ready_provenance_root=artifact_provenance_root,
         provider_receipt_refs=provider_refs,
         artifact_ready_derived_source_receipt_refs=artifact_derived_refs,
+        suspension_day_authority_sha256=suspension_sha,
     )
 
 
@@ -4334,7 +4353,14 @@ def _sealed_partition_from_stage(
             )
         )
         or non_null_value_columns != query.non_null_value_columns
-        or (query.code_policy == "pit_minute_code_batch") != (code_membership_digest is not None)
+        # Monthly moneyflow also pins the shared historical source-code set.
+        # Legacy moneyflow may omit it; minute buckets must still carry it.
+        or (query.code_policy == "pit_minute_code_batch" and code_membership_digest is None)
+        or (
+            code_membership_digest is not None
+            and query.code_policy != "pit_minute_code_batch"
+            and query.query_id != "moneyflow_ts"
+        )
     ):
         raise SourceAuditIncomplete("source content partition contract differs")
     reuse = reuse_by_identity.get(identity)
@@ -4764,6 +4790,8 @@ _TEXT_PAYLOAD_COLUMNS = frozenset(
         "effective_to_exclusive",
         "source_provider",
         "source_reference",
+        "volume_shares_source",
+        "volume_shares_sha256",
         "updated_at",
     }
 )

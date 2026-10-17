@@ -53,6 +53,9 @@ def zero_compute():
         "backend.services.hmm_risk.risk_l2.fit_predict",
         "backend.services.hmm_risk.risk_l2.prepare_file_inputs",
         "backend.services.hmm_risk.risk_l2.drawdown_outcomes",
+        "backend.services.hmm_risk.formal_state_model.fit_entry",
+        "backend.services.hmm_risk.formal_state_model.causal_filter",
+        "backend.services.hmm_risk.rotation_l1_input_bundle.load_active_hmm_dataset_identity",
         "sklearn.linear_model.LogisticRegression.fit",
         "sklearn.linear_model.LogisticRegression.predict",
         "sklearn.linear_model.LogisticRegression.predict_proba",
@@ -66,13 +69,15 @@ def zero_compute():
         yield
 
 
-def load_inputs(request_path: Path, expected_hash: str) -> tuple[dict, list[str], list[str], dict, dict]:
+def load_inputs(
+    request_path: Path, expected_hash: str, *, request_version: str = VERSION, approved_pins: Mapping = APPROVED_PINS
+) -> tuple[dict, list[str], list[str], dict, dict]:
     """Read only four explicitly pinned original assets, reusing the original validator."""
     try:
         request, request_stamp = original._read(request_path)
         verify_receipt(request, expected_hash)
-        require(request.get("schema_version") == VERSION + "_request", "unknown request schema")
-        require(all(request.get(k) == v for k, v in APPROVED_PINS.items()), "approved pins differ", "identity_mismatch")
+        require(request.get("schema_version") == request_version + "_request", "unknown request schema")
+        require(all(request.get(k) == v for k, v in approved_pins.items()), "approved pins differ", "identity_mismatch")
         assets, stamps = {}, {}
         for name in ("acceptance", "sealed", "features", "facts"):
             path = Path(request[name + "_path"])
@@ -229,6 +234,46 @@ def _distribution(values: list[float]) -> dict:
     }
 
 
+def arm_day(catalog, weights, values, previous, depleted, paired):
+    """Original single-sided drift/cost arithmetic, shared without changing old defaults."""
+    exposure = math.fsum(weights.values())
+    turnover = math.fsum(abs(weights[c] - previous[c]) for c in catalog) if previous is not None else None
+    gross = math.fsum(weights[c] * values[c] for c in catalog if weights[c] != 0) if paired else None
+    if depleted:
+        gross, turnover = None, None
+    sensitivity = {
+        str(bp): gross
+        if bp == 0
+        else gross - bp / 10000 * turnover
+        if gross is not None and turnover is not None
+        else None
+        for bp in COST_BPS
+    }
+    body = {
+        "risk_budget": exposure,
+        "cash_budget": 1 - exposure,
+        "gross_return": gross,
+        "one_sided_risk_turnover": turnover if paired else None,
+        "cost_sensitivity_return": sensitivity,
+        "target_weights_sha256": canonical_sha256(weights),
+    }
+    if gross is None:
+        previous, body["closing_cash_budget"] = None, None
+    elif gross <= -1:
+        depleted, previous, body["closing_cash_budget"] = True, None, None
+    else:
+        previous = {c: weights[c] * (1 + values[c]) / (1 + gross) if weights[c] else 0.0 for c in catalog}
+        require(all(finite(v) for v in previous.values()), "drifted budget is non-finite", "numeric_invalid")
+        cash = (1 - exposure) / (1 + gross)
+        require(
+            finite(cash) and math.isclose(math.fsum(previous.values()) + cash, 1.0, abs_tol=1e-12),
+            "closing risk/cash budget differs",
+            "formula_invalid",
+        )
+        body["closing_cash_budget"] = cash
+    return body, previous, depleted
+
+
 def replay(catalog: list[str], days: list[str], signals: Mapping, returns: Mapping) -> dict:
     """Pure reference arithmetic; production loader independently enforces all 423 days."""
     require(len(catalog) == 131 and catalog == sorted(set(catalog)), "131 canonical sectors required")
@@ -270,46 +315,11 @@ def replay(catalog: list[str], days: list[str], signals: Mapping, returns: Mappi
         arms = {}
         for a in ARMS:
             weights = targets[a]
-            exposure = math.fsum(weights.values())
-            turnover = math.fsum(abs(weights[c] - previous[a][c]) for c in catalog) if previous[a] is not None else None
-            gross = math.fsum(weights[c] * values[c] for c in catalog if weights[c] != 0) if paired else None
-            if depleted[a]:
-                gross, turnover = None, None
+            arms[a], previous[a], depleted[a] = arm_day(catalog, weights, values, previous[a], depleted[a], paired)
+            gross = arms[a]["gross_return"]
             paths[a].append(gross)
-            sensitivity = {
-                str(bp): gross
-                if bp == 0
-                else gross - bp / 10000 * turnover
-                if gross is not None and turnover is not None
-                else None
-                for bp in COST_BPS
-            }
             for bp in COST_BPS:
-                costs[a][bp].append(sensitivity[str(bp)])
-            arms[a] = {
-                "risk_budget": exposure,
-                "cash_budget": 1 - exposure,
-                "gross_return": gross,
-                "one_sided_risk_turnover": turnover if paired else None,
-                "cost_sensitivity_return": sensitivity,
-                "target_weights_sha256": canonical_sha256(weights),
-            }
-            if gross is None:
-                previous[a] = None
-                arms[a]["closing_cash_budget"] = None
-            elif gross <= -1:
-                depleted[a], previous[a] = True, None
-                arms[a]["closing_cash_budget"] = None
-            else:
-                previous[a] = {c: weights[c] * (1 + values[c]) / (1 + gross) if weights[c] else 0.0 for c in catalog}
-                require(all(finite(v) for v in previous[a].values()), "drifted budget is non-finite", "numeric_invalid")
-                cash = (1 - exposure) / (1 + gross)
-                require(
-                    finite(cash) and math.isclose(math.fsum(previous[a].values()) + cash, 1.0, abs_tol=1e-12),
-                    "closing risk/cash budget differs",
-                    "formula_invalid",
-                )
-                arms[a]["closing_cash_budget"] = cash
+                costs[a][bp].append(arms[a]["cost_sensitivity_return"][str(bp)])
         daily.append(
             {
                 "return_date": t,

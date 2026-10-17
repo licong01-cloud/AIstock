@@ -52,6 +52,23 @@ def test_nine_hand_computed_values_hashes_and_input_immutability():
     assert receipt == compute(**data)[1]
 
 
+@pytest.mark.parametrize("missing_volume", [False, True])
+def test_all_unknown_price_columns_preserve_candidates_and_independent_volume(missing_volume):
+    data = inputs()
+    for field in ("open", "high", "low", "close") + (("volume",) if missing_volume else ()):
+        data["panel"][field] = np.nan
+    original = data["panel"].copy(deep=True)
+    result, receipt = compute(**data)
+    assert len(result) == 2 and result[["ret_1", "ret_5", "ret_10", "atr14_close", "close_location_in_day"]].isna().all().all()
+    if missing_volume:
+        assert result.volume_ratio_5_to_20.isna().all()
+    else:
+        np.testing.assert_allclose(result.volume_ratio_5_to_20, [117/109.5]*2)
+    assert result.csi300_ret_5.notna().all() and result.market_up_ratio.eq(.6).all()
+    assert receipt["candidate_count"] == 2 and receipt["fit_count"] == 0
+    pd.testing.assert_frame_equal(data["panel"], original)
+
+
 def test_package_identity_and_original_rank_are_metadata_not_predictors():
     data = inputs()
     first, receipt = compute(**data)
