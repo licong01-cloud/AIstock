@@ -291,6 +291,66 @@ def test_refresh_persists_outcome_and_exact_retry_returns_existing_receipt(tmp_p
     assert planner.calls == 1
 
 
+@pytest.mark.parametrize("missing_last", [False, True])
+def test_native_planner_refresh_traverses_reused_pages_without_recalculating(tmp_path, missing_last):
+    from backend.services.advisory_historical_range.outcome_planner import HistoricalRangeOutcomePlanner
+    from backend.tests.advisory_historical_range.test_r4_outcome_planner import (
+        _Calendar, _Seeds, _request as planner_request, _seed,
+    )
+
+    seeds = tuple(
+        _seed(HistoricalRangeOutcomeSubjectType.CANDIDATE, f"candidate-{i}",
+              _ref(HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT, "c"))
+        for i in range(4)
+    )
+    payload = planner_request().model_dump(mode="python", exclude={"request_hash"})
+    payload.update(requested_subject_types=(HistoricalRangeOutcomeSubjectType.CANDIDATE,),
+                   requested_projections=(HistoricalRangeOutcomeProjection.EXECUTABLE,),
+                   horizons=(1,), max_items_per_slice=1)
+    request = HistoricalRangeOutcomeRefreshRequestV1.model_validate(payload)
+    original = _Repository()
+    store = HistoricalRangeArtifactStore(root=tmp_path)
+
+    def service(repository, evaluator):
+        return HistoricalRangeOutcomeApplicationService(
+            repository=repository, artifact_store=store, evaluator=evaluator,
+            planner=HistoricalRangeOutcomePlanner(
+                subject_provider=_Seeds(seeds), calendar=_Calendar(),
+                producer_code_hash="b" * 64, outcome_contract_version="r4_v1",
+                latest_outcome=lambda logical_id: repository.load_latest_outcome(outcome_logical_id=logical_id),
+            ),
+        )
+
+    first, _ = service(original, _Evaluator()).refresh_until_stable_boundary(
+        request=request, resolved_request_hash="f" * 64, worker_id="first-worker",
+    )
+    assert first.status == "COMPLETED" and original.append_count == 4
+    repository = _Repository()
+    repository.outcomes = dict(original.outcomes)
+    if missing_last:
+        last_id = next(key for key, fact in repository.outcomes.items() if fact.subject_id == "candidate-3")
+        del repository.outcomes[last_id]
+    preserved = dict(repository.outcomes)
+    calls = []
+
+    class OnlyMissingEvaluator(_Evaluator):
+        def evaluate(self, item):
+            assert missing_last and item.subject_id == "candidate-3"
+            calls.append(item.subject_id)
+            return super().evaluate(item)
+
+    payload["operation_idempotency_key"] = "new-operation-same-financial-inputs"
+    result, _ = service(repository, OnlyMissingEvaluator()).refresh_until_stable_boundary(
+        request=HistoricalRangeOutcomeRefreshRequestV1.model_validate(payload),
+        resolved_request_hash="f" * 64, worker_id="next-worker",
+    )
+    assert result.status == "COMPLETED"
+    assert result.processed_count == repository.append_count == int(missing_last)
+    assert calls == (["candidate-3"] if missing_last else [])
+    assert len(repository.outcomes) == 4
+    assert all(repository.outcomes[key] == fact for key, fact in preserved.items())
+
+
 def test_production_composition_adapts_keyword_only_latest_outcome(tmp_path: Path) -> None:
     from backend.services.advisory_historical_range.composition import (
         build_historical_range_outcome_application_service,
