@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"time"
 
@@ -54,7 +55,15 @@ func (tm *TaskManager) Run(taskType string, fn func(ctx context.Context) error) 
 	tm.mu.Unlock()
 
 	go func() {
-		err := fn(ctx)
+		err := func() (err error) {
+			defer func() {
+				if v := recover(); v != nil {
+					err = fmt.Errorf("task panic: %v", v)
+				}
+			}()
+			return fn(ctx)
+		}()
+		cancel()
 
 		tm.mu.Lock()
 		defer tm.mu.Unlock()
@@ -105,7 +114,16 @@ func (tm *TaskManager) Get(id string) (*Task, bool) {
 	defer tm.mu.RUnlock()
 
 	task, ok := tm.tasks[id]
-	return task, ok
+	if !ok {
+		return nil, false
+	}
+	copy := *task
+	copy.cancel = nil
+	if task.EndedAt != nil {
+		end := *task.EndedAt
+		copy.EndedAt = &end
+	}
+	return &copy, true
 }
 
 func (tm *TaskManager) List() []*Task {
@@ -114,7 +132,13 @@ func (tm *TaskManager) List() []*Task {
 
 	list := make([]*Task, 0, len(tm.tasks))
 	for _, task := range tm.tasks {
-		list = append(list, task)
+		copy := *task
+		copy.cancel = nil
+		if task.EndedAt != nil {
+			end := *task.EndedAt
+			copy.EndedAt = &end
+		}
+		list = append(list, &copy)
 	}
 	return list
 }

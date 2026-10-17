@@ -113,14 +113,29 @@ def test_unsafe_inputs_fail_closed(sector_packet, case):
         build_sector_daily_features_v1(**sector_packet)
 
 
-def test_no_candidates_remains_empty_computation_not_native_success(sector_packet):
+@pytest.mark.parametrize('object_classification', [False, True])
+def test_no_candidates_remains_empty_computation_not_native_success(sector_packet, object_classification):
     for field in ('candidates', 'raw_daily', 'suspend_rows'):
         sector_packet['core_inputs'][field] = sector_packet['core_inputs'][field].iloc[:0]
-    sector_packet['classification_rows'] = sector_packet['classification_rows'].iloc[:0]
+    classified = sector_packet['classification_rows']
+    sector_packet['classification_rows'] = pd.DataFrame(columns=classified.columns) if object_classification else classified.iloc[:0]
     sector_packet['sector_quotes'] = sector_packet['sector_quotes'].iloc[:0]
     frame, receipt = build_sector_daily_features_v1(**sector_packet)
     assert frame.empty and list(frame.columns) == [*KEY, *FEATURES]
     assert receipt['status'] == 'NO_CANDIDATES' and receipt['native_identity'] == 'UNPROVEN'
+
+
+@pytest.mark.parametrize('poison', ['foreign_classification', 'future_quote'])
+def test_empty_roster_still_validates_classification_and_quote_clock(sector_packet, poison):
+    for field in ('candidates', 'raw_daily', 'suspend_rows'):
+        sector_packet['core_inputs'][field] = sector_packet['core_inputs'][field].iloc[:0]
+    classified = sector_packet['classification_rows']
+    sector_packet['classification_rows'] = classified.iloc[:1] if poison == 'foreign_classification' else pd.DataFrame(columns=classified.columns)
+    quoted = sector_packet['sector_quotes'].iloc[:1].copy()
+    quoted['datetime'] = sector_packet['calendar'][-1]
+    sector_packet['sector_quotes'] = quoted
+    with pytest.raises(ValueError, match='exact original candidate keys|future or foreign session'):
+        build_sector_daily_features_v1(**sector_packet)
 
 
 def test_precomputed_source_entry_reuses_same_core_without_a_second_calculation(sector_packet, monkeypatch):
