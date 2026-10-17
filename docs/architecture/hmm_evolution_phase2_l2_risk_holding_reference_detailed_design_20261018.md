@@ -2,7 +2,7 @@
 
 > v1.0；2026-10-18；F2；HMM owner。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` §1.18。
-> L2-RISK-HOLDING-REFERENCE-D1～D6：**PROPOSED_FOR_USER_APPROVAL**。本文件是收益参照合同提案，不是新模型或第二个消费公式；源码实施、正式重评分及源码合入均未执行。
+> L2-RISK-HOLDING-REFERENCE-D1～D6：**APPROVED_BY_USER**（2026-10-18）。用户已批准完整精确合同并授权实施；这是收益参照合同，不是新模型或第二个消费公式。源码实施中，正式重评分及源码合入尚未执行。
 
 ## 1. Background / Goal / Scope
 
@@ -116,9 +116,9 @@ cohort/outcomes按`(u,canonical_l2_code,canonical_security_code)`排序且键唯
 
 ## 9. Implementation Plan / 单一交付包
 
-获精确批准后，同一个实现任务完成：HMM独立holding-reference builder与薄CLI、原五臂引擎复用、直接不变量测试、多轮作者审核/修复、提交门禁、一次双fresh-process零推断重评分及价值结论。设计/测试/adapter不拆独立产品阶段。
+精确合同已获批准，同一个实现任务完成：HMM独立holding-reference builder与薄CLI、原五臂引擎复用、直接不变量测试、多轮作者审核/修复、提交门禁、一次双fresh-process零推断重评分及价值结论。设计/测试/adapter不拆独立产品阶段。
 
-拟修改范围为新增`backend/services/hmm_risk/risk_l2_holding_reference.py`、`scripts/hmm_risk/run_risk_l2_holding_reference.py`、`backend/tests/hmm_risk/test_risk_l2_holding_reference.py`和直接设计状态；如确需复用helper接口变更，先列精确路径及旧调用兼容性，不迁移20维业务。当前本轮只改3份直接文档，没有源码实施。
+实际修改范围为新增`backend/services/hmm_risk/risk_l2_holding_reference.py`、`scripts/hmm_risk/run_risk_l2_holding_reference.py`、`backend/tests/hmm_risk/test_risk_l2_holding_reference.py`，以及本设计和父蓝图的直接状态，共5文件。复用既有helper而不改其接口或20维业务；未修改调度器、数据生产、QE、Selection、Advisory及CI配置。
 
 ## 10. Verification Plan / Design Acceptance Index
 
@@ -136,14 +136,14 @@ cohort/outcomes按`(u,canonical_l2_code,canonical_security_code)`排序且键唯
 
 | 维度 | 当前状态 |
 |---|---|
-| D1～D6新精确参照合同 | PROPOSED_FOR_USER_APPROVAL；未执行 |
-| 源码/直接测试/源码PR | 未开始；上表路径是后续测试计划，不是已存在或已通过的测试 |
+| D1～D6新精确参照合同 | APPROVED_BY_USER（2026-10-18）；正式重评分未执行 |
+| 源码/直接测试/源码PR | builder/CLI/直接测试已实现；26项定向测试和55项PR小矩阵通过，lint/format/compile/L0/F2/fresh-process import通过；PR未创建 |
 | 双process重评分 | 未开始，fits=0、新推断=0 |
 | 数据/生产/运行态 | 零变更 |
 
 直接测试以最小反例证明：即便u新入池股票缺先前市值，q篮子与收益保持不变；若q已有成分市值/报价缺失则不能删它；u退出不会抹去持仓；真实停牌有限报价可用，缺估值NA不填0；单股票行业/真实极端行情可计算；source/code map/PIT/quote权威漂移、未来权重、重复键、缺原sealed或bitwise差异必须typed停止。toy算术测试不可冒充正式103日结果。
 
-本轮文档只运行F2、链接/精确scope及diff检查；实现阶段本地只跑changed-file检查、直接fix-point、小矩阵与L0，广域HMM矩阵留CI/Nightly，不为研究重复全量训练或模块测试。需两轮以上作者审修；不声称独立第三方审核。
+实现阶段本地只跑changed-file检查、直接fix-point、小矩阵与L0，广域HMM矩阵留CI/Nightly，不为研究重复全量训练或模块测试。两轮以上作者审修，不声称独立第三方审核。上表历史设计审核状态不等于源码或正式研究通过，实际进度以下表与当次执行回执为准。
 
 ## 11. Risks / Rollout / Rollback / Production Gates
 
@@ -151,7 +151,7 @@ cohort/outcomes按`(u,canonical_l2_code,canonical_security_code)`排序且键唯
 
 Rollout仅为新增离线CLI和不可变结果；rollback为不采用新参照/政策，不回写原acceptance，不切生产版本。普通backend文件按真实changed-files推导runtime contract，不能因离线用途人工降级；即使源码需用户重启，独立CLI结果不依赖后端进程控制。
 
-production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；dataset_write=false；active_profile_write=false；runtime_activation=false；process_control=false；QE_experiment=false。本轮文档runtime_impact=none；未来代码分类在实际changed-files形成后重新计算，不复用本文分类。
+production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；dataset_write=false；active_profile_write=false；runtime_activation=false；process_control=false；QE_experiment=false。当前5个changed-files由canonical workflow重算为`runtime_impact=backend`、`target_ids=[backend-main]`、`catalog_error=null`，不可人工降级。使用既有`docs/operations/backend_main_runtime_restart_runbook.md`，identity ref=`http://127.0.0.1:8001/api/v1/runtime-identity`、business smoke ref=`http://127.0.0.1:8001/api/v1/hmm-risk/risk-l2/overview`，持久化基础为git源码；新模块/CLI及HMM router/health均通过任务树fresh-process import，contract `pre_pr_ready=true/blocking=[]`，运行态仍`pending_user_restart`而非生效。本次离线CLI研究不依赖后端生效，不为研究记录要求重启；未来用户若核验后端源码装载，按既有runbook另验，不以overview充当离线价值结果。
 
 ## 12. DESIGN-COMPLIANCE-001 / 审修记录
 
@@ -165,3 +165,9 @@ production_ddl_gate=noop；production_dml_gate=noop；dependency_gates=noop；da
 第二轮作者设计审核：补齐retrospective PIT effective-date与historical-as-known的不同声明、最小cohort行与唯一排序、来源事实NA和派生数值错误分离；修订父蓝图§1.4残留的“当前只闭合自动触发”，统一为收益价值任务。原五臂/103日期/四成本和原acceptance不变；新增测试路径仅是计划，不宣称已执行。未发现需要修改数据集、调度器、训练域或跨模块源码的设计项。
 
 第三轮作者交叉复核：实际只读验证原request/features/双sealed/acceptance五个canonical pins，双sealed文件bytes相同；冻结calendar核对104/103和首末q/p/u通过。三文档F2均PASS、warnings=0，3/3 ownership零歧义；精确changed-files、设计链接和历史版本表/§11.2保留检查通过。DESIGN-COMPLIANCE-001四项逐项符合本次文档范围，无剩余设计阻断finding；不是独立第三方审核。新合同仍待批准，源码、测试和正式重评分未执行，不以文档PASS代替业务效果。
+
+以上三轮为合同批准前的历史设计审查。2026-10-18用户已明确批准完整D1～D6；下面是批准后的源码审修，不把旧历史改写成当前pending。
+
+源码第一轮作者审核：修复calendar/PIT universe/manifest/code-map/quote authority的读前后稳定性覆盖；确保cohort先冻结再读报价。直接反例覆盖入池/重新入池、PIT退出后的真实报价、市值最新事实缺失不回取旧值、证券alias、单成分及极端真实收益、停牌合法有限报价/缺估值NA、factor/prev_close单位、五臂四成本和禁止fit/filter/predict/DB/active-profile读取。
+
+源码第二轮作者审核：修复parent在facts构造失败或第二child启动失败时的真实完成数量记录，并用CLI级故障注入覆盖0/1/2成功child、child自报hash身份漂移、finalization写入失败和collision不覆盖；补充自然入池/退出边界及有限停牌报价状态的事实读回。26项定向测试通过，五个原资产canonical pins和双sealed字节一致性实际预检通过。模型、20维、五臂和四成本均未变化；正式一次重评分尚未执行，不将toy测试冒称正式结果。
