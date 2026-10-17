@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1902",
-  "closed_at": null,
+  "closed_at": "2026-10-17T13:26:30.671094Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -100,10 +100,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1902/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1902",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "0854e026b51220f2404ae04468126d0d0eefd4e3b2e90f54c475ae885819bfb0",
+      "expected_identity": "a404be483b8440d69b4cbccf06dd4d63058b53df",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T13:16:58.268694Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "0d93c49a25ab42082675e912063f6f8b12bfe18a029fb4ccbea1164155393b50",
+      "receipt_sha256": "bef916d181678480a3037953077e71749f087b81c40c8ad8a5631cfa0be60585",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c61b1b915dbc4cefdb8ed0ac85a92098e7b0bc6c4b4d220bdd27e2f79d8b041b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -134,7 +156,7 @@
     ],
     "validation_evidence_digest": "ee50ed7816d2e2eb5e0d9235382676d303c1f3ff536f3b15b78358b81699446e"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -144,7 +166,8 @@
     "source_event_id": "FE-20261014-e7fefa32be9f"
   },
   "validation_evidence": [
-    "python -m pytest backend/tests/test_qlib_export_stock_universe_filters.py -q -> 40 passed"
+    "python -m pytest backend/tests/test_qlib_export_stock_universe_filters.py -q -> 40 passed",
+    "Current runtime identity and business-smoke verified; source validation retained by receipt ec11088f8eae65e1"
   ],
   "verification_budget": {
     "budget": "standard",
