@@ -38,18 +38,36 @@
   ],
   "expected": "Exact calendar payload validated and Advisory UI spec selected and collected without retired paper backend suite.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      ".github/workflows/test.yml",
+      "backend/services/validation/plan_catalog.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "frontend/tests/advisory-mocked.config.ts",
+      "noxfile.py",
       "scripts/aistock_issue_workflow.py",
       "scripts/aistock_runtime_semantics.py",
-      "noxfile.py",
-      "tests/aistock_validation/catalog/test_plans.yaml",
-      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/bugs/20261017_BUG-1966-advisory-calendar-smoke-contract-and-mocked-ui-ci-mapping-missing.json",
       "tests/aistock_validation/catalog/file_ownership.yaml",
-      "backend/services/validation/plan_catalog.py",
-      "backend/tests/scripts/test_ci_change_classifier.py"
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/test.yml",
+      "backend/services/validation/plan_catalog.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "frontend/tests/advisory-mocked.config.ts",
+      "noxfile.py",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1966-advisory-calendar-smoke-contract-and-mocked-ui-ci-mapping-missing.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_issue_workflow.py",
@@ -218,15 +236,17 @@
     "validation_workflow_automation",
     "validation_catalog_integrity"
   ],
-  "risk_area": "bug",
   "resolution_note": "Register exact calendar-only GET semantics and a single Advisory mocked UI plan. The isolated frontend copies source and existing Next bytes to X, junctions other prebuilt dependencies, uses no shared/live server, and never installs packages. Review rounds covered semantic identity/order failures, fail-closed changed-test coverage, mixed UI target dispatch and real browser startup. DESIGN-COMPLIANCE-001 four checks passed: complete requested contracts, no business scope drift, explicit failures, no added approval gates. Full affected UI regression is executed by the selected CI frontend target, not by the retired Paper backend/database suite.",
+  "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
