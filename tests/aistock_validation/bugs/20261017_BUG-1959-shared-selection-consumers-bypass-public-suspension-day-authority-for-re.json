@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1959",
-  "closed_at": null,
+  "closed_at": "2026-10-17T12:07:48.588394Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -242,10 +242,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/LOCALSIM/workflow/BUG-1959-postrestart-native-gate-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1959",
+      "business_smoke_semantic": {
+        "contract_id": "run_terminal_evidence",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "a271c55a1be4aff6c917251e3f408ad4f415bb6f8b84389670a30f1047d59142",
+      "expected_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T12:05:27.498644Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d9e89b620c3ba5f621a08cc85be7ce1f1dd6345bb66c7051944610f4a23ac562",
+      "receipt_sha256": "92215879f103d53b77d8abd9e4c86e6d82ef49de150a1ae576d6de2acaa259b3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "993ca68b6b7b202bd663716d10602d50c1ffd8b76831af080b4349b77adfedda",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -280,7 +302,7 @@
     ],
     "validation_evidence_digest": "3430ac3bad9cbbc71b2f34d3177b65ded99d6f55b4fe318d37328a1d3fd6757a"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "strategy_package"
   ],
@@ -297,7 +319,10 @@
     "python -m nox -s l0 --envdir X:/AIstock_temp/LOCALSIM/BUG-1959-nox -- backend/services/strategy_package/reference_prices.py backend/services/selection_center/tradability.py backend/tests/strategy_package/test_reference_price_availability.py backend/tests/selection_center/test_tradability_provider_clocks.py docs/contracts/strategy_package_reference_price_availability_v1.md docs/analysis/localsim_shared_suspension_authority_acceptance_20261017.md tests/aistock_validation/bugs/20261017_BUG-1959-shared-selection-consumers-bypass-public-suspension-day-authority-for-re.json backend/services/selection_center/suspension_provider.py backend/services/simulation_runtime/localsim_selection_signal.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/advisory_historical_range/test_selection_signal_kernel.py -> passed; 11 exact files, zero findings/blocking; artifacts on X drive",
     "pytest backend/tests/strategy_package/test_reference_price_availability.py backend/tests/strategy_package/test_selection_computation.py backend/tests/selection_center/test_tradability_provider_clocks.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/simulation_runtime/test_localsim_selection_inference.py backend/tests/advisory_historical_range/test_selection_signal_kernel.py backend/tests/simulation_execution/test_localsim_suspension_authority.py -q -> 131 passed; XML X:/AIstock_temp/LOCALSIM/workflow/BUG-1959-direct-final-r2.xml",
     "ruff check backend/services/selection_center/suspension_provider.py backend/services/selection_center/tradability.py backend/services/strategy_package/reference_prices.py backend/services/simulation_runtime/localsim_selection_signal.py backend/tests/strategy_package/test_reference_price_availability.py backend/tests/selection_center/test_tradability_provider_clocks.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/advisory_historical_range/test_selection_signal_kernel.py -> passed",
-    "git diff --check -> passed"
+    "git diff --check -> passed",
+    "python -B X:/AIstock_temp/LOCALSIM/workflow/BUG-1959-native-Jan23-runtime-acceptance-20261017.py -> passed; original simrun_b46b1e4c2ab67080; complete 4916/4920/4 scores/rank/UNKNOWN, frozen identities and Top50 equal; native D suspension, true 6.23 quote Jan20, held valuation and no suspended-stock orders; receipt 20261017T120622Z",
+    "python -B X:/AIstock_temp/LOCALSIM/workflow/LOCALSIM-unified-economic-readback-20261017.py -> passed; original Jan23 24 orders/72 fills/72 cash ledger/51 positions; original Jan20-22 payload/timestamps/seven economic counts unchanged; receipt 20261017T120423Z; entire replay catch-up and formal LocalSIM activation remain pending",
+    "DESIGN-COMPLIANCE-001 -> passed for BUG-1959 native fix-point: full scoring/TopK verified, genuine gaps remain fail-closed, original accounting preserved, no added force/approval gate; full-history task not declared complete"
   ],
   "verification_budget": {
     "budget": "standard",
