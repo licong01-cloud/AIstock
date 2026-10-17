@@ -51,6 +51,7 @@ from .source_authority import FrozenSourceAuthoritySnapshot, load_source_stage_r
 from .sw_l2_quote_policy import (
     QUOTE_PUBLICATION_POLICY_SCHEMA,
     build_quote_availability_payload,
+    publication_quote_observations,
     quote_publication_policy_identity,
 )
 from backend.services.core_index_catalog import P0_POOL_IDS, POOL_DEFINITIONS
@@ -995,10 +996,38 @@ class FrozenMonthlySharedComponentBuilder:
             authority_sha256=mapping_authority_sha,
         )
         code_map = validate_release_sw_l2_code_map(code_map_payload)
+        # Project the same frozen quote facts once, before compiling publication
+        # scope. No historical stock scan is added to the native monthly path.
+        sector_root = root / "components" / "sector_context_candidate_v1"
+        sector_root.mkdir(parents=True, exist_ok=False)
+        quote_facts_path = root / QUOTE_FACTS_PATH
+        from .monthly_legacy_prefix import _signature
+
+        source_pin = (
+            physical_authority["verified_output_files"]["factor_bundle/sector_data.h5"] if native
+            else {"sha256": _sha256(sector_h5), "size": sector_h5.stat().st_size,
+                  "signature": list(_signature(sector_h5))}
+        )
+        try:
+            quote_facts = build_sector_quote_facts(
+                source_path=sector_h5, target_path=quote_facts_path,
+                source_pin=source_pin, code_map=code_map, cutoff=cutoff,
+                chunk_rows=self.profile.resource_policy.validation_read_chunk_rows,
+                prefix=prefix,
+                month_range=(physical_authority.get("physical_month_ranges") or {}).get("sector_data"),
+                checkpoint=context.checkpoint, progress=context.progress,
+            )
+        except SectorQuoteFactsError as exc:
+            raise MonthlySharedComponentsError(str(exc)) from exc
+        publication_evidence = {}
         quote_payload = build_quote_availability_payload(
             code_map=code_map,
             required_start=self.sector_membership_start,
             cutoff=cutoff,
+            classification_rows=classify,
+            quote_observations=publication_quote_observations(
+                quote_facts_path, chunk_rows=self.profile.resource_policy.validation_read_chunk_rows),
+            evidence=publication_evidence,
         )
         quote = validate_sector_quote_availability(
             quote_payload, code_map=code_map, required_end=cutoff
@@ -1088,8 +1117,6 @@ class FrozenMonthlySharedComponentBuilder:
         )
         base_manifest = json.loads(base_manifest_path.read_bytes())
         sector_sha = base_manifest["files"][sector_h5.relative_to(root).as_posix()]["sha256"]
-        sector_root = root / "components" / "sector_context_candidate_v1"
-        sector_root.mkdir(parents=True, exist_ok=False)
         code_map_path = _write_json(sector_root / "sector_code_map.json", code_map_payload)
         history_path = None
         history_ref = physical_authority.get("industry_history_projection_ref")
@@ -1113,26 +1140,6 @@ class FrozenMonthlySharedComponentBuilder:
         else:
             market.to_parquet(market_path, index=False)
             sector_membership.to_parquet(membership_path, index=False)
-        from .monthly_legacy_prefix import _signature
-
-        quote_facts_path = root / QUOTE_FACTS_PATH
-        source_pin = {
-            "sha256": sector_sha, "size": sector_h5.stat().st_size,
-            "signature": list(_signature(sector_h5)),
-        }
-        if native:
-            source_pin = physical_authority["verified_output_files"]["factor_bundle/sector_data.h5"]
-        try:
-            quote_facts = build_sector_quote_facts(
-                source_path=sector_h5, target_path=quote_facts_path,
-                source_pin=source_pin, code_map=code_map, cutoff=cutoff,
-                chunk_rows=self.profile.resource_policy.validation_read_chunk_rows,
-                prefix=prefix,
-                month_range=(physical_authority.get("physical_month_ranges") or {}).get("sector_data"),
-                checkpoint=context.checkpoint, progress=context.progress,
-            )
-        except SectorQuoteFactsError as exc:
-            raise MonthlySharedComponentsError(str(exc)) from exc
         receipt = {
             "schema_version": SECTOR_CONTEXT_RECEIPT_SCHEMA,
             "source_dataset_manifest_sha256": base_manifest_sha,
@@ -1179,6 +1186,7 @@ class FrozenMonthlySharedComponentBuilder:
                 "mapping_authority": dict(quote.mapping_authority),
                 "publication_policy_schema": QUOTE_PUBLICATION_POLICY_SCHEMA,
                 "publication_policy_identity": quote_publication_policy_identity(),
+                "publication_evidence": publication_evidence,
             },
             "membership": {
                 "schema_version": SECTOR_MEMBERSHIP_SPANS_SCHEMA,

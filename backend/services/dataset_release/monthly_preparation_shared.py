@@ -48,7 +48,7 @@ from .shared_sector_context import (
     validate_market_context_frame,
     validate_membership_frame,
 )
-from .sw_l2_quote_policy import build_quote_availability_payload
+from .sw_l2_quote_policy import build_quote_availability_payload, publication_quote_observations
 from .monthly_worker import ProducerContext
 
 
@@ -417,8 +417,12 @@ def _sector_context_files(
         authority_sha256=authority,
     )
     code_map = validate_release_sw_l2_code_map(code_payload)
+    publication_evidence = {}
     quote_payload = build_quote_availability_payload(
-        code_map=code_map, required_start=start, cutoff=snapshot.official_cutoff
+        code_map=code_map, required_start=start, cutoff=snapshot.official_cutoff,
+        classification_rows=classify,
+        quote_observations=publication_quote_observations(root / "facts" / "sector_data.h5", chunk_rows=bound),
+        evidence=publication_evidence,
     )
     quote = validate_sector_quote_availability(quote_payload, code_map=code_map, required_end=snapshot.official_cutoff)
     membership, market, counts = summarize_sector_context(
@@ -434,7 +438,7 @@ def _sector_context_files(
     return [
         "facts/sector_data.h5", "sector_code_map.json", "sector_quote_availability.json",
         "sector_membership_spans.parquet", "market_context.parquet",
-    ], {"sector_facts": facts, **counts}
+    ], {"sector_facts": facts, "publication_evidence": publication_evidence, **counts}
 
 
 def summarize_sector_context(

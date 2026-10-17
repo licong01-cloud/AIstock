@@ -32,10 +32,13 @@ def _fixture(tmp_path, monkeypatch):
                 "partitions": [{"partition_key": "2024-07", "ref": {"sha256": "a" * 64, "size": 1}}]}}}
     codes = [f"801{i:03d}.SI" for i in range(131)]
     monkeypatch.setattr(policy, "SW2021_L2_TAXONOMY_DIGEST", policy.taxonomy_digest(codes))
-    monkeypatch.setattr(policy, "_LAST_PUBLISHED", {})
     mapping = _code_map(codes)
-    old = policy.build_quote_availability_payload(code_map=mapping, required_start=date(2024, 7, 1), cutoff=date(2026, 9, 30))
-    next(r for r in old["entries"] if r["canonical_l2_code"] == "801011.SI")["availability_spans"] = []
+    old = policy.build_quote_availability_payload(
+        code_map=mapping, required_start=date(2024, 7, 1), cutoff=date(2026, 9, 30),
+        classification_rows=[{"index_code": code, "src": "SW2021", "level": "L2",
+                              "is_pub": "0" if code == "801011.SI" else "1"} for code in codes],
+        quote_observations=[],
+    )
     component = target / "components/sector_context_candidate_v1"
     payloads = {"qe_dataset_manifest.json": {"generation": "new"},
         "components/sector_context_candidate_v1/sector_code_map.json": dict(mapping_payload(mapping)),

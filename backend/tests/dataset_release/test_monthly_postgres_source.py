@@ -952,8 +952,6 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
     )
 
     codes = [f"801{i:03d}.SI" for i in range(131)]
-    monkeypatch.setattr(policy, "_NEVER_QUOTED", frozenset({codes[0]}))
-    monkeypatch.setattr(policy, "_LAST_PUBLISHED", {})
     monkeypatch.setattr(policy, "SW2021_L2_TAXONOMY_DIGEST", policy.taxonomy_digest(codes))
     data = rows()
     data.update(
@@ -973,7 +971,8 @@ def test_frozen_wrapper_persists_all_nine_real_gates(tmp_path, monkeypatch, miss
                 }
                 for pool in P0_POOL_IDS
             ],
-            "sw_index_classify": [{"index_code": code, "level": "L2"} for code in codes],
+            "sw_index_classify": [{"index_code": code, "level": "L2", "src": "SW2021",
+                                   "is_pub": "0" if code == codes[0] else "1"} for code in codes],
             "sw_index_member": [
                 {
                     "ts_code": SYMBOL if i == 1 else f"{10000 + i:06d}.SZ",

@@ -1,6 +1,13 @@
 {
   "actual": "Generic private quote-available stock row lacks facts; current policy marks 801011.SI available through cutoff solely because a historical row existed.",
   "allowed_write_scope": [
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
+    "backend/services/dataset_release/monthly_shared_components.py",
+    "backend/services/dataset_release/monthly_frozen_source_audit.py",
+    "backend/services/dataset_release/monthly_build_recovery.py",
+    "backend/tests/dataset_release/test_monthly_shared_components.py",
+    "backend/tests/dataset_release/test_monthly_build_recovery.py",
+    "backend/tests/dataset_release/test_monthly_sector_mapping.py",
     "backend/services/dataset_release/sw_l2_quote_policy.py",
     "backend/services/dataset_release/monthly_preparation_shared.py",
     "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
@@ -17,6 +24,30 @@
   ],
   "created_at": "2026-10-16T20:40:58.917046Z",
   "description": "September operation dmr_63a313d97fd046a38d5a876265565014 is FAILED BUILD attempt 273. BUG-1935 established one historical quote for 801011.SI but incorrectly extrapolated availability through September. The frozen month contains 63 quote-NaN rows for three stocks and 21 trading days. Tushare index_classify returns is_pub=0 and sw_daily returns no September rows, while local sw_daily retains historical observations through 2026-04-28. This does not establish an official stop date. Preserve authentic history, moneyflow and completed exports; do not derive publication dates from missing values or waive the contract.",
+  "development_progress": {
+    "data_repair_complete": false,
+    "delivery_status": "SOURCE_FIX_VALIDATED_REPACKAGE_AND_USER_RESTART_PENDING",
+    "design_compliance_001": {
+      "business_semantics_unchanged": "PASS: source publication obligation corrected from primary versioned catalog; PIT, model, thresholds, moneyflow and consumers unchanged",
+      "no_new_gate": "PASS: reuse existing publication authority and component receipts; no new approval or research gate",
+      "no_partial_claim": "PASS: source fix verified; candidate repack and post-user-restart runtime pending",
+      "no_silent_error": "PASS: real missing quotes still raise typed key-specific error"
+    },
+    "diagnosis_revision": "The primary Tushare SW2021 classification table explicitly lists 801011 is_pub=0 and the fewer-than-five nonpublication rule. All seven canonical nonpublished codes are present in the sealed 134-row SW2021 catalog. This is a provider/version publication obligation, NOT a historical stop event: retain authentic dated sw_daily observations without extrapolation. SWS analysis is a different incomplete quote contract (no absolute amount) and is not mixed into sw_daily facts.",
+    "fresh_process_receipt_sha256": "c1f419eb9e1e4c7ff9e9027ed3bba70c873c3ead3a8210db1c092687c8b2088a",
+    "full_bug_fix_complete": false,
+    "official_analysis_missing_required_field": "absolute quote amount; bargainsumrate is a percentage, not sw2_amount",
+    "official_analysis_rows_202609": 21,
+    "official_analysis_source": "https://www.swsresearch.com/institute-sw/api/index_analysis/index_analysis_report/",
+    "review_rounds": [
+      "1: field-level RED/GREEN for all three missing quote metrics, positive/negative infinity and quotes outside authority; invalid data still fails before sidecar publication.",
+      "2: preserve publication spans, shared IDs, moneyflow, price files, SOURCE and checkpoint; no fallback, DB/profile writes or extra scans/gates. Review removed per-row error formatting from the healthy-row hot path.",
+      "3: actual frozen September SOURCE and physical H5 tail produce identical authority digest 9ca1133341111c43100a6e59cf2c43e2eb48c4fa4f2f59992e75f1c5a8887b49; native summary has zero membership/quote/unknown gaps; unchanged HMM _sector_returns succeeds. No historical business audit, DB/profile/runtime writes or price re-export.",
+      "4: call-closure review found legacy BUG-1935 recovery still compiling publication from a single row. It now only verifies old packaging and dated proof; ordinary BUILD owns the new authority. Recovery locks and retained-export tests pass."
+    ],
+    "source_diagnostics": "Preserve fail-closed behavior while including symbol, trade_date, canonical_l2_code, shared ID, missing/invalid fields and a stable reason code.",
+    "targeted_tests": "RED reproduced obsolete perpetual policy; GREEN 74 policy/private/shared tests, 46 mapping/recovery tests (1 explicit skip), 14 source tests. New real-policy integration preserves membership and quote NA. Ruff passed."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -32,58 +63,36 @@
     "X:/AIstock_dataset_release_control/cas/sha256/77/77574f1dea9200bb2b9a8450d6223655060a115d672758f826e08aaea5eff55f",
     "X:/AIstock_dataset_release_control/cas/sha256/c1/c1f419eb9e1e4c7ff9e9027ed3bba70c873c3ead3a8210db1c092687c8b2088a"
   ],
-  "development_progress": {
-    "delivery_status": "PARTIAL_DIAGNOSTICS_ONLY_DATA_BLOCKED",
-    "data_repair_complete": false,
-    "full_bug_fix_complete": false,
-    "official_analysis_rows_202609": 21,
-    "official_analysis_source": "https://www.swsresearch.com/institute-sw/api/index_analysis/index_analysis_report/",
-    "official_analysis_missing_required_field": "absolute quote amount; bargainsumrate is a percentage, not sw2_amount",
-    "diagnosis_revision": "Current is_pub=0 and empty Tushare responses cannot prove a stop date. The official historical analysis endpoint returns 801011 observations on 2026-04-29 and all 21 September sessions. Do not add a fabricated publication end or NA waiver. Full quote variant and unit closure remains unresolved.",
-    "source_diagnostics": "Preserve fail-closed behavior while including symbol, trade_date, canonical_l2_code, shared ID, missing/invalid fields and a stable reason code.",
-    "targeted_tests": "63 related tests passed; 6 fix-point tests passed again after review moved error formatting off the healthy-row hot path. RED reproduced missing key diagnostics before the patch; changed-file Ruff and compile passed.",
-    "fresh_process_receipt_sha256": "c1f419eb9e1e4c7ff9e9027ed3bba70c873c3ead3a8210db1c092687c8b2088a",
-    "review_rounds": [
-      "1: field-level RED/GREEN for all three missing quote metrics, positive/negative infinity and quotes outside authority; invalid data still fails before sidecar publication.",
-      "2: preserve publication spans, shared IDs, moneyflow, price files, SOURCE and checkpoint; no fallback, DB/profile writes or extra scans/gates. Review removed per-row error formatting from the healthy-row hot path.",
-      "3: fresh process loads the actual September H5 physical tail only and reports 000592.SZ/2026-09-01/801011.SI with all three fields; source signatures, plan bytes and active profile remain unchanged."
-    ],
-    "design_compliance_001": {
-      "no_partial_claim": "PASS: explicitly partial; candidate and full BUG remain blocked",
-      "no_silent_error": "PASS: real missing quotes still raise typed key-specific error",
-      "business_semantics_unchanged": "PASS: no publication, PIT, threshold or consumer changes",
-      "no_new_gate": "PASS: enrich existing errors only"
-    }
-  },
-  "investigation_readback": {
-    "candidate_ready": false,
-    "conclusion": "BLOCKED_OFFICIAL_QUOTE_FIELD_CONTRACT_UNRESOLVED",
-    "diagnostic_sha256": "139ed5b85aa5151a37576afb30878cbbc639654a946ae59a51908dd9abed8495",
-    "full_history_content_scan": false,
-    "month_rows": 103128,
-    "nonfinite_rows_801011": 63,
-    "price_reexport_performed": false,
-    "production_database_write": false,
-    "profile_write": false,
-    "publication_effective_boundary_verified": false,
-    "remaining_required_evidence": "Independently sourced, same-variant complete 801011.SI September pct_change/vol/amount facts and explicit units. Official analysis rows exist but omit absolute amount; do not infer a stop date or reconstruct amount from rounded turnover ratios/mean price.",
-    "runtime_action": false,
-    "source_snapshot_replaced": false,
-    "symbols": ["000592.SZ", "000663.SZ", "002679.SZ"],
-    "trading_days": 21,
-    "validation_end": "2026-09-30",
-    "validation_start": "2026-09-01"
-  },
   "expected": "Explicit independently sourced publication scope and real quote facts remain distinct and date-bound; no perpetual extrapolation, fabricated stop date, erased history or re-export of completed prices. Missing evidence stays typed and blocked with precise keys.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/tests/dataset_release/test_monthly_preparation_shared.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1951-monthly-sw-l2-publication-policy-extrapolates-a-historical-observation-i.json",
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/sw_l2_quote_policy.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/dataset_release/test_sw_l2_quote_policy.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/sw_l2_quote_policy.py",
       "backend/services/dataset_release/monthly_preparation_shared.py",
-      "backend/tests/dataset_release/test_sw_l2_quote_policy.py",
-      "backend/tests/dataset_release/test_monthly_preparation_shared.py"
+      "backend/tests/dataset_release/test_monthly_preparation_shared.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1951-monthly-sw-l2-publication-policy-extrapolates-a-historical-observation-i.json",
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/sw_l2_quote_policy.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/dataset_release/test_sw_l2_quote_policy.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/sw_l2_quote_policy.py",
@@ -174,6 +183,42 @@
   "fixed_at": null,
   "github_issue_number": 6223,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6223",
+  "investigation_readback": {
+    "candidate_ready": false,
+    "canonical_catalog_count": 131,
+    "canonical_nonpublished_count": 7,
+    "conclusion": "FROZEN_MONTH_PUBLICATION_SCOPE_VALIDATED_REPACKAGE_PENDING",
+    "diagnostic_sha256": "139ed5b85aa5151a37576afb30878cbbc639654a946ae59a51908dd9abed8495",
+    "full_history_content_scan": false,
+    "hmm_quote_unavailable_sector_days": 147,
+    "hmm_sector_return_row_count": 2751,
+    "membership_gap_count": 0,
+    "month_rows": 103128,
+    "nonfinite_rows_801011": 63,
+    "pit_symbol_count": 4915,
+    "price_reexport_performed": false,
+    "production_database_write": false,
+    "profile_write": false,
+    "publication_catalog_row_count": 134,
+    "publication_effective_boundary_verified": false,
+    "quote_availability_digest": "9ca1133341111c43100a6e59cf2c43e2eb48c4fa4f2f59992e75f1c5a8887b49",
+    "quote_gap_count": 0,
+    "quote_required_sector_date_count": 2604,
+    "remaining_required_evidence": "After user-owned restart, resume the same monthly operation and regenerate shared packaging/pins only; finish three-node candidate validation. No invented stop date or reconstructed amount is needed for provider-nonpublished entries. Activation remains separately authorized.",
+    "runtime_action": false,
+    "source_build_authority_equal": true,
+    "source_catalog_digest": "c6bcef09df8b23dffed2dd46464cfbae3f943d9ce725c62a25286d2b6c73bf2e",
+    "source_snapshot_replaced": false,
+    "symbols": [
+      "000592.SZ",
+      "000663.SZ",
+      "002679.SZ"
+    ],
+    "trading_days": 21,
+    "unknown_code_count": 0,
+    "validation_end": "2026-09-30",
+    "validation_start": "2026-09-01"
+  },
   "last_seen_at": "2026-10-16T20:40:58.917046Z",
   "module": "qlib_data",
   "non_goals": [
@@ -191,14 +236,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "Fresh AIstock process: actual September H5 physical tail, 103128 rows, 21 sessions; native summarize_sector_context raises SW_L2_QUOTE_FACTS_MISSING at 000592.SZ/2026-09-01/801011.SI with all three required quote fields. CAS c1f419eb9e1e4c7ff9e9027ed3bba70c873c3ead3a8210db1c092687c8b2088a; no DB, candidate, plan, profile or runtime writes."
+      "Fresh AIstock process: actual September H5 physical tail, 103128 rows, 21 sessions; native summarize_sector_context raises SW_L2_QUOTE_FACTS_MISSING at 000592.SZ/2026-09-01/801011.SI with all three required quote fields. CAS c1f419eb9e1e4c7ff9e9027ed3bba70c873c3ead3a8210db1c092687c8b2088a; no DB, candidate, plan, profile or runtime writes.",
+      "New isolated AIstock python process loaded worktree source; actual September 103128 rows/21 sessions; 4915 PIT stocks; quote_gap_count=membership_gap_count=unknown_code_count=0; HMM _sector_returns 2751 sector-days with 147 legal unavailable; original H5 signature unchanged; DB/profile/runtime writes=0",
+      "Fresh AIstock process loaded worktree source; September 103128 physical rows/21 sessions, 4915 PIT stocks; quote/membership/unknown gaps=0; HMM returns=2751, legal unavailable=147; source unchanged; DB/profile/runtime writes=0"
     ],
-    "inference_basis": "planned_scope",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",

@@ -67,7 +67,7 @@ def shared(sector, monkeypatch):  # noqa: F811 - imported pytest fixture
 
     # Synthetic taxonomy is limited to this logic unit test. The actual
     # production publication policy is never weakened or patched on disk.
-    def test_quote_policy(*, code_map, required_start, cutoff):
+    def test_quote_policy(*, code_map, required_start, cutoff, **_kwargs):
         entries = [
             {
                 "canonical_l2_code": code,
@@ -146,6 +146,31 @@ def test_missing_available_sector_quotes_are_not_filled(shared):
     with pytest.raises(ComponentPreparationError, match="quote-available"):
         run(shared, "sector_context")
     assert not (shared[4] / "sector_context" / "sector_membership_spans.parquet").exists()
+
+
+def test_versioned_nonpublication_runs_real_shared_policy_without_losing_membership(shared, monkeypatch):
+    from backend.services.dataset_release import monthly_preparation_shared as producer
+    from backend.services.dataset_release import sw_l2_quote_policy as policy
+
+    codes = [f"801{number:03d}.SI" for number in range(131)]
+    monkeypatch.setattr(policy, "SW2021_L2_TAXONOMY_DIGEST", policy.taxonomy_digest(codes))
+    original = producer._source_rows
+
+    def source_rows(cas, snapshot, dataset):
+        rows = original(cas, snapshot, dataset)
+        if dataset == "sw_index_classify":
+            return [dict(row, src="SW2021", is_pub="0" if row["index_code"] == codes[1] else "1") for row in rows]
+        return rows
+
+    monkeypatch.setattr(producer, "_source_rows", source_rows)
+    monkeypatch.setattr(producer, "build_quote_availability_payload", policy.build_quote_availability_payload)
+    result = run(shared, "sector_context")
+    counts = result["domain_counts"]
+    assert counts["membership_gap_count"] == counts["quote_gap_count"] == 0
+    assert counts["publication_evidence"]["nonpublished_catalog_codes"] == [codes[1]]
+    assert counts["publication_evidence"]["dated_observation_count"] == 0
+    frame = pd.read_parquet(shared[4] / "sector_context/sector_membership_spans.parquet")
+    assert set(frame.instrument) == {"000001.SZ", "000002.SZ"}
 
 
 @pytest.mark.parametrize("field", ["sw2_pct_change", "sw2_vol", "sw2_amount"])
