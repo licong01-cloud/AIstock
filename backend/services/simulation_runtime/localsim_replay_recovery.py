@@ -271,6 +271,25 @@ class LocalSimReplayRecoveryService:
         return self.evaluate(self.repository.get_replay_recovery_snapshot(replay_job_id))
 
     def evaluate(self, snapshot: dict[str, Any]) -> LocalSimReplayRecoveryCheckV1:
+        from .localsim_file_inputs import (
+            FILE_BINDING_KEY, FILE_SOURCE_ID, current_file_dataset, historical_suspension_provider,
+            localsim_file_inputs,
+        )
+        if snapshot["job"]["historical_source_id"] == FILE_SOURCE_ID and current_file_dataset() is None:
+            from copy import copy
+            from backend.services.simulation_data.frozen_file_adapters import FileMinuteMarketDataProvider
+            binding = (snapshot["release"]["release_config_json"].get("metadata") or {}).get(FILE_BINDING_KEY)
+            try:
+                if not binding or binding["binding_hash"] != snapshot["job"]["historical_source_sha256"]:
+                    raise ValueError("file recovery identity mismatch")
+                with localsim_file_inputs(binding, run_id="recovery:" + snapshot["job"]["replay_job_id"]) as dataset:
+                    bound = copy(self)
+                    bound.market_provider = FileMinuteMarketDataProvider(dataset)
+                    bound.suspension_provider = historical_suspension_provider(dataset)
+                    return bound.evaluate(snapshot)
+            except ValueError as exc:
+                return self._check(snapshot, reasons=[getattr(exc, "context", {}).get("reason_code")
+                    or "LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT"], native={})
         job, run = snapshot["job"], snapshot.get("run")
         reasons: list[str] = []
         native: dict[str, Any] = {}
@@ -284,9 +303,12 @@ class LocalSimReplayRecoveryService:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_ACCOUNT_ACTIVITY_UNKNOWN")
             if account_activity:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_ACCOUNT_RUN_IN_FLIGHT")
+            file_dataset = current_file_dataset()
+            source_kwargs = {"file_binding": file_dataset.binding} if file_dataset else {}
             source = self.source_authority.resolve(
                 historical_source_id=job["historical_source_id"], start_trade_date=date.fromisoformat(job["start_trade_date"]),
                 end_trade_date=date.fromisoformat(job["end_trade_date"]), require_latest_completed=False,
+                **source_kwargs,
             )
             next_day = date.fromisoformat(job["next_trade_date"])
             index = source.trading_days.index(next_day)
@@ -355,6 +377,7 @@ class LocalSimReplayRecoveryService:
             if not isinstance(symbol, str) or not symbol.strip() or context.get("trade_date") != run["trade_date"]:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_FAILURE_IDENTITY_INVALID")
             from backend.services.simulation_data.contracts import MinuteDataSource
+            market_source = MinuteDataSource.DATASET_FILES if file_dataset else MinuteDataSource.DB_HISTORICAL
 
             status = (self.suspension_provider.load_statuses(
                 symbols=[symbol], trade_date=next_day, valuation_symbols=[symbol],
@@ -365,7 +388,7 @@ class LocalSimReplayRecoveryService:
                     NATIVE_PRE_CLOSE_KEY, REFERENCE_KEY, validate_suspended_native_pre_close,
                     validate_suspension_reference,
                 )
-                native.update({"symbol": symbol, "trade_date": next_day.isoformat(), "source": "DB_HISTORICAL",
+                native.update({"symbol": symbol, "trade_date": next_day.isoformat(), "source": market_source.value,
                                "eligibility": "FULL_DAY_SUSPENDED"})
                 if NATIVE_PRE_CLOSE_KEY in status:
                     native["valuation_native_pre_close"] = validate_suspended_native_pre_close(
@@ -379,14 +402,14 @@ class LocalSimReplayRecoveryService:
                 if context.get("reason_code") == "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID":
                     self._invalid("LOCALSIM_REPLAY_RECOVERY_SUSPENSION_UNPROVEN")
                 market = self.market_provider.load_symbol_input(
-                    symbol=symbol, trade_date=next_day, source=MinuteDataSource.DB_HISTORICAL,
+                    symbol=symbol, trade_date=next_day, source=market_source,
                     min_bars=1, require_suspend_status=True,
                 )
                 native.update({"symbol": market.symbol, "trade_date": market.trade_date.isoformat(),
                                "source": market.source.value, "prev_close": market.market_context.get("prev_close"),
                                "bar_count": len(market.minute_bars)})
                 if (native["symbol"] != symbol or native["trade_date"] != run["trade_date"]
-                        or native["source"] != "DB_HISTORICAL" or not native["bar_count"]):
+                        or native["source"] != market_source.value or not native["bar_count"]):
                     self._invalid("LOCALSIM_REPLAY_RECOVERY_NATIVE_INPUT_CONFLICT")
         except (DataUnavailableError, InvalidStateTransitionError) as exc:
             reasons.append(str(exc.context.get("reason_code") or type(exc).__name__))

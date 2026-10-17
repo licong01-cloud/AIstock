@@ -7,7 +7,7 @@ Account/order/ledger commits remain entirely with the original lifecycle.
 
 from __future__ import annotations
 
-from copy import deepcopy
+from copy import copy, deepcopy
 import hashlib
 import json
 from pathlib import Path
@@ -45,6 +45,7 @@ from .localsim_selection_inference import (
     LOCALSIM_INFERENCE_SCOPE, LocalSimInferenceScope, LocalSimReferencedAssetResolver,
     LocalSimSharedInferenceProvider, own_scope, windows_x_root,
 )
+from .localsim_file_inputs import current_file_dataset
 
 
 def _selection_code_identity():
@@ -55,6 +56,8 @@ def _selection_code_identity():
         base / "advisory_historical_range/selection_signal_kernel.py",
         base / "simulation_signal/strategy_package_selection.py",
         base / "selection_center/tradability.py", base / "selection_center/suspension_provider.py",
+        base.parent / "data_service/frozen_dataset.py", base / "advisory_historical_range/inference_inputs.py",
+        Path(__file__).with_name("localsim_file_inputs.py"), base / "simulation_data/frozen_file_adapters.py",
     )
     paths += tuple(base / "strategy_package" / (name + ".py") for name in (
         "selection_computation", "selection_artifact", "selection_signal_preparation", "live_inference", "runtime",
@@ -86,6 +89,9 @@ class LocalSimRawRepository:
                 raise ValueError("native LocalSIM leg populations conflict with the parent input population")
             metadata["universe_members"] = list(baseline["members"])
         metadata["localsim_signal_run"] = {"consumer_scope": "LOCALSIM", "run_id": scope.run_id, "clocks": scope.clocks.to_dict()}
+        dataset = current_file_dataset()
+        if dataset is not None:
+            metadata["localsim_signal_run"]["file_binding_hash"] = dataset.identity
         artifact = SelectionScoreArtifact.model_validate({**artifact.model_dump(), "metadata": metadata})
         artifact = StrategyPackageSelectionArtifactRepository._with_digest(artifact)
         scope.stage = "native_raw_publication"
@@ -110,6 +116,13 @@ class LocalSimRawRepository:
 
 
 class LocalSimSelectionArtifactService(StrategyPackageSelectionArtifactService):
+    def _load_reference_prices(self, symbols, trade_date):
+        dataset = current_file_dataset()
+        if dataset is None:
+            return super()._load_reference_prices(symbols, trade_date)
+        from backend.services.simulation_data.frozen_file_adapters import file_reference_prices
+        return file_reference_prices(dataset, symbols=symbols, as_of_date=trade_date)
+
     def generate_from_live_inference(self, **kwargs):
         if kwargs["package_id"] in own_scope().artifacts:
             raise InvalidStateTransitionError(
@@ -294,17 +307,46 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
         return super()._build_operational_evidence_by_package(**kwargs)
 
     def run_selection(self, **kwargs):
+        dataset = current_file_dataset()
+        if kwargs.get("data_source") == "DATASET_FILES" and dataset is None:
+            current_file_dataset(required=True)
+        if dataset is not None and not getattr(self, "_file_bound", False):
+            if kwargs.get("data_source") != "DATASET_FILES":
+                raise ValueError("frozen file scope cannot consume a different market source")
+            from backend.services.simulation_data.frozen_file_adapters import (
+                FileTradingCalendar, FileTradabilityFilter,
+            )
+            from backend.services.selection_center.risk_policy import StPitRiskDecisionProvider, StockRiskPolicyService
+            bound = copy(self)
+            bound.calendar_provider = FileTradingCalendar(dataset)
+            bound.tradability_filter = FileTradabilityFilter(dataset)
+            st = StPitRiskDecisionProvider(span_loader=dataset.spans)
+            st.source_name = "dataset_files.stock_universe_pit"
+            bound.risk_policy_service = StockRiskPolicyService(providers={"st_pit": st})
+            bound._file_bound = True
+            return bound.run_selection(**kwargs)
         recovery_evidence = kwargs.pop("recovery_evidence", None)
         if kwargs.get("prospective_context") is not None:
             raise ValueError("LocalSIM consumer uses its own daily evidence, not an Advisory prospective writer")
         trade_date = kwargs["trade_date"]
         config = deepcopy(kwargs.get("runtime_config") or {})
+        if dataset is not None:
+            profile = config.get("runtime_profile", {})
+            if (profile.get("hmm") or {}).get("enabled"):
+                raise DataUnavailableError("file mode has no native HMM input adapter", context={
+                    "reason_code": "FROZEN_DATASET_HMM_INPUT_UNCOVERED"})
+            if (profile.get("risk_policy") or {}).get("enabled") and any(
+                name != "st_pit" for name in (profile["risk_policy"].get("providers") or ["st_pit"])
+            ):
+                raise DataUnavailableError("file mode does not cover a requested native risk provider", context={
+                    "reason_code": "FROZEN_DATASET_RISK_POLICY_UNCOVERED"})
         release = kwargs.get("runtime_release")
         identities = {p: self.package_repository.get(p).manifest_sha256 for p in kwargs["package_ids"]}
         identity = canonical_json_sha256({"packages": identities, "date": trade_date.isoformat(), "source": kwargs["data_source"],
                                           "localsim_suspension_policy": localsim_suspension_policy_identity(),
                                          "ordered_package_ids": kwargs["package_ids"],
                                          "config": config, "mode": kwargs["mode"].value,
+                                         "file_binding_hash": dataset.identity if dataset else None,
                                          "release": getattr(release, "release_hash", None),
                                           "recovery_evidence": getattr(recovery_evidence, "artifact_hash", None),
                                           "code": dict(_LOADED_SELECTION_CODE_IDENTITY)})
@@ -368,6 +410,9 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
             raise InvalidStateTransitionError("LocalSIM recovery raw evidence is not the exact native frozen input",
                                               context={"reason_code": "LOCALSIM_FROZEN_RAW_EVIDENCE_CONFLICT"})
         artifact = SelectionScoreArtifact.model_validate(owner.get("raw_artifact", {}))
+        dataset = current_file_dataset()
+        if dataset is not None and artifact.metadata.get("localsim_signal_run", {}).get("file_binding_hash") != dataset.identity:
+            raise InvalidStateTransitionError("LocalSIM frozen raw file identity differs from this replay")
         sealed = StrategyPackageSelectionArtifactRepository._with_digest(artifact)
         if (sealed.artifact_payload_sha256 != artifact.artifact_payload_sha256
                 or artifact.package_id != stored.package_id or artifact.manifest_sha256 != stored.manifest_sha256

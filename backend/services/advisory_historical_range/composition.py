@@ -33,7 +33,9 @@ from backend.services.strategy_package.selection_signal_preparation import (
 )
 
 from .artifact_store import HistoricalRangeArtifactStore
-from .outcome_file_source import FileHistoricalRangeOutcomeSourceProvider, freeze_outcome_file_binding
+from .outcome_file_source import (
+    FileHistoricalRangeOutcomeSourceProvider, OutcomeFileVerificationSession, freeze_outcome_file_binding,
+)
 from .outcome_file_inputs import (
     FileHistoricalRangeCandidateProjectionLoader,
     FileHistoricalRangeOutcomeSubjectInputProvider,
@@ -683,10 +685,11 @@ def build_explicit_historical_range_r5_runtime_factory(
             component_root=policy_component_root,
             provider=policy_provider,
         )
+        file_verification = OutcomeFileVerificationSession()
         outcome_requests = HistoricalRangeR5OutcomeRequestFactory(
             policy_registry=policy_registry,
             identities=identities,
-            file_binding_factory=freeze_outcome_file_binding,
+            file_binding_factory=lambda: freeze_outcome_file_binding(verification_session=file_verification),
         )
 
         def outcome_service_factory(request: Any) -> HistoricalRangeOutcomeApplicationService:
@@ -704,6 +707,8 @@ def build_explicit_historical_range_r5_runtime_factory(
                     binding=request.file_source_binding,
                     start_trade_date=inputs.start_trade_date,
                     label_as_of_trade_date=request.label_as_of_trade_date,
+                    verification_session=file_verification,
+                    context_only=request.summary_mode == "ONLY",
                 )
                 projection = FileHistoricalRangeCandidateProjectionLoader(
                     inputs=inputs, artifact_store=read_cache, policy_provider=policy_provider,
