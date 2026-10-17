@@ -42,6 +42,18 @@ def packet():
         component_roles=roles, terminal_weights=weights)
 
 
+@pytest.mark.parametrize("object_columns", [False, True])
+def test_empty_original_roster_preserves_schema_and_no_candidate_state(packet, object_columns):
+    columns = packet["candidates"].columns
+    packet["candidates"] = pd.DataFrame(columns=columns) if object_columns else packet["candidates"].iloc[:0].copy()
+    packet["raw_daily"] = packet["raw_daily"].iloc[:0].copy()
+    packet["suspend_rows"] = packet["suspend_rows"].iloc[:0].copy()
+    frame, receipt = build_economic_daily_feature_core_v1(**packet)
+    assert frame.empty and list(frame.columns[3:]) == list(D_FEATURES)
+    assert receipt["status"] == "NO_CANDIDATES" and receipt["candidate_count"] == 0
+    assert receipt["unknown_fields"] == [] and receipt["outcomes_read"] is receipt["new_native_receipt"] is False
+
+
 def test_complete_D_values_reuse_shared_formulas_and_hand_calculated_information(packet):
     frame, receipt = build_economic_daily_feature_core_v1(**packet)
     assert frame.instrument.tolist() == packet["candidates"].instrument.tolist()

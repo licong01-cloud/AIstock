@@ -8,8 +8,10 @@ assigning the default publication rule to a new or renamed industry.
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Any, Mapping, Sequence
+from datetime import date, timedelta
+import math
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Sequence
 
 from .canonical import digest_named_fields
 from .shared_sector_context import (
@@ -19,27 +21,43 @@ from .shared_sector_context import (
 )
 
 
-QUOTE_PUBLICATION_POLICY_SCHEMA = "aistock_sw_l2_quote_publication_policy_v1"
+QUOTE_PUBLICATION_POLICY_SCHEMA = "aistock_sw_l2_quote_publication_policy_v2"
 SW2021_L2_TAXONOMY_DIGEST = (
     "ce01d8dac21b52ad9852d11f21225bb063964962b0cdaef580d75e7b396abb74"
 )
 
-# 801011.SI is a taxonomy/catalog identity without a published quote series in
-# the approved shared authority.  The six dated rows stopped publication after
-# 2026-04-28; their stock membership and money-flow semantics remain valid.
-_NEVER_QUOTED = frozenset({"801011.SI"})
-_LAST_PUBLISHED: Mapping[str, date] = {
-    "801019.SI": date(2026, 4, 28),
-    "801117.SI": date(2026, 4, 28),
-    "801207.SI": date(2026, 4, 28),
-    "801216.SI": date(2026, 4, 28),
-    "801961.SI": date(2026, 4, 28),
-    "801983.SI": date(2026, 4, 28),
-}
+# The provider's version-qualified publication catalog, not stock membership,
+# determines which quotes are required. The SW2021 table explicitly lists
+# 801011 as unpublished. Authentic historical sw_daily observations still
+# prove availability ON THOSE DATES; neither fact supplies a stop/start date.
+PUBLICATION_RULE_URL = "https://tushare.pro/document/2?doc_id=181"
+_QUOTE_FIELDS = ("sw2_pct_change", "sw2_vol", "sw2_amount")
 
 
 class SWL2QuotePolicyError(RuntimeError):
     """The frozen taxonomy cannot be bound to the publication policy."""
+
+
+def publication_quote_observations(path: Path, *, chunk_rows: int):
+    """Read the existing small quote projection, not historical stock prices.
+
+    Private preparation may pass its already materialized sector facts. Final
+    BUILD uses sector_quote_facts, which it already has to produce exactly once.
+    This is a projection of positive evidence, not a historical quality audit.
+    """
+    import pandas as pd
+
+    before = path.stat()
+    with pd.HDFStore(path, mode="r") as store:
+        for frame in store.select("data", columns=["l2_code_id", *_QUOTE_FIELDS], chunksize=chunk_rows):
+            for row in frame.reset_index().itertuples(index=False):
+                yield {"trade_date": row.datetime, "l2_code_id": row.l2_code_id,
+                       **{key: getattr(row, key) for key in _QUOTE_FIELDS}}
+    after = path.stat()
+    if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns) != (
+        after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns
+    ):
+        raise SWL2QuotePolicyError("frozen quote observation file changed during read")
 
 
 def taxonomy_digest(ordered_codes: Sequence[str]) -> str:
@@ -57,11 +75,9 @@ def quote_publication_policy_identity() -> str:
         QUOTE_PUBLICATION_POLICY_SCHEMA,
         {
             "taxonomy_digest": SW2021_L2_TAXONOMY_DIGEST,
-            "never_quoted": sorted(_NEVER_QUOTED),
-            "last_published": {
-                code: value.isoformat() for code, value in sorted(_LAST_PUBLISHED.items())
-            },
-            "default_rule": "available_through_release_cutoff_v1",
+            "publication_catalog": "frozen_index_classify_SW2021_is_pub",
+            "publication_rule_url": PUBLICATION_RULE_URL,
+            "nonpublished_rule": "retain_dated_observations_without_extrapolation_v1",
         },
     )
 
@@ -71,8 +87,17 @@ def build_quote_availability_payload(
     code_map: ReleaseSWL2CodeMap,
     required_start: date,
     cutoff: date,
+    classification_rows: Iterable[Mapping[str, Any]],
+    quote_observations: Iterable[Mapping[str, Any]],
+    evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Clip the approved publication authority to one release window."""
+    """Bind publication scope and dated facts without inventing a stop date.
+
+    is_pub=0 is a provider/version contract, NOT a backdated event or an
+    inference from membership/NaN. Dated complete quote observations remain
+    usable even for a nonpublished catalog entry, but cannot license its next
+    day/month. A partial observation never becomes an absence exemption.
+    """
 
     if cutoff < required_start:
         raise SWL2QuotePolicyError("quote availability window is inverted")
@@ -83,22 +108,45 @@ def build_quote_availability_payload(
             "SW L2 taxonomy differs from the approved quote policy: "
             f"expected={SW2021_L2_TAXONOMY_DIGEST} actual={observed_digest}"
         )
-    exceptions = _NEVER_QUOTED | set(_LAST_PUBLISHED)
-    if not exceptions.issubset(ordered_codes):
-        raise SWL2QuotePolicyError("quote policy exceptions are absent from the taxonomy")
+    catalog: dict[str, str] = {}
+    for row in classification_rows:
+        code = str(row.get("index_code", ""))
+        if (code in catalog or row.get("src") != "SW2021" or row.get("level") != "L2"
+            or type(row.get("is_pub")) not in (str, int) or str(row["is_pub"]) not in {"0", "1"}):
+            raise SWL2QuotePolicyError(f"SW L2 publication catalog is invalid: {code}")
+        catalog[code] = str(row["is_pub"])
+    if not set(ordered_codes) <= catalog.keys():
+        raise SWL2QuotePolicyError("SW L2 publication catalog omits a canonical code")
+    observed: dict[str, set[date]] = {code: set() for code in ordered_codes if catalog[code] == "0"}
+    for row in quote_observations:
+        code = code_map.id_to_code.get(row.get("l2_code_id"))
+        if code not in observed:
+            continue
+        try:
+            day = date.fromisoformat(str(row["trade_date"])[:10])
+            if not required_start <= day <= cutoff:
+                continue
+            values = [row[key] for key in _QUOTE_FIELDS]
+            if all(value is None or math.isnan(float(value)) for value in values):
+                continue
+            if (any(value is None or isinstance(value, bool) or not math.isfinite(float(value)) for value in values)
+                or float(values[1]) < 0 or float(values[2]) < 0):
+                raise ValueError("incomplete or non-finite fields")
+        except (KeyError, TypeError, ValueError, OverflowError) as exc:
+            raise SWL2QuotePolicyError(f"SW L2 quote observation invalid: {code} {row.get('trade_date')}") from exc
+        observed[code].add(day)
 
     entries: list[dict[str, Any]] = []
     for code in ordered_codes:
         spans: list[dict[str, str]] = []
-        if code not in _NEVER_QUOTED:
-            end = min(cutoff, _LAST_PUBLISHED.get(code, cutoff))
-            if required_start <= end:
-                spans.append(
-                    {
-                        "start_date": required_start.isoformat(),
-                        "end_date": end.isoformat(),
-                    }
-                )
+        if catalog[code] == "1":
+            spans.append({"start_date": required_start.isoformat(), "end_date": cutoff.isoformat()})
+        else:
+            for day in sorted(observed[code]):
+                if spans and date.fromisoformat(spans[-1]["end_date"]) + timedelta(days=1) == day:
+                    spans[-1]["end_date"] = day.isoformat()
+                else:
+                    spans.append({"start_date": day.isoformat(), "end_date": day.isoformat()})
         entries.append(
             {"canonical_l2_code": code, "availability_spans": spans}
         )
@@ -117,6 +165,18 @@ def build_quote_availability_payload(
         code_map=code_map,
         required_end=cutoff,
     )
+    if evidence is not None:
+        evidence.update({
+            "publication_rule_url": PUBLICATION_RULE_URL,
+            "publication_policy_identity": quote_publication_policy_identity(),
+            "classification_catalog_digest": digest_named_fields(
+                "aistock_sw_l2_frozen_publication_catalog_v1", {"catalog": catalog}),
+            "nonpublished_catalog_codes": sorted(observed),
+            "dated_observation_count": sum(map(len, observed.values())),
+            "scope_semantics": "versioned_catalog_obligation_plus_dated_provider_facts_v1",
+            "historical_stop_date_inferred": False,
+            "membership_used_to_infer_publication": False,
+        })
     return payload
 
 
@@ -126,5 +186,6 @@ __all__ = (
     "SWL2QuotePolicyError",
     "build_quote_availability_payload",
     "quote_publication_policy_identity",
+    "publication_quote_observations",
     "taxonomy_digest",
 )

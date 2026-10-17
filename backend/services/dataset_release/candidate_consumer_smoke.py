@@ -1,9 +1,9 @@
 """Shared candidate consumer contracts for supervised QE/HMM smoke tests.
 
-The QE gate deliberately uses Qlib's public ``D.features`` API instead of
-reading float bins directly.  The HMM gate is narrower: it proves that the
-candidate index H5 implements the shared training/prediction data contract;
-it does *not* claim that an existing HMM runtime has been switched to it.
+The QE probe deliberately uses Qlib's public ``D.features`` API instead of
+reading float bins directly. The index probe checks the new month in either
+normalized H5 storage or inherited raw H5 plus genuine normalized Parquet;
+it does not certify historical returns or switch an existing HMM runtime.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ from typing import Any, Callable, Mapping, Protocol, Sequence
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 
 from .index_contract import (
     DOMESTIC_INDEX_DEFINITIONS,
@@ -33,6 +34,7 @@ from .streaming_artifacts import iter_hdf_frames
 CANDIDATE_CONSUMER_SMOKE_SCHEMA = "dataset_release_candidate_consumer_smoke_v1"
 QE_QLIB_READER_CONTRACT = "qe_qlib_d_features_candidate_v1"
 HMM_INDEX_H5_READER_CONTRACT = "hmm_shared_index_h5_loader_v1"
+HMM_RAW_INDEX_MONTH_READER_CONTRACT = "hmm_shared_raw_index_month_loader_v1"
 QE_STOCK_FIELDS: tuple[str, ...] = tuple(f"${field}" for field in QLIB_STOCK_FIELDS)
 QE_DAILY_FIELDS = QE_STOCK_FIELDS
 QE_MINUTE_FIELDS = QE_STOCK_FIELDS
@@ -323,7 +325,7 @@ def validate_candidate_consumer_smoke_receipt(
         or qe.get("qlib_init_provider_frequencies") != ["1min", "day"]
         or not isinstance(hmm, Mapping)
         or hmm.get("status") != "PASS"
-        or hmm.get("reader_contract") != HMM_INDEX_H5_READER_CONTRACT
+        or hmm.get("reader_contract") not in {HMM_INDEX_H5_READER_CONTRACT, HMM_RAW_INDEX_MONTH_READER_CONTRACT}
         or hmm.get("schema_version") != INDEX_SCHEMA_VERSION
         or hmm.get("universe_version") != INDEX_UNIVERSE_VERSION
         or hmm.get("benchmark") != HMM_BENCHMARK_CODE
@@ -334,6 +336,15 @@ def validate_candidate_consumer_smoke_receipt(
         or hmm.get("existing_hmm_consumer_activation") != "not_activated_not_switched"
     ):
         raise CandidateConsumerSmokeError("consumer reader contract differs")
+    if hmm.get("reader_contract") == HMM_RAW_INDEX_MONTH_READER_CONTRACT and (
+        hmm.get("validation_scope") != "month_delta"
+        or hmm.get("month_start") != cutoff.replace(day=1).isoformat()
+        or hmm.get("historical_values_validated") != 0
+        or hmm.get("return_source") != "frozen_month_index_context_parquet"
+        or hmm.get("h5_storage_contract") != "inherited_raw_8_share_volume_thousand_cny_v1"
+        or hmm.get("raw_normalized_month_values_match") is not True
+    ):
+        raise CandidateConsumerSmokeError("consumer raw index month evidence differs")
     _validate_feature_evidence(qe.get("daily"), QE_DAILY_FIELDS, cutoff)
     _validate_feature_evidence(qe.get("minute"), QE_MINUTE_FIELDS, cutoff)
     _validate_feature_evidence(qe.get("indices"), QE_INDEX_FIELDS, cutoff)
@@ -414,6 +425,13 @@ def load_hmm_index_contract_smoke(
 ) -> dict[str, Any]:
     """Load 000300 from the shared index H5 without claiming runtime adoption."""
 
+    with pd.HDFStore(str(path), mode="r") as store:
+        storer = store.get_storer("data")
+        if storer is None:
+            raise CandidateConsumerSmokeError("HMM index H5 data is missing")
+        fixed = not bool(getattr(storer, "is_table", False))
+    if fixed:
+        return _load_raw_index_month(path, cutoff=cutoff, max_rows=max_rows, checkpoint=checkpoint)
     rows = 0
     cutoff_rows = 0
     for frame in iter_hdf_frames(path, chunksize=max_rows):
@@ -426,10 +444,14 @@ def load_hmm_index_contract_smoke(
             continue
         if benchmark.empty:
             continue
+        dates = pd.to_datetime(benchmark.index.get_level_values("datetime"))
+        # Historical rows are inherited content, not monthly business QA.
+        in_month = (dates.date >= cutoff.replace(day=1)) & (dates.date <= cutoff)
+        benchmark = benchmark.loc[in_month]
         numeric = benchmark.loc[:, list(HMM_SMOKE_FIELDS)].apply(pd.to_numeric, errors="coerce")
+        dates = dates[in_month]
         if not np.isfinite(numeric.to_numpy(dtype=float)).all():
             raise CandidateConsumerSmokeError("HMM index H5 contains non-finite values")
-        dates = pd.to_datetime(benchmark.index.get_level_values("datetime"))
         cutoff_rows += int((dates.strftime("%Y-%m-%d") == cutoff.isoformat()).sum())
         rows += len(benchmark)
     if rows <= 0 or cutoff_rows != 1:
@@ -444,6 +466,73 @@ def load_hmm_index_contract_smoke(
         "rows": rows,
         "cutoff_rows": cutoff_rows,
         "cutoff": cutoff.isoformat(),
+        "existing_hmm_consumer_activation": "not_activated_not_switched",
+    }
+
+
+def _load_raw_index_month(path: Path, *, cutoff: date, max_rows: int, checkpoint: Callable[[], None]) -> dict[str, Any]:
+    """Read inherited raw storage and genuine normalized MONTH facts separately.
+
+    The raw H5 has no old pre_close/return. Never manufacture either, and never
+    claim that it implements the normalized historical H5 schema. Small fixed
+    storage is materialized only after a physical row bound has been proven.
+    """
+    from .monthly_legacy_index import RAW_COLUMNS
+    from .monthly_legacy_prefix import _plain_chain, _signature
+
+    parquet = path.parent / "index_context.parquet"
+    _plain_chain(path)
+    _plain_chain(parquet)
+    signatures = {file: _signature(file) for file in (path, parquet)}
+    with pd.HDFStore(str(path), mode="r") as store:
+        storer = store.get_storer("data")
+        if storer.group.axis1.nrows > max_rows:
+            raise CandidateConsumerSmokeError("raw index H5 exceeds the declared read bound")
+        raw = store.select("data")
+    if tuple(raw.columns) != RAW_COLUMNS or pq.ParquetFile(parquet).metadata.num_rows > max_rows:
+        raise CandidateConsumerSmokeError("raw index month storage/schema bound differs")
+    checkpoint()
+    frame = pd.read_parquet(parquet)
+    if tuple(frame.columns) != INDEX_H5_COLUMNS or tuple(frame.index.names) != ("datetime", "instrument"):
+        raise CandidateConsumerSmokeError("normalized index month schema differs")
+    start = cutoff.replace(day=1)
+    dates = pd.to_datetime(frame.index.get_level_values("datetime"))
+    if frame.empty or frame.index.has_duplicates or not np.isfinite(frame.to_numpy(dtype=float)).all() or any(not start <= day <= cutoff for day in dates.date):
+        raise CandidateConsumerSmokeError("normalized index month dates/values differ")
+    raw_dates = pd.to_datetime(raw["trade_date"])
+    month = raw.loc[(raw_dates.dt.date >= start) & (raw_dates.dt.date <= cutoff)].copy()
+    month["datetime"] = pd.to_datetime(month["trade_date"])
+    month["instrument"] = month["ts_code"].astype(str).str.upper()
+    month = month.set_index(["datetime", "instrument"]).sort_index()
+    frame = frame.sort_index()
+    if month.index.has_duplicates or not month.index.equals(frame.index):
+        raise CandidateConsumerSmokeError("raw/normalized index month keys differ")
+    for raw_field, normalized_field, scalar in (
+        ("open", "idx_open_point", 1), ("high", "idx_high_point", 1),
+        ("low", "idx_low_point", 1), ("close", "idx_close_point", 1),
+        ("volume", "idx_volume_share_equiv", 1), ("amount", "idx_amount_cny", 1000),
+    ):
+        if not np.allclose(month[raw_field].to_numpy(dtype=float) * scalar, frame[normalized_field].to_numpy(dtype=float), rtol=1e-6, atol=0, equal_nan=False):
+            raise CandidateConsumerSmokeError("raw/normalized index month values differ")
+    if any(_signature(file) != signature for file, signature in signatures.items()):
+        raise CandidateConsumerSmokeError("raw index month changed during consumer read")
+    try:
+        benchmark = frame.xs(HMM_BENCHMARK_CODE, level="instrument")
+    except KeyError as exc:
+        raise CandidateConsumerSmokeError("raw index month omits CSI300") from exc
+    cutoff_rows = int((pd.to_datetime(benchmark.index).date == cutoff).sum())
+    if cutoff_rows != 1:
+        raise CandidateConsumerSmokeError("raw index month CSI300 cutoff differs")
+    checkpoint()
+    return {
+        "status": "PASS", "reader_contract": HMM_RAW_INDEX_MONTH_READER_CONTRACT,
+        "schema_version": INDEX_SCHEMA_VERSION, "universe_version": INDEX_UNIVERSE_VERSION,
+        "benchmark": HMM_BENCHMARK_CODE, "fields": list(HMM_SMOKE_FIELDS),
+        "rows": len(benchmark), "cutoff_rows": cutoff_rows, "cutoff": cutoff.isoformat(),
+        "month_start": start.isoformat(), "validation_scope": "month_delta",
+        "historical_values_validated": 0, "return_source": "frozen_month_index_context_parquet",
+        "h5_storage_contract": "inherited_raw_8_share_volume_thousand_cny_v1",
+        "raw_normalized_month_values_match": True,
         "existing_hmm_consumer_activation": "not_activated_not_switched",
     }
 

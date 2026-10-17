@@ -5,9 +5,11 @@ import errno
 import hashlib
 import importlib
 import json
+import os
 from pathlib import Path
 from typing import Any, Mapping
 
+import numpy as np
 import pytest
 
 from backend.services.dataset_release import monthly_unified as monthly_subject
@@ -288,6 +290,165 @@ def _request(*, key: str = "monthly-202609") -> MonthlyReleaseRequest:
     )
 
 
+@pytest.mark.parametrize("supplement_name", ["monthly_industry_history", "monthly_prev_close_repairs", "monthly_suspension_authority"])
+@pytest.mark.parametrize("drift", [None, "base_plan", "binding", "source_receipt"])
+def test_history_supplement_keeps_sealed_source_across_producer_upgrade(tmp_path, drift, supplement_name):
+    from backend.services.dataset_release.monthly_unified import _digest
+    pipeline = Pipeline(fail_once_at="BUILD")
+    producer = {"version": "old"}
+    pipeline.stage_identity = lambda stage: _digest({"stage": stage, "version": producer["version"]})
+    service = _service(tmp_path, pipeline)
+    operation_id = service.submit(_request())["operation_id"]
+    assert service.run(operation_id)["status"] == "FAILED"
+    source = service.store.read_checkpoint(operation_id, "SOURCE")
+    plan = service.store.read_plan(operation_id)
+    binding = {"base_plan_digest": _digest(plan), "source_receipt_canonical_sha256": source["canonical_sha256"]}
+    reference = {"sha256": hashlib.sha256(canonical_json_bytes(binding) + b"\n").hexdigest()}
+    proposed = {**plan, supplement_name: binding, supplement_name + "_ref": reference}
+    if drift == "base_plan":
+        proposed["generation"] = "different"
+    elif drift == "binding":
+        binding["source_receipt_canonical_sha256"] = "a" * 64
+    elif drift == "source_receipt":
+        binding["source_receipt_canonical_sha256"] = "a" * 64
+        reference["sha256"] = hashlib.sha256(canonical_json_bytes(binding) + b"\n").hexdigest()
+    service.store.replace_plan(operation_id, proposed)
+    producer["version"] = "new"
+    service.resume(operation_id)
+    if drift is None:
+        assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
+        assert pipeline.calls.count("SOURCE") == 1
+    else:
+        with pytest.raises(MonthlyReleaseConflict):
+            service.run(operation_id)
+        assert pipeline.calls.count("SOURCE") == 1
+
+
+@pytest.mark.parametrize("case", ["ok", "source_unsealed", "active_drift", "read_failure"])
+def test_history_binding_uses_readonly_snapshot_and_never_changes_source(tmp_path, monkeypatch, case):
+    from types import SimpleNamespace
+    from backend.services.dataset_release import monthly_industry_history as history_module, monthly_industry_facts as facts_module
+    from backend.services.dataset_release import monthly_legacy_prefix, monthly_sector_mapping
+
+    class SourcePipeline(Pipeline):
+        def run_stage(self, **kwargs):
+            value = dict(super().run_stage(**kwargs))
+            if kwargs["stage"] == "SOURCE":
+                value["input_refs"] = [{"id": "source-inputs/attempt-1/frozen-source-bundle.json", "sha256": HEX, "size": 1}]
+                value["canonical_sha256"] = monthly_subject._digest({key: item for key, item in value.items() if key != "canonical_sha256"})
+            return value
+
+    service = _service(tmp_path, SourcePipeline(fail_once_at="SOURCE" if case == "source_unsealed" else "BUILD"))
+    operation = service.submit(_request())["operation_id"]
+    assert service.run(operation)["status"] == "FAILED"
+    source_before = service.store.read_checkpoint(operation, "SOURCE")
+    calls = []
+    class Connection:
+        def set_session(self, **kwargs):
+            calls.append(kwargs)
+        def rollback(self):
+            calls.append("rollback")
+        def close(self):
+            calls.append("close")
+    def capture(connection, **kwargs):
+        assert isinstance(connection, Connection)
+        if case == "read_failure":
+            raise ValueError("authority is unavailable")
+        payload = {"existing_authority": True}
+        return SimpleNamespace(payload=payload, sha256=monthly_subject._digest(payload))
+    monkeypatch.setattr(history_module, "capture_industry_history", capture)
+    monkeypatch.setattr(history_module.IndustryHistoryProjection, "read", lambda value: SimpleNamespace(payload=value, sha256=monthly_subject._digest(value)))
+    monkeypatch.setattr(facts_module, "capture_industry_quote_source", lambda *args, **kwargs: {"frozen_quotes": True})
+    monkeypatch.setattr(monthly_legacy_prefix, "load_legacy_prefix", lambda *args, **kwargs: object())
+    monkeypatch.setattr(monthly_sector_mapping, "load_predecessor_sector_mapping", lambda prefix: {"code_map": {}})
+    if case == "active_drift":
+        service.active_profile.write_bytes(service.active_profile.read_bytes() + b" ")
+    if case in {"source_unsealed", "active_drift"}:
+        with pytest.raises(MonthlyReleaseConflict):
+            service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection, quote_cas=object())
+        assert not calls
+    elif case == "read_failure":
+        with pytest.raises(ValueError, match="authority is unavailable"):
+            service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection, quote_cas=object())
+        assert calls[-2:] == ["rollback", "close"]
+    else:
+        value = service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection, quote_cas=object())
+        assert calls == [{"readonly": True, "isolation_level": "REPEATABLE READ", "autocommit": False}, "rollback", "close"]
+        assert service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection, quote_cas=object()) == value
+        assert len(calls) == 3
+        binding = service.store.read_plan(operation)["monthly_industry_history"]
+        assert binding["database_write"] is False and binding["activation_authorized"] is False
+        # Existing September history binding stays immutable when independent
+        # quote facts are added later. The sealed price SOURCE is never rerun.
+        retained_plan = service.store.read_plan(operation)
+        history_ref = retained_plan["monthly_industry_history_ref"]
+        service.store.replace_plan(operation, {key: item for key, item in retained_plan.items()
+            if key not in {"monthly_industry_quote_source", "monthly_industry_quote_source_ref"}})
+        service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection, quote_cas=object())
+        after = service.store.read_plan(operation)
+        assert after["monthly_industry_history"] == binding
+        assert after["monthly_industry_history_ref"] == history_ref
+        assert after["monthly_industry_quote_source"]["source_bundle_sha256"] == HEX
+    assert service.store.read_checkpoint(operation, "SOURCE") == source_before
+
+
+@pytest.mark.parametrize("sealed", [False, True])
+@pytest.mark.parametrize("kind", ["prev_close", "suspension"])
+def test_prev_close_binding_retains_source_and_is_idempotent(tmp_path, monkeypatch, sealed, kind):
+    from backend.services.dataset_release import monthly_prev_close_repair as correction
+    if kind == "suspension":
+        from backend.services.dataset_release import monthly_suspension_repair as correction
+    class SourcePipeline(Pipeline):
+        def run_stage(self, **kwargs):
+            value = dict(super().run_stage(**kwargs))
+            if kwargs["stage"] == "SOURCE":
+                value["input_refs"] = [{"id": "source-inputs/frozen-source-bundle.json", "sha256": HEX, "size": 1}]
+                value["canonical_sha256"] = monthly_subject._digest({k: v for k, v in value.items() if k != "canonical_sha256"})
+            return value
+    service = _service(tmp_path, SourcePipeline(fail_once_at="BUILD" if sealed else "SOURCE"))
+    operation = service.submit(_request())["operation_id"]
+    service.run(operation)
+    before = service.store.read_checkpoint(operation, "SOURCE")
+    calls = []
+    def capture(inputs=None, **kwargs):
+        calls.append(inputs)
+        return {"schema_version": correction.SCHEMA, "facts": []}
+    monkeypatch.setattr(correction, "capture_approved_corrections" if kind == "prev_close" else "capture_approved_authority", capture)
+    cas = type("CAS", (), {"put_json": lambda self, value: type("Ref", (), {"as_dict": lambda self: {"sha256": HEX, "size": 1, "relative_path": "fact"}})()})()
+    def bind():
+        if kind == "suspension":
+            return service.bind_suspension_authority(operation, principal="operator:test", cas=cas)
+        return service.bind_prev_close_repairs(operation, inputs={"exact": True}, principal="operator:test", cas=cas)
+    if not sealed:
+        with pytest.raises(MonthlyReleaseConflict):
+            bind()
+        assert calls == []
+        return
+    result = bind()
+    assert result["status"] == "BOUND" and len(calls) == 1
+    assert bind() == result
+    assert len(calls) == 1 and service.store.read_checkpoint(operation, "SOURCE") == before
+    if kind == "prev_close":
+        with pytest.raises(MonthlyReleaseConflict, match="binding changed"):
+            service.bind_prev_close_repairs(operation, inputs={"exact": False}, principal="operator:test", cas=cas)
+    else:
+        plan = service.store.read_plan(operation)
+        assert plan[correction.BINDING]["database_write"] is False
+        assert plan[correction.BINDING]["activation_authorized"] is False
+        assert service.status(operation)["status"] == "FAILED"
+        path = service.store.operation_root(operation) / plan[correction.BINDING + "_ref"]["id"]
+        path.write_bytes(path.read_bytes() + b" ")
+        with pytest.raises(MonthlyReleaseConflict, match="binding changed"):
+            bind()
+        path.write_bytes(monthly_subject._canonical_payload(plan[correction.BINDING]))
+        # Real orchestration resume must adopt the unchanged sealed SOURCE,
+        # not merely prove that the binding endpoint returned BOUND.
+        service.resume(operation)
+        service.run(operation)
+        assert service.status(operation)["status"] == "READY_TO_ACTIVATE"
+        assert service.store.read_checkpoint(operation, "SOURCE") == before
+
+
 def _adoptable_successor(
     tmp_path: Path, service: MonthlyReleaseService
 ) -> dict[str, Any]:
@@ -438,6 +599,166 @@ def test_existing_successor_adoption_rejects_drift_and_incomplete_evidence(
         service.adopt_existing_successor(**values)
 
 
+def _quote_only_successor(tmp_path: Path, service: MonthlyReleaseService) -> dict[str, Any]:
+    values = _adoptable_successor(tmp_path, service)
+    baseline = Path(ActiveProfileSnapshot.read(service.active_profile).candidate_root)
+    candidate = values['candidate_root']
+    provider = 'components/minute_bin_candidate'
+    mutable = {'minute_provider_catalog', 'minute_meta_export'}
+    symbols = ['000698.SZ', '002305.SZ', '002496.SZ']
+    stamps = [f'2026-01-05 09:{minute}:00' for minute in range(31, 36)] + ['2026-08-31 15:00:00']
+    (baseline / provider / 'calendars').mkdir(parents=True)
+    (baseline / provider / 'instruments').mkdir()
+    (baseline / provider / 'calendars/1min.txt').write_text('\n'.join(stamps) + '\n', encoding='utf-8')
+    (baseline / provider / 'instruments/all.txt').write_text('\n'.join(f'{s}\t2025-01-01\t2025-12-31' for s in symbols) + '\n', encoding='utf-8')
+    _canonical(baseline / provider / 'meta_export.json', {'cutoff': '2026-08-31'})
+    for symbol in symbols:
+        directory = baseline / provider / 'features' / symbol.lower()
+        directory.mkdir(parents=True)
+        (directory / 'close.1min.bin').write_bytes(np.array([0, 1, 2, 3, 4, 5, 6], dtype='<f4').tobytes())
+    pool = baseline / 'stock_pools/stock_universe.txt'
+    pool.parent.mkdir()
+    pool.write_text('\n'.join(f'{s}\t2025-01-01\t2025-12-31' for s in symbols) + '\n', encoding='utf-8')
+    pins = {key: {'path': path, 'sha256': _sha(baseline / path), 'size': (baseline / path).stat().st_size}
+            for key, path in {'minute_provider_catalog': provider + '/instruments/all.txt',
+                              'minute_meta_export': provider + '/meta_export.json',
+                              'minute_calendar': provider + '/calendars/1min.txt',
+                              'stock_universe': 'stock_pools/stock_universe.txt'}.items()}
+    old = {'release_id': 'qe_hmm_full_v2_20260831', 'cutoff_trade_date': '2026-08-31',
+           'deployment_snapshot_id': 'old', 'components': pins}
+    old['dataset_manifest_sha256'] = monthly_subject._digest(old)
+    _canonical(baseline / 'qe_dataset_manifest.json', old)
+    active = json.loads(service.active_profile.read_text(encoding='utf-8'))
+    active['components'].update(dataset_manifest_sha256=old['dataset_manifest_sha256'],
+                                dataset_manifest_file_sha256=_sha(baseline / 'qe_dataset_manifest.json'))
+    active['node_bindings'] = {'wsl2-5080': {'candidate_root': '/mnt/releases/baseline'},
+                              'rdagent-node1': {'candidate_root': '/home/releases/baseline'}}
+    _canonical(service.active_profile, active)
+    for path in baseline.rglob('*'):
+        if path.is_file() and path.name != 'qe_dataset_manifest.json':
+            target = candidate / path.relative_to(baseline)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            os.link(path, target)
+    catalog = candidate / provider / 'instruments/all.txt'
+    catalog.unlink()
+    catalog.write_bytes(('\n'.join(f'{s}\t{stamps[0]}\t{stamps[-1]}' for s in sorted(symbols)) + '\n').encode('utf-8'))
+    metadata = candidate / provider / 'meta_export.json'
+    metadata.unlink()
+    _canonical(metadata, {'cutoff': '2026-08-31', 'mode': 'physical_quote_catalog_v1'})
+    report = {'schema_version': 'aistock_minute_quote_catalog_repair_v1', 'cutoff': '2026-08-31',
+              'predecessor_manifest_identity': old['dataset_manifest_sha256'],
+              'price_write': False, 'stock_pool_write': False, 'database_write': False,
+              'active_profile_write': False, 'runtime_action': False,
+              'catalog': {'sha256': _sha(catalog)}}
+    _canonical(candidate / 'reports/minute_quote_catalog_repair.json', report)
+    new_pins = {key: ({'path': pin['path'], 'sha256': _sha(candidate / pin['path']),
+                      'size': (candidate / pin['path']).stat().st_size} if key in mutable else pin)
+                for key, pin in pins.items()}
+    report_path = candidate / 'reports/minute_quote_catalog_repair.json'
+    new_pins['minute_quote_catalog_repair'] = {'path': 'reports/minute_quote_catalog_repair.json',
+                                             'sha256': _sha(report_path), 'size': report_path.stat().st_size}
+    new = {**old, 'components': new_pins, 'deployment_snapshot_id': 'new'}
+    new.pop('dataset_manifest_sha256')
+    new['dataset_manifest_sha256'] = monthly_subject._digest(new)
+    _canonical(candidate / 'qe_dataset_manifest.json', new)
+    target = json.loads(values['profile_candidate'].read_text(encoding='utf-8'))
+    _canonical(values['profile_candidate'], {**active, **{k: target[k] for k in ['generation', 'controller_paths', 'node_bindings']},
+        'components': {**active['components'], 'dataset_manifest_sha256': new['dataset_manifest_sha256'],
+                       'dataset_manifest_file_sha256': _sha(candidate / 'qe_dataset_manifest.json')}})
+    readback = {'schema_version': 'aistock_minute_quote_catalog_readback_v1', 'status': 'PASS',
+                'dataset_manifest_sha256': new['dataset_manifest_sha256'],
+                'manifest_file_sha256': _sha(candidate / 'qe_dataset_manifest.json'),
+                'minute_catalog_sha256': _sha(catalog), 'nodes': {},
+                'quote_sample_start': stamps[0], 'quote_sample_end': stamps[4],
+                'database_write': False, 'runtime_action': False, 'training_experiment': False}
+    for node in REQUIRED_NODES:
+        readback['nodes'][node] = {'status': 'PASS', 'dataset_identity_complete': True,
+            'manifest_identity': new['dataset_manifest_sha256'],
+            'manifest_file_sha256': readback['manifest_file_sha256'],
+            'component_hashes': {'minute_provider_catalog': _sha(catalog)},
+            'catalog_quotes': {s: {'rows': 5, 'close': [1, 2, 3, 4, 5]} for s in symbols},
+            'PIT_buy_excluded_samples': symbols}
+    readback_path = candidate / 'reports/minute_quote_catalog_readback.json'
+    _canonical(readback_path, readback)
+    return {**values, 'predecessor_profile_sha256': _sha(service.active_profile),
+            'target_profile_sha256': _sha(values['profile_candidate']),
+            'dataset_manifest_sha256': new['dataset_manifest_sha256'],
+            'dataset_manifest_file_sha256': readback['manifest_file_sha256'],
+            'node_manifest_file_sha256': {n: readback['manifest_file_sha256'] for n in REQUIRED_NODES},
+            'evidence_refs': [{'relative_path': p.relative_to(candidate).as_posix(), 'sha256': _sha(p),
+                               'schema_version': schema} for p, schema in [(report_path, report['schema_version']), (readback_path, readback['schema_version'])]]}
+
+
+def test_quote_only_successor_uses_typed_quote_evidence_without_rebinding_hmm(tmp_path: Path) -> None:
+    service = _service(tmp_path, Pipeline())
+    values = _quote_only_successor(tmp_path, service)
+    before = service.active_profile.read_bytes()
+    adopted = service.adopt_existing_successor(**values)
+    assert adopted['status'] == 'READY_TO_ACTIVATE'
+    assert service.active_profile.read_bytes() == before
+    assert service.adopt_existing_successor(**values)['operation_id'] == adopted['operation_id']
+
+
+@pytest.mark.parametrize('case', ['unrelated_pin', 'nonfinite_quote', 'missing_node', 'false_eligibility', 'lineage', 'missing_readback'])
+def test_quote_only_successor_rejects_incomplete_or_changed_proofs(tmp_path: Path, case: str) -> None:
+    service = _service(tmp_path, Pipeline())
+    values = _quote_only_successor(tmp_path, service)
+    candidate = values['candidate_root']
+    proof_path = candidate / 'reports/minute_quote_catalog_readback.json'
+    if case in {'nonfinite_quote', 'missing_node', 'false_eligibility'}:
+        proof = json.loads(proof_path.read_text(encoding='utf-8'))
+        if case == 'missing_node':
+            del proof['nodes']['rdagent-node1']
+        elif case == 'false_eligibility':
+            proof['nodes']['rdagent-node1']['PIT_buy_excluded_samples'] = []
+        else:
+            proof['nodes']['rdagent-node1']['catalog_quotes']['000698.SZ']['close'][0] = None
+        _canonical(proof_path, proof)
+        values['evidence_refs'][1]['sha256'] = _sha(proof_path)
+    elif case == 'missing_readback':
+        values['evidence_refs'] = values['evidence_refs'][:1]
+    elif case == 'lineage':
+        report_path = candidate / 'reports/minute_quote_catalog_repair.json'
+        report = json.loads(report_path.read_text(encoding='utf-8'))
+        report['predecessor_manifest_identity'] = 'e' * 64
+        _canonical(report_path, report)
+        values['evidence_refs'][0]['sha256'] = _sha(report_path)
+    else:
+        manifest_path = candidate / 'qe_dataset_manifest.json'
+        manifest = json.loads(manifest_path.read_text(encoding='utf-8'))
+        manifest['components']['minute_calendar']['sha256'] = 'e' * 64
+        manifest.pop('dataset_manifest_sha256')
+        manifest['dataset_manifest_sha256'] = monthly_subject._digest(manifest)
+        _canonical(manifest_path, manifest)
+        profile = json.loads(values['profile_candidate'].read_text(encoding='utf-8'))
+        profile['components']['dataset_manifest_sha256'] = manifest['dataset_manifest_sha256']
+        profile['components']['dataset_manifest_file_sha256'] = _sha(manifest_path)
+        _canonical(values['profile_candidate'], profile)
+        values.update(target_profile_sha256=_sha(values['profile_candidate']),
+                      dataset_manifest_sha256=manifest['dataset_manifest_sha256'],
+                      dataset_manifest_file_sha256=_sha(manifest_path),
+                      node_manifest_file_sha256={node: _sha(manifest_path) for node in REQUIRED_NODES})
+    with pytest.raises(monthly_subject.MonthlyReleaseNotReady, match='quote-only adoption proof'):
+        service.adopt_existing_successor(**values)
+
+
+@pytest.mark.parametrize('status,exact,allowed', [('ACTIVATED_VERIFIED', True, True), ('READY_TO_ACTIVATE', True, False), ('ACTIVATED_VERIFIED', False, False)])
+def test_quote_only_same_cutoff_requires_exact_activated_predecessor(tmp_path: Path, status: str, exact: bool, allowed: bool) -> None:
+    service = _service(tmp_path, Pipeline())
+    values = _quote_only_successor(tmp_path, service)
+    operation = 'dmr_' + '1' * 32
+    root = service.store.operation_root(operation)
+    _canonical(root / 'request.json', {'operation_id': operation, 'product_profile': values['product_profile'],
+               'target_cutoff': values['target_cutoff'].isoformat(), 'idempotency_key': 'old-adoption',
+               'target_profile_sha256': values['predecessor_profile_sha256'] if exact else 'e' * 64})
+    _canonical(root / 'state.json', {'status': status, 'operation_id': operation})
+    if allowed:
+        assert service.adopt_existing_successor(**values)['status'] == 'READY_TO_ACTIVATE'
+    else:
+        with pytest.raises(MonthlyReleaseConflict, match='another operation'):
+            service.adopt_existing_successor(**values)
+
+
 def _authorization(
     path: Path,
     *,
@@ -530,6 +851,135 @@ def test_cancel_is_observed_at_stage_boundary(tmp_path: Path) -> None:
     operation_id = service.submit(_request())["operation_id"]
     service.cancel(operation_id)
     assert service.run(operation_id)["status"] == "CANCELLED"
+
+
+@pytest.mark.parametrize("when", ["inside", "after"])
+def test_source_controlled_cancel_never_seals_checkpoint(tmp_path, when):
+    class Controlled(Pipeline):
+        def run_stage_with_control(self, *, checkpoint, progress, **kwargs):
+            checkpoint()
+            progress({"phase": "PRIVATE_SOURCE", "rows_validated": 100, "partitions_sealed": 1})
+            service.cancel(kwargs["operation_id"])
+            if when == "inside":
+                checkpoint()
+            return super().run_stage(**kwargs)
+
+    pipeline = Controlled()
+    service = _service(tmp_path, pipeline)
+    operation = service.submit(_request())["operation_id"]
+    result = service.run(operation)
+    assert result["status"] == "CANCELLED"
+    assert result["last_error"] is None
+    assert not any(service.status(operation)["checkpoints"].values())
+    assert not (service.store.operation_root(operation) / "receipts" / "ready.json").exists()
+    assert pipeline.calls == ([] if when == "inside" else ["SOURCE"])
+
+
+def test_source_progress_is_throttled_attempt_bound_and_not_readiness(tmp_path, monkeypatch):
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseConflict
+
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    service.store.update_state(operation, attempt=1, current_stage="SOURCE", status="CHECKING_SOURCE")
+    clock = [0.0]
+    monkeypatch.setattr(monthly_subject.time, "monotonic", lambda: clock[0])
+    checkpoint, progress = service._stage_control(operation, attempt=1, stage="SOURCE")
+    progress({"phase": "PRIVATE_SOURCE", "rows_validated": 100})
+    first = service.status(operation)["stage_progress"]
+    assert first["rows_validated"] == 100
+    assert first["total_rows"] is None
+    assert first["total_partitions"] is None
+    assert first["elapsed_seconds"] == 0
+    assert first["rows_validated_per_second"] is None
+    for value in range(101, 110):
+        clock[0] += 1
+        progress({"rows_validated": value})
+    assert service.status(operation)["stage_progress"] == first
+    clock[0] = 16
+    checkpoint()
+    observed = service.status(operation)["stage_progress"]
+    assert observed["rows_validated"] == 109
+    assert observed["elapsed_seconds"] == 16
+    assert observed["rows_validated_per_second"] == 109 / 16
+    assert observed["rows_sealed_per_second"] is None
+    assert not any(service.status(operation)["checkpoints"].values())
+    service.store.update_state(operation, attempt=2)
+    with pytest.raises(MonthlyReleaseConflict, match="stage control identity"):
+        checkpoint()
+
+
+@pytest.mark.parametrize("payload", [{"rows_validated": -1}, {"rows_validated": True}, {"outcomes_read": True},
+    {"completed_instruments": -1}, {"instrument_count": True}, {"instruments_per_second": float("nan")},
+    {"elapsed_seconds": float("inf")}, {"elapsed_seconds": True}])
+def test_source_progress_rejects_invalid_observation(tmp_path, payload):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    service.store.update_state(operation, attempt=1, current_stage="SOURCE", status="CHECKING_SOURCE")
+    _, progress = service._stage_control(operation, attempt=1, stage="SOURCE")
+    with pytest.raises(MonthlyReleaseError, match="progress"):
+        progress(payload)
+
+
+def test_build_progress_accepts_real_component_events_without_readiness(tmp_path):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    service.store.update_state(operation, attempt=1, current_stage="BUILD", status="BUILDING")
+    _, progress = service._stage_control(operation, attempt=1, stage="BUILD")
+    events = [
+        {"phase": "BUILD_NATIVE_QLIB_APPEND", "dataset": "daily_bin", "instrument_count": 4927},
+        {"phase": "BUILD_NATIVE_QLIB_APPEND", "frequency": "day", "completed_instruments": 4927,
+         "total_instruments": 4927, "completed_feature_files": 59124, "elapsed_seconds": 2.0,
+         "instruments_per_second": 2463.5},
+        {"phase": "BUILD_NATIVE_QLIB_APPEND_DONE", "dataset": "daily_bin", "instrument_count": 4927},
+    ]
+    for event in events:
+        progress(event)
+    state = service.status(operation)
+    assert state["stage_progress"]["completed_feature_files"] == 59124
+    assert state["stage_progress"]["component_elapsed_seconds"] == 2.0
+    progress({"phase": "BUILD_NATIVE_QLIB_APPEND", "dataset": "minute_bin", "instrument_count": 4915})
+    assert service.status(operation)["stage_progress"]["completed_instruments"] is None
+    progress({"phase": "FACTOR_MONTH_APPEND", "dataset": "daily_pv", "inherited_rows_serialized": 0,
+              "inherited_bytes_copied": 123, "month_rows_written": 103128})
+    progress({"phase": "FACTOR_ROLLING_SEED", "dataset": "moneyflow", "physical_rows_read": 19,
+              "indexed_tail_requests": 1})
+    assert service.status(operation)["stage_progress"]["month_rows_written"] is None
+    assert service.status(operation)["status"] == "BUILDING"
+    assert not any(service.status(operation)["checkpoints"].values())
+
+
+def test_registered_source_control_is_wired_through_real_service(tmp_path):
+    from types import SimpleNamespace
+    from backend.services.dataset_release.monthly_worker import RegisteredMonthlyPipeline
+
+    def produce(context):
+        context.progress({"phase": "PRIVATE_SOURCE", "rows_validated": 1000})
+        service.cancel(context.operation_id)
+        context.checkpoint()
+        pytest.fail("cancelled source must not return evidence")
+
+    pipeline = RegisteredMonthlyPipeline(
+        {stage: SimpleNamespace(produce=produce, producer_id="fixture", producer_version="1") for stage in STAGES},
+        artifact_roots=(tmp_path,),
+    )
+    service = _service(tmp_path, pipeline)
+    operation = service.submit(_request())["operation_id"]
+    assert service.run(operation)["status"] == "CANCELLED"
+    assert not any(service.status(operation)["checkpoints"].values())
+
+
+def test_cancel_race_before_checkpoint_publication_is_not_success(tmp_path, monkeypatch):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    original = service.store.write_checkpoint
+
+    def cancel_before_write(*args, **kwargs):
+        service.cancel(operation)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(service.store, "write_checkpoint", cancel_before_write)
+    assert service.run(operation)["status"] == "CANCELLED"
+    assert not any(service.status(operation)["checkpoints"].values())
 
 
 def test_busy_writer_preserves_operation_and_releases_only_owned_lock(tmp_path: Path) -> None:

@@ -114,6 +114,7 @@ def test_effect_baseline_uses_release_bin_indices_with_bounded_source_dates(tmp_
         assert len(source_days) == release_calendar.index(effect.END) - release_calendar.index(effect.START) + 25
         assert source_days[-1] == date(2026, 3, 30)
         assert kwargs["provider_path"] == assets["instrument_universe_path"]
+        assert kwargs["provider_catalog_path"] == assets["qlib_root"] / "instruments/all.txt"
         expected = pd.DataFrame({"trade_date": [effect.START, source_days[-1]], "instrument": ["000001.SZ"] * 2})
         result, _ = baseline._qlib_amount_frame(tmp_path, calendar=kwargs["calendar"], expected=expected)
         assert result["amount_cny"].tolist() == [

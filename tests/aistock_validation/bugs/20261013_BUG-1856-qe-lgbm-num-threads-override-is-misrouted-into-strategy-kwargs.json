@@ -1,0 +1,341 @@
+{
+  "actual": "Composer raises strategy does not support parameter num_threads; failed loops have experiment_id=null and no CPU training starts.",
+  "allowed_write_scope": [
+    "backend/services/quantevolver/config_composer.py",
+    "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+    "tests/aistock_validation/bugs/20261013_BUG-1856-qe-lgbm-num-threads-override-is-misrouted-into-strategy-kwargs.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1856",
+  "closed_at": "2026-10-13T03:08:22.243576Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-13T01:27:59.057863Z",
+  "description": "MA-E54 本轮首次显式设置 LGBM model_params.num_threads=12；ConfigComposer 未将该键归为 LGBModel 参数，因而泄漏至策略 kwargs，在训练前拒绝全部 12 个 node1 Loop。此前注册模型的默认 num_threads=24 直接来自模型目录，不经过该覆盖入口。数据集、因子和 HMM 不是本次根因。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261013-93ae039b469c",
+      "timestamp": "2026-10-13T01:27:59.057847Z"
+    },
+    {
+      "action": "root_cause_red_green_and_compatibility_review",
+      "actor": "codex",
+      "note": "旧代码默认模型与目录模型两项精确 RED 复现 num_threads 错传策略。第一轮补齐 LGB 参数路由；第二轮兼容性审核和 RED 测试发现全局过滤会改变非 LGB 模型的策略行为，进一步限定仅 LGBModel 消费 num_threads。最终四项路由、默认值、目录覆盖、请求隔离、完整 YAML 等价和未知策略 fail-closed 合同通过。无数据集变更、无训练/回测启动、未重试失败 Loop、未影响当前 WSL 实验。",
+      "timestamp": "2026-10-13T01:42:25Z"
+    },
+    {
+      "action": "design_compliance_review",
+      "actor": "codex",
+      "note": "DESIGN-COMPLIANCE-001：①真实 Composer 路由完整修复，无占位/简化；②未知策略参数继续显式拒绝，无静默丢弃；③显式线程覆盖以外模型、因子、seed、标签、日期、股票池、成本、TWAP、尾盘处理、HMM/风险政策不变，非 LGB 自定义策略语义保持；④未新增门禁、审批、环境锁或资源硬上限。测试只生成配置，不在 Windows 执行实际 QE 实验。",
+      "timestamp": "2026-10-13T01:42:25Z"
+    }
+  ],
+  "evidence_uris": [
+    "qe_20261013_024708_2cff: Loop2 and all 12 node1 LGBM arms fail at ConfigComposer._compose_conf_yaml before submission; source default num_threads=24, new explicit override=12."
+  ],
+  "expected": "Explicit LGBM num_threads overrides must reach task.model.kwargs only; defaults, seeds, dataset, time splits, portfolio and minute TWAP execution must remain unchanged, and unknown strategy keys must still fail closed.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1856-qe-lgbm-num-threads-override-is-misrouted-into-strategy-kwargs.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1856-qe-lgbm-num-threads-override-is-misrouted-into-strategy-kwargs.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/quantevolver/config_composer.py",
+        "backend/tests/quantevolver/test_sector_risk_overlay_config.py"
+      ],
+      "impacted_modules": [
+        "qe.sector_risk_overlay",
+        "qe.core",
+        "qe.auto_evolution",
+        "qe.enhanced_metrics",
+        "qe.data_completeness",
+        "qe.long_trend_evaluation"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/quantevolver/config_composer.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_sector_risk_overlay_config.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness",
+            "qe.long_trend_evaluation"
+          ],
+          "primary_module": "qe.sector_risk_overlay",
+          "risk_level": "high",
+          "rule_id": "qe_sector_risk_overlay"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/quantevolver/config_composer.py",
+        "backend/tests/quantevolver/test_sector_risk_overlay_config.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/quantevolver/config_composer.py",
+      "backend/tests/quantevolver/test_sector_risk_overlay_config.py"
+    ]
+  },
+  "first_seen_at": "2026-10-13T01:27:59.057863Z",
+  "fix_branch": null,
+  "fix_commit": "8e9986a4c2fbb884f05dbc9c2d9e84588943ede9",
+  "fixed_at": "2026-10-13T02:40:11Z",
+  "github_issue_number": 5932,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5932",
+  "last_seen_at": "2026-10-13T01:27:59.057863Z",
+  "module": "qe.sector_risk_overlay",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5936",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/quantevolver/test_sector_risk_overlay_config.py -q -k lgbm_num_threads",
+  "required_verification": [
+    "l0",
+    "qe_sector_risk_overlay_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/dataset-profile",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Isolated pytest process loaded tracked ConfigComposer source SHA256=0c050441fe292b0da961f3b437aa3ce6009e9a7f643a660f07e3a572e0d83485; rtk pytest backend/tests/quantevolver/test_sector_risk_overlay_config.py -q -k 'lgbm_num_threads or non_lgbm_strategy_semantics' -> 4 passed. Native LGBModel receives num_threads=12 only in task.model.kwargs; other executable configuration remains equal to the unchanged baseline, repeated requests do not mutate catalog/default kwargs, unknown strategy keys still raise, and non-LGB catalog strategy kwargs are preserved. No experiment, training, backtest, dataset write or service process control performed. The existing running backend is not claimed to have loaded this fix.",
+      "Fresh isolated pytest loaded tracked ConfigComposer SHA256=0c050441fe292b0da961f3b437aa3ce6009e9a7f643a660f07e3a572e0d83485 at task HEAD 1307a7761d98712171726d1cdc3f2b7b08c6ab14; four exact LGBM/non-LGBM routing and executable YAML equality tests passed; no QE training, backtest or user-service process control."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1856\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1856",
+      "business_smoke_semantic": {
+        "contract_id": "qe_dataset_profile",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "4510e42f54fe1b9ffb8d58db7f717ab62791523dce9374eb146d1d2fbb78dff4",
+      "contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+      "expected_identity": "8e9986a4c2fbb884f05dbc9c2d9e84588943ede9",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-13T03:07:24.320014Z",
+      "mode": "read_only",
+      "observed_identity": "e52581e3e9945170da91e8e3e2744cd4129b11b6",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "53c238cfce2960b1514f2a667907f21e443ee2ccbfc56558df3ff1af7dccbc86",
+      "receipt_sha256": "260b989532ff93fa6f0dc931eef172ce87204ec5850ff24d36b3133bac160dce",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f45ca4d588a33537bca336866dbedc227577b39768b01349b1f6198a53fde968",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1856",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4ad3e79c4b4ceb20",
+    "recorded_at": "2026-10-13T02:41:05.961123Z",
+    "runtime_contract_digest": "8d1fdcc23a705d6a78a9d188978bab6132d35dd02f968eeac9a027dcaa11e463",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "089168b2dfd53d70b190321a14fb0647b3604140",
+    "source_merge_commit": "8e9986a4c2fbb884f05dbc9c2d9e84588943ede9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5936",
+    "validation_evidence": [
+      "validation-receipt: id=9ecf05ab30721497 commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/quantevolver/test_sector_risk_overlay_config.py -q` result=`passed 15 tests at final HEAD`",
+      "validation-receipt: id=0ba07d531595116d commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/quantevolver/config_composer.py backend/tests/quantevolver/test_sector_risk_overlay_config.py tests/aistock_validation/bugs/20261013_BUG-1856-qe-lgbm-num-threads-override-is-misrouted-into-strategy-kwargs.json` result=`passed files=3 blocking=0`",
+      "validation-receipt: id=81876fa8e3dc32c0 commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files validation_module_registry_l0 -- --changed-only` result=`passed guardrail files=3 mapped=3 blocking=0; registry 8 tests and 14 mapped files`",
+      "validation-receipt: id=9eee3b4f1758540a commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s guardrail_changed_files validation_module_registry_l0 -- --changed-only` result=`passed guardrail files=3 mapped=3 blocking=0; registry 8 tests and 14 mapped files`",
+      "validation-receipt: id=4dcf5d61f52c9466 commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/quantevolver/config_composer.py backend/tests/quantevolver/test_sector_risk_overlay_config.py` result=`passed`",
+      "validation-receipt: id=5b4112db9248cbe6 commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/quantevolver/config_composer.py backend/tests/quantevolver/test_sector_risk_overlay_config.py` result=`passed`",
+      "validation-receipt: id=a814b99ed321de5a commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "0c672f507e4049221c1415ab573fb1922e5e0ba552607f5233eff5643156b591"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qe.sector_risk_overlay"
+  ],
+  "title": "QE LGBM num_threads override is misrouted into strategy kwargs",
+  "trigger_condition": {
+    "fingerprint": "93ae039b469c122bd008c9ad",
+    "source_event_id": "FE-20261013-93ae039b469c"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=9ecf05ab30721497 commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/quantevolver/test_sector_risk_overlay_config.py -q` result=`passed 15 tests at final HEAD`",
+    "validation-receipt: id=0ba07d531595116d commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/quantevolver/config_composer.py backend/tests/quantevolver/test_sector_risk_overlay_config.py tests/aistock_validation/bugs/20261013_BUG-1856-qe-lgbm-num-threads-override-is-misrouted-into-strategy-kwargs.json` result=`passed files=3 blocking=0`",
+    "validation-receipt: id=81876fa8e3dc32c0 commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files validation_module_registry_l0 -- --changed-only` result=`passed guardrail files=3 mapped=3 blocking=0; registry 8 tests and 14 mapped files`",
+    "validation-receipt: id=9eee3b4f1758540a commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s guardrail_changed_files validation_module_registry_l0 -- --changed-only` result=`passed guardrail files=3 mapped=3 blocking=0; registry 8 tests and 14 mapped files`",
+    "validation-receipt: id=4dcf5d61f52c9466 commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/quantevolver/config_composer.py backend/tests/quantevolver/test_sector_risk_overlay_config.py` result=`passed`",
+    "validation-receipt: id=5b4112db9248cbe6 commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/quantevolver/config_composer.py backend/tests/quantevolver/test_sector_risk_overlay_config.py` result=`passed`",
+    "validation-receipt: id=a814b99ed321de5a commit=089168b2dfd53d70b190321a14fb0647b3604140 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python F:\\Dev\\AIstock\\scripts\\aistock_issue_workflow.py post-restart-verify --bug-id BUG-1856 --target backend-main --expected-identity 8e9986a4c2fbb884f05dbc9c2d9e84588943ede9 -> passed workflow_gate=verified user-restarted backend identity and business probes"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe.sector_risk_overlay",
+        "qe_sector_risk_overlay"
+      ],
+      "plans": [
+        "qe_sector_risk_overlay_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe.sector_risk_overlay",
+          "qe_sector_risk_overlay"
+        ],
+        "plans": [
+          "qe_sector_risk_overlay_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -1495,6 +1495,9 @@ class CustomEvoLoopConfig(BaseModel):
     disable_alpha158: bool = Field(False, description="Disable QE bundled Alpha158 20-factor baseline for this loop")
     model_id: str = Field(..., description="模型 ID")
     model_params: Optional[Dict[str, Any]] = Field(None, description="模型训练参数，如 ltr_loss_mode/topk_train_k 等")
+    feature_processing: Optional[Dict[str, Any]] = Field(
+        None, description="Request-local model input exclusions and clip_outlier; not model hyperparameters",
+    )
     strategy_id: Optional[str] = Field(None, description="交易策略ID，None=使用默认 TopkDropoutStrategy")
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数: topk, n_drop, hold_thresh, risk_degree 等")
     runtime_flags: Optional[Dict[str, Any]] = Field(None, description="Runtime-only archive/seed/provenance flags")

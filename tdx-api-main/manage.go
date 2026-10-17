@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const (
+var (
 	DefaultDatabaseDir = "./data/database"
 )
 

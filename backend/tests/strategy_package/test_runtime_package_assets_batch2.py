@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import json
+import os
 import pickle
 import sys
 from datetime import UTC, date, datetime
@@ -173,6 +174,8 @@ def test_frozen_package_runtime_materializes_assets_without_qe_db(tmp_path: Path
     assert (source.asset_workspace_path / "mlruns" / "package_asset" / "artifacts" / "params.pkl").read_bytes() == b"params-from-package"
     assert prepared.model_params_path.read_bytes() == b"params-from-package"
     assert prepared.model_params_origin == "package_asset"
+    assert os.path.samefile(prepared.model_params_path, source.asset_workspace_path / "mlruns" / "package_asset" / "artifacts" / "params.pkl")
+    assert os.path.samefile(prepared.model_params_path, store._path_from_uri(manifest.model_asset.asset_ref))
     assert prepared.dynamic_factors == ["factor_a", "factor_b"]
     assert prepared.alpha158_factors == []
     factor_order = json.loads(prepared.factor_order_path.read_text(encoding="utf-8"))

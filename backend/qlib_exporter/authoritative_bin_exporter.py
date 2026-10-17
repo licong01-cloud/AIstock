@@ -15,6 +15,7 @@ import pandas as pd
 from ..db.pg_pool import get_conn
 from ..services.dataset_release.a_share_limit_rule import derive_limit_prices
 from .config import IPO_FILTER_DAYS
+from .quote_catalog import build_minute_quote_catalog
 
 
 PRICE_UNIT_DIVISOR = 1000.0
@@ -583,7 +584,7 @@ def rewrite_stock_all_txt_from_pit_spans(
     feature_frequency: str | None = None,
     allowed_bin_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Rewrite Qlib instruments/all.txt using PIT stock-universe spans."""
+    """Keep legacy daily PIT behavior; minute all is a physical quote catalog."""
 
     if end < start:
         raise ValueError("end must be >= start")
@@ -593,6 +594,17 @@ def rewrite_stock_all_txt_from_pit_spans(
     all_txt = bin_dir / "instruments" / "all.txt"
     if not all_txt.exists():
         raise FileNotFoundError(all_txt)
+
+    if feature_frequency == MINUTE_FREQ_QLIB:
+        if allowed_bin_root is None or bin_dir != allowed_bin_root / bin_dir.name:
+            raise ValueError("allowed_bin_root must be the physical candidate parent")
+        catalog = build_minute_quote_catalog(bin_dir, start=start.isoformat(), end=end.isoformat())
+        summary = {**catalog.receipt(), "path": str(all_txt), "start": start.isoformat(), "end": end.isoformat()}
+        all_txt.write_bytes(catalog.payload)
+        (all_txt.parent / "all_pit_universe_summary.json").write_text(
+            json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return summary
 
     physical_range_summary: dict[str, Any] | None = None
     if feature_frequency:
