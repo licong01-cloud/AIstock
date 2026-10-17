@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import subprocess
+import urllib.parse
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -13,6 +14,64 @@ import pytest
 
 import scripts.aistock_issue_workflow as workflow
 from scripts.aistock_bug_id_allocator import compact_terminal_reservation
+
+
+@pytest.mark.parametrize('case,expected', [('partial', 'passed'), ('empty', 'failed'), ('fake-zero', 'failed'), ('empty-available', 'failed'), ('no-proof', 'failed'), ('loading', 'pending')])
+def test_pipeline_overview_probe_validates_partial_observation_contract(case, expected):
+    source = {'state': 'loading', 'data': None, 'collected_at': None, 'stale': False, 'refreshing': True}
+    sources = {key: dict(source) for key in ['ci', 'runners', 'nightly', 'bugs', 'prs', 'worktrees']}
+    sources['bugs'] = {'state': 'available', 'data': {'pending': 1, 'total': 3}, 'source': 'registry',
+                       'collected_at': '2026-10-17T00:00:00Z', 'age_seconds': 0, 'stale': False, 'refreshing': False}
+    sources['prs'] = {'state': 'unavailable', 'error': 'TimeoutError', 'data': None, 'stale': False, 'refreshing': False}
+    payload = {'status': 'success', 'data': {'schema_version': 'aistock_pipeline_overview_v1', 'read_only': True, 'sections': sources}}
+    mutations = {'empty': (payload['data'], 'sections', {}), 'fake-zero': (sources['ci'], 'data', {'queued': 0}),
+                 'no-proof': (sources['bugs'], 'collected_at', None), 'empty-available': (sources['bugs'], 'data', {}),
+                 'loading': (sources, 'bugs', dict(source))}
+    if case in mutations:
+        target, key, value = mutations[case]
+        target[key] = value
+    verdict = workflow._evaluate_business_smoke_semantics('http://127.0.0.1:8001/api/v1/validation/overview/snapshot', json.dumps(payload), response_sha256='a' * 64)[1]
+    assert verdict['contract_id'] == 'pipeline_overview_observations'
+    assert verdict['verdict'] == expected
+
+
+@pytest.mark.parametrize("error,attempts,success", [
+    ("error: fetching ref refs/remotes/origin/main failed: incorrect old value provided", 2, True),
+    (f"error: cannot lock ref 'refs/remotes/origin/main': is at {'a'*40} but expected {'b'*40}", 2, True),
+    ("error: fetching ref refs/remotes/origin/main failed: incorrect old value provided", 2, False),
+    ("fatal: Authentication failed", 1, False),
+    ("error: cannot lock ref 'refs/remotes/origin/main': Permission denied", 1, False),
+    ("error: fetching ref refs/heads/main failed: incorrect old value provided", 1, False),
+    ("fatal: early EOF", 2, True),
+])
+def test_fetch_retries_only_transport_or_exact_remote_ref_race(monkeypatch, error, attempts, success):
+    calls = []
+    def run(args, **kwargs):
+        calls.append(args)
+        return dict(ok=True, stdout="fetched") if len(calls) == 2 and success else dict(ok=False, stderr=error)
+    monkeypatch.setattr(workflow, "_run_command", run)
+    monkeypatch.setattr(workflow.time, "sleep", lambda _: None)
+    if success:
+        assert workflow._git_fetch_with_transport_retry(["origin", "main"]) == "fetched"
+    else:
+        with pytest.raises(workflow.WorkflowError) as failure:
+            workflow._git_fetch_with_transport_retry(["origin", "main"])
+        assert str(failure.value) == error
+    assert calls == [["git", "fetch", "origin", "main"]] * attempts
+
+
+@pytest.mark.parametrize("eligible", [False, True])
+def test_nightly_issue_supersession_requires_receipt_and_bounds_reads(monkeypatch, eligible):
+    rows = [dict(databaseId=n, headSha="a" * 40, status="completed", conclusion="success") for n in range(200, 180, -1)]
+    monkeypatch.setattr(workflow, "_run_command", lambda *args, **kwargs: dict(ok=True, stdout=json.dumps(rows)))
+    checks = []
+    def receipt(**kwargs):
+        checks.append(kwargs["run_id"])
+        return dict(eligible=eligible, reason="source_bound_l3_receipt" if eligible else "no_live_source_bound_l3_receipt")
+    monkeypatch.setattr(workflow.ci_failure_summary, "nightly_success_receipt_eligibility", receipt)
+    result = workflow._find_superseding_main_success(dict(workflow="AIstock Nightly L3 + DR", branch="main", run_id="100"))
+    assert (result is not None) is eligible
+    assert len(checks) == (1 if eligible else 5)
 
 
 @pytest.mark.parametrize('fault', ['wrapper', 'empty', 'count', 'missing', 'price', 'duplicate', 'shares', 'overflow'])
@@ -504,27 +563,27 @@ def _local_data_payload(overview: bool = False) -> dict[str, Any]:
 @pytest.mark.parametrize('overview', [False, True])
 def test_local_data_freshness_separates_cache_and_readiness(overview: bool) -> None:
     endpoint = 'overview' if overview else 'data-stats'
-    _, verdict = workflow._evaluate_business_smoke_semantics(
-        f'http://127.0.0.1:8001/api/v1/local-data/{endpoint}',
-        json.dumps(_local_data_payload(overview)), response_sha256='a'*64)
+    verdict = _business_semantic(f'http://127.0.0.1:8001/api/v1/local-data/{endpoint}', _local_data_payload(overview), 'a'*64)
     assert verdict['verdict'] == 'passed'
     assert verdict['contract_id'] == 'local_data_freshness'
     assert verdict['facts']['stale'] == 1
 
 
-@pytest.mark.parametrize(('key', 'value'), [
+@pytest.mark.parametrize(('area', 'key', 'value'), [
+    *(("row", key, value) for key, value in [
     ('physical_max_date', '2026-09-29'), ('physical_max_date_source', 'cache'),
     ('stats_date_source', 'live'), ('readiness_source', 'cache'),
     ('ready_date', '2026-08-11'), ('cache_state', 'fresh'),
     ('readiness_status', 'unknown'), ('operator_action_required', 0),
     ('audit_ready_date', '2026-09-31'), ('stats_max_date', '2026-8-11'),
     ('audit_quality_status', {}),
+    ]),
+    *(("envelope", key, value) for key, value in [('success', False), ('operation', 'wrong'), ('risk_level', 'write')]),
 ])
-def test_local_data_freshness_rejects_conflated_evidence(key: str, value: Any) -> None:
+def test_local_data_freshness_rejects_invalid_readback(area: str, key: str, value: Any) -> None:
     payload = _local_data_payload()
-    payload['data']['items'][0][key] = value
-    status, _, _ = workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')
-    assert status == 'failed'
+    (payload['data']['items'][0] if area == "row" else payload)[key] = value
+    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
 
 
 @pytest.mark.parametrize('state', ['unknown', 'quality_blocked'])
@@ -538,13 +597,6 @@ def test_local_data_freshness_preserves_non_ready_states(state: str) -> None:
         row['audit_quality_status'] = 'low_coverage'
     status, _, facts = workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')
     assert status == 'passed' and facts[state] == 1
-
-
-@pytest.mark.parametrize(('key', 'value'), [('success', False), ('operation', 'wrong'), ('risk_level', 'write')])
-def test_local_data_freshness_requires_read_only_envelope(key: str, value: Any) -> None:
-    payload = _local_data_payload()
-    payload[key] = value
-    assert workflow._validate_local_data_freshness(payload, url='/api/v1/local-data/data-stats')[0] == 'failed'
 
 
 def test_local_data_overview_validates_counters_without_hiding_real_alerts() -> None:
@@ -598,9 +650,7 @@ def _metrics_payload() -> dict[str, Any]:
 
 
 def test_factor_metrics_semantics_bind_real_results_without_profitability_threshold() -> None:
-    _, verdict = workflow._evaluate_business_smoke_semantics(
-        _METRICS_PROBE, json.dumps(_metrics_payload()), response_sha256="a" * 64
-    )
+    verdict = _business_semantic(_METRICS_PROBE, _metrics_payload(), "a" * 64)
     assert verdict["verdict"] == "passed" and verdict["contract_id"] == "factor_metrics_results"
     assert verdict["facts"]["calc_batch_id"] == "batch1"
     assert verdict["facts"]["acceptance_scope"] == "bound_metrics_readback_only"
@@ -617,34 +667,28 @@ def test_factor_metrics_semantics_bind_real_results_without_profitability_thresh
     _METRICS_PROBE.split("?", 1)[1] + "&offset=1",
 ])
 def test_factor_metrics_semantics_reject_unbound_or_conflicting_probe(query: str) -> None:
-    assert workflow._validate_factor_metrics_results(
-        _metrics_payload(), url=_METRICS_PROBE.split("?", 1)[0] + "?" + query
-    )[0] == "failed"
+    assert _business_semantic(_METRICS_PROBE.split("?", 1)[0] + "?" + query, _metrics_payload(), "a" * 64)["verdict"] == "failed"
 
 
-@pytest.mark.parametrize(("field", "value"), [
+@pytest.mark.parametrize(("area", "field", "value"), [
+    *(("row", field, value) for field, value in [
     ("factor_name", "other"), ("calc_batch_id", "old_batch"), ("eval_window", "2024"),
     ("snapshot_date", "2026-06-30"), ("universe", "old_pool"), ("return_horizon", "20d"),
     ("id", True), ("n_trading_days", 0), ("coverage", float("nan")), ("ic_mean", float("inf")),
     ("rank_ic_mean", 2), ("ic_positive_ratio", -1), ("icir", None), ("rank_icir", "1"),
     ("h20_ic_mean", float("nan")), ("ic_mean", 10 ** 500),
     ("calculated_at", "2026-09-30T13:04:21"), ("calculated_at", "2026-08-30T13:04:21+08:00"),
-])
-def test_factor_metrics_semantics_reject_invalid_business_rows(field: str, value: Any) -> None:
-    payload = _metrics_payload()
-    payload["items"][0][field] = value
-    assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE)[0] == "failed"
-
-
-@pytest.mark.parametrize(("field", "value"), [
+    ]),
+    *(("envelope", field, value) for field, value in [
     ("items", []), ("total", True), ("total", 0), ("ok", False), ("domain", "other"),
     ("errors", ["failed"]), ("pagination", {}),
     ("success", False), ("status", "failed"),
     ("pagination", {"limit": 1, "offset": 0, "next_offset": 1, "total": 2, "has_more": False}),
+    ]),
 ])
-def test_factor_metrics_semantics_reject_empty_or_contradictory_envelope(field: str, value: Any) -> None:
+def test_factor_metrics_semantics_reject_invalid_readback(area: str, field: str, value: Any) -> None:
     payload = _metrics_payload()
-    payload[field] = value
+    (payload["items"][0] if area == "row" else payload)[field] = value
     assert workflow._validate_factor_metrics_results(payload, url=_METRICS_PROBE)[0] == "failed"
 
 
@@ -660,6 +704,126 @@ def _business_semantic(url: str, payload: Any, response_hash: str) -> dict[str, 
     return workflow._evaluate_business_smoke_semantics(
         url, json.dumps(payload), response_sha256=response_hash,
     )[1]
+
+
+@pytest.mark.parametrize("state,patch,area,field,value,passed", [
+    (state, {}, None, None, None, True)
+    for state in ("QUEUED", "RUNNING", "WAITING_INPUT", "COMPLETED", "RETRYABLE_FAILED", "FAILED")
+] + [
+    ("RUNNING", {"lease_expired": True}, None, None, None, True),
+    ("COMPLETED", {"operation_type": "CREATE", "request_payload_sha256": None, "planning_identity_hash": "a" * 64,
+                   "lease_expires_at": "2026-10-16T00:05:00+00:00"}, "ref", "artifact_kind", "SOURCE_REQUIREMENT_PLAN", True),
+    ("RETRYABLE_FAILED", {"attempt_no": 0, "started_at": None, "fencing_token": None,
+                          "error_json": {"schema_version": "advisory_historical_range_background_dispatch_failure_v1",
+                                         "batch_id": "ahrb_test", "operation_id": "ahrop_test", "retryable": True,
+                                         "command": "EXECUTION_RESUME", "stage": "CLAIM_AND_EXECUTION", "reason_code": "FAILED", "error_type": "Error",
+                                         "recorded_at": "2026-10-16T00:00:00+00:00"}}, None, None, None, True),
+    ("QUEUED", {}, "row", "batch_id", "other", False), ("QUEUED", {}, "row", "operation_id", "", False),
+    ("QUEUED", {}, "data", "operations", [], False), ("QUEUED", {}, "payload", "ok", False, False),
+    ("QUEUED", {}, "row", "attempt_no", 1, False), ("RUNNING", {}, "row", "lease_expires_at", None, False),
+    ("QUEUED", {}, "row", "lease_expired", True, False), ("RUNNING", {}, "row", "fencing_token", True, False),
+    ("COMPLETED", {}, "row", "error_json", {"reason": "FAILED"}, False),
+    ("FAILED", {}, "row", "error_json", None, False), ("RUNNING", {}, "row", "result_hash", "a" * 64, False),
+    ("COMPLETED", {}, "row", "finished_at", None, False), ("COMPLETED", {}, "row", "result_ref", None, False),
+    ("COMPLETED", {}, "ref", "semantic_content_hash", "b" * 64, False),
+    ("COMPLETED", {}, "ref", "artifact_kind", "SOURCE_REQUIREMENT_PLAN", False),
+    ("COMPLETED", {}, "ref", "relative_path", "../escape", False),
+    ("COMPLETED", {}, "row", "result_status", "NOT_REAL", False),
+    ("QUEUED", {}, "page", "has_more", True, False), ("QUEUED", {}, "row", "created_at", "naive", False),
+    ("QUEUED", {}, "query", "expected_operation_id", "other", False),
+    ("QUEUED", {}, "query", "status", "COMPLETED", False),
+    ("QUEUED", {}, "duplicate", None, None, False), ("QUEUED", {}, "payload", "data", None, False),
+    ("QUEUED", {}, "row", "request_payload_sha256", "bad", False),
+    ("RETRYABLE_FAILED", {"attempt_no": 0, "started_at": None}, None, None, None, False),
+    ("RETRYABLE_FAILED", {}, "row", "error_json", {"schema_version": "advisory_historical_range_background_dispatch_failure_v1",
+                                                    "operation_id": "wrong", "batch_id": "ahrb_test"}, False),
+])
+def test_advisory_operation_readback_is_not_execution_success(state, patch, area, field, value, passed):
+    stamp = "2026-10-16T00:00:00+00:00"
+    publishes, terminal = state in {"WAITING_INPUT", "COMPLETED", "FAILED"}, state in {"COMPLETED", "FAILED"}
+    ref = dict(schema_version="advisory_historical_range_artifact_ref_v1", artifact_kind="RANGE_RECEIPT",
+               relative_path="receipts/op.json", producer_contract_version="v1", payload_schema_version="v1",
+               semantic_content_hash="a" * 64, payload_sha256="c" * 64, file_sha256="d" * 64)
+    row = dict(operation_id="ahrop_test", batch_id="ahrb_test", operation_type="RESUME",
+               operation_idempotency_key="resume-key", status=state, row_version=1,
+               request_payload_sha256="a" * 64, expected_row_version=1,
+               attempt_no=0 if state == "QUEUED" else 1, fencing_token=None if state == "QUEUED" else 1,
+               created_at=stamp, started_at=None if state == "QUEUED" else stamp,
+               finished_at=stamp if terminal else None, lease_expired=False,
+               lease_expires_at="2026-10-16T00:05:00+00:00" if state == "RUNNING" else None,
+               error_json={"reason": "FAILED"} if state in {"FAILED", "RETRYABLE_FAILED"} else None,
+               result_ref=ref if publishes else None, result_hash="a" * 64 if publishes else None,
+               result_status="PARTIAL" if publishes else None, result_row_version=2 if publishes else None)
+    row.update(patch)
+    data, page = {"operations": [row]}, {"limit": 50, "has_more": False, "next_cursor": None}
+    payload, query = {"ok": True, "data": data, "page": page}, {"expected_operation_id": "ahrop_test"}
+    if area == "duplicate":
+        data["operations"].append(dict(row))
+    elif area:
+        {"row": row, "data": data, "page": page, "payload": payload, "ref": ref, "query": query}[area][field] = value
+    semantic = _business_semantic("http://localhost/api/v1/advisory/historical-range-batches/ahrb_test/operations?"
+                                  + urllib.parse.urlencode(query), payload, "e" * 64)
+    assert semantic["contract_id"] == "advisory_historical_operation_status_readback"
+    assert semantic["verdict"] == ("passed" if passed else "failed")
+    if passed:
+        assert semantic["facts"]["execution_completed"] is False
+        assert semantic["facts"]["operations"][0]["status"] == state
+        assert semantic["facts"]["verification_scope"] == "operation_status_readback_only"
+
+
+@pytest.mark.parametrize("target,value", [
+    ("native", None), ("multi_alpha", None), ("valid_empty", None), ("legacy", None), ("history", None),
+    ("row.status", "FAILED"), ("row.status", "PENDING"), ("row.error_json", {"error_code": "DATA_UNAVAILABLE"}),
+    ("row.artifact_id", "other"), ("row.package_id", "other"), ("row.manifest_sha256", "0" * 64),
+    ("row.runtime_config_hash", "0" * 64), ("row.trade_date", "2026-10-13"), ("row.data_source", "other"),
+    ("query.expected_artifact_id", ""), ("query.expected_artifact_id", ["duplicate", "duplicate"]),
+    ("query.expected_trade_date", "invalid"), ("query.expected_manifest_sha256", "invalid"), ("payload.ok", False),
+    ("payload.artifacts", []), ("payload.artifacts", [None]), ("duplicate", None), ("missing_error", None),
+    ("metadata.authority_scope", "diagnostic_backtest_only"), ("metadata.source_type", []),
+    ("row.artifact_sha256", None), ("row.artifact_payload_sha256", "0" * 64), ("row.artifact_input_context_hash", []),
+    ("metadata.provider_semantics_id", "other"), ("row.score_count", 2), ("row.score_count", True),
+    ("row.score_preview", [None]), ("score.score", float("nan")), ("score.score", True), ("row.score_preview", None),
+    ("row.top_score_symbol", "other"), ("row.artifact_contract_version", []), ("metadata.candidate_outcome", "other"),
+    ("metadata.multi_alpha_parent_parity_hash", []), ("legacy_empty", None), ("score.score", 0.6),
+])
+def test_selection_artifact_semantic_native_readback(target, value):
+    # Use the real writer's pure model/digest helpers as an independent contract oracle; no repository I/O.
+    from backend.services.strategy_package.selection_artifact import SelectionScoreArtifact, StrategyPackageSelectionArtifactRepository
+
+    empty = target in {"valid_empty", "legacy_empty"}
+    scores = [] if empty else [{"symbol": "000001.SZ", "score": 0.5}]
+    artifact = SelectionScoreArtifact(
+        package_id="pkg_native", manifest_sha256="a" * 64, trade_date="2026-10-14", data_source="DB",
+        runtime_config_hash="b" * 64, scores_json=scores, score_count=len(scores), universe_count=2,
+        top_score_symbol=None if empty else "000001.SZ", artifact_contract_version="selection_score_artifact_v2",
+        artifact_input_context_hash="c" * 64, source_revision_set_hash="d" * 64, asset_closure_hash="e" * 64,
+        metadata=dict(authority_scope="authoritative_selection", source_type="live_qe_model_inference_v1",
+                      candidate_outcome="VALID_NO_CANDIDATE" if empty else "CANDIDATES_PRESENT",
+                      empty_stage="alpha_raw" if empty else None,
+                      provider_semantics_id="strategy_package_live_inference_v2", provider_semantics_hash="f" * 64))
+    row = StrategyPackageSelectionArtifactRepository._with_digest(artifact).model_dump(mode="json")
+    row["score_preview"] = row.pop("scores_json")[:10]
+    query = {"expected_" + key: row[key] for key in ("artifact_id", "manifest_sha256", "runtime_config_hash", "trade_date", "data_source")}
+    payload = dict(ok=True, package_id="pkg_native", artifacts=[row])
+    if "." in target:
+        area, key = target.split(".")
+        {"row": row, "query": query, "payload": payload, "metadata": row["metadata"], "score": row["score_preview"][0]}[area][key] = value
+    elif target in {"legacy", "legacy_empty"}:
+        row["artifact_contract_version"] = None
+    elif target == "multi_alpha":
+        row["metadata"]["source_type"] = "live_multi_alpha_inference_v1"
+    elif target == "missing_error":
+        row.pop("error_json")
+    elif target == "duplicate":
+        payload["artifacts"] *= 2
+    elif target == "history":
+        payload["artifacts"].append({**row, "artifact_id": "old", "status": "FAILED", "error_json": {"error_code": "DATA_UNAVAILABLE"}})
+    semantic = _business_semantic("http://127.0.0.1:8001/api/v1/strategy-packages/pkg_native/selection-artifacts?"
+                                  + urllib.parse.urlencode(query, doseq=True), payload, "1" * 64)
+    passed = target in {"native", "multi_alpha", "valid_empty", "legacy", "history"}
+    assert (semantic["contract_id"], semantic["verdict"]) == ("strategy_package_selection_artifact_readback", "passed" if passed else "failed")
+    if target == "row.error_json":
+        assert semantic["facts"]["error_code"] == "DATA_UNAVAILABLE"
 
 
 def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test") -> dict[str, Any]:
@@ -801,14 +965,21 @@ def test_sector_entry_semantic_requires_explicit_unambiguous_subject(query):
     assert _sector_entry_semantic(_sector_entry_payload(), query)["verdict"] == "failed"
 
 
-def test_offline_factor_comparison_keeps_online_and_unknown_sources_fail_closed():
-    files = ["backend/services/factor_research/comparison.py", "backend/tests/factor_research/test_comparison.py",
-             "docs/analysis/factor-comparison.md", "tests/aistock_validation/bugs/BUG-1755.json"]
+@pytest.mark.parametrize("name", ["comparison", "memory", "full_evaluation"])
+def test_offline_factor_research_keeps_online_and_unknown_sources_fail_closed(name):
+    test_name = "assistance" if name == "memory" else name
+    files = [f"backend/services/factor_research/{name}.py", f"backend/tests/factor_research/test_{test_name}.py",
+             "docs/analysis/factor-comparison.md", "tests/aistock_validation/bugs/20261015_BUG-1914-issue.json"]
     offline = workflow._classify_runtime_impact(files)
     assert (offline["runtime_impact"], offline["target_ids"]) == ("none", [])
     for online in ("backend/routers/factor_metrics.py", "backend/services/factor_research/not_registered.py"):
         mixed = workflow._classify_runtime_impact([*files, online])
         assert (mixed["runtime_impact"], mixed["target_ids"]) == ("backend", ["backend-main"])
+        contract = workflow.build_runtime_contract(record={}, changed_files=[*files, online])
+        assert contract["inferred_runtime_files"] == [online] and contract["pre_pr_ready"] is False
+        assert f"runtime_source: `{online}`" in workflow.render_task_card_markdown({"runtime_contract": contract})
+        original = {key: value for key, value in contract.items() if key != "inferred_runtime_files"}
+        assert workflow._runtime_contract_digest(contract) == workflow._runtime_contract_digest(original)
 
 
 def test_sector_entry_semantic_preserves_nonempty_calculation_and_rejects_tampered_hash():
@@ -821,13 +992,22 @@ def test_sector_entry_semantic_preserves_nonempty_calculation_and_rejects_tamper
     assert _business_semantic(url, payload, "e" * 64)["verdict"] == "failed"
 
 
-def test_factor_comparison_provisional_backend_contract_reconciles_to_offline():
+@pytest.mark.parametrize("name", ["comparison", "memory", "full_evaluation"])
+def test_factor_research_provisional_backend_contract_reconciles_to_offline(name):
     result = workflow.build_runtime_contract(record={"runtime_contract": {
         "schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "runtime_impact": "backend",
         "target_ids": ["backend-main"], "provisional": True, "inference_basis": "planned_scope",
-    }}, changed_files=["backend/services/factor_research/comparison.py"])
+    }}, changed_files=[f"backend/services/factor_research/{name}.py"])
     assert result["runtime_impact"] == "none" and result["target_ids"] == []
     assert result["pre_pr_ready"] is True and result["backend_restart_required"] is False
+    assert result["inferred_runtime_files"] == []
+
+
+def test_runtime_task_card_bounds_source_output_without_losing_attribution():
+    contract = workflow.build_runtime_contract(record={}, changed_files=[f"backend/services/new_{i:02}.py" for i in range(12)])
+    text = workflow.render_task_card_markdown({"runtime_contract": contract})
+    assert len(contract["inferred_runtime_files"]) == 12 and text.count("- runtime_source:") == 10
+    assert "runtime_source_count: `12`" in text and "new_11.py" not in text
 
 
 def _entry_price_payload(configured=False):
@@ -962,6 +1142,66 @@ def test_unknown_business_smoke_endpoint_remains_fail_closed() -> None:
     assert semantic["contract_id"] is None
     assert semantic["verdict"] == "failed"
     assert "no target-owned business-smoke semantic contract" in semantic["reason"]
+
+
+def _daily_job_probe():
+    identity = dict(schema_version="hmm_database_daily_input_v1", source_mode="database_daily",
+                    as_of_trade_date="2026-10-12", effective_trade_date="2026-10-13",
+                    read_cutoff_at="2026-10-13T00:00:00+08:00", input_sha256="a" * 64)
+    identity.update(completion_authority="market.dataset_date_refresh_audit", knowledge_mode="forward_current_read_snapshot",
+                    historical_as_known_verified=False, completion_statuses={name: dict(dataset=name, trade_date="2026-10-12",
+                    status="success", row_count=1, refreshed_at="2026-10-12T23:00:00+08:00")
+                    for name in ("sector_data", "sw_daily", "index_daily")})
+    common = dict(snapshot_id="snapshot-1", config_id="config-1", signal_preset="balanced",
+                  as_of_trade_date="2026-10-12", effective_trade_date="2026-10-13", generation_mode="daily_asof_prediction_v1")
+    plan = dict(common, source_mode="database_daily", model_sha256="b" * 64, parameter_sha256="c" * 64,
+                generator_sha256="d" * 64, input_identity=identity, generation_available=True)
+    # Golden writer fingerprint: canonical UTF-8 JSON with terminal newline.
+    plan["daily_key"] = "785ade97f7209b945737f6f46d487001c195073a5917b544fad56e3d80e3ff9c"
+    plan["output_path"] = f"F:/models/coefficients_balanced_2026-10-13_2026-10-13__daily_{plan['daily_key']}.json"
+    plan["input_data_max_dates"] = dict.fromkeys(("sector_data", "sw_daily", "index_daily_000300"), "2026-10-12")
+    common.update(output_path=plan["output_path"], input_data_max_dates=plan["input_data_max_dates"])
+    result = dict(common, source_mode="database_daily", input_identity=dict(identity), status="GENERATED",
+                  registration_status="REGISTERED_READBACK", artifact_sha256="e" * 64, coefficient_bytes=100,
+                  date_count=1, sector_count=131, requires_wsl=False)
+    row = dict(common, job_id="job-1", status="COMPLETED", result_status="GENERATED", plan_json=plan,
+               result_json=result, artifact_sha256="e" * 64, completed_at="2026-10-13T01:00:00+08:00")
+    query = dict(config_id="config-1", signal_preset="balanced", as_of_trade_date="2026-10-12", effective_trade_date="2026-10-13",
+                 daily_key=plan["daily_key"], model_sha256="b" * 64, job_id="job-1", input_sha256="a" * 64, artifact_sha256="e" * 64)
+    return row, query
+
+
+@pytest.mark.parametrize("target,value", [("valid", None), ("exists", None), ("empty", None), ("duplicate", None),
+    ("query.job_id", ""), ("query.job_id", ["job-1", "job-1"]), ("duplicate_asset", None), ("status", "RUNNING"), ("status", "FAILED"),
+    ("query.job_id", "other"), ("snapshot_id", "other"), ("signal_preset", "other"), ("plan_json.source_mode", "qe_frozen_file"),
+    ("plan_json.as_of_trade_date", "2026-10-13"), ("plan_json.effective_trade_date", "2026-10-12"),
+    ("plan_json.daily_key", "f" * 64), ("plan_json.model_sha256", "f" * 64), ("plan_json.input_identity.input_sha256", "f" * 64),
+    ("artifact_sha256", "f" * 64), ("result_json.registration_status", "PUBLISHED"),
+    ("result_json.input_identity.input_sha256", "f" * 64), ("result_json.coefficient_bytes", True), ("error_message", "failed"),
+    ("plan_json.input_identity.read_cutoff_at", "2026-10-14T00:00:00+08:00"), ("query.model_sha256", "b" * 12),
+    ("plan_json.parameter_sha256", "f" * 64), ("plan_json.generator_sha256", "f" * 64), ("result_json.status", []),
+    ("plan_json", None), ("query.as_of_trade_date", "2026-10-32"), ("plan_json.input_identity.read_cutoff_at", "2026-10-13T00:00:00"),
+    ("result_json.date_count", 2), ("input_data_max_dates", {}), ("plan_json.input_identity.schema_version", "wrong"),
+    ("plan_json.generation_available", False), ("result_json.output_path", "F:/other.json"),
+    ("result_json.generation_mode", "file_extension"), ("result_json.requires_wsl", True),
+    ("plan_json.input_identity.completion_statuses", {}), ("plan_json.input_identity.historical_as_known_verified", True),
+    ("completed_at", "2099-10-13T01:00:00+08:00")])
+def test_daily_coefficient_jobs_semantics(target, value):
+    row, query = _daily_job_probe()
+    if target == "exists":
+        row["result_status"] = row["result_json"]["status"] = "EXISTS"
+    elif target not in {"valid", "empty", "duplicate", "duplicate_asset"}:
+        parts = target.split(".")
+        obj = {**row, "query": query} if parts[0] == "query" else row
+        for part in parts[:-1]:
+            obj = obj[part]
+        obj[parts[-1]] = value
+    payload = [] if target == "empty" else [row, row] if target == "duplicate" else [row]
+    if target == "duplicate_asset":
+        payload.append({**row, "job_id": "job-2"})
+    semantic = _business_semantic("http://127.0.0.1:8001/api/v1/hmm-training/snapshots/snapshot-1/daily-coefficients/jobs?"
+                                 + urllib.parse.urlencode(query, doseq=True), payload, "f" * 64)
+    assert (semantic["contract_id"], semantic["verdict"]) == ("hmm_database_daily_coefficient_jobs", "passed" if target in {"valid", "exists"} else "failed")
 
 
 @pytest.mark.parametrize("kind,case,expected", [
@@ -1376,7 +1616,9 @@ def test_runtime_catalog_validation_error_cannot_be_downgraded(invalid_runtime_c
 
 @pytest.mark.parametrize("path,registered", [
     ("/api/v1/audit-unregistered-contract", False),
+    ("/api/v1/advisory/historical-range-batches/ahrb_test/operations", True),
     ("/api/v1/factor-metrics/results", True),
+    ("/api/v1/hmm-training/snapshots/snapshot-1/daily-coefficients/jobs", True),
     ("/api/v1/advisory/programs/advp_test/sector-entry-price?target_trade_date=2026-08-28&list_version_id=list-test", True),
 ])
 def test_runtime_preflight_checks_semantic_registration_without_http(path, registered) -> None:
@@ -1394,7 +1636,7 @@ def test_runtime_preflight_checks_semantic_registration_without_http(path, regis
     )
     semantic_errors = [error for error in contract["blocking"] if "semantic contract" in error]
     assert bool(semantic_errors) is not registered
-    assert contract["pre_pr_ready"] is registered
+    assert (contract["pre_pr_ready"], contract["runtime_impact"], contract["target_ids"]) == (registered, "backend", ["backend-main"])
 
 
 def test_bug_1549_active_contract_consumers_remain_backend_main() -> None:

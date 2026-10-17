@@ -249,6 +249,7 @@ class LocalSimControlPlaneService:
         release_metadata: dict[str, Any] | None = None,
         requested_execution_policy_audit: dict[str, Any] | None = None,
         effective_from: date,
+        effective_to: date | None = None,
         created_by: str,
         created_reason: str | None = None,
     ) -> tuple[
@@ -284,6 +285,11 @@ class LocalSimControlPlaneService:
         if audit:
             audit["consulted_for_execution"] = False
         metadata = dict(release_metadata or {})
+        if effective_to is not None:
+            metadata["localsim_replay_range"] = {
+                "start_trade_date": effective_from.isoformat(),
+                "end_trade_date": effective_to.isoformat(),
+            }
         if audit:
             metadata["requested_execution_policy_audit"] = audit
         release, binding = self._build_release_binding(
@@ -301,7 +307,7 @@ class LocalSimControlPlaneService:
             release_validation_evidence=dict(release_validation_evidence or {}),
             release_metadata=metadata,
             effective_from=effective_from,
-            effective_to=None,
+            effective_to=effective_to,
             created_by=created_by,
             created_reason=created_reason,
         )

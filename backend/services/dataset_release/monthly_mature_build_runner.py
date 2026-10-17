@@ -152,7 +152,9 @@ class MatureMonthlyPhysicalBuildRunner:
             physical_plan["preparation_predecessor_profile_sha256"] = predecessor.get("profile_sha256")
         common = {
             "run_id": context.operation_id,
-            "attempt_id": f"{context.operation_id}-attempt-{context.attempt}",
+            # Match the supervised BUILD receipt; the current fence, not the
+            # retained materialization directory, distinguishes retry ownership.
+            "attempt_id": f"{context.operation_id}-build",
             "attempt_fence": context.attempt,
             "pressure_rung": 0,
             "stage_timeout_seconds": self.profile.stage_timeouts_seconds["full_build"],
@@ -233,6 +235,10 @@ class MatureMonthlyPhysicalBuildRunner:
                 )
                 finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
                 resume.save("finalize-bins", finalized_ref, roots=("daily_bin", "minute_bin", "index_context", "factor_bundle"))
+            from .monthly_quote_catalog import refresh_retained_quote_catalog
+            finalized = refresh_retained_quote_catalog(resume, finalized=finalized, cas=self.cas)
+            from .monthly_prev_close_repair import apply_prev_close_corrections
+            finalized = apply_prev_close_corrections(resume, finalized=finalized, cas=self.cas, plan=context.plan)
             finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
             from .monthly_industry_history import apply_retained_history
             prepare = apply_retained_history(resume, context=context, compiled=compiled, prepare=prepare, cas=self.cas, profile=self.profile)

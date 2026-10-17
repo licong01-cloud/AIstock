@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
-from typing import Any, Protocol
+from threading import Event, Lock, Thread
+from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 import psycopg2
@@ -44,6 +45,8 @@ from backend.services.advisory_historical_range.outcome_source import Historical
 
 logger = logging.getLogger(__name__)
 
+_FINALIZATION_HEARTBEAT_MAX_SECONDS = 60.0
+
 
 class HistoricalRangeOutcomeWorkPlanner(Protocol):
     def plan_slice(
@@ -60,7 +63,9 @@ class HistoricalRangeOutcomeEvaluator(Protocol):
 
 
 class HistoricalRangeSummaryCoordinator(Protocol):
-    def refresh(self, *, range_run_id: str) -> HistoricalRangeArtifactRefV1 | None: ...
+    def refresh(
+        self, *, range_run_id: str, assert_active: Callable[[], None] | None = None,
+    ) -> HistoricalRangeArtifactRefV1 | None: ...
 
 
 class HistoricalRangeOutcomeRepository(Protocol):
@@ -74,6 +79,74 @@ class HistoricalRangeOutcomeRepository(Protocol):
 
     def append_outcomes(self, facts: tuple[HistoricalRangeOutcomeFactV1, ...]) -> tuple[bool, ...]: ...
     def list_operation_attempt_receipt_refs(self, *, operation_id: str) -> tuple[HistoricalRangeArtifactRefV1, ...]: ...
+
+
+class _OutcomeChildLease:
+    """One fenced child claim, including slow success AND failure finalization.
+
+    The worker and heartbeat serialize cursor/CAS updates. The repository stops
+    this guard only after receipt/closure validation, immediately before CAS.
+    """
+
+    def __init__(self, *, repository, operation, lease_seconds):
+        self._repository = repository
+        self._operation = dict(operation)
+        self._duration = timedelta(seconds=lease_seconds)
+        self._interval = min(_FINALIZATION_HEARTBEAT_MAX_SECONDS, max(0.1, lease_seconds / 3))
+        self._stop = Event()
+        self._lock = Lock()
+        self._error: BaseException | None = None
+        self._thread = Thread(target=self._run, name=f"ahr-outcome-child-{operation['operation_id']}", daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def check(self):
+        with self._lock:
+            if self._error is not None:
+                raise self._error
+            if self._operation["lease_expires_at"] <= datetime.now(UTC):
+                raise HistoricalRangeContractError(REASON_REPOSITORY_CONFLICT, "outcome child lease expired")
+
+    def renew(self, *, cursor=None, update_cursor=False):
+        with self._lock:
+            if self._error is not None:
+                raise self._error
+            current = self._operation
+            if current["lease_expires_at"] <= datetime.now(UTC):
+                raise HistoricalRangeContractError(REASON_REPOSITORY_CONFLICT, "cannot renew an expired outcome child claim")
+            self._operation = self._repository.transition_operation(
+                operation_id=str(current["operation_id"]),
+                expected_row_version=int(current["row_version"]),
+                target_status=HistoricalRangeOperationStatus.RUNNING,
+                attempt_no=int(current["attempt_no"]),
+                worker_id=str(current["worker_id"]), lease_token=str(current["lease_token"]),
+                lease_expires_at=max(datetime.now(UTC) + self._duration, current["lease_expires_at"] + timedelta(microseconds=1)),
+                fencing_token=int(current["fencing_token"]),
+                stable_keyset_cursor_json=cursor if update_cursor else current.get("stable_keyset_cursor_json"),
+            )
+            return dict(self._operation)
+
+    def _run(self):
+        while not self._stop.wait(self._interval):
+            try:
+                self.renew()
+            except BaseException as exc:
+                with self._lock:
+                    self._error = exc
+                self._stop.set()
+                return
+
+    def close(self):
+        self._stop.set()
+        self._thread.join()
+        with self._lock:
+            return dict(self._operation)
+
+    def finish(self):
+        current = self.close()
+        self.check()
+        return current
 
 
 class HistoricalRangeOutcomeApplicationService:
@@ -158,6 +231,8 @@ class HistoricalRangeOutcomeApplicationService:
             else set()
         )
         current_item: HistoricalRangeOutcomeWorkItemV1 | None = None
+        lease = _OutcomeChildLease(repository=self._repository, operation=operation, lease_seconds=request.lease_seconds)
+        lease.start()
 
         def remember_outcome(ref: HistoricalRangeArtifactRefV1) -> None:
             nonlocal processed_count
@@ -168,6 +243,7 @@ class HistoricalRangeOutcomeApplicationService:
 
         try:
             while True:
+                lease.check()
                 planned = self._planner.plan_slice(
                     request=request,
                     cursor=cursor,
@@ -178,6 +254,7 @@ class HistoricalRangeOutcomeApplicationService:
                 def flush_pending_outcomes() -> None:
                     if not pending_outcomes:
                         return
+                    lease.check()
                     self._repository.append_outcomes(
                         tuple(fact for fact, _ref in pending_outcomes)
                     )
@@ -186,6 +263,7 @@ class HistoricalRangeOutcomeApplicationService:
                     pending_outcomes.clear()
 
                 for item in planned.items:
+                    lease.check()
                     current_item = item
                     touched_runs.add(item.range_run_id)
                     existing = self._repository.find_outcome_by_input(
@@ -279,20 +357,12 @@ class HistoricalRangeOutcomeApplicationService:
                 cursor = planned.next_cursor
                 if planned.exhausted:
                     break
-                operation = self._repository.transition_operation(
-                    operation_id=operation_request.operation_id,
-                    expected_row_version=int(operation["row_version"]),
-                    target_status=HistoricalRangeOperationStatus.RUNNING,
-                    attempt_no=attempt_no,
-                    worker_id=worker_id,
-                    lease_token=lease_token,
-                    lease_expires_at=datetime.now(UTC) + timedelta(seconds=request.lease_seconds),
-                    fencing_token=fencing_token,
-                    stable_keyset_cursor_json=cursor,
-                )
+                operation = lease.renew(cursor=cursor, update_cursor=True)
             if self._summary_coordinator is not None:
                 for range_run_id in sorted(touched_runs):
-                    ref = self._summary_coordinator.refresh(range_run_id=range_run_id)
+                    lease.check()
+                    ref = self._summary_coordinator.refresh(range_run_id=range_run_id, assert_active=lease.check)
+                    lease.check()
                     if ref is not None:
                         if ref.artifact_kind is not HistoricalRangeArtifactKind.SUMMARY:
                             raise ValueError("summary coordinator returned a non-SUMMARY ref")
@@ -307,6 +377,7 @@ class HistoricalRangeOutcomeApplicationService:
             )
             return self._finish(
                 operation=operation,
+                finalize_lease=lease.finish,
                 receipt=receipt,
                 resolved_request_hash=resolved_request_hash,
                 worker_id=worker_id,
@@ -333,6 +404,7 @@ class HistoricalRangeOutcomeApplicationService:
             )
             return self._retryable(
                 operation=operation,
+                finalize_lease=lease.finish,
                 request=request,
                 resolved_request_hash=resolved_request_hash,
                 worker_id=worker_id,
@@ -358,6 +430,7 @@ class HistoricalRangeOutcomeApplicationService:
             )
             return self._finish(
                 operation=operation,
+                finalize_lease=lease.finish,
                 receipt=receipt,
                 resolved_request_hash=resolved_request_hash,
                 worker_id=worker_id,
@@ -383,6 +456,7 @@ class HistoricalRangeOutcomeApplicationService:
                 )
                 return self._retryable(
                     operation=operation,
+                    finalize_lease=lease.finish,
                     request=request,
                     resolved_request_hash=resolved_request_hash,
                     worker_id=worker_id,
@@ -397,6 +471,7 @@ class HistoricalRangeOutcomeApplicationService:
                 )
             return self._fail(
                 operation=operation,
+                finalize_lease=lease.finish,
                 request=request,
                 resolved_request_hash=resolved_request_hash,
                 worker_id=worker_id,
@@ -425,6 +500,7 @@ class HistoricalRangeOutcomeApplicationService:
             )
             return self._fail(
                 operation=operation,
+                finalize_lease=lease.finish,
                 request=request,
                 resolved_request_hash=resolved_request_hash,
                 worker_id=worker_id,
@@ -438,6 +514,8 @@ class HistoricalRangeOutcomeApplicationService:
                 reason_code=REASON_OUTCOME_CALCULATION_FAILED,
                 error_type=type(error).__name__,
             )
+        finally:
+            lease.close()
 
     def _load_prior_attempt_outputs(
         self,
@@ -571,6 +649,7 @@ class HistoricalRangeOutcomeApplicationService:
         target_status: HistoricalRangeOperationStatus,
         cursor: dict[str, Any] | None,
         error_json: dict[str, Any] | None,
+        finalize_lease: Callable[[], dict[str, Any]] | None = None,
     ) -> tuple[HistoricalRangeOutcomeRefreshReceiptV1, HistoricalRangeArtifactRefV1]:
         upstream = tuple((*receipt.outcome_refs, *receipt.summary_refs))
         stored = self._artifact_store.publish_payload(
@@ -605,6 +684,7 @@ class HistoricalRangeOutcomeApplicationService:
         )
         self._repository.transition_operation(
             operation_id=receipt.operation_id,
+            finalize_lease=finalize_lease,
             expected_row_version=int(operation["row_version"]),
             target_status=target_status,
             attempt_no=attempt_no,
@@ -636,6 +716,7 @@ class HistoricalRangeOutcomeApplicationService:
         summary_refs: tuple[HistoricalRangeArtifactRefV1, ...],
         reason_code: str,
         error_type: str,
+        finalize_lease: Callable[[], dict[str, Any]] | None = None,
     ) -> tuple[HistoricalRangeOutcomeRefreshReceiptV1, HistoricalRangeArtifactRefV1]:
         error_json = {"reason_code": reason_code, "error_type": error_type}
         logger.error(
@@ -656,6 +737,7 @@ class HistoricalRangeOutcomeApplicationService:
         )
         return self._finish(
             operation=operation,
+            finalize_lease=finalize_lease,
             receipt=receipt,
             resolved_request_hash=resolved_request_hash,
             worker_id=worker_id,
@@ -683,6 +765,7 @@ class HistoricalRangeOutcomeApplicationService:
         outcome_refs: tuple[HistoricalRangeArtifactRefV1, ...],
         summary_refs: tuple[HistoricalRangeArtifactRefV1, ...],
         reason_code: str,
+        finalize_lease: Callable[[], dict[str, Any]] | None = None,
     ) -> tuple[HistoricalRangeOutcomeRefreshReceiptV1, HistoricalRangeArtifactRefV1]:
         cursor = operation.get("stable_keyset_cursor_json")
         receipt = HistoricalRangeOutcomeRefreshReceiptV1(
@@ -740,5 +823,6 @@ class HistoricalRangeOutcomeApplicationService:
             stable_keyset_cursor_json=cursor,
             error_json=error_json,
             attempt=attempt,
+            finalize_lease=finalize_lease,
         )
         return receipt, stored.ref

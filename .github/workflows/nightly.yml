@@ -1,9 +1,10 @@
 name: AIstock Nightly L3 + DR
+run-name: ${{ github.event_name == 'repository_dispatch' && format('AIstock schedule nightly.yml {0}', github.event.client_payload.cycle_date) || github.workflow }}
 
 on:
-  schedule:
-    # 19:07 UTC = 03:07 China Standard Time (UTC+8) -- after market close + log rotation
-    - cron: '7 19 * * *'
+  repository_dispatch:
+    # Windows wall-clock trigger 03:07 UTC+8; still subject to overnight admission.
+    types: [aistock_nightly]
   workflow_dispatch:
     inputs:
       run_dr:
@@ -41,7 +42,7 @@ on:
         type: choice
         default: warning_only
         options:
-          - off
+          - 'off'
           - warning_only
           - opt_in_auto_file
       llm_auto_file_opt_in:
@@ -147,7 +148,7 @@ jobs:
 
       - name: Select prior durable Nightly L3 receipt
         id: select_nightly_receipt
-        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name == 'schedule' || (inputs.run_nightly_l3 && !inputs.full_nightly_run))
+        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name != 'workflow_dispatch' || (inputs.run_nightly_l3 && !inputs.full_nightly_run))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -157,7 +158,6 @@ jobs:
             --repo "${GITHUB_REPOSITORY}" \
             --workflow nightly.yml \
             --branch main \
-            --event schedule \
             --status completed \
             --limit 10 \
             --json databaseId,headSha \
@@ -420,7 +420,7 @@ jobs:
           }
 
       - name: Download selected Nightly L3 retry receipt
-        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name == 'schedule' || !inputs.full_nightly_run)
+        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name != 'workflow_dispatch' || !inputs.full_nightly_run)
         uses: actions/download-artifact@v8
         with:
           name: nightly-l3-retry-source-${{ github.run_id }}
@@ -904,7 +904,7 @@ jobs:
             --output-dir "$outDir/bug-candidates"
 
       - name: Promote ready Nightly BugCandidates to Issue workflow
-        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in))
+        if: steps.background_window.outputs.background_admitted == 'true' && (github.event_name != 'workflow_dispatch' || (github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode == 'opt_in_auto_file' && inputs.llm_auto_file_opt_in))
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -1431,11 +1431,17 @@ jobs:
                 || issue.title === payload.title
               ));
               const existingBody = existing ? (existing.body || "") : "";
-              const promotedBugLink = existingBody.match(/- BUG ID: `BUG-\d+`[^\n]*/);
+              const existingBugId = existing ? existing.title.match(/^(BUG-\d+)\s/) : null;
+              const promotedBugLink = existingBody.match(/- BUG ID: `BUG-\d+`[^\n]*/)
+                || (existingBugId ? [`- BUG ID: \`${existingBugId[1]}\` (existing Issue linkage; repair not verified).`] : null);
               const existingBugDraft = existingBody.match(/\n\n## Nightly BUG Draft\n[\s\S]*$/);
               let issueNumber;
               let issueBody = payload.body.replaceAll('--issue <issue-number>', '--issue __ISSUE_NUMBER__');
               if (promotedBugLink) {
+                issueBody = issueBody.replace(
+                  '- intake_status: `awaiting_local_registry_intake`',
+                  '- intake_status: `registered_not_fixed`',
+                );
                 issueBody = issueBody.replace(
                   "- BUG ID: pending until promoted by `aistock_issue_workflow.py promote-ci-issue`.",
                   promotedBugLink[0],
@@ -1493,7 +1499,13 @@ jobs:
                 nightly_marker: marker,
                 title: payload.title,
                 promotion_status: promotedBugLink ? 'already_linked' : 'pending',
+                intake_status: promotedBugLink ? 'registered_not_fixed' : (
+                  issueBody.includes('awaiting_local_registry_intake') ? 'awaiting_local_registry_intake' : 'triage_only'
+                ),
               });
+              if (!promotedBugLink && issueBody.includes('awaiting_local_registry_intake')) {
+                core.warning(`Nightly #${issueNumber}: local pipeline intake pending; affected module owner must repair after registration. Issue publication is not a repair.`);
+              }
             }
             fs.writeFileSync(
               'tmp/validation/nightly_failure_issue/github-issue-numbers.json',
@@ -1501,6 +1513,11 @@ jobs:
               'utf8',
             );
             const promotionCandidate = issueRecords.find((item) => item.promotion_status === 'pending');
+            core.summary.addHeading('Nightly registry intake (not repair completion)');
+            await core.summary.addTable([
+              ['Issue', 'Intake status'],
+              ...issueRecords.map((item) => [`#${item.issue_number}`, item.intake_status]),
+            ]).write();
             if (promotionCandidate) {
               fs.writeFileSync(
                 singleIssueNumberPath,
@@ -1557,6 +1574,8 @@ jobs:
             if [ "${PROMOTION_WORKFLOW_GATE}" = "deferred_registry_pr_capability" ]; then
               PROMOTION_GATE="deferred_registry_pr_capability"
               echo "workflow_gate=${PROMOTION_GATE} issue=${ISSUE_NUMBER} reason=actions_cannot_persist_registry_pr" | tee -a "${PROMOTION_STATUS}"
+              echo "::warning::Nightly BUG registration deferred for #${ISSUE_NUMBER}; local pipeline intake owner must take over from its durable Issue handoff. Not registered, claimed or fixed."
+              printf '\n### Nightly registration deferred\n\nIssue #%s requires local pipeline intake; see its Local Registry Intake section. Actions permissions unchanged; this is not a PR merge gate.\n' "${ISSUE_NUMBER}" >> "${GITHUB_STEP_SUMMARY}"
             fi
             if [ -n "${BUG_ID}" ]; then
               BRANCH="$(python -c "import json; p=json.load(open('tmp/validation/nightly_failure_issue/bug-promotion-full.json', encoding='utf-8')); print(p.get('submit_bug', {}).get('registry_worktree_plan', {}).get('branch') or '')")"
@@ -1625,6 +1644,10 @@ jobs:
           body = body.replace(
               "- BUG ID: pending until promoted by `aistock_issue_workflow.py promote-ci-issue`.",
               replacement,
+          )
+          body = body.replace(
+              "- intake_status: `awaiting_local_registry_intake`",
+              "- intake_status: `registered_not_fixed`",
           )
           if "## Nightly BUG Draft" not in body:
               body += (

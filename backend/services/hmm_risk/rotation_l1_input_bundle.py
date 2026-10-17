@@ -1247,27 +1247,45 @@ def _require_active_direct_v2_profile(
 
 
 def _require_direct_v2_manifest(
-    *, root: Path, state: Mapping[str, Any], release_cutoff: date, release_id: str
+    *,
+    root: Path,
+    state: Mapping[str, Any],
+    release_cutoff: date,
+    release_id: str,
+    frozen_binding: Mapping[str, str] | None = None,
 ) -> tuple[Path, dict[str, Any]]:
     """One manifest validator shared by active and explicitly frozen consumers."""
 
     manifest_binding = state.get("manifest")
-    if not isinstance(manifest_binding, Mapping) or set(manifest_binding) != {
+    legacy_fields = {
         "dataset_manifest_sha256",
         "deployment_snapshot_id",
         "file_sha256",
         "path",
-    }:
+    }
+    shared_fields = {"dataset_manifest_sha256", "path", "sha256", "size"}
+    shared = isinstance(manifest_binding, Mapping) and set(manifest_binding) == shared_fields
+    if not isinstance(manifest_binding, Mapping) or not (
+        set(manifest_binding) == legacy_fields or (shared and frozen_binding is not None)
+    ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 state manifest binding is invalid")
     if manifest_binding.get("path") != "qe_dataset_manifest.json":
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 dataset manifest path differs")
     manifest_path = root / "qe_dataset_manifest.json"
     if _is_indirect_path(manifest_path) or not manifest_path.is_file():
         raise _fail(REASON_SOURCE_COMPONENT_MISSING, "direct-v2 dataset manifest is missing or indirect")
-    if _sha256_file(manifest_path) != _require_sha256(
-        manifest_binding.get("file_sha256"), "direct-v2 manifest file_sha256"
-    ):
+    file_hash = _require_sha256(
+        manifest_binding.get("sha256" if shared else "file_sha256"), "direct-v2 manifest file_sha256"
+    )
+    if _sha256_file(manifest_path) != file_hash:
         raise _fail(REASON_HASH_MISMATCH, "direct-v2 dataset manifest file hash differs")
+    if shared and (
+        type(manifest_binding.get("size")) is not int
+        or manifest_binding["size"] != manifest_path.stat().st_size
+        or file_hash != frozen_binding["manifest_file_sha256"]
+        or manifest_binding["dataset_manifest_sha256"] != frozen_binding["manifest_sha256"]
+    ):
+        raise _fail(REASON_HASH_MISMATCH, "direct-v2 shared manifest differs from approved frozen pins")
     manifest = _read_json_object(manifest_path)
     dataset_manifest_sha256 = _require_sha256(
         manifest_binding.get("dataset_manifest_sha256"), "direct-v2 dataset_manifest_sha256"
@@ -1278,8 +1296,11 @@ def _require_direct_v2_manifest(
         or manifest.get("cutoff_trade_date") != release_cutoff.isoformat()
         or manifest.get("availability_status") != "CANDIDATE_READY"
         or manifest.get("dataset_manifest_sha256") != dataset_manifest_sha256
-        or manifest.get("deployment_snapshot_id") != manifest_binding.get("deployment_snapshot_id")
-        or state.get("revision") != manifest.get("revision")
+        # A shared successor can retain an older logical manifest revision.
+        # Only an explicit frozen identity/file pin permits this shape; the
+        # active/legacy path keeps its existing revision/snapshot checks.
+        or (not shared and manifest.get("deployment_snapshot_id") != manifest_binding.get("deployment_snapshot_id"))
+        or (not shared and state.get("revision") != manifest.get("revision"))
     ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 dataset manifest identity differs")
     return manifest_path, manifest
@@ -1325,11 +1346,11 @@ def _require_frozen_direct_v2_profile(
     ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 frozen state root differs")
     manifest_path, manifest = _require_direct_v2_manifest(
-        root=root, state=state, release_cutoff=release_cutoff, release_id=binding["release_id"]
+        root=root, state=state, release_cutoff=release_cutoff, release_id=binding["release_id"], frozen_binding=binding
     )
     if (
         manifest.get("dataset_manifest_sha256") != binding["manifest_sha256"]
-        or state["manifest"]["file_sha256"] != binding["manifest_file_sha256"]
+        or state["manifest"].get("file_sha256", state["manifest"].get("sha256")) != binding["manifest_file_sha256"]
     ):
         raise _fail(REASON_HASH_MISMATCH, "direct-v2 frozen manifest differs from approved pins")
     return {**binding, "binding_sha256": canonical_sha256(binding)}, manifest_path, manifest

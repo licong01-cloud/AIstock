@@ -1299,7 +1299,8 @@ def _validate_native_month(
     expected_history = invocation.plan.get("industry_history_projection_sha256")
     if expected_history is not None or history_ref is not None:
         from .monthly_industry_history import IndustryHistoryProjection, factor_file_receipts
-        proof = invocation.cas.get_json_bounded(history_ref, max_bytes=16 * 1024 * 1024)
+        from .monthly_build_resume import load_sealed_build_json
+        proof = load_sealed_build_json(invocation.cas, history_ref)
         projection = IndustryHistoryProjection.read(proof["projection"])
         if projection.sha256 != expected_history or proof.get("status") != "PASS" or proof.get("database_write") is not False:
             raise CandidateBuildStageError("industry repair was not verified against frozen authority")
@@ -4324,7 +4325,11 @@ def _prerequisite_json(invocation: BuildStageInvocation, name: str) -> Mapping[s
 
 
 def _cas_json(cas: CASStore, reference: Any) -> Mapping[str, Any]:
-    value = cas.get_json_bounded(reference, max_bytes=32 * 1024 * 1024)
+    from .monthly_build_resume import load_sealed_build_json
+    # Complete producer-owned receipts may contain a full-market file index.
+    # Legacy hash-only control references retain their existing small cap.
+    value = (cas.get_json_bounded(reference, max_bytes=32 * 1024 * 1024)
+             if isinstance(reference, str) else load_sealed_build_json(cas, reference))
     if not isinstance(value, Mapping):
         raise CandidateBuildStageError("stage CAS receipt is not an object")
     return value
