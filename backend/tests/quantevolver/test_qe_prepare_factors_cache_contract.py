@@ -726,3 +726,46 @@ def test_feature_processing_b_a_c_b_yaml_isolation_and_real_normalizer(panel_com
 def test_feature_processing_rejects_silent_misconfiguration(monkeypatch, options):
     with pytest.raises(ValueError, match="qe_feature_processing_invalid"):
         _panel_script(monkeypatch, feature_processing=options)
+
+
+def test_feature_processing_public_request_and_retry_snapshot_are_request_local(monkeypatch, tmp_path):
+    import copy
+
+    monkeypatch.setenv("QE_LIVE_LOG_DIR", str(tmp_path / "qe_logs"))
+    from backend.routers.quantevolver_evolution import CustomEvoLoopConfig
+    from backend.services.quantevolver.experiment_config_builders import (
+        build_config_from_custom_evo_loop, build_config_from_retry_loop,
+    )
+    from tests.fixtures.sample_configs import CUSTOM_EVO_LOOP_MINIMAL, CUSTOM_EVO_TASK
+
+    original = copy.deepcopy(CUSTOM_EVO_LOOP_MINIMAL)
+    for options in (None, {"exclude_from_model": ["Alpha001"]}, {"clip_outlier": False}, None):
+        request = CustomEvoLoopConfig(**{
+            **original, "disable_alpha158": True,
+            **({"feature_processing": options} if options is not None else {}),
+        })
+        public = request.model_dump()
+        cfg = build_config_from_custom_evo_loop(public, CUSTOM_EVO_TASK)
+        params = cfg.build_custom_params()
+        assert params.get("feature_processing") == options
+        assert "feature_processing" not in cfg.build_strategy_params()
+        snapshot = json.loads(json.dumps({
+            "factor_list": cfg.factor_names, "model_id": cfg.model_id,
+            "model_params": params, "disable_alpha158": True,
+        }))
+        restored = build_config_from_retry_loop(snapshot, CUSTOM_EVO_TASK)
+        assert restored.build_custom_params().get("feature_processing") == options
+        assert public["feature_processing"] == options
+    assert CUSTOM_EVO_LOOP_MINIMAL == original
+
+
+@pytest.mark.parametrize("mode", [{"backtest_only": True}, {"prediction_replay": True}, {"alpha_mode": "multi"}])
+def test_feature_processing_cannot_silently_skip_training(mode):
+    from backend.services.quantevolver.experiment_config_builders import build_config_from_custom_evo_loop
+    from tests.fixtures.sample_configs import CUSTOM_EVO_LOOP_MINIMAL, CUSTOM_EVO_TASK
+
+    with pytest.raises(ValueError, match="feature_processing: input changes require"):
+        build_config_from_custom_evo_loop({
+            **CUSTOM_EVO_LOOP_MINIMAL, **mode, "disable_alpha158": True,
+            "feature_processing": {"clip_outlier": False},
+        }, CUSTOM_EVO_TASK)

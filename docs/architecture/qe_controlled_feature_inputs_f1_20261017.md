@@ -12,7 +12,6 @@ QE owner 实施，精确文件范围：
 - backend/services/quantevolver/experiment_config_builders.py
 - backend/routers/quantevolver_evolution.py
 - backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py
-- backend/tests/unified_engine/test_experiment_config.py
 - 本文档
 
 ## Non-goals
@@ -63,9 +62,11 @@ A 仍计算原11因子，保留 Price_Deviation_Historical_High 面板参考，�
 | F-002 | backend/services/quantevolver/config_composer.py | backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py::test_feature_processing_real_panel_output_keeps_cache_and_identity | PASS | 无 |
 | F-003 | backend/services/quantevolver/config_composer.py | backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py::test_feature_processing_real_panel_output_keeps_cache_and_identity | PASS | 无 |
 | F-004 | backend/services/quantevolver/config_composer.py | backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py::test_feature_processing_b_a_c_b_yaml_isolation_and_real_normalizer | PASS | 无 |
-| F-005 | backend/routers/quantevolver_evolution.py; backend/services/quantevolver/experiment_config_builders.py | backend/tests/unified_engine/test_experiment_config.py::test_feature_processing_public_request_and_retry_snapshot_are_request_local; backend/tests/unified_engine/test_experiment_config.py::test_feature_processing_cannot_silently_skip_training | PASS | 无 |
+| F-005 | backend/routers/quantevolver_evolution.py; backend/services/quantevolver/experiment_config_builders.py | backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py::test_feature_processing_public_request_and_retry_snapshot_are_request_local; backend/tests/quantevolver/test_qe_prepare_factors_cache_contract.py::test_feature_processing_cannot_silently_skip_training | PASS | 无 |
 
-源码验收证据（2026-10-17）：在现有 AIstock Python 环境运行上述两个完整测试文件，84 passed。真实小型 Parquet 写入、共享输入字节不变、原面板锚点保留、Qlib DataHandlerLP 的 DK_L/DK_I 共同预处理、序列 B/A/C/B 和重试快照均通过。只运行单元/合同测试，没有模型训练或投资回测。更广的 QE read/sector overlay 回归交现有 CI/nightly，不据此声称全系统业务验收。
+源码验收证据（2026-10-17）：在现有 AIstock Python 环境运行 test_qe_prepare_factors_cache_contract.py 与 test_experiment_config.py 两个完整测试文件，84 passed。真实小型 Parquet 写入、共享输入字节不变、原面板锚点保留、Qlib DataHandlerLP 的 DK_L/DK_I 共同预处理、序列 B/A/C/B 和重试快照均通过。只运行单元/合同测试，没有模型训练或投资回测。更广的 QE read/sector overlay 回归交现有 CI/nightly，不据此声称全系统业务验收。
+
+CI 路由复核：原 test_experiment_config.py 不在本次选中的 CI 计划中，新增四项配置测试完整移入已由 qe_sector_risk_overlay_backend 执行的 test_qe_prepare_factors_cache_contract.py；断言不变，原配置测试文件无 PR 差异，不修改流水线、计划或 ownership。迁移后该完整文件39 passed；分类器 workflow_gate=passed、unexecuted_test_files=[]，F1、Ruff、py_compile、L0 和归属检查通过。
 
 多轮自审：第一轮修正生成脚本 JSON 别名及测试 YAML 日期序列化；第二轮补齐实际训练/推理消费路径和不支持模式的参数报错；第三轮核对默认兼容、缓存不变、实际输入身份、成熟边界及授权范围。没有借用其他 agent 的名义报告审核。
 
@@ -77,4 +78,4 @@ DESIGN-COMPLIANCE-001：① 两项配置均有正式请求、真实产物消费�
 
 ## Production gates
 
-DDL/DML、依赖安装、数据发布、客户端安装：noop。影响 backend-main 的新装配配置；后端重启由用户执行，源码交付不代表运行时激活。未获本批实验启动授权，不训练、不回测；本轮实现和审核，不自动合入。
+DDL/DML、依赖安装、数据发布、客户端安装：noop。影响 backend-main 的新装配配置；后端重启由用户执行，源码交付不代表运行时激活。用户已授权多轮审核修复、CI 通过后的源码合入；未获本批实验启动授权，不训练、不回测。
