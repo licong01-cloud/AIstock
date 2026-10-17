@@ -724,7 +724,7 @@ async function mockShellApis(page: Page, tradingDefaults: JsonObject = {}) {
     const path = new URL(route.request().url()).pathname;
     return json(route, path.endsWith("/unack-count") ? { count: 0 } : { alerts: [] });
   });
-  await page.route("**/api/v1/paper-v2/trading-days/defaults**", async (route) => json(route, {
+  await page.route("**/api/v1/advisory/trading-days/defaults**", async (route) => json(route, {
     as_of_date: "2026-06-08",
     trading_day_status: {
       is_trading_day: true,
@@ -887,6 +887,8 @@ async function mockAdvisoryApis(page: Page, options: {
     const path = url.pathname;
     const method = request.method();
     calls.push(`${method} ${path}${url.search}`);
+
+    if (path.endsWith("/api/v1/advisory/trading-days/defaults")) return route.fallback();
 
     if (path.endsWith("/api/v1/advisory/universe-options") && method === "GET") {
       return json(route, {
@@ -1321,6 +1323,48 @@ async function mockAdvisoryApis(page: Page, options: {
 async function activeSymbols(page: Page) {
   const texts = await page.getByTestId("advisory-active-cell-symbol").allTextContents();
   return texts.map((text) => text.match(/\d{6}\.(?:SZ|SH|BJ)/)?.[0] ?? text.trim());
+}
+
+for (const calendarState of ["unavailable", "slow"] as const) {
+  test(`Advisory calendar ${calendarState} preserves stored recommendations and blocks date-dependent writes`, async ({ page }) => {
+    await mockShellApis(page);
+    const { calls } = await mockAdvisoryApis(page);
+    const retiredRequests: string[] = [];
+    page.on("request", (request) => {
+      if (request.url().includes("/paper-v2/trading-days/defaults")) retiredRequests.push(request.url());
+    });
+    let releaseCalendar = () => {};
+    let failCalendar = calendarState === "unavailable";
+    const calendarGate = new Promise<void>((resolve) => { releaseCalendar = resolve; });
+    await page.route("**/api/v1/advisory/trading-days/defaults**", async (route) => {
+      if (failCalendar) return json(route, { detail: { message: "official calendar unavailable" } }, 503);
+      if (calendarState === "slow") await calendarGate;
+      return route.fallback();
+    });
+    try {
+      await page.goto("/paper-v2/advisory");
+      await expect(page.getByText("codex_smoke_20260604").first()).toBeVisible();
+      await expect(page.getByTestId("advisory-list-version-summary")).toContainText("advlv_20260605");
+      await expect(page.getByTestId("advisory-active-cell-symbol").first()).toBeVisible();
+      await expect(page.getByTestId("advisory-selected-preview")).toBeDisabled();
+      await expect(page.getByTestId("advisory-selected-run")).toBeDisabled();
+      await expect(page.getByTestId("advisory-selected-catchup")).toBeDisabled();
+      expect(calls.filter((call) => call.startsWith("POST "))).toEqual([]);
+      expect(retiredRequests).toEqual([]);
+      if (calendarState === "unavailable") {
+        await expect(page.getByTestId("advisory-calendar-error")).toContainText("official calendar unavailable");
+        failCalendar = false;
+        await page.getByRole("button", { name: "刷新", exact: true }).click();
+        await expect(page.getByTestId("advisory-calendar-error")).toHaveCount(0);
+        await expect(page.getByTestId("advisory-review-target-select")).toBeEnabled();
+      } else {
+        releaseCalendar();
+        await expect(page.getByTestId("advisory-review-target-select")).toBeEnabled();
+      }
+    } finally {
+      releaseCalendar();
+    }
+  });
 }
 
 test("Advisory page renders task shell before slow leaderboard and detail endpoints complete", async ({ page }) => {
@@ -2412,12 +2456,15 @@ test("Advisory page exposes initial list generation when a new program has no li
   });
 
   await mockShellApis(page);
+  await mockAdvisoryApis(page, { extraPrograms: [enabledProgram()] });
   await page.route("**/api/v1/advisory/**", async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
     const method = request.method();
     calls.push(`${method} ${path}${url.search}`);
+
+    if (path.endsWith("/api/v1/advisory/trading-days/defaults")) return route.fallback();
 
     if (path.endsWith("/api/v1/advisory/universe-options") && method === "GET") {
       return json(route, {
@@ -2569,7 +2616,7 @@ test("Advisory page exposes initial list generation when a new program has no li
       detailByVersion = { [String(published.list_version_id)]: { list_version: published, items: publishedItems } };
       return json(route, initialPayload(false, initialTargetDate));
     }
-    return json(route, { detail: `unexpected advisory route: ${method} ${path}` }, 404);
+    return route.fallback();
   });
 
   await page.goto("/paper-v2/advisory");

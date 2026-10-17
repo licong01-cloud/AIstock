@@ -141,6 +141,13 @@
   "first_seen_at": "2026-10-17T12:43:14.011399Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "Restore Advisory-owned official-calendar daily defaults and independently load stored task/list/stock data. Calendar errors remain visible; review and catch-up stay disabled until authoritative dates return. No ranking, pricing, policy, model, data or LocalSIM/QE/HMM changes. UI redesign is explicitly deferred.",
+  "design_compliance_001_review": {
+    "no_simplified_delivery": "PASS: full current-page task, stored list, active pool and existing review paths tested; public CI and production activation remain separately pending, not claimed complete.",
+    "no_silent_errors": "PASS: calendar errors are explicit and stored results remain readable; unavailable calendar cannot authorize review or invent dates.",
+    "business_semantics_unchanged": "PASS: native ranking, TopK, quote/model data, review payloads and D/C context stay unchanged; calendar choices are not a market-data readiness claim.",
+    "no_unapproved_gate": "PASS: no new business/research/approval gate; only preserve existing authoritative-date requirements for mutations."
+  },
   "fixed_at": null,
   "github_issue_number": 6265,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6265",
@@ -163,7 +170,14 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/trading-days/defaults?lookback_trading_days=10",
+    "fresh_process_evidence": [
+      "READ_ONLY_PASS: new isolated Python TestClient loaded this worktree's persistent Advisory router and real TradingCalendarStatusService using existing canonical official cache, returning 10 dates through 2026-10-16 and next=2026-10-19. Initial isolated attempt without environment/cache correctly failed closed; it is not PASS evidence. No service startup, database writes, price data mutation or task submission.",
+      "READ_ONLY_UI_PASS: isolated frontend 3192 displayed real GET-only production tasks (including LSTM and TCN), 16 active-stock rows and persisted list identity with the fresh-source calendar response injected only for the not-yet-loaded new endpoint. This is source integration evidence, NOT production 3000/8001 activation. Playwright 10 distinct focused scenarios and API 21 tests passed; TypeScript, Ruff, focused ESLint and L0 passed."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
