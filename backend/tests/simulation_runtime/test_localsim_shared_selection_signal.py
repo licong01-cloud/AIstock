@@ -288,6 +288,41 @@ def test_public_suspension_policy_change_cannot_reuse_old_localsim_projection(tm
     assert roots[0] != roots[1]
 
 
+@pytest.mark.parametrize("source", ["reference_prices.py", "tradability.py", "suspension_provider.py"])
+def test_loaded_shared_source_change_invalidates_projection_but_later_checkout_does_not(tmp_path, monkeypatch, source):
+    from backend.services.simulation_runtime import localsim_selection_signal as module
+
+    service = LocalSimSelectionSignalService.__new__(LocalSimSelectionSignalService)
+    service.temporary_root = tmp_path
+    service.native_repository = InMemorySimulationRuntimeRepository()
+    service.package_repository = SimpleNamespace(get=lambda _: SimpleNamespace(manifest_sha256="a" * 64))
+    roots, cached = [], object()
+
+    def recover(root, _identity, **_):
+        roots.append(root)
+        return cached if root == roots[0] else None
+
+    def fail(*_args, **_kwargs):
+        raise DataUnavailableError("fresh computation required")
+
+    service._recover = recover
+    monkeypatch.setattr(StrategyPackageSelectionService, "run_selection", fail)
+    kwargs = dict(package_ids=["native-package"], mode=SelectionMode.SINGLE_PACKAGE,
+                  trade_date=TRADE_DATE, data_source="DB_HISTORICAL", runtime_config={})
+    assert service.run_selection(**kwargs) is cached
+    # Editing the checkout cannot relabel an already running process as new code.
+    monkeypatch.setattr(module.Path, "read_bytes", lambda _self: (_ for _ in ()).throw(AssertionError("late source read")))
+    assert service.run_selection(**kwargs) is cached
+    assert roots[0] == roots[1]
+    loaded = dict(module._LOADED_SELECTION_CODE_IDENTITY)
+    assert source in loaded
+    loaded[source] = "f" * 64
+    monkeypatch.setattr(module, "_LOADED_SELECTION_CODE_IDENTITY", loaded)
+    with pytest.raises(DataUnavailableError, match="fresh computation"):
+        service.run_selection(**kwargs)
+    assert roots[0] != roots[2]
+
+
 def test_foreign_native_evidence_and_corrupt_own_artifact_fail_loudly(tmp_path):
     scope, computed, program, _ = _computed(tmp_path)
     repository = InMemorySimulationRuntimeRepository()

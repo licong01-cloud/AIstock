@@ -332,11 +332,10 @@ def test_native_empty_alpha_does_not_claim_HMM_observation_or_require_generation
 
 
 def test_localsim_checkpoint_namespace_binds_shared_kernel_source(tmp_path, monkeypatch):
-    from pathlib import Path
     from types import SimpleNamespace
     from backend.services.selection_center.models import SelectionMode
     from backend.services.simulation_runtime.localsim_selection_signal import LocalSimSelectionSignalService
-    import backend.services.advisory_historical_range.selection_signal_kernel as module
+    from backend.services.simulation_runtime import localsim_selection_signal as module
 
     # Exercise the actual consumer's pre-lookup identity, stop at the read-only
     # recovery seam; never enter native publication, account or execution.
@@ -352,8 +351,11 @@ def test_localsim_checkpoint_namespace_binds_shared_kernel_source(tmp_path, monk
     kwargs = dict(package_ids=["arbitrary-package"], trade_date=TRADE_DATE,
                   data_source="DB_HISTORICAL", mode=SelectionMode.SINGLE_PACKAGE, runtime_config={})
     assert service.run_selection(**kwargs) is marker
-    original = Path.read_bytes
-    kernel_path = Path(module.__file__).resolve()
-    monkeypatch.setattr(Path, "read_bytes", lambda path: b"legacy-C-filter-source" if path.resolve() == kernel_path else original(path))
+    # Model the next process loading different kernel code; changing checkout
+    # bytes alone must not claim that the running process loaded that code.
+    loaded = dict(module._LOADED_SELECTION_CODE_IDENTITY)
+    assert "selection_signal_kernel.py" in loaded
+    loaded["selection_signal_kernel.py"] = "f" * 64
+    monkeypatch.setattr(module, "_LOADED_SELECTION_CODE_IDENTITY", loaded)
     assert service.run_selection(**kwargs) is marker
     assert len(identities) == 2 and identities[0] != identities[1]
