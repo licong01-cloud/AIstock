@@ -122,6 +122,7 @@ _BACKEND_VERSION = "1.0.0"
 _CHANNEL_KIND_BY_SOURCE: dict[MinuteDataSource, MarketDataChannelKind] = {
     MinuteDataSource.TDX_REALTIME: "in_process_tdx",
     MinuteDataSource.DB_HISTORICAL: "in_process_db",
+    MinuteDataSource.DATASET_FILES: "in_process_files",
 }
 
 
@@ -190,6 +191,14 @@ class LocalSimBackend(BrokerBackend):
             execution_policy=execution_policy,
         )
         self._data_source = data_source
+        if data_source == MinuteDataSource.DATASET_FILES:
+            from backend.services.simulation_data.frozen_file_adapters import FileMinuteMarketDataProvider
+            from backend.services.simulation_runtime.localsim_file_inputs import (
+                current_file_dataset, historical_suspension_provider as file_suspension_provider,
+            )
+            dataset = current_file_dataset(required=True)
+            market_data_provider = market_data_provider or FileMinuteMarketDataProvider(dataset)
+            historical_suspension_provider = historical_suspension_provider or file_suspension_provider(dataset)
         self._market_data_provider = market_data_provider or SimulationMinuteMarketDataProvider()
         from .suspension import LocalSimHistoricalSuspensionProvider
 
@@ -924,7 +933,7 @@ class LocalSimBackend(BrokerBackend):
                 )
 
             historical_suspended = False
-            if self._data_source == MinuteDataSource.DB_HISTORICAL:
+            if self._data_source in {MinuteDataSource.DB_HISTORICAL, MinuteDataSource.DATASET_FILES}:
                 status = self._historical_suspension_statuses.get(intent.symbol)
                 if status is None and self._historical_suspension_provider is not None:
                     status = self._historical_suspension_provider.load_statuses(
@@ -1446,7 +1455,7 @@ class LocalSimBackend(BrokerBackend):
                 as_of_time=as_of_time,
             )
         statuses = dict(pre_trade_tradability)
-        if self._data_source == MinuteDataSource.DB_HISTORICAL and self._historical_suspension_provider is not None:
+        if self._data_source in {MinuteDataSource.DB_HISTORICAL, MinuteDataSource.DATASET_FILES} and self._historical_suspension_provider is not None:
             missing = [symbol for symbol in normalized_symbols if symbol not in statuses]
             if missing:
                 statuses.update(self._historical_suspension_provider.load_statuses(
@@ -1469,7 +1478,7 @@ class LocalSimBackend(BrokerBackend):
                                                                 symbol=symbol, trade_date=trade_date)
                     records[symbol] = LocalSimMarketMarkV1(
                         symbol=symbol, price=native["pre_close"], as_of_time=as_of_time,
-                        source="market.stk_limit.pre_close:frozen_historical_suspension",
+                        source=native["price_source"] + ":frozen_historical_suspension",
                         provenance=LocalSimMarketMarkProvenance.SUSPENDED_PREV_CLOSE,
                         suspension_reference=native,
                     )
@@ -1479,7 +1488,7 @@ class LocalSimBackend(BrokerBackend):
                                                               trade_date=trade_date)
                     records[symbol] = LocalSimMarketMarkV1(
                         symbol=symbol, price=reference["reference_close"], as_of_time=as_of_time,
-                        source="market.kline_daily_raw:strategy_package_reference_price_availability_v1",
+                        source=reference["reference_source"] + ":strategy_package_reference_price_availability_v1",
                         provenance=LocalSimMarketMarkProvenance.SUSPENDED_REFERENCE_CLOSE,
                         suspension_reference=reference,
                     )
@@ -1574,7 +1583,7 @@ class LocalSimBackend(BrokerBackend):
                     )
                     continue
                 provenance = LocalSimMarketMarkProvenance.REALTIME_MINUTE_CLOSE
-            elif self._data_source == MinuteDataSource.DB_HISTORICAL:
+            elif self._data_source in {MinuteDataSource.DB_HISTORICAL, MinuteDataSource.DATASET_FILES}:
                 market_input = self._market_data_provider.load_symbol_input(
                     symbol=symbol,
                     trade_date=trade_date,

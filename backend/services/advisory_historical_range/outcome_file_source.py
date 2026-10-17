@@ -18,6 +18,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from backend.data_service.frozen_dataset import FrozenDatasetError, raw_price_li, read_h5_window
+
 from backend.services.advisory_historical_range.canonical import canonical_json_sha256
 from backend.services.advisory_historical_range.outcome_source import (
     HistoricalRangeOutcomeSourceError,
@@ -153,11 +155,11 @@ class FileHistoricalRangeOutcomeSourceProvider(HistoricalRangeOutcomeSourceProvi
                 raise _error(f"frozen file changed after binding: {path.name}")
 
     def _load_batch(self) -> dict[str, pd.DataFrame]:
-        start, end = pd.Timestamp(self._start).value, pd.Timestamp(self._end).value
-        with pd.HDFStore(self._paths["daily_pv"], mode="r") as store:
-            table = store.get_storer("data").table
-            coordinates = table.get_where_list(f"(datetime >= {start}) & (datetime <= {end})", sort=True)
-            frame = store.select("data", where=coordinates, columns=["open", "high", "low", "close", "factor"])
+        try:
+            frame = read_h5_window(self._paths["daily_pv"], start=self._start, end=self._end,
+                                  columns=["open", "high", "low", "close", "factor"])
+        except FrozenDatasetError as exc:
+            raise _error(str(exc)) from exc
         self.batch_read_count += 1
         if frame.index.has_duplicates:
             raise _error("daily file contains duplicate stock/day rows")
@@ -218,15 +220,10 @@ class FileHistoricalRangeOutcomeSourceProvider(HistoricalRangeOutcomeSourceProvi
 
     @staticmethod
     def _raw_li(adjusted: Any, factor: Decimal) -> Decimal | None:
-        if adjusted is None or not math.isfinite(float(adjusted)):
-            return None
-        raw = Decimal(str(adjusted)) / factor
-        nearest = (raw * 1000).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
-        # The producer's raw unit is an integer li. Reject precision loss that
-        # cannot be explained by its float32 bin repair path; never double-adjust.
-        if abs(raw - nearest / 1000) > max(Decimal("0.00001"), abs(raw) * Decimal("0.0000002")):
-            raise _error("raw price cannot be restored at declared li precision")
-        return nearest
+        try:
+            return raw_price_li(adjusted, factor)
+        except FrozenDatasetError as exc:
+            raise _error(str(exc)) from exc
 
     def _load_symbol_rows(self, *, symbol: str, start_trade_date: date, end_trade_date: date) -> tuple[dict[str, Any], ...]:
         if start_trade_date < self._start or end_trade_date > self._end:
