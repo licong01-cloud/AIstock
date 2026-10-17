@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1278",
-  "closed_at": null,
+  "closed_at": "2026-10-17T12:57:56.294450Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,9 +27,20 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/__init__.py",
+      "backend/routers/health.py",
+      "backend/tests/platform_api/test_health_contract.py",
+      "tests/aistock_validation/bugs/20260831_BUG-1278-health-runtime-identity-capture-deadlocks-coverage-ci-during-module-impo.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/routers/__init__.py",
+      "backend/routers/health.py",
+      "backend/tests/platform_api/test_health_contract.py",
+      "tests/aistock_validation/bugs/20260831_BUG-1278-health-runtime-identity-capture-deadlocks-coverage-ci-during-module-impo.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -80,10 +91,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1278/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1278",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "6de593132281ab3952575784659d4a9959017fc60aa3724d2d47f2062c534261",
+      "expected_identity": "a5dfc84954eb587525b406a76c8e44f0a4d10cb1",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T12:56:49.185780Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "47d7abeaf63492903e433b07f1332d31a93f4c8cfda2e1746d11569c034757af",
+      "receipt_sha256": "195cf03089431d61c737e623135085537e25289487606f6ddadb00a20bd1c1ff",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0e9205b9c75b253ce5afe8281321620d8516ffe2d16887c702eb51086f1d102b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -120,7 +153,7 @@
     ],
     "validation_evidence_digest": "9b42ed33119871a8fa7cc96ee61b5a10f005a294d1167034cfaae305deec2b6c"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "platform.api",
     "validation"
@@ -137,7 +170,8 @@
     "validation-receipt: id=49f9e3a8bfe9cdb9 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`8 passed and ownership 14/14`",
     "validation-receipt: id=6d78c3b301c1ce7f commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=ruff plan=direct status=passed command=`python -m ruff check backend/routers/__init__.py backend/routers/health.py backend/tests/platform_api/test_health_contract.py` result=`passed`",
     "validation-receipt: id=e48e04dd8a9a1a04 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=compile plan=direct status=passed command=`python -m py_compile backend/routers/__init__.py backend/routers/health.py backend/tests/platform_api/test_health_contract.py` result=`passed`",
-    "validation-receipt: id=eb9ccdaa71307bc6 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=eb9ccdaa71307bc6 commit=4a9ab6b4fdc087264edb35da53d995c77f30e260 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "canonical post-restart-verify BUG-1278 -> verified; identity contains a5dfc84954eb587525b406a76c8e44f0a4d10cb1; target-owned health semantic passed; no process control"
   ],
   "verification_budget": {
     "budget": "standard",
