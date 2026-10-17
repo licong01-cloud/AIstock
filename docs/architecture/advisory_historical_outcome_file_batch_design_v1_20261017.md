@@ -69,6 +69,7 @@ REFRESH_OUTCOMES_RUN 自己持有 fenced lease，不得借父任务心跳证明�
 1. **只读产物与已验证类型复用。** 首次依旧执行完整文件 SHA、envelope/schema、payload、精确 ref、run/day/upstream 校验。随后按完整 ref 与文件指纹（设备、inode、大小、mtime、ctime）复用封存的嵌套只读对象；普通 `load` 仍返回可修改的深拷贝，不能修改缓存。缓存按序列化文件重量上限 128 MiB、最多 4,096 项淘汰；这不是进程 RSS 上限。金融 fact 首次验证后保留 typed artifact 和规范化 JSON，私有缓存不进入序列化或内容 hash；复制/替换 JSON 不得借用原校验结果。负向缺行业也缓存，但不得填零、虚构行业或修改收益。
 2. **文件验证会话。** 同一 runtime 中的 profile binding 与文件 provider 共享有界 SHA 证明（最多 512 项），每次使用重查指纹；内容或文件身份变化即失败，不重新绑定。fresh process 重新执行完整验证。OHLC 批读窗口和内存表沿用原生实现，不复制文件、不跨运行共享结果，也不把行情文件缓存误当 SQL 控制面可以移除。
 3. **三种显式汇总模式。** `REFRESH` 为兼容旧请求/hash 的默认模式；`DEFER` 只完成该批金融结算，收据显式 `summary_deferred=true`，不得宣称整体 summary 已完成；`ONLY` 仅对显式 run 的既有事实执行最终汇总，不遍历金融 planner、不调用 evaluator、不追加金融事实，且必须生成真实 SUMMARY ref。ONLY 的文件上下文只验证/读取实际消费的行业成员与映射，不建立无用 OHLC/停牌/涨跌停价格窗口；该上下文拒绝金融结算入口，金融路径仍完整验证其消费文件。中间阶段可 DEFER，所有依赖完成后执行一次 ONLY；默认及已有调用行为不变。失败、CAS/fencing、成熟度、费用、缺价和上游闭包均沿用原生合同。
+   父收据根据实际子收据聚合延迟标记，而不是根据计划假设实际已经延迟；旧收据无该字段时按旧版不支持 DEFER 的合同处理为 false。没有实际子收据不能凭空声称延迟结算完成。
 4. **身份不伪装。** summary、文件适配源码和 producer 的真实 hash 按现有计算更新；不能宣称本轮文件代码调整后金融 producer hash 未变。既存完成事实及原 producer 身份保留，ONLY 可在不重算金融事实的情况下更新 summary。需要重算的后续金融请求必须遵守原生新 producer / correction / evidence 协议；旧请求 exact retry 只能恢复原冻结计划，不能被新代码默默升级。可选 `expected_execution_identity` 精确绑定 financial producer、file binding、policy 三项；旧 API 不传时保持兼容，新 continuation 必须传入，不能用整库 HEAD 代替这三项。
 5. **通用 continuation 而非改写旧客户端。** 新清单 schema 为 `advisory_outcome_continuation_v1`，明确单 run 阶段、依赖、冻结请求与身份；不接管运行中的 legacy 清单或 checkpoint。原子 X 盘 checkpoint 绑定清单 hash，POST 前保存完整原请求，恢复逐页查询原生父/子操作，确认原 key、request hash、operation 身份、租约及结果 ref。响应丢失仅执行保存请求的官方 exact retry；未知状态或失败不能标成功。轮询默认 10 秒、汇报默认 1,800 秒，调度不等待汇报；不同 batch 可按显式资源并发预算执行，同 batch 保留原生 inflight 限制，不增加 QE 全局空闲或双包同时到齐门禁。最终完整 summary 由清单的最终 ONLY 阶段表达，DEFER 完成不等于整项业务完成。
 
@@ -122,6 +123,8 @@ BUG-1954 四项复审：①真实全量只读 loader/calculate 与闭包验证�
 上述完整测量记录于 BUG-1967 runtime_contract 的 `bug1967-summary-final-readonly.json`，测量开始/结束四项源码指纹一致；之后只修正私有缓存的对象相等比较，不改 loader、文件价格语义、汇总公式或经济 hash。同步最新 main 时另继承已合入的 #6281：文件价格读取/原价换算调用共享 `frozen_dataset` helper，没有在本任务改写该共享模块；交点的 14 项文件来源与轻量汇总回归通过。最终源码另由 `bug1967-final-source-smoke-r2.json` 与定向测试验证精确原生产物/DB fact/typed fact、缓存读取后相等性及当前源码指纹，无需为无关对象比较和 helper 接线修正重复长时全量计算。各证据标明版本，不把前一测量冒充最终 commit 的运行激活或生产性能保证。
 
 BUG-1967 的 DESIGN-COMPLIANCE-001 四项复审：①交付全部登记优化及真实完整只读链路，不以小样本/假成功代替；②首次校验、真正缺价、冲突、CAS 与失败仍明确报错，ONLY 无 SUMMARY 不得成功；③仅显式汇总模式、可选行业缺口呈现及真实 producer 身份变化按 §5.2 同步，费用/收益/选股/成熟度不变；④无新研究审批、整库 HEAD 或 QE 空闲门禁，后端重启仍由用户执行。矩阵 PASS 只指上述源码合同，CI、源码合入和后端激活另记。
+
+首轮扩展 CI 为 497 通过、2 跳过、4 个父任务兼容场景失败（旧测试请求没有新 summary_mode）。随后将父标记改为从实际子收据聚合，四个原失败场景与真实 DEFER 父子标记场景共 5 项定向回归通过，不修改旧测试或降低验证要求。至此本地覆盖 84 个不同场景；最终 CI 以修复后的新 HEAD 独立结果为准，不重跑旧 run 冒充修复版本。
 
 ### LocalSIM 窗口提示词
 

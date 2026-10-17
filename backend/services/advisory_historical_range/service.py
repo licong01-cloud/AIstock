@@ -763,7 +763,11 @@ class ResponseBoundHistoricalRangeDispatcher:
                 request_hash=plan.request_hash,
                 status=receipt_status,
                 processed_count=len(outcome_refs),
-                summary_deferred=all(request.summary_mode == "DEFER" for request in plan.requests),
+                # Report what children actually produced, not merely the plan.
+                # Legacy receipt contracts predate DEFER and omit this flag.
+                summary_deferred=bool(receipts) and all(
+                    getattr(receipt, "summary_deferred", False) for receipt in receipts
+                ),
                 outcome_refs=tuple(
                     sorted(
                         outcome_refs.values(),

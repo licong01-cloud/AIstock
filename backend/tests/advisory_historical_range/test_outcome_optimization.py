@@ -78,6 +78,10 @@ def test_fact_retains_validated_typed_artifact_without_changing_financial_hash(t
 
 
 def test_explicit_defer_skips_summary_and_is_visible_in_receipt(tmp_path):
+    from datetime import UTC, datetime
+    from types import SimpleNamespace
+    from uuid import uuid4
+    from backend.services.advisory_historical_range.service import ResponseBoundHistoricalRangeDispatcher
     from backend.services.advisory_historical_range.models import HistoricalRangeOutcomeRefreshRequestV1
     raw = _request_contract().model_dump(mode="json", exclude={"request_hash"})
     request = HistoricalRangeOutcomeRefreshRequestV1.model_validate({**raw, "summary_mode": "DEFER"})
@@ -91,6 +95,18 @@ def test_explicit_defer_skips_summary_and_is_visible_in_receipt(tmp_path):
         resolved_request_hash="9" * 64, worker_id="optimization-test")
     assert receipt.status == "COMPLETED" and receipt.processed_count == 1
     assert receipt.summary_deferred is True and receipt.summary_refs == ()
+    transition = {}
+    runtime = SimpleNamespace(artifact_store=service._artifact_store, outcome_service_factory=None,
+        outcome=SimpleNamespace(refresh_until_stable_boundary=lambda **_: (receipt, None)),
+        query=SimpleNamespace(resolved_request_hash=lambda _: "9" * 64),
+        repository=SimpleNamespace(transition_operation=lambda **kw: transition.update(kw)))
+    ResponseBoundHistoricalRangeDispatcher._execute_claimed_outcome_plan(runtime=runtime,
+        plan=SimpleNamespace(request_hash="b" * 64, requests=(request,)), operation_id="parent",
+        batch_id="batch", worker_id="worker", parent_heartbeat=SimpleNamespace(stop=lambda: None),
+        claimed={"attempt_no": 1, "fencing_token": 1, "worker_id": "worker", "lease_token": str(uuid4()),
+                 "row_version": 2, "started_at": datetime.now(UTC)})
+    parent = service._artifact_store.load(transition["result_ref"])
+    assert parent.payload["summary_deferred"] is True and parent.payload["summary_refs"] == []
 
 
 def test_legacy_request_hash_and_api_payload_remain_unchanged():
