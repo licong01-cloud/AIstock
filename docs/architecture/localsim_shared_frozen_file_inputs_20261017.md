@@ -39,6 +39,8 @@
 - backend/tests/test_inference_engine_historical_readonly.py（修正现有 __new__ fixture 的 temp_root 初始化）
 - backend/tests/simulation_data/test_frozen_file_adapters.py
 - backend/tests/simulation_runtime/test_localsim_file_inputs.py
+- backend/tests/paper_trading_v2/test_market_data_broker_match.py（原生 broker/source 合同新增显式文件来源与 MiniQMT 拒绝配对）
+- backend/tests/simulation_runtime/test_lifecycle_scheduler.py（旧 DB 回放 fixture 明确来源身份，保持原生真实撮合回归）
 - 本文和 docs/analysis/localsim_shared_frozen_file_inputs_acceptance_20261017.md
 
 如实现需要其他文件，先在本文登记具体路径与理由。不得修改 AGENTS、标准、QE、HMM、数据发布或 ownership catalog；公共读取代码接受既有版本化资产，不生产/补写数据。

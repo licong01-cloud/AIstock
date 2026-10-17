@@ -19,7 +19,7 @@
 
 ## 直接回归与审核
 
-证据目录：`X:/AIstock_temp/LOCALSIM/shared-file-inputs-tests/`。最终小矩阵覆盖 15 个直接相关测试文件：256 项通过、1 项条件跳过、2 项旧 fixture 初始化失败。修正两个使用 `InferenceEngine.__new__` 的测试 fixture，按 nodeid 复验通过；后续补充文件能力守卫、原生错误码传递、三个线程边界与原有DB选股隔离回归。有效唯一结果为 264 项通过、1 项条件跳过，不把第一次失败的收据改写成全绿。
+证据目录：`X:/AIstock_temp/LOCALSIM/shared-file-inputs-tests/`。最终小矩阵覆盖 15 个直接相关测试文件：256 项通过、1 项条件跳过、2 项旧 fixture 初始化失败。修正两个使用 `InferenceEngine.__new__` 的测试 fixture，按 nodeid 复验通过；后续补充文件能力守卫、原生错误码传递、三个线程边界、原有DB选股隔离和CI发现的旧合同回归。有效唯一结果为 282 项通过、1 项条件跳过，不把第一次失败的收据改写成全绿。
 
 - `final-matrix-r1.xml`：最终直接矩阵原始收据。
 - `fixture-fix-r2.xml`、`review-r3.xml`：失败点及后续 PIT 身份错误码修复复验。
@@ -28,8 +28,9 @@
 - `failure-reason-r1.xml`：原生 PIT 文件身份错误穿过共享 CLI 后保留具体原因码，失败收据没有成功结果。
 - `native-worker-scope-r1.xml`：绑定线程、stage watchdog、异步选股三处真实线程边界；父调用超时退出后仍持有独立 reader 和同一冻结身份，无 SQL 回退。
 - `native-db-worker-r1.xml`：原有 DB 选股的运行 release 隔离回归通过。
+- `ci-contract-fix-r1.xml`：CI发现的两处旧合同补齐；LocalSIM文件来源许可、MiniQMT拒绝文件来源，以及旧DB原生真实撮合/残余前缀回归，共18项通过。
 
-语法/AST、Ruff、精确33文件写范围、git diff --check及F2八项矩阵校验通过。CI分类targeted_ci_required，六个变更测试文件均登记到实际选定计划；UI新建来源请求合同同步更新，原有DB任务fixture保留，UI回归交CI执行。
+语法/AST、Ruff、精确35文件写范围、git diff --check及F2八项矩阵校验通过。CI分类targeted_ci_required，八个变更测试文件均登记到实际选定计划；UI新建来源请求合同同步更新，原有DB任务fixture保留。首次CI的前端类型检查与14项Playwright通过；后端两处旧测试合同未同步而失败，修复后仅定向复验，最终HEAD仍须以新CI收据为准，不能用步骤continue-on-error后的success替代内部计划结果。
 
 三轮人工审核处理了实际发现：第一轮修正 H5 日期查询、文件来源入口守卫及原生静态字段口径；第二轮修正 float32 原始限价还原和 dataclass 适配；第三轮补齐 bin 注册世代校验、恢复时冻结来源核对和文件 risk provider 隔离。最终真实探针修正跨共享CLI的原因码丢失，两包明确返回FROZEN_DATASET_PIT_IDENTITY_MISMATCH。提交后复查补齐三个后台线程入口的独立reader生命周期，定向验证父调用超时/退出后的接续。新增测试覆盖对应合同，不靠复制评分、过滤或财务逻辑规避问题。
 
