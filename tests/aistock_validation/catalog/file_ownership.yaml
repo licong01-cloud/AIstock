@@ -905,6 +905,8 @@ rules:
       - backend/tests/scripts/test_localsim_product_validation.py
       - backend/tests/scripts/test_prepare_localsim_successor_cutover.py
       - frontend/src/app/simulation/localsim/**
+      - frontend/src/lib/simulation/localsim/**
+      - frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts
     primary_module: simulation.localsim_successor_core
     impact_modules: [simulation_runtime, platform.db, paper_v2, strategy_package]
     layer: trading_runtime

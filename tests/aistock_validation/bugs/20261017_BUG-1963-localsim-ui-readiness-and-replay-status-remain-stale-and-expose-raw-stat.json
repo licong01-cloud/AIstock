@@ -4,6 +4,7 @@
     "frontend/src/app/simulation/localsim/page.tsx",
     "frontend/src/app/simulation/localsim/replays/page.tsx",
     "frontend/src/app/simulation/localsim/replays/[replayJobId]/page.tsx",
+    "frontend/src/app/simulation/localsim/replays/[[]replayJobId[]]/page.tsx",
     "frontend/src/app/simulation/localsim/localsim.module.css",
     "frontend/src/lib/simulation/localsim/api.ts",
     "frontend/src/lib/simulation/localsim/types.ts",
@@ -12,6 +13,11 @@
     "frontend/src/app/simulation/localsim/components/replay-status.tsx",
     "frontend/src/lib/simulation/localsim/use-readback.ts",
     "frontend/src/lib/simulation/localsim/presentation.ts",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "tests/aistock_validation/catalog/module_registry.yaml",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "noxfile.py",
+    "backend/services/validation/plan_catalog.py",
     "tests/aistock_validation/bugs/20261017_BUG-1963-localsim-ui-readiness-and-replay-status-remain-stale-and-expose-raw-stat.json"
   ],
   "assigned_agent": null,
@@ -48,7 +54,12 @@
       "frontend/src/app/simulation/localsim/localsim.module.css",
       "frontend/src/lib/simulation/localsim/api.ts",
       "frontend/src/lib/simulation/localsim/types.ts",
-      "frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts"
+      "frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml",
+      "noxfile.py",
+      "backend/services/validation/plan_catalog.py"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {

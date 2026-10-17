@@ -599,6 +599,12 @@ def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
 
 
 @nox.session(venv_backend="none")
+def localsim_control_plane_ui(session: nox.Session) -> None:
+    """Run the LocalSIM readback and status UI contract with mocked APIs."""
+    _run_mocked_frontend_target(session, "tests/paper-v2/localsim-unified-control-plane.spec.ts")
+
+
+@nox.session(venv_backend="none")
 def frontend_type_lint(session: nox.Session) -> None:
     """Run the direct shared-frontend compile and lint contract."""
 
