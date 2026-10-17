@@ -93,7 +93,7 @@
   "github_issue_number": 6240,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6240",
   "last_seen_at": "2026-10-17T10:03:27.746874Z",
-  "module": "hmm.risk",
+  "module": "hmm",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
@@ -109,11 +109,16 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -c isolated import of backend.services.hmm_data_source.daily_input, backend.routers.hmm_training, backend.routers.hmm_risk, backend.routers.health -> PASS; all resolved under BUG-1955 task worktree; database=0; fit=0; service_control=0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/runtime-contracts/hmm-database-daily-dispatch",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
