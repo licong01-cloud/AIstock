@@ -32,13 +32,14 @@
   ],
   "expected": "The implemented HMM Risk backend plan has an exact runner allowlist mapping, no unimplemented UI plan/session is registered, and validation catalog integrity passes.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20260722_BUG-834-hmm-risk-test-plan-command-keys-lack-runner-contract-and-ui-plan-is-prem.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "noxfile.py",
-      "backend/services/validation/plan_catalog.py",
-      "tests/aistock_validation/catalog/module_registry.yaml",
-      "tests/aistock_validation/catalog/test_plans.yaml"
+      "tests/aistock_validation/bugs/20260722_BUG-834-hmm-risk-test-plan-command-keys-lack-runner-contract-and-ui-plan-is-prem.json"
     ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "noxfile.py",
@@ -67,6 +68,12 @@
       ],
       "unmatched_files": []
     },
+    "planned_files": [
+      "noxfile.py",
+      "backend/services/validation/plan_catalog.py",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "noxfile.py",
@@ -95,7 +102,22 @@
     "validation_module_registry_l0",
     "validation_catalog_integrity"
   ],
+  "resolution_note": "2026-10-17 registry-only recovery of the original BUG-834 record from commit a773c4f3ea0d56ccc238a9e81139ff63752797ee. PR #2645 was superseded. Current main registers nox_hmm_risk_backend and an implemented mocked hmm_risk_ui directory contract; no HMM business/source changes are required. A present implemented UI is not the premature skip-only plan described by the original issue.",
   "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
@@ -233,6 +255,5 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set",
-  "resolution_note": "2026-10-17 registry-only recovery of the original BUG-834 record from commit a773c4f3ea0d56ccc238a9e81139ff63752797ee. PR #2645 was superseded. Current main registers nox_hmm_risk_backend and an implemented mocked hmm_risk_ui directory contract; no HMM business/source changes are required. A present implemented UI is not the premature skip-only plan described by the original issue."
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
 }
