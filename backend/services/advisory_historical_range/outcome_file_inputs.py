@@ -20,6 +20,7 @@ from .models import (
     HistoricalRangeArtifactKind,
     HistoricalRangeCandidateArtifactPayloadV2,
     HistoricalRangeDayReceiptPayloadV2,
+    sealed_json_view,
 )
 from .outcome_evaluator import PostgresHistoricalRangeOutcomeSubjectInputProvider
 from .retrospective_projection import PostgresHistoricalRangeCandidateProjectionLoader
@@ -33,36 +34,43 @@ class HistoricalRangeOutcomeReadCache(HistoricalRangeArtifactStore):
     silently refreshed, and every caller still checks its own run/day/payload
     and upstream contracts. This is not exported to shared selection or LocalSIM.
     """
-    def __init__(self, *, root, max_bytes=32 * 1024 * 1024):
+    def __init__(self, *, root, max_bytes=128 * 1024 * 1024, max_entries=4096):
         super().__init__(root=root)
+        if max_bytes < 1 or max_entries < 1:
+            raise ValueError("artifact cache bounds must be positive")
         self._cache = OrderedDict()
         self._cached_bytes = 0
         self._max_bytes = max_bytes
+        self._max_entries = max_entries
 
     def load(self, ref):
+        return self.load_readonly(ref).model_copy(deep=True)
+
+    def load_readonly(self, ref):
         key = canonical_json_sha256(ref.model_dump(mode="json"))
         path = (self.root / ref.relative_path).resolve()
         if not path.is_relative_to(self.root):
             raise ValueError("outcome artifact escapes its registered root")
         stat = path.stat()
-        stamp = (stat.st_size, stat.st_mtime_ns)
+        stamp = (stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino, stat.st_dev)
         cached = self._cache.get(key)
         if cached is not None:
             if cached[0] != stamp:
                 raise ValueError("sealed outcome input changed after verification")
             self._cache.move_to_end(key)
-            return cached[1].model_copy(deep=True)
+            return cached[1]
         envelope = super().load(ref)
         after = path.stat()
-        if stamp != (after.st_size, after.st_mtime_ns):
+        if stamp != (after.st_size, after.st_mtime_ns, after.st_ctime_ns, after.st_ino, after.st_dev):
             raise ValueError("sealed outcome input changed during verification")
+        envelope = envelope.model_copy(update={"payload": sealed_json_view(envelope.payload)})
         if stat.st_size <= self._max_bytes:
-            while self._cache and (self._cached_bytes + stat.st_size > self._max_bytes or len(self._cache) >= 256):
+            while self._cache and (self._cached_bytes + stat.st_size > self._max_bytes or len(self._cache) >= self._max_entries):
                 _, (old_stamp, _) = self._cache.popitem(last=False)
                 self._cached_bytes -= old_stamp[0]
             self._cache[key] = (stamp, envelope)
             self._cached_bytes += stat.st_size
-        return envelope.model_copy(deep=True)
+        return envelope
 
 
 def _command_ref_path(store, batch_id, idempotency_key):
@@ -182,9 +190,9 @@ class FrozenHistoricalRangeOutcomeInputs:
 
     def _index_day(self, run_id, header, day) -> None:
         ref = HistoricalRangeArtifactRefV1.model_validate(day["candidate_artifact_ref"])
-        payload = HistoricalRangeCandidateArtifactPayloadV2.model_validate(self._store.load(ref).payload)
+        payload = HistoricalRangeCandidateArtifactPayloadV2.model_validate(self._store.load_readonly(ref).payload)
         day_ref = HistoricalRangeArtifactRefV1.model_validate(day["day_receipt_ref"])
-        receipt = HistoricalRangeDayReceiptPayloadV2.model_validate(self._store.load(day_ref).payload)
+        receipt = HistoricalRangeDayReceiptPayloadV2.model_validate(self._store.load_readonly(day_ref).payload)
         if (payload.range_run_id != run_id or payload.day_run_id != day["day_run_id"] or
                 payload.decision_trade_date != day["decision_trade_date"] or receipt.range_run_id != run_id or
                 receipt.day_run_id != day["day_run_id"] or receipt.candidate_artifact_ref != ref or day["day_finished_at"] is None):
@@ -256,4 +264,4 @@ class FileHistoricalRangeSummaryContextProvider(PostgresHistoricalRangeSummaryCo
         return metadata
 
     def _load_summary_industry_at_t(self, *, symbol, decision_trade_date):
-        return self._source_provider.load_industry_at_t(symbol=symbol, decision_trade_date=decision_trade_date)[0]
+        return self._source_provider.load_optional_industry_at_t(symbol=symbol, decision_trade_date=decision_trade_date)[0]
