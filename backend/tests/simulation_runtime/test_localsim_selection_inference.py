@@ -36,6 +36,42 @@ from backend.services.simulation_runtime.localsim_selection_probe import _disk_b
 DAY = date(2026, 1, 5)
 
 
+def test_path_probe_timeout_is_retryable_and_does_not_expose_command(monkeypatch, tmp_path):
+    from backend.services.simulation_runtime.localsim_selection_inference import probe_localsim_wsl_witness
+
+    witness = tmp_path / "path-witness.txt"
+    witness.write_text("owned-selection", encoding="utf-8")
+    monkeypatch.setattr("backend.services.simulation_runtime.localsim_selection_inference._require_windows_x_root",
+                        lambda value: Path(value).resolve())
+    def timeout(*args, **_):
+        raise subprocess.TimeoutExpired(["secret-command"], 20)
+
+    monkeypatch.setattr(subprocess, "run", timeout)
+    with pytest.raises(DataUnavailableError) as caught:
+        probe_localsim_wsl_witness(distro="Ubuntu", witness=witness, run_id="owned-selection")
+    assert caught.value.context["reason_code"] == "LOCALSIM_WSL_X_PATH_TIMEOUT"
+    assert caught.value.context["failure_stage"] == "WSL_PATH_PROBE"
+    assert "secret-command" not in str(caught.value)
+
+
+def test_path_probe_checks_owned_windows_and_wsl_content(monkeypatch, tmp_path):
+    from backend.services.simulation_runtime.localsim_selection_inference import probe_localsim_wsl_witness
+
+    witness = tmp_path / "path-witness.txt"
+    witness.write_text("owned-selection", encoding="utf-8")
+    monkeypatch.setattr("backend.services.simulation_runtime.localsim_selection_inference._require_windows_x_root",
+                        lambda value: Path(value).resolve())
+    calls = []
+    monkeypatch.setattr(subprocess, "run", lambda *a, **kw: calls.append(a) or SimpleNamespace(returncode=0, stdout="other"))
+    with pytest.raises(DataUnavailableError):
+        probe_localsim_wsl_witness(distro="Ubuntu", witness=witness, run_id="owned-selection")
+    assert len(calls) == 1
+    witness.write_text("wrong-owner", encoding="utf-8")
+    with pytest.raises(DataUnavailableError):
+        probe_localsim_wsl_witness(distro="Ubuntu", witness=witness, run_id="owned-selection")
+    assert len(calls) == 1
+
+
 def test_disk_accounting_does_not_count_hardlink_aliases_as_copies(tmp_path):
     import os
     payload = b"one-physical-input"
@@ -152,6 +188,8 @@ def _mock_owned_node(monkeypatch, scope, *, foreign=False, failure=False):
 
 
 def _provider(tmp_path, monkeypatch):
+    monkeypatch.setattr("backend.services.simulation_runtime.localsim_selection_inference._require_windows_x_root",
+                        lambda value: Path(value).resolve())
     scope = LocalSimInferenceScope("own-run", tmp_path / "own-run", SelectionSignalDayV1(DAY, DAY-timedelta(days=1), DAY), {})
     scope.root.mkdir()
     workspace = SimpleNamespace(workspace_path=scope.root / "workspaces" / "native",

@@ -599,6 +599,12 @@ def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
 
 
 @nox.session(venv_backend="none")
+def localsim_control_plane_ui(session: nox.Session) -> None:
+    """Run the LocalSIM readback and status UI contract with mocked APIs."""
+    _run_mocked_frontend_target(session, "tests/paper-v2/localsim-unified-control-plane.spec.ts")
+
+
+@nox.session(venv_backend="none")
 def frontend_type_lint(session: nox.Session) -> None:
     """Run the direct shared-frontend compile and lint contract."""
 
@@ -1211,6 +1217,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/test_stock_universe_pit_spans.py",
         "backend/tests/test_tushare_sync_engine.py",
         "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
+        "backend/tests/scripts/test_repair_local_sync_incident.py",
         "backend/tests/test_sw_industry_history_store.py",
         "backend/tests/test_etf_share_size_source.py",
         "backend/tests/scripts/test_validate_etf_share_size_source.py",

@@ -96,6 +96,98 @@ def test_native_builder_reads_full_market_inventory_above_small_control_cap(tmp_
                 "component_artifact_manifest_ref": reference.as_dict(), "verified_output_files": files})
 
 
+@pytest.mark.parametrize("symbol,day,verified", [
+    ("603616.SH", date(2026, 1, 22), True),
+    ("000001.SZ", date(2026, 9, 1), False),
+])
+def test_suspend_export_resolves_only_disclosure_backed_mixed_events(tmp_path, symbol, day, verified):
+    import json
+    from backend.services.dataset_release.monthly_shared_components import MonthlySharedComponentsError
+    kwargs = dict(root=tmp_path, rows=[dict(ts_code=symbol, trade_date=day, suspend_type=kind,
+                  suspend_timing=None) for kind in ("S", "R")], pit_rows=[(symbol, day, day)],
+                  calendar=(day,), profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
+    if not verified:
+        with pytest.raises(MonthlySharedComponentsError, match="unresolved suspension"):
+            _build_suspend(**kwargs)
+        assert not (tmp_path / "components").exists()
+        return
+    parquet, meta, keys, _count = _build_suspend(**kwargs)
+    frame = pd.read_parquet(parquet)
+    evidence = json.loads(meta.read_text())
+    assert len(frame) == 1 and keys == {(symbol, day)}
+    assert frame["suspend_timing"].isna().all()
+    assert len(evidence["raw_provider_events"]) == 2
+    assert evidence["day_resolutions"][0]["basis"] == "OFFICIAL_DISCLOSURE"
+    assert evidence["historical_publication_time_proven"] is False
+
+
+@pytest.mark.parametrize("timing", ["9:34-9:44", "13:13-13:23,13:23-13:33"])
+def test_suspend_export_preserves_explicit_intraday_ranges_with_resume(tmp_path, timing):
+    day, symbol = date(2026, 9, 30), "000001.SZ"
+    rows = [dict(ts_code=symbol, trade_date=day, suspend_type="S", suspend_timing=timing),
+            dict(ts_code=symbol, trade_date=day, suspend_type="R", suspend_timing=None)]
+    parquet, meta, keys, count = _build_suspend(
+        root=tmp_path, rows=rows, pit_rows=[(symbol, day, day)], calendar=(day,),
+        profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
+    frame, evidence = pd.read_parquet(parquet), json.loads(meta.read_bytes())
+    assert count == 2 and keys == {(symbol, day)} and len(frame) == 1
+    assert frame.iloc[0]["suspend_timing"] == timing
+    assert len(evidence["raw_provider_events"]) == 2
+    assert evidence["day_resolutions"][0]["state"] == "INTRADAY_SUSPENDED"
+
+
+@pytest.mark.parametrize("corruption", [None, "source", "cutoff", "predecessor", "binding", "authority", "conflict"])
+def test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallback(tmp_path, corruption):
+    from backend.data_service.suspension_day_authority import digest, load_authority, SCHEMA, POLICY
+    from backend.services.dataset_release.monthly_suspension_repair import BINDING, SCHEMA as BINDING_SCHEMA, build_authority
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    snapshot = SimpleNamespace(source_manifest_ref=cas.put_json({}))
+    day, symbol = date(2026, 9, 15), "601238.SH"
+    empty = {"schema_version": SCHEMA, "policy": POLICY, "entries": []}
+    authority, provenance = build_authority(cas, snapshot, plan={}, operation_id="test", source_bundle_sha256="a" * 64)
+    assert authority == empty and provenance is None  # no checkout fallback
+    kwargs = dict(rows=[dict(ts_code=symbol, trade_date=day, suspend_type=k, suspend_timing=None) for k in ("S", "R")],
+        pit_rows=[(symbol, day, day)], calendar=(day,), profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
+    with pytest.raises(MonthlySharedComponentsError, match="unresolved suspension"):
+        _build_suspend(root=tmp_path / "before", suspension_authority=authority, **kwargs)
+    approved = load_authority()
+    binding = {"schema_version": BINDING_SCHEMA, "operation_id": "test", "source_bundle_sha256": "a" * 64,
+        "target_cutoff": "2026-09-30", "predecessor_manifest_sha256": "b" * 64,
+        "authority_ref": cas.put_json(approved).as_dict()}
+    plan = {BINDING: binding, BINDING + "_ref": {"sha256": digest(binding)},
+        "target_cutoff": "2026-09-30", "predecessor": {"dataset_manifest_sha256": "b" * 64}}
+    if corruption == "source":
+        binding["source_bundle_sha256"] = "c" * 64
+    elif corruption == "cutoff":
+        binding["target_cutoff"] = "2026-10-31"
+    elif corruption == "predecessor":
+        binding["predecessor_manifest_sha256"] = "c" * 64
+    elif corruption == "binding":
+        plan[BINDING + "_ref"]["sha256"] = "c" * 64
+    elif corruption == "authority":
+        binding["authority_ref"]["sha256"] = "c" * 64
+    elif corruption == "conflict":
+        original = json.loads(json.dumps(approved))
+        original["entries"] = [r for r in original["entries"] if r["ts_code"] == symbol]
+        original["entries"][0]["announcement_id"] += "-other"
+        snapshot.source_manifest_ref = cas.put_json({"suspension_day_authority": original})
+    if corruption != "binding":
+        plan[BINDING + "_ref"]["sha256"] = digest(binding)
+    if corruption is not None:
+        with pytest.raises((ValueError, RuntimeError), match="suspension|CAS|blob"):
+            build_authority(cas, snapshot, plan=plan, operation_id="test", source_bundle_sha256="a" * 64)
+        return
+    authority, provenance = build_authority(cas, snapshot, plan=plan, operation_id="test", source_bundle_sha256="a" * 64)
+    assert [(r["ts_code"], r["trade_date"]) for r in authority["entries"]] == [(symbol, day.isoformat())]
+    parquet, meta, keys, _ = _build_suspend(root=tmp_path / "after", suspension_authority=authority,
+        suspension_binding=provenance, **kwargs)
+    assert keys == {(symbol, day)} and len(pd.read_parquet(parquet)) == 1
+    readback = json.loads(meta.read_bytes())
+    assert readback["suspension_authority_binding"] == provenance
+    assert readback["day_resolutions"][0]["basis"] == "OFFICIAL_DISCLOSURE"
+    assert cas.get_json_bounded(snapshot.source_manifest_ref, max_bytes=1024) == {}
+
+
 def test_native_suspend_keeps_pinned_prefix_and_checks_only_new_month(tmp_path):
     import json
 
@@ -562,7 +654,7 @@ def test_shared_builder_seals_all_sidecars_from_one_frozen_source(
         lambda _cas, _frozen, dataset: tuple(source[dataset]),
     )
 
-    def quote_payload(*, code_map, required_start, cutoff):  # type: ignore[no-untyped-def]
+    def quote_payload(*, code_map, required_start, cutoff, **_kwargs):  # type: ignore[no-untyped-def]
         entries = [
             {
                 "canonical_l2_code": code,

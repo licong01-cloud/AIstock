@@ -26,6 +26,7 @@ from backend.services.selection_center.models import SelectionCandidate, Selecti
 from backend.services.selection_center.prospective_evidence import SelectionStageTrace
 from backend.services.selection_center.prospective_evidence_assembler import ProspectiveSelectionEvidenceAssembler
 from backend.services.simulation_signal.contracts import DailySelectionEvidence, canonical_json_sha256
+from backend.services.simulation_execution.localsim.suspension import localsim_suspension_policy_identity
 from backend.services.simulation_signal.strategy_package_selection import (
     StrategyPackageSelectionResult, StrategyPackageSelectionService,
 )
@@ -44,6 +45,26 @@ from .localsim_selection_inference import (
     LOCALSIM_INFERENCE_SCOPE, LocalSimInferenceScope, LocalSimReferencedAssetResolver,
     LocalSimSharedInferenceProvider, own_scope, windows_x_root,
 )
+
+
+def _selection_code_identity():
+    base = Path(__file__).resolve().parents[1]
+    paths = (
+        Path(__file__), Path(__file__).with_name("localsim_selection_inference.py"),
+        base.parents[1] / "scripts/strategy_package_live_inference.py", base.parent / "inference_engine.py",
+        base / "advisory_historical_range/selection_signal_kernel.py",
+        base / "simulation_signal/strategy_package_selection.py",
+        base / "selection_center/tradability.py", base / "selection_center/suspension_provider.py",
+    )
+    paths += tuple(base / "strategy_package" / (name + ".py") for name in (
+        "selection_computation", "selection_artifact", "selection_signal_preparation", "live_inference", "runtime",
+        "multi_alpha_live", "reference_prices"))
+    return {str(p.name): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
+
+
+# Fingerprint the sources actually loaded by this process, not a later main
+# checkout. Shared reference/filter changes must invalidate old projections.
+_LOADED_SELECTION_CODE_IDENTITY = _selection_code_identity()
 
 
 class LocalSimRawRepository:
@@ -192,6 +213,7 @@ class LocalSimDailyEvidenceWriter:
         projection = json.loads((scope.root / "projection.json").read_text(encoding="utf-8"))
         payload["localsim_signal_run"] = {
             "schema_version": "localsim_selection_signal_run_v1", "consumer_scope": "LOCALSIM", "run_id": scope.run_id,
+            "suspension_policy_identity": localsim_suspension_policy_identity(),
             "clocks": scope.clocks.to_dict(), "semantic_identity": common.semantic_identity,
             "storage_identity": common.storage_identity, "membership_status": common.membership_status[evidence.package_id],
             "unscored_members": list(common.unscored_members[evidence.package_id]),
@@ -279,21 +301,13 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
         config = deepcopy(kwargs.get("runtime_config") or {})
         release = kwargs.get("runtime_release")
         identities = {p: self.package_repository.get(p).manifest_sha256 for p in kwargs["package_ids"]}
-        code_paths = (
-            Path(__file__), Path(__file__).with_name("localsim_selection_inference.py"),
-            Path(__file__).resolve().parents[3] / "scripts/strategy_package_live_inference.py",
-            Path(__file__).resolve().parents[3] / "backend/inference_engine.py",
-            Path(__file__).resolve().parents[1] / "advisory_historical_range/selection_signal_kernel.py",
-        )
-        code_paths += tuple(Path(__file__).resolve().parents[1] / "strategy_package" / (name + ".py") for name in (
-            "selection_computation", "selection_artifact", "selection_signal_preparation", "live_inference", "runtime", "multi_alpha_live"))
-        code_paths += (Path(__file__).resolve().parents[1] / "simulation_signal/strategy_package_selection.py",)
         identity = canonical_json_sha256({"packages": identities, "date": trade_date.isoformat(), "source": kwargs["data_source"],
+                                          "localsim_suspension_policy": localsim_suspension_policy_identity(),
                                          "ordered_package_ids": kwargs["package_ids"],
                                          "config": config, "mode": kwargs["mode"].value,
                                          "release": getattr(release, "release_hash", None),
                                           "recovery_evidence": getattr(recovery_evidence, "artifact_hash", None),
-                                          "code": {str(p.name): hashlib.sha256(p.read_bytes()).hexdigest() for p in code_paths}})
+                                          "code": dict(_LOADED_SELECTION_CODE_IDENTITY)})
         logical_root = self.temporary_root / identity
         logical_root.mkdir(parents=True, exist_ok=True)
         with inference_output_lease(logical_root / "checkpoint.json"):

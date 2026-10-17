@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from copy import deepcopy
 from datetime import UTC, date, datetime
+import ast
+from pathlib import Path
+import re
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -16,6 +19,7 @@ from .localsim_replay import local_sim_calendar_snapshot_sha256
 
 RECOVERY_KEY = "localsim_replay_recovery_v1"
 RECOVERY_SCHEMA = "localsim_replay_recovery_v1"
+PRESELECTION_RECOVERY_KEY = "localsim_preselection_recovery_v1"
 RETIREMENT_KEY = "localsim_memory_handle_retirement_v1"
 ECONOMIC_TABLES = ("run", "orders", "order_events", "fills", "cash_ledger", "positions", "daily_snapshots")
 ROLLED_BACK_LOCAL_SIM_FAILURES = frozenset({
@@ -293,8 +297,12 @@ class LocalSimReplayRecoveryService:
                     or job["day_engine_contract_id"] != "simulation_daily_engine_v1"
                     or completed != job["completed_trade_date"] or next_day >= source.current_trading_date):
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT")
-            if not run or run["status"] != "FAILED_RETRYABLE" or run["broker_backend"] != "local_sim":
+            if run is None:
+                native.update(self._inspect_preselection(snapshot))
+            elif run["status"] != "FAILED_RETRYABLE" or run["broker_backend"] != "local_sim":
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_DAILY_RUN_INVALID")
+            if run is None:
+                return self._check(snapshot, reasons=reasons, native=native)
             binding, release, plan = snapshot["binding"], snapshot["release"], snapshot.get("plan")
             if (snapshot["account"]["status"] != "ACTIVE"
                     or snapshot["account"].get("account_id") != job["simulation_account_id"]
@@ -384,12 +392,59 @@ class LocalSimReplayRecoveryService:
             reasons.append(str(exc.context.get("reason_code") or type(exc).__name__))
         except ValueError:
             reasons.append("LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT")
+        return self._check(snapshot, reasons=reasons, native=native)
+
+    @staticmethod
+    def _check(snapshot, *, reasons, native):
+        job, run = snapshot["job"], snapshot.get("run")
         digest = canonical_json_sha256({"snapshot": snapshot, "native_input": native, "reason_codes": reasons})
         return LocalSimReplayRecoveryCheckV1(
             replay_job_id=job["replay_job_id"], version=job["version"], ready=not reasons,
             reason_codes=reasons, snapshot_sha256=digest, run_id=run["run_id"] if run else None,
-            trade_date=job["next_trade_date"], economic_counts=counts, native_input=native,
+            trade_date=job["next_trade_date"], economic_counts=snapshot["economic_counts"], native_input=native,
         )
+
+    def _inspect_preselection(self, snapshot: dict[str, Any]) -> dict[str, Any]:
+        """Only the precisely identified legacy, pre-node witness timeout is recoverable."""
+        job, binding, release = snapshot["job"], snapshot["binding"], snapshot["release"]
+        context = job.get("failure_context") or {}
+        if (job["status"] != "FAILED_TERMINAL" or job["failure_code"] != "TimeoutExpired"
+                or context.get("trade_date") != job["next_trade_date"]):
+            self._invalid("LOCALSIM_REPLAY_RECOVERY_FAILURE_UNSUPPORTED")
+        if (snapshot["account"].get("status") != "ACTIVE"
+                or snapshot["account"].get("account_id") != job["simulation_account_id"]
+                or binding.get("binding_id") != job["binding_id"]
+                or release.get("release_id") != job["release_id"]
+                or binding["strategy_id"] != job["simulation_account_id"]
+                or binding["broker_backend"] != "local_sim"
+                or binding["release_id"] != release["release_id"]
+                or binding["release_hash"] != release["release_hash"]
+                or binding["package_id"] != release["package_id"]
+                or binding["manifest_sha256"] != release["manifest_sha256"]):
+            self._invalid("LOCALSIM_REPLAY_RECOVERY_FROZEN_IDENTITY_CONFLICT")
+        absence = snapshot.get("preselection_absence")
+        if (not isinstance(absence, dict) or not re.fullmatch(r"simrun_[0-9a-f]{16}", absence.get("run_id", ""))
+                or absence.get("account_day_runs") != [] or snapshot.get("plan") is not None
+                or snapshot.get("evidence_hash") is not None):
+            self._invalid("LOCALSIM_REPLAY_RECOVERY_PRESELECTION_ABSENCE_UNPROVEN")
+        require_no_economic_effects({}, snapshot["economic_counts"], now=self.clock())
+        match = re.fullmatch(r"Command '(\[.*\])' timed out after 20 seconds", context.get("message", ""))
+        try:
+            command = ast.literal_eval(match[1]) if match else None
+        except (ValueError, SyntaxError):
+            command = None
+        if (not isinstance(command, list) or len(command) != 6 or command[:2] != ["wsl", "-d"]
+                or not isinstance(command[2], str) or not re.fullmatch(r"[A-Za-z0-9_.-]+", command[2])
+                or command[3:5] != ["--", "cat"] or not isinstance(command[5], str)):
+            self._invalid("LOCALSIM_REPLAY_RECOVERY_FAILURE_UNSUPPORTED")
+        path = re.fullmatch(r"/mnt/x/AIstock_temp/LOCALSIM/[0-9a-f]{64}/(lsselection_[0-9a-f]{32})/"
+                            r"node/[0-9a-f]{32}/path-witness\.txt", command[5])
+        if path is None:
+            self._invalid("LOCALSIM_REPLAY_RECOVERY_FAILURE_UNSUPPORTED")
+        from .localsim_selection_inference import probe_localsim_wsl_witness
+
+        proof = probe_localsim_wsl_witness(distro=command[2], witness=Path("X:/" + command[5][7:]), run_id=path[1])
+        return {"recovery_phase": "PRESELECTION", "candidate_run_id": absence["run_id"], "path_probe": proof}
 
     def recover(self, replay_job_id: str, request: LocalSimReplayRecoverRequestV1):
         return self.repository.recover_terminal_replay(

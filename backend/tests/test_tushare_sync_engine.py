@@ -1363,6 +1363,39 @@ def test_stk_limit_null_retry_preserves_fields_and_finite_revisions(monkeypatch)
     assert calls[0][1][0][2:] == (None, 16.83, 13.77)
 
 
+def test_stk_limit_preserves_provider_zero_lower_bound_without_fabricating_price(monkeypatch):
+    from backend.services.tushare_dataset_specs import STK_LIMIT, stk_limit_prices_valid
+    calls = []
+    row = {"ts_code": "920196.BJ", "trade_date": "20261016", "pre_close": 14.21,
+           "up_limit": 99999.99, "down_limit": 0.0}
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda _cur, sql, values: calls.append(values))
+    assert TushareSyncEngine()._upsert_plain_batch(_FakeConn(), STK_LIMIT, [row]) == 1
+    assert calls[0][0][-1] == 0.0
+    assert not stk_limit_prices_valid(row)  # consumer execution contract is unchanged.
+
+
+@pytest.mark.parametrize("reference,upper,lower", [(10, 9, 0), (10, 11, -1), (10, 11, 12)])
+def test_stk_limit_invalid_relations_cannot_overwrite_finite_facts(monkeypatch, reference, upper, lower):
+    from backend.services.tushare_dataset_specs import STK_LIMIT
+    monkeypatch.setattr(sync_engine.pgx, "execute_values", lambda *_: pytest.fail("invalid relation reached SQL"))
+    with pytest.raises(ValueError, match="invalid provider price relation"):
+        TushareSyncEngine()._upsert_plain_batch(_FakeConn(), STK_LIMIT, [{
+            "ts_code": "920196.BJ", "trade_date": "20261016", "pre_close": reference,
+            "up_limit": upper, "down_limit": lower}])
+
+
+def test_stk_limit_readback_distinguishes_provider_zero_boundary_from_missing_price(monkeypatch):
+    class Cursor(_FakeCursor):
+        def fetchall(self):
+            return [("920196.BJ", 14.21, 99999.99, 0)]
+    conn = _FakeConn()
+    monkeypatch.setattr(conn, "cursor", lambda: Cursor(conn))
+    receipt, quality = TushareSyncEngine()._stk_limit_readback_quality(conn, dt.date(2026, 10, 16))
+    assert quality == {"quality_status": "ok"}
+    assert receipt["source_zero_lower_bound_count"] == 1
+    assert receipt["invalid_count"] == 0
+
+
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), "NaN", True, 0, -1])
 def test_stk_limit_rejects_invalid_source_price_before_writing(monkeypatch, value):
     from backend.services.tushare_dataset_specs import STK_LIMIT

@@ -145,6 +145,12 @@ def test_preflight_exempts_unpublished_l2_from_sw_daily_contract():
     assert "is_pub = '0'" in sql
     assert "pit.l2_code NOT IN (SELECT index_code FROM unpublished_l2)" in sql
     assert "pit.l2_code IN (SELECT index_code FROM unpublished_l2)" in sql
+    # Daily ingestion never copies yesterday's published quote into a legal
+    # missing quote; the static exporter must obey this same exact-date rule.
+    assert "sd.trade_date = %(trade_date)s" in module._BUILD_DAY_SQL
+    assert "sd.open, sd.high, sd.low, sd.close, sd.pct_change" in module._BUILD_DAY_SQL
+    assert "sw2_close           = EXCLUDED.sw2_close" in module._BUILD_DAY_SQL
+    assert "COALESCE(sd." not in module._BUILD_DAY_SQL
 
 
 def test_failed_insert_rolls_back_delete_without_clearing_revision(monkeypatch):
