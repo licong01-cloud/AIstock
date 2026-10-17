@@ -7,6 +7,7 @@ import pytest
 from backend.models.analysis import StockQuote
 from backend.services.selection_center.models import SelectionCandidate
 from backend.services.selection_center.result_enrichment import (
+    SELECTION_PRICE_MODE_DAILY_DB_ONLY,
     SelectionResultEnrichmentService,
     component_scores_with_display_fields,
     display_fields_from_component_scores,
@@ -20,8 +21,9 @@ class _FakeNameResolver:
 
 
 class _FakeCursor:
-    def __init__(self) -> None:
+    def __init__(self, rows: list[dict] | None = None) -> None:
         self.executed: list[tuple[str, tuple]] = []
+        self.rows = rows if rows is not None else [{"ts_code": "000001.SZ", "close_li": 12340, "volume_hand": 777}]
 
     def __enter__(self):
         return self
@@ -33,7 +35,7 @@ class _FakeCursor:
         self.executed.append((sql, params))
 
     def fetchall(self):
-        return [{"ts_code": "000001.SZ", "close_li": 12340, "volume_hand": 777}]
+        return self.rows
 
 
 class _FakeConn:
@@ -86,6 +88,8 @@ def test_historical_selection_entry_price_uses_pit_reference_close_not_current_q
     assert candidate.current_price_source == "TDX_REALTIME"
     assert candidate.volume == pytest.approx(123456)
     assert cursor.executed[0][1][0] == date(2026, 5, 12)
+    assert "trade_date = %s" in cursor.executed[0][0]
+    assert "trade_date <= %s" not in cursor.executed[0][0]
 
 
 def test_historical_selection_rejects_invalid_pit_reference_date_before_query() -> None:
@@ -208,4 +212,152 @@ def test_current_day_selection_fails_fast_when_tdx_quote_price_is_missing() -> N
             [SelectionCandidate(symbol="000001.SZ", score=0.9, rank=1, reference_price=99.0)],
             trade_date=date(2026, 5, 25),
             runtime_config={},
+        )
+
+
+def test_daily_db_only_future_target_uses_cutoff_close_without_realtime_quote() -> None:
+    cursor = _FakeCursor()
+    service = SelectionResultEnrichmentService(
+        conn_factory=lambda: _FakeConn(cursor),
+        symbol_name_resolver=_FakeNameResolver(),
+        quote_fetcher=lambda _symbol: pytest.fail("DAILY_DB_ONLY must not request realtime quotes"),
+        today_provider=lambda: date(2026, 9, 12),
+    )
+
+    enriched = service.enrich_candidates(
+        [SelectionCandidate(symbol="000001.SZ", score=0.9, rank=1, reference_price=99.0)],
+        trade_date=date(2026, 9, 14),
+        runtime_config={
+            "selection_price_mode": SELECTION_PRICE_MODE_DAILY_DB_ONLY,
+            "point_in_time_context": {"reference_price_trade_date": "2026-09-11"},
+        },
+    )
+
+    candidate = enriched[0]
+    assert candidate.selection_entry_price == pytest.approx(12.34)
+    assert candidate.reference_price == pytest.approx(12.34)
+    assert candidate.previous_close == pytest.approx(12.34)
+    assert candidate.volume == pytest.approx(777)
+    assert candidate.selection_entry_price_source == "market.kline_daily_raw.close:2026-09-11"
+    assert candidate.selection_entry_price_time == "2026-09-11"
+    assert candidate.current_price is None
+    assert candidate.current_price_source is None
+    assert cursor.executed[0][1][0] == date(2026, 9, 11)
+
+
+def test_daily_db_only_missing_cutoff_close_fails_closed_without_candidate_fallback() -> None:
+    cursor = _FakeCursor(rows=[])
+    service = SelectionResultEnrichmentService(
+        conn_factory=lambda: _FakeConn(cursor),
+        symbol_name_resolver=_FakeNameResolver(),
+        quote_fetcher=lambda _symbol: pytest.fail("DAILY_DB_ONLY must not request realtime quotes"),
+        today_provider=lambda: date(2026, 9, 12),
+    )
+
+    with pytest.raises(DataUnavailableError, match="authoritative database close prices") as captured:
+        service.enrich_candidates(
+            [SelectionCandidate(symbol="000001.SZ", score=0.9, rank=1, reference_price=99.0)],
+            trade_date=date(2026, 9, 14),
+            runtime_config={
+                "selection_price_mode": SELECTION_PRICE_MODE_DAILY_DB_ONLY,
+                "point_in_time_context": {"reference_price_trade_date": "2026-09-11"},
+            },
+        )
+
+    assert captured.value.context["source"] == "market.kline_daily_raw.close_li"
+    assert captured.value.context["missing_price_count"] == 1
+
+
+def test_daily_db_only_uses_last_available_close_for_normal_suspension_gap() -> None:
+    cursor = _FakeCursor(
+        rows=[
+            {
+                "ts_code": "000001.SZ",
+                "trade_date": date(2026, 9, 10),
+                "close_li": 12340,
+                "volume_hand": 777,
+            }
+        ]
+    )
+    service = SelectionResultEnrichmentService(
+        conn_factory=lambda: _FakeConn(cursor),
+        symbol_name_resolver=_FakeNameResolver(),
+        quote_fetcher=lambda _symbol: pytest.fail("DAILY_DB_ONLY must not request realtime quotes"),
+        today_provider=lambda: date(2026, 9, 12),
+    )
+
+    candidate = service.enrich_candidates(
+        [SelectionCandidate(symbol="000001.SZ", score=0.9, rank=1, reference_price=99.0)],
+        trade_date=date(2026, 9, 14),
+        runtime_config={
+            "selection_price_mode": SELECTION_PRICE_MODE_DAILY_DB_ONLY,
+            "point_in_time_context": {"reference_price_trade_date": "2026-09-11"},
+        },
+    )[0]
+
+    assert candidate.selection_entry_price == pytest.approx(12.34)
+    assert candidate.selection_entry_price_source == "market.kline_daily_raw.close:2026-09-10"
+    assert candidate.selection_entry_price_time == "2026-09-10"
+    assert candidate.volume == 0.0
+    assert display_fields_from_component_scores(candidate.component_scores)["reference_price_trade_date"] == "2026-09-10"
+    assert "SELECT DISTINCT ON (ts_code)" in cursor.executed[0][0]
+    assert "trade_date <= %s" in cursor.executed[0][0]
+
+
+def test_daily_db_only_database_failure_fails_closed_without_candidate_fallback() -> None:
+    def raise_connection_failure():
+        raise RuntimeError("database unavailable")
+
+    service = SelectionResultEnrichmentService(
+        conn_factory=raise_connection_failure,
+        symbol_name_resolver=_FakeNameResolver(),
+        quote_fetcher=lambda _symbol: pytest.fail("DAILY_DB_ONLY must not request realtime quotes"),
+        today_provider=lambda: date(2026, 9, 12),
+    )
+
+    with pytest.raises(DataUnavailableError, match="database price query failed") as captured:
+        service.enrich_candidates(
+            [SelectionCandidate(symbol="000001.SZ", score=0.9, rank=1, reference_price=99.0)],
+            trade_date=date(2026, 9, 14),
+            runtime_config={
+                "selection_price_mode": SELECTION_PRICE_MODE_DAILY_DB_ONLY,
+                "point_in_time_context": {"reference_price_trade_date": "2026-09-11"},
+            },
+        )
+
+    assert captured.value.context["source"] == "market.kline_daily_raw.close_li"
+    assert captured.value.context["error_type"] == "RuntimeError"
+
+
+@pytest.mark.parametrize("mode", ["UNKNOWN", 1, []])
+def test_selection_price_mode_rejects_unknown_values(mode: object) -> None:
+    service = SelectionResultEnrichmentService(
+        conn_factory=lambda: pytest.fail("invalid mode must fail before DB access"),
+        symbol_name_resolver=_FakeNameResolver(),
+        quote_fetcher=lambda _symbol: pytest.fail("invalid mode must fail before quote access"),
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError, match="selection_price_mode"):
+        service.enrich_candidates(
+            [SelectionCandidate(symbol="000001.SZ", score=0.9, rank=1, reference_price=99.0)],
+            trade_date=date(2026, 9, 14),
+            runtime_config={"selection_price_mode": mode},
+        )
+
+
+def test_daily_db_only_requires_cutoff_before_target_date() -> None:
+    service = SelectionResultEnrichmentService(
+        conn_factory=lambda: pytest.fail("invalid cutoff must fail before DB access"),
+        symbol_name_resolver=_FakeNameResolver(),
+        quote_fetcher=lambda _symbol: pytest.fail("invalid cutoff must fail before quote access"),
+    )
+
+    with pytest.raises(RuntimeConfigInvalidError, match="must be before trade_date"):
+        service.enrich_candidates(
+            [SelectionCandidate(symbol="000001.SZ", score=0.9, rank=1, reference_price=99.0)],
+            trade_date=date(2026, 9, 14),
+            runtime_config={
+                "selection_price_mode": SELECTION_PRICE_MODE_DAILY_DB_ONLY,
+                "point_in_time_context": {"reference_price_trade_date": "2026-09-14"},
+            },
         )

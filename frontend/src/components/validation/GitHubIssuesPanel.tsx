@@ -1,6 +1,6 @@
 "use client";
 
-import SectionCard from "@/components/paper-v2/SectionCard";
+import SectionCard from "@/components/trading-console/SectionCard";
 import type { ValidationBug, ValidationBugSummary } from "@/lib/validation/api";
 
 const CLOSED_BUG_STATUSES = new Set(["fixed", "closed", "resolved", "verified"]);

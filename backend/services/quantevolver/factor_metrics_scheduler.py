@@ -27,6 +27,7 @@ import schedule
 from ...db.pg_pool import get_conn
 from ...ingestion.tdx_scheduler import _build_frequency_job, _FutureTracker
 from ..dispatch_service import DispatchService
+from .factor_universe_mask_service import OFFICIAL_FACTOR_UNIVERSE_KEY
 OFFICIAL_FACTOR_WINDOW_START = "2018-08-01"
 OFFICIAL_FACTOR_WINDOW_END = "2026-06-30"
 
@@ -324,6 +325,7 @@ class FactorMetricsScheduler:
             "timeout_per_factor": timeout_per_factor,
             "force": bool(options.get("force", False)),
             "qlib_bin_path": str(qlib_bin_path) if qlib_bin_path else None,
+            "universe_key": str(options.get("universe_key") or OFFICIAL_FACTOR_UNIVERSE_KEY),
             "cache_source": "official_offline_backtest_factor_data",
             "code_source": "code_text",
         }

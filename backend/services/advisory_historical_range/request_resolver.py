@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 from decimal import Decimal
 from typing import Protocol
 
@@ -16,7 +17,11 @@ from backend.services.advisory_historical_range.models import (
     HistoricalRangeResearchBatchRequestV1,
     ResearchProgramSpecV1,
 )
-from backend.services.advisory_program import AdvisoryProgram, AdvisoryStrategyBindingVersion
+from backend.services.advisory_program import (
+    AdvisoryProgram,
+    AdvisoryStrategyBindingVersion,
+    normalize_advisory_review_policy,
+)
 from backend.services.strategy_package.advisory_input_projection import (
     StrategyPackageHistoricalRangeInputProjection,
     StrategyPackageHistoricalRangeInputProjectionV2,
@@ -49,10 +54,12 @@ class HistoricalRangeResolvedPackageV1:
 class HistoricalRangeAdmittedPackageResolver:
     """Read exact admitted identity without repeating admission or health checks."""
 
-    def __init__(self, *, package_reader: StrategyPackageIdentityReader) -> None:
+    def __init__(self, *, package_reader: StrategyPackageIdentityReader,
+                 sequence_length_reader: Callable[[StrategyPackageManifest], dict[str, int]] | None = None) -> None:
         if package_reader is None:
             raise ValueError("package_reader is required")
         self._package_reader = package_reader
+        self._sequence_length_reader = sequence_length_reader
 
     def resolve(self, package_id: str) -> HistoricalRangeResolvedPackageV1:
         normalized = str(package_id or "").strip()
@@ -78,12 +85,22 @@ class HistoricalRangeAdmittedPackageResolver:
                 "admitted StrategyPackage weights do not exactly cover its components",
                 context={"package_id": normalized},
             )
+        if self._sequence_length_reader is not None:
+            sequence_lengths = self._sequence_length_reader(manifest)
+        else:
+            models = manifest.model_asset if isinstance(manifest.model_asset, list) else [manifest.model_asset]
+            if any(model.preprocessor_asset is not None for model in models):
+                raise RuntimeConfigInvalidError("frozen sequence metadata reader is required for fitted datasets")
+            sequence_lengths = dict.fromkeys(component_by_id, 1)
+        if (set(sequence_lengths) != set(component_by_id)
+                or any(isinstance(value, bool) or not isinstance(value, int) or value < 1 for value in sequence_lengths.values())):
+            raise RuntimeConfigInvalidError("frozen sequence metadata must cover every component with its actual positive length")
         components = tuple(
             HistoricalRangeAdmittedComponentV1(
                 component_id=leg.alpha_component_id,
                 weight=Decimal(str(weights[leg.alpha_component_id])),
                 factor_order=leg.factor_order,
-                required_window=get_strategy_package_inference_required_window(leg.factor_order),
+                required_window=get_strategy_package_inference_required_window(leg.factor_order) + sequence_lengths[leg.alpha_component_id] - 1,
                 buffer_trading_days=5,
                 runtime_input_identity_hash=canonical_json_sha256(
                     {
@@ -107,7 +124,7 @@ class HistoricalRangeAdmittedPackageResolver:
                     {
                         "component_id": leg.alpha_component_id,
                         "factor_order_hash": leg.factor_order_hash,
-                        "required_window": get_strategy_package_inference_required_window(leg.factor_order),
+                        "required_window": get_strategy_package_inference_required_window(leg.factor_order) + sequence_lengths[leg.alpha_component_id] - 1,
                         "buffer_trading_days": 5,
                         "window_resolution": "trading_calendar",
                     }
@@ -203,7 +220,10 @@ class HistoricalRangeProgramResolver:
             source_program_version = program.version
             source_binding_version_id = binding.binding_version_id
             runtime_config = dict(binding.runtime_config_json)
-            review_policy = dict(program.review_policy)
+            review_policy = normalize_advisory_review_policy(
+                program.review_policy,
+                target_count=program.target_count,
+            )
             program_config = {
                 "program_id": program.program_id,
                 "program_version": program.version,
@@ -223,8 +243,14 @@ class HistoricalRangeProgramResolver:
             source_program_version = None
             source_binding_version_id = None
             runtime_config = dict(spec.runtime_config)
-            review_policy = dict(spec.review_policy)
-            program_config = spec.semantic_payload()
+            review_policy = normalize_advisory_review_policy(
+                spec.review_policy,
+                target_count=spec.target_count,
+            )
+            program_config = {
+                **spec.semantic_payload(),
+                "review_policy": review_policy,
+            }
             style_profile_ref = spec.style_profile_ref
             style_profile_hash = spec.style_profile_hash
         resolved_package = resolved_packages.get(package_id)

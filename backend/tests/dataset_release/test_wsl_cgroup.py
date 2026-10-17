@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from itertools import count
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -20,17 +21,17 @@ from backend.services.dataset_release.wsl_resource_guardian import (
 )
 
 
-def test_systemd_command_freezes_memory_and_control_group_lifecycle() -> None:
+def test_systemd_command_owns_control_group_without_memory_limits() -> None:
     identity = WslUnitIdentity.create("Ubuntu", "attempt-001", 7)
     service = WslCgroupService(identity, ResourcePolicy())
     command = service.launch_command(["python3", "guardian.py", "--", "worker"])
     assert command[:5] == ["wsl.exe", "-d", "Ubuntu", "--", "systemd-run"]
-    assert "--property=MemoryHigh=6442450944" in command
-    assert "--property=MemoryMax=8589934592" in command
-    assert "--property=MemorySwapMax=0" in command
+    assert not any("MemoryHigh=" in item for item in command)
+    assert not any("MemoryMax=" in item for item in command)
+    assert not any("MemorySwapMax=" in item for item in command)
     assert "--property=KillMode=control-group" in command
     assert "--property=SendSIGKILL=yes" in command
-    assert "--property=OOMPolicy=kill" in command
+    assert not any("OOMPolicy=" in item for item in command)
     assert "--pipe" in command
     assert "--unit=aistock-dataset-attempt-001-7.service" in command
 
@@ -44,14 +45,14 @@ def test_unit_identity_rejects_injection(distro: str, attempt: str, fence: int) 
         WslUnitIdentity.create(distro, attempt, fence)
 
 
-def test_readback_requires_exact_limits_and_identity() -> None:
+def test_readback_requires_unlimited_memory_and_identity() -> None:
     stdout = "\n".join(
         [
             "MainPID=321",
             "ControlGroup=/user.slice/aistock.service",
-            f"MemoryHigh={6 * GIB}",
-            f"MemoryMax={8 * GIB}",
-            "MemorySwapMax=0",
+            "MemoryHigh=infinity",
+            "MemoryMax=infinity",
+            "MemorySwapMax=infinity",
             "ActiveState=active",
         ]
     )
@@ -66,10 +67,12 @@ def test_readback_requires_exact_limits_and_identity() -> None:
     )
     readback = service.readback()
     assert readback.main_pid == 321
+    assert readback.memory_high_bytes == 0
+    assert readback.memory_max_bytes == 0
     assert readback.memory_swap_max_bytes == 0
 
 
-def test_readback_fails_closed_on_weakened_memory_max() -> None:
+def test_readback_rejects_any_aistock_memory_limit() -> None:
     stdout = "\n".join(
         [
             "MainPID=321",
@@ -89,7 +92,7 @@ def test_readback_fails_closed_on_weakened_memory_max() -> None:
         ResourcePolicy(),
         runner=runner,
     )
-    with pytest.raises(WslCgroupError, match="readback mismatch"):
+    with pytest.raises(WslCgroupError, match="unexpectedly has AIstock memory limits"):
         service.readback()
 
 
@@ -129,21 +132,22 @@ class FakeChild:
 
 def _resource_kwargs(tmp_path: Path, *, available: int = 20 * GIB):
     return {
+        "monotonic": lambda counter=count(): float(next(counter)),
         "telemetry_path": tmp_path / "wsl-resource.json",
-        "memory_high_bytes": 6 * GIB,
-        "memory_max_bytes": 8 * GIB,
+        "memory_high_bytes": 0,
+        "memory_max_bytes": 0,
         "memory_swap_max_bytes": 0,
-        "start_available_bytes": 12 * GIB,
+        "start_available_bytes": 0,
         "resource_checkpoint_path": "/mnt/x/control/resource-checkpoint.json",
         "control_group_loader": lambda: "/user.slice/aistock.service",
         "cgroup_reader": lambda _control_group: {
             "memory.current": 2 * GIB,
             "memory.peak": 3 * GIB,
-            "memory.high": 6 * GIB,
-            "memory.max": 8 * GIB,
+            "memory.high": "max",
+            "memory.max": "max",
             "memory.swap.current": 0,
-            "memory.swap.max": 0,
-            "memory.oom.group": 1,
+            "memory.swap.max": "max",
+            "memory.oom.group": 0,
             "memory.events": {"oom": 0, "oom_kill": 0},
             "wsl_mem_available_bytes": available,
         },
@@ -198,7 +202,7 @@ def test_guardian_exits_nonzero_on_stale_heartbeat_without_killing_child(tmp_pat
 
 def test_guardian_returns_child_status_when_heartbeat_and_pipe_remain_healthy(tmp_path: Path, monkeypatch) -> None:
     now = datetime(2026, 8, 11, tzinfo=timezone.utc)
-    counters = iter([1, 2, 3])
+    counters = iter([1, 2, 3, 4])
     child_env = {}
     monkeypatch.setenv("SECRET_TOKEN", "must-not-reach-wsl-child")
     monkeypatch.setenv("TDX_DB_PASSWORD", "must-not-reach-build-child")
@@ -229,19 +233,20 @@ def test_guardian_returns_child_status_when_heartbeat_and_pipe_remain_healthy(tm
     assert "TDX_DB_PASSWORD" not in child_env
     telemetry = (tmp_path / "wsl-resource.json").read_text(encoding="utf-8")
     assert '"memory_current_bytes":2147483648' in telemetry
-    assert '"memory_oom_group":1' in telemetry
+    assert '"memory_oom_group":0' in telemetry
 
 
 def test_guardian_loss_exits_for_systemd_control_group_fail_stop(tmp_path: Path) -> None:
     now = datetime(2026, 8, 11, tzinfo=timezone.utc)
-    pipes = iter([True, False])
+    pipes = iter([True, True, False])
+    counters = count(1)
     guardian = WslResourceGuardian(
         attempt_id="attempt",
         fence=2,
         heartbeat_path=tmp_path / "heartbeat.json",
         ttl_seconds=15,
         command=["worker"],
-        heartbeat_loader=lambda _path: GuardianHeartbeat("attempt", 2, 1, now),
+        heartbeat_loader=lambda _path: GuardianHeartbeat("attempt", 2, next(counters), now),
         pipe_probe=lambda: next(pipes),
         popen_factory=lambda *_args, **_kwargs: FakeChild([None]),
         now=lambda: now,
@@ -251,9 +256,10 @@ def test_guardian_loss_exits_for_systemd_control_group_fail_stop(tmp_path: Path)
     assert guardian.run() == 73
 
 
-def test_guardian_checks_wsl_available_before_starting_heavy_child(tmp_path: Path) -> None:
+def test_guardian_records_low_wsl_available_without_blocking_child(tmp_path: Path) -> None:
     now = datetime(2026, 8, 11, tzinfo=timezone.utc)
     started = False
+    counters = count(1)
 
     def popen(*_args, **_kwargs):
         nonlocal started
@@ -266,7 +272,7 @@ def test_guardian_checks_wsl_available_before_starting_heavy_child(tmp_path: Pat
         heartbeat_path=tmp_path / "heartbeat.json",
         ttl_seconds=15,
         command=["worker"],
-        heartbeat_loader=lambda _path: GuardianHeartbeat("attempt", 2, 1, now),
+        heartbeat_loader=lambda _path: GuardianHeartbeat("attempt", 2, next(counters), now),
         pipe_probe=lambda: True,
         popen_factory=popen,
         now=lambda: now,
@@ -274,8 +280,8 @@ def test_guardian_checks_wsl_available_before_starting_heavy_child(tmp_path: Pat
         **_resource_kwargs(tmp_path, available=10 * GIB),
     )
 
-    assert guardian.run() == 74
-    assert started is False
+    assert guardian.run() == 0
+    assert started is True
 
 
 def test_guardian_cli_has_no_independent_ttl_default() -> None:
@@ -292,3 +298,72 @@ def test_guardian_cli_has_no_independent_ttl_default() -> None:
                 "worker",
             ]
         )
+
+
+@pytest.mark.parametrize("host_offset_seconds", [8, -60, 86400])
+def test_guardian_accepts_counter_progress_despite_wall_clock_skew(
+    tmp_path: Path, host_offset_seconds: int,
+) -> None:
+    guest_now = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    counters = iter([1, 2, 3, 4])
+    guardian = WslResourceGuardian(
+        attempt_id="attempt", fence=2,
+        heartbeat_path=tmp_path / "heartbeat.json", ttl_seconds=15,
+        command=["worker"],
+        heartbeat_loader=lambda _path: GuardianHeartbeat(
+            "attempt", 2, next(counters),
+            guest_now + timedelta(seconds=host_offset_seconds),
+        ),
+        pipe_probe=lambda: True,
+        popen_factory=lambda *_args, **_kwargs: FakeChild([0]),
+        now=lambda: guest_now, sleep=lambda _seconds: None,
+        **_resource_kwargs(tmp_path),
+    )
+    assert guardian.run() == 0
+
+
+@pytest.mark.parametrize("counters", [[1, 2, 1], [1, 2, *([2] * 20)]])
+def test_guardian_rejects_counter_rollback_or_stall_after_startup(
+    tmp_path: Path, counters: list[int], capsys,
+) -> None:
+    now = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    sequence = iter(counters)
+    child = FakeChild([None] * 30)
+    guardian = WslResourceGuardian(
+        attempt_id="attempt", fence=2,
+        heartbeat_path=tmp_path / "heartbeat.json", ttl_seconds=3,
+        command=["worker"],
+        heartbeat_loader=lambda _path: GuardianHeartbeat("attempt", 2, next(sequence), now),
+        pipe_probe=lambda: True,
+        popen_factory=lambda *_args, **_kwargs: child,
+        now=lambda: now, sleep=lambda _seconds: None,
+        **_resource_kwargs(tmp_path),
+    )
+    assert guardian.run() == 73
+    assert "WSL_GUARDIAN_OWNER_LOST" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("closed_pipe", [False, True])
+def test_guardian_requires_live_progress_before_starting_child(
+    tmp_path: Path, closed_pipe: bool, capsys,
+) -> None:
+    started = False
+
+    def popen(*_args, **_kwargs):
+        nonlocal started
+        started = True
+        return FakeChild([0])
+
+    now = datetime(2026, 10, 13, tzinfo=timezone.utc)
+    guardian = WslResourceGuardian(
+        attempt_id="attempt", fence=2,
+        heartbeat_path=tmp_path / "heartbeat.json", ttl_seconds=3,
+        command=["worker"],
+        heartbeat_loader=lambda _path: GuardianHeartbeat("attempt", 2, 1, now),
+        pipe_probe=lambda: not closed_pipe, popen_factory=popen,
+        now=lambda: now, sleep=lambda _seconds: None,
+        **_resource_kwargs(tmp_path),
+    )
+    assert guardian.run() == 72
+    assert started is False
+    assert "WSL_GUARDIAN_STARTUP_FAILED" in capsys.readouterr().err

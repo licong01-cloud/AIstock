@@ -1,8 +1,10 @@
-import MetricCard from "@/components/paper-v2/MetricCard";
-import SectionCard from "@/components/paper-v2/SectionCard";
-import StatusBadge from "@/components/paper-v2/StatusBadge";
+import MetricCard from "@/components/trading-console/MetricCard";
+import SectionCard from "@/components/trading-console/SectionCard";
+import StatusBadge from "@/components/trading-console/StatusBadge";
 import {
   type JsonObject,
+  type OverviewSource,
+  type PipelineOverviewSnapshot,
   type ValidationAutomationSummary,
   type ValidationBranchDetailSummary,
   type ValidationCodeIntelligenceSummary,
@@ -57,6 +59,7 @@ type PipelineCardView = {
 };
 
 export type PipelineOverviewCardsProps = {
+  snapshot?: PipelineOverviewSnapshot | null;
   activeSection: string;
   onSelect: (section: PipelineOverviewSectionId) => void;
   cardsSummary?: ValidationPhase1CardsSummary | null;
@@ -171,6 +174,33 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
     ["后端卡片状态", backendCard?.health_tone || "-"],
     ["后端风险分", backendCard?.risk_score ?? "-"],
   ];
+
+  const required: Record<string, unknown> = {
+    overview: props.health,
+    code_intelligence: props.codeIntelligenceSummary?.data_state,
+    merge_gate: props.mergeGate?.decision,
+    issue_workflow: props.issueWorkflowSummary?.open_count,
+    pipeline_tests: props.pipelineTestSummary?.test_count,
+    features: props.uiTargetSummary?.target_count,
+    modules: props.moduleQuality?.summary?.module_count,
+    github_issues: props.githubIssueSummary?.bug_count,
+    branches_prs: props.githubPrSummary?.open_count,
+    legacy_debt: props.legacyDebtSummary?.debt_count,
+    automation: props.snapshot?.sections.nightly?.data,
+  };
+  if (section.id === "overview" && props.snapshot) {
+    const sources = Object.values(props.snapshot.sections);
+    const complete = sources.length > 0 && sources.every((source) => source.state === "available" && !source.stale);
+    return { id: section.id, label: section.label, hint: section.hint, tone: "gray",
+      state: complete ? "快照已读取（不代表业务验收）" : "部分数据 / unknown",
+      meta: "CI / Runner / Nightly / BUG / PR / worktree", risk: "-",
+      rows: [["数据时间", props.snapshot.generated_at], ["来源", "overview/snapshot"], ["复用时间（秒）", props.snapshot.ttl_seconds]], reasonCodes: [] };
+  }
+  if (required[section.id] === null || required[section.id] === undefined || warningKeys.length) {
+    return { id: section.id, label: section.label, hint: section.hint, tone: "gray", state: warningKeys.length ? "unavailable" : "unknown",
+      meta: "未读取 / 数据不完整，不作通过判断", risk: "-", rows: baseRows,
+      reasonCodes: warningKeys.length ? warningKeys : ["source_not_loaded"] };
+  }
 
   if (section.id === "overview") {
     const repo = isObject(props.cardsSummary?.repo) ? props.cardsSummary?.repo : {};
@@ -440,27 +470,82 @@ function buildSectionView(section: PipelineSection, props: PipelineOverviewCards
     };
   }
 
-  const runnerState = objectField(objectField(props.automationSummary, "nightly"), "state") || objectField(objectField(props.health, "nightly"), "state") || props.automationSummary?.gh_auth_status || "unknown";
+  const nightly = props.snapshot?.sections.nightly;
+  const runners = props.snapshot?.sections.runners;
+  const run = objectField(nightly?.data, "latest_run");
+  const state = objectField(run, "conclusion") || objectField(run, "status") || "unknown";
   return {
-    id: section.id,
-    label: section.label,
-    hint: section.hint,
-    tone: normalizeTone(backendCard?.health_tone || runnerState),
-    state: display(runnerState),
-    meta: `runner jobs ${display(props.executions?.total ?? props.executions?.items?.length ?? 0)}`,
-    risk: backendCard?.risk_score ?? (runnerState === "unknown" ? 35 : 8),
-    rows: [
-      ...baseRows,
-      ["nightly summary", objectField(props.automationSummary, "nightly") || objectField(props.health, "nightly") || "未接入 /validation/nightly/summary 时显示 unknown"],
-      ["runner health", props.validationSummary?.runner || props.health?.runner],
-      ["gh_auth_status", props.automationSummary?.gh_auth_status],
-      ["github_data_state", props.automationSummary?.github_data_state],
-      ["scripts", props.automationSummary?.scripts],
-      ["mcp_policy", props.automationSummary?.mcp_policy],
-      ["actions", props.automationSummary?.actions],
-    ],
-    reasonCodes: stringList(props.automationSummary?.reason_codes),
+    id: section.id, label: section.label, hint: section.hint,
+    tone: nightly?.state === "available" && !nightly.stale ? toneFromState(state) : "gray",
+    state: nightly?.stale ? "stale" : display(state),
+    meta: `Nightly ${display(state)} / Runner ${display(runners?.state)}`,
+    risk: "-", rows: [
+      ...baseRows, ["Nightly latest_run", run], ["Runner", runners?.data],
+      ["数据时间", nightly?.collected_at], ["来源", nightly?.source],
+      ["gh_auth_status（不代表业务通过）", props.automationSummary?.gh_auth_status],
+      ["scripts", props.automationSummary?.scripts], ["actions", props.automationSummary?.actions],
+    ], reasonCodes: nightly?.error ? [nightly.error] : [],
   };
+}
+
+function sourceTone(source?: OverviewSource): "info" | "warning" {
+  return source?.state === "available" && !source.stale ? "info" : "warning";
+}
+
+export function PipelineGlobalOverview({ snapshot, error, onRefresh }: {
+  snapshot: PipelineOverviewSnapshot | null; error: string | null; onRefresh: () => void;
+}) {
+  const sources = snapshot?.sections || {};
+  const data = (name: string) => sources[name]?.data;
+  const rows = (name: string, field = "items"): JsonObject[] => {
+    const value = data(name)?.[field];
+    return Array.isArray(value) ? value.filter(isObject) : [];
+  };
+  const queued = objectField(data("ci"), "queued");
+  const running = objectField(data("ci"), "in_progress");
+  const nightly = objectField(data("nightly"), "latest_run");
+  const nightlyState = objectField(nightly, "conclusion") || objectField(nightly, "status") || "unknown";
+  const nightlyUpdated = Date.parse(String(objectField(nightly, "updated_at") || ""));
+  const nightlyFresh = Number.isFinite(nightlyUpdated) && Date.now() - nightlyUpdated < 36 * 3600_000 && Date.now() >= nightlyUpdated - 300_000;
+  const runRows = (value: unknown): JsonObject[] => isObject(value) && Array.isArray(value.items) ? value.items.filter(isObject) : [];
+  return <SectionCard title="研发流水线全局总览" eyebrow="只读观测，不代表业务验收或可安全清理"
+    action={<button type="button" className="pv2-link-button" onClick={onRefresh}>重新读取快照</button>}>
+    {error ? <div role="alert">快照读取失败：{error}。已有数据仅供参考，不代表最新状态。</div> : null}
+    {!snapshot && !error ? <div role="status">正在读取轻量快照，数据到达后分区展示。</div> : null}
+    <div className="pv2-grid pv2-grid-4">
+      <MetricCard label="CI 排队工作流" value={display(objectField(queued, "total") ?? "unknown")} hint="GitHub queued；不是业务测试失败" tone={sourceTone(sources.ci)} />
+      <MetricCard label="CI 执行中工作流" value={display(objectField(running, "total") ?? "unknown")} hint="in_progress；其中 job 仍可能排队" tone={sourceTone(sources.ci)} />
+      <MetricCard label="最近 Nightly" value={display(nightlyState)} hint={display(objectField(nightly, "updated_at"))}
+        tone={nightlyState === "success" && objectField(nightly, "status") === "completed" && nightlyFresh && sources.nightly?.state === "available" && !sources.nightly.stale && !error ? "success" : "warning"} />
+      <MetricCard label="待处理 BUG" value={display(data("bugs")?.pending ?? "unknown")} hint="canonical registry；含待重启验证记录" tone={sourceTone(sources.bugs)} />
+      <MetricCard label="开放 PR" value={display(data("prs")?.observed_open ?? "unknown")} hint={data("prs")?.truncated ? "至少 100，列表已截断" : "GitHub open PR"} tone={sourceTone(sources.prs)} />
+      <MetricCard label="任务 Worktree" value={display(data("worktrees")?.task_worktrees ?? "unknown")} hint="仅注册数量，未判定是否可清理" tone={sourceTone(sources.worktrees)} />
+    </div>
+    <h3>两个 GitHub Runner</h3>
+    <div className="pv2-table-wrap"><table className="pv2-table"><thead><tr><th>角色</th><th>名称</th><th>连接</th><th>占用</th></tr></thead>
+      <tbody>{["ci", "security"].map((role) => {
+        const matches = rows("runners").filter((runner) => runner.role === role);
+        return matches.length ? matches.map((runner) => <tr key={String(runner.id)}><td>{role}</td><td>{display(runner.name)}</td><td>{display(runner.status)}</td><td>{runner.status === "online" ? runner.busy === true ? "busy" : "idle" : "unknown"}</td></tr>)
+          : <tr key={role}><td>{role}</td><td colSpan={3}>unknown / 未观测到该角色</td></tr>;
+      })}</tbody></table></div>
+    <details><summary>CI 排队 / 执行明细（有界列表）</summary>
+      <DetailRows rows={[...runRows(queued), ...runRows(running)].map((run) => [String(run.id), {
+        workflow: run.name, status: run.status, branch: run.head_branch,
+        queued_since: run.status === "queued" ? run.created_at : undefined,
+        running_since: run.status === "in_progress" ? run.run_started_at : undefined,
+        url: run.html_url,
+      }])} />
+    </details>
+    <details><summary>最近 Nightly 原始运行身份</summary><DetailRows rows={[["latest_run", nightly ?? "unknown"]]} /></details>
+    <details><summary>开放 PR 明细（最多 10 条）</summary><DetailRows rows={rows("prs").map((pr) => [String(pr.number), { title: pr.title, url: pr.html_url }])} /></details>
+    <h3>数据时间与来源</h3>
+    <div className="pv2-table-wrap"><table className="pv2-table"><thead><tr><th>分区</th><th>读取状态</th><th>采集时间</th><th>数据年龄（秒）</th><th>来源</th></tr></thead>
+      <tbody>{["ci", "runners", "nightly", "bugs", "prs", "worktrees"].map((key) => {
+        const source = sources[key];
+        return <tr key={key}><td>{key}</td><td>{error ? "连接失败 / 未确认新鲜度" : source?.stale ? "stale / 刷新中" : source?.state || "loading"}{source?.error ? ` (${source.error})` : ""}</td><td>{display(source?.collected_at)}</td><td>{display(source?.age_seconds)}</td><td>{display(source?.source)}</td></tr>;
+      })}</tbody></table></div>
+    <p className="pv2-muted">共享缓存 {snapshot?.ttl_seconds ?? 60} 秒；各来源独立采集。只读观测不会启动测试、修改数据库或控制服务。</p>
+  </SectionCard>;
 }
 
 function DetailRows({ rows }: { rows: Array<[string, unknown]> }) {
@@ -521,7 +606,7 @@ export default function PipelineOverviewCards(props: PipelineOverviewCardsProps)
           <MetricCard label="当前状态" value={active.state} hint={active.hint} tone={metricTone(active.tone)} />
           <MetricCard label="摘要" value={active.meta || "-"} hint={cardSummaryText(findBackendCard(props.cardsSummary, active.id)) || "当前 API 聚合"} tone="info" />
           <MetricCard label="风险分" value={active.risk} hint="后端提供或前端保守估算" tone={metricTone(active.tone)} />
-          <MetricCard label="降级项" value={warningEntries.length} hint="可选 API 失败不会阻塞页面" tone={warningEntries.length ? "warning" : "success"} />
+          <MetricCard label="降级项" value={warningEntries.length} hint="仅统计已请求的分区；未读取不代表通过" tone={warningEntries.length ? "warning" : "info"} />
         </div>
         <div style={{ marginTop: 12 }}>
           <ReasonCodeChips items={active.reasonCodes} />

@@ -1,4 +1,183 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
+import type { AdvisoryEntryPrice } from "../../src/lib/api/advisory";
+
+for (const [state, text] of [
+  ["ACCEPTABLE_PRICE_SET", "9.95～9.96 CNY"],
+  ["NO_ACCEPTABLE_PRICE", "未知节点不能判为不适合"],
+  ["UNKNOWN_INPUT_OR_SUPPORT", "不能判为不推荐"],
+  ["NOT_CONFIGURED", "不代表没有可盈利股票"],
+  ["IDENTITY_CONFLICT", "M1原名单、价格字段或角色不一致"],
+] as const) {
+  test(`M1 sector entry original-list presentation distinguishes ${state}`, async ({ page }) => {
+    await mockShellApis(page);
+    const accepted = state === "ACCEPTABLE_PRICE_SET";
+    const sector: JsonObject = state === "NOT_CONFIGURED" ? {} : {
+      status: "COMPUTED", decision_date: "2026-06-04", target_date: "2026-06-05", model_sha256: "a".repeat(64),
+      bundle_sha256: "b".repeat(64), config_sha256: "c".repeat(64), projection_sha256: "d".repeat(64),
+      source_review_policy_sha256: "e".repeat(64), model_parent_policy_identity: "f".repeat(64), model_value_policy_identity: "a".repeat(64),
+      candidate_receipt: { program_id: state === "IDENTITY_CONFLICT" ? "foreign" : PROGRAM_ID, binding_version_id: "unit-binding",
+        list_version_id: "unit-list", review_run_id: "unit-review", selection_run_id: "unit-run", decision_date: "2026-06-04",
+        target_date: "2026-06-05", candidate_scope: "ORIGINAL_PUBLISHED_TOP20", native_receipt_created: false,
+        candidate_count: 1, original_list_item_count: 2, candidate_roster_sha256: "b".repeat(64),
+        source_policy_state: "DECLARED_ORIGINAL", source_review_policy_sha256: "e".repeat(64), source_evidence: "UI_PRESENTATION_ONLY",
+        universe_selection: { mode: "stock_universe", pool_ids: [] } },
+      candidates: [{ instrument: "000001.SZ", selection_effective_rank: 1, status: state === "IDENTITY_CONFLICT" ? "UNKNOWN_INPUT_OR_SUPPORT" : state,
+        legal_node_count: 8, unknown_node_count: state === "UNKNOWN_INPUT_OR_SUPPORT" || state === "IDENTITY_CONFLICT" ? 8 : 2,
+        intervals: accepted ? [{ low_cny: 9.95, high_cny: 9.96, tick_cny: .01, node_count: 2, expected_net_bps_min: 20,
+          expected_net_bps_max: 30, downside_q90_bps_max: 200 }, { low_cny: 9.98, high_cny: 9.99, tick_cny: .01, node_count: 2,
+          expected_net_bps_min: 18, expected_net_bps_max: 28, downside_q90_bps_max: 220 }] : [] }],
+      unmodeled_items: [{ instrument: "600001.SH", rank: 21, action: "WATCH", reason_code: "OUTSIDE_MODEL_TOP20_SCOPE" }],
+    };
+    const { calls } = await mockAdvisoryApis(page, { sectorEntryDaily: sector });
+    await page.goto("/paper-v2/advisory");
+    const card = page.getByTestId("advisory-sector-entry-price");
+    await expect(card).toContainText(text);
+    await expect(card).toContainText("不保证成交或盈利");
+    if (accepted) {
+      await expect(card).toContainText("9.98～9.99 CNY");
+      await expect(card).toContainText("模型范围外/非买入候选 1 项");
+    }
+    expect(calls.filter((call) => call.includes("/sector-entry-price")).every((call) => call.startsWith("GET "))).toBe(true);
+  });
+}
+
+test("M1 sector entry original-list presentation discards late previous-list response", async ({ page }) => {
+  await mockShellApis(page);
+  const oldList = publishedListVersion("2026-06-10", "2026-06-09");
+  const nextList = publishedListVersion("2026-06-09", "2026-06-08");
+  await mockAdvisoryApis(page, { initialListVersions: [oldList, nextList] });
+  let releaseOld!: () => void;
+  let observedOld!: () => void;
+  const release = new Promise<void>((resolve) => { releaseOld = resolve; });
+  const observed = new Promise<void>((resolve) => { observedOld = resolve; });
+  await page.route("**/api/v1/advisory/programs/*/sector-entry-price*", async (route) => {
+    const url = new URL(route.request().url());
+    const id = url.searchParams.get("list_version_id");
+    const result: JsonObject = { ok: true, schema_version: "economic_sector_daily_service_v1", model_family: "M1_SECTOR_PRICE_VALUE_V1",
+      program_id: PROGRAM_ID, requested_target_date: url.searchParams.get("target_trade_date"), requested_list_version_id: id,
+      decision_use: "NAVIGATION_ONLY", deployable: false, economic_effectiveness: "NOT_CONFIRMED", fit_count: 0,
+      database_written: false, outcomes_read: false, package_qualification_rechecked: false,
+      status: "NOT_CONFIGURED", candidates: [], unmodeled_items: [] };
+    if (id === oldList.list_version_id) { observedOld(); await release; }
+    if (id === nextList.list_version_id) Object.assign(result, {
+      status: "NO_CANDIDATES", decision_date: "2026-06-08", target_date: "2026-06-09",
+      source_review_policy_sha256: null, model_sha256: "a".repeat(64), bundle_sha256: "b".repeat(64),
+      config_sha256: "c".repeat(64), projection_sha256: "d".repeat(64), model_parent_policy_identity: "e".repeat(64),
+      model_value_policy_identity: "f".repeat(64), candidate_receipt: { program_id: PROGRAM_ID, list_version_id: id,
+        binding_version_id: "unit-binding", selection_run_id: "unit-run", review_run_id: "unit-review",
+        candidate_scope: "ORIGINAL_PUBLISHED_TOP20", native_receipt_created: false, decision_date: "2026-06-08",
+        target_date: "2026-06-09", candidate_count: 0, original_list_item_count: 0,
+        candidate_roster_sha256: "a".repeat(64), source_review_policy_sha256: null },
+    });
+    return json(route, result);
+  });
+  try {
+    await page.goto("/paper-v2/advisory");
+    await observed;
+    await page.getByTestId(`advisory-view-list-version-${nextList.list_version_id}`).click();
+    const card = page.getByTestId("advisory-sector-entry-price");
+    await expect(card).toContainText("NO_CANDIDATES");
+    const lateResponse = page.waitForResponse((response) => response.url().includes("/sector-entry-price")
+      && new URL(response.url()).searchParams.get("list_version_id") === oldList.list_version_id);
+    releaseOld();
+    await lateResponse;
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
+    await expect(card).toContainText("NO_CANDIDATES");
+    await expect(card).not.toContainText("NOT_CONFIGURED");
+    await expect(card.getByRole("alert")).toHaveCount(0);
+  } finally { releaseOld(); }
+});
+
+for (const [state, text] of [
+  ["NO_ACCEPTABLE_PRICE", "已知条件下无合适价格"],
+  ["PARTIAL_UNKNOWN", "仍有未知条件"],
+  ["UNAVAILABLE", "不能视为不推荐"],
+] as const) {
+  test(`economic entry read-only research distinguishes ${state} without legacy ranking`, async ({ page }) => {
+    const bundle = "adveserve_" + "a".repeat(24);
+    await mockShellApis(page);
+    const { calls } = await mockAdvisoryApis(page, {
+      modelShadowByProgramId: { [PROGRAM_ID]: { status: "MODEL_UNAVAILABLE", candidates: [], shortlist_count: 0,
+        candidate_count: 0, baselines: {}, hmm_unavailable: [], reason_code: "UNIT_LEGACY_UNAVAILABLE", price_range: null } },
+      economicEntryResearch: { status: "RESEARCH_NAVIGATION", program_id: PROGRAM_ID, bundle_id: bundle,
+        target_date: "2025-01-29", decision_date: "2025-01-28", evidence_state: "RESEARCH_NAVIGATION", decision_use: "NAVIGATION_ONLY", deployable: false,
+        advice: [{ schema_version: "economic_entry_daily_projection_v1", role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY",
+          decision_use: "NAVIGATION_ONLY", deployable: false, evidence_state: "RESEARCH_NAVIGATION", role_binding_sha256: null, recommendation_status: state,
+          availability: state === "NO_ACCEPTABLE_PRICE" ? "COMPLETE" : state === "UNAVAILABLE" ? "UNAVAILABLE" : "PARTIAL",
+          reason_code: null, prediction_input: { program_id: PROGRAM_ID, instrument: "000001.SZ", decision_date: "2025-01-28",
+            binding_version_id: "unit-only-binding", run_id: null, list_id: null, restored_cohort_sha256: "e".repeat(64), selection_rank: 1,
+            captured_at: "2026-10-02T00:00:00Z",
+            target_date: "2025-01-29", source_evidence: "RECOVERED_LIMITED", evidence_level: "HISTORICAL_REPLAY", evidence_limitations: ["unit-only presentation fixture"] },
+          acceptable_price_intervals: [], node_status_counts: {
+            REJECTED: state === "UNAVAILABLE" ? 0 : 1, OUT_OF_SUPPORT: state === "NO_ACCEPTABLE_PRICE" ? 0 : state === "UNAVAILABLE" ? 2 : 1 },
+          query_node_count: state === "NO_ACCEPTABLE_PRICE" ? 1 : 2,
+          risk_budget: { maximum_loss_bps: 800, reference_use: "FIXED_RESEARCH_STOP_REFERENCE" }, model_bundle_sha256: "b".repeat(64),
+          original_advice_sha256: "c".repeat(64), projection_sha256: "d".repeat(64) }] },
+    });
+    await page.goto("/paper-v2/advisory");
+    const card = page.getByTestId("advisory-economic-entry-value");
+    await expect(card.getByTestId("economic-entry-role-status")).toContainText("NOT_CONFIGURED");
+    await card.locator("summary").filter({ hasText: "只读查看" }).click();
+    await page.getByLabel("经济价格研究bundle").fill(bundle);
+    await page.getByLabel("经济价格研究目标日").fill("2025-01-29");
+    await card.getByRole("button", { name: "读取探索产物" }).click();
+    await expect(card.getByTestId("economic-entry-research-result")).toContainText(text);
+    await expect(card).toContainText("不用于实盘");
+    expect(calls.filter((call) => call.includes("/entry-value/")).every((call) => call.startsWith("GET "))).toBe(true);
+  });
+}
+
+for (const state of ["PUBLISHED", "STALE", "IDENTITY_CONFLICT"] as const) {
+  test(`economic entry qualified presentation distinguishes ${state}`, async ({ page }) => {
+    // Presentation-only fixture, never real confirmation or activation evidence.
+    await mockShellApis(page);
+    const roleSha = "a".repeat(64);
+    const status = state === "IDENTITY_CONFLICT" ? "PUBLISHED" : state;
+    const economicStatus: JsonObject = {
+      status, evidence_state: "CONFIRMED_ENTRY_VALUE", deployable: status === "PUBLISHED", decision_use: "ADVISORY_ONLY",
+      automatic_capture_enabled: true, qualification_gaps: [], role_binding_sha256: roleSha, pointer_sha256: "b".repeat(64),
+      bundle_id: "advecserve_" + "c".repeat(24), binding_version_id: "unit-only-binding", original_batch_sha256: "d".repeat(64),
+      reason_code: status === "STALE" ? "D_ADVICE_EXPIRED_AT_T_OPEN" : null,
+      advice: [{ schema_version: "economic_entry_daily_projection_v1", role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY",
+        evidence_state: "CONFIRMED_ENTRY_VALUE", deployable: true, decision_use: "ADVISORY_ONLY", role_binding_sha256: state === "IDENTITY_CONFLICT" ? "f".repeat(64) : roleSha,
+        recommendation_status: "ACCEPTABLE_PRICE_SET", availability: "PARTIAL", reason_code: null,
+        prediction_input: { program_id: PROGRAM_ID, binding_version_id: "unit-only-binding", run_id: "unit-only-run", list_id: "unit-only-list",
+          instrument: "000001.SZ", selection_rank: 1, restored_cohort_sha256: null, decision_date: "2026-06-08", target_date: "2026-06-09",
+          captured_at: "2026-06-08T17:00:00+08:00", source_evidence: "NATIVE_COMPLETE", evidence_level: "PROSPECTIVE_INPUT", evidence_limitations: ["unit-only presentation fixture"] },
+        acceptable_price_intervals: [{ minimum_cny: 9.95, maximum_cny: 9.97, grid_step_cny: .01, node_count: 3,
+          expected_net_return_min_bps: 30, expected_net_return_max_bps: 45, entry_net_max_loss_q90_max_bps: 200 }],
+        node_status_counts: { ACCEPTABLE: 3, OUT_OF_SUPPORT: 1 }, query_node_count: 4,
+        risk_budget: { maximum_loss_bps: 800, reference_use: "EXPLICIT_BUSINESS_CONFIGURATION", configuration_sha256: "e".repeat(64) },
+        model_bundle_sha256: "b".repeat(64), original_advice_sha256: "c".repeat(64), projection_sha256: "d".repeat(64) }],
+    };
+    const { calls } = await mockAdvisoryApis(page, { economicEntryStatus: economicStatus });
+    await page.goto("/paper-v2/advisory");
+    const card = page.getByTestId("advisory-economic-entry-value");
+    if (state === "IDENTITY_CONFLICT") {
+      await expect(card.getByTestId("economic-entry-status-error")).toContainText("身份或证据不一致");
+      await expect(card).not.toContainText("9.95");
+      const validRow: JsonObject = { ...(economicStatus.advice as JsonObject[])[0], role_binding_sha256: roleSha };
+      const interval = (validRow.acceptable_price_intervals as JsonObject[])[0];
+      // Reuse the same presentation fixture: contradictory economics/counts and empty
+      // PUBLISHED must fail closed, without adding another fixture or research trial.
+      for (const advice of [
+        [],
+        [{ ...validRow, acceptable_price_intervals: [{ ...interval, expected_net_return_min_bps: -1 }] }],
+        [{ ...validRow, node_status_counts: { ACCEPTABLE: 3, INVENTED_STATE: 1 } }],
+      ]) {
+        economicStatus.advice = advice;
+        await page.reload();
+        await expect(card.getByTestId("economic-entry-status-error")).toContainText("身份或证据不一致");
+        await expect(card).not.toContainText("9.95");
+      }
+    } else {
+      await expect(card.getByTestId("economic-entry-role-status")).toContainText(state);
+      await expect(card).toContainText("9.95～9.97 CNY");
+      if (state === "STALE") await expect(card).toContainText("不能作为当前买入建议");
+    }
+    expect(calls.filter((call) => call.includes("/entry-value/")).every((call) => call.startsWith("GET "))).toBe(true);
+  });
+}
 
 type JsonObject = Record<string, unknown>;
 
@@ -73,11 +252,19 @@ function priceRangeCandidate(symbol: string) {
   return {
     symbol,
     status: "EXPERIMENTAL_SHADOW",
-    projection_condition: "ENTRY_EXECUTABLE_AT_PREDICTED_ENTRY_MID",
-    entry_executable_probability: 0.62,
+    availability_status: "AVAILABLE",
+    projection_condition: "NEXT_TRADING_DAY_VALID_OPEN_AT_PREDICTED_ENTRY_MID",
     decision_reference_price: 10,
+    decision_price_trade_date: "2026-08-12",
     target_raw_price_multiplier: 1,
-    entry_price: { condition: "ENTRY_EXECUTABLE", low: 9.9, mid: 10, high: 10.1 },
+    entry_price_range: { condition: "NEXT_TRADING_DAY_VALID_OPEN" as const, low: 9.9, mid: 10, high: 10.1 },
+    calibrated_entry_price_range: null,
+    entry_gap_calibration: {
+      state: "UNCALIBRATED",
+      method: null,
+      delta: null,
+      nominal_coverage: 0.8,
+    },
     take_profit_price: { low: 11.1, high: 12.1, horizon_trade_days: 5 },
     protective_price: {
       status: "AVAILABLE_CONDITIONAL_ON_POLICY_ACTIVATION",
@@ -90,11 +277,11 @@ function priceRangeCandidate(symbol: string) {
     stop_loss_price: { status: "AVAILABLE", low: 9.2, high: 9.6, hard_stop_price: 9.2 },
     tick_size: 0.01,
     regulatory_price_range: {
-      status: "LIMITED",
+      status: "LIMITED" as const,
       low: 9,
       high: 11,
       rule_id: "MAIN_10PCT_V1",
-      source: "DECISION_TIME_BOARD_ST_RULE",
+      source: "DECISION_TIME_BOARD_ST_RULE" as const,
     },
     review_policy: {
       review_policy_sha256: "review_hash",
@@ -111,16 +298,18 @@ function priceRangeCandidate(symbol: string) {
 function calibratedPriceRangeCandidate(symbol: string) {
   return {
     ...priceRangeCandidate(symbol),
-    calibrated_entry_price: {
-      condition: "ENTRY_EXECUTABLE",
+    calibrated_entry_price_range: {
+      condition: "NEXT_TRADING_DAY_VALID_OPEN" as const,
       low: 9.8,
       mid: 10,
       high: 10.2,
     },
-    entry_gap_calibration_state: "CALIBRATED",
-    entry_gap_calibration_method: "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION",
-    entry_gap_calibration_delta: 0.01,
-    entry_executable_calibration_state: "UNCALIBRATED",
+    entry_gap_calibration: {
+      state: "CALIBRATED" as const,
+      method: "CQR_CENTRAL_80_NONNEGATIVE_EXPANSION",
+      delta: 0.01,
+      nominal_coverage: 0.8,
+    },
   };
 }
 
@@ -158,13 +347,25 @@ function forwardPredictionPayload(): JsonObject {
       message: null,
     },
     price_range: {
+      schema_version: "advisory_daily_price_envelope_v1",
+      objective_contract: "RISK_MANAGED_ADVISORY",
       status: "EXPERIMENTAL_SHADOW",
+      availability_status: "AVAILABLE",
+      decision_as_of_trade_date: "2026-08-12",
+      target_trade_date: "2026-08-13",
       calibration_state: "UNCALIBRATED",
+      nominal_coverage: 0.8,
+      package_id: "pkg_codex_smoke",
+      package_manifest_sha256: "a".repeat(64),
+      style_profile_hash: "b".repeat(64),
       price_range_bundle_id: "price_forward",
       parent_bundle_id: "bundle_forward",
       outcome_bundle_id: "outcome_forward",
       model_version: "advprreq_forward",
       price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+      review_policy_sha256: "c".repeat(64),
+      source_bundle_schema_version: "advisory_price_range_bundle_v1",
+      entry_admission_model_status: "RETIRED_NON_IDENTIFIABLE",
       candidates: [priceRangeCandidate("000002.SZ"), priceRangeCandidate("000001.SZ")],
       reason_code: null,
       message: null,
@@ -319,7 +520,8 @@ const activeBinding = {
   fusion_method: null,
   package_set_hash: "pkg_hash",
   fusion_policy_sha256: null,
-  runtime_config_json: {},
+  runtime_config_json: { universe_selection: { mode: "stock_universe", pool_ids: [] } },
+  universe_selection: { mode: "stock_universe", pool_ids: [] },
   effective_from_trade_date: null,
   effective_to_trade_date: null,
   activation_status: "ACTIVE",
@@ -592,17 +794,23 @@ async function mockAdvisoryApis(page: Page, options: {
   listVersionsByProgramId?: Record<string, JsonObject[]>;
   bindingsByProgramId?: Record<string, JsonObject[]>;
   modelShadowByProgramId?: Record<string, JsonObject>;
+  economicEntryResearch?: JsonObject;
+  economicEntryStatus?: JsonObject;
+  sectorEntryDaily?: JsonObject;
   forwardRunsByProgramId?: Record<string, JsonObject[]>;
   forwardDetailsById?: Record<string, JsonObject>;
   forwardModelMetricsByProgramId?: Record<string, JsonObject>;
   forwardModelMetricsDelayMs?: number;
   leaderboardDelayMs?: number;
   detailDelayMs?: number;
+  deliveryPreflight?: JsonObject | ((body: JsonObject) => JsonObject);
 } = {}) {
   const calls: string[] = [];
   const reviewBodies: JsonObject[] = [];
   const replayBodies: JsonObject[] = [];
   const applyBindingBodies: JsonObject[] = [];
+  const createBodies: JsonObject[] = [];
+  const deliveryPreflightBodies: JsonObject[] = [];
   const wait = (ms = 0) => new Promise((resolve) => { setTimeout(resolve, ms); });
   let programStatus = options.initialProgramStatus ?? program.status;
   let latestReviewTradeDate = options.initialLatestReviewTradeDate ?? program.latest_review_trade_date;
@@ -680,6 +888,60 @@ async function mockAdvisoryApis(page: Page, options: {
     const method = request.method();
     calls.push(`${method} ${path}${url.search}`);
 
+    if (path.endsWith("/api/v1/advisory/universe-options") && method === "GET") {
+      return json(route, {
+        ok: true,
+        schema_version: "advisory_universe_selection_v1",
+        default_selection: { mode: "stock_universe", pool_ids: [] },
+        modes: ["stock_universe", "single_index", "index_union"],
+        pools: [
+          { pool_id: "csi300", index_code: "000300.SH", label: "沪深300", priority: "P0" },
+          { pool_id: "csi500", index_code: "000905.SH", label: "中证500", priority: "P0" },
+        ],
+      });
+    }
+    if (path.endsWith("/api/v1/advisory/delivery-preflight") && method === "POST") {
+      const body = request.postDataJSON() as JsonObject;
+      deliveryPreflightBodies.push(body);
+      const configured = typeof options.deliveryPreflight === "function"
+        ? options.deliveryPreflight(body)
+        : options.deliveryPreflight;
+      return json(route, configured || {
+        ok: true,
+        schema_version: "advisory_delivery_preflight_v1",
+        overall_status: "READY_BASELINE_ONLY",
+        package: {
+          package_id: body.package_id,
+          manifest_sha256: "a".repeat(64),
+          package_status: "SELECTION_ENABLED",
+          source_type: "qe_experiment",
+          source_id: "qe_test",
+          asset_eligible: true,
+          asset_blockers: [],
+        },
+        universe_compatibility: {
+          status: "LEGACY_UNIVERSE_UNSPECIFIED",
+          requested: body.universe_selection,
+          source_declared: null,
+          evidence_paths: [],
+          evidence_errors: [],
+        },
+        policy_compatibility: {
+          status: body.program_id ? "ACTIVE_POLICY_MATCH" : "NEW_POLICY_BINDING_REQUIRED",
+          requested_target_count: body.target_count,
+          active_target_count: body.program_id ? body.target_count : null,
+          package_backtest_topk: 50,
+          package_policy_authority: "DIAGNOSTIC_ONLY_NOT_ADVISORY_RUNTIME_AUTHORITY",
+        },
+        model_compatibility: {
+          status: "REQUIRED_AFTER_BINDING",
+          validation_stage: "PUBLICATION_FULL_RESOLUTION",
+          binding_version_id: null,
+        },
+        blockers: [],
+        warnings: ["PACKAGE_UNIVERSE_IDENTITY_UNSPECIFIED"],
+      });
+    }
     if (path.endsWith("/api/v1/advisory/programs") && method === "GET") {
       return json(route, { ok: true, programs: [currentProgram(), ...staticExtraPrograms] });
     }
@@ -751,6 +1013,33 @@ async function mockAdvisoryApis(page: Page, options: {
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/bindings/active`) && method === "GET") {
       const binding = (bindingsByProgramId[currentRouteProgramId] || []).find((item) => item.activation_status === "ACTIVE") || { ...activeBinding, program_id: currentRouteProgramId };
       return json(route, { ok: true, binding });
+    }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/sector-entry-price`) && method === "GET") {
+      const configured = options.sectorEntryDaily || {};
+      const receipt = configured.candidate_receipt as JsonObject | undefined;
+      return json(route, { ok: true, schema_version: "economic_sector_daily_service_v1", model_family: "M1_SECTOR_PRICE_VALUE_V1",
+        program_id: currentRouteProgramId, requested_target_date: url.searchParams.get("target_trade_date"),
+        requested_list_version_id: url.searchParams.get("list_version_id"), decision_use: "NAVIGATION_ONLY", deployable: false,
+        economic_effectiveness: "NOT_CONFIRMED", database_written: false, outcomes_read: false, package_qualification_rechecked: false,
+        fit_count: 0, status: "NOT_CONFIGURED", candidates: [], unmodeled_items: [], ...configured,
+        ...(receipt ? { candidate_receipt: { ...receipt, list_version_id: url.searchParams.get("list_version_id") || "unit-list" } } : {}) });
+    }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/entry-value/status`) && method === "GET") {
+      const target = url.searchParams.get("target_trade_date");
+      if (options.economicEntryStatus) {
+        const advice = (options.economicEntryStatus.advice as JsonObject[] || []).map((row) => ({ ...row,
+          prediction_input: { ...(row.prediction_input as JsonObject), target_date: target || "2026-06-09" } }));
+        return json(route, { ok: true, schema_version: "economic_entry_consumer_status_v1", program_id: currentRouteProgramId,
+          role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY", target_date: target, resolved_target_date: target || "2026-06-09",
+          research_namespace_configured: true, ...options.economicEntryStatus, advice });
+      }
+      return json(route, { ok: true, schema_version: "economic_entry_consumer_status_v1", program_id: currentRouteProgramId,
+        role: "ENTRY_VALUE", objective_contract: "RISK_MANAGED_ADVISORY", status: "NOT_CONFIGURED", target_date: url.searchParams.get("target_trade_date"),
+        evidence_state: "UNCONFIRMED", deployable: false, advice: [], reason_code: "NO_QUALIFIED_ENTRY_VALUE_ROLE_BOUND",
+        qualification_gaps: ["independent_economic_confirmation"], automatic_capture_enabled: false, research_namespace_configured: true });
+    }
+    if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/entry-value/research`) && method === "GET") {
+      return json(route, { ok: true, ...options.economicEntryResearch });
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/model-shadow`) && method === "GET") {
       const configured = options.modelShadowByProgramId?.[currentRouteProgramId];
@@ -848,13 +1137,25 @@ async function mockAdvisoryApis(page: Page, options: {
           message: null,
         },
         price_range: {
+          schema_version: "advisory_daily_price_envelope_v1",
+          objective_contract: "RISK_MANAGED_ADVISORY",
           status: "EXPERIMENTAL_SHADOW",
+          availability_status: "AVAILABLE",
+          decision_as_of_trade_date: "2026-06-04",
+          target_trade_date: url.searchParams.get("target_trade_date"),
           calibration_state: "UNCALIBRATED",
+          nominal_coverage: 0.8,
+          package_id: "pkg_codex_smoke",
+          package_manifest_sha256: "a".repeat(64),
+          style_profile_hash: "b".repeat(64),
           price_range_bundle_id: "price_range_bundle_ui",
           parent_bundle_id: "bundle_ui",
           outcome_bundle_id: "outcome_bundle_ui",
           model_version: "advprreq_ui",
           price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+          review_policy_sha256: "c".repeat(64),
+          source_bundle_schema_version: "advisory_price_range_bundle_v1",
+          entry_admission_model_status: "RETIRED_NON_IDENTIFIABLE",
           candidates: [priceRangeCandidate("000002.SZ"), priceRangeCandidate("000001.SZ")],
           reason_code: null,
           message: null,
@@ -948,6 +1249,7 @@ async function mockAdvisoryApis(page: Page, options: {
       return json(route, reviewPayload(false, lastReviewTargetDate));
     }
     if (path.endsWith("/api/v1/advisory/programs") && method === "POST") {
+      createBodies.push(request.postDataJSON() as JsonObject);
       return json(route, { ok: true, program: { ...program, status: "ENABLED" } });
     }
     if (currentRouteProgramId && path.endsWith(`/api/v1/advisory/programs/${currentRouteProgramId}/replay`) && method === "POST") {
@@ -986,6 +1288,8 @@ async function mockAdvisoryApis(page: Page, options: {
         package_mode: bindingPayload.package_mode,
         package_ids: bindingPayload.package_ids,
         package_weights: bindingPayload.package_weights || {},
+        universe_selection: bindingPayload.universe_selection || { mode: "stock_universe", pool_ids: [] },
+        runtime_config_json: { universe_selection: bindingPayload.universe_selection || { mode: "stock_universe", pool_ids: [] } },
         activation_reason: body.activation_reason,
       };
       bindingsByProgramId[currentRouteProgramId] = [nextBinding];
@@ -1011,7 +1315,7 @@ async function mockAdvisoryApis(page: Page, options: {
     }
     return json(route, { detail: `unexpected advisory route: ${method} ${path}` }, 404);
   });
-  return { calls, reviewBodies, replayBodies, applyBindingBodies };
+  return { calls, reviewBodies, replayBodies, applyBindingBodies, createBodies, deliveryPreflightBodies };
 }
 
 async function activeSymbols(page: Page) {
@@ -1057,7 +1361,7 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   });
 
   const shell = await mockShellApis(page);
-  const { calls, reviewBodies } = await mockAdvisoryApis(page);
+  const { calls, reviewBodies, createBodies, deliveryPreflightBodies } = await mockAdvisoryApis(page);
   await page.goto("/paper-v2/advisory");
 
   await expect(page.getByRole("heading", { name: "运行中的荐股任务排行榜" })).toBeVisible();
@@ -1068,6 +1372,7 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.locator("textarea")).toHaveCount(0);
   await expect(page.getByPlaceholder("strategy_package_id")).toHaveCount(0);
   await expect(page.getByTestId("advisory-package-select-pkg-1")).toBeVisible();
+  await expect(page.getByTestId("advisory-universe-mode")).toBeVisible();
   await expect(page.getByTestId("advisory-package-select-pkg-1").locator("option[value=\"pkg_codex_smoke\"]")).toHaveText(/Codex Smoke Top20/);
   await expect(page.locator("body")).not.toContainText("JSON");
   await expect(page.getByTestId("advisory-review-target-date")).toHaveText("2026-06-08");
@@ -1101,7 +1406,11 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await page.getByTestId("advisory-outcome-horizon-20").click();
   await expect(page.getByTestId("advisory-outcome-table").locator("tbody tr").first()).toContainText("2.0%");
   await expect(page.getByTestId("advisory-price-range-shadow")).toContainText("EXPERIMENTAL_SHADOW");
+  await expect(page.getByTestId("advisory-price-range-shadow")).toContainText("日级价格区间");
   await expect(page.getByTestId("advisory-price-range-basis")).toContainText("未复权 CNY");
+  await expect(page.getByTestId("advisory-price-range-basis")).toContainText("目标日 2026-06-05");
+  await expect(page.getByTestId("advisory-price-range-basis")).toContainText("不表示最佳分钟");
+  await expect(page.getByTestId("advisory-price-range-table")).not.toContainText("可执行概率");
   await expect(page.getByTestId("advisory-price-range-source")).toContainText("price_range_bu...");
   await expect(page.getByTestId("advisory-price-range-source")).toContainText("outcome_bundle...");
   await expect(page.getByTestId("advisory-price-range-table").locator("tbody tr")).toHaveCount(2);
@@ -1203,12 +1512,80 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   });
   await expect(page.getByTestId("advisory-package-select-pkg-1")).toBeVisible();
   await page.getByTestId("advisory-package-select-pkg-1").selectOption("pkg_codex_smoke");
+  await page.getByTestId("advisory-universe-mode").selectOption("index_union");
+  await page.getByTestId("advisory-universe-pools").selectOption(["csi300", "csi500"]);
   await page.getByRole("button", { name: "创建并启用" }).click();
   await expect.poll(() => calls.filter((entry) => entry === "POST /api/v1/advisory/programs").length).toBe(1);
+  expect(deliveryPreflightBodies.at(-1)).toEqual({
+    package_id: "pkg_codex_smoke",
+    universe_selection: { mode: "index_union", pool_ids: ["csi300", "csi500"] },
+    target_count: 20,
+  });
+  await expect(page.getByTestId("advisory-create-delivery-preflight")).toContainText("旧策略包未声明冻结股票池身份");
+  expect(createBodies[0]?.universe_selection).toEqual({ mode: "index_union", pool_ids: ["csi300", "csi500"] });
+  await page.getByTestId("advisory-target-count").fill("5");
+  await expect(page.getByTestId("advisory-create-delivery-preflight")).toHaveCount(0);
 
   expect(pageErrors).toEqual([]);
   expect(consoleErrors).toEqual([]);
   expect(badResponses).toEqual([]);
+});
+
+test("Advisory delivery preflight blocks an incompatible package before create mutation", async ({ page }) => {
+  await mockShellApis(page);
+  const { calls, createBodies, deliveryPreflightBodies } = await mockAdvisoryApis(page, {
+    deliveryPreflight: {
+      ok: true,
+      schema_version: "advisory_delivery_preflight_v1",
+      overall_status: "BLOCKED",
+      package: {
+        package_id: "pkg_codex_smoke",
+        manifest_sha256: "b".repeat(64),
+        package_status: "SELECTION_ENABLED",
+        source_type: "qe_experiment",
+        source_id: "qe_restricted",
+        asset_eligible: true,
+        asset_blockers: [],
+      },
+      universe_compatibility: {
+        status: "PACKAGE_IDENTITY_MISMATCH",
+        requested: { mode: "stock_universe", pool_ids: [] },
+        source_declared: { mode: "single_index", pool_ids: ["csi300"] },
+        evidence_paths: ["backtest_context.daily_strategy.custom_params.universe_selection"],
+        evidence_errors: [],
+      },
+      policy_compatibility: {
+        status: "NEW_POLICY_BINDING_REQUIRED",
+        requested_target_count: 20,
+        active_target_count: null,
+        package_backtest_topk: 20,
+        package_policy_authority: "DIAGNOSTIC_ONLY_NOT_ADVISORY_RUNTIME_AUTHORITY",
+      },
+      model_compatibility: {
+        status: "NOT_APPLICABLE",
+        validation_stage: "NOT_APPLICABLE",
+        binding_version_id: null,
+      },
+      blockers: ["PACKAGE_UNIVERSE_IDENTITY_MISMATCH"],
+      warnings: [],
+    },
+  });
+  let dialogCount = 0;
+  page.on("dialog", async (dialog) => {
+    dialogCount += 1;
+    await dialog.dismiss();
+  });
+
+  await page.goto("/paper-v2/advisory");
+  await page.getByTestId("advisory-package-select-pkg-1").selectOption("pkg_codex_smoke");
+  await page.getByTestId("advisory-create-program").click();
+
+  await expect(page.getByTestId("advisory-create-delivery-preflight")).toContainText("交付预检未通过");
+  await expect(page.getByTestId("advisory-create-delivery-preflight")).toContainText("策略包股票池不能覆盖目标荐股股票池");
+  expect(deliveryPreflightBodies).toHaveLength(1);
+  expect(createBodies).toHaveLength(0);
+  expect(calls.filter((entry) => entry === "POST /api/v1/advisory/programs")).toHaveLength(0);
+  expect(dialogCount).toBe(0);
 });
 
 test("Advisory calibrated outcome shows calibrated and raw values without hiding M4", async ({ page }) => {
@@ -1280,7 +1657,7 @@ test("Advisory calibrated outcome shows calibrated and raw values without hiding
 });
 
 
-test("Advisory calibrated entry interval keeps raw M4 visible and binary uncalibrated", async ({ page }) => {
+test("Advisory calibrated daily entry interval keeps the raw interval visible", async ({ page }) => {
   await mockShellApis(page);
   await mockAdvisoryApis(page, {
     modelShadowByProgramId: {
@@ -1330,11 +1707,14 @@ test("Advisory calibrated entry interval keeps raw M4 visible and binary uncalib
   );
   await expect(row).toContainText("9.80 - 10.20");
   await expect(row).toContainText("9.90 - 10.10");
-  await expect(row).toContainText("UNCALIBRATED");
+  await expect(row).toContainText("AVAILABLE");
+  await expect(row).not.toContainText("可执行概率");
 });
 
 
-test("Advisory model unavailability remains isolated from the persisted rule list", async ({ page }) => {
+test("Advisory model unavailability preserves independent entry prices and the persisted rule list", async ({ page }) => {
+  const price = calibratedPriceRangeCandidate("000001.SZ");
+  const auxiliary = { status: "UNAVAILABLE" as const, payload: null, source_identity: null, reason_code: "OUTCOME_ROLE_UNAVAILABLE" };
   const badResponses: string[] = [];
   page.on("response", (response) => {
     if (response.url().includes("/api/v1/advisory/") && response.status() >= 400) {
@@ -1356,6 +1736,27 @@ test("Advisory model unavailability remains isolated from the persisted rule lis
         hmm_unavailable: [],
         reason_code: "ADVISORY_MODEL_ROOT_NOT_CONFIGURED",
         message: "model root is not configured",
+        entry_price: {
+          schema_version: "advisory_entry_price_envelope_v2", role: "ENTRY_PRICE",
+          projection_producer_version: "advisory_entry_price_core_v1",
+          objective_contract: "RISK_MANAGED_ADVISORY", evidence_state: "CONFIRMED_PRICE_DISTRIBUTION",
+          availability_status: "AVAILABLE", auxiliary_availability: "UNAVAILABLE",
+          program_id: PROGRAM_ID, binding_version_id: activeBinding.binding_version_id, package_id: "pkg_codex_smoke",
+          package_manifest_sha256: "a".repeat(64), style_profile_hash: "b".repeat(64), review_policy_sha256: "c".repeat(64),
+          universe_identity_sha256: "d".repeat(64), candidate_projection_sha256: "e".repeat(64), feature_schema_sha256: "f".repeat(64),
+          training_lineage: { parent_bundle_id: "1".repeat(64), outcome_bundle_id: "2".repeat(64) },
+          role_binding_sha256: "3".repeat(64), price_range_bundle_id: "4".repeat(64), price_range_bundle_manifest_sha256: "5".repeat(64),
+          decision_as_of_trade_date: "2026-06-04", price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+          nominal_coverage: 0.8, calibration_state: "CALIBRATED_INTERVAL", reason_code: null, message: null,
+          target_trade_date: "2026-06-05", candidate_count: 1, available_count: 1, unavailable_count: 0,
+          candidates: [{
+            symbol: "000001.SZ", decision_reference_price: 10, decision_price_trade_date: "2026-06-04",
+            target_raw_price_multiplier: 1, tick_size: 0.01, regulatory_price_range: price.regulatory_price_range,
+            entry_price: { status: "AVAILABLE", raw_range: price.entry_price_range, calibrated_range: price.calibrated_entry_price_range,
+              calibration: price.entry_gap_calibration, reason_code: null, message: null },
+            take_profit: auxiliary, protective: auxiliary, stop_loss: auxiliary,
+          }],
+        } satisfies AdvisoryEntryPrice,
       },
     },
   });
@@ -1367,6 +1768,9 @@ test("Advisory model unavailability remains isolated from the persisted rule lis
   );
   await expect(page.getByTestId("advisory-list-items-table")).toContainText("000001.SZ");
   await expect(page.getByTestId("advisory-model-shadow-table")).toHaveCount(0);
+  await expect(page.getByTestId("advisory-entry-price-row")).toContainText("9.80 - 10.20 / 10.00");
+  await expect(page.getByTestId("advisory-entry-evidence")).toContainText("不代表收益验证通过");
+  await expect(page.getByTestId("advisory-entry-price-row")).toContainText("止盈未验证");
   expect(badResponses).toEqual([]);
 });
 
@@ -1896,7 +2300,7 @@ test("Advisory native multi-alpha parent binding is scoped per active program", 
       next_trading_day: "2026-06-11",
     },
   });
-  const { calls, replayBodies, applyBindingBodies } = await mockAdvisoryApis(page, {
+  const { calls, applyBindingBodies, deliveryPreflightBodies } = await mockAdvisoryApis(page, {
     initialProgramStatus: "ENABLED",
     initialLatestReviewTradeDate: "2026-06-09",
     initialLastReviewStatus: "SUCCEEDED",
@@ -1917,24 +2321,16 @@ test("Advisory native multi-alpha parent binding is scoped per active program", 
   await expect(page.getByText("选股运行 ID")).toHaveCount(0);
 
   await page.getByTestId(`advisory-strategy-package-${rowProgramId}-pkg-1`).selectOption("pkg_second_candidate");
-  await page.getByTestId(`advisory-strategy-replay-${rowProgramId}`).click();
-  await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${rowProgramId}/replay`)).length).toBe(1);
-  expect(calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/replay`))).toHaveLength(0);
-  expect(replayBodies.at(-1)).toMatchObject({
-    start_date: "2026-06-05",
-    end_date: "2026-06-10",
-    draft_binding: {
-      package_mode: "single_package",
-      package_ids: ["pkg_second_candidate"],
-      package_weights: { pkg_second_candidate: 1 },
-      target_count: 20,
-    },
-    compare_to_binding_version_id: "advb_native_active",
-  });
-  await expect(page.getByTestId(`advisory-strategy-replay-result-${rowProgramId}`)).toContainText("回放状态：SUCCEEDED");
-
+  await page.getByTestId(`advisory-strategy-universe-mode-${rowProgramId}`).selectOption("index_union");
+  await page.getByTestId(`advisory-strategy-universe-pools-${rowProgramId}`).selectOption(["csi300", "csi500"]);
   await page.getByTestId(`advisory-strategy-apply-${rowProgramId}`).click();
   await expect.poll(() => calls.filter((entry) => entry.endsWith(`/programs/${rowProgramId}/bindings/apply`)).length).toBe(1);
+  expect(deliveryPreflightBodies.at(-1)).toEqual({
+    package_id: "pkg_second_candidate",
+    universe_selection: { mode: "index_union", pool_ids: ["csi300", "csi500"] },
+    target_count: 20,
+    program_id: rowProgramId,
+  });
   expect(calls.filter((entry) => entry.endsWith(`/programs/${PROGRAM_ID}/bindings/apply`))).toHaveLength(0);
   expect(applyBindingBodies.at(-1)).toMatchObject({
     binding: {
@@ -1942,13 +2338,17 @@ test("Advisory native multi-alpha parent binding is scoped per active program", 
       package_ids: ["pkg_second_candidate"],
       package_weights: { pkg_second_candidate: 1 },
       target_count: 20,
+      universe_selection: { mode: "index_union", pool_ids: ["csi300", "csi500"] },
     },
-    source_replay_run_id: `advreplay_${rowProgramId}`,
+    source_replay_run_id: null,
     expected_program_version: 1,
     expected_binding_version_id: "advb_native_active",
     effective_from_trade_date: "2026-06-11",
   });
   await expect(page.getByTestId(`advisory-strategy-apply-result-${rowProgramId}`)).toContainText("已应用新策略绑定");
+  await expect(page.getByTestId(`advisory-strategy-delivery-preflight-${rowProgramId}`)).toContainText("基线可用");
+  await page.getByTestId(`advisory-strategy-target-count-${rowProgramId}`).fill("5");
+  await expect(page.getByTestId(`advisory-strategy-delivery-preflight-${rowProgramId}`)).toHaveCount(0);
   await expect(page.getByTestId(`advisory-row-latest-context-${PROGRAM_ID}`)).toContainText("预测目标：2026-06-09");
   await expect(page.getByTestId(`advisory-row-latest-context-${rowProgramId}`)).toContainText("预测目标：2026-06-10");
 
@@ -2019,6 +2419,19 @@ test("Advisory page exposes initial list generation when a new program has no li
     const method = request.method();
     calls.push(`${method} ${path}${url.search}`);
 
+    if (path.endsWith("/api/v1/advisory/universe-options") && method === "GET") {
+      return json(route, {
+        ok: true,
+        schema_version: "advisory_universe_selection_v1",
+        default_selection: { mode: "stock_universe", pool_ids: [] },
+        modes: ["stock_universe", "single_index", "index_union"],
+        pools: [
+          { pool_id: "csi300", index_code: "000300.SH", label: "沪深300", priority: "P0" },
+          { pool_id: "csi500", index_code: "000905.SH", label: "中证500", priority: "P0" },
+        ],
+      });
+    }
+
     if (path.endsWith("/api/v1/advisory/programs") && method === "GET") {
       return json(route, { ok: true, programs: [enabledProgram()] });
     }
@@ -2077,6 +2490,48 @@ test("Advisory page exposes initial list generation when a new program has no li
         due_observation_count: 0,
         next_maturity_trade_date: null,
         evaluation: null,
+      });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/forward-runs`) && method === "GET") {
+      return json(route, { ok: true, forward_runs: [] });
+    }
+    if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/model-shadow`) && method === "GET") {
+      return json(route, {
+        ok: true,
+        status: "MODEL_UNAVAILABLE",
+        calibration_state: "UNCALIBRATED",
+        program_id: newProgramId,
+        target_trade_date: url.searchParams.get("target_trade_date"),
+        candidate_count: 0,
+        shortlist_count: 0,
+        candidates: [],
+        baselines: {},
+        hmm_unavailable: [],
+        outcome: {
+          status: "OUTCOME_UNAVAILABLE",
+          calibration_state: "UNCALIBRATED",
+          outcome_bundle_id: null,
+          parent_bundle_id: null,
+          model_version: null,
+          horizons: OUTCOME_HORIZONS,
+          candidates: [],
+          reason_code: "ADVISORY_OUTCOME_BUNDLE_NOT_AVAILABLE",
+          message: "parent model unavailable",
+        },
+        price_range: {
+          status: "PRICE_RANGE_UNAVAILABLE",
+          calibration_state: "UNCALIBRATED",
+          price_range_bundle_id: null,
+          parent_bundle_id: null,
+          outcome_bundle_id: null,
+          model_version: null,
+          price_basis: "UNADJUSTED_CNY_DECISION_CLOSE",
+          candidates: [],
+          reason_code: "ADVISORY_PRICE_RANGE_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
+          message: "parent model unavailable",
+        },
+        reason_code: "ADVISORY_MODEL_BUNDLE_NOT_AVAILABLE_FOR_PACKAGE",
+        message: "no exact bundle",
       });
     }
     if (path.endsWith(`/api/v1/advisory/programs/${newProgramId}/reviews/preview`) && method === "POST") {

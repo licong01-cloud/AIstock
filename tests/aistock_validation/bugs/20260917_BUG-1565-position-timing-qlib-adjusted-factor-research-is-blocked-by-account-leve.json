@@ -1,0 +1,276 @@
+{
+  "actual": "Preparation fails closed on unbound material factor changes and requires corporate-action snapshot, rights-issue authority, participation policy, and full-scope authority before any research outcome can be read.",
+  "allowed_write_scope": [
+    "backend/services/position_timing/pattern_universe_benchmark.py",
+    "backend/tests/position_timing/test_pattern_universe_benchmark.py",
+    "tests/aistock_validation/bugs/20260917_BUG-1565-position-timing-qlib-adjusted-factor-research-is-blocked-by-account-leve.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1565",
+  "closed_at": "2026-09-17T05:15:12Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-17T03:29:18.361550Z",
+  "description": "Preparation fails closed on unbound material factor changes and requires corporate-action snapshot, rights-issue authority, participation policy, and full-scope authority before any research outcome can be read.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260917-e2d8eac6a7d9",
+      "timestamp": "2026-09-17T03:29:18.361527Z"
+    }
+  ],
+  "evidence_uris": [
+    "PT-NEXT-020 diagnostic 1b7cb653af74e5b6174d6e94f4125a0ae51a0eed1f391d91cd265b821f79c3c8"
+  ],
+  "expected": "Future PT-NEXT-020 prepare/run use an explicit Qlib adjusted-factor signal-research mode, retain factor/restatement/candidate identity gates, and do not require or apply dividend, rights-subscription, share-arrival, cash-ledger, or full-scope corporate-action authorities.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/position_timing/pattern_universe_benchmark.py",
+      "backend/tests/position_timing/test_pattern_universe_benchmark.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/position_timing/pattern_universe_benchmark.py",
+      "backend/tests/position_timing/test_pattern_universe_benchmark.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/position_timing/pattern_universe_benchmark.py",
+        "backend/tests/position_timing/test_pattern_universe_benchmark.py"
+      ],
+      "impacted_modules": [
+        "position_timing",
+        "platform.api",
+        "portfolio_management",
+        "watchlist",
+        "frontend_common"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/position_timing/pattern_universe_benchmark.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        },
+        {
+          "file": "backend/tests/position_timing/test_pattern_universe_benchmark.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/position_timing/pattern_universe_benchmark.py",
+        "backend/tests/position_timing/test_pattern_universe_benchmark.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/position_timing/pattern_universe_benchmark.py",
+      "backend/tests/position_timing/test_pattern_universe_benchmark.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/position_timing/pattern_universe_benchmark.py",
+      "backend/tests/position_timing/test_pattern_universe_benchmark.py"
+    ]
+  },
+  "first_seen_at": "2026-09-17T03:29:18.361550Z",
+  "fix_branch": null,
+  "fix_commit": "7e37dc25e5cb22156c1e0e996b43f98696c8350f",
+  "fixed_at": "2026-09-17T05:15:12Z",
+  "github_issue_number": 4890,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4890",
+  "last_seen_at": "2026-09-17T03:29:18.361550Z",
+  "module": "position_timing",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4891",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m backend.services.position_timing.pattern_universe_benchmark prepare --help",
+  "required_verification": [
+    "l0",
+    "position_timing_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1565",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "0124893dfb36ef8e",
+    "recorded_at": "2026-09-17T05:16:23.038648Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "c5dbbd2d79196ab572e2eabb9ef4f808527da13f",
+    "source_merge_commit": "7e37dc25e5cb22156c1e0e996b43f98696c8350f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4891",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/services/position_timing/pattern_universe_benchmark.py backend/tests/position_timing/test_pattern_universe_benchmark.py tests/aistock_validation/bugs/20260917_BUG-1565-position-timing-qlib-adjusted-factor-research-is-blocked-by-account-leve.json -> passed"
+    ],
+    "validation_evidence_digest": "c46e136d827537fe97de15416a2cdf6759719600232c5c3dd9774bf579b12357"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "position_timing"
+  ],
+  "title": "Position timing Qlib adjusted-factor research is blocked by account-level corporate-action authority",
+  "trigger_condition": {
+    "fingerprint": "e2d8eac6a7d9de66306da034",
+    "source_event_id": "FE-20260917-e2d8eac6a7d9"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -- backend/services/position_timing/pattern_universe_benchmark.py backend/tests/position_timing/test_pattern_universe_benchmark.py tests/aistock_validation/bugs/20260917_BUG-1565-position-timing-qlib-adjusted-factor-research-is-blocked-by-account-leve.json -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "position_timing"
+      ],
+      "plans": [
+        "position_timing_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "position_timing"
+        ],
+        "plans": [
+          "position_timing_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -1,0 +1,421 @@
+from __future__ import annotations
+
+from datetime import UTC, date, datetime
+from types import SimpleNamespace
+
+import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from backend.routers import simulation_runtime as simulation_runtime_router
+from backend.services.simulation_runtime.localsim_control import LocalSimControlPlaneService
+from backend.services.simulation_runtime.localsim_cutover_readiness import LocalSimCutoverReadiness
+from backend.services.simulation_runtime.localsim_product_control import (
+    LocalSimAccountCreateRequestV1,
+    LocalSimBulkLifecycleRequestV1,
+    LocalSimHistoricalSourceResolutionV1,
+    LocalSimHistoricalSourceAuthority,
+    LocalSimProductControlPlaneService,
+    LocalSimReplayCreateRequestV1,
+    LocalSimSelectionLinkContextV1,
+)
+from backend.services.simulation_runtime.localsim_query import LocalSimQueryService
+from backend.services.simulation_runtime.localsim_runtime_profile_repository import (
+    InMemoryLocalSimRuntimeProfileRepository,
+)
+from backend.services.simulation_runtime.successor_repository import InMemoryLocalSimSuccessorRepository
+from backend.services.simulation_runtime.successor_models import SimulationLedgerScopeV1
+from backend.services.simulation_runtime.models import canonical_json_sha256
+from backend.services.strategy_package.execution_policy import ValidatedExecutionPolicy
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
+
+
+NOW = datetime(2026, 8, 31, 5, 0, tzinfo=UTC)
+MANIFEST = "a" * 64
+
+
+def test_frozen_historical_range_can_resume_across_days_without_relaxing_create_or_current_day_guard() -> None:
+    days = (date(2026, 8, 27), date(2026, 8, 28), date(2026, 8, 31), date(2026, 9, 1))
+
+    class Calendar:
+        def list_trading_days(self, start, end):
+            return tuple(day for day in days if start <= day <= end)
+
+        def latest_trading_day_on_or_before(self, value):
+            return max(day for day in days if day <= value)
+
+    authority = LocalSimHistoricalSourceAuthority(
+        calendar=Calendar(), clock=lambda: datetime(2026, 9, 2, 0, 0, tzinfo=UTC),
+    )
+    kwargs = {"historical_source_id": "market.kline_minute_raw.v1",
+              "start_trade_date": days[0], "end_trade_date": days[1]}
+    with pytest.raises(InvalidStateTransitionError, match="latest completed"):
+        authority.resolve(**kwargs)
+    old = authority.resolve(**kwargs, require_latest_completed=False)
+    latest = authority.resolve(**{**kwargs, "end_trade_date": days[-1]})
+    assert old.trading_days == days[:2] and old.latest_completed_trade_date == days[-1]
+    assert old.historical_source_sha256 == latest.historical_source_sha256
+    with pytest.raises(InvalidStateTransitionError, match="current or future"):
+        authority.resolve(**{**kwargs, "end_trade_date": date(2026, 9, 2)}, require_latest_completed=False)
+
+
+class _Readiness:
+    def __init__(self, *, ready: bool = True) -> None:
+        self.ready = ready
+        self.calls = 0
+
+    def require_ready(self) -> None:
+        self.calls += 1
+        if not self.ready:
+            raise RuntimeError("cutover not ready")
+
+    def require_replay_recovery_ready(self) -> None:
+        self.require_ready()
+
+
+class _Authority:
+    def __init__(self) -> None:
+        self.policy = ValidatedExecutionPolicy(
+            policy_id="execpol_twap",
+            package_id="pkg_alpha",
+            manifest_sha256=MANIFEST,
+            policy_name="TWAP",
+            policy_json={
+                "execution_level": "minute",
+                "bar_freq": "1m",
+                "algo_code": "TWAP",
+                "algo_config": {},
+                "fallback_algo_code": None,
+                "fallback_policy": {"on_algo_error": "fail"},
+            },
+            source_backtest_id="bt_001",
+            source_backtest_status="SUCCEEDED",
+        )
+
+    def resolve_product(self, *, package_id: str, runtime_profile_version_id: str, execution_policy_version_id: str):
+        assert package_id == "pkg_alpha"
+        assert runtime_profile_version_id == "lsrpv_001"
+        assert execution_policy_version_id == self.policy.policy_id
+        profile = SimpleNamespace(profile_id="lsrprof_001")
+        version = SimpleNamespace(
+            profile_version_id="lsrpv_001",
+            config_sha256="b" * 64,
+            daily_strategy_profile_version_id="lsdaily_001",
+            config_json={
+                "schema_version": "localsim_runtime_profile_config_v1",
+                "daily_strategy": {"strategy_id": "score_weighted_topk_v2", "strategy_version": "v2", "top_k": 20},
+                "hmm": {"enabled": False}, "risk_policy": {"enabled": False}, "fee_policy": {},
+            },
+        )
+        return SimpleNamespace(
+            package_id=package_id,
+            manifest_sha256=MANIFEST,
+            admission_receipt_id="lsadm_001",
+            runtime_profile=profile,
+            runtime_profile_version=version,
+            execution_policy=self.policy,
+            tail_policy_version_id="lstail_001",
+            tail_policy_sha256="c" * 64,
+            release_validation_evidence=lambda: {
+                "schema_version": "localsim_product_authority_evidence_v1",
+                "admission_receipt": {"receipt_id": "lsadm_001", "receipt_hash": "d" * 64, "payload": {}},
+            },
+        )
+
+
+class _HistoricalAuthority:
+    def resolve(self, *, historical_source_id: str, start_trade_date: date, end_trade_date: date):
+        assert historical_source_id == "market.kline_minute_raw.v1"
+        return LocalSimHistoricalSourceResolutionV1(
+            historical_source_id=historical_source_id,
+            historical_source_sha256="e" * 64,
+            trading_days=(start_trade_date, date(2026, 8, 27), end_trade_date),
+            current_trading_date=date(2026, 8, 31),
+            latest_completed_trade_date=end_trade_date,
+        )
+
+
+class _FailReplayRepository(InMemoryLocalSimSuccessorRepository):
+    def save_replay_job(self, job):
+        raise RuntimeError("injected replay insert failure")
+
+
+class _FailAfterAccountBundleRepository(InMemoryLocalSimSuccessorRepository):
+    def create_account_bundle(self, **kwargs):
+        super().create_account_bundle(**kwargs)
+        raise RuntimeError("injected selection link insert failure")
+
+
+def _service(repository=None):
+    repository = repository or InMemoryLocalSimSuccessorRepository()
+    readiness = _Readiness()
+    control = LocalSimControlPlaneService(repository=repository, clock=lambda: NOW)
+    return (
+        LocalSimProductControlPlaneService(
+            repository=repository,
+            control=control,
+            authority=_Authority(),
+            readiness=readiness,
+            historical_source_authority=_HistoricalAuthority(),
+        ),
+        repository,
+        readiness,
+    )
+
+
+def _account_request() -> LocalSimAccountCreateRequestV1:
+    return LocalSimAccountCreateRequestV1(
+        account_name="LocalSIM current package",
+        package_id="pkg_alpha",
+        initial_capital="1000000.0000",
+        runtime_profile_version_id="lsrpv_001",
+        execution_policy_version_id="execpol_twap",
+        effective_from=date(2026, 8, 31),
+        created_reason="new successor account",
+        requested_execution_policy_audit={"requested_policy": "V25_TWO_STAGE"},
+    )
+
+
+def _replay_request() -> LocalSimReplayCreateRequestV1:
+    return LocalSimReplayCreateRequestV1(
+        account_name="LocalSIM six month replay",
+        package_id="pkg_alpha",
+        initial_capital="1000000.0000",
+        runtime_profile_version_id="lsrpv_001",
+        execution_policy_version_id="execpol_twap",
+        effective_from=date(2026, 2, 27),
+        effective_to=date(2026, 8, 28),
+        start_trade_date=date(2026, 2, 27),
+        end_trade_date=date(2026, 8, 28),
+        historical_source_id="market.kline_minute_raw.v1",
+    )
+
+
+def test_account_product_resolves_all_authority_and_freezes_evidence() -> None:
+    service, repository, readiness = _service()
+    result = service.create_account(_account_request(), created_by="test")
+
+    assert result.ok is True
+    assert result.account is not None and result.account.manifest_sha256 == MANIFEST
+    assert result.ledger_scope is not None and result.ledger_scope.native_account_id == result.account.account_id
+    assert result.release is not None
+    assert result.release.execution_policy_version_id == "execpol_twap"
+    assert result.release.validation_evidence["admission_receipt"]["receipt_id"] == "lsadm_001"
+    assert result.release.release_config_json["metadata"]["requested_execution_policy_audit"][
+        "consulted_for_execution"
+    ] is False
+    assert len(repository.accounts) == len(repository.releases) == len(repository.bindings) == 1
+    assert readiness.calls == 1
+
+
+def test_replay_product_commits_five_entities_in_one_repository_transaction() -> None:
+    service, repository, _ = _service()
+    result = service.create_replay(_replay_request(), created_by="test")
+
+    assert result.replay is not None
+    assert result.account is not None and result.replay.simulation_account_id == result.account.account_id
+    assert result.release is not None and result.replay.release_id == result.release.release_id
+    assert result.binding is not None and result.binding.effective_to == result.replay.end_trade_date
+    assert len(repository.accounts) == 1
+    assert len(repository.ledger_scopes) == 1
+    assert len(repository.releases) == 1
+    assert len(repository.bindings) == 1
+    assert len(repository.replay_jobs) == 1
+
+
+def test_replay_product_rolls_back_account_scope_release_and_binding_when_job_insert_fails() -> None:
+    repository = _FailReplayRepository()
+    service, _, _ = _service(repository)
+    with pytest.raises(RuntimeError, match="injected replay insert failure"):
+        service.create_replay(_replay_request(), created_by="test")
+
+    assert repository.accounts == {}
+    assert repository.ledger_scopes == {}
+    assert repository.releases == {}
+    assert repository.bindings == {}
+    assert repository.replay_jobs == {}
+
+
+def test_selection_product_commits_account_and_neutral_link_atomically() -> None:
+    service, repository, _ = _service()
+    response, link = service.create_account_from_selection(
+        _account_request(),
+        link_context=LocalSimSelectionLinkContextV1(
+            run_id="sel_001",
+            trade_date=date(2026, 8, 28),
+            data_source="QLIB_HISTORICAL",
+            runtime_config={"schema_version": "selection_simulation_account_link_v1"},
+        ),
+        created_by="test",
+    )
+    assert response.account is not None
+    assert link["simulation_account_id"] == response.account.account_id
+    assert len(repository.selection_links) == 1
+
+
+def test_selection_link_failure_rolls_back_product_bundle() -> None:
+    repository = _FailAfterAccountBundleRepository()
+    service, _, _ = _service(repository)
+    with pytest.raises(RuntimeError, match="selection link insert failure"):
+        service.create_account_from_selection(
+            _account_request(),
+            link_context=LocalSimSelectionLinkContextV1(
+                run_id="sel_001",
+                trade_date=date(2026, 8, 28),
+                data_source="QLIB_HISTORICAL",
+                runtime_config={"schema_version": "selection_simulation_account_link_v1"},
+            ),
+            created_by="test",
+        )
+    assert repository.accounts == {}
+    assert repository.ledger_scopes == {}
+    assert repository.releases == {}
+    assert repository.bindings == {}
+    assert repository.selection_links == {}
+
+
+def test_account_request_rejects_server_authority_fields() -> None:
+    payload = _account_request().model_dump(mode="json")
+    payload["manifest_sha256"] = MANIFEST
+    with pytest.raises(ValueError, match="Extra inputs are not permitted"):
+        LocalSimAccountCreateRequestV1.model_validate(payload)
+
+
+def test_bulk_lifecycle_is_all_or_nothing() -> None:
+    service, repository, _ = _service()
+    first = service.create_account(_account_request(), created_by="test").account
+    second_request = _account_request().model_copy(update={"account_name": "LocalSIM second account"})
+    second = service.create_account(second_request, created_by="test").account
+    assert first is not None and second is not None
+
+    invalid = LocalSimBulkLifecycleRequestV1(
+        action="pause",
+        items=[
+            {"account_id": first.account_id, "expected_version": first.version},
+            {"account_id": second.account_id, "expected_version": second.version + 1},
+        ],
+    )
+    with pytest.raises(InvalidStateTransitionError, match="precondition failed"):
+        service.transition_accounts_bulk(invalid)
+    assert repository.get_account(first.account_id).status.value == "ACTIVE"
+    assert repository.get_account(second.account_id).status.value == "ACTIVE"
+
+    valid = LocalSimBulkLifecycleRequestV1(
+        action="pause",
+        items=[
+            {"account_id": first.account_id, "expected_version": first.version},
+            {"account_id": second.account_id, "expected_version": second.version},
+        ],
+    )
+    result = service.transition_accounts_bulk(valid)
+    assert [account.status.value for account in result.accounts] == ["PAUSED", "PAUSED"]
+
+
+def test_product_router_exposes_only_successor_commands_and_stable_cursor_queries() -> None:
+    product_service, repository, readiness = _service()
+    query_service = LocalSimQueryService(
+        repository=repository,
+        profile_repository=InMemoryLocalSimRuntimeProfileRepository(),
+    )
+    app = FastAPI()
+    app.include_router(simulation_runtime_router.router, prefix="/api/v1")
+    app.dependency_overrides[simulation_runtime_router.get_localsim_product_service] = lambda: product_service
+    app.dependency_overrides[simulation_runtime_router.get_localsim_query_service] = lambda: query_service
+    app.dependency_overrides[simulation_runtime_router.get_localsim_readiness] = lambda: readiness
+    client = TestClient(app)
+
+    response = client.post(
+        "/api/v1/simulation-runtime/localsim/accounts",
+        json=_account_request().model_dump(mode="json"),
+    )
+    assert response.status_code == 200
+    assert response.json()["schema_version"] == "localsim_control_response_v1"
+    assert response.json()["account"]["package_id"] == "pkg_alpha"
+    account_id = response.json()["account"]["account_id"]
+    native_detail = client.get(f"/api/v1/simulation-runtime/localsim/accounts/{account_id}")
+    assert native_detail.status_code == 200
+    assert native_detail.json()["ledger_scope"]["ledger_scope_id"] == account_id
+
+    # A retained successor resolves its scope through lineage, not account_id.
+    native_scope = repository.resolve_ledger_scope_for_account(account_id)
+    legacy_identity = {
+        "schema_version": "simulation_ledger_scope_v1", "ledger_scope_id": "legacy_portfolio",
+        "scope_kind": "LEGACY_PORTFOLIO", "source_identity": "legacy_portfolio", "native_account_id": None,
+    }
+    legacy_scope = SimulationLedgerScopeV1(
+        **legacy_identity, ledger_scope_hash=canonical_json_sha256(legacy_identity),
+        created_by=native_scope.created_by, created_at=native_scope.created_at,
+    )
+    original_resolver = repository.resolve_ledger_scope_for_account
+    repository.resolve_ledger_scope_for_account = lambda requested: (
+        legacy_scope
+        if requested == account_id else original_resolver(requested)
+    )
+    retained_detail = client.get(f"/api/v1/simulation-runtime/localsim/accounts/{account_id}")
+    assert retained_detail.status_code == 200
+    assert retained_detail.json()["ledger_scope"]["ledger_scope_id"] == "legacy_portfolio"
+
+    forged = _account_request().model_dump(mode="json")
+    forged["manifest_sha256"] = MANIFEST
+    assert client.post("/api/v1/simulation-runtime/localsim/accounts", json=forged).status_code == 422
+
+    listed = client.get("/api/v1/simulation-runtime/localsim/accounts", params={"limit": 1})
+    assert listed.status_code == 200
+    assert len(listed.json()["items"]) == 1
+    assert client.post("/api/v1/simulation-runtime/scheduler/start").status_code == 404
+    assert client.post("/api/v1/simulation-runtime/scheduler/stop").status_code == 404
+    assert client.post("/api/v1/simulation-runtime/scheduler/tick").status_code == 404
+
+
+@pytest.mark.parametrize("structural_blocker", [
+    None, "ledger_scope_runtime_fk_count:1", "orphan_ledger_scope_count:1", "invalid_ledger_scope_count:1",
+    "retained_lineage_missing:1", "legacy_active_session_count:1", "legacy_auto_run_count:1",
+    "legacy_sentinel_count:1", "required_relation_missing:paper_v2.run", "unknown_readiness_fact",
+    "in_flight_economic_run_count:0", "in_flight_economic_run_count:2",
+])
+def test_recovery_routes_allow_independent_activity_and_preserve_other_cutover_gates(monkeypatch, structural_blocker):
+    from backend.services.simulation_runtime.localsim_replay_recovery import LocalSimReplayRecoveryCheckV1
+    from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus
+
+    service, _, _ = _service()
+    original = service.create_replay(_replay_request(), created_by="test").replay
+    original = original.model_copy(update={"status": LocalSimReplayStatus.FAILED_TERMINAL,
+        "failure_code": "BrokerConnectivityError", "failure_context": {"trade_date": original.next_trade_date.isoformat()}})
+    readiness = LocalSimCutoverReadiness()
+    blockers = ("in_flight_economic_run_count:1",) + ((structural_blocker,) if structural_blocker else ())
+    snapshot = readiness._result(blockers=blockers, relation_presence={}, runtime_fk_count=2,
+                                 in_flight_economic_run_count=1)
+    monkeypatch.setattr(readiness, "read", lambda: snapshot)
+    service.readiness = readiness
+    calls = []
+
+    def inspect(job_id):
+        calls.append(("inspect", job_id))
+        return LocalSimReplayRecoveryCheckV1(replay_job_id=job_id, version=original.version, ready=True,
+            reason_codes=[], snapshot_sha256="a" * 64, economic_counts={})
+
+    def recover(job_id, request):
+        calls.append(("recover", job_id))
+        assert request.expected_version == original.version and request.snapshot_sha256 == "a" * 64
+        return original.model_copy(update={"status": LocalSimReplayStatus.FAILED_RETRYABLE,
+                                           "version": original.version + 1})
+
+    service.replay_recovery = SimpleNamespace(inspect=inspect, recover=recover)
+    app = FastAPI()
+    app.include_router(simulation_runtime_router.router, prefix="/api/v1")
+    app.dependency_overrides[simulation_runtime_router.get_localsim_product_service] = lambda: service
+    client = TestClient(app)
+    path = f"/api/v1/simulation-runtime/localsim/replays/{original.replay_job_id}"
+    check = client.get(path + "/recovery")
+    result = client.post(path + "/recover", json={"expected_version": original.version, "snapshot_sha256": "a" * 64})
+    if structural_blocker:
+        assert check.status_code == result.status_code == 503
+        assert result.json()["detail"]["context"]["blockers"] == [structural_blocker]
+        assert calls == []
+    else:
+        assert check.status_code == result.status_code == 200
+        assert check.json()["ready"] and result.json()["replay"]["status"] == "FAILED_RETRYABLE"
+        assert calls == [("inspect", original.replay_job_id), ("recover", original.replay_job_id)]
+    # Product cutover/live activation continues to require global quiescence.
+    with pytest.raises(DataUnavailableError, match="cutover is not ready"):
+        readiness.require_ready()

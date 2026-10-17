@@ -113,6 +113,8 @@ class StrategyPackageSelectionResult:
         default_factory=ProspectiveSelectionEvidenceAssembler.not_requested_receipt
     )
     phase1_trace_capture_receipt: Phase1TraceCaptureReceipt = field(default_factory=Phase1TraceCaptureReceipt.disabled)
+    # Existing artifacts actually consumed by this execution; no reconstruction.
+    score_artifacts_by_package: dict[str, Any] = field(default_factory=dict)
 
 
 class DailySelectionSignalService:
@@ -494,6 +496,7 @@ class StrategyPackageSelectionService:
             stage_trace_by_package=stage_trace_by_package,
             evidence_capture_receipt=capture_receipt,
             phase1_trace_capture_receipt=phase1_trace_receipt,
+            score_artifacts_by_package=dict(artifact_by_package),
         )
 
     def _capture_phase1_stage_traces(

@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from ...db.pg_pool import get_conn
 from .factor_official_evaluation_service import CALC_ENGINE
@@ -32,6 +32,8 @@ logger = logging.getLogger("aistock.quantevolver.factor_cleanup_service")
 
 
 class FactorCleanupService:
+
+    PIT_CAUSALITY_QUARANTINE_PREFIX = "PIT_CAUSALITY_VIOLATION"
 
     DEFAULTS: Dict[str, float] = {
         "ic_th": 0.003,
@@ -226,7 +228,7 @@ class FactorCleanupService:
                                 disable_reason = %s,
                                 disable_batch_id = %s,
                                 disable_at = NOW(),
-                                updated_at = NOW()
+                                rehab_candidate = FALSE
                             WHERE id = ANY(%s) AND is_available = TRUE
                             """,
                             (reason, batch_id, ids),
@@ -293,8 +295,11 @@ class FactorCleanupService:
             "rollback_sql": (
                 f"UPDATE aistock_factor_catalog "
                 f"SET is_available=TRUE, disable_reason=NULL, "
-                f"disable_batch_id=NULL, disable_at=NULL "
-                f"WHERE disable_batch_id='{batch_id}';"
+                f"disable_batch_id=NULL, disable_at=NULL, "
+                f"rehab_candidate=FALSE, last_rehab_at=NOW() "
+                f"WHERE disable_batch_id='{batch_id}' "
+                f"AND COALESCE(disable_reason, '') NOT LIKE "
+                f"'{self.PIT_CAUSALITY_QUARANTINE_PREFIX}%';"
             ),
         }
 
@@ -325,20 +330,37 @@ class FactorCleanupService:
             with conn.cursor() as cur:
                 cur.execute(
                     """
+                    SELECT COUNT(*)
+                    FROM aistock_factor_catalog
+                    WHERE disable_batch_id = %s
+                      AND COALESCE(disable_reason, '') LIKE %s
+                    """,
+                    (batch_id, f"{self.PIT_CAUSALITY_QUARANTINE_PREFIX}%"),
+                )
+                blocked_quarantine_count = int((cur.fetchone() or [0])[0] or 0)
+                cur.execute(
+                    """
                     UPDATE aistock_factor_catalog
                     SET is_available = TRUE,
                         disable_reason = NULL,
                         disable_batch_id = NULL,
                         disable_at = NULL,
-                        updated_at = NOW()
+                        rehab_candidate = FALSE,
+                        last_rehab_at = NOW()
                     WHERE disable_batch_id = %s
+                      AND COALESCE(disable_reason, '') NOT LIKE %s
                     """,
-                    (batch_id,),
+                    (batch_id, f"{self.PIT_CAUSALITY_QUARANTINE_PREFIX}%"),
                 )
                 rehab = cur.rowcount
             conn.commit()
         logger.info("Rollback batch=%s, rehab=%d", batch_id, rehab)
-        return {"ok": True, "batch_id": batch_id, "rehab_count": rehab}
+        return {
+            "ok": True,
+            "batch_id": batch_id,
+            "rehab_count": rehab,
+            "blocked_quarantine_count": blocked_quarantine_count,
+        }
 
     # ────────────────────────────────────────────────────────────────
     # Internal

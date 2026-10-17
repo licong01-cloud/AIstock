@@ -105,6 +105,7 @@ class SelectionCenterService:
         strategy_selection_service: StrategyPackageSelectionService | Any | None = None,
         result_enrichment_service: SelectionResultEnrichmentService | Any | None = None,
         asset_eligibility_service: Any | None = None,
+        advisory_input_archive: Any | None = None,
     ) -> None:
         self.package_repository = package_repository or StrategyPackageRepository()
         self.repository = repository or SelectionCenterRepository()
@@ -121,6 +122,7 @@ class SelectionCenterService:
         # Compatibility-only injection seam. StrategyPackage admission belongs
         # to the upstream package-entry boundary, never to Selection runtime.
         self.asset_eligibility_service = asset_eligibility_service
+        self.advisory_input_archive = advisory_input_archive
         self.package_health_service = package_health_service or SelectionPackageHealthService(
             artifact_repository=getattr(self.runtime, "artifact_repository", None),
             runtime_source_resolver=getattr(self.selection_artifact_service, "runtime_asset_resolver", None),
@@ -170,7 +172,11 @@ class SelectionCenterService:
         data_source: str,
         runtime_config: dict[str, Any] | None = None,
         prospective_context: ProspectiveSelectionContext | None = None,
+        advisory_archive_context: dict[str, Any] | None = None,
     ) -> SelectionRun:
+        if advisory_archive_context is not None:
+            from .advisory_input_archive import AdvisorySelectionInputArchive
+            AdvisorySelectionInputArchive.validate_context(advisory_archive_context, target_date=trade_date)
         run = SelectionRun(
             mode=mode,
             trade_date=trade_date,
@@ -225,6 +231,12 @@ class SelectionCenterService:
                     "no_candidate_reason": selection.no_candidate_reason,
                 }
             )
+            if advisory_archive_context is not None:
+                from .advisory_input_archive import AdvisorySelectionInputArchive
+                archive = self.advisory_input_archive or AdvisorySelectionInputArchive()
+                ref = archive.capture(run=completed, selection=selection, context=advisory_archive_context)
+                completed = completed.model_copy(update={"runtime_config": {
+                    **completed.runtime_config, "advisory_frozen_input_archive": ref}})
             return self.repository.complete_run(completed)
         except TradingCoreError as exc:
             self.repository.fail_run(run, exc.to_dict())
@@ -984,7 +996,7 @@ class SelectionCenterService:
             self.repository.fail_run(run, error)
             raise
 
-    def prepare_paper_portfolio_creation(
+    def prepare_localsim_account_creation(
         self,
         *,
         run_id: str,
@@ -992,22 +1004,22 @@ class SelectionCenterService:
         run = self.repository.get_run(run_id)
         if run.status != SelectionRunStatus.SUCCEEDED:
             raise InvalidStateTransitionError(
-                "only successful selection runs can create paper portfolios",
+                "only successful selection runs can create LocalSIM accounts",
                 context={"run_id": run_id, "status": run.status.value},
             )
         if not run.aggregate_results:
             raise DataUnavailableError(
-                "selection run has no aggregate results for paper portfolio creation",
+                "selection run has no aggregate results for LocalSIM account creation",
                 context={"run_id": run_id},
             )
         if run.mode != SelectionMode.SINGLE_PACKAGE or len(run.package_ids) != 1:
             raise UnsupportedFeatureError(
-                "creating a paper portfolio from multi-package selection requires a combined StrategyPackage",
+                "creating a LocalSIM account from multi-package selection requires a combined StrategyPackage",
                 context={"run_id": run_id, "mode": run.mode.value, "package_ids": run.package_ids},
             )
         if is_non_trading_runtime_config(run.runtime_config):
             raise InvalidStateTransitionError(
-                "non-trading selection preview cannot create a Paper v2 portfolio",
+                "non-trading selection preview cannot create a LocalSIM account",
                 context={
                     "run_id": run_id,
                     "runtime_config_scope": runtime_config_scope(run.runtime_config),
@@ -1219,7 +1231,7 @@ class SelectionCenterService:
             return effective
         return validate_runtime_profile_binding(
             run.runtime_config,
-            context={"run_id": run.run_id, "path": "selection_center.paper_runtime_config_from_selection_run"},
+            context={"run_id": run.run_id, "path": "selection_center.localsim_account_from_selection_run"},
             require_trade_enabled=True,
         )
 

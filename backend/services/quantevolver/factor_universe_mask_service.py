@@ -10,6 +10,7 @@ import psycopg2.extras as pgx
 
 from ...db.pg_pool import get_conn
 from ..canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY
+from ..canonical_equity_pit import require_canonical_rolling_universe_key
 from ..canonical_pit_dataset_consumer import FormalDatasetUsage
 from ..dataset_release.pit import (
     FrozenPitSnapshot,
@@ -39,6 +40,15 @@ OFFICIAL_FACTOR_INDEX_POLICY = "st_pit_buy_eligible_reindexed_v1"
 OFFICIAL_FACTOR_COVERAGE_SEMANTICS = "st_pit_buy_eligible_suspend_excluded_non_warmup_v1"
 QE_BACKTEST_FRESHNESS_PROFILE = "qe_backtest_coverage"
 PAPER_LIVE_FRESHNESS_PROFILE = "paper_live_latest"
+
+
+def _require_factor_universe_key(universe_key: str) -> str:
+    """Accept the legacy dataset snapshot or the canonical direct-v2 universe."""
+
+    normalized = str(universe_key or "").strip()
+    if normalized == CANONICAL_PIT_UNIVERSE_KEY:
+        return require_canonical_rolling_universe_key(normalized)
+    return require_qe_immutable_st_pit_universe_key(normalized)
 
 
 def _as_date(value: str | dt.date | pd.Timestamp | None) -> dt.date:
@@ -211,8 +221,17 @@ class FactorUniverseMaskService:
                 universe_key=universe_key,
             )
             return {"state": self._formal_state(), "action": "read_frozen_artifact"}
-        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
+        universe_key = _require_factor_universe_key(universe_key)
         assert self._pit_service is not None
+        if universe_key == CANONICAL_PIT_UNIVERSE_KEY:
+            state = self._pit_service.get_status_readonly(universe_key=universe_key)
+            return {
+                "universe_key": universe_key,
+                "status": state.get("status"),
+                "rebuilt": False,
+                "action": "read_canonical_state",
+                "state": state,
+            }
         if universe_key == OFFICIAL_FACTOR_UNIVERSE_KEY:
             require_qe_dataset_window(start_date=start, end_date=end)
             return self._pit_service.ensure_immutable_dataset_snapshot(
@@ -239,8 +258,10 @@ class FactorUniverseMaskService:
             if universe_key != OFFICIAL_FACTOR_UNIVERSE_KEY:
                 raise ValueError("formal frozen PIT does not accept a universe_key override")
             return self._formal_state()
-        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
+        universe_key = _require_factor_universe_key(universe_key)
         assert self._pit_service is not None
+        if universe_key == CANONICAL_PIT_UNIVERSE_KEY:
+            return self._pit_service.get_status_readonly(universe_key=universe_key)
         return self._pit_service.get_status(universe_key=universe_key)
 
     def metadata(
@@ -286,7 +307,7 @@ class FactorUniverseMaskService:
                 }
             )
             return meta
-        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
+        universe_key = _require_factor_universe_key(universe_key)
         ensure_result: dict[str, Any] | None = None
         if ensure:
             ensure_result = self.ensure_ready(
@@ -385,7 +406,7 @@ class FactorUniverseMaskService:
                     if span.eligible_start <= end and span.eligible_end >= start
                 }
             )
-        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
+        universe_key = _require_factor_universe_key(universe_key)
         if ensure:
             self.ensure_ready(start_date=start, end_date=end, universe_key=universe_key)
         with get_conn() as conn:
@@ -443,7 +464,7 @@ class FactorUniverseMaskService:
                     }
                 )
             return rows
-        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
+        universe_key = _require_factor_universe_key(universe_key)
         if ensure:
             self.ensure_ready(start_date=start, end_date=end, universe_key=universe_key)
         params: list[Any] = [universe_key, end, start]
@@ -482,7 +503,7 @@ class FactorUniverseMaskService:
         universe_key: str = OFFICIAL_FACTOR_UNIVERSE_KEY,
         ensure: bool = True,
     ) -> np.ndarray:
-        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
+        universe_key = _require_factor_universe_key(universe_key)
         date_index = pd.DatetimeIndex(dates).normalize()
         inst_list = [_normalize_instrument(inst) for inst in instruments]
         mask = np.zeros((len(date_index), len(inst_list)), dtype=bool)
@@ -568,7 +589,7 @@ class FactorUniverseMaskService:
                 rows,
                 names=["datetime", "instrument"],
             )
-        universe_key = require_qe_immutable_st_pit_universe_key(universe_key)
+        universe_key = _require_factor_universe_key(universe_key)
         if ensure:
             self.ensure_ready(start_date=start, end_date=end, universe_key=universe_key)
         params: list[Any] = [universe_key, start, end]

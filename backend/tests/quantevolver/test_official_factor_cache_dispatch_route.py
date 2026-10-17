@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import asyncio
 import json
 import sys
@@ -11,6 +12,166 @@ from pydantic import ValidationError
 from starlette.background import BackgroundTasks
 
 from backend.routers import quantevolver as router
+from backend.services import manual_factor_service as manual_svc
+from backend.services.quantevolver.factor_official_evaluation_service import FactorOfficialEvaluationService
+
+
+def test_manual_factor_workspace_prefers_active_dataset_profile(monkeypatch) -> None:
+    monkeypatch.setattr(manual_svc, "FACTOR_WORKSPACE_WSL", "/legacy/r7/factor_data")
+    monkeypatch.setattr(
+        "backend.services.quantevolver.node_execution.resolve_default_qe_node_id",
+        lambda: "wsl2-5080",
+    )
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_active_dataset_profile.resolve_active_dataset_node_binding",
+        lambda *, node_id: {
+            "node_id": node_id,
+            "factor_data_dir": "/releases/r8/components/factor_h5_static_candidate_v2",
+        },
+    )
+
+    assert manual_svc._require_factor_workspace_wsl() == "/releases/r8/components/factor_h5_static_candidate_v2"
+
+
+def test_manual_factor_workspace_uses_legacy_env_without_active_profile(monkeypatch) -> None:
+    monkeypatch.setattr(manual_svc, "FACTOR_WORKSPACE_WSL", "/legacy/factor_data")
+    monkeypatch.setattr(
+        "backend.services.quantevolver.node_execution.resolve_default_qe_node_id",
+        lambda: "wsl2-5080",
+    )
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_active_dataset_profile.resolve_active_dataset_node_binding",
+        lambda *, node_id: None,
+    )
+
+    assert manual_svc._require_factor_workspace_wsl() == "/legacy/factor_data"
+
+
+def test_official_evaluation_prefers_active_profile_paths(monkeypatch) -> None:
+    captured = {}
+
+    class _ForbiddenComposer:
+        def _fetch_workspace_config(self, node_id=None):
+            raise AssertionError("legacy workspace config must not be read while an active profile exists")
+
+    class _FakeFullComputeDispatch:
+        def __init__(self, dispatch_service=None):
+            pass
+
+        def submit(self, **kwargs):
+            captured.update(kwargs)
+            return {"ok": True, "status": "running", "task_id": "r8-task"}
+
+    monkeypatch.setattr(
+        "backend.services.quantevolver.config_composer.ConfigComposer",
+        lambda: _ForbiddenComposer(),
+    )
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_active_dataset_profile.resolve_active_dataset_node_binding",
+        lambda *, node_id: {
+            "node_id": node_id,
+            "factor_data_dir": "/releases/r8/components/factor_h5_static_candidate_v2",
+            "qlib_data_path": "/releases/r8/components/daily_bin_candidate",
+            "generation": "20260918-v11",
+            "profile_sha256": "r8-profile-sha",
+        },
+    )
+    monkeypatch.setattr(
+        "backend.services.quantevolver.official_factor_full_compute_dispatch_service.OfficialFactorFullComputeDispatchService",
+        _FakeFullComputeDispatch,
+    )
+
+    service = FactorOfficialEvaluationService.__new__(FactorOfficialEvaluationService)
+    service._dispatch_service = object()
+    result = service.compute(
+        factor_names=["Alpha_Test"],
+        start_date="2018-08-01",
+        end_date="2026-08-31",
+    )
+
+    assert result["success"] is True
+    assert captured["factor_data_dir"] == "/releases/r8/components/factor_h5_static_candidate_v2"
+    assert captured["qlib_bin_path"] == "/releases/r8/components/daily_bin_candidate"
+    assert captured["universe_key"] == "aistock_equity_pit_canonical_v2"
+    assert captured["node_id"] == "wsl2-5080"
+    assert result["active_profile_generation"] == "20260918-v11"
+    assert result["active_profile_sha256"] == "r8-profile-sha"
+    assert result["universe_key"] == "aistock_equity_pit_canonical_v2"
+
+
+def test_official_full_compute_dispatch_preserves_explicit_universe_key() -> None:
+    from backend.services.quantevolver.official_factor_full_compute_dispatch_service import (
+        OfficialFactorFullComputeDispatchService,
+    )
+
+    captured = {}
+
+    class _FakeDispatchService:
+        async def create_and_submit_task(self, payload):
+            captured.update(payload)
+            return {"task_id": "official-r8", "status": "queued"}
+
+    result = OfficialFactorFullComputeDispatchService(_FakeDispatchService()).submit(
+        factor_names=["factor_a"],
+        factor_data_dir="/releases/r8/components/factor_h5_static_candidate_v2",
+        qlib_bin_path="/releases/r8/components/daily_bin_candidate",
+        start_date="2018-08-01",
+        end_date="2026-08-31",
+        universe_key="aistock_equity_pit_canonical_v2",
+    )
+
+    assert result["ok"] is True
+    assert captured["payload"]["universe_key"] == "aistock_equity_pit_canonical_v2"
+
+
+def test_official_full_compute_binds_explicit_profile_paths_once(monkeypatch) -> None:
+    from backend.services.quantevolver import (
+        official_factor_full_compute_dispatch_service as service_mod,
+    )
+
+    captured = {}
+    frozen = {
+        "profile_sha256": "a" * 64,
+        "cutoff": "2026-08-31",
+    }
+
+    class _FakeDispatchService:
+        async def create_and_submit_task(self, payload):
+            captured.update(payload)
+            return {"task_id": "official-r8", "status": "queued"}
+
+    monkeypatch.setattr(
+        service_mod,
+        "freeze_explicit_dataset_task_binding",
+        lambda **_kwargs: frozen,
+    )
+    monkeypatch.setattr(
+        service_mod,
+        "frozen_dataset_environment",
+        lambda _binding: {
+            "RDAGENT_FACTOR_DATA_WSL": "/releases/r8/components/factor_h5_static_candidate_v2",
+            "QE_QLIB_DATA_PATH": "/releases/r8/components/daily_bin_candidate",
+        },
+    )
+
+    result = service_mod.OfficialFactorFullComputeDispatchService(
+        _FakeDispatchService()
+    ).submit(
+        factor_names=["factor_a"],
+        factor_data_dir=None,
+        start_date="2018-08-01",
+        end_date="2026-08-31",
+        dataset_profile_path="X:/profiles/r8.json",
+        expected_profile_sha256="a" * 64,
+    )
+
+    assert captured["dataset_binding"] is frozen
+    assert captured["payload"]["factor_data_dir"].endswith(
+        "/factor_h5_static_candidate_v2"
+    )
+    assert captured["payload"]["qlib_bin_path"].endswith("/daily_bin_candidate")
+    assert captured["payload"]["universe_key"] == "aistock_equity_pit_canonical_v2"
+    assert result["payload"]["dataset_profile_sha256"] == "a" * 64
 
 
 def test_cache_status_sort_keeps_numeric_scores_comparable():
@@ -195,6 +356,11 @@ def test_official_full_compute_custom_dispatch_uses_legacy_wsl_runner(monkeypatc
     svc = dispatch_mod.DispatchService()
     monkeypatch.setattr(dispatch_mod, "ComputeNodeClient", _FakeClient)
     monkeypatch.setattr(dispatch_mod, "get_conn", lambda: _NoopConn())
+    monkeypatch.setattr(
+        dispatch_mod,
+        "_freeze_dispatch_dataset_binding",
+        lambda **_kwargs: None,
+    )
     def _fake_insert_task(data):
         captured["insert_task"] = data
         return {"task_id": "local-1"}
@@ -263,6 +429,31 @@ def test_official_evaluation_wsl_runner_delegates_full_compute_payload(monkeypat
     assert captured["payload"] == payload
 
 
+@pytest.mark.parametrize(
+    "script_name",
+    [
+        "run_correlation_compute_wsl.py",
+        "run_official_evaluation_wsl.py",
+        "run_official_factor_full_compute_wsl.py",
+    ],
+)
+def test_wsl_factor_runners_never_override_explicit_task_environment(script_name: str) -> None:
+    script_path = Path(__file__).resolve().parents[3] / "backend" / "scripts" / script_name
+    tree = ast.parse(script_path.read_text(encoding="utf-8"))
+    calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "load_dotenv"
+    ]
+
+    assert len(calls) == 1
+    override = next((item.value for item in calls[0].keywords if item.arg == "override"), None)
+    assert isinstance(override, ast.Constant)
+    assert override.value is False
+
+
 def test_factor_metrics_scheduler_submits_official_full_compute_dispatch(monkeypatch):
     from backend.services.quantevolver import factor_metrics_scheduler as scheduler_mod
 
@@ -290,6 +481,7 @@ def test_factor_metrics_scheduler_submits_official_full_compute_dispatch(monkeyp
                 "workers": 2,
                 "timeout_per_factor": 900,
                 "node_id": "node-a",
+                "universe_key": "aistock_equity_pit_canonical_v2",
             },
             triggered_by="manual",
         )
@@ -312,7 +504,30 @@ def test_factor_metrics_scheduler_submits_official_full_compute_dispatch(monkeyp
     assert payload["workers"] == 2
     assert payload["max_workers"] == 2
     assert payload["batch_size"] == 8
+    assert payload["universe_key"] == "aistock_equity_pit_canonical_v2"
     assert payload["cache_source"] == "official_offline_backtest_factor_data"
+
+
+def test_factor_job_status_queries_use_finished_at(monkeypatch):
+    from backend.routers import factor_correlation, factor_metrics
+
+    captured: list[str] = []
+
+    def _capture(sql, _params=()):
+        captured.append(sql)
+        return []
+
+    monkeypatch.setattr(factor_metrics, "_rows", _capture)
+    monkeypatch.setattr(factor_correlation, "_rows", _capture)
+
+    assert factor_metrics._job("job-1") is None
+    with pytest.raises(HTTPException) as exc_info:
+        factor_correlation.get_job("job-2")
+
+    assert exc_info.value.status_code == 404
+    assert len(captured) == 2
+    assert all("finished_at AS completed_at" in sql for sql in captured)
+    assert all(" started_at, completed_at" not in sql for sql in captured)
 
 
 def test_factor_cache_compute_explicit_factors_can_include_disabled(monkeypatch):

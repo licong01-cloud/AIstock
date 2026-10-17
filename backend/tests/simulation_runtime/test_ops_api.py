@@ -365,7 +365,7 @@ def test_scheduler_status_reports_controlled_ops_and_does_not_claim_autostart(cl
     assert scheduler["read_only_status_api"] is True
     assert scheduler["read_only_ops_api"] is False
     assert scheduler["controlled_ops_api"] is True
-    assert scheduler["manual_tick_endpoint_enabled"] is True
+    assert scheduler["manual_tick_endpoint_enabled"] is False
     assert scheduler["scheduler_control_api_enabled"] is False
     assert scheduler["effective_runtime_health"] == "SCHEDULER_INACTIVE"
     assert scheduler["scheduler_loop_health"]["status"] == "NOT_APPLICABLE"
@@ -1113,19 +1113,9 @@ def test_runs_api_surfaces_miniqmt_succeeded_with_capacity_residual(
     )
 
 
-def test_scheduler_tick_api_is_controlled_dry_run_by_default(client: TestClient) -> None:
-    response = client.post(
-        "/api/v1/simulation-runtime/scheduler/tick",
-        json="2026-05-21T09:22:00+00:00",
-    )
-
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["action"] == "scheduler_tick"
-    assert payload["trade_date"] == "2026-05-21"
-    assert payload["submit"] is False
-    assert payload["total_bindings"] >= 0
-    assert "results" in payload
+def test_scheduler_mutation_api_is_not_public(client: TestClient) -> None:
+    for path in ("start", "stop", "tick"):
+        assert client.post(f"/api/v1/simulation-runtime/scheduler/{path}").status_code == 404
 
 
 def test_missing_run_maps_to_404(client: TestClient) -> None:

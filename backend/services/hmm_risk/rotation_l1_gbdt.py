@@ -1,0 +1,2379 @@
+"""Active G2-A v1.6 development executor for L1 sector rotation.
+
+This module owns the model-facing, development-only contract. It consumes an
+already materialised causal panel and fits the approved target-free market
+context inside each fresh process; it never queries a database, searches a
+release, reads a tail, or silently manufactures missing features.
+"""
+
+from __future__ import annotations
+
+import importlib.metadata
+import hashlib
+import json
+import math
+import os
+import platform
+import tempfile
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+from typing import Any, Mapping, Sequence
+
+import numpy as np
+import pandas as pd
+from backend.services.hmm_risk.jump_model import (
+    PreparedComponent,
+    Preprocessor,
+    SequenceData,
+    causal_states,
+    fit_jump_model,
+)
+from backend.services.hmm_risk.contracts import canonical_sha256
+from backend.services.dataset_release.cas_store import canonical_json_bytes
+
+V14_CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_4"
+V16_CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_6"
+CONTRACT_VERSION = V16_CONTRACT_VERSION
+INPUT_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_input_bundle_v2"
+PROCESS_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_process_v2"
+ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_acceptance_v2"
+V16_PROCESS_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_process_v3"
+V16_ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_acceptance_v3"
+INPUT_MANIFEST_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_input_manifest_v2"
+V13_CONTRACT_VERSION = "hmm_risk_rotation_l1_g2a_v1_3"
+V13_PROCESS_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_process_v1"
+V13_ACCEPTANCE_SCHEMA_VERSION = "hmm_risk_rotation_l1_g2a_acceptance_v1"
+V16_SCORE_TRANSFORM = "daily_available_l1_average_rank_centered_v1"
+V16_SCORE_FEATURE = "moneyflow_intensity_delta_5d"
+FIXED_HORIZON = 10
+FROZEN_FORWARD_POWER_STATUS = "INSUFFICIENT"
+HORIZON_AUTHORITY = {
+    "source_contract_version": "hmm_risk_rotation_l1_g2a_v1_3",
+    "selection_model_class": "RIDGE_COMPARATOR",
+    "selected_horizon": FIXED_HORIZON,
+    "gbdt_horizon_optimality_not_claimed": True,
+    "development_reused": True,
+    "battery_rerun_performed": False,
+}
+
+V13_CONTINUOUS_FEATURES = (
+    "relative_momentum_5d",
+    "relative_momentum_10d",
+    "relative_momentum_20d",
+    "relative_momentum_60d",
+    "relative_downside_volatility_20d",
+    "relative_max_drawdown_20d",
+    "pit_breadth_above_ma20",
+    "moneyflow_intensity_20d",
+)
+V14_CONTINUOUS_FEATURES = (*V13_CONTINUOUS_FEATURES, "moneyflow_intensity_delta_5d")
+V13_FEATURES = (*V13_CONTINUOUS_FEATURES, "market_regime_sign")
+V14_FEATURES = (*V14_CONTINUOUS_FEATURES, "market_regime_sign")
+
+
+def _v16_scoring_contract() -> dict[str, Any]:
+    return {
+        "schema_version": "hmm_risk_rotation_l1_deterministic_scoring_contract_v1",
+        "contract_version": V16_CONTRACT_VERSION,
+        "feature": V16_SCORE_FEATURE,
+        "causal_feature_lag": "t_minus_1_inputs_only",
+        "cross_section": "available_canonical_l1_sectors",
+        "rank_method": "average",
+        "rank_direction": "ascending",
+        "score_formula": "(average_rank - 1) / (available_count - 1) - 0.5",
+        "score_transform": V16_SCORE_TRANSFORM,
+        "sector_code_tie_break": False,
+        "missing_or_non_finite": "typed_unavailable",
+        "training_performed": False,
+        "target_accessed_for_score": False,
+        "market_context_accessed_for_score": False,
+    }
+
+
+# Backward-compatible defaults are intentionally pinned to the currently
+# active v1.3 product.  The v1.4 offline executor always passes V14_* names
+# explicitly and cannot activate itself by changing these aliases.
+CONTINUOUS_FEATURES = V13_CONTINUOUS_FEATURES
+FEATURES = V13_FEATURES
+TARGET_COLUMNS = ("target_5d", "target_10d")
+VALUE_COLUMNS = (*V14_CONTINUOUS_FEATURES, *TARGET_COLUMNS)
+REASON_COLUMNS = tuple(f"reason__{column}" for column in VALUE_COLUMNS)
+MATURITY_COLUMNS = ("target_5d_mature", "target_10d_mature")
+MARKET_FEATURES = ("daily_return", "volatility_3d")
+HORIZONS = (5, 10)
+ROLLING_WINDOW_OPEN_DAYS = 504
+MINIMUM_METRIC_SECTORS = 28
+CANONICAL_SECTOR_COUNT = 31
+MINIMUM_VALID_CONTINUOUS_FEATURES = 8
+MINIMUM_DEVELOPMENT_COVERAGE = 0.90
+MINIMUM_DELTA_FEATURE_COVERAGE = 0.90
+MINIMUM_LEAF_ROW_COUNT = 310
+MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR = math.ceil(MINIMUM_LEAF_ROW_COUNT / CANONICAL_SECTOR_COUNT)
+LEAF_DISTINCT_DATE_TARGET = 20
+MAXIMUM_BELOW_TARGET_LEAF_FRACTION = 0.01
+BINDING_MBE_IC = 0.02
+STATE_TIE_EPSILON = 1e-12
+SINGLE_THREAD_ENVIRONMENT = (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+)
+
+FOLDS = (
+    ("fold-1", date(2023, 9, 4), date(2024, 3, 14)),
+    ("fold-2", date(2024, 3, 15), date(2024, 9, 18)),
+    ("fold-3", date(2024, 9, 19), date(2025, 3, 31)),
+    ("fold-4", date(2025, 4, 1), date(2025, 9, 30)),
+    ("fold-5", date(2025, 10, 1), date(2026, 3, 31)),
+)
+
+REASON_INPUT = "hmm_risk_rotation_input_contract_invalid"
+REASON_LABEL = "hmm_risk_rotation_label_incomplete"
+REASON_HORIZON = "hmm_risk_rotation_horizon_selection_failed"
+REASON_FEATURE = "hmm_risk_rotation_feature_contract_invalid"
+REASON_FIT = "hmm_risk_rotation_fit_failed"
+REASON_REPRODUCIBILITY = "hmm_risk_rotation_reproducibility_mismatch"
+REASON_SCORE = "hmm_risk_rotation_score_non_finite"
+REASON_LEAF = "hmm_risk_rotation_leaf_date_coverage_insufficient"
+REASON_COVERAGE = "hmm_risk_rotation_coverage_insufficient"
+
+
+class RotationL1G2AError(RuntimeError):
+    """Typed fail-closed G2-A error."""
+
+    def __init__(self, reason_code: str, message: str, *, stage: str, evidence: Mapping[str, Any] | None = None):
+        super().__init__(message)
+        self.reason_code = reason_code
+        self.stage = stage
+        self.evidence = dict(evidence or {})
+
+
+def _fail(reason: str, message: str, *, stage: str, **evidence: Any) -> RotationL1G2AError:
+    return RotationL1G2AError(reason, message, stage=stage, evidence=evidence)
+
+
+@dataclass(frozen=True)
+class FoldSlice:
+    name: str
+    train_dates: tuple[date, ...]
+    purge_dates: tuple[date, ...]
+    validation_dates: tuple[date, ...]
+
+    def receipt(self) -> dict[str, Any]:
+        body = {
+            "fold": self.name,
+            "train_start": self.train_dates[0].isoformat(),
+            "train_end": self.train_dates[-1].isoformat(),
+            "train_count": len(self.train_dates),
+            "train_date_sha256": canonical_sha256([item.isoformat() for item in self.train_dates]),
+            "purge_dates": [item.isoformat() for item in self.purge_dates],
+            "validation_start": self.validation_dates[0].isoformat(),
+            "validation_end": self.validation_dates[-1].isoformat(),
+            "validation_count": len(self.validation_dates),
+            "validation_date_sha256": canonical_sha256([item.isoformat() for item in self.validation_dates]),
+        }
+        return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+@dataclass(frozen=True)
+class MarketContext:
+    signs: Mapping[date, float]
+    receipt: Mapping[str, Any]
+
+
+@dataclass
+class FitProgress:
+    """Shared deterministic fit counter used by the active G2-B contract."""
+
+    planned: int
+    started: int = 0
+    completed: int = 0
+    failed: int = 0
+    active_fit: str | None = None
+
+    def execute(self, identity: str, operation: Any) -> Any:
+        self.started += 1
+        self.active_fit = identity
+        try:
+            result = operation()
+        except Exception:
+            self.failed += 1
+            raise
+        self.completed += 1
+        self.active_fit = None
+        return result
+
+    def receipt(self) -> dict[str, Any]:
+        return {
+            "planned": self.planned,
+            "started": self.started,
+            "completed": self.completed,
+            "failed": self.failed,
+            "active_fit": self.active_fit,
+        }
+
+
+def _normalise_panel(panel: pd.DataFrame) -> pd.DataFrame:
+    if not isinstance(panel.index, pd.MultiIndex) or tuple(panel.index.names) != ("trade_date", "sector_code"):
+        raise _fail(REASON_INPUT, "G2-A panel index must be (trade_date, sector_code)", stage="input")
+    frame = panel.copy()
+    dates = pd.to_datetime(frame.index.get_level_values("trade_date"), errors="raise")
+    if dates.tz is not None or not dates.equals(dates.normalize()):
+        raise _fail(REASON_INPUT, "G2-A trade dates are not canonical sessions", stage="input")
+    codes = frame.index.get_level_values("sector_code").astype(str)
+    frame.index = pd.MultiIndex.from_arrays([dates.date, codes], names=["trade_date", "sector_code"])
+    if frame.index.has_duplicates:
+        raise _fail(REASON_INPUT, "G2-A panel contains duplicate date/sector rows", stage="input")
+    if not frame.index.is_monotonic_increasing:
+        frame = frame.sort_index()
+    return frame
+
+
+def _moneyflow_intensity_from_window(
+    source_days: Sequence[date],
+    sector: str,
+    stock_by_key: Mapping[tuple[date, str], Mapping[str, Any]],
+) -> tuple[float, str | None]:
+    """Return one causal 20-session moneyflow intensity without imputation."""
+
+    if len(source_days) != 20:
+        return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
+    daily_window = [stock_by_key.get((item, sector)) for item in source_days]
+    source_reasons = sorted(
+        {
+            str(item["moneyflow_reason_code"])
+            for item in daily_window
+            if item is not None and item.get("moneyflow_reason_code")
+        }
+    )
+    if source_reasons:
+        return math.nan, source_reasons[0]
+    if any(item is None for item in daily_window):
+        return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
+    typed_window = [item for item in daily_window if item is not None]
+    net = [item.get("moneyflow_net_amount_cny") for item in typed_window]
+    amount = [item.get("moneyflow_traded_amount_cny") for item in typed_window]
+    try:
+        finite = all(value is not None and math.isfinite(float(value)) for value in (*net, *amount))
+        denominator = math.fsum(float(value) for value in amount) if finite else math.nan
+    except (TypeError, ValueError, OverflowError):
+        finite = False
+        denominator = math.nan
+    if not finite or not math.isfinite(denominator) or denominator <= 0:
+        return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
+    value = math.fsum(float(item) for item in net) / denominator
+    if not math.isfinite(value):
+        return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
+    return value, None
+
+
+def build_v16_single_date_feature_frame(
+    *,
+    calendar: Sequence[date],
+    stock_daily_inputs: Sequence[Mapping[str, Any]],
+    trade_date: date,
+) -> pd.DataFrame:
+    """Build the v1.6 t-1 moneyflow-delta input for one decision session."""
+
+    ordered = tuple(calendar)
+    if len(ordered) != 26 or ordered[-1] != trade_date or ordered != tuple(sorted(set(ordered))):
+        raise _fail(REASON_INPUT, "G2-A v1.6 single-date calendar differs", stage="inference")
+    stock_by_key: dict[tuple[date, str], Mapping[str, Any]] = {}
+    for raw in stock_daily_inputs:
+        key = (raw.get("source_date"), str(raw.get("sector_code")))
+        if not isinstance(key[0], date) or key in stock_by_key:
+            raise _fail(REASON_INPUT, "G2-A v1.6 stock-derived input keys differ", stage="inference")
+        stock_by_key[key] = raw
+    sectors = tuple(sorted({sector for _day, sector in stock_by_key}))
+    expected_keys = {(day, sector) for day in ordered[:-1] for sector in sectors}
+    if len(sectors) != CANONICAL_SECTOR_COUNT or set(stock_by_key) != expected_keys:
+        raise _fail(REASON_INPUT, "G2-A v1.6 stock-derived denominator differs", stage="inference")
+
+    rows: list[dict[str, Any]] = []
+    for sector in sectors:
+        current, current_reason = _moneyflow_intensity_from_window(ordered[5:25], sector, stock_by_key)
+        lagged, lagged_reason = _moneyflow_intensity_from_window(ordered[0:20], sector, stock_by_key)
+        if math.isfinite(current) and math.isfinite(lagged):
+            value = current - lagged
+            reason = None
+        else:
+            value = math.nan
+            reason = current_reason or lagged_reason or "hmm_risk_rotation_moneyflow_history_incomplete"
+        rows.append(
+            {
+                "trade_date": trade_date,
+                "sector_code": sector,
+                V16_SCORE_FEATURE: value,
+                f"reason__{V16_SCORE_FEATURE}": reason,
+            }
+        )
+    return pd.DataFrame.from_records(rows).set_index(["trade_date", "sector_code"]).sort_index()
+
+
+def build_materialised_panel(
+    *,
+    calendar: Sequence[date],
+    sector_close: Mapping[tuple[date, str], float],
+    benchmark_close: Mapping[date, float],
+    stock_daily_inputs: Sequence[Mapping[str, Any]],
+    include_targets: bool = True,
+    include_risk_target: bool = False,
+    outcome_calendar: Sequence[date] | None = None,
+) -> pd.DataFrame:
+    """Build the exact ten-column v1.4 model panel from bound components.
+
+    The CSI300 market regime is fitted later inside each fresh process. Missing
+    values stay missing; this function never imputes or shortens a lookback.
+    """
+
+    ordered = tuple(calendar)
+    if ordered != tuple(sorted(set(ordered))) or not ordered:
+        raise _fail(REASON_INPUT, "G2-A materialisation calendar differs", stage="materialisation")
+    target_ordered = tuple(ordered if outcome_calendar is None else outcome_calendar)
+    if (
+        target_ordered != tuple(sorted(set(target_ordered)))
+        or not target_ordered
+        or any(day not in target_ordered for day in ordered)
+    ):
+        raise _fail(REASON_INPUT, "materialisation outcome calendar differs", stage="materialisation")
+    sectors = tuple(sorted({str(code) for _day, code in sector_close}))
+    if len(sectors) != CANONICAL_SECTOR_COUNT:
+        raise _fail(REASON_INPUT, "G2-A materialisation sector denominator differs", stage="materialisation")
+    stock_by_key: dict[tuple[date, str], Mapping[str, Any]] = {}
+    for raw in stock_daily_inputs:
+        key = (raw.get("source_date"), str(raw.get("sector_code")))
+        if not isinstance(key[0], date) or key in stock_by_key:
+            raise _fail(REASON_INPUT, "G2-A stock-derived input keys differ", stage="materialisation")
+        stock_by_key[key] = raw
+    position = {day: index for index, day in enumerate(ordered)}
+    target_position = {day: index for index, day in enumerate(target_ordered)}
+
+    def finite_close(day: date, sector: str | None = None) -> float | None:
+        raw = benchmark_close.get(day) if sector is None else sector_close.get((day, sector))
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            return None
+        return value if math.isfinite(value) and value > 0 else None
+
+    def relative_returns(days: Sequence[date], sector: str) -> list[float] | None:
+        values: list[float] = []
+        for day in days:
+            index = position[day]
+            if index == 0:
+                return None
+            previous = ordered[index - 1]
+            sector_now, sector_previous = finite_close(day, sector), finite_close(previous, sector)
+            market_now, market_previous = finite_close(day), finite_close(previous)
+            if None in {sector_now, sector_previous, market_now, market_previous}:
+                return None
+            assert sector_now is not None and sector_previous is not None
+            assert market_now is not None and market_previous is not None
+            values.append(sector_now / sector_previous - market_now / market_previous)
+        return values
+
+    def moneyflow_intensity(
+        decision_index: int,
+        sector: str,
+    ) -> tuple[float, str | None]:
+        """Return the causal 20-day intensity ending at decision t-1.
+
+        ``decision_index`` identifies t.  Moving it back five canonical open
+        days therefore gives the approved t-6 endpoint for the lagged term.
+        """
+
+        if decision_index < 20:
+            return math.nan, "hmm_risk_rotation_moneyflow_history_incomplete"
+        return _moneyflow_intensity_from_window(
+            ordered[decision_index - 20 : decision_index],
+            sector,
+            stock_by_key,
+        )
+
+    rows: list[dict[str, Any]] = []
+    for decision_index, decision_day in enumerate(ordered):
+        raw_targets: dict[int, dict[str, float]] = {item: {} for item in HORIZONS}
+        if include_targets:
+            for horizon in HORIZONS:
+                target_index = target_position[decision_day]
+                future_index = target_index + horizon
+                if future_index >= len(target_ordered):
+                    continue
+                future_day = target_ordered[future_index]
+                market_now, market_future = finite_close(decision_day), finite_close(future_day)
+                if market_now is None or market_future is None:
+                    continue
+                for sector in sectors:
+                    sector_now, sector_future = finite_close(decision_day, sector), finite_close(future_day, sector)
+                    if sector_now is None or sector_future is None:
+                        raw_targets[horizon].clear()
+                        break
+                    raw_targets[horizon][sector] = sector_future / sector_now - market_future / market_now
+        centered_targets: dict[int, dict[str, float]] = {}
+        for horizon in HORIZONS:
+            values = raw_targets[horizon]
+            if len(values) == CANONICAL_SECTOR_COUNT:
+                median = float(np.median(list(values.values())))
+                centered_targets[horizon] = {sector: value - median for sector, value in values.items()}
+            else:
+                centered_targets[horizon] = {}
+
+        for sector in sectors:
+            row: dict[str, Any] = {"trade_date": decision_day, "sector_code": sector}
+            moneyflow_value, moneyflow_reason = moneyflow_intensity(decision_index, sector)
+            lagged_moneyflow_value, lagged_moneyflow_reason = moneyflow_intensity(decision_index - 5, sector)
+            for lookback in (5, 10, 20, 60):
+                if decision_index < lookback:
+                    value = math.nan
+                else:
+                    source_days = ordered[decision_index - lookback : decision_index]
+                    sector_start = (
+                        finite_close(ordered[decision_index - lookback - 1], sector)
+                        if decision_index > lookback
+                        else None
+                    )
+                    sector_end = finite_close(ordered[decision_index - 1], sector)
+                    market_start = (
+                        finite_close(ordered[decision_index - lookback - 1]) if decision_index > lookback else None
+                    )
+                    market_end = finite_close(ordered[decision_index - 1])
+                    value = (
+                        sector_end / sector_start - market_end / market_start
+                        if None not in {sector_start, sector_end, market_start, market_end}
+                        and len(source_days) == lookback
+                        else math.nan
+                    )
+                row[f"relative_momentum_{lookback}d"] = value
+            if decision_index >= 20:
+                source_days = ordered[decision_index - 20 : decision_index]
+                excess = relative_returns(source_days, sector)
+                sector_path = [finite_close(item, sector) for item in source_days]
+                market_path = [finite_close(item) for item in source_days]
+                if excess is not None:
+                    row["relative_downside_volatility_20d"] = -math.sqrt(
+                        math.fsum(min(item, 0.0) ** 2 for item in excess) / 20.0
+                    )
+                else:
+                    row["relative_downside_volatility_20d"] = math.nan
+                if None not in sector_path and None not in market_path:
+                    sector_array = np.asarray(sector_path, dtype=np.float64)
+                    market_array = np.asarray(market_path, dtype=np.float64)
+                    sector_mdd = float(np.max(1.0 - sector_array / np.maximum.accumulate(sector_array)))
+                    market_mdd = float(np.max(1.0 - market_array / np.maximum.accumulate(market_array)))
+                    row["relative_max_drawdown_20d"] = market_mdd - sector_mdd
+                else:
+                    row["relative_max_drawdown_20d"] = math.nan
+            else:
+                row["relative_downside_volatility_20d"] = math.nan
+                row["relative_max_drawdown_20d"] = math.nan
+            row["moneyflow_intensity_20d"] = moneyflow_value
+            if math.isfinite(moneyflow_value) and math.isfinite(lagged_moneyflow_value):
+                row["moneyflow_intensity_delta_5d"] = moneyflow_value - lagged_moneyflow_value
+                moneyflow_delta_reason = None
+            else:
+                row["moneyflow_intensity_delta_5d"] = math.nan
+                moneyflow_delta_reason = moneyflow_reason or lagged_moneyflow_reason
+            previous_day = ordered[decision_index - 1] if decision_index else None
+            breadth = stock_by_key.get((previous_day, sector)) if previous_day is not None else None
+            breadth_value = breadth.get("pit_breadth_above_ma20") if breadth is not None else None
+            row["pit_breadth_above_ma20"] = (
+                float(breadth_value) if breadth_value is not None and math.isfinite(float(breadth_value)) else math.nan
+            )
+            if include_targets:
+                for horizon in HORIZONS:
+                    row[f"target_{horizon}d"] = centered_targets[horizon].get(sector, math.nan)
+                    row[f"target_{horizon}d_mature"] = math.isfinite(float(row[f"target_{horizon}d"]))
+            if include_risk_target:
+                target_index = target_position[decision_day]
+                adverse_values: list[float] = []
+                sector_start = finite_close(decision_day, sector)
+                market_start = finite_close(decision_day)
+                if (
+                    sector_start is not None
+                    and market_start is not None
+                    and target_index + FIXED_HORIZON < len(target_ordered)
+                ):
+                    for offset in range(1, FIXED_HORIZON + 1):
+                        outcome_day = target_ordered[target_index + offset]
+                        sector_outcome = finite_close(outcome_day, sector)
+                        market_outcome = finite_close(outcome_day)
+                        if sector_outcome is None or market_outcome is None:
+                            adverse_values.clear()
+                            break
+                        adverse_values.append(sector_outcome / sector_start - market_outcome / market_start)
+                adverse = min(adverse_values) if len(adverse_values) == FIXED_HORIZON else math.nan
+                row["relative_adverse_excursion_10d"] = adverse
+                row["risk_event_10d"] = float(adverse <= -0.05) if math.isfinite(adverse) else math.nan
+                row["risk_event_10d_mature"] = math.isfinite(adverse)
+                row["reason__risk_event_10d"] = (
+                    None if math.isfinite(adverse) else "hmm_risk_risk_l1_target_unavailable"
+                )
+            for feature in V14_CONTINUOUS_FEATURES:
+                value = float(row[feature])
+                if math.isfinite(value):
+                    row[f"reason__{feature}"] = None
+                elif feature == "pit_breadth_above_ma20":
+                    row[f"reason__{feature}"] = (
+                        str(breadth.get("breadth_reason_code"))
+                        if breadth is not None and breadth.get("breadth_reason_code")
+                        else "hmm_risk_rotation_breadth_coverage_insufficient"
+                    )
+                elif feature == "moneyflow_intensity_20d":
+                    row[f"reason__{feature}"] = moneyflow_reason
+                elif feature == "moneyflow_intensity_delta_5d":
+                    row[f"reason__{feature}"] = (
+                        moneyflow_delta_reason or "hmm_risk_rotation_moneyflow_history_incomplete"
+                    )
+                else:
+                    row[f"reason__{feature}"] = "hmm_risk_rotation_price_history_incomplete"
+            if include_targets:
+                for target in TARGET_COLUMNS:
+                    row[f"reason__{target}"] = (
+                        None if bool(row[f"{target}_mature"]) else "hmm_risk_rotation_label_not_mature_or_incomplete"
+                    )
+            rows.append(row)
+    return pd.DataFrame.from_records(rows).set_index(["trade_date", "sector_code"]).sort_index()
+
+
+def build_label_free_feature_panel(
+    *,
+    calendar: Sequence[date],
+    sector_close: Mapping[tuple[date, str], float],
+    benchmark_close: Mapping[date, float],
+    stock_daily_inputs: Sequence[Mapping[str, Any]],
+) -> pd.DataFrame:
+    """Build the shared causal feature panel without constructing any target."""
+
+    return build_materialised_panel(
+        calendar=calendar,
+        sector_close=sector_close,
+        benchmark_close=benchmark_close,
+        stock_daily_inputs=stock_daily_inputs,
+        include_targets=False,
+        include_risk_target=False,
+    )
+
+
+def validate_input_bundle(
+    bundle: Mapping[str, Any],
+    *,
+    require_training_delta_coverage: bool = True,
+) -> tuple[pd.DataFrame, tuple[date, ...], tuple[str, ...], dict[date, float]]:
+    """Validate the materialised development panel without accepting aliases."""
+
+    if (
+        set(bundle) != {"schema_version", "panel", "benchmark_close", "identity"}
+        or bundle.get("schema_version") != INPUT_SCHEMA_VERSION
+    ):
+        raise _fail(REASON_INPUT, "G2-A input bundle envelope differs", stage="input")
+    identity = bundle.get("identity")
+    if not isinstance(identity, Mapping):
+        raise _fail(REASON_INPUT, "G2-A input identity is missing", stage="input")
+    required_identity = {
+        "source_sha256",
+        "mapping_sha256",
+        "feature_contract_sha256",
+        "development_end",
+        "source_cutoff",
+        "tail_mature_decision_counts",
+        "tail_mature_date_sha256",
+    }
+    if set(identity) != required_identity or identity.get("development_end") != "2026-03-31":
+        raise _fail(REASON_INPUT, "G2-A input identity differs", stage="input")
+    for field in {"source_sha256", "mapping_sha256", "feature_contract_sha256", "tail_mature_date_sha256"}:
+        value = identity.get(field)
+        if not isinstance(value, str) or len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+            raise _fail(REASON_INPUT, f"G2-A {field} is not canonical SHA-256", stage="input")
+    try:
+        source_cutoff = date.fromisoformat(str(identity["source_cutoff"]))
+    except ValueError as exc:
+        raise _fail(REASON_INPUT, "G2-A source cutoff is invalid", stage="input") from exc
+    tail_counts = identity.get("tail_mature_decision_counts")
+    if (
+        source_cutoff < date(2026, 4, 1)
+        or not isinstance(tail_counts, Mapping)
+        or set(tail_counts) != {"5", "10"}
+        or any(not isinstance(tail_counts[key], int) or tail_counts[key] < 0 for key in ("5", "10"))
+    ):
+        raise _fail(REASON_INPUT, "G2-A tail maturity identity differs", stage="input")
+    panel = bundle.get("panel")
+    if not isinstance(panel, pd.DataFrame):
+        raise _fail(REASON_INPUT, "G2-A panel is missing", stage="input")
+    frame = _normalise_panel(panel)
+    expected_columns = {*VALUE_COLUMNS, *REASON_COLUMNS, *MATURITY_COLUMNS}
+    if set(frame.columns) != expected_columns:
+        raise _fail(REASON_FEATURE, "G2-A feature/target columns differ", stage="input")
+    calendar = tuple(sorted(set(frame.index.get_level_values("trade_date"))))
+    sectors = tuple(sorted(set(frame.index.get_level_values("sector_code"))))
+    if len(sectors) != CANONICAL_SECTOR_COUNT or not calendar or calendar[-1] != date(2026, 3, 31):
+        raise _fail(REASON_INPUT, "G2-A canonical sector/calendar boundary differs", stage="input")
+    counts = frame.groupby(level="trade_date", sort=True).size()
+    if not counts.eq(CANONICAL_SECTOR_COUNT).all():
+        raise _fail(REASON_INPUT, "G2-A daily canonical denominator differs", stage="input")
+    if any(not pd.api.types.is_numeric_dtype(frame[column]) for column in VALUE_COLUMNS):
+        raise _fail(REASON_FEATURE, "G2-A numeric value column dtype differs", stage="input")
+    try:
+        numeric = frame.loc[:, list(VALUE_COLUMNS)].apply(pd.to_numeric, errors="raise")
+    except (TypeError, ValueError) as exc:
+        raise _fail(REASON_FEATURE, "G2-A numeric value columns contain non-numeric data", stage="input") from exc
+    for column in VALUE_COLUMNS:
+        values = numeric[column].to_numpy(dtype=np.float64)
+        if np.isinf(values).any():
+            raise _fail(REASON_FEATURE, f"G2-A {column} contains infinite values", stage="input")
+        reasons = frame[f"reason__{column}"]
+        valid_reason = reasons.map(lambda value: value is None or (isinstance(value, str) and bool(value)))
+        finite = np.isfinite(values)
+        reason_missing = reasons.isna().to_numpy()
+        if not bool(valid_reason.all()) or np.any(finite != reason_missing):
+            raise _fail(REASON_FEATURE, f"G2-A {column} validity/reason differs", stage="input")
+    for horizon in HORIZONS:
+        target = f"target_{horizon}d"
+        maturity = frame[f"{target}_mature"]
+        if not maturity.map(lambda value: isinstance(value, (bool, np.bool_))).all():
+            raise _fail(REASON_LABEL, f"G2-A {target} maturity type differs", stage="input")
+        if not np.array_equal(maturity.to_numpy(dtype=bool), np.isfinite(numeric[target].to_numpy(dtype=np.float64))):
+            raise _fail(REASON_LABEL, f"G2-A {target} maturity/value differs", stage="input")
+    frame.loc[:, list(VALUE_COLUMNS)] = numeric
+    raw_benchmark = bundle.get("benchmark_close")
+    if not isinstance(raw_benchmark, Mapping):
+        raise _fail(REASON_INPUT, "G2-A CSI300 close input is missing", stage="input")
+    benchmark: dict[date, float] = {}
+    for raw_day, raw_value in raw_benchmark.items():
+        if not isinstance(raw_day, date):
+            raise _fail(REASON_INPUT, "G2-A CSI300 date identity differs", stage="input")
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise _fail(REASON_INPUT, "G2-A CSI300 close is invalid", stage="input") from exc
+        if not math.isfinite(value) or value <= 0:
+            raise _fail(REASON_INPUT, "G2-A CSI300 close is invalid", stage="input")
+        benchmark[raw_day] = value
+    if any(day not in benchmark for day in calendar):
+        raise _fail(REASON_INPUT, "G2-A CSI300 calendar coverage differs", stage="input")
+    if require_training_delta_coverage:
+        _delta_feature_coverage_receipt(frame, calendar)
+    return frame, calendar, sectors, benchmark
+
+
+def _delta_feature_coverage_receipt(
+    frame: pd.DataFrame,
+    calendar: Sequence[date],
+) -> dict[str, Any]:
+    """Validate that v1.4 cannot silently fall back to the v1.3 feature set."""
+
+    feature = "moneyflow_intensity_delta_5d"
+    scopes: list[dict[str, Any]] = []
+
+    def add_scope(name: str, dates: Sequence[date]) -> None:
+        if not dates:
+            raise _fail(REASON_FEATURE, "G2-A v1.4 feature coverage scope is empty", stage="input", scope=name)
+        values = frame.loc[(list(dates), slice(None)), feature].to_numpy(dtype=np.float64)
+        finite_count = int(np.isfinite(values).sum())
+        row_count = int(len(values))
+        coverage = finite_count / row_count if row_count else 0.0
+        scopes.append(
+            {
+                "scope": name,
+                "start": dates[0].isoformat(),
+                "end": dates[-1].isoformat(),
+                "row_count": row_count,
+                "finite_count": finite_count,
+                "coverage": coverage,
+            }
+        )
+        if coverage < MINIMUM_DELTA_FEATURE_COVERAGE:
+            raise _fail(
+                REASON_FEATURE,
+                "G2-A v1.4 moneyflow delta coverage is insufficient",
+                stage="input",
+                scope=name,
+                row_count=row_count,
+                finite_count=finite_count,
+                coverage=coverage,
+                minimum_coverage=MINIMUM_DELTA_FEATURE_COVERAGE,
+            )
+
+    ordered = tuple(calendar)
+    add_scope("full-development", ordered)
+    for fold in fold_slices(ordered, horizon=10):
+        add_scope(f"{fold.name}:train", fold.train_dates)
+        add_scope(f"{fold.name}:validation", fold.validation_dates)
+    body = {
+        "feature": feature,
+        "minimum_coverage": MINIMUM_DELTA_FEATURE_COVERAGE,
+        "scopes": scopes,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _v16_feature_coverage_receipt(frame: pd.DataFrame, folds: Sequence[FoldSlice]) -> dict[str, Any]:
+    scopes: list[dict[str, Any]] = []
+    all_dates: list[date] = []
+    for fold in folds:
+        all_dates.extend(fold.validation_dates)
+        values = frame.loc[(list(fold.validation_dates), slice(None)), V16_SCORE_FEATURE].to_numpy(dtype=np.float64)
+        finite_count = int(np.isfinite(values).sum())
+        row_count = len(values)
+        coverage = finite_count / row_count
+        scopes.append(
+            {
+                "scope": f"{fold.name}:validation",
+                "start": fold.validation_dates[0].isoformat(),
+                "end": fold.validation_dates[-1].isoformat(),
+                "row_count": row_count,
+                "finite_count": finite_count,
+                "coverage": coverage,
+            }
+        )
+        if coverage < MINIMUM_DELTA_FEATURE_COVERAGE:
+            raise _fail(
+                REASON_FEATURE,
+                "G2-A v1.6 validation moneyflow delta coverage is insufficient",
+                stage="input",
+                scope=fold.name,
+                coverage=coverage,
+            )
+    values = frame.loc[(all_dates, slice(None)), V16_SCORE_FEATURE].to_numpy(dtype=np.float64)
+    finite_count = int(np.isfinite(values).sum())
+    row_count = len(values)
+    coverage = finite_count / row_count
+    scopes.append(
+        {
+            "scope": "all-oof-validation",
+            "start": all_dates[0].isoformat(),
+            "end": all_dates[-1].isoformat(),
+            "row_count": row_count,
+            "finite_count": finite_count,
+            "coverage": coverage,
+        }
+    )
+    if coverage < MINIMUM_DELTA_FEATURE_COVERAGE:
+        raise _fail(
+            REASON_FEATURE,
+            "G2-A v1.6 overall OOF moneyflow delta coverage is insufficient",
+            stage="input",
+            coverage=coverage,
+        )
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_g2a_v16_feature_coverage_v1",
+        "feature": V16_SCORE_FEATURE,
+        "minimum_coverage": MINIMUM_DELTA_FEATURE_COVERAGE,
+        "scopes": scopes,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        while block := handle.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _logical_input_sha256(panel: pd.DataFrame, benchmark: Mapping[date, float]) -> str:
+    rows = []
+    for identity, raw in panel.sort_index().iterrows():
+        values = []
+        for column in VALUE_COLUMNS:
+            value = float(raw[column])
+            values.append(value if math.isfinite(value) else None)
+        reasons = [raw[column] if isinstance(raw[column], str) else None for column in REASON_COLUMNS]
+        maturity = [bool(raw[column]) for column in MATURITY_COLUMNS]
+        rows.append([identity[0].isoformat(), str(identity[1]), *values, *reasons, *maturity])
+    return canonical_sha256(
+        {
+            "columns": [*VALUE_COLUMNS, *REASON_COLUMNS, *MATURITY_COLUMNS],
+            "rows": rows,
+            "benchmark_close": [[day.isoformat(), float(benchmark[day])] for day in sorted(benchmark)],
+        }
+    )
+
+
+def _external_output_root(path: Path, forbidden_roots: Sequence[Path]) -> Path:
+    raw = Path(path)
+    if not raw.is_absolute():
+        raise _fail(REASON_INPUT, "G2-A bundle output must be absolute", stage="writer")
+    parent = raw.parent.resolve(strict=True)
+    output = parent / raw.name
+    for forbidden in forbidden_roots:
+        try:
+            output.relative_to(Path(forbidden).resolve(strict=True))
+        except ValueError:
+            continue
+        raise _fail(REASON_INPUT, "G2-A bundle output cannot be inside the repository", stage="writer")
+    if output.exists() or output.is_symlink():
+        raise _fail(REASON_INPUT, "G2-A bundle output already exists", stage="writer")
+    return output
+
+
+def write_input_bundle(
+    bundle: Mapping[str, Any],
+    output_root: Path,
+    *,
+    forbidden_roots: Sequence[Path],
+) -> dict[str, Any]:
+    panel, calendar, sectors, benchmark = validate_input_bundle(bundle)
+    output = _external_output_root(output_root, forbidden_roots)
+    logical_sha256 = _logical_input_sha256(panel, benchmark)
+    with tempfile.TemporaryDirectory(prefix=f".{output.name}.tmp-", dir=output.parent) as raw_temporary:
+        temporary = Path(raw_temporary)
+        panel_path = temporary / "panel.h5"
+        benchmark_path = temporary / "benchmark.h5"
+        storage_panel = panel.copy()
+        storage_panel.index = pd.MultiIndex.from_arrays(
+            [
+                pd.to_datetime(storage_panel.index.get_level_values("trade_date")),
+                storage_panel.index.get_level_values("sector_code"),
+            ],
+            names=["trade_date", "sector_code"],
+        )
+        for column in REASON_COLUMNS:
+            storage_panel[column] = storage_panel[column].fillna("").astype(str)
+        storage_panel.to_hdf(
+            panel_path,
+            key="data",
+            mode="w",
+            format="table",
+            data_columns=["trade_date", "sector_code"],
+        )
+        pd.DataFrame(
+            {"close": [benchmark[day] for day in calendar]},
+            index=pd.DatetimeIndex(pd.to_datetime(calendar), name="trade_date"),
+        ).to_hdf(benchmark_path, key="data", mode="w", format="table", data_columns=["trade_date"])
+        body = {
+            "schema_version": INPUT_MANIFEST_SCHEMA_VERSION,
+            "input_schema_version": INPUT_SCHEMA_VERSION,
+            "identity": dict(bundle["identity"]),
+            "files": {
+                "panel": {"path": "panel.h5", "sha256": _sha256_file(panel_path)},
+                "benchmark": {"path": "benchmark.h5", "sha256": _sha256_file(benchmark_path)},
+            },
+            "calendar_start": calendar[0].isoformat(),
+            "calendar_end": calendar[-1].isoformat(),
+            "calendar_count": len(calendar),
+            "sector_count": len(sectors),
+            "row_count": len(panel),
+            "logical_input_sha256": logical_sha256,
+        }
+        manifest = {**body, "manifest_sha256": canonical_sha256(body)}
+        (temporary / "manifest.json").write_bytes(canonical_json_bytes(manifest) + b"\n")
+        readback = read_input_bundle(temporary, forbidden_roots=())
+        if readback["manifest"]["manifest_sha256"] != manifest["manifest_sha256"]:
+            raise _fail(REASON_INPUT, "G2-A bundle readback differs", stage="writer")
+        temporary.rename(output)
+    return manifest
+
+
+def read_input_bundle(root: Path, *, forbidden_roots: Sequence[Path]) -> dict[str, Any]:
+    raw = Path(root)
+    if not raw.is_absolute() or raw.is_symlink():
+        raise _fail(REASON_INPUT, "G2-A bundle root is invalid", stage="reader")
+    resolved = raw.resolve(strict=True)
+    for forbidden in forbidden_roots:
+        try:
+            resolved.relative_to(Path(forbidden).resolve(strict=True))
+        except ValueError:
+            continue
+        raise _fail(REASON_INPUT, "G2-A bundle root cannot be inside the repository", stage="reader")
+    manifest_path = resolved / "manifest.json"
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _fail(REASON_INPUT, "G2-A bundle manifest cannot be read", stage="reader") from exc
+    body = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    if (
+        set(manifest)
+        != {
+            "schema_version",
+            "input_schema_version",
+            "identity",
+            "files",
+            "calendar_start",
+            "calendar_end",
+            "calendar_count",
+            "sector_count",
+            "row_count",
+            "logical_input_sha256",
+            "manifest_sha256",
+        }
+        or manifest.get("schema_version") != INPUT_MANIFEST_SCHEMA_VERSION
+        or manifest.get("input_schema_version") != INPUT_SCHEMA_VERSION
+        or manifest.get("manifest_sha256") != canonical_sha256(body)
+    ):
+        raise _fail(REASON_INPUT, "G2-A bundle manifest differs", stage="reader")
+    files = manifest.get("files")
+    if not isinstance(files, Mapping) or set(files) != {"panel", "benchmark"}:
+        raise _fail(REASON_INPUT, "G2-A bundle file manifest differs", stage="reader")
+    resolved_files: dict[str, Path] = {}
+    for name, expected_name in (("panel", "panel.h5"), ("benchmark", "benchmark.h5")):
+        entry = files.get(name)
+        if not isinstance(entry, Mapping) or set(entry) != {"path", "sha256"} or entry.get("path") != expected_name:
+            raise _fail(REASON_INPUT, "G2-A bundle file entry differs", stage="reader")
+        path = (resolved / expected_name).resolve(strict=True)
+        if path.parent != resolved or path.is_symlink() or _sha256_file(path) != entry.get("sha256"):
+            raise _fail(REASON_INPUT, "G2-A bundle file identity differs", stage="reader")
+        resolved_files[name] = path
+    try:
+        panel = pd.read_hdf(resolved_files["panel"])
+        benchmark_frame = pd.read_hdf(resolved_files["benchmark"])
+    except Exception as exc:
+        raise _fail(REASON_INPUT, "G2-A bundle H5 cannot be read", stage="reader") from exc
+    if tuple(benchmark_frame.columns) != ("close",) or benchmark_frame.index.name != "trade_date":
+        raise _fail(REASON_INPUT, "G2-A benchmark readback schema differs", stage="reader")
+    for column in REASON_COLUMNS:
+        if column not in panel:
+            raise _fail(REASON_INPUT, "G2-A panel reason readback differs", stage="reader")
+        panel[column] = panel[column].replace("", None)
+    benchmark = {pd.Timestamp(day).date(): float(value) for day, value in benchmark_frame["close"].items()}
+    bundle = {
+        "schema_version": INPUT_SCHEMA_VERSION,
+        "panel": panel,
+        "benchmark_close": benchmark,
+        "identity": dict(manifest["identity"]),
+    }
+    validated_panel, calendar, sectors, validated_benchmark = validate_input_bundle(bundle)
+    if (
+        manifest.get("calendar_start") != calendar[0].isoformat()
+        or manifest.get("calendar_end") != calendar[-1].isoformat()
+        or manifest.get("calendar_count") != len(calendar)
+        or manifest.get("sector_count") != len(sectors)
+        or manifest.get("row_count") != len(validated_panel)
+        or manifest.get("logical_input_sha256") != _logical_input_sha256(validated_panel, validated_benchmark)
+    ):
+        raise _fail(REASON_INPUT, "G2-A bundle logical readback differs", stage="reader")
+    return {"bundle": bundle, "manifest": manifest}
+
+
+def fold_slices(calendar: Sequence[date], *, horizon: int) -> tuple[FoldSlice, ...]:
+    if horizon not in HORIZONS:
+        raise _fail(REASON_HORIZON, "unsupported G2-A horizon", stage="fold")
+    ordered = tuple(calendar)
+    if ordered != tuple(sorted(set(ordered))):
+        raise _fail(REASON_INPUT, "G2-A calendar is not sorted and unique", stage="fold")
+    position = {item: index for index, item in enumerate(ordered)}
+    output: list[FoldSlice] = []
+    for name, start, end in FOLDS:
+        validation = tuple(item for item in ordered if start <= item <= end)
+        if not validation or validation[0] != next((item for item in ordered if item >= start), None):
+            raise _fail(REASON_HORIZON, f"{name} validation calendar is incomplete", stage="fold")
+        first_index = position[validation[0]]
+        train_end_index = first_index - horizon - 1
+        train_start_index = train_end_index - ROLLING_WINDOW_OPEN_DAYS + 1
+        if train_start_index < 0:
+            raise _fail(REASON_HORIZON, f"{name} rolling train is incomplete", stage="fold")
+        train = ordered[train_start_index : train_end_index + 1]
+        purge = ordered[train_end_index + 1 : first_index]
+        if len(train) != ROLLING_WINDOW_OPEN_DAYS or len(purge) != horizon:
+            raise _fail(REASON_HORIZON, f"{name} purge/train arithmetic differs", stage="fold")
+        output.append(FoldSlice(name, train, purge, validation))
+    return tuple(output)
+
+
+def _market_raw_features(benchmark: Mapping[date, float], calendar: Sequence[date]) -> pd.DataFrame:
+    ordered = tuple(calendar)
+    rows: list[dict[str, Any]] = []
+    for index, day in enumerate(ordered):
+        daily_return = math.nan
+        volatility = math.nan
+        if index >= 1:
+            daily_return = (
+                benchmark[ordered[index - 1]] / benchmark[ordered[index - 2]] - 1.0 if index >= 2 else math.nan
+            )
+        if index >= 4:
+            returns = [
+                benchmark[ordered[item]] / benchmark[ordered[item - 1]] - 1.0 for item in range(index - 3, index)
+            ]
+            volatility = float(np.std(np.asarray(returns, dtype=np.float64), ddof=0))
+        rows.append({"trade_date": day, "daily_return": daily_return, "volatility_3d": volatility})
+    return pd.DataFrame.from_records(rows).set_index("trade_date")
+
+
+def _prepared_market_component(
+    raw: pd.DataFrame,
+    *,
+    dates: Sequence[date],
+    mean: np.ndarray,
+    std: np.ndarray,
+    preprocessor: Preprocessor,
+) -> PreparedComponent:
+    selected = raw.reindex(list(dates))
+    values = selected.loc[:, list(MARKET_FEATURES)].to_numpy(dtype=np.float64)
+    valid = np.isfinite(values).all(axis=1)
+    transformed = np.full(values.shape, np.nan, dtype=np.float64)
+    transformed[valid] = (values[valid] - mean) / std
+    sequences: list[SequenceData] = []
+    segment_dates: list[date] = []
+    segment_values: list[np.ndarray] = []
+    previous_position: int | None = None
+    calendar_position = {day: index for index, day in enumerate(raw.index)}
+
+    def flush() -> None:
+        if not segment_dates:
+            return
+        sequence_index = len(sequences)
+        sequences.append(
+            SequenceData(
+                key=f"000300.SH:{sequence_index}",
+                dates=tuple(segment_dates),
+                ordinals=tuple(calendar_position[item] for item in segment_dates),
+                values=np.vstack(segment_values).astype(np.float64),
+            )
+        )
+        segment_dates.clear()
+        segment_values.clear()
+
+    for row_index, day in enumerate(dates):
+        position = calendar_position[day]
+        if not valid[row_index]:
+            flush()
+            previous_position = None
+            continue
+        if previous_position is not None and position != previous_position + 1:
+            flush()
+        segment_dates.append(day)
+        segment_values.append(transformed[row_index])
+        previous_position = position
+    flush()
+    valid_dates = [day for day, accepted in zip(dates, valid, strict=True) if accepted]
+    return PreparedComponent(
+        component="market",
+        level="MARKET",
+        feature_names=MARKET_FEATURES,
+        expected_sector_count=1,
+        minimum_daily_count=1,
+        canonical_codes=("000300.SH",),
+        sequences=tuple(sequences),
+        preprocessor=preprocessor,
+        unavailable_items=tuple(
+            {"trade_date": day.isoformat(), "reason_code": "hmm_risk_rotation_market_context_unavailable"}
+            for day, accepted in zip(dates, valid, strict=True)
+            if not accepted
+        ),
+        valid_row_count=len(valid_dates),
+        valid_identity_sha256=canonical_sha256([item.isoformat() for item in valid_dates]),
+    )
+
+
+def fit_market_context(
+    benchmark: Mapping[date, float],
+    calendar: Sequence[date],
+    *,
+    train_dates: Sequence[date],
+    apply_dates: Sequence[date],
+) -> MarketContext:
+    """Fit the approved target-free CSI300 MARKET-CONTEXT-A once."""
+
+    raw = _market_raw_features(benchmark, calendar)
+    train = raw.reindex(list(train_dates)).loc[:, list(MARKET_FEATURES)]
+    values = train.to_numpy(dtype=np.float64)
+    if values.shape != (ROLLING_WINDOW_OPEN_DAYS, len(MARKET_FEATURES)) or not np.isfinite(values).all():
+        raise _fail(REASON_FEATURE, "market context train features are incomplete", stage="market_context")
+    mean = np.asarray([math.fsum(column.tolist()) / len(column) for column in values.T], dtype=np.float64)
+    variance = np.asarray(
+        [
+            math.fsum((float(value) - float(center)) ** 2 for value in column) / len(column)
+            for column, center in zip(values.T, mean, strict=True)
+        ],
+        dtype=np.float64,
+    )
+    std = np.sqrt(variance)
+    if not np.isfinite(std).all() or np.any(std <= 1e-12):
+        raise _fail(REASON_FEATURE, "market context train scale is invalid", stage="market_context")
+    preprocessor = Preprocessor(
+        feature_names=MARKET_FEATURES,
+        lower=tuple(float(value) for value in np.min(values, axis=0)),
+        upper=tuple(float(value) for value in np.max(values, axis=0)),
+        mean=tuple(float(value) for value in mean),
+        std=tuple(float(value) for value in std),
+        valid_row_count=len(values),
+        valid_identity_sha256=canonical_sha256([item.isoformat() for item in train_dates]),
+    )
+    train_component = _prepared_market_component(raw, dates=train_dates, mean=mean, std=std, preprocessor=preprocessor)
+    if len(train_component.sequences) != 1 or train_component.valid_row_count != ROLLING_WINDOW_OPEN_DAYS:
+        raise _fail(REASON_FEATURE, "market context train sequence is not contiguous", stage="market_context")
+    try:
+        fit = fit_jump_model(train_component, state_count=2, jump_penalty=4.0, seed=42)
+    except Exception as exc:
+        raise _fail(REASON_FIT, "market context jump fit failed", stage="market_context") from exc
+    semantic_scores = fit.centers[:, 0] - fit.centers[:, 1]
+    if not np.isfinite(semantic_scores).all() or abs(float(semantic_scores[0] - semantic_scores[1])) <= 1e-8:
+        raise _fail(REASON_FIT, "market context semantic states are tied", stage="market_context")
+    risk_on_state = int(np.argmax(semantic_scores))
+    apply_component = _prepared_market_component(raw, dates=apply_dates, mean=mean, std=std, preprocessor=preprocessor)
+    try:
+        paths = causal_states(apply_component, fit.centers, 4.0)
+    except Exception as exc:
+        raise _fail(REASON_FIT, "market context causal recursion failed", stage="market_context") from exc
+    signs: dict[date, float] = {}
+    for sequence, path in zip(apply_component.sequences, paths, strict=True):
+        for day, state in zip(sequence.dates, path, strict=True):
+            signs[day] = 1.0 if int(state) == risk_on_state else -1.0
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_market_context_a_v1",
+        "feature_names": list(MARKET_FEATURES),
+        "as_of_policy": "decision_t_reads_through_t_minus_1",
+        "volatility_window": 3,
+        "volatility_ddof": 0,
+        "zscore_ddof": 0,
+        "train_start": train_dates[0].isoformat(),
+        "train_end": train_dates[-1].isoformat(),
+        "train_count": len(train_dates),
+        "train_date_sha256": canonical_sha256([item.isoformat() for item in train_dates]),
+        "mean": mean.tolist(),
+        "std": std.tolist(),
+        "lower": np.min(values, axis=0).tolist(),
+        "upper": np.max(values, axis=0).tolist(),
+        "centers": fit.centers.tolist(),
+        "centers_sha256": canonical_sha256(fit.centers.tolist()),
+        "jump_penalty": 4.0,
+        "seed": 42,
+        "risk_on_state": risk_on_state,
+        "semantic_scores": semantic_scores.tolist(),
+        "apply_count": len(apply_dates),
+        "available_count": len(signs),
+        "available_date_sha256": canonical_sha256([item.isoformat() for item in sorted(signs)]),
+        "target_accessed": False,
+    }
+    return MarketContext(signs=signs, receipt={**body, "receipt_sha256": canonical_sha256(body)})
+
+
+def _with_market_signs(frame: pd.DataFrame, signs: Mapping[date, float]) -> pd.DataFrame:
+    result = frame.copy()
+    dates = result.index.get_level_values("trade_date")
+    result["market_regime_sign"] = [signs.get(day, math.nan) for day in dates]
+    return result
+
+
+def cross_section_rank_features(
+    frame: pd.DataFrame,
+    *,
+    continuous_features: Sequence[str] = CONTINUOUS_FEATURES,
+) -> pd.DataFrame:
+    result = frame.copy()
+    for feature in continuous_features:
+        grouped = result[feature].groupby(level="trade_date", sort=True)
+        ranks = grouped.rank(method="average")
+        counts = grouped.transform("count")
+        result[feature] = ((ranks - 1.0) / (counts - 1.0)) - 0.5
+        result.loc[counts <= 1, feature] = np.nan
+    return result
+
+
+def _spearman(left: np.ndarray, right: np.ndarray) -> float:
+    if len(left) < MINIMUM_METRIC_SECTORS or len(left) != len(right):
+        raise _fail(REASON_COVERAGE, "daily Rank IC denominator is insufficient", stage="metric")
+    if not np.isfinite(left).all() or not np.isfinite(right).all():
+        raise _fail(REASON_SCORE, "daily Rank IC input is non-finite", stage="metric")
+    left_rank = pd.Series(left).rank(method="average").to_numpy(dtype=np.float64)
+    right_rank = pd.Series(right).rank(method="average").to_numpy(dtype=np.float64)
+    if np.std(left_rank) == 0 or np.std(right_rank) == 0:
+        raise _fail(REASON_COVERAGE, "daily Rank IC is undefined", stage="metric")
+    value = float(np.corrcoef(left_rank, right_rank)[0, 1])
+    if not math.isfinite(value):
+        raise _fail(REASON_SCORE, "daily Rank IC is non-finite", stage="metric")
+    return value
+
+
+def newey_west(values: Sequence[float], *, lag: int) -> dict[str, float]:
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim != 1 or len(array) <= lag or lag < 0 or not np.isfinite(array).all():
+        raise _fail(REASON_HORIZON, "HAC input is not computable", stage="metric")
+    mean = float(array.mean())
+    centered = array - mean
+    lrv = float(np.dot(centered, centered) / len(array))
+    for offset in range(1, lag + 1):
+        covariance = float(np.dot(centered[offset:], centered[:-offset]) / len(array))
+        lrv += 2.0 * (1.0 - offset / (lag + 1.0)) * covariance
+    if not math.isfinite(lrv) or lrv <= 0:
+        raise _fail(REASON_HORIZON, "HAC long-run variance is not positive", stage="metric")
+    standard_error = math.sqrt(lrv / len(array))
+    return {
+        "mean": mean,
+        "long_run_variance": lrv,
+        "standard_error": standard_error,
+        "t_stat": mean / standard_error,
+        "lag": float(lag),
+        "count": float(len(array)),
+    }
+
+
+def _eligible_rows(
+    frame: pd.DataFrame,
+    *,
+    ridge: bool,
+    continuous_features: Sequence[str] = CONTINUOUS_FEATURES,
+    minimum_valid_continuous_features: int = MINIMUM_VALID_CONTINUOUS_FEATURES,
+) -> pd.Series:
+    market = frame["market_regime_sign"].isin((-1.0, 1.0))
+    finite_continuous = np.isfinite(frame.loc[:, list(continuous_features)].to_numpy(dtype=np.float64)).sum(axis=1)
+    minimum = len(continuous_features) if ridge else minimum_valid_continuous_features
+    return pd.Series(market.to_numpy() & (finite_continuous >= minimum), index=frame.index)
+
+
+def project_states(predictions: pd.Series) -> tuple[dict[tuple[date, str], str], dict[str, Any]]:
+    if not isinstance(predictions.index, pd.MultiIndex) or tuple(predictions.index.names) != (
+        "trade_date",
+        "sector_code",
+    ):
+        raise _fail(REASON_SCORE, "state projection score identity differs", stage="state_projection")
+    states: dict[tuple[date, str], str] = {}
+    daily: list[dict[str, Any]] = []
+    for day, group in predictions.groupby(level="trade_date", sort=True):
+        valid = [(str(code), float(value)) for (_raw_day, code), value in group.items() if math.isfinite(float(value))]
+        valid.sort(key=lambda item: (item[1], item[0]))
+        count = len(valid)
+        q = max(5, math.ceil(0.20 * count)) if count else 5
+        labels = ["neutral"] * count
+        for index in range(min(q, count)):
+            labels[index] = "fading"
+        for index in range(max(0, count - q), count):
+            labels[index] = "trending"
+        start = 0
+        boundary_ties: list[list[str]] = []
+        while start < count:
+            end = start + 1
+            anchor = valid[start][1]
+            while end < count and valid[end][1] - anchor <= STATE_TIE_EPSILON:
+                end += 1
+            if start < q < end or start < count - q < end:
+                for index in range(start, end):
+                    labels[index] = "neutral"
+                boundary_ties.append([valid[index][0] for index in range(start, end)])
+            start = end
+        for (code, _score), label in zip(valid, labels, strict=True):
+            states[(day, code)] = label
+        counts = {label: labels.count(label) for label in ("fading", "neutral", "trending")}
+        daily.append(
+            {
+                "trade_date": day.isoformat(),
+                "available_count": count,
+                "q": q,
+                "state_counts": counts,
+                "boundary_tie_groups": boundary_ties,
+                "spread_available": counts["fading"] >= 5 and counts["trending"] >= 5,
+            }
+        )
+    body = {
+        "daily": daily,
+        "state_rows_sha256": canonical_sha256(
+            [[day.isoformat(), code, state] for (day, code), state in sorted(states.items())]
+        ),
+    }
+    return states, {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _metrics(
+    predictions: pd.Series,
+    target: pd.Series,
+    sectors: Sequence[str],
+    states: Mapping[tuple[date, str], str] | None = None,
+) -> dict[str, Any]:
+    joined = pd.concat({"score": predictions, "target": target}, axis=1)
+    daily: list[dict[str, Any]] = []
+    available_by_sector = {code: 0 for code in sectors}
+    total_by_sector = {code: 0 for code in sectors}
+    for day, group in joined.groupby(level="trade_date", sort=True):
+        for code in sectors:
+            total_by_sector[code] += 1
+        valid = group[np.isfinite(group["score"]) & np.isfinite(group["target"])]
+        for code in valid.index.get_level_values("sector_code"):
+            available_by_sector[str(code)] += 1
+        row = {"trade_date": day.isoformat(), "available_sector_count": len(valid), "metric_valid": False}
+        if len(valid) >= MINIMUM_METRIC_SECTORS:
+            rank_ic = _spearman(valid["score"].to_numpy(dtype=np.float64), valid["target"].to_numpy(dtype=np.float64))
+            row.update(
+                {
+                    "metric_valid": True,
+                    "rank_ic": rank_ic,
+                }
+            )
+            if states is not None:
+                fading = [
+                    float(value)
+                    for (_raw_day, code), value in valid["target"].items()
+                    if states.get((day, str(code))) == "fading"
+                ]
+                trending = [
+                    float(value)
+                    for (_raw_day, code), value in valid["target"].items()
+                    if states.get((day, str(code))) == "trending"
+                ]
+                if len(fading) >= 5 and len(trending) >= 5:
+                    row["spread"] = float(np.mean(trending) - np.mean(fading))
+                    row["spread_valid"] = True
+                else:
+                    row["spread"] = None
+                    row["spread_valid"] = False
+        daily.append(row)
+    valid_ic = [float(item["rank_ic"]) for item in daily if item["metric_valid"]]
+    daily_ratio = len(valid_ic) / len(daily) if daily else 0.0
+    sector_ratios = {code: available_by_sector[code] / total_by_sector[code] for code in sectors}
+    spreads = [float(item["spread"]) for item in daily if item.get("spread_valid") is True]
+    mean_ic = float(np.mean(valid_ic)) if valid_ic else None
+    mean_spread = float(np.mean(spreads)) if spreads else None
+    return {
+        "daily": daily,
+        "daily_metric_coverage": daily_ratio,
+        "minimum_sector_coverage": min(sector_ratios.values()) if sector_ratios else 0.0,
+        "sector_coverage": sector_ratios,
+        "mean_rank_ic": mean_ic,
+        "mean_spread": mean_spread,
+        "metric_direction_divergence_observed": bool(
+            mean_ic is not None and mean_spread is not None and mean_ic * mean_spread < 0
+        ),
+        "rank_ic_sha256": canonical_sha256(valid_ic),
+        "coverage_accepted": daily_ratio >= MINIMUM_DEVELOPMENT_COVERAGE
+        and all(value >= MINIMUM_DEVELOPMENT_COVERAGE for value in sector_ratios.values()),
+    }
+
+
+def require_formal_runtime() -> dict[str, Any]:
+    if any(os.environ.get(name) != "1" for name in SINGLE_THREAD_ENVIRONMENT):
+        raise _fail(REASON_FIT, "formal runtime is not configured for one thread", stage="environment")
+    try:
+        from threadpoolctl import threadpool_info
+    except ImportError as exc:
+        raise _fail(REASON_FIT, "threadpoolctl is unavailable", stage="environment") from exc
+    pools = threadpool_info()
+    if any(int(item.get("num_threads", 0)) != 1 for item in pools):
+        raise _fail(REASON_FIT, "effective native threadpool count is not one", stage="environment", pools=pools)
+    identity = runtime_identity()
+    if identity["packages"].get("lightgbm") != "4.6.0":
+        raise _fail(REASON_FIT, "LightGBM version differs from approved contract", stage="environment")
+    return {
+        **identity,
+        "thread_environment": {name: os.environ[name] for name in SINGLE_THREAD_ENVIRONMENT},
+        "pools": pools,
+    }
+
+
+def _lightgbm_profile() -> dict[str, Any]:
+    return {
+        "boosting_type": "gbdt",
+        "objective": "regression_l1",
+        "class_weight": None,
+        "max_depth": 3,
+        "num_leaves": 7,
+        "learning_rate": 0.03,
+        "n_estimators": 240,
+        "subsample_for_bin": 200000,
+        "min_child_samples": MINIMUM_LEAF_ROW_COUNT,
+        "min_child_weight": 0.001,
+        "min_split_gain": 0.0,
+        "reg_alpha": 1.0,
+        "reg_lambda": 10.0,
+        "subsample": 1.0,
+        "subsample_freq": 0,
+        "colsample_bytree": 1.0,
+        "max_bin": 63,
+        "min_data_in_bin": 3,
+        "feature_pre_filter": False,
+        "use_missing": True,
+        "zero_as_missing": False,
+        "extra_trees": False,
+        "path_smooth": 0.0,
+        "max_delta_step": 0.0,
+        "random_state": 42,
+        "n_jobs": 1,
+        "deterministic": True,
+        "force_col_wise": True,
+        "importance_type": "split",
+        "verbosity": -1,
+    }
+
+
+def _leaf_date_coverage(
+    estimator: Any,
+    features: pd.DataFrame,
+    dates: Sequence[date],
+    *,
+    fit_identity: str,
+) -> dict[str, Any]:
+    leaves = np.asarray(estimator.predict(features, pred_leaf=True))
+    if leaves.ndim == 1:
+        leaves = leaves.reshape(-1, 1)
+    if (
+        leaves.ndim != 2
+        or leaves.shape[0] != len(features)
+        or leaves.shape[1] == 0
+        or len(dates) != len(features)
+        or not np.isfinite(leaves).all()
+        or np.any(leaves < 0)
+        or not np.equal(leaves, np.floor(leaves)).all()
+    ):
+        raise _fail(
+            REASON_LEAF,
+            "GBDT leaf identity matrix is invalid",
+            stage="leaf_date_coverage",
+            fit_identity=fit_identity,
+            leaf_shape=list(leaves.shape),
+            feature_rows=len(features),
+            date_rows=len(dates),
+        )
+    observations: list[tuple[int, int, int]] = []
+    date_array = np.asarray(dates, dtype=object)
+    for tree_index in range(leaves.shape[1]):
+        for leaf_id in sorted(set(int(value) for value in leaves[:, tree_index])):
+            distinct = len(set(date_array[leaves[:, tree_index] == leaf_id]))
+            observations.append((tree_index, leaf_id, distinct))
+    if not observations:
+        raise _fail(
+            REASON_LEAF,
+            "GBDT leaf coverage is empty",
+            stage="leaf_date_coverage",
+            fit_identity=fit_identity,
+        )
+    counts = np.asarray([item[2] for item in observations], dtype=np.float64)
+    below_target = [[tree, leaf, count] for tree, leaf, count in observations if count < LEAF_DISTINCT_DATE_TARGET]
+    below_hard_floor = [
+        [tree, leaf, count] for tree, leaf, count in observations if count < MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR
+    ]
+    below_target_fraction = len(below_target) / len(observations)
+    distribution_budget_passed = len(below_target) * 100 <= len(observations)
+    contract_passed = not below_hard_floor and distribution_budget_passed
+    body = {
+        "hard_floor_distinct_dates": MINIMUM_LEAF_DISTINCT_DATE_HARD_FLOOR,
+        "target_distinct_dates": LEAF_DISTINCT_DATE_TARGET,
+        "maximum_below_target_leaf_fraction": MAXIMUM_BELOW_TARGET_LEAF_FRACTION,
+        "minimum": int(counts.min()),
+        "p01": float(np.quantile(counts, 0.01)),
+        "p05": float(np.quantile(counts, 0.05)),
+        "median": float(np.median(counts)),
+        "leaf_count": len(observations),
+        "below_target_leaf_count": len(below_target),
+        "below_target_leaf_fraction": below_target_fraction,
+        "below_target_leaf_ids": below_target,
+        "hard_floor_violating_leaf_ids": below_hard_floor,
+        "contract_passed": contract_passed,
+        "distribution_sha256": canonical_sha256(observations),
+    }
+    if not contract_passed:
+        raise _fail(
+            REASON_LEAF,
+            "GBDT leaf distinct-date distribution coverage failed",
+            stage="leaf_date_coverage",
+            fit_identity=fit_identity,
+            summary=body,
+        )
+    return body
+
+
+def _contribution_receipt(
+    estimator: Any,
+    features: pd.DataFrame,
+    scores: np.ndarray,
+    *,
+    feature_names: Sequence[str] = FEATURES,
+) -> tuple[dict[str, Any], np.ndarray]:
+    contributions = np.asarray(estimator.predict(features, pred_contrib=True), dtype=np.float64)
+    if contributions.shape != (len(features), len(feature_names) + 1) or not np.isfinite(contributions).all():
+        raise _fail(REASON_SCORE, "GBDT feature contributions are invalid", stage="prediction")
+    reconstructed = contributions[:, :-1].sum(axis=1) + contributions[:, -1]
+    tolerance = 1e-12 + 1e-10 * np.maximum(1.0, np.abs(scores))
+    if np.any(np.abs(reconstructed - scores) > tolerance):
+        raise _fail(REASON_SCORE, "GBDT feature contributions do not reconstruct score", stage="prediction")
+    receipt = {
+        "shape": list(contributions.shape),
+        "canonical_sha256": canonical_sha256(contributions.tolist()),
+        "maximum_reconstruction_error": float(np.max(np.abs(reconstructed - scores), initial=0.0)),
+    }
+    return receipt, contributions
+
+
+def require_deterministic_runtime() -> dict[str, Any]:
+    """Validate the numeric runtime without imposing a model-library dependency."""
+
+    if any(os.environ.get(name) != "1" for name in SINGLE_THREAD_ENVIRONMENT):
+        raise _fail(REASON_FIT, "formal runtime is not configured for one thread", stage="environment")
+    try:
+        from threadpoolctl import threadpool_info
+    except ImportError as exc:
+        raise _fail(REASON_FIT, "threadpoolctl is unavailable", stage="environment") from exc
+    pools = threadpool_info()
+    if any(int(item.get("num_threads", 0)) != 1 for item in pools):
+        raise _fail(REASON_FIT, "effective native threadpool count is not one", stage="environment", pools=pools)
+    return {
+        **runtime_identity(),
+        "thread_environment": {name: os.environ[name] for name in SINGLE_THREAD_ENVIRONMENT},
+        "pools": pools,
+    }
+
+
+def _development_summary(metrics: Mapping[str, Any], *, horizon: int) -> dict[str, Any]:
+    metric_rows = [item for item in metrics["daily"] if item["metric_valid"]]
+    metric_hac = newey_west([float(item["rank_ic"]) for item in metric_rows], lag=horizon - 1)
+    monthly_groups: dict[str, list[float]] = {}
+    for item in metric_rows:
+        month = str(item["trade_date"])[:7]
+        monthly_groups.setdefault(month, []).append(float(item["rank_ic"]))
+    monthly = [
+        {"month": month, "mean_rank_ic": float(np.mean(values)), "metric_date_count": len(values)}
+        for month, values in sorted(monthly_groups.items())
+    ]
+    return {
+        "mean_rank_ic": metrics["mean_rank_ic"],
+        "hac_lag": horizon - 1,
+        "hac_standard_error": metric_hac["standard_error"],
+        "hac_lower_two_sided_95pct": float(metric_hac["mean"] - 1.959963984540054 * metric_hac["standard_error"]),
+        "hac_upper_two_sided_95pct": float(metric_hac["mean"] + 1.959963984540054 * metric_hac["standard_error"]),
+        "monthly": monthly,
+        "positive_month_ratio": (
+            sum(float(item["mean_rank_ic"]) > 0 for item in monthly) / len(monthly) if monthly else None
+        ),
+        "worst_month": min(monthly, key=lambda item: float(item["mean_rank_ic"])) if monthly else None,
+        "promotion_gate_applied": False,
+    }
+
+
+def build_v16_scores(bundle: Mapping[str, Any]) -> tuple[pd.Series, tuple[FoldSlice, ...]]:
+    """Build the target-free v1.6 score authority from the frozen v1.4 feature."""
+
+    frame, calendar, _sectors, _benchmark = validate_input_bundle(
+        bundle,
+        require_training_delta_coverage=False,
+    )
+    folds = fold_slices(calendar, horizon=FIXED_HORIZON)
+    validation_dates = tuple(day for fold in folds for day in fold.validation_dates)
+    ranked = cross_section_rank_features(frame, continuous_features=(V16_SCORE_FEATURE,))
+    scores = ranked.loc[(list(validation_dates), slice(None)), V16_SCORE_FEATURE].sort_index()
+    if scores.index.has_duplicates or len(scores) != len(validation_dates) * CANONICAL_SECTOR_COUNT:
+        raise _fail(REASON_INPUT, "deterministic OOF denominator differs", stage="prediction")
+    finite_scores = scores[np.isfinite(scores.to_numpy(dtype=np.float64))]
+    if not finite_scores.empty and (float(finite_scores.min()) < -0.5 or float(finite_scores.max()) > 0.5):
+        raise _fail(REASON_SCORE, "deterministic rank score is outside the approved range", stage="prediction")
+    return scores, folds
+
+
+def _v16_oof_rows(
+    frame: pd.DataFrame,
+    calendar: Sequence[date],
+    scores: pd.Series,
+    states: Mapping[tuple[date, str], str],
+    *,
+    model_hash: str,
+) -> list[dict[str, Any]]:
+    calendar_position = {day: index for index, day in enumerate(calendar)}
+    rows: list[dict[str, Any]] = []
+    contribution_index = V14_FEATURES.index(V16_SCORE_FEATURE)
+    for (day, raw_code), raw_score in scores.items():
+        code = str(raw_code)
+        day_position = calendar_position.get(day)
+        if day_position is None or day_position == 0:
+            raise _fail(REASON_SCORE, "deterministic OOF row lacks causal as-of identity", stage="prediction")
+        score = float(raw_score)
+        base = {
+            "trade_date": day.isoformat(),
+            "as_of_date": calendar[day_position - 1].isoformat(),
+            "sector_code": code,
+            "model_hash": model_hash,
+        }
+        if math.isfinite(score):
+            state = states.get((day, code))
+            if state not in {"fading", "neutral", "trending"}:
+                raise _fail(REASON_SCORE, "deterministic available row lacks state", stage="prediction")
+            contributions = [0.0] * (len(V14_FEATURES) + 1)
+            contributions[contribution_index] = score
+            rows.append(
+                {
+                    **base,
+                    "availability": "available",
+                    "reason_code": None,
+                    "rotation_score": score,
+                    "forecast_state": state,
+                    "feature_contributions": contributions,
+                }
+            )
+        else:
+            raw_reason = frame.at[(day, raw_code), f"reason__{V16_SCORE_FEATURE}"]
+            reason = raw_reason if isinstance(raw_reason, str) and raw_reason else REASON_FEATURE
+            rows.append(
+                {
+                    **base,
+                    "availability": "unavailable",
+                    "reason_code": reason,
+                    "rotation_score": None,
+                    "forecast_state": None,
+                    "feature_contributions": None,
+                }
+            )
+    return rows
+
+
+def _run_v16_process(
+    bundle: Mapping[str, Any],
+    *,
+    producer_commit: str,
+    process_index: int,
+    runtime_validator: Any = require_deterministic_runtime,
+) -> dict[str, Any]:
+    if (
+        process_index not in (1, 2)
+        or not isinstance(producer_commit, str)
+        or len(producer_commit) != 40
+        or any(character not in "0123456789abcdef" for character in producer_commit)
+    ):
+        raise _fail(REASON_INPUT, "deterministic process identity differs", stage="input")
+    frame, calendar, sectors, _benchmark = validate_input_bundle(
+        bundle,
+        require_training_delta_coverage=False,
+    )
+    runtime = runtime_validator()
+    scoring_contract = _v16_scoring_contract()
+    model_text = canonical_json_bytes(scoring_contract).decode("utf-8")
+    model_hash = canonical_sha256(scoring_contract)
+
+    scores, folds = build_v16_scores(bundle)
+    delta_feature_coverage = _v16_feature_coverage_receipt(frame, folds)
+
+    states, state_receipt = project_states(scores)
+    metrics = _metrics(scores, frame.loc[scores.index, f"target_{FIXED_HORIZON}d"], sectors, states)
+    if not metrics["coverage_accepted"]:
+        raise _fail(REASON_COVERAGE, "deterministic development coverage failed", stage="research_product_gate")
+    development_summary = _development_summary(metrics, horizon=FIXED_HORIZON)
+    oof_rows = _v16_oof_rows(frame, calendar, scores, states, model_hash=model_hash)
+    fold_receipts = []
+    for fold in folds:
+        fold_scores = scores.loc[(list(fold.validation_dates), slice(None))]
+        fold_receipts.append(
+            {
+                **fold.receipt(),
+                "training_performed": False,
+                "prediction_row_count": len(fold_scores),
+                "available_prediction_row_count": int(np.isfinite(fold_scores.to_numpy(dtype=np.float64)).sum()),
+                "model_sha256": model_hash,
+            }
+        )
+    final_model = {
+        "model_kind": "deterministic_cross_section_rank",
+        "training_performed": False,
+        "model_sha256": model_hash,
+        "scoring_contract_sha256": model_hash,
+    }
+    payload = {
+        "contract_version": V16_CONTRACT_VERSION,
+        "selected_horizon": FIXED_HORIZON,
+        "horizon_authority": HORIZON_AUTHORITY,
+        "horizon_authority_sha256": canonical_sha256(HORIZON_AUTHORITY),
+        "input_feature_contract_version": V14_CONTRACT_VERSION,
+        "score_transform": V16_SCORE_TRANSFORM,
+        "scoring_contract": scoring_contract,
+        "scoring_contract_sha256": model_hash,
+        "profile": {"model_kind": "deterministic_cross_section_rank", "fit_required": False},
+        "runtime_identity": runtime,
+        "producer_commit": producer_commit,
+        "forward_power_status": FROZEN_FORWARD_POWER_STATUS,
+        "input_identity": dict(bundle["identity"]),
+        "delta_feature_coverage": delta_feature_coverage,
+        "folds": fold_receipts,
+        "market_context_receipts": [],
+        "metrics": metrics,
+        "development_summary": development_summary,
+        "state_projection": state_receipt,
+        "oof_prediction_rows": oof_rows,
+        "oof_prediction_rows_sha256": canonical_sha256(oof_rows),
+        "prediction_sha256": canonical_sha256(
+            [
+                [day.isoformat(), str(code), None if not math.isfinite(float(value)) else float(value)]
+                for (day, code), value in scores.items()
+            ]
+        ),
+        "research_product_gate": {"passed": True, "effect_threshold_applied": False},
+        "tail_access_gate": {
+            "passed": float(metrics["mean_rank_ic"]) >= BINDING_MBE_IC,
+            "binding_mbe_rank_ic": BINDING_MBE_IC,
+        },
+        "final_model": final_model,
+        "gbdt_fit_count": 0,
+        "market_fit_count": 0,
+        "fit_count": 0,
+        "fit_progress": {"planned": 0, "started": 0, "completed": 0, "failed": 0, "active_fit": None},
+        "tail_accessed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    body = {
+        "schema_version": V16_PROCESS_SCHEMA_VERSION,
+        "process_index": process_index,
+        "reproducibility_payload": payload,
+        "reproducibility_payload_sha256": canonical_sha256(payload),
+        "final_model_text": model_text,
+    }
+    return {**body, "report_sha256": canonical_sha256(body)}
+
+
+def run_gbdt_process(
+    bundle: Mapping[str, Any],
+    *,
+    producer_commit: str,
+    process_index: int,
+    model_contract_version: str = V16_CONTRACT_VERSION,
+    runtime_validator: Any = require_formal_runtime,
+) -> dict[str, Any]:
+    if model_contract_version != V16_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT, "only the active v1.6 contract is executable", stage="input")
+    deterministic_runtime_validator = (
+        require_deterministic_runtime if runtime_validator is require_formal_runtime else runtime_validator
+    )
+    return _run_v16_process(
+        bundle,
+        producer_commit=producer_commit,
+        process_index=process_index,
+        runtime_validator=deterministic_runtime_validator,
+    )
+
+
+def _valid_v16_feature_coverage_receipt(value: Any) -> bool:
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema_version",
+        "feature",
+        "minimum_coverage",
+        "scopes",
+        "receipt_sha256",
+    }:
+        return False
+    body = {key: item for key, item in value.items() if key != "receipt_sha256"}
+    scopes = value.get("scopes")
+    expected_names = {"all-oof-validation", *(f"fold-{index}:validation" for index in range(1, 6))}
+    if (
+        value.get("schema_version") != "hmm_risk_rotation_l1_g2a_v16_feature_coverage_v1"
+        or value.get("feature") != V16_SCORE_FEATURE
+        or value.get("minimum_coverage") != MINIMUM_DELTA_FEATURE_COVERAGE
+        or value.get("receipt_sha256") != canonical_sha256(body)
+        or not isinstance(scopes, list)
+        or len(scopes) != len(expected_names)
+    ):
+        return False
+    actual_names = set()
+    for scope in scopes:
+        if not isinstance(scope, Mapping) or set(scope) != {
+            "scope",
+            "start",
+            "end",
+            "row_count",
+            "finite_count",
+            "coverage",
+        }:
+            return False
+        try:
+            start = date.fromisoformat(str(scope["start"]))
+            end = date.fromisoformat(str(scope["end"]))
+        except ValueError:
+            return False
+        row_count = scope.get("row_count")
+        finite_count = scope.get("finite_count")
+        coverage = scope.get("coverage")
+        if (
+            not isinstance(scope.get("scope"), str)
+            or not isinstance(row_count, int)
+            or isinstance(row_count, bool)
+            or row_count <= 0
+            or not isinstance(finite_count, int)
+            or isinstance(finite_count, bool)
+            or not 0 <= finite_count <= row_count
+            or not isinstance(coverage, (int, float))
+            or isinstance(coverage, bool)
+            or not math.isclose(float(coverage), finite_count / row_count, rel_tol=0.0, abs_tol=0.0)
+            or float(coverage) < MINIMUM_DELTA_FEATURE_COVERAGE
+            or start > end
+        ):
+            return False
+        actual_names.add(scope["scope"])
+    return actual_names == expected_names
+
+
+def _validated_v16_process(child: Mapping[str, Any], *, expected_index: int) -> Mapping[str, Any]:
+    expected_child_keys = {
+        "schema_version",
+        "process_index",
+        "reproducibility_payload",
+        "reproducibility_payload_sha256",
+        "final_model_text",
+        "report_sha256",
+    }
+    body = {key: value for key, value in child.items() if key != "report_sha256"}
+    payload = child.get("reproducibility_payload")
+    if (
+        set(child) != expected_child_keys
+        or child.get("schema_version") != V16_PROCESS_SCHEMA_VERSION
+        or child.get("process_index") != expected_index
+        or not isinstance(payload, Mapping)
+        or child.get("reproducibility_payload_sha256") != canonical_sha256(payload)
+        or child.get("report_sha256") != canonical_sha256(body)
+    ):
+        raise _fail(REASON_REPRODUCIBILITY, "deterministic child envelope differs", stage="closure")
+
+    scoring_contract = _v16_scoring_contract()
+    model_hash = canonical_sha256(scoring_contract)
+    model_text = canonical_json_bytes(scoring_contract).decode("utf-8")
+    folds = payload.get("folds")
+    oof_rows = payload.get("oof_prediction_rows")
+    final_model = payload.get("final_model")
+    if (
+        payload.get("contract_version") != V16_CONTRACT_VERSION
+        or payload.get("selected_horizon") != FIXED_HORIZON
+        or payload.get("horizon_authority") != HORIZON_AUTHORITY
+        or payload.get("horizon_authority_sha256") != canonical_sha256(HORIZON_AUTHORITY)
+        or payload.get("input_feature_contract_version") != V14_CONTRACT_VERSION
+        or payload.get("score_transform") != V16_SCORE_TRANSFORM
+        or payload.get("scoring_contract") != scoring_contract
+        or payload.get("scoring_contract_sha256") != model_hash
+        or payload.get("profile") != {"model_kind": "deterministic_cross_section_rank", "fit_required": False}
+        or payload.get("forward_power_status") != FROZEN_FORWARD_POWER_STATUS
+        or not isinstance(payload.get("input_identity"), Mapping)
+        or not _valid_v16_feature_coverage_receipt(payload.get("delta_feature_coverage"))
+        or payload.get("market_context_receipts") != []
+        or payload.get("research_product_gate") != {"passed": True, "effect_threshold_applied": False}
+        or not isinstance(payload.get("tail_access_gate"), Mapping)
+        or not isinstance(payload["tail_access_gate"].get("passed"), bool)
+        or payload["tail_access_gate"].get("binding_mbe_rank_ic") != BINDING_MBE_IC
+        or payload.get("gbdt_fit_count") != 0
+        or payload.get("market_fit_count") != 0
+        or payload.get("fit_count") != 0
+        or payload.get("fit_progress") != {"planned": 0, "started": 0, "completed": 0, "failed": 0, "active_fit": None}
+        or payload.get("tail_accessed") is not False
+        or payload.get("database_write_performed") is not False
+        or payload.get("runtime_action_performed") is not False
+        or not isinstance(payload.get("producer_commit"), str)
+        or len(payload["producer_commit"]) != 40
+        or any(character not in "0123456789abcdef" for character in payload["producer_commit"])
+        or not isinstance(folds, list)
+        or len(folds) != len(FOLDS)
+        or not isinstance(oof_rows, list)
+        or not oof_rows
+        or payload.get("oof_prediction_rows_sha256") != canonical_sha256(oof_rows)
+        or child.get("final_model_text") != model_text
+        or final_model
+        != {
+            "model_kind": "deterministic_cross_section_rank",
+            "training_performed": False,
+            "model_sha256": model_hash,
+            "scoring_contract_sha256": model_hash,
+        }
+    ):
+        raise _fail(REASON_REPRODUCIBILITY, "deterministic child payload differs", stage="closure")
+
+    base_fold_keys = {
+        "fold",
+        "train_start",
+        "train_end",
+        "train_count",
+        "train_date_sha256",
+        "purge_dates",
+        "validation_start",
+        "validation_end",
+        "validation_count",
+        "validation_date_sha256",
+        "receipt_sha256",
+    }
+    validation_windows: list[tuple[date, date, str]] = []
+    for fold, expected in zip(folds, FOLDS, strict=True):
+        if not isinstance(fold, Mapping) or set(fold) != {
+            *base_fold_keys,
+            "training_performed",
+            "prediction_row_count",
+            "available_prediction_row_count",
+            "model_sha256",
+        }:
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic fold receipt differs", stage="closure")
+        try:
+            validation_start = date.fromisoformat(str(fold["validation_start"]))
+            validation_end = date.fromisoformat(str(fold["validation_end"]))
+        except (TypeError, ValueError) as exc:
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic fold dates differ", stage="closure") from exc
+        base = {key: fold[key] for key in base_fold_keys if key != "receipt_sha256"}
+        expected_name, expected_start, expected_end = expected
+        if (
+            fold["fold"] != expected_name
+            or validation_start < expected_start
+            or validation_end != expected_end
+            or fold["receipt_sha256"] != canonical_sha256(base)
+            or fold["training_performed"] is not False
+            or fold["prediction_row_count"] != fold["validation_count"] * CANONICAL_SECTOR_COUNT
+            or not isinstance(fold["available_prediction_row_count"], int)
+            or not 0 <= fold["available_prediction_row_count"] <= fold["prediction_row_count"]
+            or fold["model_sha256"] != model_hash
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic fold contract differs", stage="closure")
+        validation_windows.append((validation_start, validation_end, expected_name))
+
+    expected_row_keys = {
+        "trade_date",
+        "as_of_date",
+        "sector_code",
+        "availability",
+        "reason_code",
+        "rotation_score",
+        "forecast_state",
+        "feature_contributions",
+        "model_hash",
+    }
+    daily_codes: dict[date, set[str]] = {}
+    available_by_date: dict[date, int] = {}
+    as_of_by_date: dict[date, date] = {}
+    seen: set[tuple[date, str]] = set()
+    contribution_index = V14_FEATURES.index(V16_SCORE_FEATURE)
+    for row in oof_rows:
+        if not isinstance(row, Mapping) or set(row) != expected_row_keys:
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF row shape differs", stage="closure")
+        try:
+            trade_date = date.fromisoformat(str(row["trade_date"]))
+            as_of_date = date.fromisoformat(str(row["as_of_date"]))
+        except (TypeError, ValueError) as exc:
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF date differs", stage="closure") from exc
+        code = row.get("sector_code")
+        identity = (trade_date, str(code))
+        if (
+            not isinstance(code, str)
+            or not code
+            or as_of_date >= trade_date
+            or identity in seen
+            or row.get("model_hash") != model_hash
+            or sum(start <= trade_date <= end for start, end, _name in validation_windows) != 1
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF identity differs", stage="closure")
+        seen.add(identity)
+        daily_codes.setdefault(trade_date, set()).add(code)
+        existing_as_of = as_of_by_date.setdefault(trade_date, as_of_date)
+        if existing_as_of != as_of_date:
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF as-of differs", stage="closure")
+        if row.get("availability") == "available":
+            score = row.get("rotation_score")
+            contributions = row.get("feature_contributions")
+            if (
+                not isinstance(score, (int, float))
+                or isinstance(score, bool)
+                or not math.isfinite(float(score))
+                or not -0.5 <= float(score) <= 0.5
+                or row.get("forecast_state") not in {"fading", "neutral", "trending"}
+                or row.get("reason_code") is not None
+                or not isinstance(contributions, list)
+                or len(contributions) != len(V14_FEATURES) + 1
+                or not all(
+                    isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+                    for value in contributions
+                )
+                or contributions[contribution_index] != score
+                or any(value != 0.0 for index, value in enumerate(contributions) if index != contribution_index)
+            ):
+                raise _fail(REASON_REPRODUCIBILITY, "deterministic available OOF row differs", stage="closure")
+            available_by_date[trade_date] = available_by_date.get(trade_date, 0) + 1
+        elif row.get("availability") == "unavailable":
+            if (
+                row.get("rotation_score") is not None
+                or row.get("forecast_state") is not None
+                or row.get("feature_contributions") is not None
+                or not isinstance(row.get("reason_code"), str)
+                or not row["reason_code"]
+            ):
+                raise _fail(REASON_REPRODUCIBILITY, "deterministic unavailable OOF row differs", stage="closure")
+        else:
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF availability differs", stage="closure")
+    if not daily_codes or any(len(codes) != CANONICAL_SECTOR_COUNT for codes in daily_codes.values()):
+        raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF daily denominator differs", stage="closure")
+    for fold, (start, end, _name) in zip(folds, validation_windows, strict=True):
+        dates = tuple(sorted(day for day in daily_codes if start <= day <= end))
+        purge_dates = tuple(date.fromisoformat(str(item)) for item in fold["purge_dates"])
+        if (
+            len(dates) != fold["validation_count"]
+            or not dates
+            or sum(available_by_date.get(day, 0) for day in dates) != fold["available_prediction_row_count"]
+            or as_of_by_date[dates[0]] != purge_dates[-1]
+            or any(as_of_by_date[day] != previous for previous, day in zip(dates, dates[1:]))
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "deterministic OOF calendar lineage differs", stage="closure")
+    return payload
+
+
+def _validated_process(child: Mapping[str, Any], *, expected_index: int) -> Mapping[str, Any]:
+    payload = child.get("reproducibility_payload")
+    if isinstance(payload, Mapping) and payload.get("contract_version") == V16_CONTRACT_VERSION:
+        return _validated_v16_process(child, expected_index=expected_index)
+
+    expected_keys = {
+        "schema_version",
+        "process_index",
+        "reproducibility_payload",
+        "reproducibility_payload_sha256",
+        "final_model_text",
+        "report_sha256",
+    }
+    body = {key: value for key, value in child.items() if key != "report_sha256"}
+    metrics = payload.get("metrics") if isinstance(payload, Mapping) else None
+    daily = metrics.get("daily") if isinstance(metrics, Mapping) else None
+    input_identity = payload.get("input_identity") if isinstance(payload, Mapping) else None
+    producer_commit = payload.get("producer_commit") if isinstance(payload, Mapping) else None
+    model_text = child.get("final_model_text")
+    if (
+        set(child) != expected_keys
+        or child.get("schema_version") != PROCESS_SCHEMA_VERSION
+        or child.get("process_index") != expected_index
+        or not isinstance(payload, Mapping)
+        or payload.get("contract_version") != V14_CONTRACT_VERSION
+        or child.get("reproducibility_payload_sha256") != canonical_sha256(payload)
+        or child.get("report_sha256") != canonical_sha256(body)
+        or not isinstance(model_text, str)
+        or not model_text
+        or not isinstance(input_identity, Mapping)
+        or not input_identity
+        or not isinstance(metrics, Mapping)
+        or not isinstance(metrics.get("mean_rank_ic"), (int, float))
+        or isinstance(metrics.get("mean_rank_ic"), bool)
+        or not math.isfinite(float(metrics["mean_rank_ic"]))
+        or not isinstance(daily, list)
+        or not daily
+        or not isinstance(producer_commit, str)
+        or len(producer_commit) != 40
+        or any(character not in "0123456789abcdef" for character in producer_commit)
+        or payload.get("tail_accessed") is not False
+        or payload.get("database_write_performed") is not False
+        or payload.get("runtime_action_performed") is not False
+    ):
+        raise _fail(REASON_REPRODUCIBILITY, "frozen v1.4 baseline receipt differs", stage="closure")
+    valid_daily_count = 0
+    for row in daily:
+        if not isinstance(row, Mapping):
+            raise _fail(REASON_REPRODUCIBILITY, "frozen v1.4 metric receipt differs", stage="closure")
+        if row.get("metric_valid") is not True:
+            continue
+        day = row.get("trade_date")
+        rank_ic = row.get("rank_ic")
+        if (
+            not isinstance(day, str)
+            or not isinstance(rank_ic, (int, float))
+            or isinstance(rank_ic, bool)
+            or not math.isfinite(float(rank_ic))
+        ):
+            raise _fail(REASON_REPRODUCIBILITY, "frozen v1.4 metric receipt differs", stage="closure")
+        valid_daily_count += 1
+    if valid_daily_count == 0:
+        raise _fail(REASON_REPRODUCIBILITY, "frozen v1.4 has no valid metric date", stage="closure")
+    return payload
+
+
+def validate_v14_process_reference(value: Mapping[str, Any]) -> None:
+    """Validate only the frozen v1.4 fields consumed by active v1.6."""
+
+    payload = _validated_process(value, expected_index=1)
+    if payload.get("contract_version") != V14_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT, "reference is not the frozen v1.4 process", stage="closure")
+
+
+def _v16_score_authority(bundle: Mapping[str, Any]) -> dict[str, Any]:
+    scores, folds = build_v16_scores(bundle)
+    frame, calendar, sectors, _benchmark = validate_input_bundle(
+        bundle,
+        require_training_delta_coverage=False,
+    )
+    states, state_receipt = project_states(scores)
+    metrics = _metrics(scores, frame.loc[scores.index, f"target_{FIXED_HORIZON}d"], sectors, states)
+    scoring_hash = canonical_sha256(_v16_scoring_contract())
+    oof_rows = _v16_oof_rows(frame, calendar, scores, states, model_hash=scoring_hash)
+    return {
+        "prediction_sha256": canonical_sha256(
+            [
+                [day.isoformat(), str(code), None if not math.isfinite(float(value)) else float(value)]
+                for (day, code), value in scores.items()
+            ]
+        ),
+        "state_projection": state_receipt,
+        "metrics": metrics,
+        "development_summary": _development_summary(metrics, horizon=FIXED_HORIZON),
+        "delta_feature_coverage": _v16_feature_coverage_receipt(frame, folds),
+        "oof_prediction_rows": oof_rows,
+        "oof_prediction_rows_sha256": canonical_sha256(oof_rows),
+        "tail_access_gate": {
+            "passed": float(metrics["mean_rank_ic"]) >= BINDING_MBE_IC,
+            "binding_mbe_rank_ic": BINDING_MBE_IC,
+        },
+    }
+
+
+def validate_v16_input_authority_rebind(
+    v14_reference: Mapping[str, Any],
+    v14_input_bundle: Mapping[str, Any],
+    candidate_input_bundle: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate an authority-only v1.4/v1.6 input identity transition.
+
+    The frozen v1.4 process remains diagnostic evidence only.  A rebind is
+    valid solely when both independently validated bundles contain exactly the
+    same logical panel and benchmark, while the versioned source and/or mapping
+    authority has changed.  Paths and mutable container hashes are deliberately
+    excluded from the receipt.
+    """
+
+    baseline = _validated_process(v14_reference, expected_index=1)
+    if baseline.get("contract_version") != V14_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT, "paired baseline is not the frozen v1.4 process", stage="closure")
+    old_frame, old_calendar, old_sectors, old_benchmark = validate_input_bundle(v14_input_bundle)
+    new_frame, new_calendar, new_sectors, new_benchmark = validate_input_bundle(candidate_input_bundle)
+    old_identity = dict(v14_input_bundle["identity"])
+    new_identity = dict(candidate_input_bundle["identity"])
+    if baseline.get("input_identity") != old_identity:
+        raise _fail(REASON_INPUT, "paired v1.4 process input authority differs", stage="closure")
+    if set(old_identity) != set(new_identity):
+        raise _fail(REASON_INPUT, "paired input authority fields differ", stage="closure")
+    changed_fields = tuple(sorted(key for key in old_identity if old_identity[key] != new_identity[key]))
+    if not changed_fields or not set(changed_fields).issubset({"source_sha256", "mapping_sha256"}):
+        raise _fail(REASON_INPUT, "paired input authority change is not an approved rebind", stage="closure")
+
+    old_logical_sha256 = _logical_input_sha256(old_frame, old_benchmark)
+    new_logical_sha256 = _logical_input_sha256(new_frame, new_benchmark)
+    comparison_columns = [*VALUE_COLUMNS, *REASON_COLUMNS, *MATURITY_COLUMNS]
+    if (
+        old_calendar != new_calendar
+        or old_sectors != new_sectors
+        or not old_frame.loc[:, comparison_columns].equals(new_frame.loc[:, comparison_columns])
+        or old_benchmark != new_benchmark
+        or old_logical_sha256 != new_logical_sha256
+    ):
+        raise _fail(REASON_INPUT, "paired input logical data differs", stage="closure")
+
+    calendar_sha256 = canonical_sha256([day.isoformat() for day in old_calendar])
+    sector_sha256 = canonical_sha256([*old_sectors])
+    benchmark_sha256 = canonical_sha256([[day.isoformat(), float(old_benchmark[day])] for day in sorted(old_benchmark)])
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_g2a_input_authority_rebind_v1",
+        "scope": "paired_v14_diagnostic_only",
+        "old_input_identity": old_identity,
+        "new_input_identity": new_identity,
+        "changed_identity_fields": [*changed_fields],
+        "logical_input_sha256": old_logical_sha256,
+        "calendar_sha256": calendar_sha256,
+        "sector_sha256": sector_sha256,
+        "benchmark_sha256": benchmark_sha256,
+        "row_count": len(old_frame),
+        "calendar_count": len(old_calendar),
+        "sector_count": len(old_sectors),
+        "candidate_recomputed": True,
+        "baseline_model_authority_reused": False,
+        "tail_accessed": False,
+    }
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def _paired_v14_diagnostic(
+    v14_reference: Mapping[str, Any],
+    candidate_payload: Mapping[str, Any],
+    *,
+    v14_input_bundle: Mapping[str, Any] | None = None,
+    candidate_input_bundle: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    baseline = _validated_process(v14_reference, expected_index=1)
+    if baseline.get("contract_version") != V14_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT, "paired baseline is not the frozen v1.4 process", stage="closure")
+    candidate_version = candidate_payload.get("contract_version")
+    if candidate_version != V16_CONTRACT_VERSION:
+        raise _fail(REASON_INPUT, "paired candidate is not the active v1.6 contract", stage="closure")
+    baseline_identity = baseline.get("input_identity")
+    candidate_identity = candidate_payload.get("input_identity")
+    authority_rebind = None
+    if baseline_identity == candidate_identity:
+        if v14_input_bundle is not None:
+            raise _fail(
+                REASON_INPUT, "paired v1.4 input root is ambiguous without an authority change", stage="closure"
+            )
+    else:
+        if v14_input_bundle is None or candidate_input_bundle is None:
+            raise _fail(REASON_INPUT, "v1.6 authority rebind requires both validated input bundles", stage="closure")
+        if candidate_identity != candidate_input_bundle.get("identity"):
+            raise _fail(REASON_INPUT, "v1.6 candidate input authority differs", stage="closure")
+        authority_rebind = validate_v16_input_authority_rebind(
+            v14_reference,
+            v14_input_bundle,
+            candidate_input_bundle,
+        )
+
+    def daily_ic(payload: Mapping[str, Any]) -> dict[str, float]:
+        metrics = payload.get("metrics")
+        rows = metrics.get("daily") if isinstance(metrics, Mapping) else None
+        if not isinstance(rows, list):
+            raise _fail(REASON_INPUT, "paired metric evidence is missing", stage="closure")
+        result: dict[str, float] = {}
+        for row in rows:
+            if not isinstance(row, Mapping) or row.get("metric_valid") is not True:
+                continue
+            day = row.get("trade_date")
+            value = row.get("rank_ic")
+            if (
+                not isinstance(day, str)
+                or day in result
+                or not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(float(value))
+            ):
+                raise _fail(REASON_INPUT, "paired metric identity differs", stage="closure")
+            result[day] = float(value)
+        return result
+
+    baseline_ic = daily_ic(baseline)
+    candidate_ic = daily_ic(candidate_payload)
+    if tuple(baseline_ic) != tuple(candidate_ic):
+        raise _fail(REASON_INPUT, "paired v1.4 successor metric dates differ", stage="closure")
+    dates = tuple(baseline_ic)
+    differences = [candidate_ic[day] - baseline_ic[day] for day in dates]
+    try:
+        paired_hac: Mapping[str, Any] = newey_west(differences, lag=FIXED_HORIZON - 1)
+        paired_hac_reason = None
+    except RotationL1G2AError as exc:
+        paired_hac = {}
+        paired_hac_reason = exc.reason_code
+    body = {
+        "schema_version": "hmm_risk_rotation_l1_g2a_v14_v16_paired_diagnostic_v1",
+        "baseline_contract_version": V14_CONTRACT_VERSION,
+        "candidate_contract_version": candidate_version,
+        "common_date_count": len(dates),
+        "common_date_sha256": canonical_sha256([*dates]),
+        "baseline_mean_rank_ic": float(baseline["metrics"]["mean_rank_ic"]),
+        "candidate_mean_rank_ic": float(candidate_payload["metrics"]["mean_rank_ic"]),
+        "mean_daily_rank_ic_difference": float(np.mean(differences)),
+        "paired_difference_hac": dict(paired_hac),
+        "paired_difference_hac_reason_code": paired_hac_reason,
+        "binding_gate_applied": False,
+        "tail_accessed": False,
+    }
+    if authority_rebind is not None:
+        body["input_authority_rebind"] = authority_rebind
+    return {**body, "receipt_sha256": canonical_sha256(body)}
+
+
+def close_processes(
+    first: Mapping[str, Any],
+    second: Mapping[str, Any],
+    *,
+    v14_reference: Mapping[str, Any] | None = None,
+    input_bundle: Mapping[str, Any] | None = None,
+    v14_input_bundle: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    first_payload = _validated_process(first, expected_index=1)
+    second_payload = _validated_process(second, expected_index=2)
+    if first.get("reproducibility_payload_sha256") != second.get("reproducibility_payload_sha256"):
+        raise _fail(REASON_REPRODUCIBILITY, "fresh-process payloads differ", stage="closure")
+    if first.get("final_model_text") != second.get("final_model_text") or first_payload != second_payload:
+        raise _fail(REASON_REPRODUCIBILITY, "fresh-process model or payload differs", stage="closure")
+    payload = first_payload
+    mean_ic = float(payload["metrics"]["mean_rank_ic"])
+    tail_allowed = bool(payload["tail_access_gate"]["passed"])
+    forward_power_status = str(payload["forward_power_status"])
+    v16 = payload["contract_version"] == V16_CONTRACT_VERSION
+    if not v16:
+        raise _fail(REASON_INPUT, "only the active v1.6 contract can be closed", stage="closure")
+    if v14_reference is None or input_bundle is None:
+        raise _fail(
+            REASON_INPUT,
+            "v1.6 closure requires frozen v1.4 and input score authorities",
+            stage="closure",
+        )
+    if payload.get("input_identity") != input_bundle.get("identity"):
+        raise _fail(REASON_INPUT, "v1.6 score authority input identity differs", stage="closure")
+    score_authority = _v16_score_authority(input_bundle)
+    if any(payload.get(field) != score_authority[field] for field in score_authority):
+        raise _fail(REASON_REPRODUCIBILITY, "v1.6 score or metric authority differs", stage="closure")
+    body = {
+        "schema_version": V16_ACCEPTANCE_SCHEMA_VERSION,
+        "contract_version": payload["contract_version"],
+        "status": "development_complete",
+        "selected_horizon": payload["selected_horizon"],
+        # Offline closure proves deterministic model computation only.  The
+        # research surface becomes AVAILABLE_EXPERIMENTAL after the OOF rows
+        # have passed the transactional repository/readback and real API/UI
+        # product validation defined by G2-A v1.3.
+        "research_surface_status": "NOT_AVAILABLE",
+        "rotation_l1_capability_status": "NOT_AVAILABLE",
+        "model_effect_tail_access_eligible": tail_allowed,
+        "forward_power_status": forward_power_status,
+        "forward_confirmation": (
+            "PENDING_INSUFFICIENT_POWER"
+            if tail_allowed and forward_power_status == "INSUFFICIENT"
+            else "PENDING_INCONCLUSIVE"
+            if tail_allowed
+            else "NOT_STARTED"
+        ),
+        "development_oof_mean_rank_ic": mean_ic,
+        "tail_access_gate_passed": tail_allowed,
+        "tail_accessed": False,
+        "research_product_compute_conditions_satisfied": True,
+        "research_product_gate_passed": False,
+        "child_sha256s": [first["report_sha256"], second["report_sha256"]],
+        "reproducibility_payload_sha256": first["reproducibility_payload_sha256"],
+        "producer_commit": payload["producer_commit"],
+        "model_write_performed": False,
+        "database_write_performed": False,
+        "runtime_action_performed": False,
+    }
+    body["fit_count"] = payload["fit_count"]
+    body["horizon_authority"] = payload["horizon_authority"]
+    body["horizon_authority_sha256"] = payload["horizon_authority_sha256"]
+    body["input_feature_contract_version"] = payload["input_feature_contract_version"]
+    body["score_transform"] = payload["score_transform"]
+    body["scoring_contract_sha256"] = payload["scoring_contract_sha256"]
+    body["score_authority_sha256"] = score_authority["prediction_sha256"]
+    body["paired_v14_diagnostic"] = _paired_v14_diagnostic(
+        v14_reference,
+        payload,
+        v14_input_bundle=v14_input_bundle,
+        candidate_input_bundle=input_bundle,
+    )
+    return {**body, "acceptance_sha256": canonical_sha256(body)}
+
+
+def runtime_identity() -> dict[str, Any]:
+    packages = {}
+    for name in ("lightgbm", "numpy", "scipy", "scikit-learn"):
+        try:
+            packages[name] = importlib.metadata.version(name)
+        except importlib.metadata.PackageNotFoundError:
+            packages[name] = None
+    return {"python": platform.python_version(), "platform": platform.platform(), "packages": packages}
+
+
+__all__ = [
+    "ACCEPTANCE_SCHEMA_VERSION",
+    "BINDING_MBE_IC",
+    "CONTRACT_VERSION",
+    "CONTINUOUS_FEATURES",
+    "FEATURES",
+    "FitProgress",
+    "FOLDS",
+    "HORIZON_AUTHORITY",
+    "HORIZONS",
+    "INPUT_SCHEMA_VERSION",
+    "PROCESS_SCHEMA_VERSION",
+    "V13_ACCEPTANCE_SCHEMA_VERSION",
+    "V13_CONTINUOUS_FEATURES",
+    "V13_CONTRACT_VERSION",
+    "V13_FEATURES",
+    "V13_PROCESS_SCHEMA_VERSION",
+    "V14_CONTRACT_VERSION",
+    "V14_CONTINUOUS_FEATURES",
+    "V14_FEATURES",
+    "V16_CONTRACT_VERSION",
+    "V16_ACCEPTANCE_SCHEMA_VERSION",
+    "V16_PROCESS_SCHEMA_VERSION",
+    "V16_SCORE_FEATURE",
+    "V16_SCORE_TRANSFORM",
+    "RotationL1G2AError",
+    "build_label_free_feature_panel",
+    "build_materialised_panel",
+    "build_v16_single_date_feature_frame",
+    "build_v16_scores",
+    "close_processes",
+    "cross_section_rank_features",
+    "fold_slices",
+    "fit_market_context",
+    "newey_west",
+    "project_states",
+    "read_input_bundle",
+    "require_formal_runtime",
+    "require_deterministic_runtime",
+    "run_gbdt_process",
+    "runtime_identity",
+    "validate_input_bundle",
+    "validate_v14_process_reference",
+    "validate_v16_input_authority_rebind",
+    "write_input_bundle",
+]

@@ -8,8 +8,17 @@ from backend.services.advisory_historical_range.calendar_resolver import Histori
 from backend.services.advisory_historical_range.canonical import canonical_json_sha256
 from backend.services.advisory_historical_range.requirement_planner import HistoricalRangeSourceRequirementPlanner
 from backend.services.advisory_historical_range.code_release import HistoricalRangeCodeReleaseResolver
-from backend.services.advisory_historical_range.models import HistoricalRangeAlphaMode, HistoricalRangeResearchBatchRequestV1
+from backend.services.advisory_historical_range.models import (
+    HistoricalRangeAlphaMode,
+    HistoricalRangeResearchBatchRequestV1,
+    ResearchProgramSpecV1,
+)
+from backend.services.advisory_historical_range.request_resolver import (
+    HistoricalRangeAdmittedPackageResolver,
+    HistoricalRangeProgramResolver,
+)
 from backend.tests.advisory_historical_range.conftest import date_plan, digest, frozen_program, research_spec
+from backend.tests.strategy_package.test_multi_alpha_live_selection import _make_parent
 
 
 def _git(repo: Path, *args: str) -> None:
@@ -37,6 +46,67 @@ def test_code_release_hashes_dirty_executed_bytes_without_clean_gate(tmp_path: P
     assert dirty.code_release_hash != clean.code_release_hash
     assert dirty.file_content_hashes[0][0] == "service.py"
     assert dirty.code_release_hash == canonical_json_sha256(dirty.semantic_payload())
+
+
+def test_program_resolver_freezes_complete_target_specific_review_policies() -> None:
+    package_repository, parent = _make_parent(live_weight_policy=False)
+    specs = tuple(
+        ResearchProgramSpecV1(
+            program_name=f"history-{target_count}",
+            package_id=parent.package_id,
+            target_count=target_count,
+            review_policy={},
+            runtime_config={"runtime_profile": {"selection": {"top_k": target_count}}},
+            entry_price_basis="next_open_executable",
+            exit_price_basis="next_open_executable",
+        )
+        for target_count in (5, 20)
+    )
+    request = HistoricalRangeResearchBatchRequestV1(
+        request_id="request-review-policy",
+        client_idempotency_key="request-review-policy-key",
+        program_specs=specs,
+        start_trade_date=date(2026, 7, 1),
+        end_trade_date=date(2026, 7, 1),
+    )
+    resolver = HistoricalRangeProgramResolver(
+        package_resolver=HistoricalRangeAdmittedPackageResolver(
+            package_reader=package_repository,
+        )
+    )
+
+    programs = resolver.freeze_programs(
+        request=request,
+        code_release_id="git-test",
+        code_release_hash=digest("code-release"),
+        selection_semantics_version="selection-v1",
+        selection_semantics_hash=digest("selection"),
+        list_semantics_version="list-v1",
+        list_semantics_hash=digest("list"),
+    )
+
+    programs_by_target = {
+        int(program.program_config["target_count"]): program for program in programs
+    }
+    assert set(programs_by_target) == {5, 20}
+    assert programs_by_target[5].review_policy["rank_enter_threshold"] == 5
+    assert programs_by_target[5].review_policy["rank_exit_threshold"] == 10
+    assert programs_by_target[20].review_policy["rank_enter_threshold"] == 20
+    assert programs_by_target[20].review_policy["rank_exit_threshold"] == 40
+    for program in programs_by_target.values():
+        assert program.program_config["review_policy"] == program.review_policy
+        assert program.review_policy_hash == canonical_json_sha256(program.review_policy)
+        assert set(program.review_policy) == {
+            "rank_enter_threshold",
+            "rank_exit_threshold",
+            "rank_exit_confirm_days",
+            "daily_replacement_budget",
+            "stop_loss_bps",
+            "take_profit_bps",
+            "trailing_stop_bps",
+            "time_stop_days",
+            "take_profit_mode",
+        }
 
 
 class _Cursor:

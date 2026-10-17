@@ -15,6 +15,10 @@ import json
 import os
 import sys
 import uuid
+from pathlib import Path
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import psycopg2
@@ -416,6 +420,11 @@ def upsert_minute(conn, ts_code: str, trade_date: dt.date, bars: List[Dict[str, 
             f"invalid minute OHLC payload for {ts_code} {trade_date}: "
             f"count={len(invalid_rows)} samples={invalid_rows[:5]}"
         )
+    if not values:
+        return 0, None
+    from backend.services.minute_data_session_contract import guard_minute_values
+
+    values = guard_minute_values(conn, ts_code, trade_date, values)
     if not values:
         return 0, None
     with conn.cursor() as cur:

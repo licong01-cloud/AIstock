@@ -17,6 +17,7 @@ from backend.services.advisory_phase1.dataset_store import LocalContentAddressed
 from backend.services.advisory_historical_range.models import (
     HistoricalRangeArtifactKind,
     HistoricalRangeArtifactRefV1,
+    HistoricalRangeContractError,
     HistoricalRangeEvaluationWindowType,
     HistoricalRangeOutcomeProjection,
     HistoricalRangeOutcomeSubjectType,
@@ -628,6 +629,10 @@ class _OutcomeRepository:
 
 class _ContextProvider:
     def load(self, *, fact, artifact, calculation):
+        # Financial facts deliberately have no run column. The loader must
+        # supply its verified query scope to both SQL and file consumers.
+        assert fact.range_run_id == "run-1"
+        assert fact.subject_id == "candidate-1"
         return HistoricalRangeSummaryRowContextV1(
             canonical_signal_id="signal-1",
             decision_trade_date=date(2026, 7, 3),
@@ -687,6 +692,38 @@ def test_outcome_set_loader_selects_typed_calculation_rows(tmp_path: Path) -> No
     assert frozen.rows[0].projection == "RETURN_GROSS"
     assert frozen.rows[0].industry_at_t == "I1"
     assert frozen.rows[0].market_regime_at_t == "R1"
+
+
+@pytest.mark.parametrize("regime", [None, "R1"])
+def test_summary_regime_resolves_each_exact_artifact_once(tmp_path, monkeypatch, regime):
+    store = HistoricalRangeArtifactStore(root=tmp_path)
+    stored = store.publish_payload(
+        artifact_kind=HistoricalRangeArtifactKind.DAY_RECEIPT,
+        producer_contract_version="test_v1",
+        payload_schema_version="test_v1",
+        resolved_request_hash="9" * 64,
+        range_run_id="run-1",
+        day_run_id="day-1",
+        payload={"stage_trace": {"metadata": {"hmm": {"regime": regime}}}},
+    )
+    calls = []
+    native_load = store.load
+
+    def counted_load(ref):
+        calls.append(ref)
+        return native_load(ref)
+
+    monkeypatch.setattr(store, "load", counted_load)
+    provider = PostgresHistoricalRangeSummaryContextProvider(
+        conn_factory=None, artifact_store=store, source_provider=None,
+    )
+    assert [provider._regime_from_subject_ref(stored.ref) for _ in range(8)] == [regime] * 8
+    assert calls == [stored.ref]
+    with pytest.raises(HistoricalRangeContractError, match="raw file hash"):
+        provider._regime_from_subject_ref(stored.ref.model_copy(update={"file_sha256": "0" * 64}))
+    stored.path.write_bytes(stored.path.read_bytes() + b"\n")
+    with pytest.raises(ValueError, match="changed after verification"):
+        provider._regime_from_subject_ref(stored.ref)
 
 
 class _ContextCursor:

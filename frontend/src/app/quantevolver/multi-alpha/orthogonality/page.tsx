@@ -2,9 +2,9 @@
 
 import type { CSSProperties } from "react";
 import { useMemo, useState } from "react";
-import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import MetricCard from "@/components/paper-v2/MetricCard";
-import SectionCard from "@/components/paper-v2/SectionCard";
+import ErrorPanel from "@/components/trading-console/ErrorPanel";
+import MetricCard from "@/components/trading-console/MetricCard";
+import SectionCard from "@/components/trading-console/SectionCard";
 import { shortHash } from "@/lib/paper-v2/format";
 import {
   type MatrixValue,

@@ -353,12 +353,6 @@ def validate_panel(panel: pd.DataFrame, *, config: Mapping[str, Any]) -> pd.Data
         raise D2InputError("qe_p0_d2_daily_coverage_insufficient", "a date has fewer rows than top_k")
     if sectors.lt(int(config["top_m"])).any():
         raise D2InputError("qe_p0_d2_sector_coverage_insufficient", "a date has fewer sectors than top_m")
-    sector_sizes = frame.groupby(["datetime", "l2_code_id"], sort=True).size()
-    if sector_sizes.lt(2).any():
-        raise D2InputError(
-            "qe_p0_d2_within_sector_coverage_insufficient",
-            "every date/sector requires at least two stocks",
-        )
     return frame.sort_values(["datetime", "l2_code_id", "instrument"], kind="mergesort").reset_index(drop=True)
 
 
@@ -453,26 +447,50 @@ def _evaluate_date(
         )
         candidates["soft_score"] = candidates["sector_percentile"] * candidates["stock_percentile"]
         selected = _rank_order(candidates, "soft_score").head(top_k)
-    if len(selected) != top_k:
+    if selected.empty:
         raise D2InputError(
             "qe_p0_d2_selection_coverage_insufficient",
-            f"selected rows={len(selected)} expected top_k={top_k}",
+            f"selected rows=0 for top_k cap={top_k}",
         )
 
     correlations: list[float] = []
+    multi_stock_sector_count = 0
+    degenerate_multi_stock_sector_count = 0
+    eligible_sector_count = 0
+    eligible_stock_count = 0
+    singleton_sector_count = 0
     selected_sector_panel = day.loc[day["l2_code_id"].isin(predicted_top)]
+    selected_sector_count = int(selected_sector_panel["l2_code_id"].nunique())
     for _sector, group in selected_sector_panel.groupby("l2_code_id", sort=True):
-        correlation = group[stock_column].rank(method="average").corr(
-            group["label"].rank(method="average")
-        )
+        if len(group) < 2:
+            singleton_sector_count += 1
+            continue
+        multi_stock_sector_count += 1
+        stock_rank = group[stock_column].rank(method="average")
+        label_rank = group["label"].rank(method="average")
+        if stock_rank.nunique() < 2 or label_rank.nunique() < 2:
+            degenerate_multi_stock_sector_count += 1
+            continue
+        correlation = stock_rank.corr(label_rank)
         if pd.notna(correlation):
+            eligible_sector_count += 1
+            eligible_stock_count += len(group)
             correlations.append(float(correlation))
     if not correlations:
-        raise D2InputError("qe_p0_d2_within_sector_rankic_invalid", "no finite within-sector RankIC")
+        current_date = pd.Timestamp(day["datetime"].iloc[0]).date().isoformat()
+        raise D2InputError(
+            "qe_p0_d2_within_sector_coverage_insufficient",
+            "selected sector set has no multi-stock group for within-sector RankIC: "
+            f"date={current_date} sector_mode={sector_mode} gating={gating}",
+        )
 
     tail_stock_count = max(1, math.ceil(len(day) * tail_fraction))
     oracle_tail_stocks = set(_rank_order(day, "label").head(tail_stock_count)["instrument"])
     selected_stocks = set(selected["instrument"])
+    day_sector_sizes = day.groupby("l2_code_id", sort=True).size()
+    selected_singleton_stock_count = int(
+        selected["l2_code_id"].map(day_sector_sizes).eq(1).sum()
+    )
     return {
         "sector_recall_at_m": len(predicted_top & oracle_top) / len(oracle_top),
         "sector_ndcg_at_m": _ndcg_at_m(predicted_order, oracle_order, top_m),
@@ -481,19 +499,32 @@ def _evaluate_date(
         "stock_tail_recall": len(selected_stocks & oracle_tail_stocks) / len(oracle_tail_stocks),
         "selected_label_mean": float(selected["label"].mean()),
         "selected_label_hit_rate": float(selected["label"].gt(0).mean()),
+        "selected_stock_count": float(len(selected)),
+        "selected_stock_top_k_fill_fraction": float(len(selected) / top_k),
+        "within_sector_rankic_eligible_sector_count": float(eligible_sector_count),
+        "within_sector_rankic_eligible_stock_count": float(eligible_stock_count),
+        "within_sector_rankic_degenerate_multi_stock_sector_count": float(
+            degenerate_multi_stock_sector_count
+        ),
+        "within_sector_rankic_multi_stock_sector_count": float(multi_stock_sector_count),
+        "within_sector_rankic_selected_sector_count": float(selected_sector_count),
+        "within_sector_rankic_singleton_sector_count": float(singleton_sector_count),
+        "selected_singleton_stock_count": float(selected_singleton_stock_count),
     }
 
 
 def evaluate_panel(panel: pd.DataFrame, *, validated_input: ValidatedInput) -> Mapping[str, Any]:
     frame = validate_panel(panel, config=validated_input.config)
     config = validated_input.config
-    daily_sample_counts = {
-        pd.Timestamp(current_date).date().isoformat(): {
+    daily_sample_counts = {}
+    for current_date, group in frame.groupby("datetime", sort=True):
+        sector_sizes = group.groupby("l2_code_id", sort=True).size()
+        daily_sample_counts[pd.Timestamp(current_date).date().isoformat()] = {
             "rows": int(len(group)),
-            "sectors": int(group["l2_code_id"].nunique()),
+            "sectors": int(len(sector_sizes)),
+            "singleton_sectors": int(sector_sizes.eq(1).sum()),
+            "multi_stock_sectors": int(sector_sizes.ge(2).sum()),
         }
-        for current_date, group in frame.groupby("datetime", sort=True)
-    }
     cell_receipts: list[Mapping[str, Any]] = []
     for cell_id, sector_mode, stock_mode in CELL_SPECS:
         for gating in GATING_MODES:
@@ -519,8 +550,42 @@ def evaluate_panel(panel: pd.DataFrame, *, validated_input: ValidatedInput) -> M
                     "stock_tail_recall",
                     "selected_label_mean",
                     "selected_label_hit_rate",
+                    "selected_stock_count",
+                    "selected_stock_top_k_fill_fraction",
                 )
             }
+            selected_sector_observations = sum(
+                row["within_sector_rankic_selected_sector_count"] for row in daily_rows
+            )
+            eligible_sector_observations = sum(
+                row["within_sector_rankic_eligible_sector_count"] for row in daily_rows
+            )
+            metrics["within_sector_rankic_eligible_sector_fraction"] = float(
+                eligible_sector_observations / selected_sector_observations
+            )
+            metrics["within_sector_rankic_eligible_sector_count_mean"] = float(
+                np.mean([row["within_sector_rankic_eligible_sector_count"] for row in daily_rows])
+            )
+            metrics["within_sector_rankic_eligible_stock_count_mean"] = float(
+                np.mean([row["within_sector_rankic_eligible_stock_count"] for row in daily_rows])
+            )
+            metrics["within_sector_rankic_degenerate_multi_stock_sector_count_mean"] = float(
+                np.mean(
+                    [
+                        row["within_sector_rankic_degenerate_multi_stock_sector_count"]
+                        for row in daily_rows
+                    ]
+                )
+            )
+            metrics["within_sector_rankic_multi_stock_sector_count_mean"] = float(
+                np.mean([row["within_sector_rankic_multi_stock_sector_count"] for row in daily_rows])
+            )
+            metrics["within_sector_rankic_singleton_sector_count_mean"] = float(
+                np.mean([row["within_sector_rankic_singleton_sector_count"] for row in daily_rows])
+            )
+            metrics["selected_singleton_stock_count_mean"] = float(
+                np.mean([row["selected_singleton_stock_count"] for row in daily_rows])
+            )
             metrics["selected_label_mean_block_bootstrap"] = _moving_block_ci(
                 [row["selected_label_mean"] for row in daily_rows],
                 block_days=int(config["bootstrap_block_days"]),
@@ -539,10 +604,13 @@ def evaluate_panel(panel: pd.DataFrame, *, validated_input: ValidatedInput) -> M
                     "portfolio_status": PORTFOLIO_STATUS,
                 }
             )
+    reason_codes = ["qe_p0_d2_all_eight_signal_cells_computed"]
+    if any(row["singleton_sectors"] > 0 for row in daily_sample_counts.values()):
+        reason_codes.append("qe_p0_d2_singleton_sectors_excluded_from_within_sector_rankic")
     receipt: dict[str, Any] = {
         "schema_version": RECEIPT_SCHEMA,
         "outcome": OUTCOME_COMPUTABLE,
-        "reason_codes": ["qe_p0_d2_all_eight_signal_cells_computed"],
+        "reason_codes": reason_codes,
         "input_manifest_sha256": validated_input.manifest_sha256,
         "panel_sha256": validated_input.panel_sha256,
         "identities": validated_input.identities,

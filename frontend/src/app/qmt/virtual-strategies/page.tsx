@@ -1,12 +1,12 @@
 ﻿"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import JsonPanel from "@/components/paper-v2/JsonPanel";
-import NoticePanel from "@/components/paper-v2/NoticePanel";
-import PaperTable from "@/components/paper-v2/PaperTable";
-import SectionCard from "@/components/paper-v2/SectionCard";
-import StatusBadge from "@/components/paper-v2/StatusBadge";
+import ErrorPanel from "@/components/trading-console/ErrorPanel";
+import JsonPanel from "@/components/trading-console/JsonPanel";
+import NoticePanel from "@/components/trading-console/NoticePanel";
+import PaperTable from "@/components/trading-console/PaperTable";
+import SectionCard from "@/components/trading-console/SectionCard";
+import StatusBadge from "@/components/trading-console/StatusBadge";
 import { qmtApi, type QmtStatus } from "@/lib/paper-v2/api";
 import { asText, formatCompact, formatNumber, shortHash } from "@/lib/paper-v2/format";
 import { qmtStrategyLedgerApi, type QmtVirtualStrategySummary } from "@/lib/qmt-strategy-ledger/api";

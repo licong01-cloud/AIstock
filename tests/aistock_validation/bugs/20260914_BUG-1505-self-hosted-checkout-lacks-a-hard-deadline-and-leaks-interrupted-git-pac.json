@@ -1,0 +1,372 @@
+{
+  "actual": "Checkout is bounded only by a 120-minute job timeout and one 44 MB interrupted pack fragment remains in the security runner workspace.",
+  "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    ".github/workflows/pr-quality.yml",
+    ".github/workflows/semgrep.yml",
+    ".github/workflows/dependency-update-validate.yml",
+    "scripts/ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "docs/standards/aistock_development_standard_v1.5_20260523.md",
+    "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+    "tests/aistock_validation/bugs/20260914_BUG-1505-self-hosted-checkout-lacks-a-hard-deadline-and-leaks-interrupted-git-pac.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1505",
+  "closed_at": "2026-09-14T18:06:10Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-14T17:48:23.392589Z",
+  "description": "Checkout is bounded only by a 120-minute job timeout and one 44 MB interrupted pack fragment remains in the security runner workspace.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260914-e8dd87857c7c",
+      "timestamp": "2026-09-14T17:48:23.392571Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/34819442218/job/103897402014"
+  ],
+  "expected": "Every self-hosted checkout has a five-minute hard step deadline and an always-run, exact-path cleanup for interrupted tmp_pack fragments inside the disposable workspace.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/dependency-update-validate.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1505-self-hosted-checkout-lacks-a-hard-deadline-and-leaks-interrupted-git-pac.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/dependency-update-validate.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260914_BUG-1505-self-hosted-checkout-lacks-a-hard-deadline-and-leaks-interrupted-git-pac.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        ".github/workflows/test.yml",
+        ".github/workflows/pr-quality.yml",
+        ".github/workflows/semgrep.yml",
+        ".github/workflows/dependency-update-validate.yml",
+        "scripts/ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      ],
+      "impacted_modules": [
+        "validation.guardrails",
+        "validation.runner",
+        "validation.center",
+        "platform.config",
+        "scripts",
+        "tests.backend",
+        "docs.standards"
+      ],
+      "matched_rules": [
+        {
+          "file": ".github/workflows/test.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/pr-quality.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/semgrep.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/dependency-update-validate.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "scripts/ci_workflow_policy_scan.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.md",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        },
+        {
+          "file": "docs/standards/aistock_development_standard_v1.5_20260523.yaml",
+          "impact_modules": [
+            "validation.guardrails"
+          ],
+          "primary_module": "docs.standards",
+          "risk_level": "medium",
+          "rule_id": "docs_standards"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        ".github/workflows/test.yml",
+        ".github/workflows/pr-quality.yml",
+        ".github/workflows/semgrep.yml",
+        ".github/workflows/dependency-update-validate.yml",
+        "scripts/ci_workflow_policy_scan.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+        "docs/standards/aistock_development_standard_v1.5_20260523.md",
+        "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      ".github/workflows/test.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/dependency-update-validate.yml",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      ".github/workflows/test.yml",
+      ".github/workflows/pr-quality.yml",
+      ".github/workflows/semgrep.yml",
+      ".github/workflows/dependency-update-validate.yml",
+      "scripts/ci_workflow_policy_scan.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "docs/standards/aistock_development_standard_v1.5_20260523.md",
+      "docs/standards/aistock_development_standard_v1.5_20260523.yaml"
+    ]
+  },
+  "first_seen_at": "2026-09-14T17:48:23.392589Z",
+  "fix_branch": null,
+  "fix_commit": "f45c9809d268f857ef66a61b7b6f6a22f702fecd",
+  "fixed_at": "2026-09-14T18:06:10Z",
+  "github_issue_number": 4721,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4721",
+  "last_seen_at": "2026-09-14T17:48:23.392589Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4723",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "gh run view 34819442218 --json jobs; Get-ChildItem F:\\Dev\\github-actions-runner\\aistock-security\\_work\\AIstock\\AIstock\\.git\\objects\\pack -Filter tmp_pack_*",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "infra_failure",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1505",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "584df02db04127b1",
+    "recorded_at": "2026-09-14T18:07:44.751217Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "189440a13960ba43446d6486ef122a7518fccf38",
+    "source_merge_commit": "f45c9809d268f857ef66a61b7b6f6a22f702fecd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4723",
+    "validation_evidence": [
+      "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+      "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -q -> 27 passed"
+    ],
+    "validation_evidence_digest": "f0d5d545d7864dffabf3994d853314143273b070fdca6fb8f9f00060ed7d603a"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Self-hosted checkout lacks a hard deadline and leaks interrupted Git pack fragments",
+  "trigger_condition": {
+    "fingerprint": "e8dd87857c7c7b4ec85818e5",
+    "source_event_id": "FE-20260914-e8dd87857c7c"
+  },
+  "validation_evidence": [
+    "python -m nox -s guardrail_changed_files -- --changed-only -> passed",
+    "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -q -> 27 passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

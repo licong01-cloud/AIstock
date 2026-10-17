@@ -1,17 +1,115 @@
 from __future__ import annotations
 
+import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
+import yaml
 
 import noxfile
 from scripts.ci_workflow_policy_scan import (
     build_contract_evidence,
+    has_event_bound_base_preparation,
+    has_owned_wall_clock_trigger,
     scan_environment_contracts,
     scan_nox_text,
     scan_workflow_text,
     scan_workflows,
 )
+
+
+def test_hmm_nox_bounds_parent_threads_without_reducing_verification(monkeypatch, tmp_path):
+    calls = []
+    class Session:
+        def run(self, *args, **kwargs):
+            calls.append((args, kwargs))
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setattr(noxfile, "_env", lambda extra: {"OPENBLAS_NUM_THREADS": "24", **extra})
+    noxfile.hmm_risk_backend(Session())
+    args, kwargs = next(call for call in calls if "pytest" in call[0])
+    assert all(kwargs["env"].get(key) == "1" for key in (
+        "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"))
+    assert {"backend/tests/hmm_risk", "--cov-branch", "--cov-fail-under=70", "--durations=10"} <= set(args)
+    assert "not integration" in args and "-x" not in args
+
+
+def test_nightly_dr_failure_does_not_suppress_research_or_disappear_from_summary() -> None:
+    jobs = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))["jobs"]
+    l3, summary = jobs["nightly-l3"], jobs["full-summary"]
+    assert l3["needs"] == ["runner-preflight"]
+    assert "needs.dr-" not in l3["if"]
+    assert "inputs.run_nightly_l3" in l3["if"]
+    assert jobs["dr-validate"]["needs"] == "dr-snapshot"
+    assert {"dr-snapshot", "dr-validate", "nightly-l3"} <= set(summary["needs"])
+    assert summary["if"] == "always()"
+    failure = next(step for step in summary["steps"] if step.get("name") == "Build Nightly failure issue context")
+    assert "needs.dr-snapshot.result == 'failure'" in failure["if"]
+    assert "needs.dr-validate.result == 'failure'" in failure["if"]
+    for key, job in (("L3_RESULT", "nightly-l3"), ("DR_RESULT", "dr-snapshot"), ("DR_VALIDATE_RESULT", "dr-validate")):
+        assert failure["env"][key] == ("${{ needs." + job + ".outputs.background_admitted == 'false' && 'deferred' || needs."
+                                      + job + ".result }}")
+
+
+def test_policy_test_has_one_owner_matching_its_guardrail_source() -> None:
+    from backend.services.validation.file_ownership import FileOwnershipCatalog
+    catalog = FileOwnershipCatalog()
+    owner = catalog.match_path("backend/tests/scripts/test_ci_workflow_policy_scan.py")
+    assert owner.ownership_status == "mapped"
+    assert owner.primary_module == catalog.match_path("scripts/ci_workflow_policy_scan.py").primary_module
+
+
+def test_nightly_workflow_validation_requires_prebuilt_ci_and_x_temp() -> None:
+    jobs = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))["jobs"]
+    steps = jobs["code-intelligence-weekly"]["steps"]
+    validation_index = next(i for i, step in enumerate(steps)
+                            if step.get("name") == "Validate CI/Nightly issue workflow automation")
+    verify = steps[validation_index - 1]
+    validation = steps[validation_index]
+    assert verify["name"] == "Verify prebuilt environment for workflow validation"
+    assert verify["env"] == {"AISTOCK_CI_ENV_NAME": "AIstock-CI", "AISTOCK_CI_TEST_TEMP_REQUIRED": "1"}
+    assert "conda run -n AIstock-CI python scripts/ci_environment_verify.py" in verify["run"]
+    assert "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }" in verify["run"]
+    assert validation["run"].strip() == "conda run -n AIstock-CI python -m nox -s validation_workflow_automation"
+    for step in (verify, validation):
+        assert not step.get("continue-on-error", False)
+        assert step["if"] == "steps.background_window.outputs.background_admitted == 'true'"
+        # No status override: default success() still prevents running after failed preflight.
+
+
+def test_tdx_ci_is_offline_and_builds_web_module() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    step = next(s for s in workflow["jobs"]["ci-verdict"]["steps"] if s.get("id") == "go_validation")
+    assert str(step["env"]["GOPROXY"]).lower() in {"off", "false"}
+    assert str(step["env"]["GOSUMDB"]).lower() in {"off", "false"}
+    assert step["env"]["GOTOOLCHAIN"] == "local"
+    assert "go test -mod=readonly ./protocol -count=1" in step["run"]
+    assert "go test -mod=readonly . -run '^TestPagination' -count=1" in step["run"]
+    assert "go test -mod=readonly . -count=1" in step["run"]
+    assert "go build -mod=readonly ./..." in step["run"]
+    assert "cd web" in step["run"]
+    assert 'go build -mod=readonly -o "${TMP}/aistock-tdx-web.exe" .' in step["run"]
+    assert "go test ./..." not in step["run"]
+    from backend.services.validation.file_ownership import FileOwnershipCatalog
+    catalog = FileOwnershipCatalog()
+    for path in ("tdx-api-main/protocol/unit.go", "tdx-api-main/web/server.go",
+                 "tdx-api-main/web/go.mod", "tdx-api-main/protocol/unit_test.go"):
+        assert catalog.match_path(path).primary_module == "local_data"
+
+
+@pytest.mark.parametrize("mutation", ["empty-base", "wrong-head", "pr-only-condition"])
+def test_manual_preparation_policy_rejects_event_input_regressions(mutation: str) -> None:
+    text = Path(".github/workflows/pr-quality.yml").read_text(encoding="utf-8")
+    assert has_event_bound_base_preparation(text, manual=True)
+    if mutation == "empty-base":
+        text = text.replace("inputs.base_sha", "github.event.pull_request.base.sha")
+    elif mutation == "wrong-head":
+        text = text.replace("SOURCE_HEAD_SHA: ${{ github.sha }}", "SOURCE_HEAD_SHA: ${{ github.event.before }}")
+    else:
+        text = text.replace("        id: quality_lane", "        if: github.event_name == 'pull_request'\n        id: quality_lane")
+    assert not has_event_bound_base_preparation(text, manual=True)
 
 
 def test_policy_scan_rejects_install_and_disposable_database() -> None:
@@ -59,6 +157,19 @@ def test_repository_workflows_pass_zero_install_and_database_service_policy() ->
     assert findings == []
 
 
+@pytest.mark.parametrize("old,new", [
+    ("types: [aistock_codeql]", "types: [arbitrary]"),
+    ("repository_dispatch:", "schedule:"),
+    ("repository_dispatch:", "push:"),
+    ("AIstock schedule codeql.yml", "arbitrary"),
+    ("scheduled-admission", "missing-admission"),
+])
+def test_daily_trigger_policy_rejects_unowned_or_unprotected_dispatch(old, new):
+    text = Path(".github/workflows/codeql.yml").read_text(encoding="utf-8")
+    assert has_owned_wall_clock_trigger(text, "codeql.yml", "aistock_codeql")
+    assert not has_owned_wall_clock_trigger(text.replace(old, new), "codeql.yml", "aistock_codeql")
+
+
 def test_nox_dependency_bootstrap_requires_ci_fail_closed_guard() -> None:
     findings = scan_nox_text('session.run("npm", "ci", external=True)')
     assert findings and findings[0]["reason"].startswith("Nox contains npm ci")
@@ -67,6 +178,173 @@ def test_nox_dependency_bootstrap_requires_ci_fail_closed_guard() -> None:
 def test_repository_runner_contract_is_explicit() -> None:
     findings = scan_environment_contracts(sorted(Path(".github/workflows").glob("*.yml")))
     assert findings == []
+
+
+def test_pr_ci_substantive_steps_stop_when_cancelled_but_keep_failure_aggregation() -> None:
+    job = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))["jobs"]["ci-verdict"]
+    substantive = {"dependency_validation", "pr_quality_validation", "semgrep_validation", "backend_validation",
+                   "frontend_dependencies", "frontend_validation", "go_validation", "prompt_validation",
+                   "workflow_validation", "workflow_policy"}
+    steps = {step.get("id"): step for step in job["steps"]}
+    for step_id in substantive:
+        condition = steps[step_id]["if"]
+        assert condition.startswith("${{ !cancelled() && "), step_id
+        assert "success()" not in condition and "always()" not in condition, step_id
+    assert steps["prerequisite_gate"]["if"] == "always()"
+    verdict = next(step for step in job["steps"] if step.get("name") == "Require every selected CI lane to pass")
+    assert verdict["if"] == "always()" and "exit 1" in verdict["run"]
+
+
+def test_self_hosted_checkout_requires_verified_git_mirror_with_bounded_fallback(tmp_path: Path) -> None:
+    workflow = tmp_path / "test.yml"
+    workflow.write_text(
+        "env:\n"
+        "  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n"
+        "  GIT_HTTP_LOW_SPEED_TIME: '60'\n"
+        "  GIT_CONFIG_COUNT: '1'\n"
+        "  GIT_CONFIG_KEY_0: http.version\n"
+        "  GIT_CONFIG_VALUE_0: HTTP/1.1\n"
+        "jobs:\n"
+        "  scan:\n"
+        "    runs-on: [self-hosted, Windows, aistock-ci]\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v8\n"
+        "        timeout-minutes: 5\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_environment_contracts([workflow])
+
+    assert any("must use a verified local Git object mirror" in item["reason"] for item in findings)
+
+
+def test_self_hosted_workflow_must_bound_stalled_or_unusably_slow_git_http_transfer(tmp_path: Path) -> None:
+    workflow = tmp_path / "codeql.yml"
+    workflow.write_text(
+        "env:\n"
+        "jobs:\n"
+        "  scan:\n"
+        "    runs-on: [self-hosted, Windows, aistock-ci-security]\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_environment_contracts([workflow])
+
+    assert any("must bound stalled or unusably slow Git HTTP transfers" in item["reason"] for item in findings)
+
+
+def test_contract_evidence_rejects_unbounded_self_hosted_git_http(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '60'\n", "", 1)
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["self_hosted_git_http_stalls_are_bounded"] is False
+
+
+def test_contract_evidence_rejects_aggressive_git_http_bandwidth_sla(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace("  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n", "  GIT_HTTP_LOW_SPEED_LIMIT: '524288'\n", 1)
+            text = text.replace("  GIT_HTTP_LOW_SPEED_TIME: '60'\n", "  GIT_HTTP_LOW_SPEED_TIME: '30'\n", 1)
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["self_hosted_git_http_stalls_are_bounded"] is False
+
+
+def test_self_hosted_checkout_requires_hard_timeout_and_literal_pack_cleanup(tmp_path: Path) -> None:
+    workflow = tmp_path / "test.yml"
+    workflow.write_text(
+        "env:\n"
+        "  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n"
+        "  GIT_HTTP_LOW_SPEED_TIME: '60'\n"
+        "  GIT_CONFIG_COUNT: '1'\n"
+        "  GIT_CONFIG_KEY_0: http.version\n"
+        "  GIT_CONFIG_VALUE_0: HTTP/1.1\n"
+        "jobs:\n"
+        "  ci:\n"
+        "    runs-on:\n"
+        "      - self-hosted\n"
+        "      - Windows\n"
+        "      - aistock-ci\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v8\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_environment_contracts([workflow])
+
+    reasons = {item["reason"] for item in findings}
+    assert "self-hosted actions/checkout must have a five-minute hard step timeout" in reasons
+    assert (
+        "self-hosted checkout must reclaim interrupted Git pack fragments by literal path without blocking the PR"
+        in reasons
+    )
+
+
+def test_contract_evidence_rejects_vacuous_checkout_discovery(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8").replace("actions/checkout@v7", "local/checkout@v7")
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["self_hosted_checkout_steps_have_hard_timeout"] is False
+    assert evidence["self_hosted_checkout_cleans_interrupted_pack_fragments"] is False
+
+
+def test_contract_evidence_accepts_a_checkout_action_version_upgrade(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8").replace("actions/checkout@v7", "actions/checkout@v8")
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["self_hosted_checkout_steps_have_hard_timeout"] is True
+    assert evidence["self_hosted_checkout_cleans_interrupted_pack_fragments"] is True
+
+
+def test_checkout_and_cleanup_contracts_are_bound_to_each_exact_step(tmp_path: Path) -> None:
+    workflow = tmp_path / "test.yml"
+    workflow.write_text(
+        "env:\n"
+        "  GIT_HTTP_LOW_SPEED_LIMIT: '1024'\n"
+        "  GIT_HTTP_LOW_SPEED_TIME: '60'\n"
+        "  GIT_CONFIG_COUNT: '1'\n"
+        "  GIT_CONFIG_KEY_0: http.version\n"
+        "  GIT_CONFIG_VALUE_0: HTTP/1.1\n"
+        "jobs:\n"
+        "  ci:\n"
+        "    runs-on: [self-hosted, Windows, aistock-ci]\n"
+        "    steps:\n"
+        "      - uses: actions/checkout@v8\n"
+        "        timeout-minutes: 5\n"
+        "      - uses: actions/checkout@v9\n"
+        "      - name: Unrelated tolerated diagnostic\n"
+        "        continue-on-error: true\n"
+        "        run: echo diagnostic\n"
+        "      - name: Reclaim interrupted Git pack fragments\n"
+        "        shell: powershell\n"
+        "        run: |\n"
+        "          Get-ChildItem -LiteralPath $packRoot -File -Filter 'tmp_pack_*'\n"
+        "          Remove-Item -LiteralPath $fragment.FullName -Force -ErrorAction Stop\n",
+        encoding="utf-8",
+    )
+
+    findings = scan_environment_contracts([workflow])
+    reasons = [item["reason"] for item in findings]
+
+    assert reasons.count("self-hosted actions/checkout must have a five-minute hard step timeout") == 1
+    assert (
+        "self-hosted checkout must reclaim interrupted Git pack fragments by literal path without blocking the PR"
+        in reasons
+    )
 
 
 def test_repository_contract_evidence_matches_machine_standard() -> None:
@@ -79,23 +357,144 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert "pr_quality_no_external_report_action_dependency" in evidence
     assert "superseded_pr_runs_cancel_in_progress" in evidence
     assert "bounded_pr_base_fetch_retry" in evidence
-    assert evidence["merge_quality_contexts_are_change_scoped"] is True
-    assert "pr_ci_no_separate_failure_publisher_job" in evidence
-    assert "pr_ci_no_external_artifact_action_dependency" in evidence
-    assert evidence["pr_ci_static_gate_reuses_classifier_checkout"] is True
-    assert evidence["pr_ci_selected_lanes_reuse_ci_verdict_runner"] is True
-    assert evidence["pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout"] is True
-    assert evidence["codeql_reuses_single_security_runner_allocation"] is True
-    assert "pr_workflows_no_external_report_action_dependency" in evidence
-    assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
-    assert evidence["nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies"] is True
-    assert evidence["self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe"] is True
-    assert evidence["nightly_retry_receipt_is_repo_scoped_bound_and_fail_closed"] is True
-    assert evidence["nightly_retries_failed_or_missing_sessions_plus_new_impact"] is True
-    assert evidence["nightly_change_scoped_l0_uses_explicit_receipt_paths"] is True
-    assert evidence["bounded_dual_runner_roles"] is True
-    assert evidence["policy_evidence_remains_one_scanner_step"] is True
-    assert evidence["javascript_actions_use_approved_native_node24_majors"] is True
+    required = (
+        "merge_quality_contexts_are_change_scoped", "pr_ci_no_separate_failure_publisher_job",
+        "pr_ci_no_external_artifact_action_dependency", "pr_ci_static_gate_reuses_classifier_checkout",
+        "pr_ci_selected_lanes_reuse_ci_verdict_runner", "changed_tests_reachable_from_selected_ci_plan",
+        "dependency_update_pr_validation_reuses_ci_verdict", "pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout",
+        "codeql_reuses_single_security_runner_allocation", "codeql_bundle_path_is_runner_independent",
+        "security_workflows_fail_fast_before_runner_allocation", "nightly_code_intelligence_has_single_scheduled_owner",
+        "nightly_preflight_requires_distinct_runner_roles", "redundant_issue_event_workflows_retired",
+        "pr_workflows_no_external_report_action_dependency", "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database",
+        "nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies", "self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe",
+        "nightly_retry_receipt_is_repo_scoped_bound_and_fail_closed", "nightly_retries_failed_or_missing_sessions_plus_new_impact",
+        "nightly_change_scoped_l0_uses_explicit_receipt_paths", "bounded_dual_runner_roles",
+        "runner_lifecycle_is_pinned_and_supervised", "self_hosted_workflows_use_verified_git_object_mirror",
+        "git_object_mirror_maintenance_is_bounded_and_offline", "self_hosted_git_http_stalls_are_bounded",
+        "pr_ci_heavy_lanes_short_circuit_after_prerequisites", "selected_validation_plans_are_subsumed_once",
+        "policy_evidence_remains_one_scanner_step", "javascript_actions_use_approved_native_node24_majors",
+    )
+    for key in required:
+        assert evidence[key] is True, key
+
+
+def test_runner_lifecycle_contract_rejects_missing_supervisor(tmp_path: Path) -> None:
+    supervisor = tmp_path / "missing-supervisor.ps1"
+
+    evidence = build_contract_evidence(
+        sorted(Path(".github/workflows").glob("*.yml")),
+        runner_supervisor_path=supervisor,
+    )
+
+    assert evidence["runner_lifecycle_is_pinned_and_supervised"] is False
+
+
+def test_git_object_mirror_contract_rejects_missing_maintenance_helper(tmp_path: Path) -> None:
+    evidence = build_contract_evidence(
+        sorted(Path(".github/workflows").glob("*.yml")),
+        git_mirror_maintenance_path=tmp_path / "missing-mirror-helper.ps1",
+    )
+
+    assert evidence["git_object_mirror_maintenance_is_bounded_and_offline"] is False
+
+
+def test_git_object_mirror_preflight_does_not_probe_an_empty_workspace_with_git(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace(
+                "$workspaceHead = Join-Path $env:GITHUB_WORKSPACE '.git\\HEAD'",
+                "& git -C $env:GITHUB_WORKSPACE rev-parse --verify 'HEAD^{commit}'",
+                1,
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["self_hosted_workflows_use_verified_git_object_mirror"] is False
+
+
+def test_git_object_mirror_helper_builds_from_aligned_local_main_without_network(tmp_path: Path) -> None:
+    powershell = shutil.which("powershell.exe") or shutil.which("powershell")
+    if not powershell:
+        pytest.skip("PowerShell helper is Windows-only")
+    source = tmp_path / "source"
+    allowed = tmp_path / "prebuilt"
+    mirror = allowed / "git" / "AIstock.git"
+    source.mkdir()
+
+    def git(*args: str, cwd: Path = source) -> str:
+        completed = subprocess.run(
+            ["git", *args], cwd=cwd, check=True, capture_output=True, text=True
+        )
+        return completed.stdout.strip()
+
+    git("init", "--initial-branch=main")
+    git("config", "user.email", "ci@example.invalid")
+    git("config", "user.name", "CI")
+    git("remote", "add", "origin", "https://github.com/licong01-cloud/AIstock.git")
+    (source / "tracked.txt").write_text("mirror seed\n", encoding="utf-8")
+    git("add", "tracked.txt")
+    git("commit", "-m", "seed")
+    main_sha = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", main_sha)
+
+    command = [
+            powershell,
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            "scripts/maintain_aistock_git_mirror.ps1",
+            "-SourceRoot",
+            str(source),
+            "-MirrorRoot",
+            str(mirror),
+            "-AllowedRoot",
+            str(allowed),
+            "-Apply",
+            "-Json",
+        ]
+    completed = subprocess.run(command, check=True, capture_output=True, text=True, timeout=30)
+
+    payload = json.loads(completed.stdout)
+    manifest = json.loads(Path(payload["manifest_path"]).read_text(encoding="utf-8-sig"))
+    assert payload["status"] == "ready"
+    assert payload["main_sha"] == main_sha
+    assert payload["network_accessed"] is False
+    assert payload["process_control_performed"] is False
+    assert manifest["repository"] == "licong01-cloud/AIstock"
+    assert git("-C", str(mirror), "rev-parse", "refs/heads/main") == main_sha
+    unchanged = Path(payload["manifest_path"]).read_bytes()
+    noop = json.loads(subprocess.run(command, check=True, capture_output=True, text=True, timeout=30).stdout)
+    assert noop["refreshed"] is False
+    assert Path(payload["manifest_path"]).read_bytes() == unchanged
+    git("commit", "--allow-empty", "-m", "advance")
+    new_sha = git("rev-parse", "HEAD")
+    git("update-ref", "refs/remotes/origin/main", new_sha)
+    refreshed = json.loads(subprocess.run(command, check=True, capture_output=True, text=True, timeout=30).stdout)
+    assert refreshed["refreshed"] is True and refreshed["main_sha"] == new_sha
+    assert git("-C", str(mirror), "cat-file", "-t", main_sha) == "commit"
+    helper = Path("scripts/maintain_aistock_git_mirror.ps1").read_text(encoding="utf-8")
+    assert "'gc.auto=0'" in helper and "'maintenance.auto=false'" in helper
+    git("update-ref", "refs/remotes/origin/main", main_sha)
+    rejected = subprocess.run(command, capture_output=True, text=True, timeout=30)
+    assert rejected.returncode != 0 and "not aligned" in rejected.stderr
+
+
+def test_heavy_lane_short_circuit_contract_rejects_direct_backend_execution(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace(
+                "steps.prerequisite_gate.outputs.heavy_lanes_allowed == 'true'",
+                "steps.classify.outcome == 'success'",
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["pr_ci_heavy_lanes_short_circuit_after_prerequisites"] is False
 
 
 def test_pr_ci_frontend_dependency_attach_cannot_be_removed(tmp_path: Path) -> None:
@@ -141,6 +540,19 @@ def test_dual_runner_policy_does_not_lock_nightly_job_count(tmp_path: Path) -> N
     evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
 
     assert evidence["bounded_dual_runner_roles"] is True
+
+
+def test_security_runner_preflight_contract_rejects_direct_queueing(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "codeql.yml":
+            text = text.replace("    needs: security-runner-preflight\n", "", 1)
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["security_workflows_fail_fast_before_runner_allocation"] is False
+    assert evidence["no_linux_or_production_environment_fallback"] is False
 
 
 def test_nightly_receipt_policy_rejects_non_scalar_candidate_stream(tmp_path: Path) -> None:
@@ -200,6 +612,22 @@ def test_codeql_security_runner_reacquisition_is_detected(tmp_path: Path) -> Non
     assert evidence["codeql_reuses_single_security_runner_allocation"] is False
 
 
+def test_codeql_bundle_path_cannot_depend_on_a_runner_workspace(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "codeql.yml":
+            text = text.replace(
+                "prebuilt\\CodeQL\\2.26.3\\x64\\codeql",
+                "aistock\\_work\\_tool\\CodeQL\\2.26.3\\x64\\codeql",
+                1,
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["codeql_bundle_path_is_runner_independent"] is False
+
+
 def test_ci_verdict_owns_workflow_validation_and_fails_closed() -> None:
     import yaml
 
@@ -224,11 +652,33 @@ def test_ci_verdict_owns_workflow_validation_and_fails_closed() -> None:
     assert final_verdict["env"]["WORKFLOW_POLICY_RESULT"] == "${{ steps.workflow_policy.outcome }}"
     assert "workflow_validation=${WORKFLOW_TEST_RESULT}" in final_verdict["run"]
     assert "workflow_policy=${WORKFLOW_POLICY_RESULT}" in final_verdict["run"]
+    assert 'failures+=("dev_db=' not in final_verdict["run"]
+    assert "### External DEV database validation" in final_verdict["run"]
+    assert "does not run database DDL/DML" in final_verdict["run"]
+
+
+def test_dev_db_requirement_cannot_be_reintroduced_as_ci_lane_failure(tmp_path: Path) -> None:
+    for source in Path(".github/workflows").glob("*.yml"):
+        text = source.read_text(encoding="utf-8")
+        if source.name == "test.yml":
+            text = text.replace(
+                'echo "### External DEV database validation"',
+                'failures+=("dev_db=external_DEV_validation_required:${DEV_DB_PLANS}")',
+                1,
+            )
+        (tmp_path / source.name).write_text(text, encoding="utf-8")
+
+    evidence = build_contract_evidence(sorted(tmp_path.glob("*.yml")))
+
+    assert evidence["existing_dev_database_lane_reference"] is False
 
 
 def test_merge_quality_contract_detects_issue_workflow_name_drift(tmp_path: Path) -> None:
     issue_workflow = tmp_path / "aistock_issue_workflow.py"
-    issue_workflow.write_text('MERGE_QUALITY_CHECK_CONTEXTS = ("CI verdict",)\n', encoding="utf-8")
+    issue_workflow.write_text(
+        'MERGE_QUALITY_CHECK_CONTEXTS = ("CI verdict", "CodeQL verdict")\n',
+        encoding="utf-8",
+    )
 
     evidence = build_contract_evidence(
         sorted(Path(".github/workflows").glob("*.yml")),
@@ -238,20 +688,58 @@ def test_merge_quality_contract_detects_issue_workflow_name_drift(tmp_path: Path
     assert evidence["merge_quality_contexts_are_change_scoped"] is False
 
 
-def test_close_sync_quality_skip_is_branch_scoped_before_runner_allocation() -> None:
+def test_codeql_is_nightly_only_before_runner_allocation() -> None:
     import yaml
 
-    expected = "startsWith(github.head_ref, 'chore/BUG-') && contains(github.head_ref, '-close-sync-')"
     for workflow_name in ("pr-quality.yml", "semgrep.yml"):
         workflow = yaml.safe_load(Path(".github/workflows", workflow_name).read_text(encoding="utf-8"))
         assert set(workflow[True]) == {"workflow_dispatch"}
 
     codeql = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
-    pull_request = codeql[True]["pull_request"]
-    assert "paths-ignore" not in pull_request
-    job_if = str(codeql["jobs"]["codeql-verdict"]["if"])
-    assert "github.event_name != 'pull_request'" in job_if
-    assert expected in job_if
+    assert set(codeql[True]) == {"repository_dispatch", "workflow_dispatch"}
+    assert codeql[True]["repository_dispatch"] == {"types": ["aistock_codeql"]}
+    assert list(codeql["jobs"]) == ["security-runner-preflight", "codeql-nightly"]
+    assert codeql["jobs"]["security-runner-preflight"]["runs-on"] == "ubuntu-latest"
+    assert codeql["jobs"]["codeql-nightly"]["needs"] == "security-runner-preflight"
+    assert codeql["jobs"]["codeql-nightly"]["name"] == "CodeQL nightly full scan"
+
+
+def test_code_intelligence_and_nightly_do_not_schedule_the_same_refresh() -> None:
+    import yaml
+
+    nightly = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
+    refresh = yaml.safe_load(Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8"))
+
+    assert refresh[True]["repository_dispatch"] == {"types": ["aistock_code_intelligence"]}
+    assert "schedule" not in refresh[True]
+    assert refresh["jobs"]["refresh-after-main"]["needs"] == "security-runner-preflight"
+    assert "concurrency" not in refresh
+    assert refresh["jobs"]["refresh-after-main"]["concurrency"] == {
+        "group": "code-intelligence-refresh-main",
+        "cancel-in-progress": True,
+    }
+    legacy = nightly["jobs"]["code-intelligence-weekly"]
+    assert legacy["if"] == ("github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence"
+                            " && needs.runner-preflight.outputs.background_admitted == 'true'")
+    assert legacy["concurrency"]["cancel-in-progress"] is True
+    assert nightly[True]["workflow_dispatch"]["inputs"]["run_code_intelligence"]["default"] is False
+
+
+def test_runner_queue_watchdog_has_event_fallbacks_without_self_hosted_runner_use() -> None:
+    import yaml
+
+    workflow = yaml.safe_load(Path(".github/workflows/runner-queue-watchdog.yml").read_text(encoding="utf-8"))
+    triggers = workflow[True]
+    job = workflow["jobs"]["reconcile-scheduled-queues"]
+    cancel_step = next(step for step in job["steps"] if step.get("name") == "Cancel only stale scheduled runs without active jobs")
+
+    assert triggers["schedule"] == [{"cron": "7,22,37,52 * * * *"}]
+    assert triggers["workflow_run"] == {"workflows": ["AIstock CI"], "types": ["completed"]}
+    assert triggers["workflow_dispatch"] == {}
+    assert job["runs-on"] == "ubuntu-latest"
+    assert "if" not in cancel_step
+    assert "--current-event schedule" in cancel_step["run"]
+    assert "--expected-head-branch main" in cancel_step["run"]
 
 
 def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -> None:
@@ -266,20 +754,42 @@ def test_ci_standard_declares_direct_codeql_and_current_efficiency_contracts() -
     expected = {
         "codeql_remote_action_download_is_eliminated",
         "codeql_exact_local_workspace_fetch_is_bounded",
-        "codeql_pr_test_only_analysis_is_skipped_without_weakening_main_push",
+        "codeql_daily_nightly_full_scan",
+        "codeql_pr_merge_gate_removed",
         "code_intelligence_refresh_is_scheduled_or_manual_only",
         "code_intelligence_refresh_has_no_external_artifact_action_dependency",
+        "security_workflows_fail_fast_before_runner_allocation",
+        "nightly_code_intelligence_has_single_scheduled_owner",
+        "nightly_preflight_requires_distinct_runner_roles",
+        "redundant_issue_event_workflows_retired",
         "javascript_actions_use_approved_native_node24_majors",
         "merge_quality_contexts_are_change_scoped",
         "bounded_dual_runner_roles",
+        "self_hosted_git_http_stalls_are_bounded",
+        "self_hosted_checkout_steps_have_hard_timeout",
+        "self_hosted_checkout_cleans_interrupted_pack_fragments",
+        "runner_lifecycle_is_pinned_and_supervised",
         "policy_evidence_remains_one_scanner_step",
         "pr_ci_static_gate_reuses_classifier_checkout",
         "pr_ci_selected_lanes_reuse_ci_verdict_runner",
+        "changed_tests_reachable_from_selected_ci_plan",
+        "dependency_update_pr_validation_reuses_ci_verdict",
         "codeql_reuses_single_security_runner_allocation",
+        "codeql_bundle_path_is_runner_independent",
     }
 
     assert expected <= required
     assert "immutable CodeQL Action release" not in standard
+    assert "GIT_HTTP_LOW_SPEED_LIMIT=1024" in standard
+    assert "GIT_HTTP_LOW_SPEED_TIME=60" in standard
+    assert "GIT_HTTP_LOW_SPEED_LIMIT=524288" not in standard
+    assert "GIT_CONFIG_KEY_0=http.version" in standard
+    assert "GIT_CONFIG_VALUE_0=HTTP/1.1" in standard
+    assert "`actions/checkout` step 必须设置 `timeout-minutes: 5`" in standard
+    assert "`tmp_pack_*`" in standard
+    assert "`continue-on-error: true`" in standard
+    assert "不得覆盖业务测试结论或新增合入门禁" in standard
+    assert "该设置不是新的 PR 门禁" in standard
     assert "禁止使用 `github/codeql-action`、`actions/checkout` 或其他远端 `uses:`" in standard
     for action_ref in (
         "actions/checkout@v7",

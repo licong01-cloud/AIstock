@@ -1,13 +1,13 @@
 ﻿"use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import ConfirmAction from "@/components/paper-v2/ConfirmAction";
-import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import MetricCard from "@/components/paper-v2/MetricCard";
-import NoticePanel from "@/components/paper-v2/NoticePanel";
-import PaperTable from "@/components/paper-v2/PaperTable";
-import SectionCard from "@/components/paper-v2/SectionCard";
-import StatusBadge from "@/components/paper-v2/StatusBadge";
+import ConfirmAction from "@/components/trading-console/ConfirmAction";
+import ErrorPanel from "@/components/trading-console/ErrorPanel";
+import MetricCard from "@/components/trading-console/MetricCard";
+import NoticePanel from "@/components/trading-console/NoticePanel";
+import PaperTable from "@/components/trading-console/PaperTable";
+import SectionCard from "@/components/trading-console/SectionCard";
+import StatusBadge from "@/components/trading-console/StatusBadge";
 import { hmmTrainingApi, strategyPackageApi } from "@/lib/paper-v2/api";
 import { hmmSnapshotLabel, shortHash, todayIso } from "@/lib/paper-v2/format";
 import type { HmmConfig, HmmDailyCoefficientJob, HmmJob, HmmSnapshot, JsonObject, StrategyPackage } from "@/lib/paper-v2/types";

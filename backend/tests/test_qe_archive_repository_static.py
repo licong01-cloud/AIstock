@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
+from psycopg2.extensions import adapt
+from psycopg2.extras import Json
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -32,9 +37,15 @@ from backend.services.qe_archive.payload_extractor import QEArchivePayloadExtrac
 from backend.services.qe_archive.policy import resolve_archive_policy
 from backend.services.qe_archive import realtime_ingestion as realtime_ingestion_module
 from backend.services.qe_archive.realtime_ingestion import QEArchiveRealtimeIngestion
-from backend.services.qe_archive.repository import QEArchiveRepository
+from backend.services.qe_archive.repository import (
+    MULTI_ALPHA_RUN_COLUMNS,
+    MULTI_ALPHA_RECOVERY_CHILD_COLUMNS,
+    MULTI_ALPHA_RECOVERY_ATTEMPT_COLUMNS,
+    QEArchiveRepository,
+)
 from backend.services.qe_archive.source_assembler import QEArchiveSourceAssembler
 from backend.services.qe_archive.worker import ArchiveWorkerEventResult, QEArchiveWorker
+from backend.services.qe_archive import worker_loop as worker_loop_module
 from backend.services.qe_archive.worker_service import (
     QEArchiveWorkerService,
     WORKER_CONFIRM_TEXT,
@@ -62,6 +73,25 @@ QE_ARCHIVE_FILES = (
     REPO_ROOT / "backend" / "routers" / "qe_archive.py",
     REPO_ROOT / "scripts" / "qe_archive_backfill.py",
 )
+
+
+@pytest.mark.parametrize("column", sorted({
+    column for columns in (MULTI_ALPHA_RUN_COLUMNS, MULTI_ALPHA_RECOVERY_CHILD_COLUMNS,
+                           MULTI_ALPHA_RECOVERY_ATTEMPT_COLUMNS)
+    for column in columns if column.endswith("_json")
+}))
+def test_multi_alpha_json_columns_roundtrip_through_real_psycopg_adapter(column: str) -> None:
+    payload = {"identity": {"record_only": True, "missing": ["executor_code_commit"]},
+               "lineage": [None, {"source": "original_prediction", "sha256": "a" * 64}]}
+    value = QEArchiveRepository._adapt_value(column, payload)
+    assert isinstance(value, Json)
+    assert json.loads(value.dumps(value.adapted)) == payload
+    assert adapt(value).getquoted()  # Real driver adaptation, no DB/server needed.
+    unicode_payload = {"sector": "半导体"}
+    unicode_value = QEArchiveRepository._adapt_value(column, unicode_payload)
+    assert json.loads(unicode_value.dumps(unicode_value.adapted)) == unicode_payload
+    assert QEArchiveRepository._adapt_value(column, None) is None
+    assert QEArchiveRepository._adapt_value("execution_identity_hash", "b" * 64) == "b" * 64
 
 
 def test_canonical_json_hash_is_stable() -> None:
@@ -885,11 +915,87 @@ def test_source_assembler_builds_loop_payload_for_archive_service() -> None:
     assert payload["run_type"] == "evolution_loop"
     assert payload["factor_list"] == ["factor_a"]
     assert payload["config"]["data_context"]["freq"] == "day"
+    assert payload["config"]["data_context"]["label_horizon"] == 3
+    assert extracted.data_contexts[0].label_horizon == 3
     assert extracted.run.research_valid is False
     assert extracted.config.config_capture_complete is True
     assert extracted.data_contexts[0].backtest_start.isoformat() == "2025-01-02"
     assert extracted.data_contexts[0].backtest_end.isoformat() == "2025-01-02"
     assert any(curve.curve_key == "drawdown_series" for curve in extracted.curves)
+
+
+def test_source_assembler_prefers_loop_label_horizon_over_mixed_horizon_task() -> None:
+    payload = QEArchiveSourceAssembler.build_loop_payload(
+        {
+            "loop_id": "task_mixed_Loop4",
+            "task_id": "task_mixed",
+            "loop_index": 4,
+            "config_json": {
+                "factor_list": ["factor_a"],
+                "label_horizon": 20,
+                "model_params": {"label_horizon": 20},
+                "model_type": "LGBModel",
+            },
+            "metrics_json": {"IC": 0.051},
+            "status": "completed",
+        },
+        {
+            "task_id": "task_mixed",
+            "task_name": "mixed horizon custom evo",
+            "label_horizon": 60,
+        },
+    )
+
+    extracted = QEArchivePayloadExtractor().extract(
+        payload,
+        event_type="qe.loop.completed",
+        source_system=payload["source_system"],
+        source_id=payload["source_id"],
+        source_sub_id=payload["source_sub_id"],
+    )
+
+    assert payload["config"]["data_context"]["label_horizon"] == 20
+    assert extracted.data_contexts[0].label_horizon == 20
+
+
+def test_source_assembler_uses_task_label_horizon_only_for_legacy_loop() -> None:
+    payload = QEArchiveSourceAssembler.build_loop_payload(
+        {
+            "loop_id": "task_legacy_Loop1",
+            "task_id": "task_legacy",
+            "loop_index": 1,
+            "config_json": {"factor_list": ["factor_a"], "model_type": "LSTM"},
+            "metrics_json": {"IC": 0.041},
+            "status": "completed",
+        },
+        {"task_id": "task_legacy", "label_horizon": 60},
+    )
+
+    assert payload["config"]["data_context"]["label_horizon"] == 60
+
+
+def test_source_assembler_rejects_conflicting_loop_label_horizons() -> None:
+    try:
+        QEArchiveSourceAssembler.build_loop_payload(
+            {
+                "loop_id": "task_conflict_Loop1",
+                "task_id": "task_conflict",
+                "loop_index": 1,
+                "config_json": {
+                    "factor_list": ["factor_a"],
+                    "label_horizon": 20,
+                    "model_params": {"label_horizon": 60},
+                    "model_type": "LGBModel",
+                },
+                "metrics_json": {"IC": 0.031},
+                "status": "completed",
+            },
+            {"task_id": "task_conflict", "label_horizon": 20},
+        )
+    except ValueError as exc:
+        assert "qe_archive_loop_label_horizon_conflict" in str(exc)
+    else:
+        raise AssertionError("conflicting per-loop label horizons must fail closed")
 
 
 def test_source_assembler_merges_posthoc_experiment_metrics_into_evolution_lineage() -> None:
@@ -1365,6 +1471,20 @@ def test_realtime_ingestion_is_disabled_by_default_and_does_not_archive() -> Non
 
     assert result == {"archived": False, "skipped_reason": "disabled"}
     assert service.calls == 0
+
+
+def test_realtime_capture_and_lifespan_worker_default_on_with_explicit_opt_out(monkeypatch) -> None:
+    monkeypatch.delenv("QE_ARCHIVE_REALTIME_ENABLED", raising=False)
+    monkeypatch.delenv("QE_ARCHIVE_WORKER_AUTOSTART", raising=False)
+    monkeypatch.delenv("QE_ARCHIVE_WORKER_ENABLED", raising=False)
+
+    assert QEArchiveRealtimeIngestion().enabled is True
+    assert worker_loop_module.autostart_enabled() is True
+
+    monkeypatch.setenv("QE_ARCHIVE_REALTIME_ENABLED", "false")
+    monkeypatch.setenv("QE_ARCHIVE_WORKER_AUTOSTART", "false")
+    assert QEArchiveRealtimeIngestion().enabled is False
+    assert worker_loop_module.autostart_enabled() is False
 
 
 def test_realtime_ingestion_enabled_queues_outbox_by_default() -> None:

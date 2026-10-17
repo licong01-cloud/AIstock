@@ -38,10 +38,11 @@ def test_custom_evo_warns_when_runtime_metadata_is_nested_in_strategy_params() -
     assert any("runtime metadata" in warning for warning in result["warnings"])
 
 
-def test_custom_evo_rejects_future_stock_pool_for_default_historical_window() -> None:
+def test_custom_evo_rejects_future_stock_pool_for_explicit_historical_window() -> None:
     result = validate_template_payload(
         "custom_evo",
         {
+            "data_split": {"test_end": "2026-04-28"},
             "loops": [
                 {
                     "factor_keys": ["Alpha001||alpha158"],

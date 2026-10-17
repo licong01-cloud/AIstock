@@ -23,7 +23,7 @@ import uuid
 from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 import aiofiles
 import httpx
@@ -32,6 +32,16 @@ from psycopg2.extras import RealDictCursor
 
 from ..db.pg_pool import get_conn
 from ..infra.compute_node_client import ComputeNodeClient
+from .quantevolver.qe_active_dataset_profile import (
+    resolve_active_dataset_node_binding,
+)
+from .dataset_release.active_task_binding import (
+    encode_qe_dataset_identity_roots,
+    freeze_explicit_dataset_task_binding,
+    freeze_optional_active_dataset_task_binding,
+    frozen_dataset_environment,
+    require_frozen_dataset_task_binding,
+)
 
 logger = logging.getLogger("aistock.dispatch_service")
 
@@ -48,6 +58,15 @@ _TASK_TYPE_COMMANDS = {
 }
 
 _CUSTOM_TASK_TYPES = {"correlation_compute", "official_evaluation", "official_factor_full_compute"}
+_TASK_TYPE_DATASET_CONSUMER = {
+    "fin_factor": "factor_research",
+    "fin_factor_report": "factor_research",
+    "fin_model": "selection",
+    "fin_quant": "unified_backtest",
+    "correlation_compute": "factor_research",
+    "official_evaluation": "factor_research",
+    "official_factor_full_compute": "factor_research",
+}
 _REMOTE_CONDA_ENV = "rdagent-gpu"
 _SECRET_ENV_MARKERS = ("KEY", "TOKEN", "SECRET", "PASSWORD", "CREDENTIAL")
 
@@ -183,6 +202,7 @@ def build_rdagent_env_overrides(
     data: Dict[str, Any],
     node: Dict[str, Any],
     config: Dict[str, Any],
+    frozen_dataset_binding: Mapping[str, Any] | None = None,
 ) -> Dict[str, str]:
     """Build the actual env passed to the remote RD-Agent scheduler.
 
@@ -190,6 +210,28 @@ def build_rdagent_env_overrides(
     only consumes them through environment variables.
     """
     env = _normalize_env_overrides(data.get("custom_env"))
+    active_binding: Mapping[str, Any] | None = None
+
+    if frozen_dataset_binding is not None:
+        active_env = frozen_dataset_environment(frozen_dataset_binding)
+    else:
+        active_binding = resolve_active_dataset_node_binding(node_id=str(node.get("node_id") or ""))
+        active_env = None if active_binding is None else {
+            "AISTOCK_DATASET_ROOT": active_binding["candidate_root"],
+            "QE_DATASET_IDENTITY_ROOTS": encode_qe_dataset_identity_roots(
+                node_id=node.get("node_id"),
+                root=active_binding["candidate_root"],
+            ),
+            "QE_QLIB_DATA_PATH": active_binding["qlib_data_path"],
+            "QLIB_DAY_DATA": active_binding["qlib_data_path"],
+            "QLIB_DATA_PATH_WSL": active_binding["qlib_data_path"],
+            "QLIB_MINUTE_DATA": active_binding["qlib_minute_path"],
+            "QLIB_MINUTE_PATH_WSL": active_binding["qlib_minute_path"],
+            "RDAGENT_FACTOR_DATA_WSL": active_binding["factor_data_dir"],
+        }
+        if active_binding is not None and active_binding.get("sector_context_dir"):
+            active_env["AISTOCK_SECTOR_CONTEXT_DIR"] = active_binding["sector_context_dir"]
+    _merge_dataset_environment(env, active_env)
 
     app_tpl = config.get("app_tpl")
     if app_tpl:
@@ -206,10 +248,10 @@ def build_rdagent_env_overrides(
         env.setdefault("FACTOR_CoSTEER_MAX_LOOP", max_loop_s)
         env.setdefault("MODEL_CoSTEER_MAX_LOOP", max_loop_s)
 
-    if node.get("qlib_data_path"):
+    if active_env is None and node.get("qlib_data_path"):
         env.setdefault("QLIB_DAY_DATA", _stringify_env_value(node["qlib_data_path"]))
         env.setdefault("QLIB_DATA_PATH_WSL", _stringify_env_value(node["qlib_data_path"]))
-    if node.get("qlib_minute_path"):
+    if active_env is None and node.get("qlib_minute_path"):
         env.setdefault("QLIB_MINUTE_DATA", _stringify_env_value(node["qlib_minute_path"]))
         env.setdefault("QLIB_MINUTE_PATH_WSL", _stringify_env_value(node["qlib_minute_path"]))
     if node.get("qlib_rdagent_root"):
@@ -225,6 +267,64 @@ def build_rdagent_env_overrides(
     env.setdefault("QLIB_SCRIPTS_SUBDIR", "scripts")
 
     return env
+
+
+def _merge_dataset_environment(
+    env: Dict[str, str],
+    active_env: Mapping[str, str] | None,
+) -> None:
+    if active_env is None:
+        return
+    conflicts = {
+        key: {"requested": env[key], "active": value}
+        for key, value in active_env.items()
+        if key in env and env[key] != value
+    }
+    if conflicts:
+        raise ValueError(
+            "custom_env dataset paths differ from the active dataset profile: "
+            + json.dumps(
+                conflicts,
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+        )
+    env.update(active_env)
+
+
+def _freeze_dispatch_dataset_binding(
+    *,
+    task_type: str,
+    node_id: str,
+    explicit_profile_path: str | None = None,
+    frozen_binding: Mapping[str, Any] | None = None,
+) -> dict[str, Any] | None:
+    consumer_id = _TASK_TYPE_DATASET_CONSUMER.get(task_type)
+    if consumer_id is None:
+        raise ValueError(f"task type has no registered dataset consumer: {task_type}")
+    if explicit_profile_path and frozen_binding is not None:
+        raise ValueError("explicit profile and frozen dataset binding are mutually exclusive")
+    if frozen_binding is not None:
+        return require_frozen_dataset_task_binding(
+            frozen_binding,
+            consumer_id=consumer_id,
+            node_id=node_id,
+        )
+    if explicit_profile_path:
+        if task_type not in {"official_factor_full_compute", "correlation_compute"}:
+            raise ValueError(
+                f"explicit dataset profile is not supported for task type {task_type}"
+            )
+        return freeze_explicit_dataset_task_binding(
+            profile_path=explicit_profile_path,
+            consumer_id=consumer_id,
+            node_id=node_id,
+        )
+    return freeze_optional_active_dataset_task_binding(
+        consumer_id=consumer_id,
+        node_id=node_id,
+    )
 
 
 class DispatchService:
@@ -393,7 +493,8 @@ class DispatchService:
     def create_node(self, data: Dict[str, Any]) -> Dict[str, Any]:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO infra.compute_nodes
                         (node_id, display_name, api_base_url, gpu_model, gpu_vram_mb,
                          capabilities, grafana_dashboard_url, prometheus_target,
@@ -402,24 +503,42 @@ class DispatchService:
                          ssh_user)
                     VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     RETURNING *
-                """, (
-                    data["node_id"], data["display_name"], data["api_base_url"],
-                    data.get("gpu_model"), data.get("gpu_vram_mb"),
-                    json.dumps(data.get("capabilities", [])),
-                    data.get("grafana_dashboard_url"), data.get("prometheus_target"),
-                    data.get("workspace_base"), data.get("factor_data_dir"),
-                    data.get("qlib_data_path"), data.get("qlib_minute_path"),
-                    data.get("qlib_rdagent_root"), data.get("callback_url"),
-                    data.get("ssh_user"),
-                ))
+                """,
+                    (
+                        data["node_id"],
+                        data["display_name"],
+                        data["api_base_url"],
+                        data.get("gpu_model"),
+                        data.get("gpu_vram_mb"),
+                        json.dumps(data.get("capabilities", [])),
+                        data.get("grafana_dashboard_url"),
+                        data.get("prometheus_target"),
+                        data.get("workspace_base"),
+                        data.get("factor_data_dir"),
+                        data.get("qlib_data_path"),
+                        data.get("qlib_minute_path"),
+                        data.get("qlib_rdagent_root"),
+                        data.get("callback_url"),
+                        data.get("ssh_user"),
+                    ),
+                )
                 return dict(cur.fetchone())
 
     def update_node(self, node_id: str, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         allowed = {
-            "display_name", "api_base_url", "gpu_model", "gpu_vram_mb",
-            "capabilities", "grafana_dashboard_url", "prometheus_target",
-            "workspace_base", "factor_data_dir", "qlib_data_path",
-            "qlib_minute_path", "qlib_rdagent_root", "callback_url",
+            "display_name",
+            "api_base_url",
+            "gpu_model",
+            "gpu_vram_mb",
+            "capabilities",
+            "grafana_dashboard_url",
+            "prometheus_target",
+            "workspace_base",
+            "factor_data_dir",
+            "qlib_data_path",
+            "qlib_minute_path",
+            "qlib_rdagent_root",
+            "callback_url",
             "ssh_user",
         }
         sets = []
@@ -460,7 +579,8 @@ class DispatchService:
         """Persist an explicit node transition, never an unchanged heartbeat."""
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     UPDATE infra.compute_nodes
                     SET status = %s, last_heartbeat = NOW(), metrics_snapshot = %s
                     WHERE node_id = %s
@@ -469,20 +589,24 @@ class DispatchService:
                         OR metrics_snapshot IS DISTINCT FROM %s::jsonb
                       )
                     RETURNING *
-                """, (
-                    status,
-                    json.dumps(metrics) if metrics is not None else None,
-                    node_id,
-                    status,
-                    json.dumps(metrics) if metrics is not None else None,
-                ))
+                """,
+                    (
+                        status,
+                        json.dumps(metrics) if metrics is not None else None,
+                        node_id,
+                        status,
+                        json.dumps(metrics) if metrics is not None else None,
+                    ),
+                )
                 row = cur.fetchone()
         if row:
-            self.publish_node_observation({
-                **dict(row),
-                "online": status != "offline",
-                "busy": status == "busy",
-            })
+            self.publish_node_observation(
+                {
+                    **dict(row),
+                    "online": status != "offline",
+                    "busy": status == "busy",
+                }
+            )
             return True
         return False
 
@@ -492,22 +616,27 @@ class DispatchService:
         expected_status = str(node.get("status") or "unknown")
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     UPDATE infra.compute_nodes
                     SET status = %s, last_heartbeat = NOW(), metrics_snapshot = NULL
                     WHERE node_id = %s
                       AND status IS NOT DISTINCT FROM %s
                       AND status IS DISTINCT FROM %s
                     RETURNING *
-                """, (status, node_id, expected_status, status))
+                """,
+                    (status, node_id, expected_status, status),
+                )
                 row = cur.fetchone()
         if not row:
             return False
-        self.publish_node_observation({
-            **dict(row),
-            "online": status != "offline",
-            "busy": status == "busy",
-        })
+        self.publish_node_observation(
+            {
+                **dict(row),
+                "online": status != "offline",
+                "busy": status == "busy",
+            }
+        )
         return True
 
     async def probe_node(self, node_id: str) -> Dict[str, Any]:
@@ -668,22 +797,25 @@ class DispatchService:
         config = data.get("config", {})
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO infra.dispatch_tasks
                         (task_id, task_name, task_type, node_id, status,
                          config, env_overrides, total_loops, time_limit)
                     VALUES (%s, %s, %s, %s, 'pending', %s, %s, %s, %s)
                     RETURNING *
-                """, (
-                    task_id,
-                    data["task_name"],
-                    data["task_type"],
-                    data["node_id"],
-                    json.dumps(config),
-                    json.dumps(data.get("env_overrides", {})),
-                    data.get("total_loops"),
-                    data.get("time_limit"),
-                ))
+                """,
+                    (
+                        task_id,
+                        data["task_name"],
+                        data["task_type"],
+                        data["node_id"],
+                        json.dumps(config),
+                        json.dumps(data.get("env_overrides", {})),
+                        data.get("total_loops"),
+                        data.get("time_limit"),
+                    ),
+                )
                 row = dict(cur.fetchone())
         self.publish_task_observation(row)
         return row
@@ -743,11 +875,11 @@ class DispatchService:
                 cur.execute(
                     f"""
                     UPDATE infra.dispatch_tasks
-                    SET {', '.join(assignments)}, updated_at = NOW()
+                    SET {", ".join(assignments)}, updated_at = NOW()
                     WHERE task_id = %s
                       AND status IS NOT DISTINCT FROM %s
                       AND remote_task_id IS NOT DISTINCT FROM %s
-                      AND ({' OR '.join(difference_terms)})
+                      AND ({" OR ".join(difference_terms)})
                     RETURNING *
                     """,
                     params,
@@ -762,15 +894,18 @@ class DispatchService:
     def _add_event(self, task_id: str, event_type: str, event_data: Any = None) -> None:
         with get_conn() as conn:
             with conn.cursor() as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     INSERT INTO infra.dispatch_task_events (task_id, event_type, event_data)
                     VALUES (%s, %s, %s)
-                """, (task_id, event_type, json.dumps(event_data) if event_data else None))
+                """,
+                    (task_id, event_type, json.dumps(event_data) if event_data else None),
+                )
 
     # ── 日志采集 ──
 
-    _LOG_COLLECTOR_MAX_RETRIES = 30       # 最多重连次数
-    _LOG_COLLECTOR_RETRY_INTERVAL = 10    # 重连间隔（秒）
+    _LOG_COLLECTOR_MAX_RETRIES = 30  # 最多重连次数
+    _LOG_COLLECTOR_RETRY_INTERVAL = 10  # 重连间隔（秒）
 
     def _append_local_log_line(self, task_id: str, line: str) -> None:
         log_dir = DISPATCH_LOGS_DIR / task_id
@@ -784,14 +919,15 @@ class DispatchService:
         existing = self._active_collectors.get(task_id)
         if existing is not None and not existing.done():
             return  # 已有活跃采集器
-        t = asyncio.get_running_loop().create_task(
-            self._log_collector(task_id, client, remote_task_id)
-        )
+        t = asyncio.get_running_loop().create_task(self._log_collector(task_id, client, remote_task_id))
         self._active_collectors[task_id] = t
         t.add_done_callback(lambda _: self._active_collectors.pop(task_id, None))
 
     async def _log_collector(
-        self, task_id: str, client: "ComputeNodeClient", remote_task_id: str,
+        self,
+        task_id: str,
+        client: "ComputeNodeClient",
+        remote_task_id: str,
     ) -> None:
         """后台持续采集节点 SSE 日志并写入本地文件。支持断连重试和 task_ended 检测。"""
         log_dir = DISPATCH_LOGS_DIR / task_id
@@ -829,7 +965,9 @@ class DispatchService:
                     return
                 # 流意外关闭但任务还在跑，重连
                 retries += 1
-                logger.warning("SSE 流关闭，准备重连 (task=%s, retry=%d/%d)", task_id, retries, self._LOG_COLLECTOR_MAX_RETRIES)
+                logger.warning(
+                    "SSE 流关闭，准备重连 (task=%s, retry=%d/%d)", task_id, retries, self._LOG_COLLECTOR_MAX_RETRIES
+                )
                 await asyncio.sleep(self._LOG_COLLECTOR_RETRY_INTERVAL)
             except asyncio.CancelledError:
                 return
@@ -840,7 +978,9 @@ class DispatchService:
                     logger.info("日志采集完成 (task=%s): 任务状态=%s", task_id, task["status"])
                     return
                 retries += 1
-                logger.warning("日志采集异常 (task=%s, retry=%d/%d): %s", task_id, retries, self._LOG_COLLECTOR_MAX_RETRIES, e)
+                logger.warning(
+                    "日志采集异常 (task=%s, retry=%d/%d): %s", task_id, retries, self._LOG_COLLECTOR_MAX_RETRIES, e
+                )
                 await asyncio.sleep(self._LOG_COLLECTOR_RETRY_INTERVAL)
         logger.error("日志采集放弃重连 (task=%s): 已达最大重试次数 %d", task_id, self._LOG_COLLECTOR_MAX_RETRIES)
 
@@ -867,7 +1007,9 @@ class DispatchService:
         return await self._create_rdagent_task(data, node)
 
     async def _create_rdagent_task(
-        self, data: Dict[str, Any], node: Dict[str, Any],
+        self,
+        data: Dict[str, Any],
+        node: Dict[str, Any],
     ) -> Dict[str, Any]:
         task_type = data["task_type"]
         rdagent_cmd = _TASK_TYPE_COMMANDS.get(task_type)
@@ -882,18 +1024,31 @@ class DispatchService:
             "multi_proc_n": data.get("multi_proc_n", 1),
             "app_tpl": data.get("app_tpl", "../app_tpl/all/v4/rdagent"),
         }
-        env_overrides = build_rdagent_env_overrides(data=data, node=node, config=config)
+        frozen_dataset_binding = _freeze_dispatch_dataset_binding(
+            task_type=task_type,
+            node_id=str(node["node_id"]),
+        )
+        if frozen_dataset_binding is not None:
+            config["dataset_binding"] = frozen_dataset_binding
+        env_overrides = build_rdagent_env_overrides(
+            data=data,
+            node=node,
+            config=config,
+            frozen_dataset_binding=frozen_dataset_binding,
+        )
 
         # 写入 DB
-        task = self._insert_task({
-            "task_name": data["task_name"],
-            "task_type": task_type,
-            "node_id": node["node_id"],
-            "config": config,
-            "env_overrides": env_overrides,
-            "total_loops": config["evolving_n"],
-            "time_limit": config.get("all_duration"),
-        })
+        task = self._insert_task(
+            {
+                "task_name": data["task_name"],
+                "task_type": task_type,
+                "node_id": node["node_id"],
+                "config": config,
+                "env_overrides": env_overrides,
+                "total_loops": config["evolving_n"],
+                "time_limit": config.get("all_duration"),
+            }
+        )
         task_id = task["task_id"]
         self._add_event(task_id, "created", {"config": config})
         self._append_local_log_line(
@@ -939,10 +1094,14 @@ class DispatchService:
                 remote_task_id=remote_task_id,
                 started_at=datetime.now(timezone.utc).isoformat(),
             )
-            self._add_event(task_id, "submitted", {
-                "remote_task_id": remote_task_id,
-                "scheduler_payload": _redact_scheduler_payload_for_log(scheduler_payload),
-            })
+            self._add_event(
+                task_id,
+                "submitted",
+                {
+                    "remote_task_id": remote_task_id,
+                    "scheduler_payload": _redact_scheduler_payload_for_log(scheduler_payload),
+                },
+            )
             self._append_local_log_line(task_id, f"[dispatch] submitted remote_task_id={remote_task_id}")
             # 更新节点当前任务
             with get_conn() as conn:
@@ -966,26 +1125,44 @@ class DispatchService:
         return task
 
     async def _create_custom_task(
-        self, data: Dict[str, Any], node: Dict[str, Any],
+        self,
+        data: Dict[str, Any],
+        node: Dict[str, Any],
     ) -> Dict[str, Any]:
         task_type = data["task_type"]
         payload = data.get("payload") or {}
         if not isinstance(payload, dict):
             raise ValueError("custom task payload 必须为对象")
 
+        frozen_dataset_binding = _freeze_dispatch_dataset_binding(
+            task_type=task_type,
+            node_id=str(node["node_id"]),
+            explicit_profile_path=str(data.get("dataset_profile_path") or "").strip() or None,
+            frozen_binding=data.get("dataset_binding"),
+        )
         config = {
             "task_type": task_type,
             "payload": payload,
         }
-        task = self._insert_task({
-            "task_name": data["task_name"],
-            "task_type": task_type,
-            "node_id": node["node_id"],
-            "config": config,
-            "env_overrides": data.get("custom_env", {}),
-            "total_loops": 1,
-            "time_limit": data.get("all_duration"),
-        })
+        if frozen_dataset_binding is not None:
+            config["dataset_binding"] = frozen_dataset_binding
+        env_overrides = _normalize_env_overrides(data.get("custom_env"))
+        if frozen_dataset_binding is not None:
+            _merge_dataset_environment(
+                env_overrides,
+                frozen_dataset_environment(frozen_dataset_binding),
+            )
+        task = self._insert_task(
+            {
+                "task_name": data["task_name"],
+                "task_type": task_type,
+                "node_id": node["node_id"],
+                "config": config,
+                "env_overrides": env_overrides,
+                "total_loops": 1,
+                "time_limit": data.get("all_duration"),
+            }
+        )
         task_id = task["task_id"]
         self._add_event(task_id, "created", {"config": config})
 
@@ -1008,7 +1185,7 @@ class DispatchService:
             "payload": scheduler_payload_payload,
             "loop_n": 1,
             "all_duration": data.get("all_duration") or "24:00:00",
-            "env_overrides": data.get("custom_env", {}),
+            "env_overrides": env_overrides,
         }
 
         try:
@@ -1044,7 +1221,9 @@ class DispatchService:
         return task
 
     async def _create_qe_task(
-        self, data: Dict[str, Any], node: Dict[str, Any],
+        self,
+        data: Dict[str, Any],
+        node: Dict[str, Any],
     ) -> Dict[str, Any]:
         """创建 QE 演进任务，关联 qe_evolution_tasks。"""
         qe_config = data.get("qe_config", {})
@@ -1060,19 +1239,22 @@ class DispatchService:
             "random_seed": qe_config.get("random_seed"),
         }
 
-        task = self._insert_task({
-            "task_name": data["task_name"],
-            "task_type": "qe_evolution",
-            "node_id": node["node_id"],
-            "config": config,
-            "env_overrides": data.get("custom_env", {}),
-            "total_loops": config["max_loops"],
-        })
+        task = self._insert_task(
+            {
+                "task_name": data["task_name"],
+                "task_type": "qe_evolution",
+                "node_id": node["node_id"],
+                "config": config,
+                "env_overrides": data.get("custom_env", {}),
+                "total_loops": config["max_loops"],
+            }
+        )
         task_id = task["task_id"]
         self._add_event(task_id, "created", {"config": config})
 
         # 调用 qe_evolution_service 创建演进任务
         from .quantevolver.qe_evolution_service import AutoEvolutionScheduler
+
         qe_svc = AutoEvolutionScheduler()
         source_task_id = config.get("source_task_id")
         if not source_task_id:
@@ -1228,11 +1410,14 @@ class DispatchService:
         """清理 N 天前已完成的任务：本地日志 + DB 记录（events 级联删除）。"""
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
-                cur.execute("""
+                cur.execute(
+                    """
                     SELECT task_id FROM infra.dispatch_tasks
                     WHERE status IN ('success', 'failed', 'canceled')
                       AND finished_at < NOW() - %s * INTERVAL '1 day'
-                """, (days,))
+                """,
+                    (days,),
+                )
                 old_tasks = [r["task_id"] for r in cur.fetchall()]
 
         cleaned_logs = 0
@@ -1299,7 +1484,7 @@ class DispatchService:
             lines = tail.splitlines() if tail else []
             return {
                 "task_id": task_id,
-                "lines": lines[offset:offset + limit],
+                "lines": lines[offset : offset + limit],
                 "total": len(lines),
                 "offset": offset,
                 "source": "db_log_tail" if lines else "missing",
@@ -1314,7 +1499,7 @@ class DispatchService:
         total = len(all_lines)
         return {
             "task_id": task_id,
-            "lines": [line.rstrip("\n") for line in all_lines[offset:offset + limit]],
+            "lines": [line.rstrip("\n") for line in all_lines[offset : offset + limit]],
             "total": total,
             "offset": offset,
         }
@@ -1383,9 +1568,7 @@ class DispatchService:
         observer_snapshot = snapshot or await asyncio.to_thread(self.load_observer_snapshot)
         tasks = list(observer_snapshot.get("tasks") or [])
         node_by_id = {
-            str(node["node_id"]): node
-            for node in (observer_snapshot.get("nodes") or [])
-            if node.get("node_id")
+            str(node["node_id"]): node for node in (observer_snapshot.get("nodes") or []) if node.get("node_id")
         }
         for task in tasks:
             self.publish_task_observation(task)
@@ -1425,10 +1608,13 @@ class DispatchService:
                             else:
                                 updates["status"] = "failed"
                                 updates["error_message"] = reason or "remote_success_validation_failed"
-                                terminal_event = ("remote_success_rejected", {
-                                    "reason": reason,
-                                    "validation": meta,
-                                })
+                                terminal_event = (
+                                    "remote_success_rejected",
+                                    {
+                                        "reason": reason,
+                                        "validation": meta,
+                                    },
+                                )
                         elif node_status in ("fail", "failed"):
                             updates["status"] = "failed"
                         else:
@@ -1449,14 +1635,20 @@ class DispatchService:
                             else:
                                 updates["status"] = "failed"
                                 updates["error_message"] = reason or "remote_completion_validation_failed"
-                                terminal_event = ("remote_success_rejected", {
-                                    "reason": reason,
-                                    "validation": meta,
-                                })
+                                terminal_event = (
+                                    "remote_success_rejected",
+                                    {
+                                        "reason": reason,
+                                        "validation": meta,
+                                    },
+                                )
                             updates["finished_at"] = datetime.now(timezone.utc).isoformat()
                             logger.info(
                                 "Task %s reached loop target on node (%d/%d); validated final status=%s",
-                                task["task_id"], cur_loop, tot_loop, updates["status"],
+                                task["task_id"],
+                                cur_loop,
+                                tot_loop,
+                                updates["status"],
                             )
                             clear_node_task = True
                 if "best_ic" in progress:
@@ -1470,11 +1662,7 @@ class DispatchService:
                 if "log_tail" in progress:
                     updates["log_tail"] = progress["log_tail"]
 
-                changed_updates = {
-                    key: value
-                    for key, value in updates.items()
-                    if task.get(key) != value
-                }
+                changed_updates = {key: value for key, value in updates.items() if task.get(key) != value}
                 if changed_updates:
                     updated_task = await asyncio.to_thread(
                         self._update_observed_task_fields,
@@ -1500,11 +1688,17 @@ class DispatchService:
                 count = self._sync_fail_counts[tid]
                 threshold = self._sync_fail_threshold_for_task(task)
                 logger.warning(
-                    "同步任务进度失败 (task=%s, 连续第%d/%d次): %s", tid, count, threshold, e,
+                    "同步任务进度失败 (task=%s, 连续第%d/%d次): %s",
+                    tid,
+                    count,
+                    threshold,
+                    e,
                 )
                 if count >= threshold:
                     logger.error(
-                        "任务 %s 连续 %d 次同步失败，自动标记为 failed", tid, count,
+                        "任务 %s 连续 %d 次同步失败，自动标记为 failed",
+                        tid,
+                        count,
                     )
                     updated_task = await asyncio.to_thread(
                         self._update_observed_task_fields,
@@ -1514,12 +1708,16 @@ class DispatchService:
                         finished_at=datetime.now(timezone.utc).isoformat(),
                     )
                     if updated_task is not None:
-                        self._add_event(tid, "auto_failed", {
-                            "reason": "sync_unreachable",
-                            "consecutive_failures": count,
-                            "threshold": threshold,
-                            "last_error": str(e),
-                        })
+                        self._add_event(
+                            tid,
+                            "auto_failed",
+                            {
+                                "reason": "sync_unreachable",
+                                "consecutive_failures": count,
+                                "threshold": threshold,
+                                "last_error": str(e),
+                            },
+                        )
                         with get_conn() as conn:
                             with conn.cursor() as cur:
                                 cur.execute(
@@ -1641,19 +1839,25 @@ class DispatchService:
                     task_type = "fin_factor"
                     # 根据节点报告的状态设置初始状态
                     node_status = item.get("status", "running")
-                    local_status = "running" if node_status == "running" else (
-                        "success" if node_status == "success" else (
-                            "failed" if node_status in ("fail", "failed") else "running"
+                    local_status = (
+                        "running"
+                        if node_status == "running"
+                        else (
+                            "success"
+                            if node_status == "success"
+                            else ("failed" if node_status in ("fail", "failed") else "running")
                         )
                     )
                     # 插入 dispatch_tasks
-                    task = self._insert_task({
-                        "task_name": task_name,
-                        "task_type": task_type,
-                        "node_id": node["node_id"],
-                        "config": {"source": "manual", "loop_n": item.get("loop_n", 0)},
-                        "total_loops": item.get("loop_n") or None,
-                    })
+                    task = self._insert_task(
+                        {
+                            "task_name": task_name,
+                            "task_type": task_type,
+                            "node_id": node["node_id"],
+                            "config": {"source": "manual", "loop_n": item.get("loop_n", 0)},
+                            "total_loops": item.get("loop_n") or None,
+                        }
+                    )
                     # 更新状态和 remote_task_id（使用节点数字 id）
                     update_fields: Dict[str, Any] = {
                         "status": local_status,
@@ -1663,10 +1867,14 @@ class DispatchService:
                     if local_status in ("success", "failed"):
                         update_fields["finished_at"] = datetime.now(timezone.utc).isoformat()
                     self._update_task_fields(task["task_id"], **update_fields)
-                    self._add_event(task["task_id"], "discovered", {
-                        "source": "manual",
-                        "node_scheduler_id": item.get("id"),
-                    })
+                    self._add_event(
+                        task["task_id"],
+                        "discovered",
+                        {
+                            "source": "manual",
+                            "node_scheduler_id": item.get("id"),
+                        },
+                    )
                     discovered += 1
                     # 新注册的也加入全局去重集合
                     global_remote_ids.add(task_name)

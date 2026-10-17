@@ -72,13 +72,13 @@ class FakeSelectionCenterService:
             context={"run_id": kwargs["run_id"], "mode": self.run.mode.value, "package_ids": self.run.package_ids},
         )
 
-    def prepare_paper_portfolio_creation(self, *, run_id: str):
+    def prepare_localsim_account_creation(self, *, run_id: str):
         raise UnsupportedFeatureError(
-            "creating a paper portfolio from multi-package selection requires a combined StrategyPackage",
+            "creating a LocalSIM account from multi-package selection requires a combined StrategyPackage",
             context={"run_id": run_id, "mode": self.run.mode.value, "package_ids": self.run.package_ids},
         )
 
-    def list_paper_portfolio_links(self, run_id: str) -> list:
+    def list_simulation_account_links(self, run_id: str) -> list:
         assert run_id == self.run.run_id
         return []
 
@@ -87,6 +87,7 @@ def _client(service: FakeSelectionCenterService) -> TestClient:
     app = FastAPI()
     app.include_router(selection_center_router.router, prefix="/api/v1")
     app.dependency_overrides[selection_center_router.get_selection_center_service] = lambda: service
+    app.dependency_overrides[selection_center_router.get_localsim_product_service] = lambda: object()
     return TestClient(app)
 
 
@@ -362,17 +363,19 @@ def test_selection_center_api_bulk_deletes_runs_with_confirmation() -> None:
     assert payload["deleted_counts"]["run"] == 1
 
 
-def test_selection_center_api_rejects_multi_package_paper_creation_fail_fast() -> None:
+def test_selection_center_api_rejects_multi_package_localsim_creation_fail_fast() -> None:
     service = FakeSelectionCenterService(_weighted_run())
     client = _client(service)
 
     response = client.post(
-        "/api/v1/selection-center/runs/sel_weighted_api/create-paper-portfolio",
+        "/api/v1/selection-center/runs/sel_weighted_api/create-localsim-account",
         json={
-            "portfolio_name": "should fail",
-            "initial_cash": 100000,
-            "start_date": "2024-01-03",
-            "data_source": "DB_HISTORICAL",
+            "account_name": "should fail",
+            "package_id": "pkg_a",
+            "initial_capital": "100000.0000",
+            "runtime_profile_version_id": "lsrpv_001",
+            "execution_policy_version_id": "execpol_twap",
+            "effective_from": "2024-01-03",
         },
     )
 

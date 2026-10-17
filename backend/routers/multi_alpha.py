@@ -60,8 +60,8 @@ class CombinePreviewRequest(BaseModel):
 class CombineBacktestRunRequest(BaseModel):
     task_id: str | None = None
     roster: list[dict[str, Any]]
-    oos_start: str
-    oos_end: str
+    oos_start: str | None = None
+    oos_end: str | None = None
     weighting_schemes: list[str] = Field(default_factory=lambda: ["equal", "orthogonality_aware", "ic_weighted", "risk_parity"])
     normalize_method: str = "zscore"
     walk_forward: dict[str, Any] = Field(default_factory=lambda: {"enabled": True, "window": 60, "min_periods": 2})
@@ -317,8 +317,23 @@ def submit_multi_alpha_combine_backtest(
     idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> dict:
     try:
+        payload = request.model_dump()
+        from backend.services.quantevolver.qe_active_dataset_profile import (
+            get_qe_dataset_profile_summary,
+        )
+
+        summary = get_qe_dataset_profile_summary()
+        defaults = summary["defaults"]
+        payload["oos_start"] = payload.get("oos_start") or defaults["test_start"]
+        payload["oos_end"] = payload.get("oos_end") or defaults["backtest_end"]
+        if summary["mode"] == "active_profile" and payload["oos_end"] > defaults["backtest_end"]:
+            raise MultiAlphaCombineBacktestError(
+                "multi-alpha OOS end exceeds the active QE release backtest end",
+                reason_code="qe_dataset_window_outside_release",
+                context={"oos_end": payload["oos_end"], "maximum": defaults["backtest_end"]},
+            )
         data = MultiAlphaCombineBacktestService().submit_run(
-            request.model_dump(),
+            payload,
             idempotency_key=idempotency_key,
         )
     except DurableCombineSubmissionError as exc:

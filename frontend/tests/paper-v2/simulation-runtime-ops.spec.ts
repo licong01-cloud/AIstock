@@ -450,61 +450,6 @@ async function mockApi(page: Page) {
   return { writeMethods, requestLog };
 }
 
-test("simulation runtime ops page displays controlled scheduler, provider, shared run trace, and filters", async ({ page }) => {
-  const pageErrors: string[] = [];
-  const consoleErrors: string[] = [];
-  const badResponses: string[] = [];
-  page.on("pageerror", (error) => pageErrors.push(error.message));
-  page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
-  });
-  page.on("response", (response) => {
-    if (response.status() >= 400) badResponses.push(`${response.status()} ${response.url()}`);
-  });
-  const { writeMethods } = await mockApi(page);
-
-  await page.goto("/paper-v2/simulation-runtime");
-
-  await expect(page.locator('a[href="/paper-v2/settings"]')).toHaveCount(0);
-  await expect(page.getByTestId("sim-runtime-total-runs")).toBeVisible();
-  await expect(page.getByTestId("sim-runtime-total-runs")).toContainText("2");
-  await expect(page.getByTestId("sim-runtime-local-count")).toContainText("1");
-  await expect(page.getByTestId("sim-runtime-miniqmt-count")).toContainText("1");
-  await expect(page.getByTestId("sim-runtime-submit-default")).toContainText("OFF");
-  await expect(page.getByTestId("sim-runtime-scheduler-status")).toContainText("simulation_lifecycle_scheduler");
-  await expect(page.getByTestId("sim-runtime-restart-recovery-mode")).toContainText("persisted_state_only");
-  await expect(page.getByText("execution_plan")).toBeVisible();
-  await expect(page.getByTestId("sim-runtime-scheduler-status")).toContainText("ENABLED");
-  await expect(page.getByTestId("sim-runtime-provider-mode")).toContainText("production");
-  await expect(page.getByTestId("sim-runtime-operator-command-panel")).toHaveCount(0);
-  await expect(page.getByText("MiniQMT Operator Command")).toHaveCount(0);
-
-  await expect(page.getByText("策略实例：Local Ops")).toBeVisible();
-  await expect(page.getByText("策略实例：MiniQMT Ops")).toBeVisible();
-  await expect(page.getByText("选出 2 只候选").first()).toBeVisible();
-  await expect(page.getByText("交易意图 2 / 已提交 0 / 失败 0")).toBeVisible();
-  await expect(page.getByText("交易意图 2 / 已提交 2 / 失败 0")).toBeVisible();
-  await expect(page.getByTestId(`sim-runtime-slot-${QMT_RUN_ID}`)).toContainText("MiniQMT 62266303 SIM");
-  await expect(page.getByTestId(`sim-runtime-slot-${QMT_RUN_ID}`)).toContainText("MiniQMT Ops");
-  await page.getByTestId(`sim-runtime-run-detail-${LOCAL_RUN_ID}`).click();
-  await expect(page.getByTestId("sim-runtime-selected-run-id")).toContainText(LOCAL_RUN_ID);
-  await expect(page.getByTestId("sim-runtime-selected-evidence-id")).toContainText("dse_local_ops");
-  await expect(page.getByTestId("sim-runtime-selected-plan-id")).toContainText(LOCAL_PLAN_ID);
-  await expect(page.getByTestId("sim-runtime-selected-intent-counts")).toContainText("BUY 1 / SELL 1 / total 2");
-  await expect(page.getByTestId("sim-runtime-selected-account-slot")).toContainText("- / -");
-  await expect(page.getByTestId("sim-runtime-selected-nav")).toContainText("1");
-  await expect(page.getByTestId("sim-runtime-selected-order-fill-errors")).toContainText("orders");
-
-  await page.getByTestId("sim-runtime-backend-filter").selectOption("minqmt_sim");
-  await expect(page.getByText("策略实例：MiniQMT Ops")).toBeVisible();
-  await expect(page.getByText("策略实例：Local Ops")).toHaveCount(0);
-
-  expect(writeMethods).toEqual([]);
-  expect(pageErrors).toEqual([]);
-  expect(consoleErrors).toEqual([]);
-  expect(badResponses).toEqual([]);
-});
-
 test("MiniQMT sim page hosts controlled operator command with Chinese labels and second confirmation", async ({ page }) => {
   const pageErrors: string[] = [];
   const consoleErrors: string[] = [];

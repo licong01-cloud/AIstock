@@ -19,6 +19,7 @@ from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any, Callable, Iterable, Iterator, Mapping, Protocol, Sequence
 
+from ..core_index_catalog import POOL_DEFINITIONS, P0_POOL_IDS
 from .canonical import (
     canonical_json_bytes,
     digest_named_fields,
@@ -50,6 +51,7 @@ from .source_manifest import (
     PartitionSummary,
     SourceManifest,
 )
+from .monthly_snapshot import SNAPSHOT_ID_RE
 from .source_pool import ReadOnlySourcePool
 from .source_rows_codec import (
     SOURCE_ROWS_CODEC,
@@ -78,12 +80,17 @@ SOURCE_WRITER_LEDGER_SCHEMA = "dataset_release_source_writer_ledger_v2"
 SOURCE_WRITER_LEDGER_DIGEST_SCHEMA = "dataset_release_source_writer_ledger_digest_v2"
 SOURCE_MVCC_FINGERPRINT_SCHEMA = "dataset_release_partition_mvcc_fingerprint_v1"
 SOURCE_MONTH_CONTENT_LEAF_SCHEMA = "dataset_release_source_month_content_leaf_v1"
+CORE_INDEX_MEMBERSHIP_RECEIPT_SCHEMA = "dataset_release_core_index_membership_source_receipt_v1"
+P3A_SECTOR_SOURCE_POLICY = "p3a_dual_authority_v1"
+MONTHLY_SECTOR_SOURCE_POLICY = "classification_published_snapshot_v1"
+MONTHLY_SECTOR_PUBLICATION_SCHEMA = "dataset_release_monthly_sector_publication_v1"
 # Flip only after the exact production PostgreSQL/Timescale permissions and
 # xmin behavior have passed the documented capability test.  Fixture injection
 # can exercise the contract without silently enabling unverified production reuse.
 MVCC_PARTITION_REUSE_PRODUCTION_VALIDATED = False
 MAX_SOURCE_STAGE_ARTIFACT_BYTES = 64 * 1024 * 1024
 _IDENTIFIER = re.compile(r"^[a-z][a-z0-9_]*$")
+_POSTGRES_IDENTIFIER = re.compile(r"^[_a-z][_a-z0-9]*$")
 _STOCK_CODE = re.compile(r"^[0-9]{6}\.(?:SH|SZ)$")
 POSTGRES_NUMERIC_NON_FINITE_MARKERS = ("NaN", "Infinity", "-Infinity")
 STK_LIMIT_REPAIRABLE_NUMERIC_COLUMNS = frozenset({"pre_close", "up_limit", "down_limit"})
@@ -210,6 +217,8 @@ class SourceQuerySpec:
     date_expression: str | None
     start_policy: str
     query_version: str
+    date_range_policy: str = "inclusive_date"
+    order_by_source_keys: bool = False
     audit_non_null_value_columns: tuple[str, ...] = ()
     audit_dataset: str | None = None
     audit_eligible_sources: tuple[str, ...] = ()
@@ -244,10 +253,26 @@ class SourceQuerySpec:
             raise ValueError("non-null source values must be projected value fields")
         if not set(self.audit_non_null_value_columns).issubset(self.value_columns):
             raise ValueError("audit non-null values must be physical projected fields")
-        if self.start_policy not in {"daily", "minute", "timeless"}:
+        if self.start_policy not in {"daily", "minute", "timeless", "window_overlap", "construction_facts"}:
             raise ValueError("source query start policy is invalid")
+        if self.start_policy == "construction_facts" and (
+            self.query_id != "adj_factor_construction" or self.date_expression is not None or self.audit_dataset is not None
+        ):
+            raise ValueError("construction facts require the code-owned bounded adj-factor query")
         if self.start_policy == "timeless" and self.date_expression is not None:
             raise ValueError("timeless query cannot carry a date expression")
+        if self.date_range_policy not in {"inclusive_date", "timestamp_day_half_open"}:
+            raise ValueError("source query date-range policy is invalid")
+        if self.date_range_policy == "timestamp_day_half_open" and (
+            self.start_policy != "minute" or self.date_expression is None
+        ):
+            raise ValueError("timestamp day bounds require a dated minute source")
+        if self.start_policy == "timeless" and self.date_range_policy != "inclusive_date":
+            raise ValueError("timeless query cannot carry a date-range policy")
+        if self.start_policy == "window_overlap" and (
+            self.date_expression is not None or self.audit_dataset is not None
+        ):
+            raise ValueError("window-overlap query is an undated PIT authority")
         if (self.audit_dataset is None) != (not self.audit_eligible_sources):
             raise ValueError("dated source audit dataset and eligible sources must be specified together")
         if self.date_expression is None and self.audit_dataset is not None:
@@ -268,11 +293,85 @@ class SourceQuerySpec:
         return f"{self.schema_name}.{self.table_name}"
 
     @property
-    def sql(self) -> str:
+    def order_sql(self) -> str:
+        if self.order_by_source_keys:
+            return "ORDER BY " + ",".join(f"source_row.{column}" for column in self.key_columns)
+        return "ORDER BY row_key, row_payload"
+
+    def _generic_select_sql(
+        self,
+        *,
+        table_identity: str | None = None,
+        include_order_columns: bool = False,
+    ) -> str:
         alias = "source_row"
         key = ",".join(f"{alias}.{column}" for column in self.key_columns)
         projected = tuple(dict.fromkeys((*self.key_columns, *self.value_columns)))
         payload = "jsonb_build_object(" + ",".join(f"'{column}',{alias}.{column}" for column in projected) + ")"
+        clauses: list[str] = []
+        if self.date_expression is not None:
+            if self.date_range_policy == "timestamp_day_half_open":
+                clauses.extend(
+                    (
+                        f"{self.date_expression} >= %(start)s::date",
+                        f"{self.date_expression} < (%(end)s::date + interval '1 day')",
+                    )
+                )
+            else:
+                clauses.extend(
+                    (
+                        f"{self.date_expression} >= %(start)s",
+                        f"{self.date_expression} <= %(end)s",
+                    )
+                )
+        if self.code_column is not None:
+            clauses.append(f"{alias}.{self.code_column} = ANY(%(codes)s)")
+        if self.code_policy == "profile_index_codes":
+            clauses.append(
+                f"{self.date_expression} >= (%(index_required_from_json)s::jsonb ->> {alias}.{self.code_column})::date"
+            )
+        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+        source_order = ""
+        if include_order_columns:
+            source_order = "".join(
+                f",{alias}.{column} AS __source_order_{index}" for index, column in enumerate(self.key_columns)
+            )
+        return (
+            "SELECT jsonb_build_array("
+            + key
+            + ")::text AS row_key, ("
+            + payload
+            + ")::text AS row_payload"
+            + source_order
+            + f" FROM {table_identity or self.table_identity} AS {alias}{where}"
+        )
+
+    @property
+    def sql(self) -> str:
+        alias = "source_row"
+        projected = tuple(dict.fromkeys((*self.key_columns, *self.value_columns)))
+        payload = "jsonb_build_object(" + ",".join(f"'{column}',{alias}.{column}" for column in projected) + ")"
+        if self.query_id == "adj_factor_construction":
+            # This returns genuine facts, not manufactured factors. The
+            # lateral query computes the actual maximum through the cutoff;
+            # exact anchors come from the immutable files being appended.
+            # UNION prevents counting a maximum/anchor twice. All data reads
+            # still execute inside the caller's imported read-only snapshot.
+            return (
+                "WITH requested_anchors AS (SELECT ts_code,trade_date FROM "
+                "jsonb_to_recordset(%(anchors_json)s::jsonb) AS a(ts_code text,trade_date date)), "
+                "selected_keys AS (SELECT codes.ts_code,maximum.trade_date "
+                "FROM unnest(%(codes)s::text[]) AS codes(ts_code) CROSS JOIN LATERAL "
+                "(SELECT fact.trade_date FROM market.adj_factor AS fact "
+                "WHERE fact.ts_code=codes.ts_code AND fact.trade_date >= %(source_start)s "
+                "AND fact.trade_date <= %(cutoff)s "
+                "ORDER BY fact.adj_factor DESC NULLS LAST, fact.trade_date DESC LIMIT 1) AS maximum "
+                "UNION SELECT ts_code,trade_date FROM requested_anchors "
+                "WHERE trade_date <= %(cutoff)s AND ts_code=ANY(%(codes)s)) "
+                "SELECT jsonb_build_array(source_row.ts_code,source_row.trade_date)::text AS row_key, ("
+                + payload + ")::text AS row_payload FROM market.adj_factor AS source_row "
+                "JOIN selected_keys USING(ts_code,trade_date) ORDER BY row_key,row_payload"
+            )
         if self.query_id == "bak_basic":
             return (
                 "SELECT jsonb_build_array(source_row.ts_code,source_row.trade_date)::text "
@@ -301,38 +400,30 @@ class SourceQuerySpec:
                 "AND source_row.cal_date <= %(end)s "
                 "AND source_row.is_trading = TRUE ORDER BY row_key,row_payload"
             )
-        clauses: list[str] = []
-        if self.date_expression is not None:
-            clauses.extend(
-                (
-                    f"{self.date_expression} >= %(start)s",
-                    f"{self.date_expression} <= %(end)s",
-                )
+        if self.query_id == "index_membership_pit":
+            return (
+                "SELECT jsonb_build_array(source_row.pool_id,source_row.ts_code,"
+                "source_row.effective_from)::text AS row_key, ("
+                + payload
+                + ")::text AS row_payload FROM market.core_index_membership_pit AS source_row "
+                "WHERE source_row.pool_id = ANY(ARRAY['csi300','csi500','csi1000','star50','star100']) "
+                "AND source_row.effective_from <= %(end)s "
+                "AND (source_row.effective_to_exclusive IS NULL "
+                "OR source_row.effective_to_exclusive > %(start)s) "
+                "ORDER BY row_key,row_payload"
             )
-        if self.code_column is not None:
-            clauses.append(f"{alias}.{self.code_column} = ANY(%(codes)s)")
-        if self.code_policy == "profile_index_codes":
-            clauses.append(
-                f"{self.date_expression} >= "
-                f"(%(index_required_from_json)s::jsonb ->> {alias}.{self.code_column})::date"
-            )
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        return (
-            "SELECT jsonb_build_array("
-            + key
-            + ")::text AS row_key, ("
-            + payload
-            + ")::text AS row_payload "
-            + f"FROM {self.table_identity} AS {alias}{where} "
-            + "ORDER BY row_key, row_payload"
-        )
+        return self._generic_select_sql() + " " + self.order_sql
 
     @property
     def fingerprint_sql(self) -> str:
         """Bounded-result MVCC revision fingerprint over the exact row query."""
 
         sql = self.sql.strip()
-        for suffix in (" ORDER BY row_key,row_payload", " ORDER BY row_key, row_payload"):
+        for suffix in (
+            " " + self.order_sql,
+            " ORDER BY row_key,row_payload",
+            " ORDER BY row_key, row_payload",
+        ):
             if sql.endswith(suffix):
                 sql = sql[: -len(suffix)]
                 break
@@ -368,6 +459,8 @@ def _query(
     *,
     values: Sequence[str],
     date_expression: str | None = None,
+    date_range_policy: str = "inclusive_date",
+    order_by_source_keys: bool = False,
     start_policy: str = "daily",
     required: Sequence[str] = (),
     non_null_values: Sequence[str] = (),
@@ -378,8 +471,9 @@ def _query(
     audit_non_null_values: Sequence[str] | None = None,
     code_column: str | None = None,
     code_policy: str | None = None,
+    default_pit_stock_filter: bool = True,
 ) -> SourceQuerySpec:
-    if code_column is None and keys and keys[0] == "ts_code":
+    if default_pit_stock_filter and code_column is None and keys and keys[0] == "ts_code":
         code_column = "ts_code"
         code_policy = "pit_stock_codes"
     required_columns = tuple(dict.fromkeys((*keys, *values, *required)))
@@ -394,26 +488,22 @@ def _query(
         required_columns=required_columns,
         non_null_value_columns=tuple(non_null_values),
         audit_non_null_value_columns=tuple(
-            (
-                value
-                for value in non_null_values
-                if value in values
-            )
+            (value for value in non_null_values if value in values)
             if audit_non_null_values is None
             else audit_non_null_values
         ),
         date_expression=date_expression,
         start_policy=start_policy,
+        date_range_policy=date_range_policy,
+        order_by_source_keys=order_by_source_keys,
         query_version=(
             f"{query_id}_canonical_row_code_major_v3"
+            + (":share_precision_v1" if query_id in {"kline_daily_raw", "kline_minute_raw"} else "")
             + (":derived_l2_v1" if derived_values else "")
             + (":pit_stock_filter_v1" if code_policy == "pit_stock_codes" else "")
             + (":profile_required_from_v1" if code_policy == "profile_index_codes" else "")
-            + (
-                ":nonfinite_numeric_to_null_v1"
-                if query_id in POSTGRES_NON_FINITE_TO_NULL_COLUMNS
-                else ""
-            )
+            + (":provider_publication_scope_v1" if not default_pit_stock_filter else "")
+            + (":nonfinite_numeric_to_null_v1" if query_id in POSTGRES_NON_FINITE_TO_NULL_COLUMNS else "")
         ),
         audit_dataset=audit_dataset,
         audit_eligible_sources=tuple(audit_eligible_sources),
@@ -437,6 +527,7 @@ _OHLCV_RAW_VALUES = (
     "volume_hand",
     "amount_li",
 )
+_RAW_PRECISION_VALUES = ("volume_shares", "volume_shares_source", "volume_shares_sha256")
 _DAILY_BASIC_VALUES = (
     "close",
     "turnover_rate",
@@ -562,7 +653,7 @@ _QUERY_SPECS = (
         "kline_daily_raw",
         _ALL_NON_INDEX,
         ("ts_code", "trade_date"),
-        values=_OHLCV_RAW_VALUES,
+        values=(*_OHLCV_RAW_VALUES, *_RAW_PRECISION_VALUES),
         non_null_values=_OHLCV_RAW_VALUES,
         date_expression="source_row.trade_date",
         audit_dataset="kline_daily_raw",
@@ -578,6 +669,11 @@ _QUERY_SPECS = (
         date_expression="source_row.trade_date",
         audit_dataset="adj_factor",
         audit_eligible_sources=("physical_audit_seed", "tushare"),
+    ),
+    _query(
+        "adj_factor_construction", "adj_factor", _ALL_NON_INDEX,
+        ("ts_code", "trade_date"), values=("adj_factor",), non_null_values=("adj_factor",),
+        start_policy="construction_facts",
     ),
     _query(
         "stk_limit",
@@ -607,9 +703,11 @@ _QUERY_SPECS = (
         "kline_minute_raw",
         (Component.MINUTE_BIN,),
         ("ts_code", "trade_time", "freq"),
-        values=_OHLCV_RAW_VALUES,
+        values=(*_OHLCV_RAW_VALUES, *_RAW_PRECISION_VALUES),
         non_null_values=_OHLCV_RAW_VALUES,
-        date_expression="source_row.trade_time::date",
+        date_expression="source_row.trade_time",
+        date_range_policy="timestamp_day_half_open",
+        order_by_source_keys=True,
         start_policy="minute",
         audit_dataset="kline_minute_raw",
         audit_eligible_sources=("physical_audit_seed", "script", "tdx_api"),
@@ -674,6 +772,10 @@ _QUERY_SPECS = (
         (Component.FACTOR_H5_STATIC,),
         ("ts_code", "trade_date"),
         values=_MARGIN_DETAIL_VALUES,
+        # Publication counts describe the complete provider domain, including
+        # securities outside executable PIT pools. Keep those facts; this does
+        # not change the independently frozen strategy stock pools.
+        default_pit_stock_filter=False,
         date_expression="source_row.trade_date",
         audit_dataset="margin_detail",
         audit_eligible_sources=("physical_audit_seed", "tushare"),
@@ -687,11 +789,26 @@ _QUERY_SPECS = (
         start_policy="timeless",
     ),
     _query(
+        "index_membership_pit",
+        "core_index_membership_pit",
+        tuple(Component),
+        ("pool_id", "ts_code", "effective_from"),
+        values=(
+            "index_code",
+            "effective_to_exclusive",
+            "source_provider",
+            "source_reference",
+            "updated_at",
+        ),
+        non_null_values=("index_code", "source_provider", "source_reference", "updated_at"),
+        start_policy="window_overlap",
+    ),
+    _query(
         "sw_index_classify",
         "sw_index_classify",
         (Component.FACTOR_H5_STATIC,),
         ("index_code",),
-        values=("level",),
+        values=("level", "src", "is_pub"),
         non_null_values=("level",),
         start_policy="timeless",
     ),
@@ -796,6 +913,51 @@ SELECT column_name,data_type,udt_name
 FROM information_schema.columns
 WHERE table_schema = %(schema_name)s AND table_name = %(table_name)s
 ORDER BY ordinal_position
+"""
+
+_MINUTE_CHUNK_TARGETS_SQL = """
+WITH target_hypertable AS (
+    SELECT id
+    FROM _timescaledb_catalog.hypertable
+    WHERE schema_name = 'market' AND table_name = 'kline_minute_raw'
+), code_hashes AS (
+    SELECT DISTINCT
+           _timescaledb_functions.get_partition_for_key(code::text)::bigint AS hash_value
+    FROM unnest(%(codes)s::text[]) AS code
+)
+SELECT DISTINCT chunk.schema_name,chunk.table_name
+FROM target_hypertable AS hypertable
+JOIN _timescaledb_catalog.chunk AS chunk
+  ON chunk.hypertable_id = hypertable.id AND NOT chunk.dropped
+JOIN _timescaledb_catalog.chunk_constraint AS time_constraint
+  ON time_constraint.chunk_id = chunk.id
+JOIN _timescaledb_catalog.dimension_slice AS time_slice
+  ON time_slice.id = time_constraint.dimension_slice_id
+JOIN _timescaledb_catalog.dimension AS time_dimension
+  ON time_dimension.id = time_slice.dimension_id
+ AND time_dimension.hypertable_id = hypertable.id
+ AND time_dimension.column_name = 'trade_time'
+JOIN _timescaledb_catalog.chunk_constraint AS code_constraint
+  ON code_constraint.chunk_id = chunk.id
+JOIN _timescaledb_catalog.dimension_slice AS code_slice
+  ON code_slice.id = code_constraint.dimension_slice_id
+JOIN _timescaledb_catalog.dimension AS code_dimension
+  ON code_dimension.id = code_slice.dimension_id
+ AND code_dimension.hypertable_id = hypertable.id
+ AND code_dimension.column_name = 'ts_code'
+WHERE time_slice.range_start <
+      _timescaledb_functions.time_to_internal(
+          (%(end)s::date + interval '1 day')::timestamptz
+      )
+  AND time_slice.range_end >
+      _timescaledb_functions.time_to_internal(%(start)s::date::timestamptz)
+  AND EXISTS (
+      SELECT 1
+      FROM code_hashes
+      WHERE code_hashes.hash_value >= code_slice.range_start
+        AND code_hashes.hash_value < code_slice.range_end
+  )
+ORDER BY chunk.schema_name,chunk.table_name
 """
 
 _OFFICIAL_CUTOFF_SQL = """
@@ -970,9 +1132,29 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
         policy: ResourcePolicy,
         *,
         connection_factory: Callable[[], Any] = independent_postgres_connection_factory,
+        imported_snapshot_id: str | None = None,
     ) -> None:
         self.policy = policy
-        self._pool = ReadOnlySourcePool(connection_factory, policy)
+        if imported_snapshot_id is not None and SNAPSHOT_ID_RE.fullmatch(imported_snapshot_id) is None:
+            raise ValueError("imported PostgreSQL snapshot identity is invalid")
+
+        def import_snapshot(connection: Any) -> None:
+            if imported_snapshot_id is None:
+                return
+            cursor = connection.cursor()
+            try:
+                # PostgreSQL does not accept bind parameters for this command.
+                # The strict server-identity regex above makes the literal safe.
+                cursor.execute(f"SET TRANSACTION SNAPSHOT '{imported_snapshot_id}'")
+            finally:
+                cursor.close()
+
+        self._pool = ReadOnlySourcePool(
+            connection_factory,
+            policy,
+            transaction_initializer=import_snapshot if imported_snapshot_id is not None else None,
+        )
+        self._imported_snapshot_id = imported_snapshot_id
         self._connection_context: Any = None
         self._connection: Any = None
         self._snapshot_tokens: tuple[str, ...] = ()
@@ -993,9 +1175,10 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
         if not row or str(row[2]).lower() not in {"on", "true", "1"}:
             raise SourceConfigurationMissing("PostgreSQL source snapshot did not acknowledge read-only mode")
         token = digest_named_fields(
-            "dataset_release_postgres_snapshot_token_v1",
+            "dataset_release_postgres_snapshot_token_v2",
             {
                 "snapshot": str(row[0]),
+                "exported_snapshot_id": self._imported_snapshot_id,
                 "isolation": str(row[1]).lower(),
                 "read_only": str(row[2]).lower(),
             },
@@ -1157,7 +1340,14 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
     ) -> Iterable[Mapping[str, Any]]:
         if not 1 <= int(fetch_rows) <= self.policy.validation_read_chunk_rows:
             raise ValueError("source stream fetch_rows is outside profile policy")
-        sql = _stream_sql(query_id)
+        sql = (
+            _targeted_minute_stream_sql(
+                _required_query_spec(query_id),
+                self._minute_chunk_relations(params),
+            )
+            if query_id == "kline_minute_raw"
+            else _stream_sql(query_id)
+        )
         connection = self._required_connection()
         try:
             cursor = connection.cursor(name=f"dataset_release_{uuid.uuid4().hex}")
@@ -1177,6 +1367,47 @@ class PostgresSourceSnapshotSession(AbstractContextManager["PostgresSourceSnapsh
                     yield _row_mapping(cursor, row)
         finally:
             cursor.close()
+
+    def _minute_chunk_relations(
+        self,
+        params: Mapping[str, Any],
+    ) -> tuple[tuple[str, str], ...]:
+        cursor = self._cursor()
+        try:
+            cursor.execute(_MINUTE_CHUNK_TARGETS_SQL, dict(params))
+            rows = tuple(cursor.fetchall())
+        except Exception as exc:
+            raise SourceConfigurationMissing(
+                "Timescale minute chunk catalog is unavailable",
+                context={"query_id": "kline_minute_raw"},
+            ) from exc
+        finally:
+            cursor.close()
+        if not rows:
+            raise SourceConfigurationMissing(
+                "Timescale minute chunk catalog returned no target relations",
+                context={"query_id": "kline_minute_raw"},
+            )
+        relations: list[tuple[str, str]] = []
+        for row in rows:
+            if len(row) != 2:
+                raise SourceConfigurationMissing(
+                    "Timescale minute chunk catalog returned an invalid row",
+                    context={"query_id": "kline_minute_raw"},
+                )
+            schema_name, table_name = (str(row[0]), str(row[1]))
+            if not _POSTGRES_IDENTIFIER.fullmatch(schema_name) or not _POSTGRES_IDENTIFIER.fullmatch(table_name):
+                raise SourceConfigurationMissing(
+                    "Timescale minute chunk catalog returned an invalid identifier",
+                    context={"query_id": "kline_minute_raw"},
+                )
+            relations.append((schema_name, table_name))
+        if relations != sorted(set(relations)):
+            raise SourceConfigurationMissing(
+                "Timescale minute chunk catalog relations are duplicated or unordered",
+                context={"query_id": "kline_minute_raw"},
+            )
+        return tuple(relations)
 
     def partition_fingerprint(
         self,
@@ -1239,6 +1470,26 @@ def production_source_session_factory(
     policy: ResourcePolicy,
 ) -> PostgresSourceSnapshotSession:
     return PostgresSourceSnapshotSession(policy)
+
+
+def imported_source_session_factory(
+    snapshot_id: str,
+    *,
+    connection_factory: Callable[[], Any] = independent_postgres_connection_factory,
+) -> SourceSessionFactory:
+    """Bind every source-authority session to one exported PG snapshot."""
+
+    if SNAPSHOT_ID_RE.fullmatch(snapshot_id) is None:
+        raise ValueError("imported PostgreSQL snapshot identity is invalid")
+
+    def factory(policy: ResourcePolicy) -> PostgresSourceSnapshotSession:
+        return PostgresSourceSnapshotSession(
+            policy,
+            connection_factory=connection_factory,
+            imported_snapshot_id=snapshot_id,
+        )
+
+    return factory
 
 
 @dataclass(frozen=True, slots=True)
@@ -1336,6 +1587,7 @@ class FrozenSourceAuthoritySnapshot:
     artifact_ready_provenance_root: str | None = None
     provider_receipt_refs: tuple[CASRef, ...] = ()
     artifact_ready_derived_source_receipt_refs: tuple[CASRef, ...] = ()
+    suspension_day_authority_sha256: str | None = None
 
     @property
     def source_content_root(self) -> str:
@@ -1527,11 +1779,23 @@ class MonthlySourceAuthority:
         *,
         session_factory: SourceSessionFactory = production_source_session_factory,
         mvcc_reuse_capability: bool = MVCC_PARTITION_REUSE_PRODUCTION_VALIDATED,
+        sector_source_policy: str = P3A_SECTOR_SOURCE_POLICY,
+        monthly_sector_mapping: Mapping[str, Any] | None = None,
     ) -> None:
+        if sector_source_policy not in {P3A_SECTOR_SOURCE_POLICY, MONTHLY_SECTOR_SOURCE_POLICY}:
+            raise ValueError("unsupported sector source policy")
         self.profile = profile
         self.cas = cas
         self._session_factory = session_factory
         self._mvcc_reuse_capability = bool(mvcc_reuse_capability)
+        self._sector_source_policy = sector_source_policy
+        self._monthly_sector_mapping = monthly_sector_mapping
+
+    @property
+    def uses_p3a_sector_source(self) -> bool:
+        # Explicit producer choice, never a missing-candidate fallback. The
+        # legacy C-013 path remains the default for existing callers.
+        return self.profile.profile == CANONICAL_PROFILE_ID and self._sector_source_policy == P3A_SECTOR_SOURCE_POLICY
 
     def freeze(
         self,
@@ -1592,7 +1856,7 @@ class MonthlySourceAuthority:
                 trading_dates=before.audit.trading_dates,
                 sample_instruments=selected_stock_codes,
             )
-            if self.profile.profile == CANONICAL_PROFILE_ID
+            if self.uses_p3a_sector_source
             else None
         )
         token_receipts = [f"control-before:{index}:{token}" for index, token in enumerate(before.snapshot_tokens)]
@@ -1604,6 +1868,8 @@ class MonthlySourceAuthority:
         mvcc_unsupported_partitions = 0
         classify_rows: list[Mapping[str, Any]] = []
         member_rows: list[Mapping[str, Any]] = []
+        core_index_membership_rows: list[Mapping[str, Any]] = []
+        core_index_membership_receipt: Mapping[str, Any] | None = None
         sector_enricher: FrozenSectorEnricher | None = None
         query_order = (
             PRODUCTION_QUERY_SPECS["sw_index_classify"],
@@ -1612,18 +1878,23 @@ class MonthlySourceAuthority:
                 value
                 for value in PRODUCTION_QUERY_SPECS.values()
                 if value.query_id not in {"sw_index_classify", "sw_index_member"}
+                and (value.query_id != "adj_factor_construction" or value.query_id in before.schemas)
             ),
         )
         for query in query_order:
             if query.query_id == "sector_data" and sector_enricher is None:
-                sector_enricher = FrozenSectorEnricher.build(
-                    classify_rows,
-                    member_rows,
+                from .monthly_sector_mapping import build_bound_sector_enricher
+                sector_enricher = build_bound_sector_enricher(
+                    classify_rows, member_rows, binding=self._monthly_sector_mapping,
                 )
             effective_query = (
                 replace(query, query_version=sector_candidate.query_version)
                 if query.query_id == "sector_data" and sector_candidate is not None
-                else query
+                else (
+                    replace(query, query_version=f"{query.query_version}:{MONTHLY_SECTOR_SOURCE_POLICY}")
+                    if query.query_id == "sector_data" and self._sector_source_policy == MONTHLY_SECTOR_SOURCE_POLICY
+                    else query
+                )
             )
             schema = (
                 SourceTableSchema(
@@ -1673,9 +1944,7 @@ class MonthlySourceAuthority:
                         spec=spec,
                         rows=(
                             {
-                                "row_key": canonical_json_bytes(
-                                    [row["ts_code"], row["trade_date"]]
-                                ).decode("utf-8"),
+                                "row_key": canonical_json_bytes([row["ts_code"], row["trade_date"]]).decode("utf-8"),
                                 "row_payload": canonical_json_bytes(row).decode("utf-8"),
                             }
                             for row in sector_candidate.iter_rows(
@@ -1788,7 +2057,11 @@ class MonthlySourceAuthority:
                                 else (
                                     member_rows.append
                                     if recheck_by_identity is not None and query.query_id == "sw_index_member"
-                                    else None
+                                    else (
+                                        core_index_membership_rows.append
+                                        if recheck_by_identity is not None and query.query_id == "index_membership_pit"
+                                        else None
+                                    )
                                 )
                             ),
                             recheck_expectation=(
@@ -1839,7 +2112,11 @@ class MonthlySourceAuthority:
                 )
                 query_rows += partition.summary.row_count
                 sealed.append(partition)
-                if recheck_by_identity is None and query.query_id in {"sw_index_classify", "sw_index_member"}:
+                if recheck_by_identity is None and query.query_id in {
+                    "sw_index_classify",
+                    "sw_index_member",
+                    "index_membership_pit",
+                }:
                     from .sealed_source_reader import CASSealedPartitionReader
 
                     reader = CASSealedPartitionReader(
@@ -1847,7 +2124,11 @@ class MonthlySourceAuthority:
                         [partition.as_build_input()],
                         max_partition_rows=effective_query.max_partition_rows,
                     )
-                    target = classify_rows if query.query_id == "sw_index_classify" else member_rows
+                    target = (
+                        classify_rows
+                        if query.query_id == "sw_index_classify"
+                        else (member_rows if query.query_id == "sw_index_member" else core_index_membership_rows)
+                    )
                     with reader.iter_rows(
                         query.query_id,
                         partition.spec.partition_key,
@@ -1857,6 +2138,12 @@ class MonthlySourceAuthority:
                 raise SourceRequiredDatasetEmpty(
                     f"required source dataset is empty: {query.query_id}",
                     context={"query_id": query.query_id, "cutoff": cutoff.isoformat()},
+                )
+            if query.query_id == "index_membership_pit":
+                core_index_membership_receipt = _validate_core_index_membership_authority(
+                    core_index_membership_rows,
+                    start=self.profile.start_date,
+                    cutoff=cutoff,
                 )
             with self._session_factory(self.profile.resource_policy) as ledger_session:
                 ledger_tokens = self._session_tokens(ledger_session)
@@ -1934,6 +2221,8 @@ class MonthlySourceAuthority:
         pit_snapshot = before.pit_snapshot
         if sector_enricher is None:
             raise SourceRequiredDatasetEmpty("sector L2 enrichment authority is missing")
+        if core_index_membership_receipt is None:
+            raise SourceRequiredDatasetEmpty("core-index PIT membership authority is missing")
         manifest = SourceManifest(tuple(item.summary for item in sealed))
         if recheck_by_identity is not None:
             _assert_recheck_partition_set(
@@ -1996,9 +2285,47 @@ class MonthlySourceAuthority:
                     if item.spec.dataset == "sw_index_member"
                 ],
             )
+            if self._sector_source_policy == MONTHLY_SECTOR_SOURCE_POLICY:
+                sector_receipt_payload = {
+                    **sector_receipt_payload,
+                    "schema_version": MONTHLY_SECTOR_PUBLICATION_SCHEMA,
+                    "publication_policy": MONTHLY_SECTOR_SOURCE_POLICY,
+                    "profile": self.profile.profile,
+                    "cutoff": cutoff.isoformat(),
+                }
+                if self._monthly_sector_mapping is not None:
+                    from .monthly_sector_mapping import sector_mapping_catalog_receipt
+                    sector_receipt_payload = {
+                        **sector_receipt_payload,
+                        "mapping_policy": "immutable_predecessor_shared_ids_v1",
+                        "monthly_catalog_lineage": sector_mapping_catalog_receipt(
+                            classify_rows, member_rows, binding=self._monthly_sector_mapping,
+                        ),
+                    }
         sector_receipt_ref = self.cas.put_json(sector_receipt_payload)
         self.cas.verify(sector_receipt_ref)
-        derived_source_receipt_refs = (sector_receipt_ref,)
+        core_index_membership_receipt_ref = self.cas.put_json(
+            {
+                **dict(core_index_membership_receipt),
+                "source_partitions": [
+                    {
+                        "identity": item.spec.identity,
+                        "content_digest": item.summary.content_digest,
+                        "row_count": item.summary.row_count,
+                        "rows_ref": item.rows_ref.as_dict(),
+                    }
+                    for item in sorted(sealed, key=lambda value: value.spec.identity)
+                    if item.spec.dataset == "index_membership_pit"
+                ],
+            }
+        )
+        self.cas.verify(core_index_membership_receipt_ref)
+        derived_source_receipt_refs = (
+            sector_receipt_ref,
+            core_index_membership_receipt_ref,
+        )
+        from backend.data_service.suspension_day_authority import load_authority
+        suspension_day_authority = load_authority()
         manifest_payload = {
             "schema_version": SOURCE_MANIFEST_ARTIFACT_SCHEMA,
             "authority_policy_version": SOURCE_AUTHORITY_POLICY_VERSION,
@@ -2008,6 +2335,9 @@ class MonthlySourceAuthority:
             "source_content_root": manifest.source_content_root,
             "partitions": [item.as_build_input() for item in sorted(sealed, key=lambda value: value.spec.identity)],
             "safety": _zero_safety(),
+            "suspension_day_authority": suspension_day_authority,
+            **({"monthly_sector_mapping": dict(self._monthly_sector_mapping)}
+               if self._monthly_sector_mapping is not None else {}),
         }
         manifest_ref = self.cas.put_json(manifest_payload)
         self.cas.verify(manifest_ref)
@@ -2126,6 +2456,7 @@ class MonthlySourceAuthority:
             snapshot_tokens=tokens,
             observation_provenance_root=observation_provenance_root,
             source_cas_usage=budget.as_dict(),
+            suspension_day_authority_sha256=sha256_hex(canonical_json_bytes(suspension_day_authority)),
         )
 
     def _capture_control_snapshot(
@@ -2204,11 +2535,7 @@ class MonthlySourceAuthority:
         read_chunk_rows: int,
     ) -> tuple[str, Mapping[str, Any]]:
         datasets = sorted(
-            {
-                str(value.audit_dataset)
-                for value in self._database_query_specs()
-                if value.audit_dataset is not None
-            }
+            {str(value.audit_dataset) for value in self._database_query_specs() if value.audit_dataset is not None}
         )
         rows: list[Mapping[str, Any]] = []
         active: list[Mapping[str, Any]] = []
@@ -2314,11 +2641,12 @@ class MonthlySourceAuthority:
         return tuple(
             value
             for value in PRODUCTION_QUERY_SPECS.values()
-            if not (
-                self.profile.profile == CANONICAL_PROFILE_ID
-                and value.query_id == "sector_data"
-            )
+            if not (self.uses_p3a_sector_source and value.query_id == "sector_data")
+            and value.query_id != "adj_factor_construction"
         )
+
+    def _refresh_audit_start(self, cutoff: date) -> date:
+        return min(self.profile.start_date, self.profile.minute_start_date)
 
     def _freeze_refresh_audit(
         self,
@@ -2329,7 +2657,7 @@ class MonthlySourceAuthority:
         read_chunk_rows: int | None = None,
     ) -> SourceRefreshAuditLedger:
         fetch_rows = read_chunk_rows or self.profile.resource_policy.validation_read_chunk_rows
-        start = min(self.profile.start_date, self.profile.minute_start_date)
+        start = self._refresh_audit_start(cutoff)
         trading_date_values: list[date] = []
         for row_number, row in enumerate(
             session.stream(
@@ -2345,9 +2673,7 @@ class MonthlySourceAuthority:
         trading_dates = tuple(trading_date_values)
         if not trading_dates or trading_dates != tuple(sorted(set(trading_dates))):
             raise SourceAuditIncomplete("official trading-date audit scope is invalid")
-        dated_specs = tuple(
-            value for value in self._database_query_specs() if value.date_expression is not None
-        )
+        dated_specs = tuple(value for value in self._database_query_specs() if value.date_expression is not None)
         dated = sorted({str(value.audit_dataset) for value in dated_specs})
         eligible_sources: dict[str, tuple[str, ...]] = {}
         eligible_quality: dict[str, tuple[str, ...]] = {}
@@ -2589,7 +2915,10 @@ class MonthlySourceAuthority:
         *,
         pit_snapshot: FrozenPitSnapshot,
         selected_stock_codes: tuple[str, ...] = (),
+        start_override: date | None = None,
     ) -> Iterable[tuple[str, dict[str, Any]]]:
+        if query.start_policy == "construction_facts":
+            raise SourceProviderContractError("construction facts require an explicitly configured monthly authority")
         codes: list[str] | None = None
         if query.code_policy == "profile_index_codes":
             codes = list(self.profile.index_codes)
@@ -2611,7 +2940,17 @@ class MonthlySourceAuthority:
                 params["index_required_from_json"] = index_required_from_json
             yield "all", params
             return
+        if query.start_policy == "window_overlap":
+            yield (
+                f"{self.profile.start_date.isoformat()}_{cutoff.isoformat()}",
+                {"start": self.profile.start_date, "end": cutoff},
+            )
+            return
         start = self.profile.minute_start_date if query.start_policy == "minute" else self.profile.start_date
+        if start_override is not None:
+            if type(start_override) is not date or not self.profile.start_date <= start_override <= cutoff:
+                raise SourceProviderContractError("source month start is outside the release range")
+            start = max(start, start_override)
         for chunk in build_date_chunks(
             start,
             cutoff,
@@ -2677,6 +3016,17 @@ class MonthlySourceAuthority:
     ) -> SealedSourcePartition:
         spec = _query_partition_spec(query, partition_key, table_schema)
         fetch_rows = read_chunk_rows or self.profile.resource_policy.validation_read_chunk_rows
+        row_fields = _QueryRowFields.from_query(query)
+        row_month: str | None = None
+
+        def observe_payload(payload: Mapping[str, Any]) -> None:
+            nonlocal row_month
+            # Keep month metadata outside the canonical row envelope. Reading
+            # the already validated payload avoids parsing its JSON again.
+            row_month = _canonical_row_month(payload) if query.date_expression is not None else None
+            if payload_observer is not None:
+                payload_observer(payload)
+
         return self._seal_rows(
             spec=spec,
             rows=self._iter_execution_rows(
@@ -2713,8 +3063,10 @@ class MonthlySourceAuthority:
                 query,
                 spec,
                 payload_enricher=payload_enricher,
-                payload_observer=payload_observer,
+                payload_observer=observe_payload,
+                row_fields=row_fields,
             ),
+            row_month_resolver=lambda _row: row_month,
             checkpoint=checkpoint,
             budget=budget,
             max_rows=query.max_partition_rows,
@@ -2802,7 +3154,11 @@ class MonthlySourceAuthority:
         if pressure_rung < 0:
             raise SourceProviderContractError("source pressure rung is invalid")
         date_params: list[dict[str, Any]] = [dict(semantic_params)]
-        if "start" in semantic_params and "end" in semantic_params:
+        # Overlap predicates are not point-date predicates: a long-lived
+        # member would be selected by every month it intersects. Keep this
+        # small interval authority as one semantic query; stream(fetch_rows)
+        # still bounds cursor memory. Never hide real duplicates downstream.
+        if query.start_policy != "window_overlap" and "start" in semantic_params and "end" in semantic_params:
             ladder = self.profile.pressure_ladder["date_chunk_months"]
             months = ladder[min(pressure_rung, len(ladder) - 1)]
             date_params = [
@@ -2845,6 +3201,7 @@ class MonthlySourceAuthority:
         source_partition_params_digest: str | None = None,
         source_code_membership_digest: str | None = None,
         row_transform: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
+        row_month_resolver: Callable[[Mapping[str, Any]], str | None] | None = None,
         checkpoint: Callable[[], None] | None = None,
         budget: SourceCASBudgetTracker | None = None,
         max_rows: int = 1_000_000,
@@ -2866,6 +3223,19 @@ class MonthlySourceAuthority:
             snapshot_tokens=(),
         )
         monthly_hashers: dict[str, CanonicalPartitionHasher] = {}
+
+        def month_hasher_for(month: str | None) -> CanonicalPartitionHasher | None:
+            if month is None:
+                return None
+            month_hasher = monthly_hashers.get(month)
+            if month_hasher is None:
+                month_hasher = CanonicalPartitionHasher(
+                    replace(spec, partition_key=month),
+                    ingestion_audit_identity=ingestion_identity,
+                    snapshot_tokens=(),
+                )
+                monthly_hashers[month] = month_hasher
+            return month_hasher
 
         def encoded() -> Iterator[bytes]:
             yield (
@@ -2894,16 +3264,13 @@ class MonthlySourceAuthority:
                     )
                 selected = row_transform(raw) if row_transform is not None else _select_row(raw, spec)
                 normalized = hasher.update(selected)
-                month = _canonical_row_month(normalized)
-                if month is not None:
-                    month_hasher = monthly_hashers.get(month)
-                    if month_hasher is None:
-                        month_hasher = CanonicalPartitionHasher(
-                            replace(spec, partition_key=month),
-                            ingestion_audit_identity=ingestion_identity,
-                            snapshot_tokens=(),
-                        )
-                        monthly_hashers[month] = month_hasher
+                month = (
+                    row_month_resolver(normalized)
+                    if row_month_resolver is not None
+                    else _canonical_row_month(normalized)
+                )
+                month_hasher = month_hasher_for(month)
+                if month_hasher is not None:
                     month_hasher.update(normalized)
                 if observer is not None:
                     observer(normalized)
@@ -3417,6 +3784,11 @@ def load_source_stage_receipt(
     ):
         raise SourceAuditIncomplete("source-stage referenced receipt graph is inconsistent")
     content_rows = manifest_payload.get("partitions")
+    from backend.data_service.suspension_day_authority import load_authority
+    suspension_payload = manifest_payload.get("suspension_day_authority")
+    suspension_sha = None
+    if suspension_payload is not None:
+        suspension_sha = sha256_hex(canonical_json_bytes(load_authority(suspension_payload)))
     reuse_rows = reuse_payload.get("partitions")
     if not isinstance(content_rows, list) or not isinstance(reuse_rows, list):
         raise SourceAuditIncomplete("source-stage partition manifests are invalid")
@@ -3429,7 +3801,7 @@ def load_source_stage_receipt(
             raise SourceAuditIncomplete("source reuse partition identity is ambiguous")
         reuse_by_identity[identity] = raw
     partitions = tuple(_sealed_partition_from_stage(cas, raw, reuse_by_identity) for raw in content_rows)
-    if len(derived_refs) != 1:
+    if len(derived_refs) not in {1, 2} or len(set(derived_refs)) != len(derived_refs):
         raise SourceAuditIncomplete("source-stage derived receipt set differs")
     sector_receipt = cas.get_json_bounded(derived_refs[0], max_bytes=MAX_SOURCE_STAGE_ARTIFACT_BYTES)
     expected_classify = [
@@ -3450,7 +3822,29 @@ def load_source_stage_receipt(
         for item in partitions
         if item.spec.dataset == "sw_index_member"
     ]
-    if expected_profile == CANONICAL_PROFILE_ID:
+    if not isinstance(sector_receipt, Mapping):
+        raise SourceAuditIncomplete("source-stage sector receipt is invalid")
+    native_publication = sector_receipt.get("schema_version") == MONTHLY_SECTOR_PUBLICATION_SCHEMA
+    if native_publication:
+        _validate_monthly_sector_publication_receipt(
+            sector_receipt,
+            expected_profile=expected_profile,
+            expected_cutoff=expected_cutoff,
+            classify_partitions=expected_classify,
+            member_partitions=expected_member,
+            mapping_binding=manifest_payload.get("monthly_sector_mapping"),
+        )
+        sector_partitions = [item for item in partitions if item.spec.dataset == "sector_data"]
+        if (
+            not sector_partitions
+            or any(
+                f":{MONTHLY_SECTOR_SOURCE_POLICY}:table_schema_sha256:" not in item.spec.query_version
+                for item in sector_partitions
+            )
+            or len(derived_refs) != 2
+        ):
+            raise SourceAuditIncomplete("source-stage sector publication lineage differs")
+    elif expected_profile == CANONICAL_PROFILE_ID:
         required_sector_fields = {
             "schema_version",
             "profile",
@@ -3476,9 +3870,7 @@ def load_source_stage_receipt(
         }
         if not isinstance(sector_receipt, Mapping) or set(sector_receipt) != required_sector_fields:
             raise SourceAuditIncomplete("source-stage P3A sector receipt schema is invalid")
-        candidate_hash = ensure_sha256_text(
-            sector_receipt.get("candidate_hash"), field="sector_candidate_hash"
-        )
+        candidate_hash = ensure_sha256_text(sector_receipt.get("candidate_hash"), field="sector_candidate_hash")
         expected_query_version = f"{SECTOR_CANDIDATE_QUERY_VERSION}:{candidate_hash}"
         scalar_digests = (
             "industry_bundle_hash",
@@ -3514,10 +3906,7 @@ def load_source_stage_receipt(
             or any(type(value) is not int or value < 0 for value in alignments.values())
             or sum(alignments.values()) != expected_opportunities
             or not isinstance(unavailable, Mapping)
-            or any(
-                re.fullmatch(r"[a-z0-9_.:-]+", str(key)) is None
-                for key in unavailable
-            )
+            or any(re.fullmatch(r"[a-z0-9_.:-]+", str(key)) is None for key in unavailable)
             or any(type(value) is not int or value < 0 for value in unavailable.values())
             or sector_receipt.get("classification_authority_receipt_hash")
             == sector_receipt.get("index_membership_authority_receipt_hash")
@@ -3554,6 +3943,14 @@ def load_source_stage_receipt(
             or sector_receipt.get("member_partitions") != expected_member
         ):
             raise SourceAuditIncomplete("source-stage sector enrichment lineage differs")
+    if len(derived_refs) == 2:
+        core_receipt = cas.get_json_bounded(derived_refs[1], max_bytes=MAX_SOURCE_STAGE_ARTIFACT_BYTES)
+        _validate_core_index_stage_receipt(
+            core_receipt,
+            partitions=partitions,
+            expected_cutoff=expected_cutoff,
+            scope_start=_pit_snapshot_from_stage(pit_payload).scope_start,
+        )
     manifest = SourceManifest(tuple(item.summary for item in partitions))
     source_content_root = ensure_sha256_text(stage.get("source_content_root"), field="source_content_root")
     stable_provenance_root = ensure_sha256_text(
@@ -3700,7 +4097,171 @@ def load_source_stage_receipt(
         artifact_ready_provenance_root=artifact_provenance_root,
         provider_receipt_refs=provider_refs,
         artifact_ready_derived_source_receipt_refs=artifact_derived_refs,
+        suspension_day_authority_sha256=suspension_sha,
     )
+
+
+def _validate_monthly_sector_publication_receipt(
+    value: Any,
+    *,
+    expected_profile: str,
+    expected_cutoff: date,
+    classify_partitions: Sequence[Mapping[str, Any]],
+    member_partitions: Sequence[Mapping[str, Any]],
+    mapping_binding: Mapping[str, Any] | None = None,
+) -> None:
+    """Bind published quotes to frozen classification, not index research coverage."""
+    expected = {
+        "schema_version": MONTHLY_SECTOR_PUBLICATION_SCHEMA,
+        "publication_policy": MONTHLY_SECTOR_SOURCE_POLICY,
+        "profile": expected_profile,
+        "cutoff": expected_cutoff.isoformat(),
+        "asof_policy": "in_date_lte_trade_date_out_date_null_or_gte_v1",
+        "winner_policy": "in_date_desc_out_date_desc_nulls_last_v1",
+        "mapping_policy": "sorted_unique_sw_l2_zero_based_v1",
+        "unknown_l2_code_id": -1,
+        "classify_partitions": list(classify_partitions),
+        "member_partitions": list(member_partitions),
+        "safety": _zero_safety(),
+    }
+    if mapping_binding is not None:
+        from .monthly_sector_mapping import _validate_binding
+        from .canonical import digest_named_fields
+        _validate_binding(mapping_binding)
+        expected["mapping_policy"] = "immutable_predecessor_shared_ids_v1"
+        lineage = value.get("monthly_catalog_lineage") if isinstance(value, Mapping) else None
+        if (
+            not isinstance(lineage, Mapping)
+            or set(lineage) != {"binding", "raw_catalog_count", "canonical_catalog_count",
+                                "raw_catalog_sha256", "unassigned_unpublished_codes",
+                                "addition_classification", "historical_business_audit_performed"}
+            or lineage["binding"] != mapping_binding
+            or lineage["canonical_catalog_count"] != 131
+            or lineage["historical_business_audit_performed"] is not False
+            or lineage["addition_classification"] != "UNASSIGNED_UNPUBLISHED_CATALOG_METADATA"
+        ):
+            raise SourceAuditIncomplete("source-stage sector catalog lineage differs")
+        extras = lineage["unassigned_unpublished_codes"]
+        codes = [row["canonical_l2_code"] for row in mapping_binding["code_map"]["entries"]]
+        if (
+            not isinstance(extras, list) or any(not isinstance(code, str) for code in extras)
+            or extras != sorted(set(extras)) or set(extras) & set(codes)
+            or type(lineage["raw_catalog_count"]) is not int
+            or lineage["raw_catalog_count"] != 131 + len(extras)
+            or value.get("code_map_digest") != digest_named_fields(
+                "dataset_release_sw_l2_code_map_v1", {"ordered_codes": codes},
+            )
+        ):
+            raise SourceAuditIncomplete("source-stage sector catalog identity differs")
+        ensure_sha256_text(lineage["raw_catalog_sha256"], field="raw_catalog_sha256")
+        expected["monthly_catalog_lineage"] = lineage
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != set(expected) | {"code_count", "code_map_digest", "membership_digest"}
+        or any(value[key] != item for key, item in expected.items())
+        or not classify_partitions
+        or not member_partitions
+        or type(value.get("code_count")) is not int
+        or value["code_count"] != 131
+    ):
+        raise SourceAuditIncomplete("source-stage sector publication contract differs")
+    try:
+        for field in ("code_map_digest", "membership_digest"):
+            ensure_sha256_text(value[field], field=field)
+    except (TypeError, ValueError, DatasetReleaseError) as exc:
+        raise SourceAuditIncomplete("source-stage sector publication digest is invalid") from exc
+
+
+def _validate_core_index_stage_receipt(
+    value: Any,
+    *,
+    partitions: Sequence[SealedSourcePartition],
+    expected_cutoff: date,
+    scope_start: date,
+) -> None:
+    """Close the second derived receipt against the sealed five-pool stream."""
+    required = {
+        "schema_version",
+        "window",
+        "pool_ids",
+        "pool_count",
+        "row_count",
+        "symbol_count",
+        "duplicate_count",
+        "overlap_count",
+        "unknown_pool_count",
+        "coverage",
+        "authority_digest",
+        "database_write_performed",
+        "source_partitions",
+    }
+    source_parts = [
+        {
+            "identity": item.spec.identity,
+            "content_digest": item.summary.content_digest,
+            "row_count": item.summary.row_count,
+            "rows_ref": item.rows_ref.as_dict(),
+        }
+        for item in sorted(partitions, key=lambda item: item.spec.identity)
+        if item.spec.dataset == "index_membership_pit"
+    ]
+    pools = sorted(P0_POOL_IDS)
+    if (
+        not isinstance(value, Mapping)
+        or set(value) != required
+        or value.get("schema_version") != CORE_INDEX_MEMBERSHIP_RECEIPT_SCHEMA
+        or value.get("window") != {"start": scope_start.isoformat(), "cutoff": expected_cutoff.isoformat()}
+        or value.get("pool_ids") != pools
+        or type(value.get("pool_count")) is not int
+        or value["pool_count"] != len(pools)
+        or not source_parts
+        or value.get("source_partitions") != source_parts
+        or type(value.get("row_count")) is not int
+        or value["row_count"] != sum(item["row_count"] for item in source_parts)
+        or type(value.get("symbol_count")) is not int
+        or not 0 < value["symbol_count"] <= value["row_count"]
+        or any(
+            type(value.get(key)) is not int or value[key] != 0
+            for key in ("duplicate_count", "overlap_count", "unknown_pool_count")
+        )
+        or value.get("database_write_performed") is not False
+        or not isinstance(value.get("coverage"), Mapping)
+        or set(value["coverage"]) != set(pools)
+    ):
+        raise SourceAuditIncomplete("source-stage core-index receipt contract differs")
+    try:
+        ensure_sha256_text(value["authority_digest"], field="core_index_authority_digest")
+        total_rows = 0
+        for pool in pools:
+            coverage = value["coverage"][pool]
+            definition = POOL_DEFINITIONS[pool]
+            required_from = max(scope_start, definition.history_start)
+            if (
+                not isinstance(coverage, Mapping)
+                or set(coverage)
+                != {
+                    "index_code",
+                    "source_provider",
+                    "required_from",
+                    "first_effective_from",
+                    "row_count",
+                    "symbol_count",
+                }
+                or coverage["index_code"] != definition.index_code
+                or coverage["source_provider"] != definition.source_provider
+                or coverage["required_from"] != required_from.isoformat()
+                or date.fromisoformat(coverage["first_effective_from"]) > required_from
+                or type(coverage["row_count"]) is not int
+                or type(coverage["symbol_count"]) is not int
+                or not 0 < coverage["symbol_count"] <= coverage["row_count"]
+                or coverage["symbol_count"] > value["symbol_count"]
+            ):
+                raise SourceAuditIncomplete("source-stage core-index coverage differs")
+            total_rows += coverage["row_count"]
+        if total_rows != value["row_count"]:
+            raise SourceAuditIncomplete("source-stage core-index coverage row total differs")
+    except (TypeError, ValueError, KeyError, DatasetReleaseError) as exc:
+        raise SourceAuditIncomplete("source-stage core-index receipt fields are invalid") from exc
 
 
 def _sealed_partition_from_stage(
@@ -3792,7 +4353,14 @@ def _sealed_partition_from_stage(
             )
         )
         or non_null_value_columns != query.non_null_value_columns
-        or (query.code_policy == "pit_minute_code_batch") != (code_membership_digest is not None)
+        # Monthly moneyflow also pins the shared historical source-code set.
+        # Legacy moneyflow may omit it; minute buckets must still carry it.
+        or (query.code_policy == "pit_minute_code_batch" and code_membership_digest is None)
+        or (
+            code_membership_digest is not None
+            and query.code_policy != "pit_minute_code_batch"
+            and query.query_id != "moneyflow_ts"
+        )
     ):
         raise SourceAuditIncomplete("source content partition contract differs")
     reuse = reuse_by_identity.get(identity)
@@ -3998,6 +4566,43 @@ def _metadata_sql(query_id: str) -> str:
     raise SourceConfigurationMissing("metadata query id is not allowlisted", context={"query_id": query_id})
 
 
+def _targeted_minute_stream_sql(
+    query: SourceQuerySpec,
+    relations: Sequence[tuple[str, str]],
+) -> str:
+    if query.query_id != "kline_minute_raw" or not query.order_by_source_keys:
+        raise SourceConfigurationMissing(
+            "targeted minute stream requires the canonical minute query",
+            context={"query_id": query.query_id},
+        )
+    if not relations:
+        raise SourceConfigurationMissing(
+            "targeted minute stream requires at least one chunk relation",
+            context={"query_id": query.query_id},
+        )
+    branches: list[str] = []
+    for schema_name, table_name in relations:
+        if not _POSTGRES_IDENTIFIER.fullmatch(schema_name) or not _POSTGRES_IDENTIFIER.fullmatch(table_name):
+            raise SourceConfigurationMissing(
+                "targeted minute stream relation identifier is invalid",
+                context={"query_id": query.query_id},
+            )
+        table_identity = f'"{schema_name}"."{table_name}"'
+        branches.append(
+            query._generic_select_sql(
+                table_identity=table_identity,
+                include_order_columns=True,
+            )
+        )
+    order_columns = ",".join(f"__source_order_{index}" for index in range(len(query.key_columns)))
+    return (
+        "SELECT row_key,row_payload FROM ("
+        + " UNION ALL ".join(branches)
+        + ") AS targeted_source_rows ORDER BY "
+        + order_columns
+    )
+
+
 def _stream_sql(query_id: str) -> str:
     if query_id == "pit_spans":
         return _PIT_SPANS_SQL
@@ -4175,12 +4780,34 @@ _TEXT_PAYLOAD_COLUMNS = frozenset(
         "market",
         "index_code",
         "level",
+        "src",
+        "is_pub",
         "in_date",
         "l2_code",
         "out_date",
+        "pool_id",
+        "effective_from",
+        "effective_to_exclusive",
+        "source_provider",
+        "source_reference",
+        "volume_shares_source",
+        "volume_shares_sha256",
+        "updated_at",
     }
 )
 _BOOLEAN_PAYLOAD_COLUMNS = frozenset({"is_trading"})
+
+
+@dataclass(frozen=True, slots=True)
+class _QueryRowFields:
+    physical: frozenset[str]
+    final: frozenset[str]
+    non_null: frozenset[str]
+
+    @classmethod
+    def from_query(cls, query: SourceQuerySpec) -> "_QueryRowFields":
+        physical = frozenset((*query.key_columns, *query.value_columns))
+        return cls(physical, physical.union(query.derived_value_columns), frozenset(query.non_null_value_columns))
 
 
 def _validate_query_row(
@@ -4190,6 +4817,7 @@ def _validate_query_row(
     *,
     payload_enricher: Callable[[Mapping[str, Any]], Mapping[str, Any]] | None = None,
     payload_observer: Callable[[Mapping[str, Any]], None] | None = None,
+    row_fields: _QueryRowFields | None = None,
 ) -> Mapping[str, Any]:
     """Validate the SQL JSON envelope before it enters semantic hashing/CAS."""
 
@@ -4198,8 +4826,8 @@ def _validate_query_row(
     payload = _load_json_value(selected["row_payload"], field="row_payload", partition=spec.identity)
     if not isinstance(row_key, list) or len(row_key) != len(query.key_columns) or not isinstance(payload, dict):
         raise SourceManifestError(f"source query JSON envelope shape differs: {spec.identity}")
-    physical_projected = tuple(dict.fromkeys((*query.key_columns, *query.value_columns)))
-    if set(payload) != set(physical_projected):
+    fields = row_fields or _QueryRowFields.from_query(query)
+    if payload.keys() != fields.physical:
         raise SourceManifestError(f"source query payload fields differ: {spec.identity}")
     for index, column in enumerate(query.key_columns):
         key_value = row_key[index]
@@ -4208,9 +4836,17 @@ def _validate_query_row(
             raise SourceManifestError(f"source query key is NULL: {spec.identity}:{column}")
         _validate_payload_type(column, key_value, partition=spec.identity)
         _validate_payload_type(column, payload_value, partition=spec.identity)
-        if canonical_json_bytes(key_value) != canonical_json_bytes(payload_value):
+        # The type checks above make direct text equality exactly equivalent
+        # to canonical JSON equality. Retain canonical comparison for numeric
+        # keys, where 1 and 1.0 have distinct serialized identities.
+        keys_match = (
+            key_value == payload_value
+            if isinstance(key_value, str) and isinstance(payload_value, str)
+            else canonical_json_bytes(key_value) == canonical_json_bytes(payload_value)
+        )
+        if not keys_match:
             raise SourceManifestError(f"source query key/payload identity differs: {spec.identity}:{column}")
-    non_null = set(query.non_null_value_columns)
+    non_null = fields.non_null
     for column in query.value_columns:
         value = _normalize_postgres_non_finite_source_value(query, column, payload[column])
         payload[column] = value
@@ -4225,16 +4861,7 @@ def _validate_query_row(
         if not isinstance(enriched, Mapping):
             raise SourceManifestError(f"source query derived payload is invalid: {spec.identity}")
         payload = dict(enriched)
-    final_projected = tuple(
-        dict.fromkeys(
-            (
-                *query.key_columns,
-                *query.value_columns,
-                *query.derived_value_columns,
-            )
-        )
-    )
-    if set(payload) != set(final_projected):
+    if payload.keys() != fields.final:
         raise SourceManifestError(f"source query derived payload fields differ: {spec.identity}")
     for column in query.derived_value_columns:
         value = payload[column]
@@ -4249,6 +4876,136 @@ def _validate_query_row(
     return {
         "row_key": canonical_json_bytes(row_key).decode("utf-8"),
         "row_payload": canonical_json_bytes(payload).decode("utf-8"),
+    }
+
+
+def _validate_core_index_membership_authority(
+    rows: Sequence[Mapping[str, Any]],
+    *,
+    start: date,
+    cutoff: date,
+) -> Mapping[str, Any]:
+    """Close the five official pool streams before they become frozen input."""
+
+    if start > cutoff:
+        raise SourceManifestError("core-index membership validation window is invalid")
+    expected_pools = tuple(sorted(P0_POOL_IDS))
+    expected_set = set(expected_pools)
+    normalized: list[dict[str, Any]] = []
+    by_pool: dict[str, list[dict[str, Any]]] = {pool_id: [] for pool_id in expected_pools}
+    identities: set[tuple[str, str, date]] = set()
+    for raw in rows:
+        pool_id = str(raw.get("pool_id") or "").strip().lower()
+        if pool_id not in expected_set:
+            raise SourceManifestError("core-index membership contains an unrequested pool")
+        definition = POOL_DEFINITIONS[pool_id]
+        index_code = str(raw.get("index_code") or "").strip().upper()
+        source_provider = str(raw.get("source_provider") or "").strip().upper()
+        ts_code = str(raw.get("ts_code") or "").strip().upper()
+        source_reference = str(raw.get("source_reference") or "").strip()
+        if (
+            index_code != definition.index_code
+            or source_provider != definition.source_provider
+            or _STOCK_CODE.fullmatch(ts_code) is None
+            or not source_reference
+        ):
+            raise SourceManifestError(f"core-index membership authority identity differs: {pool_id}/{ts_code}")
+        effective_from = _as_date(raw.get("effective_from"))
+        raw_end = raw.get("effective_to_exclusive")
+        effective_to_exclusive = None if raw_end is None else _as_date(raw_end)
+        if (
+            effective_from > cutoff
+            or (effective_to_exclusive is not None and effective_to_exclusive <= effective_from)
+            or (effective_to_exclusive is not None and effective_to_exclusive <= start)
+        ):
+            raise SourceManifestError(f"core-index membership interval escapes the frozen window: {pool_id}/{ts_code}")
+        updated_at_text = str(raw.get("updated_at") or "").strip().replace("Z", "+00:00")
+        try:
+            updated_at = datetime.fromisoformat(updated_at_text)
+        except ValueError as exc:
+            raise SourceManifestError("core-index membership updated_at is invalid") from exc
+        if updated_at.tzinfo is None or updated_at.utcoffset() is None:
+            raise SourceManifestError("core-index membership updated_at must be timezone-aware")
+        identity = (pool_id, ts_code, effective_from)
+        if identity in identities:
+            raise SourceManifestError("core-index membership identity is duplicated")
+        identities.add(identity)
+        row = {
+            "pool_id": pool_id,
+            "index_code": index_code,
+            "ts_code": ts_code,
+            "effective_from": effective_from.isoformat(),
+            "effective_to_exclusive": (
+                effective_to_exclusive.isoformat() if effective_to_exclusive is not None else None
+            ),
+            "source_provider": source_provider,
+            "source_reference": source_reference,
+            "updated_at": updated_at.isoformat(),
+        }
+        normalized.append(row)
+        by_pool[pool_id].append(row)
+
+    coverage: dict[str, Mapping[str, Any]] = {}
+    symbol_count: set[str] = set()
+    for pool_id in expected_pools:
+        pool_rows = sorted(
+            by_pool[pool_id],
+            key=lambda item: (item["ts_code"], item["effective_from"]),
+        )
+        if not pool_rows:
+            raise SourceRequiredDatasetEmpty(
+                "core-index membership pool is empty",
+                context={"pool_id": pool_id},
+            )
+        first_effective_from = min(date.fromisoformat(str(item["effective_from"])) for item in pool_rows)
+        required_from = max(start, POOL_DEFINITIONS[pool_id].history_start)
+        if first_effective_from > required_from:
+            raise SourceManifestError(f"core-index membership starts after required history: {pool_id}")
+        prior_end_by_symbol: dict[str, date | None] = {}
+        for item in pool_rows:
+            symbol = str(item["ts_code"])
+            current_start = date.fromisoformat(str(item["effective_from"]))
+            current_end = (
+                date.fromisoformat(str(item["effective_to_exclusive"]))
+                if item["effective_to_exclusive"] is not None
+                else None
+            )
+            if symbol in prior_end_by_symbol:
+                prior_end = prior_end_by_symbol[symbol]
+                if prior_end is None or current_start < prior_end:
+                    raise SourceManifestError(f"core-index membership intervals overlap: {pool_id}/{symbol}")
+            prior_end_by_symbol[symbol] = current_end
+            symbol_count.add(symbol)
+        coverage[pool_id] = {
+            "index_code": POOL_DEFINITIONS[pool_id].index_code,
+            "source_provider": POOL_DEFINITIONS[pool_id].source_provider,
+            "required_from": required_from.isoformat(),
+            "first_effective_from": first_effective_from.isoformat(),
+            "row_count": len(pool_rows),
+            "symbol_count": len({str(item["ts_code"]) for item in pool_rows}),
+        }
+
+    ordered_rows = sorted(
+        normalized,
+        key=lambda item: (item["pool_id"], item["ts_code"], item["effective_from"]),
+    )
+    authority_digest = digest_named_fields(
+        "dataset_release_core_index_membership_rows_v1",
+        {"rows": ordered_rows},
+    )
+    return {
+        "schema_version": CORE_INDEX_MEMBERSHIP_RECEIPT_SCHEMA,
+        "window": {"start": start.isoformat(), "cutoff": cutoff.isoformat()},
+        "pool_ids": list(expected_pools),
+        "pool_count": len(expected_pools),
+        "row_count": len(ordered_rows),
+        "symbol_count": len(symbol_count),
+        "duplicate_count": 0,
+        "overlap_count": 0,
+        "unknown_pool_count": 0,
+        "coverage": coverage,
+        "authority_digest": authority_digest,
+        "database_write_performed": False,
     }
 
 
@@ -4300,6 +5057,23 @@ def _sanitize_refresh_audit_row(row: Mapping[str, Any]) -> Mapping[str, Any]:
     failure_category = row.get("failure_category")
     job_id = row.get("job_id")
     raw_identity = {str(key): value for key, value in row.items()}
+    structured_metadata = metadata
+    if isinstance(metadata, str):
+        try:
+            structured_metadata = json.loads(metadata)
+        except (ValueError, TypeError):
+            structured_metadata = None
+    proof = structured_metadata.get("provider_publication") if isinstance(structured_metadata, Mapping) else None
+    if proof is not None and (
+        not isinstance(proof, Mapping)
+        or set(proof) != {"source", "row_count", "source_rows_sha256"}
+        or proof.get("source") != "tushare_response"
+        or type(proof.get("row_count")) is not int
+        or proof["row_count"] <= 0
+        or proof["row_count"] != _audit_optional_int(row.get("expected_rows"), field="expected_rows")
+        or re.fullmatch(r"[0-9a-f]{64}", str(proof.get("source_rows_sha256", ""))) is None
+    ):
+        raise SourceAuditIncomplete("provider publication proof differs from refresh denominator")
     return {
         "data_source": str(row["data_source"]),
         "status": str(row.get("status", "")).lower(),
@@ -4319,6 +5093,7 @@ def _sanitize_refresh_audit_row(row: Mapping[str, Any]) -> Mapping[str, Any]:
         ),
         "metadata_sha256": _opaque_audit_digest(metadata),
         "audit_payload_sha256": sha256_hex(canonical_json_bytes(raw_identity)),
+        **({"provider_publication": dict(proof)} if proof is not None else {}),
     }
 
 

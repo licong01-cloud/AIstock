@@ -1,0 +1,628 @@
+"""Seal one unified monthly candidate and its consumer dataset manifest.
+
+All data-bearing materializers have completed before this boundary.  The
+finalizer asks one code-owned shared-component builder for suspend, benchmark,
+stock-pool and sector-context sidecars, writes a compact build-evidence
+receipt, then snapshots every release file exactly once into the common
+``qe_dataset_manifest_v1`` identity.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import stat
+from typing import Any, Mapping, Protocol, Sequence
+
+from .canonical import canonical_json_bytes
+from .cas_store import CASRef
+from .monthly_build_bridge import CompiledMonthlyBuild
+from .monthly_build_executor import PhysicalBuildResult
+from .monthly_incremental_baseline import (
+    MONTHLY_INCREMENTAL_BASELINE_PATH,
+    build_monthly_incremental_baseline,
+)
+from .factor_materializer import FACTOR_H5_DATASETS
+from .monthly_official_adapters import StageWorkload
+from .monthly_worker import ProducerContext
+from .monthly_file_identity import file_sha256, remember_verified_file
+
+
+MONTHLY_BUILD_EVIDENCE_SCHEMA = "aistock_monthly_candidate_build_evidence_v1"
+_REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+
+
+def _seal_source_quality(root: Path, context: ProducerContext, compiled: CompiledMonthlyBuild) -> dict[str, Any] | None:
+    """Copy small pinned SOURCE warnings, not historical market data, to release."""
+    from .monthly_source_quality import (
+        accepted_parity_warning, acceptance_file_sha256, read_quality_evidence,
+        source_quality_report, validate_source_quality_acceptance,
+    )
+    path = compiled.source_bundle_path
+    before = path.stat()
+    if before.st_size > 64 * 1024 * 1024:
+        raise MonthlyCandidateFinalizerError("source quality bundle is unbounded")
+    raw = path.read_bytes()
+    after = path.stat()
+    if (before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns
+            or hashlib.sha256(raw).hexdigest() != compiled.source_bundle_sha256):
+        raise MonthlyCandidateFinalizerError("source quality bundle bytes differ")
+    bundle = json.loads(raw)
+    report = bundle.get("source_quality_report")
+    bound = context.plan.get("monthly_source_quality_inputs")
+    if report is None and bound is None:
+        return None
+    if not isinstance(report, Mapping) or report.get("acceptance") != bound:
+        raise MonthlyCandidateFinalizerError("source quality report differs from bound observations")
+    try:
+        acceptance = validate_source_quality_acceptance(bound, operation_id=context.operation_id,
+            predecessor_manifest_sha256=context.plan["predecessor"]["dataset_manifest_sha256"],
+            target_cutoff=date.fromisoformat(context.plan["target_cutoff"]), verify_evidence=False)
+        warnings = report["warnings"]
+        if not isinstance(warnings, list):
+            raise ValueError("quality warnings are invalid")
+        seen = set()
+        for warning in warnings:
+            key = warning["symbol"], warning["trade_date"]
+            if key in seen or accepted_parity_warning(acceptance, symbol=key[0],
+                    trade_date=date.fromisoformat(key[1]), mismatches=warning["mismatches"]) != warning:
+                raise ValueError("quality warning does not match accepted observations")
+            seen.add(key)
+        references = report["frozen_evidence_refs"]
+        if report != {**source_quality_report(acceptance, warnings), "frozen_evidence_refs": references}:
+            raise ValueError("quality report counts or semantics differ")
+        if not isinstance(references, list) or len(references) != len(acceptance["evidence_refs"]):
+            raise ValueError("quality evidence inventory differs")
+        release_refs = []
+        for index, (reference, original) in enumerate(zip(references, acceptance["evidence_refs"], strict=True)):
+            expected_name = f"source-quality-evidence-{index}.json"
+            if reference != {"path": expected_name, "sha256": original["sha256"], "size": original["size"]}:
+                raise ValueError("quality frozen evidence pin differs")
+            proof = read_quality_evidence({**reference, "path": str(path.parent / expected_name)})
+            relative = f"reports/source_quality/{expected_name}"
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("xb") as handle:
+                handle.write(proof)
+            release_refs.append({**reference, "path": relative})
+        authority = _write_exclusive(root / "reports/source_quality/source-quality-acceptance.json", acceptance)
+        if _sha256(authority) != acceptance_file_sha256(acceptance):
+            raise ValueError("quality acceptance seal differs")
+        sealed = _write_exclusive(root / "reports/monthly_source_quality.json", {
+            **report, "frozen_evidence_refs": release_refs})
+        return {"path": sealed.relative_to(root).as_posix(), "sha256": _sha256(sealed),
+                "size": sealed.stat().st_size, "quality_status": report["quality_status"],
+                "quality_warning_count": len(warnings)}
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        raise MonthlyCandidateFinalizerError(f"source quality closure failed: {exc}") from exc
+
+
+class MonthlyCandidateFinalizerError(RuntimeError):
+    """The unified candidate could not be sealed without ambiguity."""
+
+
+@dataclass(frozen=True, slots=True)
+class SharedReleaseComponents:
+    """Consumer-neutral sidecars produced from the sealed SOURCE snapshot."""
+
+    required_files: tuple[Path, ...]
+    qlib_calendar_path: Path
+    qlib_instruments_path: Path
+    st_pit_manifest: Mapping[str, Any]
+    source_contract: Mapping[str, Any]
+    source_rows_read: int = 0
+    computed_rows: int = 0
+    verified_output_files: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        if not self.required_files or len(set(self.required_files)) != len(
+            self.required_files
+        ):
+            raise MonthlyCandidateFinalizerError(
+                "shared component file set is empty or duplicated"
+            )
+        if (
+            type(self.source_rows_read) is not int
+            or self.source_rows_read < 0
+            or type(self.computed_rows) is not int
+            or self.computed_rows < 0
+        ):
+            raise MonthlyCandidateFinalizerError(
+                "shared component workload is invalid"
+            )
+        if not isinstance(self.verified_output_files, Mapping):
+            raise MonthlyCandidateFinalizerError("shared verified file pins are invalid")
+
+
+class MonthlySharedComponentBuilder(Protocol):
+    def execute(
+        self,
+        *,
+        context: ProducerContext,
+        staging_root: Path,
+        compiled: CompiledMonthlyBuild,
+        validation_result: Mapping[str, Any],
+    ) -> SharedReleaseComponents: ...
+
+
+def _is_link(path: Path) -> bool:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(metadata.st_mode) or bool(
+        int(getattr(metadata, "st_file_attributes", 0)) & _REPARSE_POINT
+    )
+
+
+def _plain_file(root: Path, path: Path, *, label: str) -> Path:
+    if not Path(path).is_absolute():
+        raise MonthlyCandidateFinalizerError(f"{label} path must be absolute")
+    requested = Path(path).absolute()
+    try:
+        relative = requested.relative_to(root)
+    except ValueError as exc:
+        raise MonthlyCandidateFinalizerError(f"{label} escapes candidate") from exc
+    current = root
+    if _is_link(current):
+        raise MonthlyCandidateFinalizerError("candidate root is linked")
+    for part in relative.parts:
+        current /= part
+        if _is_link(current):
+            raise MonthlyCandidateFinalizerError(f"{label} traverses a link")
+    try:
+        resolved = requested.resolve(strict=True)
+    except OSError as exc:
+        raise MonthlyCandidateFinalizerError(f"{label} is unavailable") from exc
+    if not resolved.is_relative_to(root) or not resolved.is_file():
+        raise MonthlyCandidateFinalizerError(
+            f"{label} must be a regular candidate file"
+        )
+    return resolved
+
+
+def _sha256(path: Path) -> str:
+    return file_sha256(path)
+
+
+def _write_exclusive(path: Path, value: Mapping[str, Any]) -> Path:
+    payload = canonical_json_bytes(value) + b"\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with path.open("xb") as handle:
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except FileExistsError as exc:
+        raise MonthlyCandidateFinalizerError(
+            f"candidate finalizer target already exists: {path.name}"
+        ) from exc
+    return path
+
+
+def _manifest_identity(value: Mapping[str, Any]) -> str:
+    unsigned = dict(value)
+    unsigned.pop("dataset_manifest_sha256", None)
+    return hashlib.sha256(canonical_json_bytes(unsigned)).hexdigest()
+
+
+def _component_name(relative: str) -> str:
+    return relative.replace("/", "__")
+
+
+def _st_pit_files(root: Path, value: Mapping[str, Any]) -> tuple[Path, ...]:
+    required = {
+        "schema_version",
+        "snapshot_id",
+        "cutoff_trade_date",
+        "universe_key",
+        "rule_version",
+        "selection_universe",
+        "index_membership_sidecars",
+    }
+    if not required.issubset(value):
+        raise MonthlyCandidateFinalizerError("ST-PIT manifest fields are incomplete")
+    sidecars = value.get("index_membership_sidecars")
+    pools = {"stock_universe", "csi300", "csi500", "csi1000", "star50", "star100"}
+    if not isinstance(sidecars, Mapping) or set(sidecars) != pools:
+        raise MonthlyCandidateFinalizerError("ST-PIT pool set differs")
+
+    def pinned(raw: object, *, label: str) -> Path:
+        if not isinstance(raw, Mapping) or not {"path", "sha256", "size"}.issubset(raw):
+            raise MonthlyCandidateFinalizerError(f"{label} pin is incomplete")
+        path = _plain_file(root, root / Path(str(raw["path"])), label=label)
+        if (
+            path.stat().st_size != raw["size"]
+            or _sha256(path) != raw["sha256"]
+        ):
+            raise MonthlyCandidateFinalizerError(f"{label} bytes differ")
+        return path
+
+    paths = tuple(
+        pinned(sidecars[name], label=f"ST-PIT pool {name}") for name in sorted(pools)
+    )
+    selection = pinned(value.get("selection_universe"), label="ST-PIT selection universe")
+    stock_universe = paths[sorted(pools).index("stock_universe")]
+    if selection != stock_universe:
+        raise MonthlyCandidateFinalizerError(
+            "ST-PIT selection universe differs from stock_universe"
+        )
+    return paths
+
+
+def _validate_consumer_layout(root: Path, required_files: Sequence[Path]) -> None:
+    required = set(required_files)
+    pairs = [
+        (
+            "daily_bin/qlib/calendars/day.txt",
+            "components/daily_bin_candidate/calendars/day.txt",
+        ),
+        (
+            "daily_bin/qlib/instruments/all.txt",
+            "components/daily_bin_candidate/instruments/all.txt",
+        ),
+        (
+            "minute_bin/qlib/calendars/1min.txt",
+            "components/minute_bin_candidate/calendars/1min.txt",
+        ),
+        (
+            "minute_bin/qlib/instruments/all.txt",
+            "components/minute_bin_candidate/instruments/all.txt",
+        ),
+        (
+            "index_context/index_daily.h5",
+            "components/index_context/index_daily.h5",
+        ),
+        *[
+            (
+                f"factor_bundle/{dataset}.h5",
+                f"components/factor_h5_static_candidate_v2/{dataset}.h5",
+            )
+            for dataset in FACTOR_H5_DATASETS
+        ],
+        (
+            "factor_bundle/static_factors.parquet",
+            "components/factor_h5_static_candidate_v2/static_factors.parquet",
+        ),
+    ]
+    expected = {
+        "components/daily_bin_candidate/instruments/stock_universe.txt",
+        "components/daily_bin_candidate/instruments/benchmark.txt",
+        "components/daily_bin_candidate/meta_export.json",
+        "components/minute_bin_candidate/meta_export.json",
+        "components/factor_h5_static_candidate_v2/meta.json",
+        "components/index_context/meta.json",
+        "reports/qe_index_pool_coverage_receipt.json",
+        "reports/monthly_consumer_layout_receipt.json",
+        *(target for _source, target in pairs),
+    }
+    resolved = {
+        relative: _plain_file(root, root / relative, label="consumer release file")
+        for relative in sorted(expected)
+    }
+    if not set(resolved.values()).issubset(required):
+        raise MonthlyCandidateFinalizerError(
+            "consumer release layout is absent from shared file inventory"
+        )
+    for source, target in pairs:
+        source_path = _plain_file(root, root / source, label="internal release file")
+        if not os.path.samefile(source_path, resolved[target]):
+            raise MonthlyCandidateFinalizerError(
+                "consumer release data is not a hardlink to the validated build"
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class UnifiedMonthlyCandidateFinalizer:
+    shared_components: MonthlySharedComponentBuilder
+
+    def execute(
+        self,
+        *,
+        context: ProducerContext,
+        staging_root: Path,
+        compiled: CompiledMonthlyBuild,
+        validation_result: Mapping[str, Any],
+        stage_refs: Mapping[str, CASRef],
+    ) -> PhysicalBuildResult:
+        if context.stage != "BUILD":
+            raise MonthlyCandidateFinalizerError(
+                "candidate finalizer received another stage"
+            )
+        try:
+            root = staging_root.resolve(strict=True)
+        except OSError as exc:
+            raise MonthlyCandidateFinalizerError(
+                "candidate staging root is unavailable"
+            ) from exc
+        if _is_link(staging_root) or not root.is_dir():
+            raise MonthlyCandidateFinalizerError(
+                "candidate staging root is linked or invalid"
+            )
+        manifest_path = root / "qe_dataset_manifest.json"
+        if manifest_path.exists():
+            raise MonthlyCandidateFinalizerError(
+                "candidate manifest already exists before finalization"
+            )
+        if (
+            validation_result.get("validation_status") != "PASS"
+            or validation_result.get("required_validation_failures") != 0
+        ):
+            raise MonthlyCandidateFinalizerError(
+                "physical candidate validation did not pass"
+            )
+        required_stage_refs = {
+            "prepare",
+            "finalize_bins",
+            "consumer_smoke",
+            "consumer_smoke_resource",
+            "validate",
+        }
+        if not required_stage_refs.issubset(stage_refs):
+            raise MonthlyCandidateFinalizerError("candidate stage evidence is incomplete")
+        native_month = validation_result.get("validation_scope") == "month_delta"
+        output_pins = validation_result.get("verified_output_files", {}) if native_month else {}
+        if native_month and (
+            validation_result.get("source_bundle_sha256") != compiled.source_bundle_sha256
+            or not isinstance(output_pins, Mapping) or not output_pins
+        ):
+            raise MonthlyCandidateFinalizerError("native month writer authority is incomplete")
+        sidecars = self.shared_components.execute(
+            context=context,
+            staging_root=root,
+            compiled=compiled,
+            validation_result=validation_result,
+        )
+        output_pins = dict(output_pins)
+        for relative, pin in sidecars.verified_output_files.items():
+            if relative in output_pins and pin != output_pins[relative]:
+                raise MonthlyCandidateFinalizerError("shared layout and physical writer pins disagree")
+            output_pins[relative] = pin
+        required_files = tuple(
+            _plain_file(root, path, label="shared component")
+            for path in sidecars.required_files
+        )
+        _validate_consumer_layout(root, required_files)
+        calendar = _plain_file(
+            root, sidecars.qlib_calendar_path, label="Qlib day calendar"
+        )
+        instruments = _plain_file(
+            root, sidecars.qlib_instruments_path, label="Qlib provider catalog"
+        )
+        if calendar not in required_files or instruments not in required_files:
+            raise MonthlyCandidateFinalizerError(
+                "Qlib identities are absent from the shared release file set"
+            )
+        st_pit = dict(sidecars.st_pit_manifest)
+        if (
+            st_pit.get("schema_version") != "qe_st_pit_manifest_v1"
+            or st_pit.get("cutoff_trade_date") != context.plan.get("target_cutoff")
+            or not str(st_pit.get("snapshot_id") or "").strip()
+        ):
+            raise MonthlyCandidateFinalizerError("ST-PIT manifest identity differs")
+        st_pit_files = _st_pit_files(root, st_pit)
+        if not set(st_pit_files).issubset(required_files):
+            raise MonthlyCandidateFinalizerError(
+                "ST-PIT files are absent from the shared release file set"
+            )
+        source_contract = dict(sidecars.source_contract)
+        if source_contract.get("no_fabrication") is not True:
+            raise MonthlyCandidateFinalizerError(
+                "monthly source contract must fail closed against fabrication"
+            )
+        quality_ref = _seal_source_quality(root, context, compiled)
+        baseline_authority = None if native_month else build_monthly_incremental_baseline(
+            release_id=str(context.plan.get("release_id") or ""),
+            release_digest=str(compiled.physical_plan.get("release_digest") or ""),
+            profile=str(compiled.physical_plan.get("build_inputs", {}).get("profile") or ""),
+            scope=str(compiled.physical_plan.get("build_inputs", {}).get("scope") or ""),
+            cutoff=str(context.plan.get("target_cutoff") or ""),
+            candidate_root_name=Path(str(context.plan.get("candidate_root") or "")).name,
+            component_artifact_manifest_ref=validation_result.get(
+                "component_artifact_manifest_ref"
+            ),
+            validation_ref=validation_result.get("validation_ref"),
+            source_stage_receipt_ref=compiled.source_stage_receipt_ref.as_dict(),
+            source_bundle_sha256=compiled.source_bundle_sha256,
+        )
+        baseline_path = None if native_month else _write_exclusive(
+            root / MONTHLY_INCREMENTAL_BASELINE_PATH,
+            baseline_authority,
+        )
+        evidence_path = _write_exclusive(
+            root / "reports" / "monthly_candidate_build_evidence.json",
+            {
+                "schema_version": MONTHLY_BUILD_EVIDENCE_SCHEMA,
+                "operation_id": context.operation_id,
+                "attempt": context.attempt,
+                "release_id": context.plan.get("release_id"),
+                "target_cutoff": context.plan.get("target_cutoff"),
+                "source_bundle_sha256": compiled.source_bundle_sha256,
+                "source_stage_receipt_ref": compiled.source_stage_receipt_ref.as_dict(),
+                "stage_refs": {
+                    name: reference.as_dict()
+                    for name, reference in sorted(stage_refs.items())
+                },
+                "validation_ref": validation_result.get("validation_ref"),
+                "component_artifact_manifest_ref": validation_result.get(
+                    "component_artifact_manifest_ref"
+                ),
+                "validation_scope": "month_delta" if native_month else "legacy_full",
+                "incremental_baseline_authority": None if native_month else {
+                    "path": baseline_path.relative_to(root).as_posix(),
+                    "sha256": _sha256(baseline_path),
+                    "size": baseline_path.stat().st_size,
+                    "baseline_authority_sha256": baseline_authority[
+                        "baseline_authority_sha256"
+                    ],
+                },
+                "database_read_performed": False,
+                "database_write_performed": False,
+                "runtime_action_performed": False,
+                **({"source_quality": quality_ref} if quality_ref is not None else {}),
+            },
+        )
+
+        all_files = self._snapshot_release_files(root)
+        if evidence_path.resolve(strict=True) not in all_files:
+            raise MonthlyCandidateFinalizerError(
+                "build evidence is absent from release inventory"
+            )
+        if not set(required_files).issubset(all_files):
+            raise MonthlyCandidateFinalizerError(
+                "shared component inventory is incomplete"
+            )
+        component_rows: dict[str, dict[str, Any]] = {}
+        # Actual writers already digested newly serialized bytes. Keep those
+        # pins under their unchanged file signatures; consumer hardlinks share
+        # the same physical file and must not trigger a second large read.
+        cached: dict[tuple[Any, ...], str] = {}
+        writer_signatures: dict[Path, tuple[int, int, int, int]] = {}
+        writer_inodes: dict[tuple[int, int], tuple[int, int, int, int]] = {}
+
+        def signature(path: Path) -> tuple[int, int, int, int]:
+            current = path.stat()
+            return current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns
+
+        def cache_key(path: Path, value: tuple[int, int, int, int]) -> tuple[Any, ...]:
+            return value if value[1] else (str(path), *value)
+
+        for relative, pin in output_pins.items():
+            if not isinstance(relative, str) or "\\" in relative or ":" in relative or "\x00" in relative or not isinstance(pin, Mapping):
+                raise MonthlyCandidateFinalizerError("native month writer pin is invalid")
+            path = _plain_file(root, root / relative, label="native month writer output")
+            current = signature(path)
+            if (
+                path.relative_to(root).as_posix() != relative
+                or list(current) != pin.get("signature") or current[2] != pin.get("size")
+                or not isinstance(pin.get("sha256"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", pin["sha256"]) is None
+            ):
+                raise MonthlyCandidateFinalizerError("native month writer output changed before sealing")
+            key = cache_key(path, current)
+            if key in cached and cached[key] != pin["sha256"]:
+                raise MonthlyCandidateFinalizerError("native month writer hardlink pins disagree")
+            cached[key] = pin["sha256"]
+            writer_signatures[path] = current
+            if current[1]:
+                writer_inodes[current[:2]] = current
+        for path in sorted(all_files, key=lambda item: item.relative_to(root).as_posix()):
+            relative = path.relative_to(root).as_posix()
+            name = _component_name(relative)
+            if name in component_rows:
+                raise MonthlyCandidateFinalizerError(
+                    "candidate component names are ambiguous"
+                )
+            before = signature(path)
+            if (
+                path in writer_signatures and before != writer_signatures[path]
+                or before[:2] in writer_inodes and before != writer_inodes[before[:2]]
+            ):
+                raise MonthlyCandidateFinalizerError("native month writer output changed during sealing")
+            key = cache_key(path, before)
+            if key not in cached:
+                cached[key] = _sha256(path)
+            if signature(path) != before:
+                raise MonthlyCandidateFinalizerError("candidate file changed during manifest sealing")
+            component_rows[name] = {
+                "path": relative,
+                "sha256": cached[key],
+                "size": before[2],
+            }
+            remember_verified_file(path, cached[key], expected_signature=before)
+        if any(signature(path) != expected for path, expected in writer_signatures.items()):
+            raise MonthlyCandidateFinalizerError("native month writer output changed before manifest publication")
+        deployment_content = hashlib.sha256(
+            canonical_json_bytes(component_rows)
+        ).hexdigest()
+        release_id = str(context.plan.get("release_id") or "")
+        revision = str(context.plan.get("revision") or "")
+        cutoff = str(context.plan.get("target_cutoff") or "")
+        try:
+            date.fromisoformat(cutoff)
+        except ValueError as exc:
+            raise MonthlyCandidateFinalizerError(
+                "candidate cutoff is invalid"
+            ) from exc
+        if not release_id or not revision:
+            raise MonthlyCandidateFinalizerError(
+                "candidate release identity is incomplete"
+            )
+        st_pit_sha = hashlib.sha256(canonical_json_bytes(st_pit)).hexdigest()
+        manifest: dict[str, Any] = {
+            "schema_version": "qe_dataset_manifest_v1",
+            "release_id": release_id,
+            "revision": revision,
+            "cutoff_trade_date": cutoff,
+            "deployment_content_sha256": deployment_content,
+            "deployment_snapshot_id": f"{release_id}_{deployment_content[:16]}",
+            "qlib_calendar_sha256": component_rows[
+                _component_name(calendar.relative_to(root).as_posix())
+            ]["sha256"],
+            "qlib_instruments_sha256": component_rows[
+                _component_name(instruments.relative_to(root).as_posix())
+            ]["sha256"],
+            "st_pit_snapshot_id": st_pit["snapshot_id"],
+            "st_pit_manifest_sha256": st_pit_sha,
+            "st_pit_manifest": st_pit,
+            "source_contract": source_contract,
+            "components": component_rows,
+            **({"source_quality": quality_ref} if quality_ref is not None else {}),
+        }
+        manifest["dataset_manifest_sha256"] = _manifest_identity(manifest)
+        _write_exclusive(manifest_path, manifest)
+        return PhysicalBuildResult(
+            manifest_path=manifest_path,
+            component_artifacts=tuple(all_files),
+            input_artifacts=(),
+            workload=StageWorkload(
+                source_rows_read=sidecars.source_rows_read,
+                computed_rows=sidecars.computed_rows,
+                bytes_transferred=0,
+            ),
+            database_read_performed=False,
+            database_write_performed=False,
+        )
+
+    @staticmethod
+    def _snapshot_release_files(root: Path) -> tuple[Path, ...]:
+        files: list[Path] = []
+        for base, directories, names in os.walk(root):
+            directories.sort()
+            names.sort()
+            base_path = Path(base)
+            if _is_link(base_path):
+                raise MonthlyCandidateFinalizerError(
+                    "candidate directory inventory contains a link"
+                )
+            for directory in directories:
+                if _is_link(base_path / directory):
+                    raise MonthlyCandidateFinalizerError(
+                        "candidate directory inventory contains a link"
+                    )
+            for name in names:
+                path = _plain_file(root, base_path / name, label="candidate inventory")
+                if path.name == "qe_dataset_manifest.json":
+                    raise MonthlyCandidateFinalizerError(
+                        "candidate manifest appeared during file snapshot"
+                    )
+                files.append(path)
+        if not files or len(set(files)) != len(files):
+            raise MonthlyCandidateFinalizerError(
+                "candidate file inventory is empty or duplicated"
+            )
+        return tuple(files)
+
+
+__all__: Sequence[str] = (
+    "MONTHLY_BUILD_EVIDENCE_SCHEMA",
+    "MonthlyCandidateFinalizerError",
+    "MonthlySharedComponentBuilder",
+    "SharedReleaseComponents",
+    "UnifiedMonthlyCandidateFinalizer",
+)

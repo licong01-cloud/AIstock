@@ -114,7 +114,7 @@ class TestBug014CorrelationCacheDependency:
 
     def test_all_missing_cache_returns_hint(self):
         """BUG-014: When ALL factors lack cache, the error message must guide users to run
-        offline factor cache backfill first. We test this by verifying the code path exists in the source."""
+        the official factor full compute first. We test this by verifying the code path exists in the source."""
         import inspect
         from backend.services.quantevolver.correlation_compute_service import (
             _run_correlation_compute_local,
@@ -124,8 +124,8 @@ class TestBug014CorrelationCacheDependency:
         assert "CORRELATION_FACTOR_VALUE_CACHE_DIR" in source, (
             "BUG-014: correlation compute must reference the offline research/backtest cache"
         )
-        assert "run_offline_factor_cache_backfill_first" in source, (
-            "BUG-014: correlation compute must include offline cache backfill hint for missing cache"
+        assert "run_official_factor_full_compute_first" in source, (
+            "BUG-014: correlation compute must include the current official full-compute hint for missing cache"
         )
         assert "official-evaluation/compute" not in source, (
             "BUG-362: correlation compute must not direct users to realtime/official snapshot cache"

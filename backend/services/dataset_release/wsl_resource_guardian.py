@@ -126,6 +126,7 @@ class WslResourceGuardian:
         cgroup_reader: CgroupReader = lambda value: read_cgroup_files(value),
         popen_factory: Callable[..., ChildProcess] = subprocess.Popen,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         if not _IDENTITY.fullmatch(str(attempt_id)) or fence <= 0 or ttl_seconds < 3:
@@ -143,9 +144,7 @@ class WslResourceGuardian:
                     start_available_bytes,
                 )
             )
-            or memory_high_bytes <= 0
-            or memory_max_bytes <= memory_high_bytes
-            or start_available_bytes <= 0
+            or (memory_high_bytes, memory_max_bytes, memory_swap_max_bytes, start_available_bytes) != (0, 0, 0, 0)
             or not str(resource_checkpoint_path).startswith("/")
             or "\x00" in str(resource_checkpoint_path)
         ):
@@ -168,8 +167,11 @@ class WslResourceGuardian:
         self._read_cgroup = cgroup_reader
         self._popen = popen_factory
         self._now = now
+        self._monotonic = monotonic
         self._sleep = sleep
         self._last_counter = -1
+        self._last_progress_at: float | None = None
+        self._counter_advanced = False
         self._telemetry_counter = 0
         self._control_group: str | None = None
         self._wrapper_pid = 0
@@ -180,20 +182,38 @@ class WslResourceGuardian:
             return False
         if heartbeat.counter < self._last_counter:
             return False
-        age = (self._now() - heartbeat.host_utc.astimezone(timezone.utc)).total_seconds()
-        if age < -5 or age > self.ttl_seconds:
-            return False
-        self._last_counter = heartbeat.counter
-        return True
+        # Windows and WSL UTC clocks can drift independently. Liveness is
+        # counter progress measured by this guardian's monotonic clock; UTC
+        # remains audit metadata, never a cross-host timeout clock.
+        observed = self._monotonic()
+        if heartbeat.counter > self._last_counter:
+            self._counter_advanced = self._last_counter >= 0
+            self._last_counter = heartbeat.counter
+            self._last_progress_at = observed
+        return (
+            self._last_progress_at is not None
+            and 0 <= observed - self._last_progress_at < self.ttl_seconds
+        )
+
+    def _assert_live_owner(self) -> None:
+        if not self._pipe():
+            raise GuardianError("parent pipe closed")
+        if not self._heartbeat_is_fresh():
+            raise GuardianError("heartbeat identity, counter or monotonic TTL failed")
 
     def run(self) -> int:
         try:
-            if not self._pipe() or not self._heartbeat_is_fresh():
-                return 72
-            available = self._sample_resources()
-            if available < self.start_available_bytes:
-                return 74
-        except (GuardianError, OSError, TypeError, ValueError):
+            self._assert_live_owner()
+            # A stale file with an open pipe is not enough: observe a real
+            # writer increment before admitting any child. The same TTL
+            # bounds this wait, without trusting either host's wall clock.
+            while not self._counter_advanced:
+                self._sleep(0.1)
+                self._assert_live_owner()
+            self._sample_resources()
+        except (GuardianError, OSError, TypeError, ValueError) as exc:
+            detail = str(exc) if isinstance(exc, GuardianError) else type(exc).__name__
+            print(f"WSL_GUARDIAN_STARTUP_FAILED: {detail}", file=sys.stderr, flush=True)
             return 72
         child_env = {
             key: str(os.environ[key])
@@ -212,10 +232,10 @@ class WslResourceGuardian:
         while True:
             try:
                 self._sample_resources()
-                healthy = self._pipe() and self._heartbeat_is_fresh()
-            except (GuardianError, OSError, TypeError, ValueError):
-                healthy = False
-            if not healthy:
+                self._assert_live_owner()
+            except (GuardianError, OSError, TypeError, ValueError) as exc:
+                detail = str(exc) if isinstance(exc, GuardianError) else type(exc).__name__
+                print(f"WSL_GUARDIAN_OWNER_LOST: {detail}", file=sys.stderr, flush=True)
                 return 73
             status = child.poll()
             if status is not None:
@@ -231,10 +251,10 @@ class WslResourceGuardian:
         try:
             current = _finite_counter(raw["memory.current"], "memory.current")
             peak = _finite_counter(raw["memory.peak"], "memory.peak")
-            high = _finite_counter(raw["memory.high"], "memory.high")
-            maximum = _finite_counter(raw["memory.max"], "memory.max")
+            high = _unlimited_counter(raw["memory.high"], "memory.high")
+            maximum = _unlimited_counter(raw["memory.max"], "memory.max")
             swap_current = _finite_counter(raw["memory.swap.current"], "memory.swap.current")
-            swap_maximum = _finite_counter(raw["memory.swap.max"], "memory.swap.max")
+            swap_maximum = _unlimited_counter(raw["memory.swap.max"], "memory.swap.max")
             oom_group = _finite_counter(raw["memory.oom.group"], "memory.oom.group")
             available = _finite_counter(raw["wsl_mem_available_bytes"], "wsl_mem_available_bytes")
             raw_events = raw["memory.events"]
@@ -244,12 +264,10 @@ class WslResourceGuardian:
             raise GuardianError("guardian memory.events telemetry is invalid")
         events = {str(key): _finite_counter(value, f"memory.events.{key}") for key, value in raw_events.items()}
         if (
-            high != self.memory_high_bytes
-            or maximum != self.memory_max_bytes
-            or swap_maximum != self.memory_swap_max_bytes
-            or oom_group != 1
-            or current > maximum
-            or swap_current > swap_maximum
+            high != 0
+            or maximum != 0
+            or swap_maximum != 0
+            or oom_group not in {0, 1}
             or peak < current
         ):
             raise GuardianError("guardian cgroup limit/readback mismatch")
@@ -395,6 +413,12 @@ def _finite_counter(value: object, field: str) -> int:
     if result < 0:
         raise GuardianError(f"{field} is negative")
     return result
+
+
+def _unlimited_counter(value: object, field: str) -> int:
+    if isinstance(value, str) and value.strip().casefold() in {"max", "infinity"}:
+        return 0
+    return _finite_counter(value, field)
 
 
 def _assert_plain_telemetry_parent(path: Path) -> None:

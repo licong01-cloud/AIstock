@@ -1,0 +1,289 @@
+{
+  "actual": "The strategy-fork route successfully creates/schedules a new task and then dereferences StrategyEvolutionForkRequest.execution_mode, a field removed from the request contract. The response raises HTTP 500 after the side effect, creating duplicate-submission risk on retry. Preserve current no-execution-mode business contract, remove the stale response read, add a success-path invariant proving one scheduler call and a stable response, and do not alter QE model/factor/universe/TWAP behavior.",
+  "allowed_write_scope": [
+    "backend/routers/quantevolver_evolution.py",
+    "backend/tests/quantevolver/test_qe_universe_comparison.py",
+    "tests/aistock_validation/bugs/20260911_BUG-1445-qe-strategy-fork-success-response-reads-removed-execution-mode.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1445",
+  "closed_at": "2026-09-11T15:50:34.572098Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-11T06:38:28.117079Z",
+  "description": "The strategy-fork route successfully creates/schedules a new task and then dereferences StrategyEvolutionForkRequest.execution_mode, a field removed from the request contract. The response raises HTTP 500 after the side effect, creating duplicate-submission risk on retry. Preserve current no-execution-mode business contract, remove the stale response read, add a success-path invariant proving one scheduler call and a stable response, and do not alter QE model/factor/universe/TWAP behavior.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260911-6ddf550ea65c",
+      "timestamp": "2026-09-11T06:38:28.117059Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1445-qe-strategy-fork-success-response-reads-removed-execution-mode.json"
+    ],
+    "changed_files_source": "actual_changed_files",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1445-qe-strategy-fork-success-response-reads-removed-execution-mode.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/routers/quantevolver_evolution.py",
+      "backend/tests/quantevolver/test_qe_universe_comparison.py",
+      "tests/aistock_validation/bugs/20260911_BUG-1445-qe-strategy-fork-success-response-reads-removed-execution-mode.json"
+    ]
+  },
+  "first_seen_at": "2026-09-11T06:38:28.117079Z",
+  "fix_branch": null,
+  "fix_commit": "dd5100326eb4095f83a4d894d719efe11d686ce6",
+  "fixed_at": "2026-09-11T07:38:29Z",
+  "github_issue_number": 4553,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4553",
+  "last_seen_at": "2026-09-11T06:38:28.117079Z",
+  "module": "quantevolver",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4555",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks?limit=1&detail=summary",
+    "fresh_process_evidence": [
+      "fresh Python process imported backend.routers.quantevolver_evolution and confirmed request_field_absent=true stale_response_read_absent=true",
+      "fresh pytest process: backend/tests/quantevolver/test_qe_universe_comparison.py and backend/tests/unified_engine/test_custom_evo_mutation_routes.py -> 23 passed",
+      "fresh Python process at final HEAD imported backend.routers.quantevolver_evolution and confirmed request_field_absent=true stale_response_read_absent=true",
+      "fresh Python process at HEAD 7fcd9887e confirmed request_field_absent=true stale_response_read_absent=true"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1445\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1445",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c1358b78c18c4c27f18815c43cf119d02643b182e8b3329d4a5539f3ef18c0c9",
+      "contract_digest": "b414f9f777e478c96fdd76de907651c2f81ec051674a48027b49f6079bc9af7f",
+      "expected_identity": "dd5100326eb4095f83a4d894d719efe11d686ce6",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-11T15:48:56.357713Z",
+      "mode": "read_only",
+      "observed_identity": "12c09b04f2f4a66709c6fca6ae606bdb27480a7f",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "b44e4ef1aa81461cefc8f33464bed37c551448de0e9132f713d253120ad700c6",
+      "receipt_sha256": "a8185167beb3f501ac3fc8e8f5abebd1477c777264be4d03c0ef6061870206d4",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "74af763c57567d97680df52346c6e8fab3369dab95ee3ca20f68df83156d5ac3",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1445",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1647048c52ad175b",
+    "recorded_at": "2026-09-11T07:39:34.308083Z",
+    "runtime_contract_digest": "b414f9f777e478c96fdd76de907651c2f81ec051674a48027b49f6079bc9af7f",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "def9b4aec6c956b6476952f3ca0cb3bf1ad8f46d",
+    "source_merge_commit": "dd5100326eb4095f83a4d894d719efe11d686ce6",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4555",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "3795de44c9bd37569bfe5f03fc970480732fcb54e21e94e76a12fc0664c1fc80"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "quantevolver"
+  ],
+  "title": "QE strategy-fork success response reads removed execution_mode",
+  "trigger_condition": {
+    "fingerprint": "6ddf550ea65c3aa926bf0288",
+    "source_event_id": "FE-20260911-6ddf550ea65c"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:quantevolver",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [],
+    "ui_issue": true,
+    "ui_route": "/schedules",
+    "ui_routes": [
+      "/schedules"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

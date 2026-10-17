@@ -10,7 +10,10 @@ from backend.services.quantevolver.qe_evolution_service import AutoEvolutionSche
 
 class _Cursor:
     def __init__(self, script, *, as_dict: bool = False):
-        self._script = list(script)
+        # The production query may release one pool lease before acquiring the
+        # next.  Keep one shared script across fake cursors so the test models
+        # connection boundaries instead of accidentally replaying query 1.
+        self._script = script
         self._as_dict = as_dict
         self.description = []
         self._rows = []
@@ -129,6 +132,88 @@ def test_experiment_history_summary_drops_legacy_jsonb_columns(monkeypatch):
     assert "workspace_path" not in item
 
 
+def test_experiment_history_archive_filter_preserves_server_pagination(monkeypatch):
+    import backend.services.qe_archive.backfill_service as archive_module
+    import backend.services.quantevolver.config_composer as module
+
+    summary_cols = [
+        "experiment_id", "experiment_name", "status", "factor_names", "model_id", "strategy_id",
+        "qe_task_id", "qe_loop_id", "loop_index", "parent_experiment_id", "is_evolution_loop",
+        "ic", "icir", "rank_ic", "rank_icir", "annualized_return", "max_drawdown",
+        "information_ratio", "annualized_return_no_cost", "max_drawdown_no_cost", "information_ratio_no_cost",
+        "created_at", "updated_at", "custom_params", "alpha_mode", "parent_multi_alpha_id",
+        "_evolution_base_experiment_id", "_evolution_task_type",
+    ]
+    summary_row = {
+        "experiment_id": "qe_3",
+        "experiment_name": "Recommended 3",
+        "status": "completed",
+        "factor_names": ["factor"],
+        "model_id": "LSTM",
+        "strategy_id": "TWAP",
+        "is_evolution_loop": False,
+        "ic": 0.1,
+        "annualized_return": 0.2,
+        "max_drawdown": -0.1,
+        "information_ratio": 1.0,
+        "custom_params": {},
+        "alpha_mode": "single",
+    }
+    captured_sql: list[str] = []
+    script = [
+        {"cols": ["count"], "rows": [(3,)]},
+        {
+            "capture": captured_sql,
+            "cols": ["experiment_id", "qe_task_id"],
+            "rows": [("qe_1", None), ("qe_2", None), ("qe_3", None)],
+        },
+        {
+            "cols": summary_cols,
+            "rows": [tuple(summary_row.get(column) for column in summary_cols)],
+        },
+    ]
+    lease_state = {"active": 0, "acquired": 0}
+
+    class TrackingConn(_Conn):
+        def __enter__(self):
+            lease_state["active"] += 1
+            lease_state["acquired"] += 1
+            return self
+
+        def __exit__(self, *_exc):
+            lease_state["active"] -= 1
+            return False
+
+    monkeypatch.setattr(module, "get_conn", lambda: TrackingConn(script))
+
+    class FakeArchiveService:
+        def get_source_status(self, **_kwargs):
+            assert lease_state["active"] == 0
+            return {
+                "experiments": {
+                    "qe_1": {"archive_status": "archived"},
+                    "qe_2": {"archive_status": "recommended"},
+                    "qe_3": {"archive_status": "recommended"},
+                },
+                "tasks": {},
+            }
+
+    monkeypatch.setattr(archive_module, "QEArchiveBackfillService", FakeArchiveService)
+
+    result = ConfigComposer()._list_experiment_history(
+        limit=1,
+        offset=1,
+        filters={"archive_status": "recommended", "source_type": "mcp"},
+    )
+
+    assert result["total"] == 2
+    assert result["has_more"] is False
+    assert [item["experiment_id"] for item in result["items"]] == ["qe_3"]
+    assert lease_state == {"active": 0, "acquired": 2}
+    assert "LEFT JOIN LATERAL" in captured_sql[0]
+    assert "strategy_evo_config->'_qe_run_registration'" in captured_sql[0]
+
+
 def test_get_task_detail_summary_compacts_loop_jsonb(monkeypatch):
     import backend.services.quantevolver.qe_evolution_service as module
 
@@ -160,6 +245,21 @@ def test_get_task_detail_summary_compacts_loop_jsonb(monkeypatch):
     assert "agent_analysis" not in loop_sql
     assert "config_json->'factor_list'" in loop_sql
     assert "metrics_json->>'IC'" in loop_sql
+    assert "config_json#>'{custom_params,_qe_direct_v2_dataset_binding,selection_pins}'" in loop_sql
+    assert "config_json#>'{model_params,_qe_direct_v2_dataset_binding,selection_pins}'" in loop_sql
+    assert "config_json#>>'{model_params,enable_sector_hmm}'" in loop_sql
+    assert "config_json#>'{model_params,sector_blacklist}'" in loop_sql
+    assert "config_json#>>'{custom_params,_qe_sector_blacklist_policy,enabled}'" in loop_sql
+    assert (
+        "config_json#>>'{custom_params,_qe_sector_blacklist_policy,blacklist_excluded_count}'"
+        in loop_sql
+    )
+    assert "AS absolute_metrics_present" in loop_sql
+    assert "metrics_json#>>'{enhanced_metrics,absolute_returns,sharpe}' AS sharpe" in loop_sql
+    assert "metrics_json->>'information_ratio'" in loop_sql
+    assert "metrics_json->>'benchmark_annualized_return'" in loop_sql
+    assert "WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL" in loop_sql
+    assert "THEN metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'" in loop_sql
 
 
 def test_get_task_detail_full_keeps_loop_jsonb(monkeypatch):
@@ -214,4 +314,24 @@ def test_compact_task_row_hmm_enabled_rejects_false_string():
     from backend.services.quantevolver.payload_summary import compact_task_row
 
     assert compact_task_row({"strategy_params": {"enable_sector_hmm": "false"}})["hmm_enabled"] is False
-    assert compact_task_row({"strategy_params": {"hmm_model_version_id": "snap_001"}})["hmm_enabled"] is True
+    unknown = compact_task_row({"strategy_params": {"hmm_model_version_id": "snap_001"}})
+    assert unknown["hmm_enabled"] is None
+    assert unknown["hmm_status"] == "unknown"
+
+
+def test_compact_task_row_hmm_status_uses_explicit_loop_enablement_only():
+    from backend.services.quantevolver.payload_summary import compact_task_row
+
+    mixed = compact_task_row(
+        {
+            "strategy_evo_config": {
+                "template_hmm_model_version_id": "not_enablement",
+                "loops": [
+                    {"enable_sector_hmm": False},
+                    {"enable_sector_hmm": True},
+                ],
+            }
+        }
+    )
+    assert mixed["hmm_enabled"] is None
+    assert mixed["hmm_status"] == "mixed"

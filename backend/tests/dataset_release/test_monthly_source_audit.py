@@ -1,0 +1,262 @@
+from __future__ import annotations
+
+from datetime import date
+
+import pytest
+
+from backend.services.dataset_release.monthly_source_audit import (
+    MonthlySourceAuditError,
+    SourceGateEvidence,
+    TypedGap,
+    classify_adj_factor_change,
+    close_source_audit,
+    cn_a_share_minute_labels,
+    validate_daily_basic_rows,
+    validate_daily_rows,
+    validate_daily_minute_parity,
+    validate_six_pool_market_coverage,
+    validate_trading_calendar,
+)
+from backend.services.dataset_release.monthly_unified import SOURCE_GATES
+
+
+def test_user_deferred_margin_is_not_provider_absence_or_generic_exception():
+    from backend.services.dataset_release.monthly_frozen_source_audit import GateCounter, audit_margin_publication
+    counter = GateCounter("financial_moneyflow")
+    audit_margin_publication(day=date(2026, 9, 30), rows=[], receipt={}, gate=counter,
+                             deferred_authority_sha256="a" * 64)
+    assert counter.expected_count == counter.explained_count == 1
+    assert counter.missing_count == counter.invalid_count == 0
+    assert counter.exceptions[0].reason_code == "USER_DEFERRED_COLLECTION"
+    assert counter.exceptions[0].start == counter.exceptions[0].end == "2026-09-30"
+    ordinary = GateCounter("financial_moneyflow")
+    audit_margin_publication(day=date(2026, 9, 29), rows=[], receipt={}, gate=ordinary)
+    assert ordinary.missing_count == 1
+
+
+SHA = "a" * 64
+
+
+@pytest.mark.parametrize("reference,expected_invalid", [(15.3, 0), (None, 1), (float("nan"), 1), (float("inf"), 1), (20, 1)])
+def test_target_month_limit_reference_uses_the_shared_daily_contract(reference, expected_invalid):
+    from backend.services.dataset_release.monthly_frozen_source_audit import GateCounter, audit_month_rows
+    day = date(2026, 5, 8)
+    symbol = "001205.SZ"
+    gates = {name: GateCounter(name) for name in SOURCE_GATES}
+    rows = {"stk_limit": [
+        {"ts_code": symbol, "trade_date": day, "pre_close": reference, "up_limit": 16.83, "down_limit": 13.77},
+        # Unrelated old-month invalid rows must not widen a monthly audit.
+        {"ts_code": symbol, "trade_date": date(2026, 4, 30), "pre_close": None},
+    ]}
+    audit_month_rows(rows, sessions=(day,), pools={"stock_universe": {day: {symbol}}},
+                     gates=gates, authority_sha256=SHA, minute_start=date(2027, 1, 1))
+    gate = gates["suspend_limit"]
+    assert gate.expected_count == 1
+    assert gate.invalid_count == expected_invalid
+
+
+def test_target_month_preserves_authoritative_full_day_suspension_missing_fact():
+    from backend.services.dataset_release.monthly_frozen_source_audit import GateCounter, audit_month_rows
+    day = date(2026, 5, 8)
+    gates = {name: GateCounter(name) for name in SOURCE_GATES}
+    rows = {"stk_limit": [],
+            "suspend_d": [{"ts_code": "001205.SZ", "trade_date": day, "suspend_type": "S", "suspend_timing": None}]}
+    audit_month_rows(rows, sessions=(day,), pools={"stock_universe": {day: {"001205.SZ"}}},
+                     gates=gates, authority_sha256=SHA, minute_start=date(2027, 1, 1))
+    assert gates["suspend_limit"].explained_count == 1
+    assert gates["suspend_limit"].invalid_count == 0
+    assert rows["stk_limit"] == []  # No fabricated quote for a full-day suspension.
+
+
+def _gate(name: str, snapshot: str = "snapshot-1", *, observed: int = 2, unexplained: int = 0) -> SourceGateEvidence:
+    return SourceGateEvidence(
+        gate=name,
+        snapshot_group_id=snapshot,
+        expectation_contract_ref=f"contracts/{name}.json",
+        readback_ref=f"readbacks/{name}.json",
+        expected_count=observed + unexplained,
+        observed_count=observed,
+        unexplained_missing_count=unexplained,
+    )
+
+
+def test_source_audit_requires_all_gates_from_one_snapshot() -> None:
+    gates = [_gate(name) for name in SOURCE_GATES]
+    receipt = close_source_audit(
+        cutoff=date(2026, 9, 30),
+        predecessor_cutoff=date(2026, 8, 31),
+        gates=gates,
+        changes=[],
+    )
+    assert receipt["unexplained_gap_count"] == 0
+    assert receipt["database_write_performed"] is False
+    first = receipt["gates"][SOURCE_GATES[0]]
+    assert first["schema_version"] == "aistock_monthly_source_gate_v2"
+    assert first["status"] == "PASS"
+    mixed = list(gates)
+    mixed[-1] = _gate(SOURCE_GATES[-1], "snapshot-2")
+    with pytest.raises(MonthlySourceAuditError, match="different snapshots"):
+        close_source_audit(
+            cutoff=date(2026, 9, 30),
+            predecessor_cutoff=date(2026, 8, 31),
+            gates=mixed,
+            changes=[],
+        )
+
+
+def test_source_audit_fails_closed_on_unexplained_gap() -> None:
+    gates = [_gate(name) for name in SOURCE_GATES]
+    gates[0] = _gate(SOURCE_GATES[0], observed=1, unexplained=1)
+    with pytest.raises(MonthlySourceAuditError, match="blocking"):
+        close_source_audit(
+            cutoff=date(2026, 9, 30),
+            predecessor_cutoff=date(2026, 8, 31),
+            gates=gates,
+            changes=[],
+        )
+
+
+def test_minute_contract_uses_240_close_labels_and_cross_checks_daily() -> None:
+    labels = cn_a_share_minute_labels(date(2026, 9, 30))
+    assert len(labels) == 240
+    assert labels[0].strftime("%H:%M") == "09:31"
+    assert labels[119].strftime("%H:%M") == "11:30"
+    assert labels[120].strftime("%H:%M") == "13:01"
+    rows = [
+        {
+            "datetime": stamp,
+            "open": 10.0,
+            "high": 10.0,
+            "low": 10.0,
+            "close": 10.0,
+            "vol": 1.0,
+            "amount": 10.0,
+        }
+        for stamp in labels
+    ]
+    result = validate_daily_minute_parity(
+        symbol="000001.SZ",
+        trade_date=date(2026, 9, 30),
+        daily={"open": 10, "high": 10, "low": 10, "close": 10, "vol": 240, "amount": 2400},
+        minute_rows=rows,
+        suspended=False,
+    )
+    assert result["bar_count"] == 240
+    rows[120] = {**rows[120], "datetime": "2026-09-30 13:00:00"}
+    with pytest.raises(MonthlySourceAuditError, match="non-session"):
+        validate_daily_minute_parity(
+            symbol="000001.SZ",
+            trade_date=date(2026, 9, 30),
+            daily={"open": 10, "high": 10, "low": 10, "close": 10, "vol": 240, "amount": 2400},
+            minute_rows=rows,
+            suspended=False,
+        )
+
+
+def test_daily_basic_checks_rows_and_all_required_fields() -> None:
+    rows = [
+        {"ts_code": "000001.SZ", "turnover_rate": 1.0, "turnover_rate_f": 1.1, "volume_ratio": 0.9},
+        {"ts_code": "000002.SZ", "turnover_rate": 2.0, "turnover_rate_f": 2.1, "volume_ratio": None},
+    ]
+    with pytest.raises(MonthlySourceAuditError, match="fields=1"):
+        validate_daily_basic_rows(expected_symbols=("000001.SZ", "000002.SZ"), rows=rows)
+    result = validate_daily_basic_rows(
+        expected_symbols=("000001.SZ", "000002.SZ"),
+        rows=rows,
+        nullable={
+            ("000002.SZ", "volume_ratio"): TypedGap(
+                dataset="daily_basic",
+                symbol="000002.SZ",
+                start="2026-09-30",
+                end="2026-09-30",
+                field="volume_ratio",
+                reason_code="SOURCE_NOT_APPLICABLE",
+                authority_sha256=SHA,
+            )
+        },
+    )
+    assert result["gap_count"] == 0
+
+
+def test_adj_change_classification_distinguishes_tail_rebase_and_restatement() -> None:
+    old = {date(2026, 8, 29): 1.0, date(2026, 8, 30): 1.1}
+    tail = {**old, date(2026, 8, 31): 1.2}
+    assert classify_adj_factor_change(symbol="000001.SZ", old=old, new=tail, receipt_sha256=SHA).kind == "TAIL_APPEND"
+    rebased = {date(2026, 8, 29): 2.0, date(2026, 8, 30): 2.2, date(2026, 8, 31): 2.4}
+    assert (
+        classify_adj_factor_change(symbol="000001.SZ", old=old, new=rebased, receipt_sha256=SHA).kind
+        == "ADJ_DENOMINATOR_CHANGE"
+    )
+    restated = {date(2026, 8, 29): 1.0, date(2026, 8, 30): 1.2, date(2026, 8, 31): 1.3}
+    assert (
+        classify_adj_factor_change(symbol="000001.SZ", old=old, new=restated, receipt_sha256=SHA).kind
+        == "ADJ_HISTORY_RESTATEMENT"
+    )
+
+
+def test_daily_and_six_pool_contract_preserves_delisted_history() -> None:
+    sessions = (date(2026, 9, 29), date(2026, 9, 30))
+    assert validate_trading_calendar(sessions=sessions, cutoff=sessions[-1])["session_count"] == 2
+    rows = [
+        {
+            "ts_code": "000001.SZ",
+            "trade_date": sessions[0],
+            "open": 10.0,
+            "high": 10.5,
+            "low": 9.8,
+            "close": 10.2,
+            "pre_close": 10.0,
+            "vol": 100.0,
+            "amount": 1020.0,
+        }
+    ]
+    exception = TypedGap(
+        dataset="kline_daily_raw",
+        symbol="000001.SZ",
+        start=sessions[1].isoformat(),
+        end=sessions[1].isoformat(),
+        field="ohlcv",
+        reason_code="SUSPEND_FULL_DAY",
+        authority_sha256=SHA,
+    )
+    result = validate_daily_rows(
+        expected_keys=(("000001.SZ", value) for value in sessions),
+        rows=rows,
+        explained_absences={("000001.SZ", sessions[1]): exception},
+    )
+    assert result["explained_missing_count"] == 1
+    spans = [("000001.SZ", sessions[0], sessions[1])]
+    coverage = validate_six_pool_market_coverage(
+        pools={
+            name: spans
+            for name in ("stock_universe", "csi300", "csi500", "csi1000", "star50", "star100")
+        },
+        sessions=sessions,
+        daily_keys=(("000001.SZ", sessions[0]),),
+        minute_keys=(("000001.SZ", sessions[0]),),
+        suspended_keys=(("000001.SZ", sessions[1]),),
+        minute_start=sessions[0],
+    )
+    assert all(item["day_gap_count"] == 0 for item in coverage.values())
+
+
+def test_typed_exception_cannot_be_free_text_or_unpinned() -> None:
+    with pytest.raises(ValueError, match="not registered"):
+        TypedGap(
+            dataset="daily_basic",
+            symbol="000001.SZ",
+            start="2026-09-30",
+            end="2026-09-30",
+            field="volume_ratio",
+            reason_code="IGNORE",
+            authority_sha256=SHA,
+        )
+    with pytest.raises(ValueError, match="authority"):
+        TypedGap(
+            dataset="daily_basic",
+            symbol="000001.SZ",
+            start="2026-09-30",
+            end="2026-09-30",
+            field="volume_ratio",
+            reason_code="SOURCE_NOT_APPLICABLE",
+        )

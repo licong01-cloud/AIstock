@@ -1,0 +1,256 @@
+{
+  "actual": "The approved SW L2 rotation file-only preflight on active v14 fails at 2026-01-16/688005.SH because rotation_l2_input treats only null suspend_timing as full-day. The existing HMM/global suspension contract treats suspend_type=S with null/blank or 09:30-09:30 as full-day. L2 therefore incorrectly requires absent Qlib amount and provider authority instead of excluding the full-day suspended member. Fix only HMM L2 input and direct tests; preserve PIT denominator, provider-absence fail-closed semantics, zero-fit/effect contracts, and do not modify data or runtime.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/rotation_l2_input.py",
+    "backend/tests/hmm_risk/test_rotation_l2_input.py",
+    "tests/aistock_validation/bugs/20260922_BUG-1608-hmm-l2-reader-misclassifies-09-30-09-30-suspension-as-partial-day.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1608",
+  "closed_at": "2026-10-02T12:17:09.545491Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-22T19:38:58.796306Z",
+  "description": "The approved SW L2 rotation file-only preflight on active v14 fails at 2026-01-16/688005.SH because rotation_l2_input treats only null suspend_timing as full-day. The existing HMM/global suspension contract treats suspend_type=S with null/blank or 09:30-09:30 as full-day. L2 therefore incorrectly requires absent Qlib amount and provider authority instead of excluding the full-day suspended member. Fix only HMM L2 input and direct tests; preserve PIT denominator, provider-absence fail-closed semantics, zero-fit/effect contracts, and do not modify data or runtime.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260922-58e15c8431c4",
+      "timestamp": "2026-09-22T19:38:58.796289Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "The L2 frozen reader must apply the existing full-day suspension contract to suspend_type=S with null, blank, or 09:30-09:30 timing, exclude those members from required amount/moneyflow contributors while retaining the PIT membership denominator, and continue to fail closed for partial-day or unknown source absence.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/rotation_l2_input.py",
+      "backend/tests/hmm_risk/test_rotation_l2_input.py",
+      "tests/aistock_validation/bugs/20260922_BUG-1608-hmm-l2-reader-misclassifies-09-30-09-30-suspension-as-partial-day.json"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/rotation_l2_input.py",
+        "backend/tests/hmm_risk/test_rotation_l2_input.py",
+        "tests/aistock_validation/bugs/20260922_BUG-1608-hmm-l2-reader-misclassifies-09-30-09-30-suspension-as-partial-day.json"
+      ],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [
+        "backend/services/hmm_risk/rotation_l2_input.py",
+        "backend/tests/hmm_risk/test_rotation_l2_input.py",
+        "tests/aistock_validation/bugs/20260922_BUG-1608-hmm-l2-reader-misclassifies-09-30-09-30-suspension-as-partial-day.json"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_risk/rotation_l2_input.py",
+      "backend/tests/hmm_risk/test_rotation_l2_input.py",
+      "tests/aistock_validation/bugs/20260922_BUG-1608-hmm-l2-reader-misclassifies-09-30-09-30-suspension-as-partial-day.json"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/rotation_l2_input.py",
+      "backend/tests/hmm_risk/test_rotation_l2_input.py",
+      "tests/aistock_validation/bugs/20260922_BUG-1608-hmm-l2-reader-misclassifies-09-30-09-30-suspension-as-partial-day.json"
+    ]
+  },
+  "first_seen_at": "2026-09-22T19:38:58.796306Z",
+  "fix_branch": null,
+  "fix_commit": "e158171da4fb4e873e193dd24643c8cb857a7c7e",
+  "fixed_at": "2026-09-23T02:06:38Z",
+  "github_issue_number": 5067,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5067",
+  "last_seen_at": "2026-09-22T19:38:58.796306Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5068",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/hmm_risk/test_rotation_l2_input.py -q",
+  "required_verification": [
+    "l0",
+    "hmm_risk_ui"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/latest",
+    "fresh_process_evidence": [
+      "python -c import backend.routers.hmm_risk; import backend.routers.health; import backend.services.hmm_risk.rotation_l2_input -> passed in AIstock-CI fresh process"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1608/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1608",
+      "business_smoke_semantic": {
+        "contract_id": "hmm_rotation_l2_overview",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "d2bf34010849411b1f7b4bd12d3df5a79319ecabfe512b17a39a0672896d3939",
+      "contract_digest": "a58f2386cbc41e16fdd645269cd5e80f64f4543c61df4d94612ca20006e53607",
+      "expected_identity": "e158171da4fb4e873e193dd24643c8cb857a7c7e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-02T12:15:54.698157Z",
+      "mode": "read_only",
+      "observed_identity": "959f037c0296e8587461922b68808fc1c454c4d9",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "cfb040ec6c3ece3956a1df18ce61b5abeea4c4ae662782096bac6f25dd78e507",
+      "receipt_sha256": "9901de9be80ae1fad044f33ba5bf9ac1668ebada5c17c3aa6d89bb7b8ddb09cb",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "59452b603d462d483988b6aaee2aca519dd757de01e9525b3d358941f4f9a3b3",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": true,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM L2 reader misclassifies 09:30-09:30 suspension as partial-day",
+  "trigger_condition": {
+    "fingerprint": "58e15c8431c4a01f210cb2f6",
+    "source_event_id": "FE-20260922-58e15c8431c4"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -> passed, blocking=0; validation-receipt c2cd2e1a71d26e3b bound to 9f45a7db54f45b8eefb5e2d77170d264a5eabb57"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk"
+      ],
+      "plans": [
+        "hmm_risk_ui"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk"
+        ],
+        "plans": [
+          "hmm_risk_ui"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

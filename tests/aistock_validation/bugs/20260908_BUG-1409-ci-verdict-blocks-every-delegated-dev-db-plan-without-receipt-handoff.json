@@ -1,0 +1,245 @@
+{
+  "actual": "The PR CI verdict unconditionally fails whenever dev_db_required=true, although the active standard says delegated DEV-DB plans are external validation and not a CI merge gate. Preserve classifier reporting and DEV safety, stop treating the requirement boolean as a CI failure, and enforce any required durable DEV receipt at the appropriate feature/issue finish boundary without CI database access.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260908_BUG-1409-ci-verdict-blocks-every-delegated-dev-db-plan-without-receipt-handoff.json",
+    ".github/workflows/test.yml",
+    "scripts/ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1409",
+  "closed_at": "2026-09-08T15:10:23Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-08T14:56:25.770372Z",
+  "description": "The PR CI verdict unconditionally fails whenever dev_db_required=true, although the active standard says delegated DEV-DB plans are external validation and not a CI merge gate. Preserve classifier reporting and DEV safety, stop treating the requirement boolean as a CI failure, and enforce any required durable DEV receipt at the appropriate feature/issue finish boundary without CI database access.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260908-5c72c27eab76",
+      "timestamp": "2026-09-08T14:56:25.770359Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "Codex",
+      "note": "Bound the repair to the PR verdict, its policy evidence, and the direct workflow-policy regression test after reproducing the unconditional DEV-DB failure.",
+      "timestamp": "2026-09-08T15:00:00Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "PR CI reports delegated DEV-DB requirements without treating them as an executed CI lane failure; external DEV evidence remains independently enforced by the applicable delivery or production gate.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260908_BUG-1409-ci-verdict-blocks-every-delegated-dev-db-plan-without-receipt-handoff.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "scripts/ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20260908_BUG-1409-ci-verdict-blocks-every-delegated-dev-db-plan-without-receipt-handoff.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-09-08T14:56:25.770372Z",
+  "fix_branch": null,
+  "fix_commit": "58b57b571966f79ce79c1cc242eec2c27770fe19",
+  "fixed_at": "2026-09-08T15:10:23Z",
+  "github_issue_number": 4454,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4454",
+  "last_seen_at": "2026-09-08T14:56:25.770372Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4455",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py::test_ci_verdict_owns_workflow_validation_and_fails_closed -q",
+  "required_verification": [
+    "l0",
+    "validation_center_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1409",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5161e6b7edd7f0b4",
+    "recorded_at": "2026-09-08T15:12:04.633845Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "72bd632b0e97fb0e6cf0894a87c65a81a6471e1e",
+    "source_merge_commit": "58b57b571966f79ce79c1cc242eec2c27770fe19",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4455",
+    "validation_evidence": [
+      "python -m nox -s validation_module_registry_l0 --no-error-on-missing-interpreters -> passed (8 passed; ownership 14/14)",
+      "python -m nox -s guardrail_changed_files --no-error-on-missing-interpreters -- --changed-only -> passed (blocking=0; ownership 4/4)",
+      "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -q -> passed (19 passed)"
+    ],
+    "validation_evidence_digest": "05217166bf5ef46e0c534ea7ca12d38e7a9641f5e94c179fead7e9b2fceb35d1"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "CI verdict blocks every delegated DEV-DB plan without receipt handoff",
+  "trigger_condition": {
+    "fingerprint": "5c72c27eab76729fb97d806e",
+    "source_event_id": "FE-20260908-5c72c27eab76"
+  },
+  "validation_evidence": [
+    "python -m nox -s validation_module_registry_l0 --no-error-on-missing-interpreters -> passed (8 passed; ownership 14/14)",
+    "python -m nox -s guardrail_changed_files --no-error-on-missing-interpreters -- --changed-only -> passed (blocking=0; ownership 4/4)",
+    "python -m pytest backend/tests/scripts/test_ci_workflow_policy_scan.py -q -> passed (19 passed)"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

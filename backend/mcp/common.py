@@ -49,10 +49,7 @@ def sanitize_identifier(value: Any, name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"{name} must be a non-empty string; got {value!r}")
     if not IDENTIFIER_PATTERN.match(value):
-        raise ValueError(
-            f"{name} contains illegal characters: {value!r}; "
-            "only [A-Za-z0-9_.-] allowed"
-        )
+        raise ValueError(f"{name} contains illegal characters: {value!r}; only [A-Za-z0-9_.-] allowed")
     return value
 
 
@@ -166,7 +163,9 @@ class AIstockApiClient:
     ) -> None:
         self.base_url = assert_loopback_url(base_url, env_name=env_name)
         self.env_name = env_name
-        self.timeout = float(timeout if timeout is not None else os.environ.get("AISTOCK_HTTP_TIMEOUT", DEFAULT_TIMEOUT))
+        self.timeout = float(
+            timeout if timeout is not None else os.environ.get("AISTOCK_HTTP_TIMEOUT", DEFAULT_TIMEOUT)
+        )
         self.unwrap_data = unwrap_data
         self._transport = transport
         self.max_response_bytes = (
@@ -191,12 +190,39 @@ class AIstockApiClient:
         json_body: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
     ) -> Any:
+        return self._request(method, path, json_body=json_body, params=params, headers=None)
+
+    def request_with_headers(
+        self,
+        method: str,
+        path: str,
+        *,
+        headers: dict[str, str],
+        json_body: dict[str, Any] | None = None,
+        params: dict[str, Any] | None = None,
+    ) -> Any:
+        """Send one explicitly authenticated gateway request."""
+
+        if not headers:
+            raise ValueError("request_with_headers requires non-empty headers")
+        return self._request(method, path, json_body=json_body, params=params, headers=headers)
+
+    def _request(
+        self,
+        method: str,
+        path: str,
+        *,
+        json_body: dict[str, Any] | None,
+        params: dict[str, Any] | None,
+        headers: dict[str, str] | None,
+    ) -> Any:
         with self._client() as client:
             response = client.request(
                 method.upper(),
                 path,
                 params=_clean_params(params),
                 json=json_body if json_body is not None else None,
+                headers=headers,
             )
         return self._decode(response, method.upper(), path)
 
@@ -226,8 +252,7 @@ class AIstockApiClient:
         if response.status_code >= 400:
             body = _body_excerpt(response)
             raise RuntimeError(
-                f"{method} {path} failed with HTTP {response.status_code}: "
-                f"response body excerpt={body!r}"
+                f"{method} {path} failed with HTTP {response.status_code}: response body excerpt={body!r}"
             )
         content = response.content
         original_bytes = len(content)

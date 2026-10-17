@@ -18,6 +18,7 @@ from .api_models import (
     HistoricalRangeRefreshOutcomesRequest,
 )
 from .canonical import canonical_json_sha256
+from .comparison import build_historical_range_comparison
 from .dataset_bridge import (
     HistoricalRangeDatasetBridgeApplicationService,
     HistoricalRangeDatasetBridgeArtifactV1,
@@ -57,6 +58,7 @@ from .outcome_service import HistoricalRangeOutcomeApplicationService
 from .planning_service import PLANNING_PRODUCER_CONTRACT_VERSION, HistoricalRangePlanningService
 from .query_repository import (
     HistoricalRangeNotFoundError,
+    HistoricalRangeQueryError,
     PostgresHistoricalRangeQueryRepository,
 )
 from .repository import PostgresHistoricalRangeRepository
@@ -294,10 +296,13 @@ class ResponseBoundHistoricalRangeDispatcher:
                     expected_batch_row_version=int(payload["expected_row_version"]),
                 )
             elif command == "REFRESH_OUTCOMES":
-                plan = runtime.outcome_requests.build(
-                    batch_id,
-                    HistoricalRangeRefreshOutcomesRequest.model_validate(payload["command_payload"]),
-                )
+                api_request = HistoricalRangeRefreshOutcomesRequest.model_validate(payload["command_payload"])
+                frozen_plan = payload.get("domain_plan_payload")
+                if frozen_plan is not None:
+                    plan = runtime.outcome_requests.restore_frozen_plan(batch_id, api_request, frozen_plan)
+                else:
+                    # Legacy dispatches are never silently upgraded to a new source.
+                    plan = runtime.outcome_requests.build(batch_id, api_request)
                 stage = "CLAIM_AND_EXECUTION"
                 self._run_outcome_plan(
                     runtime=runtime,
@@ -652,6 +657,12 @@ class ResponseBoundHistoricalRangeDispatcher:
                 http_status=503,
             )
         operation = runtime.query.get_operation_internal(operation_id)
+        if str(operation.get("request_payload_sha256")) != plan.request_hash:
+            raise HistoricalRangeServiceError(
+                "ADVISORY_HR_OUTCOME_COMMAND_IDENTITY_CONFLICT",
+                "outcome command differs from its registered frozen request",
+                http_status=409,
+            )
         if operation["status"] in {
             HistoricalRangeOperationStatus.COMPLETED.value,
             HistoricalRangeOperationStatus.FAILED.value,
@@ -674,6 +685,19 @@ class ResponseBoundHistoricalRangeDispatcher:
             lease_duration=_OUTCOME_PARENT_LEASE_DURATION,
         )
         parent_heartbeat.start()
+        try:
+            self._execute_claimed_outcome_plan(
+                runtime=runtime, plan=plan, operation_id=operation_id,
+                batch_id=batch_id, worker_id=worker_id, claimed=claimed,
+                parent_heartbeat=parent_heartbeat,
+            )
+        finally:
+            parent_heartbeat.stop()
+
+    @staticmethod
+    def _execute_claimed_outcome_plan(
+        *, runtime, plan, operation_id, batch_id, worker_id, claimed, parent_heartbeat,
+    ) -> None:
         outcome_refs: dict[str, HistoricalRangeArtifactRefV1] = {}
         summary_refs: dict[str, HistoricalRangeArtifactRefV1] = {}
         receipts = []
@@ -776,8 +800,9 @@ class ResponseBoundHistoricalRangeDispatcher:
                     (*aggregate.outcome_refs, *aggregate.summary_refs)
                 ),
             )
-        finally:
-            claimed = parent_heartbeat.stop()
+        except BaseException:
+            parent_heartbeat.stop()
+            raise
         finished_at = datetime.now(UTC)
         error_json = (
             {
@@ -789,7 +814,10 @@ class ResponseBoundHistoricalRangeDispatcher:
                     else "DomainSubOperationFailure"
                 ),
             }
-            if target_status is HistoricalRangeOperationStatus.FAILED
+            if target_status in {
+                HistoricalRangeOperationStatus.FAILED,
+                HistoricalRangeOperationStatus.RETRYABLE_FAILED,
+            }
             else None
         )
         attempt = HistoricalRangeOperationAttemptV1(
@@ -817,21 +845,27 @@ class ResponseBoundHistoricalRangeDispatcher:
             started_at=claimed.get("started_at") or finished_at,
             finished_at=finished_at,
         )
-        runtime.repository.transition_operation(
-            operation_id=operation_id,
-            expected_row_version=int(claimed["row_version"]),
-            target_status=target_status,
-            attempt_no=int(claimed["attempt_no"]),
-            fencing_token=int(claimed["fencing_token"]),
-            result_status=receipt_status,
-            result_ref=stored.ref if target_status in {
-                HistoricalRangeOperationStatus.COMPLETED,
-                HistoricalRangeOperationStatus.FAILED,
-                HistoricalRangeOperationStatus.WAITING_INPUT,
-            } else None,
-            error_json=error_json,
-            attempt=attempt,
-        )
+        try:
+            runtime.repository.transition_operation(
+                operation_id=operation_id,
+                expected_row_version=int(claimed["row_version"]),
+                target_status=target_status,
+                attempt_no=int(claimed["attempt_no"]),
+                fencing_token=int(claimed["fencing_token"]),
+                result_status=(
+                    None if target_status is HistoricalRangeOperationStatus.RETRYABLE_FAILED else receipt_status
+                ),
+                result_ref=stored.ref if target_status in {
+                    HistoricalRangeOperationStatus.COMPLETED,
+                    HistoricalRangeOperationStatus.FAILED,
+                    HistoricalRangeOperationStatus.WAITING_INPUT,
+                } else None,
+                error_json=error_json,
+                attempt=attempt,
+                finalize_lease=parent_heartbeat.stop,
+            )
+        finally:
+            parent_heartbeat.stop()
 
     @staticmethod
     def _claim_outcome_parent(
@@ -1126,6 +1160,36 @@ class HistoricalRangeApplicationService:
     def get_run(self, range_run_id: str) -> dict[str, Any]:
         return self._query_runtime_factory().query.get_run(range_run_id)
 
+    def compare_runs(
+        self,
+        *,
+        batch_id: str,
+        baseline_range_run_id: str,
+        candidate_range_run_id: str,
+    ) -> dict[str, Any]:
+        if baseline_range_run_id == candidate_range_run_id:
+            raise HistoricalRangeQueryError(
+                "ADVISORY_HR_COMPARISON_RUNS_NOT_DISTINCT",
+                "baseline and candidate historical-range runs must be different",
+                context={"range_run_id": baseline_range_run_id},
+            )
+        facts = self._query_runtime_factory().query.get_comparison_facts(
+            (baseline_range_run_id, candidate_range_run_id)
+        )
+        by_id = {str(item.get("range_run_id")): item for item in facts}
+        for range_run_id in (baseline_range_run_id, candidate_range_run_id):
+            if range_run_id not in by_id:
+                raise HistoricalRangeNotFoundError(
+                    "ADVISORY_HR_RESOURCE_NOT_FOUND",
+                    "historical-range run does not exist",
+                    context={"run_id": range_run_id},
+                )
+        return build_historical_range_comparison(
+            batch_id=batch_id,
+            baseline=by_id[baseline_range_run_id],
+            candidate=by_id[candidate_range_run_id],
+        )
+
     def list_days(self, range_run_id: str, **kwargs: Any) -> dict[str, Any]:
         return self._query_runtime_factory().query.list_days(range_run_id=range_run_id, **kwargs)
 
@@ -1288,7 +1352,14 @@ class HistoricalRangeApplicationService:
     ) -> dict[str, Any]:
         runtime = self._mutation_runtime_factory()
         batch = runtime.query.get_batch(batch_id)
-        command_plan = runtime.outcome_requests.build(batch_id, request)
+        frozen_builder = getattr(runtime.outcome_requests, "build_frozen", None)
+        if frozen_builder is not None and runtime.artifact_store is not None:
+            command_plan = frozen_builder(
+                batch_id, request, artifact_store=runtime.artifact_store,
+                resolved_request_hash=runtime.query.resolved_request_hash(batch_id),
+            )
+        else:
+            command_plan = runtime.outcome_requests.build(batch_id, request)
         operation, exact_retry = _persist_domain_operation(
             runtime=runtime,
             batch_id=batch_id,
@@ -1306,6 +1377,10 @@ class HistoricalRangeApplicationService:
                     "batch_id": batch_id,
                     "operation_id": operation["operation_id"],
                     "command_payload": request.model_dump(mode="json"),
+                    "domain_plan_payload": {
+                        "request_hash": command_plan.request_hash,
+                        "requests": [item.model_dump(mode="json") for item in command_plan.requests],
+                    } if frozen_builder is not None else None,
                 },
             )
         return _mutation_response(batch=batch, operation=operation, exact_retry=exact_retry, dispatch_state=("SCHEDULED" if scheduled else "NOT_SCHEDULED"))

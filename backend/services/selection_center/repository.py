@@ -10,7 +10,14 @@ import psycopg2.extras
 from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import DataUnavailableError, RuntimeConfigInvalidError
 
-from .models import SelectionCandidate, SelectionExclusion, SelectionMode, SelectionPaperPortfolioLink, SelectionRun, SelectionRunStatus
+from .models import (
+    SelectionCandidate,
+    SelectionExclusion,
+    SelectionMode,
+    SelectionRun,
+    SelectionRunStatus,
+    SelectionSimulationAccountLink,
+)
 from .price_guidance import guidance_fields_from_component_scores
 from .result_enrichment import component_scores_with_display_fields, display_fields_from_component_scores
 
@@ -364,7 +371,9 @@ class SelectionCenterRepository:
             completed_at=row["completed_at"],
         )
 
-    def create_paper_portfolio_link(self, link: SelectionPaperPortfolioLink) -> SelectionPaperPortfolioLink:
+    def create_simulation_account_link(
+        self, link: SelectionSimulationAccountLink
+    ) -> SelectionSimulationAccountLink:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -377,7 +386,7 @@ class SelectionCenterRepository:
                     """,
                     (
                         link.run_id,
-                        link.portfolio_id,
+                        link.simulation_account_id,
                         link.package_id,
                         link.manifest_sha256,
                         link.trade_date,
@@ -391,12 +400,13 @@ class SelectionCenterRepository:
                 row = cur.fetchone()
         return link.model_copy(update={"link_id": int(row[0]) if row else None})
 
-    def list_paper_portfolio_links(self, run_id: str) -> list[SelectionPaperPortfolioLink]:
+    def list_simulation_account_links(self, run_id: str) -> list[SelectionSimulationAccountLink]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
                     """
-                    SELECT link_id, run_id, portfolio_id, package_id, manifest_sha256,
+                    SELECT link_id, run_id, portfolio_id AS simulation_account_id,
+                           package_id, manifest_sha256,
                            trade_date, data_source, start_date, initial_cash,
                            runtime_config, created_at
                     FROM selection.paper_portfolio_link
@@ -407,10 +417,10 @@ class SelectionCenterRepository:
                 )
                 rows = cur.fetchall()
         return [
-            SelectionPaperPortfolioLink(
+            SelectionSimulationAccountLink(
                 link_id=int(row["link_id"]),
                 run_id=row["run_id"],
-                portfolio_id=row["portfolio_id"],
+                simulation_account_id=row["simulation_account_id"],
                 package_id=row["package_id"],
                 manifest_sha256=row["manifest_sha256"],
                 trade_date=row["trade_date"],
@@ -426,7 +436,7 @@ class SelectionCenterRepository:
     def delete_run(self, run_id: str) -> dict[str, int]:
         self.get_run(run_id)
         counts = {
-            "paper_portfolio_link": 0,
+            "simulation_account_link": 0,
             "excluded_result": 0,
             "aggregate_result": 0,
             "package_result": 0,
@@ -436,7 +446,7 @@ class SelectionCenterRepository:
             with conn.cursor() as cur:
                 for table in ("paper_portfolio_link", "excluded_result", "aggregate_result", "package_result"):
                     cur.execute(f"DELETE FROM selection.{table} WHERE run_id = %s", (run_id,))
-                    counts[table] = cur.rowcount
+                    counts["simulation_account_link" if table == "paper_portfolio_link" else table] = cur.rowcount
                 cur.execute("DELETE FROM selection.run WHERE run_id = %s", (run_id,))
                 counts["run"] = cur.rowcount
         return counts
@@ -457,7 +467,7 @@ class SelectionCenterRepository:
 class InMemorySelectionCenterRepository:
     def __init__(self) -> None:
         self.runs: dict[str, SelectionRun] = {}
-        self.paper_links: list[SelectionPaperPortfolioLink] = []
+        self.account_links: list[SelectionSimulationAccountLink] = []
 
     def create_run(self, run: SelectionRun) -> SelectionRun:
         self.runs[run.run_id] = run
@@ -508,21 +518,23 @@ class InMemorySelectionCenterRepository:
             raise DataUnavailableError("selection run does not exist", context={"run_id": run_id})
         return run
 
-    def create_paper_portfolio_link(self, link: SelectionPaperPortfolioLink) -> SelectionPaperPortfolioLink:
-        stored = link.model_copy(update={"link_id": len(self.paper_links) + 1})
-        self.paper_links.append(stored)
+    def create_simulation_account_link(
+        self, link: SelectionSimulationAccountLink
+    ) -> SelectionSimulationAccountLink:
+        stored = link.model_copy(update={"link_id": len(self.account_links) + 1})
+        self.account_links.append(stored)
         return stored
 
-    def list_paper_portfolio_links(self, run_id: str) -> list[SelectionPaperPortfolioLink]:
-        return [link for link in self.paper_links if link.run_id == run_id]
+    def list_simulation_account_links(self, run_id: str) -> list[SelectionSimulationAccountLink]:
+        return [link for link in self.account_links if link.run_id == run_id]
 
     def delete_run(self, run_id: str) -> dict[str, int]:
         self.get_run(run_id)
-        link_count = len([link for link in self.paper_links if link.run_id == run_id])
-        self.paper_links = [link for link in self.paper_links if link.run_id != run_id]
+        link_count = len([link for link in self.account_links if link.run_id == run_id])
+        self.account_links = [link for link in self.account_links if link.run_id != run_id]
         self.runs.pop(run_id, None)
         return {
-            "paper_portfolio_link": link_count,
+            "simulation_account_link": link_count,
             "excluded_result": 0,
             "aggregate_result": 0,
             "package_result": 0,

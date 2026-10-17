@@ -28,7 +28,7 @@ sequence).
 Authorization
 -------------
 This script connects to the production database (read-only -- pg_dump is
-SELECT-only by definition). Per AIstock cross-tool protocol, the FIRST
+SELECT-only by definition). Per the AIstock development standard, the FIRST
 prod snapshot run requires explicit user authorization. Subsequent runs
 under the nightly cron + the same target dir are pre-authorized.
 
@@ -46,6 +46,9 @@ Usage
 
     # Keep the in-container temp file for inspection
     python scripts/dr_snapshot_prod_db.py --keep-temp
+
+    # Prefer low CPU cost (default level 1); opt back into maximum compression
+    python scripts/dr_snapshot_prod_db.py --compression-level 9
 """
 
 from __future__ import annotations
@@ -57,8 +60,10 @@ import json
 import os
 import subprocess
 import sys
+import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Sequence
+from typing import Iterator, Sequence
 
 ENV_FILE = Path("F:/Dev/AIstock/.env")
 # Canonical snapshot directory. Per Codex Lane A r3 review (drawer
@@ -72,7 +77,7 @@ DEFAULT_DB_USER_INSIDE = "postgres"
 PROD_PORT = 5432
 PROD_DBNAME = "aistock"
 DUMP_FORMAT = "custom"
-DUMP_COMPRESS = "9"
+DUMP_COMPRESS = "1"  # zlib: prioritize Nightly CPU time without changing archive format
 MIN_EXPECTED_DUMP_BYTES = 1024  # anything below this is suspect
 
 
@@ -85,6 +90,11 @@ class SnapshotPlan:
     in_container_path: str
     is_permanent: bool
     snapshot_date: dt.date
+    compression_level: int = int(DUMP_COMPRESS)
+
+    def __post_init__(self) -> None:
+        if type(self.compression_level) is not int or not 0 <= self.compression_level <= 9:
+            raise ValueError("compression_level must be an integer from 0 to 9")
 
 
 def parse_env(env_file: Path = ENV_FILE) -> dict[str, str]:
@@ -139,6 +149,7 @@ def make_plan(
     container: str,
     pg_user: str,
     snapshot_date: dt.date,
+    compression_level: int = int(DUMP_COMPRESS),
 ) -> SnapshotPlan:
     host = cfg.get("TDX_DB_HOST") or "127.0.0.1"
     port = int(cfg.get("TDX_DB_PORT") or PROD_PORT)
@@ -155,6 +166,7 @@ def make_plan(
         in_container_path=in_container_path,
         is_permanent=is_permanent,
         snapshot_date=snapshot_date,
+        compression_level=compression_level,
     )
 
 
@@ -179,7 +191,7 @@ def execute_pg_dump_inside_container(plan: SnapshotPlan) -> None:
         "-d",
         plan.pg_dbname,
         f"--format={DUMP_FORMAT}",
-        f"--compress={DUMP_COMPRESS}",
+        f"--compress={plan.compression_level}",
         "--no-owner",
         "--no-acl",
         f"--file={plan.in_container_path}",
@@ -194,15 +206,15 @@ def copy_dump_out(plan: SnapshotPlan) -> None:
     run(cmd)
 
 
-def cleanup_in_container(plan: SnapshotPlan, keep_temp: bool) -> None:
+def cleanup_in_container(plan: SnapshotPlan, keep_temp: bool) -> bool:
     if keep_temp:
-        return
+        return True
     cmd = ["docker", "exec", plan.container, "rm", "-f", plan.in_container_path]
-    run(cmd, check=False)  # cleanup failure is non-fatal
+    return run(cmd, check=False).returncode == 0  # non-fatal, but visible in receipt
 
 
 def validate_dump(plan: SnapshotPlan) -> dict[str, object]:
-    """Run pg_restore --list against the produced dump and return summary."""
+    """Check TOC structure, not compressed payload integrity or restorability."""
     if not plan.target_path.exists():
         raise SystemExit(f"FATAL: dump not found at {plan.target_path} after docker cp")
     size = plan.target_path.stat().st_size
@@ -215,7 +227,7 @@ def validate_dump(plan: SnapshotPlan) -> dict[str, object]:
     # streaming via stdin is simpler and avoids round-tripping the file.
     list_cmd = ["docker", "exec", "-i", plan.container, "pg_restore", "--list"]
     with plan.target_path.open("rb") as fh:
-        proc = subprocess.run(list_cmd, input=fh.read(), capture_output=True, check=True)
+        proc = subprocess.run(list_cmd, stdin=fh, capture_output=True, check=True)
     listing = proc.stdout.decode("utf-8", errors="replace")
     table_lines = [line for line in listing.splitlines() if "TABLE DATA" in line]
     if not table_lines:
@@ -229,7 +241,25 @@ def validate_dump(plan: SnapshotPlan) -> dict[str, object]:
         "table_data_entries": len(table_lines),
         "snapshot_date": plan.snapshot_date.isoformat(),
         "is_permanent": plan.is_permanent,
+        "validation_scope": "toc_structure_only",
+        "toc_checked": True,
+        "archive_payload_verified": False,
+        "restore_exercised": False,
     }
+
+
+@contextmanager
+def measure_stage(name: str, stages: dict[str, dict[str, object]]) -> Iterator[None]:
+    """Emit bounded progress even if a later stage fails; never log credentials."""
+    start = time.perf_counter()
+    status = "failed"
+    print("DR_STAGE " + json.dumps({"stage": name, "status": "started"}), flush=True)
+    try:
+        yield
+        status = "completed"
+    finally:
+        stages[name] = {"status": status, "duration_seconds": round(time.perf_counter() - start, 3)}
+        print("DR_STAGE " + json.dumps({"stage": name, **stages[name]}), flush=True)
 
 
 def render_dry_run(plan: SnapshotPlan) -> str:
@@ -243,6 +273,7 @@ def render_dry_run(plan: SnapshotPlan) -> str:
             f"  target path       : {plan.target_path}",
             f"  is permanent      : {plan.is_permanent}",
             f"  snapshot date     : {plan.snapshot_date.isoformat()}",
+            f"  compression level : {plan.compression_level} (zlib, custom archive)",
         ]
     )
 
@@ -254,6 +285,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--pg-user", default=DEFAULT_DB_USER_INSIDE)
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--keep-temp", action="store_true")
+    p.add_argument("--compression-level", type=int, choices=range(10), default=int(DUMP_COMPRESS),
+                   help="zlib level 0..9; default 1 reduces CPU cost, 9 minimizes archive size")
     p.add_argument(
         "--snapshot-date",
         default=None,
@@ -277,22 +310,38 @@ def main(argv: list[str] | None = None) -> int:
         container=args.container,
         pg_user=args.pg_user,
         snapshot_date=snapshot_date,
+        compression_level=args.compression_level,
     )
     if args.dry_run:
         print(render_dry_run(plan))
         return 0
 
     print(f"DR snapshot starting -> {plan.target_path}")
+    start = time.perf_counter()
+    stages: dict[str, dict[str, object]] = {}
+    summary: dict[str, object] = {}
     try:
-        execute_pg_dump_inside_container(plan)
-        copy_dump_out(plan)
-        summary = validate_dump(plan)
+        with measure_stage("pg_dump", stages):
+            execute_pg_dump_inside_container(plan)
+        with measure_stage("copy", stages):
+            copy_dump_out(plan)
+        with measure_stage("toc", stages):
+            summary = validate_dump(plan)
     finally:
-        cleanup_in_container(plan, keep_temp=args.keep_temp)
-
-    print(json.dumps(summary, indent=2))
-    print("\nIf this is the FIRST prod snapshot of the day, please post a")
-    print("[INFO] cross-tool drawer recording the dump_path + dump_bytes.")
+        try:
+            with measure_stage("cleanup", stages):
+                cleanup_ok = cleanup_in_container(plan, keep_temp=args.keep_temp)
+            if cleanup_ok is False:
+                stages["cleanup"]["status"] = "warning"
+        finally:
+            receipt = {**summary, "schema_version": "aistock_dr_snapshot_receipt_v1",
+                       "dump_path": str(plan.target_path), "snapshot_date": plan.snapshot_date.isoformat(),
+                       "validation_scope": "toc_structure_only", "toc_checked": bool(summary.get("toc_checked")),
+                       "status": "completed" if summary and all(s["status"] != "failed" for s in stages.values()) else "failed",
+                       "stages": stages, "wall_seconds": round(time.perf_counter() - start, 3),
+                       "dump_format": DUMP_FORMAT, "dump_compress": str(plan.compression_level),
+                       "keep_temp": args.keep_temp, "archive_payload_verified": False, "restore_exercised": False}
+            print("DR_SNAPSHOT_RECEIPT " + json.dumps(receipt), flush=True)
     return 0
 
 

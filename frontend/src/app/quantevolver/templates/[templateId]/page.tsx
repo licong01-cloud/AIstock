@@ -3,10 +3,10 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import ErrorPanel from "@/components/paper-v2/ErrorPanel";
-import MetricCard from "@/components/paper-v2/MetricCard";
-import SectionCard from "@/components/paper-v2/SectionCard";
-import StatusBadge from "@/components/paper-v2/StatusBadge";
+import ErrorPanel from "@/components/trading-console/ErrorPanel";
+import MetricCard from "@/components/trading-console/MetricCard";
+import SectionCard from "@/components/trading-console/SectionCard";
+import StatusBadge from "@/components/trading-console/StatusBadge";
 import { shortHash } from "@/lib/paper-v2/format";
 import { QE_LABEL_HORIZONS } from "@/lib/qe-label-horizons";
 import {

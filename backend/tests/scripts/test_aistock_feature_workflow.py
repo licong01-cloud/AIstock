@@ -283,6 +283,29 @@ def test_cli_compact_summary_has_no_raw_payload(tmp_path: Path, capsys) -> None:
     assert "implementation_refs" not in stdout
 
 
+def test_cli_blocks_ci_classifier_failure_before_feature_pr(tmp_path: Path, capsys, monkeypatch) -> None:
+    workflow = _load_module()
+    design = _write(tmp_path / "feature-card.md", VALID_F0_CARD)
+    monkeypatch.setattr(
+        workflow,
+        "_feature_ci_preflight",
+        lambda _root, _changed: {
+            "workflow_gate": "blocked",
+            "classification": "unmapped_code_blocked",
+            "blocking": ["unmapped executable code must declare a direct CI test mapping: backend/new.py"],
+        },
+    )
+
+    exit_code = workflow.main(
+        ["validate", "--design", str(design), "--tier", "F0", "--changed-file", "backend/new.py"]
+    )
+    stdout = capsys.readouterr().out
+
+    assert exit_code == 1
+    assert "ci_classifier_unmapped_code_blocked" in stdout
+    assert "backend/new.py" in stdout
+
+
 def test_classify_task_rejects_non_feature_maintenance_and_future_feature_text() -> None:
     workflow = _load_module()
 
@@ -335,7 +358,7 @@ def test_feature_entrypoint_prompts_keep_non_feature_tasks_off_feature_lane() ->
         encoding="utf-8"
     )
 
-    assert "only for AIstock BUG/GitHub Issue work" in fix_command
-    assert "Use docs, feature, read-only, merge-aftercare, or validation-delegation commands" in fix_command
+    assert "Use this lane for AIstock BUG/GitHub Issue work" in fix_command
+    assert "uses `.claude/commands/aistock-validation-delegation.md`" in fix_command
     assert "Use this skill only for confirmed AIstock feature delivery" in feature_agent
     assert "BUG fixes, workflow policy work, docs cleanup, audits, or generic analysis" in feature_agent

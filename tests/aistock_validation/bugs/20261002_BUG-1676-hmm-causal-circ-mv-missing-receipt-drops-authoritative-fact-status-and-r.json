@@ -1,0 +1,332 @@
+{
+  "actual": "Current missing evidence contains symbol/fields/source_date/staleness only; typed causal cause and history boundary are discarded.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/stock_fact_observation.py",
+    "backend/tests/hmm_risk/test_stock_fact_observation.py",
+    "tests/aistock_validation/bugs/20261002_BUG-1676-hmm-causal-circ-mv-missing-receipt-drops-authoritative-fact-status-and-r.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1676",
+  "closed_at": "2026-10-02T12:11:55.810312Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-02T04:34:20.448598Z",
+  "description": "Current missing evidence contains symbol/fields/source_date/staleness only; typed causal cause and history boundary are discarded.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261002-fffc5f5da4a5",
+      "timestamp": "2026-10-02T04:34:20.448583Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/validation_receipts/BUG-1660-20261002/daily_basic_causal_latest_fact_readback_v2.json"
+  ],
+  "expected": "Missing prev_circ_mv evidence preserves exact supplied fact status, typed reason and source-window lineage. Known warmup NA is not fabricated or promoted to a global model failure; subsequent valid dates recover under existing C-010 semantics. BLOCKED candidate remains rejected.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1676-hmm-causal-circ-mv-missing-receipt-drops-authoritative-fact-status-and-r.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1676-hmm-causal-circ-mv-missing-receipt-drops-authoritative-fact-status-and-r.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/stock_fact_observation.py",
+        "backend/tests/hmm_risk/test_stock_fact_observation.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_risk/stock_fact_observation.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_stock_fact_observation.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/stock_fact_observation.py",
+        "backend/tests/hmm_risk/test_stock_fact_observation.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/stock_fact_observation.py",
+      "backend/tests/hmm_risk/test_stock_fact_observation.py"
+    ]
+  },
+  "first_seen_at": "2026-10-02T04:34:20.448598Z",
+  "fix_branch": null,
+  "fix_commit": "470c78ec6935c88b9d5999ac1d7ff30843bd96eb",
+  "fix_summary": {
+    "active_profile_write": false,
+    "behavior_preserved": "缺数仍为 ObservationCoverageError/NA，保留成员分母；后续真实有效日期恢复。禁止旧值回退、窗口外事实、BLOCKED candidate、补零和默认值。",
+    "database_write": false,
+    "dataset_write": false,
+    "design_compliance": {
+      "no_business_logic_drift": "模型、特征、窗口、seed、阈值、PIT 和 C-010 分母逻辑不变。",
+      "no_silent_error": "source_unavailable/latest-invalid 原因保留；未知权重仍抛错；JSON 严格序列化测试通过。",
+      "no_simplified_delivery": "仅声明缺数原因链修复，不声明 v17 preflight 或正式模型验收通过。",
+      "no_unapproved_gate": "未新增门禁或审批，仅修复现有回执信息保真。"
+    },
+    "persistent_fix": "仅在 prev_circ_mv_cny 缺数时保留已提供的 cause/lineage，将日期规范为 ISO 日期；旧调用者不制造新的 status。",
+    "process_control": false,
+    "remaining_data_boundary": "v17 候选当前 BLOCKED；000792.SZ/2021-08-10 在批准来源窗口内无严格更早 circ_mv 事实。不改写候选或扩大窗口。",
+    "review_rounds": [
+      "第一轮：6 个 cause/lineage RED 用例转 GREEN；正式与 legacy 路径均保留原因，成员不被删除，后续真实权重恢复。",
+      "第二轮：发现 date 回执序列化风险，增加严格 JSON RED 用例并修复至 GREEN；未引入 permissive default 或新业务门禁。",
+      "第三轮：核对最终 diff、消费者、fail-closed、写入范围和 DESIGN-COMPLIANCE-001，未发现阻断问题。"
+    ],
+    "root_cause": "共享 HMM 缺数回执仅保留 source_date/staleness，丢失 reader 提供的 circ_mv fact status、reason 和来源窗口/PIT 边界；原始 date 对象也无法通过严格 JSON 序列化。",
+    "runtime_validation_boundary": "fresh-process 修复点验证与 router/health 导入为源码证据；rotation-l2 overview 为重启后产品回归探针，不冒充缺数回执本身的线上证据。重启及 post-restart 验证待用户。",
+    "training_action": false
+  },
+  "fixed_at": "2026-10-02T11:42:48Z",
+  "github_issue_number": 5257,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5257",
+  "last_seen_at": "2026-10-02T04:34:20.448598Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5259",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/hmm_risk/test_stock_fact_observation.py -q -p no:cacheprovider",
+  "required_verification": [
+    "l0",
+    "hmm_risk_pr_slice"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
+    "fresh_process_evidence": [
+      "PYTHONPATH=BUG-1676 task worktree C:/Users/lc999/miniconda3/python.exe - (PowerShell here-string) -> PASS: stock_fact_observation, backend.routers.hmm_risk and backend.routers.health loaded from own worktree; socket.connect/create_connection and psycopg2.connect poisoned; supplied source_unavailable cause retained and strict JSON readback passed; source SHA256=783b15691d3eec611965c27971e934d9f5c08fde07024da30e5fdcece218809d",
+      "HEAD=1a3c429715e9b0ef7513cd6d3f1bb2fbf9a368e1; AIstock-CI python -I imports stock_fact_observation/formal_state_input/backend.routers.hmm_risk/backend.routers.health own_worktree=true network_database_poison=true PASS; no backend restart"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1676/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1676",
+      "business_smoke_semantic": {
+        "contract_id": "hmm_rotation_l2_overview",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "d2bf34010849411b1f7b4bd12d3df5a79319ecabfe512b17a39a0672896d3939",
+      "contract_digest": "a58f2386cbc41e16fdd645269cd5e80f64f4543c61df4d94612ca20006e53607",
+      "expected_identity": "470c78ec6935c88b9d5999ac1d7ff30843bd96eb",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-02T12:11:19.173878Z",
+      "mode": "read_only",
+      "observed_identity": "959f037c0296e8587461922b68808fc1c454c4d9",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "cfb040ec6c3ece3956a1df18ce61b5abeea4c4ae662782096bac6f25dd78e507",
+      "receipt_sha256": "b262607a057be65525ecb6edf6f3096415dedfac036e1d5d35f44b22b10ef498",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "e58375d48a5ad328d390b0bd17e7d6c96158e335ab740595aae30bdaa6e09490",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1676",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bff77b7e202fc75d",
+    "recorded_at": "2026-10-02T11:44:01.590886Z",
+    "runtime_contract_digest": "d127338b9304968eaac9a57f95160edaf1558c844206f34d3292fdde7b9cd9e9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "54180362e7855ca311a796ab0f0784164ea0d17d",
+    "source_merge_commit": "470c78ec6935c88b9d5999ac1d7ff30843bd96eb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5259",
+    "validation_evidence": [
+      "validation-receipt: id=537c287e7f151aa0 commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_stock_fact_observation.py -k missing_causal_cap -q -p no:cacheprovider` result=`8 passed, 12 deselected`",
+      "validation-receipt: id=61c99ffd8b1b334e commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice --no-venv` result=`PASS; 29 passed`",
+      "validation-receipt: id=5823198ff1e8532a commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`PASS; blocking=0`",
+      "validation-receipt: id=7d7f4dbc644859a4 commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-venv` result=`PASS; 8 passed; mapped=14/14`",
+      "validation-receipt: id=0ba27a965eed86ea commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=diff_check plan=direct status=passed command=`git diff --check` result=`PASS`"
+    ],
+    "validation_evidence_digest": "989917f58327d6bb7a8105cc3fc9c44eccade3c7efb6d59dd46e1243da8c032c"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM causal circ-mv missing receipt drops authoritative fact status and reason",
+  "trigger_condition": {
+    "fingerprint": "fffc5f5da4a557dc0e998b45",
+    "source_event_id": "FE-20261002-fffc5f5da4a5"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=537c287e7f151aa0 commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/hmm_risk/test_stock_fact_observation.py -k missing_causal_cap -q -p no:cacheprovider` result=`8 passed, 12 deselected`",
+    "validation-receipt: id=61c99ffd8b1b334e commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice --no-venv` result=`PASS; 29 passed`",
+    "validation-receipt: id=5823198ff1e8532a commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`PASS; blocking=0`",
+    "validation-receipt: id=7d7f4dbc644859a4 commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 --no-venv` result=`PASS; 8 passed; mapped=14/14`",
+    "validation-receipt: id=0ba27a965eed86ea commit=54180362e7855ca311a796ab0f0784164ea0d17d kind=diff_check plan=direct status=passed command=`git diff --check` result=`PASS`",
+    "python -m pytest backend/tests/hmm_risk/test_stock_fact_observation.py -k missing_causal_cap -q -p no:cacheprovider -> 8 passed, 12 deselected; source HEAD=54180362e7855ca311a796ab0f0784164ea0d17d",
+    "python -m nox -s hmm_risk_pr_slice l0 validation_module_registry_l0 --no-venv -> PASS; source receipts 29 passed, 8 passed, blocking=0 at HEAD=54180362e7855ca311a796ab0f0784164ea0d17d"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

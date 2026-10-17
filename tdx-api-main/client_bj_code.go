@@ -17,6 +17,8 @@ const (
 	UrlBjCodes = "https://www.bse.cn/nqhqController/nqhq_en.do?callback=jQuery3710848510589806625_%d"
 )
 
+var bjHTTPClient = &http.Client{Timeout: 10 * time.Second}
+
 func GetBjCodes() ([]*BjCode, error) {
 	list := []*BjCode(nil)
 	//这个200预防下bug,除非北京上市公司有4000个
@@ -28,11 +30,14 @@ func GetBjCodes() ([]*BjCode, error) {
 
 		list = append(list, ls...)
 		if done {
-			break
+			return list, nil
+		}
+		if len(ls) == 0 {
+			return nil, errors.New("BSE page made no progress")
 		}
 		<-time.After(time.Millisecond * 100)
 	}
-	return list, nil
+	return nil, errors.New("BSE page limit exceeded before source exhausted")
 }
 
 func getBjCodes(page int) (_ []*BjCode, last bool, err error) {
@@ -49,21 +54,24 @@ func getBjCodes(page int) (_ []*BjCode, last bool, err error) {
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=UTF-8")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.39 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := bjHTTPClient.Do(req)
 	if err != nil {
 		return nil, false, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, false, fmt.Errorf("BSE source HTTP %d", resp.StatusCode)
+	}
 
-	bs, err := io.ReadAll(resp.Body)
+	bs, err := io.ReadAll(io.LimitReader(resp.Body, 5*1024*1024+1))
 	if err != nil {
 		return nil, false, err
 	}
 
 	//处理数据
 	i := bytes.IndexByte(bs, '(')
-	if len(bs) < 1 || len(bs) <= i {
-		return nil, false, errors.New("未知错误: " + string(bs))
+	if len(bs) < 1 || i < 0 || i >= len(bs)-1 || len(bs) > 5*1024*1024 || bs[len(bs)-1] != ')' {
+		return nil, false, errors.New("invalid BSE JSONP response")
 	}
 
 	bs = bs[i+1 : len(bs)-1]
@@ -75,7 +83,7 @@ func getBjCodes(page int) (_ []*BjCode, last bool, err error) {
 	}
 
 	if len(ls) == 0 {
-		return nil, false, errors.New("未知错误: " + string(bs))
+		return nil, false, errors.New("empty BSE response envelope")
 	}
 
 	return ls[0].Data, ls[0].LastPage, nil

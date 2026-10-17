@@ -10,11 +10,11 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from math import isfinite
-from statistics import mean, median
 from typing import Any, Callable, Iterable, Mapping, Protocol
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -23,6 +23,23 @@ import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
 from backend.services.advisory_quality import generate_quality_report
+from backend.services.advisory_historical_range.program_performance import (
+    ProgramPerformanceMarketReader,
+    compare_program_outcomes,
+    cost_contract,
+    episode_performance,
+    fixed_five_day_outcomes,
+    net_return,
+    performance_metrics,
+    reporting_cutoff,
+)
+from backend.services.advisory_universe import (
+    AdvisoryUniverseContractError,
+    AdvisoryUniverseResolver,
+    CoreIndexAdvisoryUniverseResolver,
+    build_universe_admission_receipt,
+    normalize_advisory_universe_selection,
+)
 from backend.services.advisory_list_transition import (
     ACTION_ENTER as TRANSITION_ACTION_ENTER,
     ACTION_EXIT as TRANSITION_ACTION_EXIT,
@@ -37,6 +54,7 @@ from backend.services.advisory_list_transition import (
 )
 from backend.services.paper_trading_v2.symbol_names import PaperV2SymbolNameResolver
 from backend.services.selection_center.models import SelectionMode, SelectionRun, SelectionRunStatus
+from backend.services.selection_center.result_enrichment import SELECTION_PRICE_MODE_DAILY_DB_ONLY
 from backend.services.selection_center.service import SelectionCenterService
 from backend.services.trading_calendar_status import TradingCalendarStatusService
 from backend.services.trading_core.errors import (
@@ -98,6 +116,7 @@ BINDING_INTERVAL_SEMANTICS = "LEFT_CLOSED_RIGHT_OPEN"
 REASON_BINDING_EFFECTIVE_DATE_REQUIRED = "ADVISORY_BINDING_EFFECTIVE_DATE_REQUIRED"
 REASON_BINDING_EFFECTIVE_DATE_IN_PAST = "ADVISORY_BINDING_EFFECTIVE_DATE_IN_PAST"
 REASON_BINDING_EFFECTIVE_DATE_NOT_TRADING = "ADVISORY_BINDING_EFFECTIVE_DATE_NOT_TRADING"
+REASON_ADVISORY_UNIVERSE_BINDING_MISMATCH = "ADVISORY_UNIVERSE_BINDING_MISMATCH"
 REASON_BINDING_INTERVAL_OVERLAP = "ADVISORY_BINDING_INTERVAL_OVERLAP"
 REASON_BINDING_EXPECTED_VERSION_CONFLICT = "ADVISORY_BINDING_EXPECTED_VERSION_CONFLICT"
 REASON_LEGACY_NULL_BINDING_RESEARCH_ONLY = "ADVISORY_PHASE0A_LEGACY_NULL_BINDING_RESEARCH_ONLY"
@@ -148,6 +167,47 @@ DEFAULT_REVIEW_POLICY: dict[str, Any] = {
     "time_stop_days": 20,
     "take_profit_mode": "trailing",
 }
+
+
+def normalize_advisory_review_policy(
+    raw: Mapping[str, Any] | None,
+    *,
+    target_count: int,
+) -> dict[str, Any]:
+    """Build the canonical policy shared by current and historical Advisory."""
+
+    if target_count <= 0 or target_count > 100:
+        raise RuntimeConfigInvalidError(
+            "advisory target_count must be between 1 and 100",
+            context={"target_count": target_count},
+        )
+    policy = {
+        **DEFAULT_REVIEW_POLICY,
+        "rank_enter_threshold": target_count,
+        "rank_exit_threshold": target_count * 2,
+        **dict(raw or {}),
+    }
+    for key in (
+        "rank_enter_threshold",
+        "rank_exit_threshold",
+        "rank_exit_confirm_days",
+        "daily_replacement_budget",
+        "stop_loss_bps",
+        "take_profit_bps",
+        "trailing_stop_bps",
+        "time_stop_days",
+    ):
+        policy[key] = int(policy[key])
+        if policy[key] < 0:
+            raise RuntimeConfigInvalidError(
+                "advisory review policy values must be non-negative",
+                context={"field": key},
+            )
+    if policy["rank_enter_threshold"] <= 0 or policy["rank_exit_threshold"] < policy["rank_enter_threshold"]:
+        raise RuntimeConfigInvalidError("rank_exit_threshold must be >= rank_enter_threshold > 0")
+    if policy["daily_replacement_budget"] <= 0:
+        raise RuntimeConfigInvalidError("daily_replacement_budget must be positive")
+    return policy
 
 
 def _utcnow() -> datetime:
@@ -386,7 +446,9 @@ class AdvisoryReviewResult:
 
 class AdvisoryProgramRepository(Protocol):
     def create_program(self, program: AdvisoryProgram) -> AdvisoryProgram: ...
-    def create_program_with_binding(self, program: AdvisoryProgram, binding: AdvisoryStrategyBindingVersion) -> AdvisoryProgram: ...
+    def create_program_with_binding(
+        self, program: AdvisoryProgram, binding: AdvisoryStrategyBindingVersion
+    ) -> AdvisoryProgram: ...
     def update_program(self, program: AdvisoryProgram) -> AdvisoryProgram: ...
     def replace_program_binding(
         self,
@@ -404,17 +466,27 @@ class AdvisoryProgramRepository(Protocol):
     def list_binding_versions(self, program_id: str) -> list[AdvisoryStrategyBindingVersion]: ...
     def create_review_run(self, review_run: AdvisoryReviewRun) -> AdvisoryReviewRun: ...
     def latest_acquired_decision_date(self, program_id: str) -> date | None: ...
-    def latest_list_version(self, program_id: str, *, status: str = LIST_VERSION_STATUS_PUBLISHED) -> AdvisoryRecommendationListVersion | None: ...
-    def list_version_for_date(self, program_id: str, trade_date: date, *, status: str = LIST_VERSION_STATUS_PUBLISHED) -> AdvisoryRecommendationListVersion | None: ...
-    def create_list_version(self, list_version: AdvisoryRecommendationListVersion, items: list[AdvisoryRecommendationListItem]) -> AdvisoryRecommendationListVersion: ...
-    def list_versions(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[AdvisoryRecommendationListVersion]: ...
+    def latest_list_version(
+        self, program_id: str, *, status: str = LIST_VERSION_STATUS_PUBLISHED
+    ) -> AdvisoryRecommendationListVersion | None: ...
+    def list_version_for_date(
+        self, program_id: str, trade_date: date, *, status: str = LIST_VERSION_STATUS_PUBLISHED
+    ) -> AdvisoryRecommendationListVersion | None: ...
+    def create_list_version(
+        self, list_version: AdvisoryRecommendationListVersion, items: list[AdvisoryRecommendationListItem]
+    ) -> AdvisoryRecommendationListVersion: ...
+    def list_versions(
+        self, program_id: str, *, limit: int = 100, offset: int = 0
+    ) -> list[AdvisoryRecommendationListVersion]: ...
     def get_list_version(self, list_version_id: str) -> AdvisoryRecommendationListVersion: ...
     def list_version_items(self, list_version_id: str) -> list[AdvisoryRecommendationListItem]: ...
     def active_episodes(self, program_id: str) -> list[AdvisoryEpisode]: ...
     def all_latest_episodes(self, program_id: str) -> list[AdvisoryEpisode]: ...
     def insert_episode_snapshot(self, episode: AdvisoryEpisode) -> AdvisoryEpisode: ...
     def insert_review_decision_once(self, decision: AdvisoryReviewDecision) -> AdvisoryReviewDecision: ...
-    def list_review_decisions(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[AdvisoryReviewDecision]: ...
+    def list_review_decisions(
+        self, program_id: str, *, limit: int = 100, offset: int = 0
+    ) -> list[AdvisoryReviewDecision]: ...
     def count_review_decisions(self, program_id: str) -> int: ...
     def insert_metric_snapshot(self, program_id: str, metrics: dict[str, Any]) -> dict[str, Any]: ...
     def latest_metric_snapshot(self, program_id: str) -> dict[str, Any] | None: ...
@@ -436,10 +508,56 @@ def _successor_runtime_config(
 ) -> dict[str, Any]:
     requested = requested_binding.get("runtime_config_json")
     if requested is None:
-        return deepcopy(active_binding.runtime_config_json)
-    if not isinstance(requested, Mapping):
+        config = deepcopy(active_binding.runtime_config_json)
+        runtime_config_was_explicit = False
+    elif not isinstance(requested, Mapping):
         raise RuntimeConfigInvalidError("advisory binding runtime_config_json must be an object")
-    return deepcopy(dict(requested))
+    else:
+        config = deepcopy(dict(requested))
+        runtime_config_was_explicit = True
+    explicit_selection = requested_binding.get("universe_selection")
+    embedded_selection = config.get("universe_selection")
+    try:
+        normalized_explicit = (
+            normalize_advisory_universe_selection(explicit_selection) if explicit_selection is not None else None
+        )
+        normalized_embedded = (
+            normalize_advisory_universe_selection(embedded_selection) if embedded_selection is not None else None
+        )
+    except AdvisoryUniverseContractError as exc:
+        raise RuntimeConfigInvalidError(
+            str(exc),
+            context={"reason_code": exc.reason_code, **exc.context},
+        ) from exc
+    if (
+        runtime_config_was_explicit
+        and normalized_explicit is not None
+        and normalized_embedded is not None
+        and normalized_explicit != normalized_embedded
+    ):
+        raise RuntimeConfigInvalidError(
+            "advisory binding universe_selection conflicts with runtime_config_json",
+            context={
+                "reason_code": REASON_ADVISORY_UNIVERSE_BINDING_MISMATCH,
+                "explicit_universe_selection": normalized_explicit,
+                "runtime_universe_selection": normalized_embedded,
+            },
+        )
+    if normalized_explicit is not None:
+        config["universe_selection"] = normalized_explicit
+    elif normalized_embedded is not None:
+        config["universe_selection"] = normalized_embedded
+    elif active_binding.runtime_config_json.get("universe_selection") is not None:
+        try:
+            config["universe_selection"] = normalize_advisory_universe_selection(
+                active_binding.runtime_config_json["universe_selection"]
+            )
+        except AdvisoryUniverseContractError as exc:
+            raise RuntimeConfigInvalidError(
+                str(exc),
+                context={"reason_code": exc.reason_code, **exc.context},
+            ) from exc
+    return config
 
 
 def _latest_acquired_decision_date_with_cursor(cur: Any, program_id: str) -> date | None:
@@ -472,8 +590,13 @@ def _validate_successor_binding(
     active_binding: AdvisoryStrategyBindingVersion | None,
 ) -> None:
     if binding.effective_from_trade_date is None:
-        raise _binding_error(REASON_BINDING_EFFECTIVE_DATE_REQUIRED, "advisory binding effective_from_trade_date is required")
-    if binding.effective_to_trade_date is not None and binding.effective_to_trade_date <= binding.effective_from_trade_date:
+        raise _binding_error(
+            REASON_BINDING_EFFECTIVE_DATE_REQUIRED, "advisory binding effective_from_trade_date is required"
+        )
+    if (
+        binding.effective_to_trade_date is not None
+        and binding.effective_to_trade_date <= binding.effective_from_trade_date
+    ):
         raise _binding_error(
             REASON_BINDING_INTERVAL_OVERLAP,
             "advisory binding interval must be non-empty and left-closed/right-open",
@@ -490,7 +613,9 @@ def _validate_successor_binding(
             requested_effective_from_trade_date=binding.effective_from_trade_date.isoformat(),
         )
     for row in existing_bindings:
-        if row.binding_version_id == binding.binding_version_id or row.binding_version_id == (active_binding.binding_version_id if active_binding else None):
+        if row.binding_version_id == binding.binding_version_id or row.binding_version_id == (
+            active_binding.binding_version_id if active_binding else None
+        ):
             continue
         if row.effective_from_trade_date is None:
             continue
@@ -519,13 +644,19 @@ class InMemoryAdvisoryProgramRepository:
 
     def create_program(self, program: AdvisoryProgram) -> AdvisoryProgram:
         if program.program_id in self.programs:
-            raise RuntimeConfigInvalidError("advisory program already exists", context={"program_id": program.program_id})
+            raise RuntimeConfigInvalidError(
+                "advisory program already exists", context={"program_id": program.program_id}
+            )
         self.programs[program.program_id] = program
         return program
 
-    def create_program_with_binding(self, program: AdvisoryProgram, binding: AdvisoryStrategyBindingVersion) -> AdvisoryProgram:
+    def create_program_with_binding(
+        self, program: AdvisoryProgram, binding: AdvisoryStrategyBindingVersion
+    ) -> AdvisoryProgram:
         if program.program_id in self.programs:
-            raise RuntimeConfigInvalidError("advisory program already exists", context={"program_id": program.program_id})
+            raise RuntimeConfigInvalidError(
+                "advisory program already exists", context={"program_id": program.program_id}
+            )
         if binding.program_id != program.program_id or binding.program_version != program.version:
             raise _binding_error(
                 REASON_BINDING_EXPECTED_VERSION_CONFLICT,
@@ -585,7 +716,11 @@ class InMemoryAdvisoryProgramRepository:
         retired_active = replace(
             active,
             activation_status=BINDING_STATUS_RETIRED,
-            effective_to_trade_date=(binding.effective_from_trade_date if active.effective_from_trade_date is not None else active.effective_to_trade_date),
+            effective_to_trade_date=(
+                binding.effective_from_trade_date
+                if active.effective_from_trade_date is not None
+                else active.effective_to_trade_date
+            ),
         )
         self.binding_versions = [
             retired_active if row.binding_version_id == active.binding_version_id else row
@@ -609,7 +744,9 @@ class InMemoryAdvisoryProgramRepository:
 
     def create_binding_version(self, binding: AdvisoryStrategyBindingVersion) -> AdvisoryStrategyBindingVersion:
         if any(row.binding_version_id == binding.binding_version_id for row in self.binding_versions):
-            raise RuntimeConfigInvalidError("advisory binding version already exists", context={"binding_version_id": binding.binding_version_id})
+            raise RuntimeConfigInvalidError(
+                "advisory binding version already exists", context={"binding_version_id": binding.binding_version_id}
+            )
         if binding.activation_status == BINDING_STATUS_ACTIVE:
             raise _binding_error(
                 REASON_BINDING_EXPECTED_VERSION_CONFLICT,
@@ -627,7 +764,11 @@ class InMemoryAdvisoryProgramRepository:
         )
 
     def get_active_binding_version(self, program_id: str) -> AdvisoryStrategyBindingVersion | None:
-        rows = [row for row in self.binding_versions if row.program_id == program_id and row.activation_status == BINDING_STATUS_ACTIVE]
+        rows = [
+            row
+            for row in self.binding_versions
+            if row.program_id == program_id and row.activation_status == BINDING_STATUS_ACTIVE
+        ]
         if len(rows) > 1:
             raise _binding_error(
                 REASON_BINDING_INTERVAL_OVERLAP,
@@ -662,31 +803,44 @@ class InMemoryAdvisoryProgramRepository:
         dates = [*review_dates, *published_dates]
         return max(dates) if dates else None
 
-    def latest_list_version(self, program_id: str, *, status: str = LIST_VERSION_STATUS_PUBLISHED) -> AdvisoryRecommendationListVersion | None:
-        rows = [row for row in self.list_versions_store if row.program_id == program_id and row.version_status == status]
+    def latest_list_version(
+        self, program_id: str, *, status: str = LIST_VERSION_STATUS_PUBLISHED
+    ) -> AdvisoryRecommendationListVersion | None:
+        rows = [
+            row for row in self.list_versions_store if row.program_id == program_id and row.version_status == status
+        ]
         return sorted(rows, key=lambda row: (row.trade_date, row.created_at, row.list_version_id))[-1] if rows else None
 
-    def list_version_for_date(self, program_id: str, trade_date: date, *, status: str = LIST_VERSION_STATUS_PUBLISHED) -> AdvisoryRecommendationListVersion | None:
+    def list_version_for_date(
+        self, program_id: str, trade_date: date, *, status: str = LIST_VERSION_STATUS_PUBLISHED
+    ) -> AdvisoryRecommendationListVersion | None:
         rows = [
-            row for row in self.list_versions_store
+            row
+            for row in self.list_versions_store
             if row.program_id == program_id and row.trade_date == trade_date and row.version_status == status
         ]
         return sorted(rows, key=lambda row: (row.created_at, row.list_version_id))[-1] if rows else None
 
-    def create_list_version(self, list_version: AdvisoryRecommendationListVersion, items: list[AdvisoryRecommendationListItem]) -> AdvisoryRecommendationListVersion:
+    def create_list_version(
+        self, list_version: AdvisoryRecommendationListVersion, items: list[AdvisoryRecommendationListItem]
+    ) -> AdvisoryRecommendationListVersion:
         self.list_versions_store.append(list_version)
         self.list_items.extend(items)
         return list_version
 
-    def list_versions(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[AdvisoryRecommendationListVersion]:
+    def list_versions(
+        self, program_id: str, *, limit: int = 100, offset: int = 0
+    ) -> list[AdvisoryRecommendationListVersion]:
         rows = [row for row in self.list_versions_store if row.program_id == program_id]
-        return sorted(rows, key=lambda row: (row.trade_date, row.created_at), reverse=True)[offset:offset + limit]
+        return sorted(rows, key=lambda row: (row.trade_date, row.created_at), reverse=True)[offset : offset + limit]
 
     def get_list_version(self, list_version_id: str) -> AdvisoryRecommendationListVersion:
         for row in self.list_versions_store:
             if row.list_version_id == list_version_id:
                 return row
-        raise DataUnavailableError("advisory recommendation list version does not exist", context={"list_version_id": list_version_id})
+        raise DataUnavailableError(
+            "advisory recommendation list version does not exist", context={"list_version_id": list_version_id}
+        )
 
     def list_version_items(self, list_version_id: str) -> list[AdvisoryRecommendationListItem]:
         return sorted(
@@ -719,15 +873,22 @@ class InMemoryAdvisoryProgramRepository:
         self.review_decisions[key] = decision
         return decision
 
-    def list_review_decisions(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[AdvisoryReviewDecision]:
+    def list_review_decisions(
+        self, program_id: str, *, limit: int = 100, offset: int = 0
+    ) -> list[AdvisoryReviewDecision]:
         rows = [row for row in self.review_decisions.values() if row.program_id == program_id]
-        return sorted(rows, key=lambda row: (row.trade_date, row.symbol), reverse=True)[offset:offset + limit]
+        return sorted(rows, key=lambda row: (row.trade_date, row.symbol), reverse=True)[offset : offset + limit]
 
     def count_review_decisions(self, program_id: str) -> int:
         return sum(1 for row in self.review_decisions.values() if row.program_id == program_id)
 
     def insert_metric_snapshot(self, program_id: str, metrics: dict[str, Any]) -> dict[str, Any]:
-        snapshot = {"program_id": program_id, "snapshot_id": f"advm_{uuid4().hex}", "created_at": _utcnow(), **deepcopy(metrics)}
+        snapshot = {
+            "program_id": program_id,
+            "snapshot_id": f"advm_{uuid4().hex}",
+            "created_at": _utcnow(),
+            **deepcopy(metrics),
+        }
         self.metric_snapshots.append(snapshot)
         return snapshot
 
@@ -767,7 +928,9 @@ class AdvisoryProgramPGRepository:
                 self._replace_program_packages(cur, program)
         return program
 
-    def create_program_with_binding(self, program: AdvisoryProgram, binding: AdvisoryStrategyBindingVersion) -> AdvisoryProgram:
+    def create_program_with_binding(
+        self, program: AdvisoryProgram, binding: AdvisoryStrategyBindingVersion
+    ) -> AdvisoryProgram:
         if binding.program_id != program.program_id or binding.program_version != program.version:
             raise _binding_error(
                 REASON_BINDING_EXPECTED_VERSION_CONFLICT,
@@ -822,7 +985,9 @@ class AdvisoryProgramPGRepository:
                     ),
                 )
                 if cur.rowcount == 0:
-                    raise DataUnavailableError("advisory program does not exist", context={"program_id": program.program_id})
+                    raise DataUnavailableError(
+                        "advisory program does not exist", context={"program_id": program.program_id}
+                    )
                 self._replace_program_packages(cur, program)
         return program
 
@@ -842,7 +1007,9 @@ class AdvisoryProgramPGRepository:
                 )
                 program_row = cur.fetchone()
                 if program_row is None:
-                    raise DataUnavailableError("advisory program does not exist", context={"program_id": program.program_id})
+                    raise DataUnavailableError(
+                        "advisory program does not exist", context={"program_id": program.program_id}
+                    )
                 current_version = int(program_row["version"])
                 if current_version != expected_program_version:
                     raise _binding_error(
@@ -1040,7 +1207,9 @@ class AdvisoryProgramPGRepository:
                             "formal advisory run binding is not the unique binding for its decision date",
                             program_id=review_run.program_id,
                             trade_date=review_run.trade_date.isoformat(),
-                            expected_binding_version_id=(matching[0].binding_version_id if len(matching) == 1 else None),
+                            expected_binding_version_id=(
+                                matching[0].binding_version_id if len(matching) == 1 else None
+                            ),
                             actual_binding_version_id=review_run.binding_version_id,
                         )
                 cur.execute(
@@ -1061,7 +1230,9 @@ class AdvisoryProgramPGRepository:
             with conn.cursor() as cur:
                 return _latest_acquired_decision_date_with_cursor(cur, program_id)
 
-    def latest_list_version(self, program_id: str, *, status: str = LIST_VERSION_STATUS_PUBLISHED) -> AdvisoryRecommendationListVersion | None:
+    def latest_list_version(
+        self, program_id: str, *, status: str = LIST_VERSION_STATUS_PUBLISHED
+    ) -> AdvisoryRecommendationListVersion | None:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -1077,7 +1248,9 @@ class AdvisoryProgramPGRepository:
                 row = cur.fetchone()
         return _list_version_from_row(row) if row else None
 
-    def list_version_for_date(self, program_id: str, trade_date: date, *, status: str = LIST_VERSION_STATUS_PUBLISHED) -> AdvisoryRecommendationListVersion | None:
+    def list_version_for_date(
+        self, program_id: str, trade_date: date, *, status: str = LIST_VERSION_STATUS_PUBLISHED
+    ) -> AdvisoryRecommendationListVersion | None:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -1093,7 +1266,9 @@ class AdvisoryProgramPGRepository:
                 row = cur.fetchone()
         return _list_version_from_row(row) if row else None
 
-    def create_list_version(self, list_version: AdvisoryRecommendationListVersion, items: list[AdvisoryRecommendationListItem]) -> AdvisoryRecommendationListVersion:
+    def create_list_version(
+        self, list_version: AdvisoryRecommendationListVersion, items: list[AdvisoryRecommendationListItem]
+    ) -> AdvisoryRecommendationListVersion:
         with self._conn_factory() as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -1126,7 +1301,9 @@ class AdvisoryProgramPGRepository:
                     )
         return list_version
 
-    def list_versions(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[AdvisoryRecommendationListVersion]:
+    def list_versions(
+        self, program_id: str, *, limit: int = 100, offset: int = 0
+    ) -> list[AdvisoryRecommendationListVersion]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -1151,7 +1328,9 @@ class AdvisoryProgramPGRepository:
                 )
                 row = cur.fetchone()
         if row is None:
-            raise DataUnavailableError("advisory recommendation list version does not exist", context={"list_version_id": list_version_id})
+            raise DataUnavailableError(
+                "advisory recommendation list version does not exist", context={"list_version_id": list_version_id}
+            )
         return _list_version_from_row(row)
 
     def list_version_items(self, list_version_id: str) -> list[AdvisoryRecommendationListItem]:
@@ -1253,7 +1432,9 @@ class AdvisoryProgramPGRepository:
                 )
         return decision
 
-    def list_review_decisions(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[AdvisoryReviewDecision]:
+    def list_review_decisions(
+        self, program_id: str, *, limit: int = 100, offset: int = 0
+    ) -> list[AdvisoryReviewDecision]:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
@@ -1389,12 +1570,14 @@ class AdvisoryProgramService:
         selection_service: SelectionCenterService | Any | None = None,
         calendar_provider: AdvisoryTradingCalendarProvider | Any | None = None,
         symbol_name_resolver: PaperV2SymbolNameResolver | Any | None = None,
+        universe_resolver: AdvisoryUniverseResolver | Any | None = None,
         now_provider: Callable[[], datetime] | None = None,
     ) -> None:
         self.repository = repository or AdvisoryProgramPGRepository()
         self.selection_service = selection_service or SelectionCenterService()
         self.calendar_provider = calendar_provider or TradingCalendarStatusService()
         self.symbol_name_resolver = symbol_name_resolver or PaperV2SymbolNameResolver()
+        self.universe_resolver = universe_resolver or CoreIndexAdvisoryUniverseResolver()
         self._now_provider = now_provider or _utcnow
 
     def create_program(
@@ -1409,6 +1592,7 @@ class AdvisoryProgramService:
         entry_price_basis: str = PRICE_BASIS_NEXT_OPEN,
         exit_price_basis: str = PRICE_BASIS_NEXT_OPEN,
         review_schedule: Mapping[str, Any] | None = None,
+        universe_selection: Mapping[str, Any] | None = None,
         created_by: str | None = None,
         status: str = PROGRAM_STATUS_DRAFT,
     ) -> AdvisoryProgram:
@@ -1440,16 +1624,21 @@ class AdvisoryProgramService:
             program,
             activation_reason="initial advisory program binding",
             created_by=created_by,
-            effective_from_trade_date=self._next_eligible_binding_trade_date(program_id=program.program_id, active_binding=None),
+            effective_from_trade_date=self._next_eligible_binding_trade_date(
+                program_id=program.program_id, active_binding=None
+            ),
+            runtime_config_json={"universe_selection": self._normalize_universe_selection(universe_selection)},
         )
         return self.repository.create_program_with_binding(program, initial_binding)
 
     def update_program(self, program_id: str, updates: Mapping[str, Any]) -> AdvisoryProgram:
         program = self.repository.get_program(program_id)
         if program.status == PROGRAM_STATUS_ARCHIVED:
-            raise InvalidStateTransitionError("archived advisory program cannot be updated", context={"program_id": program_id})
+            raise InvalidStateTransitionError(
+                "archived advisory program cannot be updated", context={"program_id": program_id}
+            )
         active = self._ensure_active_binding(program)
-        config_fields = {
+        program_config_fields = {
             "program_name",
             "package_mode",
             "package_ids",
@@ -1460,13 +1649,20 @@ class AdvisoryProgramService:
             "exit_price_basis",
             "review_schedule",
         }
+        binding_config_fields = {"universe_selection"}
         concurrency_fields = {"expected_program_version", "expected_binding_version_id", "effective_from_trade_date"}
-        unknown = set(updates) - config_fields - {"status"} - concurrency_fields
+        unknown = set(updates) - program_config_fields - binding_config_fields - {"status"} - concurrency_fields
         if unknown:
-            raise RuntimeConfigInvalidError("unsupported advisory program update fields", context={"fields": sorted(unknown)})
-        changed_config = any(field_name in updates for field_name in config_fields)
-        binding_semantics_changed = any(field_name in updates for field_name in {"package_mode", "package_ids", "package_weights"})
-        if changed_config:
+            raise RuntimeConfigInvalidError(
+                "unsupported advisory program update fields", context={"fields": sorted(unknown)}
+            )
+        changed_program_config = any(field_name in updates for field_name in program_config_fields)
+        changed_config = changed_program_config or "universe_selection" in updates
+        binding_semantics_changed = any(
+            field_name in updates
+            for field_name in {"package_mode", "package_ids", "package_weights", "universe_selection"}
+        )
+        if changed_program_config:
             requested_package_ids = list(updates.get("package_ids", program.package_ids))
             package_weights = updates.get("package_weights")
             if package_weights is None and requested_package_ids != program.package_ids:
@@ -1484,7 +1680,9 @@ class AdvisoryProgramService:
                 exit_price_basis=str(updates.get("exit_price_basis", program.exit_price_basis)),
                 review_schedule=updates.get("review_schedule", program.review_schedule),
             )
-            program = replace(program, version=program.version + 1, updated_at=self._now_provider(), **config)
+            program = replace(program, updated_at=self._now_provider(), **config)
+        if changed_config:
+            program = replace(program, version=program.version + 1, updated_at=self._now_provider())
         if "status" in updates:
             if self._normalize_status(str(updates["status"])) == PROGRAM_STATUS_ENABLED:
                 self._require_native_package_config(
@@ -1493,7 +1691,9 @@ class AdvisoryProgramService:
                     operation="update_program.enable",
                 )
             program = self._with_status(program, str(updates["status"]))
-        updated = program if changed_config or "status" in updates else replace(program, updated_at=self._now_provider())
+        updated = (
+            program if changed_config or "status" in updates else replace(program, updated_at=self._now_provider())
+        )
         if not binding_semantics_changed:
             return self.repository.update_program(updated)
 
@@ -1505,10 +1705,10 @@ class AdvisoryProgramService:
         )
         successor = _binding_from_program(
             updated,
-            activation_reason="advisory program package config update",
+            activation_reason="advisory program binding semantics update",
             created_by=updated.created_by,
             effective_from_trade_date=effective_from_trade_date,
-            runtime_config_json=deepcopy(active.runtime_config_json),
+            runtime_config_json=_successor_runtime_config(active, updates),
         )
         updated, _binding = self.repository.replace_program_binding(
             updated,
@@ -1528,7 +1728,9 @@ class AdvisoryProgramService:
             )
         return self.repository.update_program(self._with_status(program, status))
 
-    def clone_program(self, program_id: str, *, program_name: str | None = None, created_by: str | None = None) -> AdvisoryProgram:
+    def clone_program(
+        self, program_id: str, *, program_name: str | None = None, created_by: str | None = None
+    ) -> AdvisoryProgram:
         source = self.repository.get_program(program_id)
         source_binding = self.repository.get_active_binding_version(program_id)
         if source_binding is None:
@@ -1558,7 +1760,9 @@ class AdvisoryProgramService:
             clone,
             activation_reason="cloned advisory program binding",
             created_by=clone.created_by,
-            effective_from_trade_date=self._next_eligible_binding_trade_date(program_id=clone.program_id, active_binding=None),
+            effective_from_trade_date=self._next_eligible_binding_trade_date(
+                program_id=clone.program_id, active_binding=None
+            ),
             runtime_config_json=deepcopy(source_binding.runtime_config_json),
         )
         return self.repository.create_program_with_binding(clone, initial_binding)
@@ -1730,7 +1934,13 @@ class AdvisoryProgramService:
         for program in self.repository.list_programs(include_archived=include_archived):
             if program.status not in ACTIVE_PROGRAM_STATUSES and not include_archived:
                 continue
-            rows.append({**program_to_dict(program), **self._program_metrics(program), **self._latest_recommendation_payload(program)})
+            rows.append(
+                {
+                    **program_to_dict(program),
+                    **self._program_metrics(program),
+                    **self._latest_recommendation_payload(program),
+                }
+            )
         return sorted(rows, key=self._leaderboard_key(sort_by))
 
     def active_pool(self, program_id: str) -> list[dict[str, Any]]:
@@ -1740,11 +1950,21 @@ class AdvisoryProgramService:
 
     def review_history(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         self.repository.get_program(program_id)
-        return self._enrich_display_names([decision_to_dict(row) for row in self.repository.list_review_decisions(program_id, limit=limit, offset=offset)])
+        return self._enrich_display_names(
+            [
+                decision_to_dict(row)
+                for row in self.repository.list_review_decisions(program_id, limit=limit, offset=offset)
+            ]
+        )
 
     def review_history_page(self, program_id: str, *, limit: int = 100, offset: int = 0) -> dict[str, Any]:
         self.repository.get_program(program_id)
-        reviews = self._enrich_display_names([decision_to_dict(row) for row in self.repository.list_review_decisions(program_id, limit=limit, offset=offset)])
+        reviews = self._enrich_display_names(
+            [
+                decision_to_dict(row)
+                for row in self.repository.list_review_decisions(program_id, limit=limit, offset=offset)
+            ]
+        )
         return {
             "reviews": reviews,
             "total_count": self.repository.count_review_decisions(program_id),
@@ -1752,13 +1972,18 @@ class AdvisoryProgramService:
             "offset": offset,
         }
 
-    def recommendation_list_versions(self, program_id: str, *, limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
+    def recommendation_list_versions(
+        self, program_id: str, *, limit: int = 100, offset: int = 0
+    ) -> list[dict[str, Any]]:
         self.repository.get_program(program_id)
-        return [list_version_to_dict(row) for row in self.repository.list_versions(program_id, limit=limit, offset=offset)]
+        return [
+            list_version_to_dict(row) for row in self.repository.list_versions(program_id, limit=limit, offset=offset)
+        ]
 
     def _latest_recommendation_payload(self, program: AdvisoryProgram) -> dict[str, Any]:
         versions = [
-            row for row in self.repository.list_versions(program.program_id, limit=20, offset=0)
+            row
+            for row in self.repository.list_versions(program.program_id, limit=20, offset=0)
             if row.version_status == LIST_VERSION_STATUS_PUBLISHED
         ]
         latest = versions[0] if versions else None
@@ -1782,7 +2007,8 @@ class AdvisoryProgramService:
             {
                 "latest_recommendation_list_version_id": latest.list_version_id,
                 "latest_recommendation_trade_date": latest.trade_date.isoformat(),
-                "latest_recommendation_target_trade_date": context["target_trade_date"] or latest.trade_date.isoformat(),
+                "latest_recommendation_target_trade_date": context["target_trade_date"]
+                or latest.trade_date.isoformat(),
                 "latest_recommendation_selection_as_of_trade_date": context["selection_as_of_trade_date"],
                 "latest_recommendation_generated_at": latest.created_at,
                 "latest_recommendation_version_status": latest.version_status,
@@ -1799,8 +2025,32 @@ class AdvisoryProgramService:
         }
 
     def return_history(self, program_id: str) -> list[dict[str, Any]]:
+        return self.return_snapshot(program_id)["returns"]
+
+    def return_snapshot(self, program_id: str, *, buy_cost_bps: float | None = None,
+                        sell_cost_bps: float | None = None) -> dict[str, Any]:
+        """Bind rows and metrics to one episode read and one reporting clock."""
         program = self.repository.get_program(program_id)
-        return self._enrich_display_names([episode_to_dict(row) for row in self._episodes_for_metrics(program)])
+        cost = cost_contract(buy_cost_bps, sell_cost_bps)
+        now = self._now_provider()
+        episodes = self._episodes_for_metrics(program, now=now)
+        rows = []
+        for episode in episodes:
+            row = episode_to_dict(episode)
+            view = episode_performance(row, now=now)
+            row.update(view)
+            gross = view["realized_gross_return_bps"]
+            row["realized_net_return_bps"] = net_return(gross, cost) if gross is not None and cost is not None else None
+            row["cost_drag_bps"] = gross - row["realized_net_return_bps"] if row["realized_net_return_bps"] is not None else None
+            row["return_bps"] = view["realized_gross_return_bps"] if view["performance_state"] == "SETTLED" else view["unrealized_gross_return_bps"]
+            row["is_win"] = row["return_bps"] > 0 if row["return_bps"] is not None else None
+            row["realized_inclusion_status"] = "INCLUDED" if view["performance_state"] == "SETTLED" else "EXCLUDED"
+            if episode.status == EPISODE_STATUS_EXITED and view["performance_state"] != "SETTLED":
+                row["planned_exit_price"] = row["exit_price"]
+                row["exit_price"] = None
+                row["win_rate_inclusion_status"] = WIN_EXCLUDED
+            rows.append(row)
+        return {"returns": self._enrich_display_names(rows), "metrics": compute_program_metrics(program, episodes, now=now, cost=cost)}
 
     def _enrich_display_names(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
@@ -1834,7 +2084,9 @@ class AdvisoryProgramService:
             for candidate in candidates
         ]
 
-    def _effective_trade_date(self, signal_date: date, basis: str, *, candidate: AdvisoryCandidate | None = None) -> date:
+    def _effective_trade_date(
+        self, signal_date: date, basis: str, *, candidate: AdvisoryCandidate | None = None
+    ) -> date:
         return _effective_date(
             signal_date,
             basis,
@@ -1847,7 +2099,83 @@ class AdvisoryProgramService:
         return self._program_metrics(program)
 
     def _program_metrics(self, program: AdvisoryProgram) -> dict[str, Any]:
-        return compute_program_metrics(program, self._episodes_for_metrics(program))
+        now = self._now_provider()
+        return compute_program_metrics(program, self._episodes_for_metrics(program, now=now), now=now)
+
+    def performance_comparison(
+        self, *, start_date: date, end_date: date, program_ids: list[str] | None = None,
+        buy_cost_bps: float | None = None, sell_cost_bps: float | None = None,
+        benchmark_instrument: str = "000300.SH",
+    ) -> dict[str, Any]:
+        if start_date > end_date:
+            raise RuntimeConfigInvalidError("performance start_date must not exceed end_date")
+        if end_date > date.max - timedelta(days=21):
+            raise RuntimeConfigInvalidError("end_date does not leave room for the five-session calendar tail")
+        cost = cost_contract(buy_cost_bps, sell_cost_bps)
+        programs = ([self.repository.get_program(identity) for identity in dict.fromkeys(program_ids)]
+                    if program_ids else [row for row in self.repository.list_programs(include_archived=False)
+                                         if row.status in ACTIVE_PROGRAM_STATUSES])
+        now = self._now_provider()
+        cutoff = reporting_cutoff(now)
+        rows = []
+        for program in programs:
+            bindings = self.repository.list_binding_versions(program.program_id)
+            for episode in self.repository.all_latest_episodes(program.program_id):
+                if not start_date <= episode.effective_entry_date <= end_date:
+                    continue
+                row = episode_to_dict(episode)
+                matches = [binding for binding in bindings if binding.effective_from_trade_date is not None
+                           and binding.effective_from_trade_date <= episode.effective_entry_date
+                           and (binding.effective_to_trade_date is None or episode.effective_entry_date < binding.effective_to_trade_date)
+                           and binding.activation_status in {BINDING_STATUS_ACTIVE, BINDING_STATUS_RETIRED}]
+                row["entry_binding_identity"] = ({
+                    "status": "EXACT_HISTORICAL_INTERVAL", "binding_version_id": matches[0].binding_version_id,
+                    "package_ids": matches[0].package_ids, "package_set_hash": matches[0].package_set_hash,
+                } if len(matches) == 1 else {"status": "UNRESOLVED_HISTORICAL_BINDING"})
+                rows.append(row)
+        conn_factory = getattr(self.repository, "_conn_factory", None)
+        if conn_factory is None:
+            raise DataUnavailableError("program performance comparison requires the read-only daily database source")
+        benchmark = benchmark_instrument.strip().upper()
+        if not benchmark:
+            raise RuntimeConfigInvalidError("benchmark_instrument is required")
+        try:
+            market = ProgramPerformanceMarketReader(conn_factory).load(
+                symbols=sorted({row["symbol"] for row in rows}), start=start_date, end=end_date,
+                cutoff=cutoff, benchmark=benchmark,
+            )
+        except psycopg2.Error as exc:
+            raise DataUnavailableError("performance market source unavailable", context={
+                "reason_code": "ADVISORY_PERFORMANCE_MARKET_SOURCE_UNAVAILABLE", "sqlstate": exc.pgcode,
+            }) from exc
+        outcomes = fixed_five_day_outcomes(rows, market, cutoff=cutoff, cost=cost)
+        response = compare_program_outcomes(
+            outcomes, program_ids=[program.program_id for program in programs],
+            calendar=[row["cal_date"] for row in market["calendar"] if row["is_trading"]],
+            start=start_date, end=end_date, cost=cost, benchmark=benchmark,
+        )
+        response.update(reported_at=now.isoformat(), metric_as_of_trade_date=cutoff.isoformat())
+        for metrics, program in zip(response["programs"], programs, strict=True):
+            metrics["program_name"] = program.program_name
+            versions = []
+            offset = 0
+            while True:
+                page = self.repository.list_versions(program.program_id, limit=100, offset=offset)
+                versions.extend(row for row in page if start_date <= row.trade_date <= end_date
+                                and row.version_status == LIST_VERSION_STATUS_PUBLISHED)
+                if len(page) < 100 or page[-1].trade_date < start_date:
+                    break
+                offset += 100
+            metrics["daily_list_changes"] = [{
+                "trade_date": row.trade_date.isoformat(), "list_version_id": row.list_version_id,
+                "binding_version_id": row.binding_version_id, "entered_count": row.entered_count,
+                "held_count": row.held_count, "exited_count": row.exited_count,
+                "changed_count": row.changed_count, "turnover_rate": row.turnover_rate,
+                "paired_list_rotation_count": min(row.entered_count, row.exited_count),
+                "rotation_basis": "PAIRED_ENTER_EXIT_COUNTS_NOT_EXECUTED_TRADES",
+                "basis": "RECOMMENDATION_LIST_CHANGES_NOT_EXECUTED_TRADES",
+            } for row in sorted(versions, key=lambda item: item.trade_date)]
+        return response
 
     def prepare_forward_selection(
         self,
@@ -1888,6 +2216,8 @@ class AdvisoryProgramService:
         market_by_symbol: Mapping[str, AdvisoryMarketMark],
         active_episodes: list[AdvisoryEpisode],
     ) -> AdvisoryReviewResult:
+        if any(mark.trade_date != target_trade_date for mark in market_by_symbol.values()):
+            raise RuntimeConfigInvalidError("forward settlement market marks must match target_trade_date")
         return self._evaluate_review(
             program=program,
             trade_date=target_trade_date,
@@ -1895,6 +2225,7 @@ class AdvisoryProgramService:
             market_by_symbol=market_by_symbol,
             active_episodes=active_episodes,
             preview=False,
+            execution_trade_date=target_trade_date,
             episode_identity_allocator=lambda candidate: _forward_episode_id(
                 program_id=program.program_id,
                 target_trade_date=target_trade_date,
@@ -1966,9 +2297,11 @@ class AdvisoryProgramService:
             )
         return marks
 
-    def _episodes_for_metrics(self, program: AdvisoryProgram) -> list[AdvisoryEpisode]:
+    def _episodes_for_metrics(self, program: AdvisoryProgram, *, now: datetime | None = None) -> list[AdvisoryEpisode]:
+        cutoff = reporting_cutoff(now or self._now_provider())
         episodes = self.repository.all_latest_episodes(program.program_id)
-        return self._with_latest_open_episode_metric_marks(program, episodes)
+        episodes = self._with_settled_episode_metric_prices(episodes, cutoff=cutoff)
+        return self._with_latest_open_episode_metric_marks(program, episodes, cutoff=cutoff)
 
     def run_review_from_selection(
         self,
@@ -1999,7 +2332,7 @@ class AdvisoryProgramService:
             operation="run_review_from_selection",
         )
         effective_runtime_config = self._with_advisory_date_context(
-            _deep_merge_dicts(binding.runtime_config_json, runtime_config or {}),
+            self._runtime_config_for_binding(binding, runtime_config),
             target_trade_date=review_trade_date,
             selection_as_of_trade_date=selection_as_of_trade_date,
         )
@@ -2011,8 +2344,22 @@ class AdvisoryProgramService:
                 selection_run_id=selection_run_id,
                 data_source=data_source,
                 runtime_config=effective_runtime_config,
+                advisory_archive_context=None if preview else {
+                    "artifact_root": os.getenv("AISTOCK_ADVISORY_MODEL_ROOT", "").strip(),
+                    "program_id": program.program_id, "binding_version_id": binding.binding_version_id,
+                    "review_policy_sha256": bound_program.review_policy_sha256,
+                    "decision_as_of_trade_date": (effective_runtime_config.get("advisory_date_context") or {}).get(
+                        "selection_as_of_trade_date"),
+                },
             )
             selection_run_ids = [run.run_id]
+            archive_ref = run.runtime_config.get("advisory_frozen_input_archive")
+            if archive_ref is not None:
+                from backend.services.selection_center.advisory_input_archive import validate_archive_reference
+                validate_archive_reference(archive_ref, run=run, program_id=program.program_id,
+                                           binding_version_id=binding.binding_version_id,
+                                           review_policy_sha256=bound_program.review_policy_sha256)
+                effective_runtime_config["advisory_frozen_input_archive"] = archive_ref
             normalized_candidates = candidates_from_selection_run(run)
         else:
             normalized_candidates = [_candidate_from_mapping(row) for row in candidates]
@@ -2057,22 +2404,43 @@ class AdvisoryProgramService:
             operation="run_review",
         )
         binding = self._ensure_active_binding(program) if binding_version_id is None else None
-        effective_binding_id = binding_version_id or (binding.binding_version_id if binding else _binding_from_program(program).binding_version_id)
-        if not preview and program.status not in {PROGRAM_STATUS_ENABLED, PROGRAM_STATUS_WAITING_DATA, PROGRAM_STATUS_REVIEW_FAILED}:
+        effective_binding_id = binding_version_id or (
+            binding.binding_version_id if binding else _binding_from_program(program).binding_version_id
+        )
+        if not preview and program.status not in {
+            PROGRAM_STATUS_ENABLED,
+            PROGRAM_STATUS_WAITING_DATA,
+            PROGRAM_STATUS_REVIEW_FAILED,
+        }:
             raise InvalidStateTransitionError(
                 "advisory program must be enabled before daily review",
                 context={"program_id": program_id, "status": program.status},
             )
         normalized_candidates = [
-            row if isinstance(row, AdvisoryCandidate) else _candidate_from_mapping(row)
-            for row in candidates
+            row if isinstance(row, AdvisoryCandidate) else _candidate_from_mapping(row) for row in candidates
         ]
+        effective_runtime_config = (
+            self._runtime_config_for_binding(binding, runtime_config)
+            if binding is not None
+            else deepcopy(dict(runtime_config or {}))
+        )
+        normalized_candidates, effective_runtime_config = self._filter_candidates_for_universe(
+            normalized_candidates,
+            trade_date=trade_date,
+            runtime_config=effective_runtime_config,
+        )
         normalized_candidates = self._enrich_candidate_display_names(normalized_candidates)
         normalized_market = {
-            symbol: row if isinstance(row, AdvisoryMarketMark) else _market_from_mapping(symbol, row, trade_date=trade_date)
+            symbol: row
+            if isinstance(row, AdvisoryMarketMark)
+            else _market_from_mapping(symbol, row, trade_date=trade_date)
             for symbol, row in dict(market_by_symbol or {}).items()
         }
-        active_episodes = initial_active_episodes if initial_active_episodes is not None else self.repository.active_episodes(program_id)
+        active_episodes = (
+            initial_active_episodes
+            if initial_active_episodes is not None
+            else self.repository.active_episodes(program_id)
+        )
         self._require_exit_observation_depth(
             program=program,
             candidates=normalized_candidates,
@@ -2084,7 +2452,9 @@ class AdvisoryProgramService:
             market_by_symbol=normalized_market,
             active_episodes=active_episodes,
         )
-        if not preview and self.repository.list_version_for_date(program_id, trade_date, status=LIST_VERSION_STATUS_PUBLISHED):
+        if not preview and self.repository.list_version_for_date(
+            program_id, trade_date, status=LIST_VERSION_STATUS_PUBLISHED
+        ):
             raise InvalidStateTransitionError(
                 "advisory review already published for trade_date",
                 context={"program_id": program_id, "trade_date": trade_date.isoformat()},
@@ -2097,7 +2467,11 @@ class AdvisoryProgramService:
             active_episodes=active_episodes,
             preview=preview,
         )
-        run_status = REVIEW_RUN_STATUS_SUCCEEDED if result.review_status == REVIEW_STATUS_SUCCEEDED else REVIEW_RUN_STATUS_WAITING_DATA
+        run_status = (
+            REVIEW_RUN_STATUS_SUCCEEDED
+            if result.review_status == REVIEW_STATUS_SUCCEEDED
+            else REVIEW_RUN_STATUS_WAITING_DATA
+        )
         review_run = self.repository.create_review_run(
             AdvisoryReviewRun(
                 review_run_id=f"advrun_{uuid4().hex}",
@@ -2109,7 +2483,7 @@ class AdvisoryProgramService:
                 data_source=data_source,
                 selection_run_id=selection_run_id,
                 selection_run_ids=list(selection_run_ids or ([] if selection_run_id is None else [selection_run_id])),
-                runtime_config_json=dict(runtime_config or {}),
+                runtime_config_json=effective_runtime_config,
                 finished_at=_utcnow(),
             )
         )
@@ -2124,7 +2498,9 @@ class AdvisoryProgramService:
             previous_list=previous_list,
             previous_items=previous_items,
             version_status=LIST_VERSION_STATUS_PREVIEW if preview else LIST_VERSION_STATUS_PUBLISHED,
-            date_context=(runtime_config or {}).get("advisory_date_context"),
+            date_context=effective_runtime_config.get("advisory_date_context"),
+            universe_receipt=effective_runtime_config.get("advisory_universe_receipt"),
+            frozen_input_archive=effective_runtime_config.get("advisory_frozen_input_archive"),
         )
         self.repository.create_list_version(list_version, list_items)
         enriched_decisions = [
@@ -2154,13 +2530,17 @@ class AdvisoryProgramService:
         metric_snapshot = self.repository.insert_metric_snapshot(program.program_id, result.metrics)
         updated = replace(
             program,
-            status=PROGRAM_STATUS_ENABLED if result.review_status == REVIEW_STATUS_SUCCEEDED else PROGRAM_STATUS_WAITING_DATA,
+            status=PROGRAM_STATUS_ENABLED
+            if result.review_status == REVIEW_STATUS_SUCCEEDED
+            else PROGRAM_STATUS_WAITING_DATA,
             last_review_status=result.review_status,
             latest_review_trade_date=trade_date,
             updated_at=_utcnow(),
         )
         updated = self.repository.update_program(updated)
-        return replace(result, program=updated, metrics={**result.metrics, "snapshot_id": metric_snapshot.get("snapshot_id")})
+        return replace(
+            result, program=updated, metrics={**result.metrics, "snapshot_id": metric_snapshot.get("snapshot_id")}
+        )
 
     def run_replay(
         self,
@@ -2219,7 +2599,7 @@ class AdvisoryProgramService:
             package_ids=program.package_ids,
             operation="run_replay",
         )
-        replay_runtime_config = _deep_merge_dicts(binding.runtime_config_json, runtime_config or {})
+        replay_runtime_config = self._runtime_config_for_binding(binding, runtime_config)
         active: list[AdvisoryEpisode] = []
         daily: list[AdvisoryReviewResult] = []
         daily_list_versions: list[dict[str, Any]] = []
@@ -2246,6 +2626,11 @@ class AdvisoryProgramService:
                 candidates = candidates_from_selection_run(run)
             else:
                 candidates = [_candidate_from_mapping(row) for row in raw_candidates]
+            candidates, day_runtime_config = self._filter_candidates_for_universe(
+                candidates,
+                trade_date=current,
+                runtime_config=day_runtime_config,
+            )
             self._require_exit_observation_depth(
                 program=program,
                 candidates=candidates,
@@ -2276,7 +2661,9 @@ class AdvisoryProgramService:
                     binding_version_id=binding.binding_version_id,
                     trade_date=current,
                     run_type=REVIEW_RUN_TYPE_REPLAY,
-                    status=REVIEW_RUN_STATUS_SUCCEEDED if result.review_status == REVIEW_STATUS_SUCCEEDED else REVIEW_RUN_STATUS_WAITING_DATA,
+                    status=REVIEW_RUN_STATUS_SUCCEEDED
+                    if result.review_status == REVIEW_STATUS_SUCCEEDED
+                    else REVIEW_RUN_STATUS_WAITING_DATA,
                     data_source=data_source,
                     selection_run_id=selection_run_ids[0] if selection_run_ids else None,
                     selection_run_ids=selection_run_ids,
@@ -2293,6 +2680,7 @@ class AdvisoryProgramService:
                 previous_list=previous_replay_list,
                 previous_items=previous_replay_items,
                 version_status=LIST_VERSION_STATUS_REPLAY,
+                universe_receipt=day_runtime_config.get("advisory_universe_receipt"),
             )
             self.repository.create_list_version(list_version, list_items)
             enriched_decisions = [
@@ -2364,7 +2752,11 @@ class AdvisoryProgramService:
     def _expected_binding_versions(updates: Mapping[str, Any]) -> tuple[int, str]:
         expected_program_version = updates.get("expected_program_version")
         expected_binding_version_id = str(updates.get("expected_binding_version_id") or "").strip()
-        if not isinstance(expected_program_version, int) or expected_program_version < 1 or not expected_binding_version_id:
+        if (
+            not isinstance(expected_program_version, int)
+            or expected_program_version < 1
+            or not expected_binding_version_id
+        ):
             raise _binding_error(
                 REASON_BINDING_EXPECTED_VERSION_CONFLICT,
                 "expected_program_version and expected_binding_version_id are required for binding replacement",
@@ -2393,7 +2785,11 @@ class AdvisoryProgramService:
         active_binding: AdvisoryStrategyBindingVersion | None,
     ) -> date:
         activation_now = self._now_provider()
-        activation_date = activation_now.astimezone(SHANGHAI_TZ).date() if activation_now.tzinfo is not None else activation_now.date()
+        activation_date = (
+            activation_now.astimezone(SHANGHAI_TZ).date()
+            if activation_now.tzinfo is not None
+            else activation_now.date()
+        )
         candidates = [self._next_trading_day(activation_date, inclusive=False)]
         acquired_date = self.repository.latest_acquired_decision_date(program_id)
         if acquired_date is not None:
@@ -2444,7 +2840,10 @@ class AdvisoryProgramService:
                 "legacy null-date binding is research-only and cannot run the formal path",
                 context={"reason_code": REASON_LEGACY_NULL_BINDING_RESEARCH_ONLY, "program_id": program.program_id},
             )
-        if binding.effective_to_trade_date is not None and binding.effective_to_trade_date <= binding.effective_from_trade_date:
+        if (
+            binding.effective_to_trade_date is not None
+            and binding.effective_to_trade_date <= binding.effective_from_trade_date
+        ):
             raise _binding_error(
                 REASON_BINDING_INTERVAL_OVERLAP,
                 "active advisory binding has an empty interval",
@@ -2527,19 +2926,29 @@ class AdvisoryProgramService:
         self,
         program: AdvisoryProgram,
         episodes: list[AdvisoryEpisode],
+        *,
+        cutoff: date | None = None,
     ) -> list[AdvisoryEpisode]:
-        active = [row for row in episodes if row.status == EPISODE_STATUS_ACTIVE and row.entry_price > 0]
+        active = [row for row in episodes if row.entry_price > 0 and (row.status == EPISODE_STATUS_ACTIVE
+                  or (cutoff is not None and row.effective_exit_date is not None and row.effective_exit_date > cutoff))]
         if not active:
             return episodes
         try:
-            marks = self._load_latest_open_episode_metric_marks(active)
-        except Exception:
-            return episodes
+            marks = self._load_latest_open_episode_metric_marks(active, cutoff=cutoff)
+        except Exception as exc:
+            logger.warning("Advisory metric marks unavailable (%s)", type(exc).__name__)
+            return [replace(row, return_bps=None, evidence_json={**row.evidence_json, "metric_mark_read_status": "MARK_SOURCE_UNAVAILABLE"})
+                    if row in active else row for row in episodes]
         if not marks:
             return episodes
-        return [_episode_with_metric_mark(row, marks[row.episode_id], program=program) if row.episode_id in marks else row for row in episodes]
+        return [
+            _episode_with_metric_mark(row, marks[row.episode_id], program=program) if row.episode_id in marks else row
+            for row in episodes
+        ]
 
-    def _load_latest_open_episode_metric_marks(self, episodes: list[AdvisoryEpisode]) -> dict[str, AdvisoryMetricMarketMark]:
+    def _load_latest_open_episode_metric_marks(
+        self, episodes: list[AdvisoryEpisode], *, cutoff: date | None = None,
+    ) -> dict[str, AdvisoryMetricMarketMark]:
         conn_factory = getattr(self.repository, "_conn_factory", None)
         if conn_factory is None:
             return {}
@@ -2559,14 +2968,16 @@ class AdvisoryProgramService:
                     active.episode_id,
                     active.symbol,
                     k.trade_date,
-                    COALESCE(NULLIF(k.close_li, 0), NULLIF(k.open_li, 0)) / %s::float AS mark_price,
+                    NULLIF(k.close_li, 0) / %s::float AS mark_price,
                     COALESCE(NULLIF(k.high_li, 0), NULLIF(k.close_li, 0), NULLIF(k.open_li, 0)) / %s::float AS high_price,
                     COALESCE(NULLIF(k.low_li, 0), NULLIF(k.close_li, 0), NULLIF(k.open_li, 0)) / %s::float AS low_price
                 FROM active
                 JOIN market.kline_daily_raw k
                   ON k.ts_code = active.symbol
                  AND k.trade_date >= active.effective_entry_date
-                WHERE COALESCE(NULLIF(k.close_li, 0), NULLIF(k.open_li, 0)) IS NOT NULL
+                 AND k.trade_date >= %s
+                 AND k.trade_date <= %s
+                WHERE k.close_li > 0
             ),
             latest AS (
                 SELECT DISTINCT ON (episode_id)
@@ -2596,7 +3007,11 @@ class AdvisoryProgramService:
         """
         with conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
-                cur.execute(sql, [*values, MARKET_PRICE_UNIT_DIVISOR, MARKET_PRICE_UNIT_DIVISOR, MARKET_PRICE_UNIT_DIVISOR])
+                cur.execute(
+                    sql, [*values, MARKET_PRICE_UNIT_DIVISOR, MARKET_PRICE_UNIT_DIVISOR, MARKET_PRICE_UNIT_DIVISOR,
+                          min(row.effective_entry_date for row in episodes),
+                          cutoff or reporting_cutoff(self._now_provider())]
+                )
                 rows = cur.fetchall()
         marks: dict[str, AdvisoryMetricMarketMark] = {}
         for row in rows:
@@ -2615,6 +3030,77 @@ class AdvisoryProgramService:
             )
         return marks
 
+    def _with_settled_episode_metric_prices(self, episodes: list[AdvisoryEpisode], *, cutoff: date) -> list[AdvisoryEpisode]:
+        """Reconcile legacy planned reference prices without altering the ledger."""
+        due = [row for row in episodes if row.status == EPISODE_STATUS_EXITED
+               and row.effective_exit_date is not None and row.effective_entry_date <= row.effective_exit_date <= cutoff]
+        conn_factory = getattr(self.repository, "_conn_factory", None)
+        if not due or conn_factory is None:
+            return episodes
+        placeholders = ", ".join("(%s::text, %s::text, %s::date, %s::date)" for _ in due)
+        values = [value for row in due for value in (row.episode_id, row.symbol, row.effective_entry_date, row.effective_exit_date)]
+        symbols = sorted({row.symbol for row in due})
+        start_date = min(row.effective_entry_date for row in due)
+        end_date = max(row.effective_exit_date for row in due)
+        source_error = None
+        try:
+            with conn_factory() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(f"""
+                        WITH due(episode_id, symbol, entry_date, exit_date) AS (VALUES {placeholders}),
+                        priced AS MATERIALIZED (
+                            SELECT ts_code, trade_date, open_li, close_li
+                            FROM market.kline_daily_raw
+                            WHERE ts_code = ANY(%s) AND trade_date BETWEEN %s AND %s
+                        ), suspended AS MATERIALIZED (
+                            SELECT ts_code, trade_date FROM market.suspend_d
+                            WHERE ts_code = ANY(%s) AND trade_date BETWEEN %s AND %s
+                              AND COALESCE(TRIM(suspend_type), 'S') = 'S'
+                        )
+                        SELECT due.episode_id, entry.open_li AS entry_open, entry.close_li AS entry_close,
+                               exit.open_li AS exit_open, exit.close_li AS exit_close,
+                               EXISTS (SELECT 1 FROM suspended s WHERE s.ts_code = due.symbol
+                                   AND s.trade_date IN (due.entry_date, due.exit_date)) AS suspended
+                        FROM due
+                        LEFT JOIN priced entry ON entry.ts_code = due.symbol AND entry.trade_date = due.entry_date
+                        LEFT JOIN priced exit ON exit.ts_code = due.symbol AND exit.trade_date = due.exit_date
+                        """, [*values, symbols, start_date, end_date, symbols, start_date, end_date])
+                    price_rows = cur.fetchall()
+                    prices = {str(row["episode_id"]): dict(row) for row in price_rows}
+                    if len(prices) != len(price_rows):
+                        raise DataUnavailableError("duplicate settlement market identity")
+        except Exception as exc:
+            logger.warning("Advisory settlement metric source unavailable (%s)", type(exc).__name__)
+            prices = {}
+            source_error = getattr(exc, "pgcode", None) or type(exc).__name__
+        due_ids = {row.episode_id for row in due}
+        result = []
+        for row in episodes:
+            if row.episode_id not in due_ids:
+                result.append(row)
+                continue
+            price = prices.get(row.episode_id, {})
+            entry = _li_price(price.get("entry_open" if row.entry_price_basis == PRICE_BASIS_NEXT_OPEN else "entry_close"))
+            exit_price = _li_price(price.get("exit_open" if row.exit_price_basis == PRICE_BASIS_NEXT_OPEN else "exit_close"))
+            reason = ("SETTLEMENT_SOURCE_UNAVAILABLE" if source_error else "SUSPENDED" if price.get("suspended") else "SETTLEMENT_MARKET_DATA_MISSING"
+                      if not entry or not exit_price or not _li_price(price.get("exit_close")) else None)
+            evidence = {**row.evidence_json, "metric_settlement": {
+                "trade_date": row.effective_exit_date.isoformat(), "source": "market.kline_daily_raw",
+                "recorded_entry_price": row.entry_price, "recorded_exit_price": row.exit_price,
+                "recorded_max_drawdown_bps": row.max_drawdown_bps,
+                "entry_price_basis": row.entry_price_basis, "exit_price_basis": row.exit_price_basis,
+                "reason_code": reason, "execution_evidence_level": "REFERENCE_HYPOTHETICAL",
+                "source_error_code": source_error,
+            }}
+            if reason:
+                result.append(replace(row, return_bps=None, is_win=None, win_rate_inclusion_status=WIN_EXCLUDED, evidence_json=evidence))
+            else:
+                gross = (exit_price / entry - 1) * 10000
+                result.append(replace(row, entry_price=entry, exit_price=exit_price, return_bps=gross,
+                                      is_win=gross > 0, win_rate_inclusion_status=WIN_INCLUDED, evidence_json=evidence,
+                                      max_drawdown_bps=row.max_drawdown_bps if entry == row.entry_price else None))
+        return result
+
     def _build_list_version(
         self,
         *,
@@ -2627,6 +3113,8 @@ class AdvisoryProgramService:
         previous_items: list[AdvisoryRecommendationListItem],
         version_status: str,
         date_context: Mapping[str, Any] | None = None,
+        universe_receipt: Mapping[str, Any] | None = None,
+        frozen_input_archive: Mapping[str, Any] | None = None,
     ) -> tuple[AdvisoryRecommendationListVersion, list[AdvisoryRecommendationListItem], dict[str, Any]]:
         previous_by_symbol = {row.symbol: row for row in previous_items}
         episode_by_id = {row.episode_id: row for row in result.active_pool}
@@ -2635,10 +3123,18 @@ class AdvisoryProgramService:
         for decision in result.decisions:
             episode = episode_by_id.get(decision.episode_id or "")
             previous = previous_by_symbol.get(decision.symbol)
-            item_state = EPISODE_STATUS_EXITED if decision.action == ACTION_EXIT else "WAITING" if decision.action == ACTION_WAITING else EPISODE_STATUS_ACTIVE
+            item_state = (
+                EPISODE_STATUS_EXITED
+                if decision.action == ACTION_EXIT
+                else "WAITING"
+                if decision.action == ACTION_WAITING
+                else EPISODE_STATUS_ACTIVE
+            )
             effective_trade_date = None
             if episode is not None:
-                effective_trade_date = episode.effective_exit_date if decision.action == ACTION_EXIT else episode.effective_entry_date
+                effective_trade_date = (
+                    episode.effective_exit_date if decision.action == ACTION_EXIT else episode.effective_entry_date
+                )
             price_basis = program.exit_price_basis if decision.action == ACTION_EXIT else program.entry_price_basis
             advice = decision.operation_advice_json or _operation_advice(
                 action=decision.action,
@@ -2661,7 +3157,9 @@ class AdvisoryProgramService:
                     symbol=decision.symbol,
                     item_state=item_state,
                     action=decision.action,
-                    stock_name=_display_stock_name(decision.evidence_json) or decision.stock_name or (episode.stock_name if episode else None),
+                    stock_name=_display_stock_name(decision.evidence_json)
+                    or decision.stock_name
+                    or (episode.stock_name if episode else None),
                     previous_action=previous.action if previous else None,
                     rank=decision.rank,
                     score=decision.score,
@@ -2684,7 +3182,11 @@ class AdvisoryProgramService:
         exited_count = sum(1 for row in items if row.action == ACTION_EXIT)
         waiting_count = sum(1 for row in items if row.action == ACTION_WAITING)
         changed_count = entered_count + exited_count + waiting_count
-        overlap_rate = (len(active_symbols & previous_active_symbols) / len(previous_active_symbols)) if previous_active_symbols else None
+        overlap_rate = (
+            (len(active_symbols & previous_active_symbols) / len(previous_active_symbols))
+            if previous_active_symbols
+            else None
+        )
         turnover_rate = ((entered_count + exited_count) / max(program.target_count, 1)) if items else 0.0
         summary = {
             "entered_count": entered_count,
@@ -2700,6 +3202,10 @@ class AdvisoryProgramService:
         }
         if date_context:
             summary["advisory_date_context"] = _json_ready(dict(date_context))
+        if universe_receipt:
+            summary["advisory_universe_receipt"] = _json_ready(dict(universe_receipt))
+        if frozen_input_archive:
+            summary["advisory_frozen_input_archive"] = _json_ready(dict(frozen_input_archive))
         list_version = AdvisoryRecommendationListVersion(
             list_version_id=list_version_id,
             program_id=program.program_id,
@@ -2735,6 +3241,7 @@ class AdvisoryProgramService:
         active_episodes: list[AdvisoryEpisode],
         preview: bool,
         episode_identity_allocator: Callable[[AdvisoryTransitionCandidateV1], str] | None = None,
+        execution_trade_date: date | None = None,
     ) -> AdvisoryReviewResult:
         """Project current Advisory inputs through the shared lifecycle engine.
 
@@ -2747,12 +3254,9 @@ class AdvisoryProgramService:
         transition_candidates: list[AdvisoryTransitionCandidateV1] = []
 
         def candidate_port(evidence: AdvisoryCandidate) -> AdvisoryTransitionCandidateV1:
-            entry_price = _price_for_basis(
-                market_by_symbol.get(evidence.symbol), evidence, program.entry_price_basis
-            )
-            exit_price = _price_for_basis(
-                market_by_symbol.get(evidence.symbol), evidence, program.exit_price_basis
-            )
+            price_candidate = None if execution_trade_date is not None else evidence
+            entry_price = _price_for_basis(market_by_symbol.get(evidence.symbol), price_candidate, program.entry_price_basis)
+            exit_price = _price_for_basis(market_by_symbol.get(evidence.symbol), price_candidate, program.exit_price_basis)
             return AdvisoryTransitionCandidateV1(
                 symbol=evidence.symbol,
                 rank=evidence.rank,
@@ -2827,12 +3331,12 @@ class AdvisoryProgramService:
                 active_rank_by_symbol={item.symbol: evidence_by_symbol[item.symbol].rank for item in active_episodes},
             ),
             episode_identity_allocator=episode_identity_allocator or (lambda _candidate: f"advep_{uuid4().hex}"),
-            effective_entry_date=lambda candidate: self._effective_trade_date(
+            effective_entry_date=lambda candidate: execution_trade_date or self._effective_trade_date(
                 trade_date,
                 program.entry_price_basis,
                 candidate=evidence_by_symbol[candidate.symbol],
             ),
-            effective_exit_date=lambda _episode: self._effective_trade_date(trade_date, program.exit_price_basis),
+            effective_exit_date=lambda _episode: execution_trade_date or self._effective_trade_date(trade_date, program.exit_price_basis),
             defer_stop_before_effective_entry=True,
             historical_mode=False,
             entry_mark_unavailable_action=TRANSITION_ACTION_WAITING,
@@ -2954,7 +3458,9 @@ class AdvisoryProgramService:
                         mapped.symbol,
                         ACTION_WAITING,
                         decision.reason_code,
-                        REVIEW_STATUS_WAITING_DATA if decision.reason_code == REVIEW_REASON_WAITING_PRICE else REVIEW_STATUS_SUCCEEDED,
+                        REVIEW_STATUS_WAITING_DATA
+                        if decision.reason_code == REVIEW_REASON_WAITING_PRICE
+                        else REVIEW_STATUS_SUCCEEDED,
                         mapped,
                         evidence,
                     )
@@ -2969,7 +3475,13 @@ class AdvisoryProgramService:
                     exit_basis=program.exit_price_basis,
                     exit_reason=decision.reason_code,
                     calendar_provider=self.calendar_provider,
+                    effective_exit_date=execution_trade_date,
                 )
+                if execution_trade_date is not None:
+                    exited = replace(exited, evidence_json={**exited.evidence_json, "reference_execution": {
+                        "trade_date": execution_trade_date.isoformat(), "price": decision.exit_price,
+                        "price_basis": program.exit_price_basis, "execution_evidence_level": "REFERENCE_HYPOTHETICAL",
+                    }})
                 snapshots.append(exited)
                 decisions.append(
                     self._decision(
@@ -3002,8 +3514,10 @@ class AdvisoryProgramService:
 
         latest = _latest_by_episode_id(snapshots)
         status_program = replace(program, last_review_status=review_status, latest_review_trade_date=trade_date)
-        metrics = compute_program_metrics(status_program, latest)
-        return AdvisoryReviewResult(status_program, trade_date, review_status, decisions, latest, metrics, preview=preview)
+        metrics = compute_program_metrics(status_program, latest, now=self._now_provider())
+        return AdvisoryReviewResult(
+            status_program, trade_date, review_status, decisions, latest, metrics, preview=preview
+        )
 
     @staticmethod
     def _decision(
@@ -3033,13 +3547,19 @@ class AdvisoryProgramService:
             entry_price=entry_price or (episode.entry_price if episode else None),
             exit_price=episode.exit_price if episode else None,
             return_bps=episode.return_bps if episode else None,
-            evidence_json=_candidate_evidence(evidence, program) if evidence else {"review_policy_sha256": program.review_policy_sha256},
+            evidence_json=_candidate_evidence(evidence, program)
+            if evidence
+            else {"review_policy_sha256": program.review_policy_sha256},
             operation_advice_json=_operation_advice(
                 action=action,
                 reason_code=reason_code,
                 trade_date=trade_date,
                 price_basis=program.exit_price_basis if action == ACTION_EXIT else program.entry_price_basis,
-                effective_trade_date=(episode.effective_exit_date if action == ACTION_EXIT else episode.effective_entry_date) if episode else None,
+                effective_trade_date=(
+                    episode.effective_exit_date if action == ACTION_EXIT else episode.effective_entry_date
+                )
+                if episode
+                else None,
                 rank=evidence.rank if evidence else episode.current_rank if episode else None,
                 score=evidence.score if evidence else episode.current_score if episode else None,
                 entry_price=entry_price or (episode.entry_price if episode else None),
@@ -3055,6 +3575,7 @@ class AdvisoryProgramService:
         selection_run_id: str | None,
         data_source: str,
         runtime_config: dict[str, Any],
+        advisory_archive_context: dict[str, Any] | None = None,
     ) -> SelectionRun:
         if selection_run_id:
             run = self.selection_service.get_run(selection_run_id)
@@ -3069,13 +3590,21 @@ class AdvisoryProgramService:
                 trade_date=trade_date,
                 data_source=data_source,
                 runtime_config=config,
+                **({"advisory_archive_context": advisory_archive_context} if advisory_archive_context is not None else {}),
             )
         if run.status != SelectionRunStatus.SUCCEEDED:
-            raise InvalidStateTransitionError("selection run must be succeeded for advisory review", context={"run_id": run.run_id, "status": run.status.value})
+            raise InvalidStateTransitionError(
+                "selection run must be succeeded for advisory review",
+                context={"run_id": run.run_id, "status": run.status.value},
+            )
         if sorted(run.package_ids) != sorted(program.package_ids):
-            raise RuntimeConfigInvalidError("selection run packages must match advisory program packages", context={"run_id": run.run_id})
+            raise RuntimeConfigInvalidError(
+                "selection run packages must match advisory program packages", context={"run_id": run.run_id}
+            )
         if run.trade_date != trade_date:
-            raise RuntimeConfigInvalidError("selection run trade_date must match advisory review trade_date", context={"run_id": run.run_id})
+            raise RuntimeConfigInvalidError(
+                "selection run trade_date must match advisory review trade_date", context={"run_id": run.run_id}
+            )
         return run
 
     @staticmethod
@@ -3097,8 +3626,11 @@ class AdvisoryProgramService:
                         "selection_as_of_trade_date": selection_as_of_trade_date.isoformat(),
                     },
                 )
+            config["selection_price_mode"] = SELECTION_PRICE_MODE_DAILY_DB_ONLY
             date_context["selection_as_of_trade_date"] = selection_as_of_trade_date.isoformat()
-            artifact_config = deepcopy(config.get("selection_artifact_config") or config.get("selection_artifact") or {})
+            artifact_config = deepcopy(
+                config.get("selection_artifact_config") or config.get("selection_artifact") or {}
+            )
             if not isinstance(artifact_config, dict):
                 raise RuntimeConfigInvalidError(
                     "advisory review selection_artifact_config must be an object",
@@ -3163,7 +3695,10 @@ class AdvisoryProgramService:
         if not isinstance(artifact_config, dict):
             raise RuntimeConfigInvalidError(
                 "advisory review selection_artifact_config must be an object",
-                context={"program_id": program.program_id, "selection_artifact_config_type": type(artifact_config).__name__},
+                context={
+                    "program_id": program.program_id,
+                    "selection_artifact_config_type": type(artifact_config).__name__,
+                },
             )
         artifact_config.setdefault("auto_generate", True)
         artifact_config.setdefault("inference_backend", "wsl")
@@ -3174,6 +3709,161 @@ class AdvisoryProgramService:
         config["runtime_profile"] = runtime_profile
         config["selection_artifact_config"] = artifact_config
         return config
+
+    @staticmethod
+    def _normalize_universe_selection(value: Mapping[str, Any] | None) -> dict[str, Any]:
+        try:
+            return normalize_advisory_universe_selection(value)
+        except AdvisoryUniverseContractError as exc:
+            raise RuntimeConfigInvalidError(
+                str(exc),
+                context={"reason_code": exc.reason_code, **exc.context},
+            ) from exc
+
+    def _runtime_config_for_binding(
+        self,
+        binding: AdvisoryStrategyBindingVersion,
+        override: Mapping[str, Any] | None,
+    ) -> dict[str, Any]:
+        base = deepcopy(binding.runtime_config_json)
+        bound_selection = self._normalize_universe_selection(base.get("universe_selection"))
+        requested = deepcopy(dict(override or {}))
+        if "universe_selection" in requested:
+            requested_selection = self._normalize_universe_selection(requested.get("universe_selection"))
+            if requested_selection != bound_selection:
+                raise RuntimeConfigInvalidError(
+                    "advisory review universe_selection must match the active binding",
+                    context={
+                        "reason_code": REASON_ADVISORY_UNIVERSE_BINDING_MISMATCH,
+                        "binding_version_id": binding.binding_version_id,
+                        "bound_universe_selection": bound_selection,
+                        "requested_universe_selection": requested_selection,
+                    },
+                )
+        merged = _deep_merge_dicts(base, requested)
+        merged["universe_selection"] = bound_selection
+        return merged
+
+    @staticmethod
+    def _universe_as_of_trade_date(
+        *,
+        target_trade_date: date,
+        runtime_config: Mapping[str, Any],
+    ) -> date:
+        context = runtime_config.get("advisory_date_context")
+        if context is None:
+            return target_trade_date
+        if not isinstance(context, Mapping):
+            raise RuntimeConfigInvalidError(
+                "advisory_date_context must be an object",
+                context={"advisory_date_context_type": type(context).__name__},
+            )
+        raw_target = context.get("target_trade_date")
+        if raw_target is not None and str(raw_target) != target_trade_date.isoformat():
+            raise RuntimeConfigInvalidError(
+                "advisory_date_context target_trade_date must match review trade_date",
+                context={
+                    "target_trade_date": target_trade_date.isoformat(),
+                    "context_target_trade_date": str(raw_target),
+                },
+            )
+        raw_as_of = context.get("selection_as_of_trade_date")
+        if raw_as_of is None:
+            return target_trade_date
+        try:
+            resolved = date.fromisoformat(str(raw_as_of))
+        except ValueError as exc:
+            raise RuntimeConfigInvalidError(
+                "advisory selection_as_of_trade_date must use YYYY-MM-DD",
+                context={"selection_as_of_trade_date": str(raw_as_of)},
+            ) from exc
+        if resolved >= target_trade_date:
+            raise RuntimeConfigInvalidError(
+                "advisory selection_as_of_trade_date must be before target_trade_date",
+                context={
+                    "selection_as_of_trade_date": resolved.isoformat(),
+                    "target_trade_date": target_trade_date.isoformat(),
+                },
+            )
+        return resolved
+
+    def _filter_candidates_for_universe(
+        self,
+        candidates: list[AdvisoryCandidate],
+        *,
+        trade_date: date,
+        runtime_config: Mapping[str, Any] | None,
+    ) -> tuple[list[AdvisoryCandidate], dict[str, Any]]:
+        config = deepcopy(dict(runtime_config or {}))
+        universe_as_of_trade_date = self._universe_as_of_trade_date(
+            target_trade_date=trade_date,
+            runtime_config=config,
+        )
+        selection = self._normalize_universe_selection(config.get("universe_selection"))
+        config["universe_selection"] = selection
+        if selection["mode"] == "stock_universe":
+            config["advisory_universe_receipt"] = build_universe_admission_receipt(
+                selection=selection,
+                trade_date=trade_date,
+                universe_as_of_trade_date=universe_as_of_trade_date,
+                input_count=len(candidates),
+                output_count=len(candidates),
+                membership_revision="selection_runtime_canonical_pit",
+                symbol_set_sha256=None,
+            )
+            return candidates, config
+        try:
+            snapshot = self.universe_resolver.resolve(selection, universe_as_of_trade_date)
+        except AdvisoryUniverseContractError as exc:
+            raise DataUnavailableError(
+                str(exc),
+                context={"reason_code": exc.reason_code, **exc.context},
+            ) from exc
+        filtered: list[AdvisoryCandidate] = []
+        for candidate in candidates:
+            if candidate.symbol not in snapshot.eligible_symbols:
+                continue
+            component_scores = deepcopy(candidate.component_scores)
+            component_scores["advisory_universe_admission"] = {
+                "original_selection_rank": candidate.rank,
+                "source_pool_ids": list(snapshot.source_pool_ids_by_symbol.get(candidate.symbol, ())),
+            }
+            filtered.append(
+                replace(
+                    candidate,
+                    rank=len(filtered) + 1,
+                    component_scores=component_scores,
+                )
+            )
+        config["advisory_universe_receipt"] = build_universe_admission_receipt(
+            selection=selection,
+            trade_date=trade_date,
+            universe_as_of_trade_date=universe_as_of_trade_date,
+            input_count=len(candidates),
+            output_count=len(filtered),
+            membership_revision=snapshot.membership_revision,
+            symbol_set_sha256=snapshot.symbol_set_sha256,
+            pit_source=snapshot.pit_source,
+            pit_universe_key=snapshot.pit_universe_key,
+            pit_rule_version=snapshot.pit_rule_version,
+            pit_revision=snapshot.pit_revision,
+        )
+        return filtered, config
+
+    def apply_universe_admission(
+        self,
+        candidates: list[AdvisoryCandidate],
+        *,
+        trade_date: date,
+        runtime_config: Mapping[str, Any] | None,
+    ) -> tuple[list[AdvisoryCandidate], dict[str, Any]]:
+        """Apply the active Advisory universe at the shared pre-ranking boundary."""
+
+        return self._filter_candidates_for_universe(
+            candidates,
+            trade_date=trade_date,
+            runtime_config=runtime_config,
+        )
 
     def _validated_config(
         self,
@@ -3201,13 +3891,25 @@ class AdvisoryProgramService:
             operation="validate_config",
         )
         if target_count <= 0 or target_count > 100:
-            raise RuntimeConfigInvalidError("advisory target_count must be between 1 and 100", context={"target_count": target_count})
+            raise RuntimeConfigInvalidError(
+                "advisory target_count must be between 1 and 100", context={"target_count": target_count}
+            )
         weights = self._normalize_weights(clean_package_ids, package_weights)
         policy = self._normalize_review_policy(review_policy, target_count=target_count)
         entry_basis = self._normalize_price_basis(entry_price_basis)
         exit_basis = self._normalize_price_basis(exit_price_basis)
-        fusion_method = "weighted_rank_fusion" if mode in {PACKAGE_MODE_FUSION, PACKAGE_MODE_WEIGHTED_RANK_FUSION} else mode if mode in {PACKAGE_MODE_UNION, PACKAGE_MODE_INTERSECTION} else None
-        fusion_sha = _canonical_sha256({"method": fusion_method, "package_ids": clean_package_ids, "package_weights": weights}) if fusion_method else None
+        fusion_method = (
+            "weighted_rank_fusion"
+            if mode in {PACKAGE_MODE_FUSION, PACKAGE_MODE_WEIGHTED_RANK_FUSION}
+            else mode
+            if mode in {PACKAGE_MODE_UNION, PACKAGE_MODE_INTERSECTION}
+            else None
+        )
+        fusion_sha = (
+            _canonical_sha256({"method": fusion_method, "package_ids": clean_package_ids, "package_weights": weights})
+            if fusion_method
+            else None
+        )
         return {
             "program_name": name,
             "package_mode": mode,
@@ -3279,47 +3981,32 @@ class AdvisoryProgramService:
     def _normalize_weights(package_ids: list[str], raw: Mapping[str, Any] | None) -> dict[str, float]:
         values = dict(raw or {package_id: 1.0 for package_id in package_ids})
         if set(values) != set(package_ids):
-            raise RuntimeConfigInvalidError("advisory package_weights must match package_ids exactly", context={"package_ids": package_ids, "weight_keys": sorted(values)})
+            raise RuntimeConfigInvalidError(
+                "advisory package_weights must match package_ids exactly",
+                context={"package_ids": package_ids, "weight_keys": sorted(values)},
+            )
         out: dict[str, float] = {}
         for package_id in package_ids:
             value = _optional_float(values[package_id])
             if value is None or value <= 0:
-                raise RuntimeConfigInvalidError("advisory package weight must be positive", context={"package_id": package_id})
+                raise RuntimeConfigInvalidError(
+                    "advisory package weight must be positive", context={"package_id": package_id}
+                )
             out[package_id] = value
         return out
 
     @staticmethod
     def _normalize_review_policy(raw: Mapping[str, Any] | None, *, target_count: int) -> dict[str, Any]:
-        policy = {
-            **DEFAULT_REVIEW_POLICY,
-            "rank_enter_threshold": target_count,
-            "rank_exit_threshold": target_count * 2,
-            **dict(raw or {}),
-        }
-        for key in (
-            "rank_enter_threshold",
-            "rank_exit_threshold",
-            "rank_exit_confirm_days",
-            "daily_replacement_budget",
-            "stop_loss_bps",
-            "take_profit_bps",
-            "trailing_stop_bps",
-            "time_stop_days",
-        ):
-            policy[key] = int(policy[key])
-            if policy[key] < 0:
-                raise RuntimeConfigInvalidError("advisory review policy values must be non-negative", context={"field": key})
-        if policy["rank_enter_threshold"] <= 0 or policy["rank_exit_threshold"] < policy["rank_enter_threshold"]:
-            raise RuntimeConfigInvalidError("rank_exit_threshold must be >= rank_enter_threshold > 0")
-        if policy["daily_replacement_budget"] <= 0:
-            raise RuntimeConfigInvalidError("daily_replacement_budget must be positive")
-        return policy
+        return normalize_advisory_review_policy(raw, target_count=target_count)
 
     @staticmethod
     def _normalize_price_basis(value: str) -> str:
         text = str(value or "").strip()
         if text not in SUPPORTED_PRICE_BASIS:
-            raise RuntimeConfigInvalidError("unsupported advisory price basis", context={"price_basis": value, "supported": sorted(SUPPORTED_PRICE_BASIS)})
+            raise RuntimeConfigInvalidError(
+                "unsupported advisory price basis",
+                context={"price_basis": value, "supported": sorted(SUPPORTED_PRICE_BASIS)},
+            )
         return text
 
     @staticmethod
@@ -3341,7 +4028,9 @@ class AdvisoryProgramService:
     def _with_status(self, program: AdvisoryProgram, status: str) -> AdvisoryProgram:
         target = self._normalize_status(status)
         if program.status == PROGRAM_STATUS_ARCHIVED and target != PROGRAM_STATUS_ARCHIVED:
-            raise InvalidStateTransitionError("archived advisory program cannot be reactivated", context={"program_id": program.program_id})
+            raise InvalidStateTransitionError(
+                "archived advisory program cannot be reactivated", context={"program_id": program.program_id}
+            )
         if target == PROGRAM_STATUS_REVIEWING:
             raise RuntimeConfigInvalidError("use run_review for REVIEWING state")
         enabled_since = program.enabled_since
@@ -3380,13 +4069,17 @@ def candidates_from_selection_run(run: SelectionRun) -> list[AdvisoryCandidate]:
             stock_name=item.stock_name,
             source_run_id=run.run_id,
             selection_entry_price_time=item.selection_entry_price_time,
-            reference_price_trade_date=_candidate_reference_trade_date_from_selection(item, run.trade_date, runtime_config=run.runtime_config),
+            reference_price_trade_date=_candidate_reference_trade_date_from_selection(
+                item, run.trade_date, runtime_config=run.runtime_config
+            ),
         )
         for item in run.aggregate_results
     ]
 
 
-def _candidate_reference_trade_date_from_selection(item: Any, fallback: date, *, runtime_config: Mapping[str, Any] | None = None) -> date:
+def _candidate_reference_trade_date_from_selection(
+    item: Any, fallback: date, *, runtime_config: Mapping[str, Any] | None = None
+) -> date:
     display = (getattr(item, "component_scores", None) or {}).get("selection_result_display")
     display = display if isinstance(display, dict) else {}
     point_in_time = (runtime_config or {}).get("point_in_time_context")
@@ -3405,44 +4098,11 @@ def _candidate_reference_trade_date_from_selection(item: Any, fallback: date, *,
     return fallback
 
 
-def compute_program_metrics(program: AdvisoryProgram, episodes: Iterable[AdvisoryEpisode]) -> dict[str, Any]:
-    rows = list(episodes)
-    evaluable = [row for row in rows if row.return_bps is not None and row.win_rate_inclusion_status in {WIN_INCLUDED, WIN_OPEN_MARK}]
-    returns = [float(row.return_bps) for row in evaluable if row.return_bps is not None]
-    wins = [row for row in evaluable if row.return_bps is not None and row.return_bps > 0]
-    drawdowns = [float(row.max_drawdown_bps) for row in rows if row.max_drawdown_bps is not None]
-    holding_days = [row.holding_trading_days for row in rows]
-    metric_exit_reasons = [_metric_count_exit_reason(row, program=program) for row in rows]
-    open_marked = [
-        row
-        for row in rows
-        if row.status == EPISODE_STATUS_ACTIVE and row.return_bps is not None and row.win_rate_inclusion_status == WIN_OPEN_MARK
-    ]
-    missing_open_marks = [row for row in rows if row.status == EPISODE_STATUS_ACTIVE and row.return_bps is None]
-    mark_trade_dates = [
-        str((row.evidence_json.get("open_mark_to_market") or {}).get("trade_date"))
-        for row in open_marked
-        if isinstance(row.evidence_json.get("open_mark_to_market"), dict)
-        and (row.evidence_json.get("open_mark_to_market") or {}).get("trade_date")
-    ]
-    return {
-        "enabled_since": program.enabled_since.isoformat() if program.enabled_since else None,
-        "entered_episode_count": len(rows),
-        "active_count": sum(1 for row in rows if row.status == EPISODE_STATUS_ACTIVE),
-        "take_profit_count": sum(1 for reason in metric_exit_reasons if reason in {EXIT_TAKE_PROFIT, EXIT_TRAILING_TAKE_PROFIT}),
-        "stop_loss_count": sum(1 for reason in metric_exit_reasons if reason == EXIT_STOP_LOSS),
-        "win_rate": (len(wins) / len(evaluable)) if evaluable else None,
-        "avg_return_bps": mean(returns) if returns else None,
-        "median_return_bps": median(returns) if returns else None,
-        "max_drawdown_bps": min(drawdowns) if drawdowns else None,
-        "avg_holding_days": mean(holding_days) if holding_days else None,
-        "last_review_status": program.last_review_status,
-        "metric_status": "READY" if returns else "WAITING_MARKET_DATA" if missing_open_marks else "NO_EPISODES",
-        "metric_evaluable_count": len(evaluable),
-        "open_mark_count": len(open_marked),
-        "missing_open_mark_count": len(missing_open_marks),
-        "metric_mark_trade_date": max(mark_trade_dates) if mark_trade_dates else None,
-    }
+def compute_program_metrics(
+    program: AdvisoryProgram, episodes: Iterable[AdvisoryEpisode], *, now: datetime | None = None,
+    cost: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return performance_metrics(program_to_dict(program), [episode_to_dict(row) for row in episodes], now=now or _utcnow(), cost=cost)
 
 
 def program_to_dict(program: AdvisoryProgram) -> dict[str, Any]:
@@ -3455,6 +4115,15 @@ def episode_to_dict(episode: AdvisoryEpisode) -> dict[str, Any]:
 
 def binding_to_dict(binding: AdvisoryStrategyBindingVersion) -> dict[str, Any]:
     payload = _json_ready(asdict(binding))
+    try:
+        payload["universe_selection"] = normalize_advisory_universe_selection(
+            binding.runtime_config_json.get("universe_selection")
+        )
+    except AdvisoryUniverseContractError as exc:
+        raise RuntimeConfigInvalidError(
+            str(exc),
+            context={"reason_code": exc.reason_code, **exc.context},
+        ) from exc
     payload["binding_interval_semantics"] = BINDING_INTERVAL_SEMANTICS
     payload["binding_payload_hash"] = hashlib.sha256(
         json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -3512,7 +4181,9 @@ def _candidate_from_mapping(row: Mapping[str, Any]) -> AdvisoryCandidate:
         raise RuntimeConfigInvalidError("advisory candidate symbol is required")
     rank = _optional_int(row.get("rank"))
     if rank is None or rank <= 0:
-        raise RuntimeConfigInvalidError("advisory candidate rank must be positive", context={"symbol": symbol, "rank": row.get("rank")})
+        raise RuntimeConfigInvalidError(
+            "advisory candidate rank must be positive", context={"symbol": symbol, "rank": row.get("rank")}
+        )
     return AdvisoryCandidate(
         symbol=symbol,
         rank=rank,
@@ -3578,7 +4249,9 @@ def _candidate_evidence(candidate: AdvisoryCandidate | None, program: AdvisoryPr
                 "stock_name": candidate.stock_name,
                 "source_run_id": candidate.source_run_id,
                 "selection_entry_price_time": candidate.selection_entry_price_time,
-                "reference_price_trade_date": candidate.reference_price_trade_date.isoformat() if candidate.reference_price_trade_date else None,
+                "reference_price_trade_date": candidate.reference_price_trade_date.isoformat()
+                if candidate.reference_price_trade_date
+                else None,
                 "component_scores": deepcopy(candidate.component_scores),
             }
         )
@@ -3596,7 +4269,12 @@ def _display_stock_name(row: Mapping[str, Any]) -> str | None:
             value = metadata.get(key)
             if value:
                 return str(value)
-    evidence = row.get("evidence_json") or row.get("evidence") or row.get("component_scores_json") or row.get("component_scores")
+    evidence = (
+        row.get("evidence_json")
+        or row.get("evidence")
+        or row.get("component_scores_json")
+        or row.get("component_scores")
+    )
     if isinstance(evidence, dict):
         for key in ("stock_name", "symbol_name"):
             value = evidence.get(key)
@@ -3611,9 +4289,13 @@ def _display_stock_name(row: Mapping[str, Any]) -> str | None:
     return None
 
 
-def _episode_with_mark(episode: AdvisoryEpisode, *, evidence: AdvisoryCandidate, price: float, program: AdvisoryProgram) -> AdvisoryEpisode:
+def _episode_with_mark(
+    episode: AdvisoryEpisode, *, evidence: AdvisoryCandidate, price: float, program: AdvisoryProgram
+) -> AdvisoryEpisode:
     return_bps = (float(price) / episode.entry_price - 1.0) * 10000.0
-    weak_days = episode.weak_rank_confirm_days + 1 if evidence.rank > int(program.review_policy["rank_exit_threshold"]) else 0
+    weak_days = (
+        episode.weak_rank_confirm_days + 1 if evidence.rank > int(program.review_policy["rank_exit_threshold"]) else 0
+    )
     return replace(
         episode,
         current_rank=evidence.rank,
@@ -3630,7 +4312,9 @@ def _episode_with_mark(episode: AdvisoryEpisode, *, evidence: AdvisoryCandidate,
     )
 
 
-def _episode_with_metric_mark(episode: AdvisoryEpisode, mark: AdvisoryMetricMarketMark, *, program: AdvisoryProgram) -> AdvisoryEpisode:
+def _episode_with_metric_mark(
+    episode: AdvisoryEpisode, mark: AdvisoryMetricMarketMark, *, program: AdvisoryProgram
+) -> AdvisoryEpisode:
     return_bps = (float(mark.mark_price) / episode.entry_price - 1.0) * 10000.0
     runup_bps = return_bps
     drawdown_bps = return_bps
@@ -3663,21 +4347,6 @@ def _episode_with_metric_mark(episode: AdvisoryEpisode, mark: AdvisoryMetricMark
                 "metric_exit_reason": exit_reason,
             },
         },
-    )
-
-
-def _metric_count_exit_reason(episode: AdvisoryEpisode, *, program: AdvisoryProgram) -> str | None:
-    if episode.exit_reason:
-        return episode.exit_reason
-    if episode.status != EPISODE_STATUS_ACTIVE or episode.return_bps is None:
-        return None
-    if episode.win_rate_inclusion_status != WIN_OPEN_MARK:
-        return None
-    return _metric_exit_reason(
-        return_bps=float(episode.return_bps),
-        max_runup_bps=_coalesce_float(episode.max_runup_bps, float(episode.return_bps)),
-        holding_days=int(episode.holding_trading_days or 0),
-        program=program,
     )
 
 
@@ -3768,7 +4437,11 @@ def _exit_reason(episode: AdvisoryEpisode, *, evidence: AdvisoryCandidate, progr
     if take_bps > 0:
         if str(policy.get("take_profit_mode") or "trailing") == "fixed" and return_bps >= take_bps:
             return EXIT_TAKE_PROFIT
-        if (episode.max_runup_bps or 0) >= take_bps and trailing_bps > 0 and return_bps <= float(episode.max_runup_bps or 0) - trailing_bps:
+        if (
+            (episode.max_runup_bps or 0) >= take_bps
+            and trailing_bps > 0
+            and return_bps <= float(episode.max_runup_bps or 0) - trailing_bps
+        ):
             return EXIT_TRAILING_TAKE_PROFIT
     return None
 
@@ -3793,13 +4466,14 @@ def _episode_exited(
     exit_basis: str,
     exit_reason: str,
     calendar_provider: AdvisoryTradingCalendarProvider | Any | None = None,
+    effective_exit_date: date | None = None,
 ) -> AdvisoryEpisode:
     return_bps = (float(exit_price) / episode.entry_price - 1.0) * 10000.0
     return replace(
         episode,
         status=EPISODE_STATUS_EXITED,
         exit_signal_date=trade_date,
-        effective_exit_date=_effective_date(trade_date, exit_basis, calendar_provider=calendar_provider),
+        effective_exit_date=effective_exit_date or _effective_date(trade_date, exit_basis, calendar_provider=calendar_provider),
         exit_price=exit_price,
         exit_price_basis=exit_basis,
         exit_reason=exit_reason,
@@ -3814,9 +4488,19 @@ def _price_for_basis(mark: AdvisoryMarketMark | None, candidate: AdvisoryCandida
     if basis == PRICE_BASIS_NEXT_OPEN:
         values = [getattr(mark, "next_open_executable", None), getattr(candidate, "next_open_executable", None)]
     elif basis == PRICE_BASIS_SIGNAL_CLOSE:
-        values = [getattr(mark, "signal_close", None), getattr(candidate, "signal_close", None), getattr(candidate, "reference_price", None), getattr(mark, "mark_price", None)]
+        values = [
+            getattr(mark, "signal_close", None),
+            getattr(candidate, "signal_close", None),
+            getattr(candidate, "reference_price", None),
+            getattr(mark, "mark_price", None),
+        ]
     else:
-        values = [getattr(mark, "next_close", None), getattr(candidate, "next_close", None), getattr(mark, "mark_price", None), getattr(candidate, "reference_price", None)]
+        values = [
+            getattr(mark, "next_close", None),
+            getattr(candidate, "next_close", None),
+            getattr(mark, "mark_price", None),
+            getattr(candidate, "reference_price", None),
+        ]
     if mark is not None and mark.suspended:
         return None
     for value in values:
@@ -3871,7 +4555,10 @@ def _latest_by_episode_id(rows: Iterable[AdvisoryEpisode]) -> list[AdvisoryEpiso
         current = latest.get(row.episode_id)
         if current is None or row.updated_at >= current.updated_at:
             latest[row.episode_id] = row
-    return sorted(latest.values(), key=lambda row: (row.status != EPISODE_STATUS_ACTIVE, row.entry_rank, row.symbol, row.episode_id))
+    return sorted(
+        latest.values(),
+        key=lambda row: (row.status != EPISODE_STATUS_ACTIVE, row.entry_rank, row.symbol, row.episode_id),
+    )
 
 
 def _selection_mode_for_package_mode(package_mode: str) -> SelectionMode:
@@ -4504,7 +5191,9 @@ def _parse_datetime(value: Any) -> datetime | None:
 
 
 def _canonical_sha256(payload: Mapping[str, Any]) -> str:
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8")
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False, default=str).encode(
+        "utf-8"
+    )
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -4540,7 +5229,7 @@ def _coalesce_float(value: float | None, fallback: float) -> float:
 
 def _sort_number(value: Any) -> float:
     parsed = _optional_float(value)
-    return parsed if parsed is not None else -10**18
+    return parsed if parsed is not None else -(10**18)
 
 
 def _sort_none_last(value: Any) -> Any:

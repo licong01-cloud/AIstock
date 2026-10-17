@@ -23,8 +23,8 @@ class FakeBackend:
         self.calls.append(("create_job", name))
         return "job-handle"
 
-    def configure_job(self, handle: object, *, memory_limit_bytes: int) -> None:
-        self.calls.append(("configure", handle, memory_limit_bytes))
+    def configure_job(self, handle: object) -> None:
+        self.calls.append(("configure", handle))
 
     def create_suspended(self, command, *, cwd: Path, env) -> JobChild:
         self.calls.append(("create_suspended", tuple(command), cwd, dict(env)))
@@ -99,7 +99,7 @@ def test_job_name_is_strictly_allowlisted(name: str) -> None:
         WindowsJob(name, policy=ResourcePolicy(), hybrid_wsl=False, backend=FakeBackend())
 
 
-def test_memory_limits_come_only_from_canonical_policy() -> None:
+def test_job_owns_processes_without_installing_aistock_memory_limits() -> None:
     windows = WindowsJob(
         "dataset-attempt-windows",
         policy=ResourcePolicy(),
@@ -112,8 +112,10 @@ def test_memory_limits_come_only_from_canonical_policy() -> None:
         hybrid_wsl=True,
         backend=FakeBackend(),
     )
-    assert windows.memory_limit_bytes == 8 * 1024**3
-    assert hybrid.memory_limit_bytes == 4 * 1024**3
+    assert windows.memory_limit_bytes is None
+    assert hybrid.memory_limit_bytes is None
+    assert ("configure", "job-handle") in windows._backend.calls
+    assert ("configure", "job-handle") in hybrid._backend.calls
 
 
 def test_hybrid_selector_must_be_explicit_boolean() -> None:

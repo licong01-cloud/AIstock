@@ -14,7 +14,7 @@ import psycopg2.extras
 from backend.db.pg_pool import get_conn
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 
-from .models import SimulationBrokerBackend, SimulationReleaseBinding, StrategyRuntimeRelease
+from .models import SimulationBrokerBackend, SimulationReleaseBinding, StrategyRuntimeRelease, canonical_json_sha256
 from .successor_models import (
     LegacyLocalSimAccountLineageV1,
     LegacyLocalSimLineageStatus,
@@ -22,6 +22,8 @@ from .successor_models import (
     LocalSimReplayStatus,
     SimulationAccountStatus,
     SimulationAccountV1,
+    SimulationLedgerScopeKind,
+    SimulationLedgerScopeV1,
 )
 
 
@@ -33,15 +35,67 @@ class LocalSimSuccessorRepositoryProtocol(Protocol):
         self,
         *,
         account: SimulationAccountV1,
+        ledger_scope: SimulationLedgerScopeV1,
         release: StrategyRuntimeRelease,
         binding: SimulationReleaseBinding,
-    ) -> tuple[SimulationAccountV1, StrategyRuntimeRelease, SimulationReleaseBinding]: ...
+    ) -> tuple[SimulationAccountV1, SimulationLedgerScopeV1, StrategyRuntimeRelease, SimulationReleaseBinding]: ...
 
     def get_account(self, account_id: str) -> SimulationAccountV1: ...
+
+    def list_accounts(
+        self,
+        *,
+        package_id: str | None = None,
+        status: SimulationAccountStatus | None = None,
+        before: tuple[datetime, str] | None = None,
+        limit: int = 100,
+    ) -> list[SimulationAccountV1]: ...
+
+    def create_replay_bundle(
+        self,
+        *,
+        account: SimulationAccountV1,
+        ledger_scope: SimulationLedgerScopeV1,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        replay_job: LocalSimReplayJobV1,
+    ) -> tuple[
+        SimulationAccountV1,
+        SimulationLedgerScopeV1,
+        StrategyRuntimeRelease,
+        SimulationReleaseBinding,
+        LocalSimReplayJobV1,
+    ]: ...
+
+    def create_selection_account_bundle(
+        self,
+        *,
+        account: SimulationAccountV1,
+        ledger_scope: SimulationLedgerScopeV1,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        selection_link: dict[str, Any],
+    ) -> tuple[
+        SimulationAccountV1,
+        SimulationLedgerScopeV1,
+        StrategyRuntimeRelease,
+        SimulationReleaseBinding,
+        dict[str, Any],
+    ]: ...
+
+    def get_ledger_scope(self, ledger_scope_id: str) -> SimulationLedgerScopeV1: ...
+
+    def resolve_ledger_scope_for_account(self, account_id: str) -> SimulationLedgerScopeV1: ...
+
+    def save_ledger_scope(self, ledger_scope: SimulationLedgerScopeV1) -> SimulationLedgerScopeV1: ...
 
     def get_release(self, release_id: str) -> StrategyRuntimeRelease: ...
 
     def get_binding(self, binding_id: str) -> SimulationReleaseBinding: ...
+
+    def list_releases_for_account(self, account_id: str, *, limit: int = 100) -> list[StrategyRuntimeRelease]: ...
+
+    def list_bindings_for_account(self, account_id: str, *, limit: int = 100) -> list[SimulationReleaseBinding]: ...
 
     def create_successor_binding(
         self,
@@ -63,12 +117,32 @@ class LocalSimSuccessorRepositoryProtocol(Protocol):
         updated_at: datetime,
     ) -> SimulationAccountV1: ...
 
+    def transition_accounts_bulk(
+        self,
+        *,
+        expected_versions: dict[str, int],
+        target_status: SimulationAccountStatus,
+        updated_at: datetime,
+    ) -> list[SimulationAccountV1]: ...
+
     def create_lineage_bundle(
         self,
         *,
         account: SimulationAccountV1,
         lineage: LegacyLocalSimAccountLineageV1,
     ) -> tuple[SimulationAccountV1, LegacyLocalSimAccountLineageV1]: ...
+
+    def delete_prepared_lineage_bundle(
+        self,
+        *,
+        legacy_account_id: str,
+        expected_lineage_id: str,
+        expected_lineage_hash: str,
+        expected_account_id: str,
+        expected_account_hash: str,
+        expected_economic_facts_sha256: str,
+        expected_created_by: str,
+    ) -> None: ...
 
     def get_lineage_by_legacy_account(self, legacy_account_id: str) -> LegacyLocalSimAccountLineageV1 | None: ...
 
@@ -85,6 +159,15 @@ class LocalSimSuccessorRepositoryProtocol(Protocol):
 
     def get_replay_job(self, replay_job_id: str) -> LocalSimReplayJobV1: ...
 
+    def list_replay_jobs(
+        self,
+        *,
+        simulation_account_id: str | None = None,
+        status: LocalSimReplayStatus | None = None,
+        before: tuple[datetime, str] | None = None,
+        limit: int = 100,
+    ) -> list[LocalSimReplayJobV1]: ...
+
     def transition_replay_job(
         self,
         *,
@@ -94,7 +177,24 @@ class LocalSimSuccessorRepositoryProtocol(Protocol):
         updated_at: datetime,
     ) -> LocalSimReplayJobV1: ...
 
+    def create_replay_catchup_successor(
+        self, *, replay_job_id: str, expected_version: int, release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding, successor_job: LocalSimReplayJobV1, updated_at: datetime,
+    ) -> LocalSimReplayJobV1: ...
+
     def create_replay_live_successor(
+        self,
+        *,
+        replay_job_id: str,
+        expected_version: int,
+        account: SimulationAccountV1,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        activation_trade_date: date,
+        updated_at: datetime,
+    ) -> tuple[StrategyRuntimeRelease, SimulationReleaseBinding, LocalSimReplayJobV1]: ...
+
+    def create_and_activate_replay_live_successor(
         self,
         *,
         replay_job_id: str,
@@ -111,6 +211,19 @@ def _transaction_conn() -> AbstractContextManager[Any]:
     return get_conn(autocommit=False, manage_transaction=True)
 
 
+def _allowed_account_sources(target_status: SimulationAccountStatus) -> set[SimulationAccountStatus]:
+    if target_status is SimulationAccountStatus.PAUSED:
+        return {SimulationAccountStatus.ACTIVE}
+    if target_status is SimulationAccountStatus.ACTIVE:
+        return {SimulationAccountStatus.PAUSED}
+    if target_status is SimulationAccountStatus.RETIRED:
+        return {SimulationAccountStatus.ACTIVE, SimulationAccountStatus.PAUSED}
+    raise InvalidStateTransitionError(
+        "LocalSIM account lifecycle target is invalid",
+        context={"reason_code": "LOCALSIM_ACCOUNT_TRANSITION_TARGET_INVALID"},
+    )
+
+
 class LocalSimSuccessorRepository:
     """PostgreSQL implementation; every mutation has CAS and transaction readback."""
 
@@ -121,20 +234,25 @@ class LocalSimSuccessorRepository:
         self,
         *,
         account: SimulationAccountV1,
+        ledger_scope: SimulationLedgerScopeV1,
         release: StrategyRuntimeRelease,
         binding: SimulationReleaseBinding,
-    ) -> tuple[SimulationAccountV1, StrategyRuntimeRelease, SimulationReleaseBinding]:
+    ) -> tuple[SimulationAccountV1, SimulationLedgerScopeV1, StrategyRuntimeRelease, SimulationReleaseBinding]:
         self._validate_new_account_binding(account=account, release=release, binding=binding)
+        self._validate_native_ledger_scope(account=account, ledger_scope=ledger_scope)
         try:
             with self._conn_factory() as conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                     self._insert_release(cur, release)
                     self._insert_account(cur, account)
+                    self._insert_ledger_scope(cur, ledger_scope)
                     self._insert_binding(cur, binding)
                     persisted_account = self._select_account(cur, account.account_id, for_update=True)
+                    persisted_ledger_scope = self._select_ledger_scope(cur, ledger_scope.ledger_scope_id)
                     persisted_release = self._select_release(cur, release.release_id)
                     persisted_binding = self._select_binding(cur, binding.binding_id)
                     self._require_same_identity(account, persisted_account, object_name="account")
+                    self._require_same_identity(ledger_scope, persisted_ledger_scope, object_name="ledger_scope")
                     self._require_same_identity(release, persisted_release, object_name="release")
                     self._require_same_identity(binding, persisted_binding, object_name="binding")
         except psycopg2.IntegrityError as exc:
@@ -143,16 +261,181 @@ class LocalSimSuccessorRepository:
                 context={
                     "reason_code": "LOCALSIM_ACCOUNT_BUNDLE_CONFLICT",
                     "account_id": account.account_id,
+                    "ledger_scope_id": ledger_scope.ledger_scope_id,
                     "release_id": release.release_id,
                     "binding_id": binding.binding_id,
                 },
             ) from exc
-        return persisted_account, persisted_release, persisted_binding
+        return persisted_account, persisted_ledger_scope, persisted_release, persisted_binding
+
+    def create_replay_bundle(
+        self,
+        *,
+        account: SimulationAccountV1,
+        ledger_scope: SimulationLedgerScopeV1,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        replay_job: LocalSimReplayJobV1,
+    ) -> tuple[
+        SimulationAccountV1,
+        SimulationLedgerScopeV1,
+        StrategyRuntimeRelease,
+        SimulationReleaseBinding,
+        LocalSimReplayJobV1,
+    ]:
+        self._validate_new_account_binding(account=account, release=release, binding=binding)
+        self._validate_native_ledger_scope(account=account, ledger_scope=ledger_scope)
+        self._validate_replay_bundle(account=account, release=release, binding=binding, replay_job=replay_job)
+        try:
+            with self._conn_factory() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    self._insert_release(cur, release)
+                    self._insert_account(cur, account)
+                    self._insert_ledger_scope(cur, ledger_scope)
+                    self._insert_binding(cur, binding)
+                    self._insert_replay(cur, replay_job)
+                    persisted_account = self._select_account(cur, account.account_id, for_update=True)
+                    persisted_scope = self._select_ledger_scope(cur, ledger_scope.ledger_scope_id)
+                    persisted_release = self._select_release(cur, release.release_id)
+                    persisted_binding = self._select_binding(cur, binding.binding_id)
+                    persisted_replay = self._select_replay(cur, replay_job.replay_job_id, for_update=True)
+                    for expected, actual, name in (
+                        (account, persisted_account, "account"),
+                        (ledger_scope, persisted_scope, "ledger_scope"),
+                        (release, persisted_release, "release"),
+                        (binding, persisted_binding, "binding"),
+                        (replay_job, persisted_replay, "replay_job"),
+                    ):
+                        self._require_same_identity(expected, actual, object_name=name)
+        except psycopg2.IntegrityError as exc:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay product transaction conflicts with existing authority",
+                context={"reason_code": "LOCALSIM_REPLAY_BUNDLE_CONFLICT", "replay_job_id": replay_job.replay_job_id},
+            ) from exc
+        return persisted_account, persisted_scope, persisted_release, persisted_binding, persisted_replay
+
+    def create_selection_account_bundle(
+        self,
+        *,
+        account: SimulationAccountV1,
+        ledger_scope: SimulationLedgerScopeV1,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        selection_link: dict[str, Any],
+    ) -> tuple[
+        SimulationAccountV1,
+        SimulationLedgerScopeV1,
+        StrategyRuntimeRelease,
+        SimulationReleaseBinding,
+        dict[str, Any],
+    ]:
+        self._validate_new_account_binding(account=account, release=release, binding=binding)
+        self._validate_native_ledger_scope(account=account, ledger_scope=ledger_scope)
+        self._validate_selection_link(account=account, selection_link=selection_link)
+        try:
+            with self._conn_factory() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    self._insert_release(cur, release)
+                    self._insert_account(cur, account)
+                    self._insert_ledger_scope(cur, ledger_scope)
+                    self._insert_binding(cur, binding)
+                    persisted_link = self._insert_selection_link(cur, selection_link)
+                    persisted_account = self._select_account(cur, account.account_id, for_update=True)
+                    persisted_scope = self._select_ledger_scope(cur, ledger_scope.ledger_scope_id)
+                    persisted_release = self._select_release(cur, release.release_id)
+                    persisted_binding = self._select_binding(cur, binding.binding_id)
+                    for expected, actual, name in (
+                        (account, persisted_account, "account"),
+                        (ledger_scope, persisted_scope, "ledger_scope"),
+                        (release, persisted_release, "release"),
+                        (binding, persisted_binding, "binding"),
+                    ):
+                        self._require_same_identity(expected, actual, object_name=name)
+                    self._require_selection_link_identity(selection_link, persisted_link)
+        except psycopg2.IntegrityError as exc:
+            raise InvalidStateTransitionError(
+                "LocalSIM selection account transaction conflicts with existing authority",
+                context={"reason_code": "LOCALSIM_SELECTION_ACCOUNT_BUNDLE_CONFLICT"},
+            ) from exc
+        return persisted_account, persisted_scope, persisted_release, persisted_binding, persisted_link
 
     def get_account(self, account_id: str) -> SimulationAccountV1:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 return self._select_account(cur, account_id)
+
+    def list_accounts(
+        self,
+        *,
+        package_id: str | None = None,
+        status: SimulationAccountStatus | None = None,
+        before: tuple[datetime, str] | None = None,
+        limit: int = 100,
+    ) -> list[SimulationAccountV1]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if package_id is not None:
+            clauses.append("package_id = %s")
+            params.append(package_id)
+        if status is not None:
+            clauses.append("status = %s")
+            params.append(status.value)
+        if before is not None:
+            clauses.append("(created_at, account_id) < (%s, %s)")
+            params.extend(before)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"SELECT * FROM paper_v2.simulation_account_v1 {where} "
+                    "ORDER BY created_at DESC, account_id DESC LIMIT %s",
+                    tuple(params),
+                )
+                return [self._account_from_row(dict(row)) for row in cur.fetchall()]
+
+    def get_ledger_scope(self, ledger_scope_id: str) -> SimulationLedgerScopeV1:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                return self._select_ledger_scope(cur, ledger_scope_id)
+
+    def resolve_ledger_scope_for_account(self, account_id: str) -> SimulationLedgerScopeV1:
+        self.get_account(account_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT scope.*
+                    FROM paper_v2.simulation_ledger_scope_v1 AS scope
+                    WHERE scope.native_account_id = %s
+                    UNION ALL
+                    SELECT scope.*
+                    FROM paper_v2.legacy_localsim_account_lineage_v1 AS lineage
+                    JOIN paper_v2.simulation_ledger_scope_v1 AS scope
+                      ON scope.ledger_scope_id = lineage.ledger_scope_id
+                    WHERE lineage.account_id = %s
+                    """,
+                    (account_id, account_id),
+                )
+                rows = cur.fetchall()
+        if len(rows) != 1:
+            raise InvalidStateTransitionError(
+                "LocalSIM account must resolve exactly one ledger scope",
+                context={
+                    "reason_code": "LOCALSIM_LEDGER_SCOPE_RESOLUTION_INVALID",
+                    "account_id": account_id,
+                    "scope_count": len(rows),
+                },
+            )
+        return self._ledger_scope_from_row(dict(rows[0]))
+
+    def save_ledger_scope(self, ledger_scope: SimulationLedgerScopeV1) -> SimulationLedgerScopeV1:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                self._insert_ledger_scope(cur, ledger_scope)
+                persisted = self._select_ledger_scope(cur, ledger_scope.ledger_scope_id)
+                self._require_same_identity(ledger_scope, persisted, object_name="ledger_scope")
+                return persisted
 
     def get_release(self, release_id: str) -> StrategyRuntimeRelease:
         with self._conn_factory() as conn:
@@ -163,6 +446,35 @@ class LocalSimSuccessorRepository:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 return self._select_binding(cur, binding_id)
+
+    def list_releases_for_account(self, account_id: str, *, limit: int = 100) -> list[StrategyRuntimeRelease]:
+        self.get_account(account_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    """
+                    SELECT DISTINCT release.*
+                    FROM strategy_pkg.strategy_runtime_release AS release
+                    JOIN paper_v2.simulation_release_binding AS binding
+                      ON binding.release_id = release.release_id
+                    WHERE binding.strategy_id = %s
+                    ORDER BY release.created_at DESC, release.release_id DESC
+                    LIMIT %s
+                    """,
+                    (account_id, limit),
+                )
+                return [self._release_from_values(dict(row)) for row in cur.fetchall()]
+
+    def list_bindings_for_account(self, account_id: str, *, limit: int = 100) -> list[SimulationReleaseBinding]:
+        self.get_account(account_id)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    "SELECT * FROM paper_v2.simulation_release_binding WHERE strategy_id = %s "
+                    "ORDER BY created_at DESC, binding_id DESC LIMIT %s",
+                    (account_id, limit),
+                )
+                return [self._binding_from_values(dict(row)) for row in cur.fetchall()]
 
     def create_successor_binding(
         self,
@@ -248,6 +560,60 @@ class LocalSimSuccessorRepository:
                     )
                 return self._select_account(cur, account_id, for_update=True)
 
+    def transition_accounts_bulk(
+        self,
+        *,
+        expected_versions: dict[str, int],
+        target_status: SimulationAccountStatus,
+        updated_at: datetime,
+    ) -> list[SimulationAccountV1]:
+        account_ids = sorted(expected_versions)
+        if not account_ids:
+            raise InvalidStateTransitionError(
+                "LocalSIM bulk lifecycle requires at least one account",
+                context={"reason_code": "LOCALSIM_BULK_LIFECYCLE_EMPTY"},
+            )
+        allowed_from = _allowed_account_sources(target_status)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                locked = [self._select_account(cur, account_id, for_update=True) for account_id in account_ids]
+                for account in locked:
+                    if account.version != expected_versions[account.account_id] or account.status not in allowed_from:
+                        raise InvalidStateTransitionError(
+                            "LocalSIM bulk lifecycle precondition failed",
+                            context={
+                                "reason_code": "LOCALSIM_BULK_LIFECYCLE_PRECONDITION_FAILED",
+                                "account_id": account.account_id,
+                                "expected_version": expected_versions[account.account_id],
+                                "actual_version": account.version,
+                                "actual_status": account.status.value,
+                                "target_status": target_status.value,
+                            },
+                        )
+                updated: list[SimulationAccountV1] = []
+                for account in locked:
+                    cur.execute(
+                        """
+                        UPDATE paper_v2.simulation_account_v1
+                        SET status = %s, version = version + 1, updated_at = %s
+                        WHERE account_id = %s AND version = %s AND status = %s
+                        """,
+                        (
+                            target_status.value,
+                            updated_at,
+                            account.account_id,
+                            account.version,
+                            account.status.value,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise InvalidStateTransitionError(
+                            "LocalSIM bulk lifecycle CAS failed",
+                            context={"reason_code": "LOCALSIM_BULK_LIFECYCLE_CAS_CONFLICT"},
+                        )
+                    updated.append(self._select_account(cur, account.account_id))
+                return updated
+
     def create_lineage_bundle(
         self,
         *,
@@ -262,6 +628,16 @@ class LocalSimSuccessorRepository:
         try:
             with self._conn_factory() as conn:
                 with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    ledger_scope = self._select_ledger_scope(cur, lineage.ledger_scope_id)
+                    if (
+                        ledger_scope.scope_kind is not SimulationLedgerScopeKind.LEGACY_PORTFOLIO
+                        or ledger_scope.source_identity != lineage.legacy_account_id
+                        or ledger_scope.native_account_id is not None
+                    ):
+                        raise InvalidStateTransitionError(
+                            "legacy LocalSIM lineage requires its immutable legacy ledger scope",
+                            context={"reason_code": "LOCALSIM_LINEAGE_LEDGER_SCOPE_MISMATCH"},
+                        )
                     self._insert_account(cur, account)
                     cur.execute(
                         """
@@ -323,6 +699,124 @@ class LocalSimSuccessorRepository:
                 row = cur.fetchone()
                 return self._lineage_from_row(dict(row)) if row is not None else None
 
+    def delete_prepared_lineage_bundle(
+        self,
+        *,
+        legacy_account_id: str,
+        expected_lineage_id: str,
+        expected_lineage_hash: str,
+        expected_account_id: str,
+        expected_account_hash: str,
+        expected_economic_facts_sha256: str,
+        expected_created_by: str,
+    ) -> None:
+        """Delete only one exact, unconsumed PREPARED bundle after a failed cutover readback."""
+
+        try:
+            with self._conn_factory() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(
+                        "SELECT * FROM paper_v2.legacy_localsim_account_lineage_v1 "
+                        "WHERE legacy_account_id = %s FOR UPDATE",
+                        (legacy_account_id,),
+                    )
+                    lineage_row = cur.fetchone()
+                    if lineage_row is None:
+                        raise DataUnavailableError(
+                            "partial LocalSIM lineage does not exist",
+                            context={"legacy_account_id": legacy_account_id},
+                        )
+                    lineage = dict(lineage_row)
+                    if (
+                        str(lineage["lineage_id"]) != expected_lineage_id
+                        or str(lineage["lineage_hash"]) != expected_lineage_hash
+                        or str(lineage["account_id"]) != expected_account_id
+                        or str(lineage["economic_facts_sha256"]) != expected_economic_facts_sha256
+                        or str(lineage["status"]) != LegacyLocalSimLineageStatus.PREPARED.value
+                        or int(lineage["version"]) != 1
+                        or str(lineage["created_by"]) != expected_created_by
+                    ):
+                        raise InvalidStateTransitionError(
+                            "partial LocalSIM lineage identity is not repairable",
+                            context={"reason_code": "LOCALSIM_LINEAGE_PARTIAL_REPAIR_IDENTITY_MISMATCH"},
+                        )
+                    cur.execute(
+                        "SELECT * FROM paper_v2.simulation_account_v1 WHERE account_id = %s FOR UPDATE",
+                        (expected_account_id,),
+                    )
+                    account_row = cur.fetchone()
+                    if account_row is None:
+                        raise DataUnavailableError(
+                            "partial LocalSIM successor account does not exist",
+                            context={"account_id": expected_account_id},
+                        )
+                    account = dict(account_row)
+                    if (
+                        str(account["account_hash"]) != expected_account_hash
+                        or int(account["version"]) != 1
+                        or str(account["created_by"]) != expected_created_by
+                        or account["created_at"] != lineage["created_at"]
+                        or account["updated_at"] != account["created_at"]
+                        or lineage["updated_at"] != lineage["created_at"]
+                    ):
+                        raise InvalidStateTransitionError(
+                            "partial LocalSIM successor account identity is not repairable",
+                            context={"reason_code": "LOCALSIM_ACCOUNT_PARTIAL_REPAIR_IDENTITY_MISMATCH"},
+                        )
+                    cur.execute(
+                        """
+                        SELECT EXISTS (
+                                   SELECT 1 FROM paper_v2.localsim_replay_job_v1
+                                   WHERE simulation_account_id = %s
+                               )
+                            OR EXISTS (
+                                   SELECT 1 FROM paper_v2.simulation_ledger_scope_v1
+                                   WHERE native_account_id = %s
+                               )
+                            OR EXISTS (
+                                   SELECT 1 FROM paper_v2.simulation_release_binding
+                                   WHERE binding_config_json->'metadata'->>'localsim_account_id' = %s
+                               ) AS consumed
+                        """,
+                        (expected_account_id, expected_account_id, expected_account_id),
+                    )
+                    if bool(cur.fetchone()["consumed"]):
+                        raise InvalidStateTransitionError(
+                            "partial LocalSIM lineage bundle is already consumed",
+                            context={"reason_code": "LOCALSIM_LINEAGE_PARTIAL_REPAIR_CONSUMED"},
+                        )
+                    cur.execute(
+                        "DELETE FROM paper_v2.legacy_localsim_account_lineage_v1 "
+                        "WHERE lineage_id = %s AND lineage_hash = %s AND version = 1 "
+                        "AND status = %s AND created_by = %s",
+                        (
+                            expected_lineage_id,
+                            expected_lineage_hash,
+                            LegacyLocalSimLineageStatus.PREPARED.value,
+                            expected_created_by,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise InvalidStateTransitionError(
+                            "partial LocalSIM lineage repair lost its CAS",
+                            context={"reason_code": "LOCALSIM_LINEAGE_PARTIAL_REPAIR_CAS_CONFLICT"},
+                        )
+                    cur.execute(
+                        "DELETE FROM paper_v2.simulation_account_v1 "
+                        "WHERE account_id = %s AND account_hash = %s AND version = 1 AND created_by = %s",
+                        (expected_account_id, expected_account_hash, expected_created_by),
+                    )
+                    if cur.rowcount != 1:
+                        raise InvalidStateTransitionError(
+                            "partial LocalSIM account repair lost its CAS",
+                            context={"reason_code": "LOCALSIM_ACCOUNT_PARTIAL_REPAIR_CAS_CONFLICT"},
+                        )
+        except psycopg2.IntegrityError as exc:
+            raise InvalidStateTransitionError(
+                "partial LocalSIM lineage bundle has dependent facts",
+                context={"reason_code": "LOCALSIM_LINEAGE_PARTIAL_REPAIR_DEPENDENCY_CONFLICT"},
+            ) from exc
+
     def transition_lineage(
         self,
         *,
@@ -368,23 +862,7 @@ class LocalSimSuccessorRepository:
                     self._select_account(cur, job.simulation_account_id)
                     self._select_release(cur, job.release_id)
                     self._select_binding(cur, job.binding_id)
-                    cur.execute(
-                        """
-                        INSERT INTO paper_v2.localsim_replay_job_v1 (
-                            replay_job_id, replay_hash, simulation_account_id, release_id, binding_id,
-                            day_engine_contract_id,
-                            start_trade_date, end_trade_date, historical_source_id,
-                            historical_source_sha256, calendar_snapshot_sha256, status,
-                            next_trade_date, completed_trade_date, live_release_id, live_binding_id,
-                            activation_trade_date, version, failure_code, failure_context,
-                            created_by, created_at, updated_at
-                        ) VALUES (
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
-                        ) ON CONFLICT (replay_hash) DO NOTHING
-                        """,
-                        self._replay_values(job),
-                    )
+                    self._insert_replay(cur, job)
                     persisted = self._select_replay(cur, job.replay_job_id, for_update=True)
                     self._require_same_identity(job, persisted, object_name="replay_job")
                     return persisted
@@ -398,6 +876,219 @@ class LocalSimSuccessorRepository:
         with self._conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 return self._select_replay(cur, replay_job_id)
+
+    def get_replay_recovery_snapshot(self, replay_job_id: str) -> dict[str, Any]:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                return self._replay_recovery_snapshot(cur, replay_job_id)
+
+    def _replay_recovery_snapshot(self, cur: Any, replay_job_id: str, *, lock: bool = False) -> dict[str, Any]:
+        from .localsim_cutover_readiness import LOCALSIM_IN_FLIGHT_ECONOMIC_RUN_STATUSES
+        from .localsim_replay_recovery import economic_fact_counts
+        from .repository import SimulationRuntimeRepository
+
+        job = self._select_replay(cur, replay_job_id, for_update=lock)
+        account = self._select_account(cur, job.simulation_account_id, for_update=lock)
+        cur.execute(
+            "SELECT * FROM paper_v2.simulation_daily_run "
+            "WHERE strategy_id = %s AND binding_id = %s AND trade_date = %s" + (" FOR UPDATE" if lock else ""),
+            (job.simulation_account_id, job.binding_id, job.next_trade_date),
+        )
+        row = cur.fetchone()
+        run = SimulationRuntimeRepository._daily_run_from_row(dict(row)) if row else None
+        plan = None
+        evidence_hash = None
+        if run is not None:
+            cur.execute("SELECT * FROM paper_v2.execution_plan WHERE plan_id = %s", (run.execution_plan_id,))
+            row = cur.fetchone()
+            plan = SimulationRuntimeRepository._execution_plan_from_row(dict(row)) if row else None
+            cur.execute("SELECT artifact_hash FROM selection.daily_selection_evidence WHERE evidence_id = %s",
+                        (run.selection_evidence_id,))
+            row = cur.fetchone()
+            evidence_hash = row["artifact_hash"] if row else None
+        cur.execute(
+            "SELECT run_id, broker_backend, binding_id, trade_date::text AS trade_date, status "
+            "FROM paper_v2.simulation_daily_run WHERE strategy_id = %s "
+            "AND status = ANY(%s::text[]) ORDER BY run_id",
+            (job.simulation_account_id, list(LOCALSIM_IN_FLIGHT_ECONOMIC_RUN_STATUSES)),
+        )
+        account_in_flight_runs = [dict(row) for row in cur.fetchall()]
+        binding = self._select_binding(cur, job.binding_id)
+        release = self._select_release(cur, job.release_id)
+        absence = None
+        if run is None:
+            from .scheduler import SimulationLifecycleScheduler
+
+            identity = SimulationLifecycleScheduler._simulation_daily_run_identity(
+                runtime_release=release, binding=binding, trade_date=job.next_trade_date,
+            ) if job.next_trade_date else None
+            candidate_id = "simrun_" + canonical_json_sha256(identity)[:16]
+            cur.execute(
+                "SELECT run_id, binding_id, broker_backend, status FROM paper_v2.simulation_daily_run "
+                "WHERE strategy_id = %s AND trade_date = %s ORDER BY run_id",
+                (job.simulation_account_id, job.next_trade_date),
+            )
+            absence = {"run_id": candidate_id, "account_day_runs": [dict(row) for row in cur.fetchall()]}
+        return {
+            "job": job.model_dump(mode="json"),
+            "account": account.model_dump(mode="json"),
+            "account_in_flight_runs": account_in_flight_runs,
+            "binding": binding.model_dump(mode="json"),
+            "release": release.model_dump(mode="json"),
+            "run": run.model_dump(mode="json") if run else None,
+            # The persisted payload contains the complete intents/decisions.
+            # Expanded decisions add a default created_at during native readback;
+            # hashing those transient objects makes an unchanged plan unstable.
+            "plan": plan.model_dump(mode="json", exclude={"intents", "trading_rule_decisions"}) if plan else None,
+            "evidence_hash": evidence_hash,
+            "economic_counts": economic_fact_counts(cur, run.run_id if run else absence["run_id"]),
+            "preselection_absence": absence,
+        }
+
+    def recover_terminal_replay(
+        self, *, replay_job_id: str, expected_version: int, expected_snapshot_sha256: str,
+        evaluate: Any, updated_at: datetime,
+    ) -> LocalSimReplayJobV1:
+        from .localsim_replay_recovery import (
+            PRESELECTION_RECOVERY_KEY, RECOVERY_KEY, RECOVERY_SCHEMA, RETIREMENT_KEY, apply_handle_retirement,
+        )
+
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                snapshot = self._replay_recovery_snapshot(cur, replay_job_id, lock=True)
+                job, run = snapshot["job"], snapshot["run"]
+                if job["version"] != expected_version:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay recovery CAS conflict",
+                        context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+                    )
+                # Daily creation and economic commits both own this namespace.
+                candidate_id = run["run_id"] if run else snapshot["preselection_absence"]["run_id"]
+                cur.execute("SELECT pg_try_advisory_xact_lock(2403, hashtext(%s)) AS locked", (candidate_id,))
+                if not cur.fetchone()["locked"]:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM economic writer is active",
+                        context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_ECONOMIC_LOCK_BUSY"},
+                    )
+                # An absent row cannot be row-locked; re-read after its writer lock.
+                snapshot = self._replay_recovery_snapshot(cur, replay_job_id, lock=True)
+                run = snapshot["run"]
+                check = evaluate(snapshot)
+                if not check.ready or check.snapshot_sha256 != expected_snapshot_sha256:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay recovery evidence is blocked or has changed",
+                        context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_CHECK_FAILED",
+                                 "blockers": check.reason_codes, "snapshot_sha256": check.snapshot_sha256},
+                    )
+                receipt = {
+                    "schema_version": RECOVERY_SCHEMA, "replay_job_id": replay_job_id,
+                    "replay_version": expected_version, "snapshot_sha256": check.snapshot_sha256,
+                    "run_id": run["run_id"] if run else None, "trade_date": job["next_trade_date"],
+                    "binding_id": job["binding_id"], "release_id": job["release_id"],
+                    "plan_id": run["execution_plan_id"] if run else None,
+                    "plan_hash": run["execution_plan_hash"] if run else None,
+                    "evidence_id": run["selection_evidence_id"] if run else None,
+                    "evidence_hash": run["selection_artifact_hash"] if run else None,
+                    "native_input": check.native_input, "recovered_at": updated_at.isoformat(),
+                    "original_failure": job["failure_context"], "economic_counts": check.economic_counts,
+                }
+                payload = run["run_payload_json"] if run else None
+                retirement = check.native_input.get(RETIREMENT_KEY)
+                if retirement is not None:
+                    payload = apply_handle_retirement(payload, retirement, retired_at=updated_at)
+                    receipt["retirement_sha256"] = payload[RETIREMENT_KEY]["receipt_sha256"]
+                receipt["receipt_sha256"] = canonical_json_sha256(receipt)
+                failure_context = job["failure_context"]
+                if run:
+                    payload = {**payload, RECOVERY_KEY: receipt}
+                    cur.execute(
+                        "UPDATE paper_v2.simulation_daily_run SET run_payload_json = %s, updated_at = %s WHERE run_id = %s",
+                        (psycopg2.extras.Json(payload), updated_at, run["run_id"]),
+                    )
+                else:
+                    failure_context = {**failure_context, PRESELECTION_RECOVERY_KEY: receipt}
+                    # No plan/day is invented for an operation that never reached
+                    # selection. The existing control audit keeps the receipt after
+                    # normal replay advancement clears transient failure fields.
+                    cur.execute(
+                        "INSERT INTO paper_v2.config_change_audit "
+                        "(portfolio_id, package_id, object_type, object_id, change_type, before_json, after_json, "
+                        "before_sha256, after_sha256, reason, created_by, request_id, created_at) "
+                        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                        (job["simulation_account_id"], snapshot["release"]["package_id"],
+                         "LOCALSIM_REPLAY", replay_job_id, "RECOVER_PRESELECTION",
+                         psycopg2.extras.Json(job), psycopg2.extras.Json(receipt), canonical_json_sha256(job),
+                         receipt["receipt_sha256"], "Native side-effect-free preselection recovery",
+                         "localsim_replay_recovery", receipt["receipt_sha256"], updated_at),
+                    )
+                cur.execute(
+                    "UPDATE paper_v2.localsim_replay_job_v1 SET status = %s, version = version + 1, updated_at = %s, "
+                    "failure_context = %s "
+                    "WHERE replay_job_id = %s AND version = %s AND status = %s",
+                    (LocalSimReplayStatus.FAILED_RETRYABLE.value, updated_at, psycopg2.extras.Json(failure_context),
+                     replay_job_id, expected_version,
+                     job["status"]),
+                )
+                if cur.rowcount != 1:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay recovery CAS failed",
+                        context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+                    )
+                result = self._select_replay(cur, replay_job_id, for_update=True)
+                payload_matches = result.failure_context == failure_context
+                if run:
+                    cur.execute("SELECT run_payload_json FROM paper_v2.simulation_daily_run WHERE run_id = %s", (run["run_id"],))
+                    persisted = cur.fetchone()
+                    payload_matches = payload_matches and persisted is not None and persisted["run_payload_json"] == payload
+                else:
+                    cur.execute("SELECT after_json FROM paper_v2.config_change_audit "
+                                "WHERE object_type = 'LOCALSIM_REPLAY' AND object_id = %s "
+                                "AND change_type = 'RECOVER_PRESELECTION' AND request_id = %s",
+                                (replay_job_id, receipt["receipt_sha256"]))
+                    audits = cur.fetchall()
+                    payload_matches = payload_matches and len(audits) == 1 and audits[0]["after_json"] == receipt
+                if (not payload_matches
+                        or result.replay_hash != job["replay_hash"]
+                        or result.version != expected_version + 1
+                        or result.status is not LocalSimReplayStatus.FAILED_RETRYABLE
+                        or result.next_trade_date.isoformat() != job["next_trade_date"]
+                        or (result.completed_trade_date.isoformat() if result.completed_trade_date else None)
+                           != job["completed_trade_date"]):
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay recovery transaction readback failed",
+                        context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_READBACK_FAILED"},
+                    )
+                return result
+
+    def list_replay_jobs(
+        self,
+        *,
+        simulation_account_id: str | None = None,
+        status: LocalSimReplayStatus | None = None,
+        before: tuple[datetime, str] | None = None,
+        limit: int = 100,
+    ) -> list[LocalSimReplayJobV1]:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if simulation_account_id is not None:
+            clauses.append("simulation_account_id = %s")
+            params.append(simulation_account_id)
+        if status is not None:
+            clauses.append("status = %s")
+            params.append(status.value)
+        if before is not None:
+            clauses.append("(created_at, replay_job_id) < (%s, %s)")
+            params.extend(before)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute(
+                    f"SELECT * FROM paper_v2.localsim_replay_job_v1 {where} "
+                    "ORDER BY created_at DESC, replay_job_id DESC LIMIT %s",
+                    tuple(params),
+                )
+                return [self._replay_from_row(dict(row)) for row in cur.fetchall()]
 
     def transition_replay_job(
         self,
@@ -447,6 +1138,72 @@ class LocalSimSuccessorRepository:
                         },
                     )
                 return self._select_replay(cur, replay_job_id, for_update=True)
+
+    def create_replay_catchup_successor(
+        self, *, replay_job_id: str, expected_version: int, release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding, successor_job: LocalSimReplayJobV1, updated_at: datetime,
+    ) -> LocalSimReplayJobV1:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                current = self._select_replay(cur, replay_job_id, for_update=True)
+                account = self._select_account(cur, current.simulation_account_id, for_update=True)
+                self._validate_native_ledger_scope(
+                    account=account, ledger_scope=self._select_ledger_scope(cur, current.simulation_account_id),
+                )
+                base_release = self._select_release(cur, current.release_id)
+                self._validate_replay_catchup_source(
+                    current=current, account=account, base_release=base_release,
+                    release=release, binding=binding, successor_job=successor_job,
+                )
+                cur.execute(
+                    """SELECT j.* FROM paper_v2.localsim_replay_job_v1 j
+                       JOIN strategy_pkg.strategy_runtime_release r ON r.release_id = j.release_id
+                       WHERE j.simulation_account_id = %s AND r.base_release_id = %s
+                         AND r.release_config_json->'metadata'->>'localsim_replay_predecessor_id' = %s
+                       LIMIT 2""",
+                    (current.simulation_account_id, current.release_id, current.replay_job_id),
+                )
+                children = cur.fetchall()
+                if len(children) > 1:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay catch-up lineage has multiple successors",
+                        context={"reason_code": "LOCALSIM_REPLAY_CATCHUP_LINEAGE_FORK"},
+                    )
+                if children:
+                    persisted = self._replay_from_row(children[0])
+                    self._validate_replay_catchup_source(
+                        current=current, account=account, base_release=base_release,
+                        release=self._select_release(cur, persisted.release_id),
+                        binding=self._select_binding(cur, persisted.binding_id), successor_job=persisted,
+                    )
+                    return persisted
+                if current.version != expected_version:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay catch-up predecessor CAS failed",
+                        context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+                    )
+                self._insert_release(cur, release)
+                self._insert_binding(cur, binding)
+                self._insert_replay(cur, successor_job)
+                cur.execute(
+                    """UPDATE paper_v2.localsim_replay_job_v1
+                       SET status = 'CAUGHT_UP', version = version + 1, updated_at = %s
+                       WHERE replay_job_id = %s AND version = %s""",
+                    (updated_at, replay_job_id, expected_version),
+                )
+                if cur.rowcount != 1:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM replay catch-up predecessor CAS failed",
+                        context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+                    )
+                persisted = self._select_replay(cur, successor_job.replay_job_id, for_update=True)
+                for expected, actual, name in (
+                    (release, self._select_release(cur, release.release_id), "release"),
+                    (binding, self._select_binding(cur, binding.binding_id), "binding"),
+                    (successor_job, persisted, "replay_job"),
+                ):
+                    self._require_same_identity(expected, actual, object_name=name)
+                return persisted
 
     def create_replay_live_successor(
         self,
@@ -527,6 +1284,19 @@ class LocalSimSuccessorRepository:
             raise InvalidStateTransitionError(
                 "LocalSIM account bundle identities are inconsistent",
                 context={"reason_code": "LOCALSIM_ACCOUNT_BUNDLE_IDENTITY_MISMATCH"},
+            )
+
+    @staticmethod
+    def _validate_native_ledger_scope(*, account: SimulationAccountV1, ledger_scope: SimulationLedgerScopeV1) -> None:
+        if (
+            ledger_scope.scope_kind is not SimulationLedgerScopeKind.SUCCESSOR_NATIVE
+            or ledger_scope.ledger_scope_id != account.account_id
+            or ledger_scope.source_identity != account.account_id
+            or ledger_scope.native_account_id != account.account_id
+        ):
+            raise InvalidStateTransitionError(
+                "LocalSIM native ledger scope does not match the successor account",
+                context={"reason_code": "LOCALSIM_LEDGER_SCOPE_ACCOUNT_MISMATCH"},
             )
 
     @staticmethod
@@ -624,6 +1394,28 @@ class LocalSimSuccessorRepository:
         )
 
     @staticmethod
+    def _insert_ledger_scope(cur: Any, ledger_scope: SimulationLedgerScopeV1) -> None:
+        cur.execute(
+            """
+            INSERT INTO paper_v2.simulation_ledger_scope_v1 (
+                ledger_scope_id, ledger_scope_hash, schema_version, scope_kind,
+                source_identity, native_account_id, created_by, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (ledger_scope_hash) DO NOTHING
+            """,
+            (
+                ledger_scope.ledger_scope_id,
+                ledger_scope.ledger_scope_hash,
+                ledger_scope.schema_version,
+                ledger_scope.scope_kind.value,
+                ledger_scope.source_identity,
+                ledger_scope.native_account_id,
+                ledger_scope.created_by,
+                ledger_scope.created_at,
+            ),
+        )
+
+    @staticmethod
     def _insert_binding(cur: Any, binding: SimulationReleaseBinding) -> None:
         cur.execute(
             """
@@ -673,13 +1465,33 @@ class LocalSimSuccessorRepository:
             raise DataUnavailableError("LocalSIM simulation account does not exist", context={"account_id": account_id})
         return cls._account_from_row(dict(row))
 
+    @classmethod
+    def _select_ledger_scope(
+        cls, cur: Any, ledger_scope_id: str, *, for_update: bool = False
+    ) -> SimulationLedgerScopeV1:
+        suffix = " FOR UPDATE" if for_update else ""
+        cur.execute(
+            f"SELECT * FROM paper_v2.simulation_ledger_scope_v1 WHERE ledger_scope_id = %s{suffix}",
+            (ledger_scope_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise DataUnavailableError(
+                "LocalSIM simulation ledger scope does not exist",
+                context={"ledger_scope_id": ledger_scope_id},
+            )
+        return cls._ledger_scope_from_row(dict(row))
+
     @staticmethod
     def _select_release(cur: Any, release_id: str) -> StrategyRuntimeRelease:
         cur.execute("SELECT * FROM strategy_pkg.strategy_runtime_release WHERE release_id = %s", (release_id,))
         row = cur.fetchone()
         if row is None:
             raise DataUnavailableError("strategy runtime release does not exist", context={"release_id": release_id})
-        values = dict(row)
+        return LocalSimSuccessorRepository._release_from_values(dict(row))
+
+    @staticmethod
+    def _release_from_values(values: dict[str, Any]) -> StrategyRuntimeRelease:
         return StrategyRuntimeRelease(
             release_id=values["release_id"],
             package_id=values["package_id"],
@@ -715,7 +1527,10 @@ class LocalSimSuccessorRepository:
         row = cur.fetchone()
         if row is None:
             raise DataUnavailableError("simulation release binding does not exist", context={"binding_id": binding_id})
-        values = dict(row)
+        return LocalSimSuccessorRepository._binding_from_values(dict(row))
+
+    @staticmethod
+    def _binding_from_values(values: dict[str, Any]) -> SimulationReleaseBinding:
         return SimulationReleaseBinding(
             binding_id=values["binding_id"],
             strategy_id=values["strategy_id"],
@@ -753,6 +1568,179 @@ class LocalSimSuccessorRepository:
             raise DataUnavailableError("LocalSIM replay job does not exist", context={"replay_job_id": replay_job_id})
         return cls._replay_from_row(dict(row))
 
+    @classmethod
+    def _insert_replay(cls, cur: Any, job: LocalSimReplayJobV1) -> None:
+        cur.execute(
+            """
+            INSERT INTO paper_v2.localsim_replay_job_v1 (
+                replay_job_id, replay_hash, simulation_account_id, release_id, binding_id,
+                day_engine_contract_id,
+                start_trade_date, end_trade_date, historical_source_id,
+                historical_source_sha256, calendar_snapshot_sha256, status,
+                next_trade_date, completed_trade_date, live_release_id, live_binding_id,
+                activation_trade_date, version, failure_code, failure_context,
+                created_by, created_at, updated_at
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            ) ON CONFLICT (replay_hash) DO NOTHING
+            """,
+            cls._replay_values(job),
+        )
+
+    @staticmethod
+    def _insert_selection_link(cur: Any, link: dict[str, Any]) -> dict[str, Any]:
+        cur.execute(
+            """
+            INSERT INTO selection.paper_portfolio_link (
+                run_id, portfolio_id, package_id, manifest_sha256, trade_date,
+                data_source, start_date, initial_cash, runtime_config, created_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (run_id, portfolio_id) DO NOTHING
+            RETURNING link_id, run_id, portfolio_id AS simulation_account_id,
+                      package_id, manifest_sha256, trade_date, data_source,
+                      start_date, initial_cash, runtime_config, created_at
+            """,
+            (
+                link["run_id"],
+                link["simulation_account_id"],
+                link["package_id"],
+                link["manifest_sha256"],
+                link["trade_date"],
+                link["data_source"],
+                link["start_date"],
+                link["initial_cash"],
+                psycopg2.extras.Json(link["runtime_config"]),
+                link["created_at"],
+            ),
+        )
+        row = cur.fetchone()
+        if row is None:
+            cur.execute(
+                """
+                SELECT link_id, run_id, portfolio_id AS simulation_account_id,
+                       package_id, manifest_sha256, trade_date, data_source,
+                       start_date, initial_cash, runtime_config, created_at
+                FROM selection.paper_portfolio_link
+                WHERE run_id = %s AND portfolio_id = %s
+                """,
+                (link["run_id"], link["simulation_account_id"]),
+            )
+            row = cur.fetchone()
+        if row is None:
+            raise DataUnavailableError(
+                "Selection LocalSIM account link readback is missing",
+                context={"reason_code": "LOCALSIM_SELECTION_LINK_READBACK_MISSING"},
+            )
+        result = dict(row)
+        result["initial_cash"] = float(result["initial_cash"])
+        return result
+
+    @staticmethod
+    def _validate_selection_link(*, account: SimulationAccountV1, selection_link: dict[str, Any]) -> None:
+        required = {
+            "run_id",
+            "simulation_account_id",
+            "package_id",
+            "manifest_sha256",
+            "trade_date",
+            "data_source",
+            "start_date",
+            "initial_cash",
+            "runtime_config",
+            "created_at",
+        }
+        if set(selection_link) != required or (
+            selection_link["simulation_account_id"] != account.account_id
+            or selection_link["package_id"] != account.package_id
+            or selection_link["manifest_sha256"] != account.manifest_sha256
+            or float(selection_link["initial_cash"]) != float(account.initial_capital)
+        ):
+            raise InvalidStateTransitionError(
+                "Selection LocalSIM account link identity is not exact",
+                context={"reason_code": "LOCALSIM_SELECTION_LINK_IDENTITY_MISMATCH"},
+            )
+
+    @staticmethod
+    def _require_selection_link_identity(expected: dict[str, Any], actual: dict[str, Any]) -> None:
+        for field in (
+            "run_id",
+            "simulation_account_id",
+            "package_id",
+            "manifest_sha256",
+            "trade_date",
+            "data_source",
+            "start_date",
+            "runtime_config",
+        ):
+            if expected[field] != actual[field]:
+                raise InvalidStateTransitionError(
+                    "Selection LocalSIM account link readback differs",
+                    context={"reason_code": "LOCALSIM_SELECTION_LINK_READBACK_MISMATCH", "field": field},
+                )
+
+    @staticmethod
+    def _validate_replay_bundle(
+        *,
+        account: SimulationAccountV1,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        replay_job: LocalSimReplayJobV1,
+    ) -> None:
+        if (
+            replay_job.simulation_account_id != account.account_id
+            or replay_job.release_id != release.release_id
+            or replay_job.binding_id != binding.binding_id
+            or binding.effective_to != replay_job.end_trade_date
+        ):
+            raise InvalidStateTransitionError(
+                "LocalSIM replay bundle identities are not exact",
+                context={"reason_code": "LOCALSIM_REPLAY_BUNDLE_IDENTITY_MISMATCH"},
+            )
+
+    @staticmethod
+    def _validate_replay_catchup_source(
+        *, current: LocalSimReplayJobV1, account: SimulationAccountV1,
+        base_release: StrategyRuntimeRelease, release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding, successor_job: LocalSimReplayJobV1,
+    ) -> None:
+        LocalSimSuccessorRepository._validate_new_account_binding(account=account, release=release, binding=binding)
+        LocalSimSuccessorRepository._validate_replay_bundle(
+            account=account, release=release, binding=binding, replay_job=successor_job,
+        )
+        product_fields = (
+            "package_id", "manifest_sha256", "runtime_profile_id", "runtime_profile_version_id",
+            "runtime_profile_sha256", "daily_strategy_profile_version_id", "execution_policy_version_id",
+            "execution_policy_sha256", "tail_policy_version_id", "tail_policy_sha256",
+        )
+        if (
+            account.status is not SimulationAccountStatus.ACTIVE
+            or current.status not in {LocalSimReplayStatus.CAUGHT_UP, LocalSimReplayStatus.READY_FOR_LIVE}
+            or current.completed_trade_date != current.end_trade_date
+            or current.next_trade_date is not None
+            or current.live_release_id is not None
+            or current.live_binding_id is not None
+            or successor_job.simulation_account_id != current.simulation_account_id
+            or successor_job.start_trade_date <= current.end_trade_date
+            or binding.effective_from != successor_job.start_trade_date
+            or release.effective_to != successor_job.end_trade_date
+            or release.base_release_id != current.release_id
+            or (release.release_config_json.get("metadata") or {}).get("localsim_replay_predecessor_id")
+            != current.replay_job_id
+            or (release.release_config_json.get("metadata") or {}).get("localsim_replay_range") != {
+                "start_trade_date": successor_job.start_trade_date.isoformat(),
+                "end_trade_date": successor_job.end_trade_date.isoformat(),
+            }
+            or successor_job.historical_source_id != current.historical_source_id
+            or successor_job.historical_source_sha256 != current.historical_source_sha256
+            or successor_job.day_engine_contract_id != current.day_engine_contract_id
+            or any(getattr(release, key) != getattr(base_release, key) for key in product_fields)
+        ):
+            raise InvalidStateTransitionError(
+                "LocalSIM replay catch-up successor must continue the same frozen account and product",
+                context={"reason_code": "LOCALSIM_REPLAY_CATCHUP_IDENTITY_MISMATCH"},
+            )
+
     @staticmethod
     def _account_from_row(row: dict[str, Any]) -> SimulationAccountV1:
         return SimulationAccountV1(
@@ -774,6 +1762,19 @@ class LocalSimSuccessorRepository:
             created_by=row["created_by"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _ledger_scope_from_row(row: dict[str, Any]) -> SimulationLedgerScopeV1:
+        return SimulationLedgerScopeV1(
+            schema_version=row["schema_version"],
+            ledger_scope_id=row["ledger_scope_id"],
+            ledger_scope_hash=row["ledger_scope_hash"],
+            scope_kind=row["scope_kind"],
+            source_identity=row["source_identity"],
+            native_account_id=row.get("native_account_id"),
+            created_by=row["created_by"],
+            created_at=row["created_at"],
         )
 
     @staticmethod
@@ -839,6 +1840,13 @@ class LocalSimSuccessorRepository:
     def _require_same_identity(expected: Any, actual: Any, *, object_name: str) -> None:
         identity_fields = {
             "account": ("account_id", "account_hash", "account_config_json"),
+            "ledger_scope": (
+                "ledger_scope_id",
+                "ledger_scope_hash",
+                "scope_kind",
+                "source_identity",
+                "native_account_id",
+            ),
             "release": ("release_id", "release_hash", "release_config_json"),
             "binding": ("binding_id", "binding_hash", "binding_config_json"),
             "lineage": ("lineage_id", "lineage_hash"),
@@ -850,6 +1858,67 @@ class LocalSimSuccessorRepository:
                 context={"reason_code": f"LOCALSIM_{object_name.upper()}_IDENTITY_READBACK_MISMATCH"},
             )
 
+    def create_and_activate_replay_live_successor(
+        self,
+        *,
+        replay_job_id: str,
+        expected_version: int,
+        account: SimulationAccountV1,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        activation_trade_date: date,
+        updated_at: datetime,
+    ) -> tuple[StrategyRuntimeRelease, SimulationReleaseBinding, LocalSimReplayJobV1]:
+        """Insert the live authority and activate it in one crash-safe transaction."""
+
+        self._validate_new_account_binding(account=account, release=release, binding=binding)
+        try:
+            with self._conn_factory() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    current = self._select_replay(cur, replay_job_id, for_update=True)
+                    if current.version != expected_version or current.status is not LocalSimReplayStatus.READY_FOR_LIVE:
+                        raise InvalidStateTransitionError(
+                            "LocalSIM replay is not ready for atomic live activation",
+                            context={"reason_code": "LOCALSIM_REPLAY_LIVE_SUCCESSOR_STATE_INVALID"},
+                        )
+                    persisted_account = self._select_account(cur, account.account_id, for_update=True)
+                    self._require_same_identity(account, persisted_account, object_name="account")
+                    self._insert_release(cur, release)
+                    self._insert_binding(cur, binding)
+                    cur.execute(
+                        """
+                        UPDATE paper_v2.localsim_replay_job_v1
+                        SET live_release_id = %s, live_binding_id = %s,
+                            activation_trade_date = %s, status = 'LIVE_ACTIVE',
+                            version = version + 1, updated_at = %s
+                        WHERE replay_job_id = %s AND version = %s AND status = 'READY_FOR_LIVE'
+                        """,
+                        (
+                            release.release_id,
+                            binding.binding_id,
+                            activation_trade_date,
+                            updated_at,
+                            replay_job_id,
+                            expected_version,
+                        ),
+                    )
+                    if cur.rowcount != 1:
+                        raise InvalidStateTransitionError(
+                            "LocalSIM replay live-activation CAS failed",
+                            context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+                        )
+                    persisted_release = self._select_release(cur, release.release_id)
+                    persisted_binding = self._select_binding(cur, binding.binding_id)
+                    persisted_job = self._select_replay(cur, replay_job_id, for_update=True)
+                    self._require_same_identity(release, persisted_release, object_name="release")
+                    self._require_same_identity(binding, persisted_binding, object_name="binding")
+                    return persisted_release, persisted_binding, persisted_job
+        except psycopg2.IntegrityError as exc:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay live activation conflicts with existing authority",
+                context={"reason_code": "LOCALSIM_REPLAY_LIVE_SUCCESSOR_CONFLICT"},
+            ) from exc
+
 
 class InMemoryLocalSimSuccessorRepository:
     """Rollback-capable in-memory implementation used by direct contract tests."""
@@ -857,6 +1926,8 @@ class InMemoryLocalSimSuccessorRepository:
     def __init__(self) -> None:
         self.accounts: dict[str, SimulationAccountV1] = {}
         self.account_hash_index: dict[str, str] = {}
+        self.ledger_scopes: dict[str, SimulationLedgerScopeV1] = {}
+        self.ledger_scope_hash_index: dict[str, str] = {}
         self.releases: dict[str, StrategyRuntimeRelease] = {}
         self.release_hash_index: dict[str, str] = {}
         self.bindings: dict[str, SimulationReleaseBinding] = {}
@@ -865,15 +1936,18 @@ class InMemoryLocalSimSuccessorRepository:
         self.legacy_lineage_index: dict[str, str] = {}
         self.replay_jobs: dict[str, LocalSimReplayJobV1] = {}
         self.replay_hash_index: dict[str, str] = {}
+        self.selection_links: dict[tuple[str, str], dict[str, Any]] = {}
 
     def create_account_bundle(
         self,
         *,
         account: SimulationAccountV1,
+        ledger_scope: SimulationLedgerScopeV1,
         release: StrategyRuntimeRelease,
         binding: SimulationReleaseBinding,
-    ) -> tuple[SimulationAccountV1, StrategyRuntimeRelease, SimulationReleaseBinding]:
+    ) -> tuple[SimulationAccountV1, SimulationLedgerScopeV1, StrategyRuntimeRelease, SimulationReleaseBinding]:
         LocalSimSuccessorRepository._validate_new_account_binding(account=account, release=release, binding=binding)
+        LocalSimSuccessorRepository._validate_native_ledger_scope(account=account, ledger_scope=ledger_scope)
         snapshot = deepcopy(self.__dict__)
         try:
             persisted_release = self._save_immutable(
@@ -892,6 +1966,14 @@ class InMemoryLocalSimSuccessorRepository:
                 value=account,
                 object_name="account",
             )
+            persisted_ledger_scope = self._save_immutable(
+                values=self.ledger_scopes,
+                hash_index=self.ledger_scope_hash_index,
+                object_id=ledger_scope.ledger_scope_id,
+                object_hash=ledger_scope.ledger_scope_hash,
+                value=ledger_scope,
+                object_name="ledger_scope",
+            )
             persisted_binding = self._save_immutable(
                 values=self.bindings,
                 hash_index=self.binding_hash_index,
@@ -900,7 +1982,7 @@ class InMemoryLocalSimSuccessorRepository:
                 value=binding,
                 object_name="binding",
             )
-            return persisted_account, persisted_release, persisted_binding
+            return persisted_account, persisted_ledger_scope, persisted_release, persisted_binding
         except Exception:
             self.__dict__.update(snapshot)
             raise
@@ -912,6 +1994,138 @@ class InMemoryLocalSimSuccessorRepository:
             raise DataUnavailableError(
                 "LocalSIM simulation account does not exist", context={"account_id": account_id}
             ) from exc
+
+    def list_accounts(
+        self,
+        *,
+        package_id: str | None = None,
+        status: SimulationAccountStatus | None = None,
+        before: tuple[datetime, str] | None = None,
+        limit: int = 100,
+    ) -> list[SimulationAccountV1]:
+        values = [
+            item
+            for item in self.accounts.values()
+            if (package_id is None or item.package_id == package_id)
+            and (status is None or item.status is status)
+            and (before is None or (item.created_at, item.account_id) < before)
+        ]
+        return sorted(values, key=lambda item: (item.created_at, item.account_id), reverse=True)[:limit]
+
+    def get_ledger_scope(self, ledger_scope_id: str) -> SimulationLedgerScopeV1:
+        try:
+            return self.ledger_scopes[ledger_scope_id]
+        except KeyError as exc:
+            raise DataUnavailableError(
+                "LocalSIM simulation ledger scope does not exist",
+                context={"ledger_scope_id": ledger_scope_id},
+            ) from exc
+
+    def resolve_ledger_scope_for_account(self, account_id: str) -> SimulationLedgerScopeV1:
+        self.get_account(account_id)
+        candidates = [scope for scope in self.ledger_scopes.values() if scope.native_account_id == account_id]
+        candidates.extend(
+            self.ledger_scopes[lineage.ledger_scope_id]
+            for lineage in self.lineages.values()
+            if lineage.account_id == account_id and lineage.ledger_scope_id in self.ledger_scopes
+        )
+        if len(candidates) != 1:
+            raise InvalidStateTransitionError(
+                "LocalSIM account must resolve exactly one ledger scope",
+                context={"reason_code": "LOCALSIM_LEDGER_SCOPE_RESOLUTION_INVALID", "account_id": account_id},
+            )
+        return candidates[0]
+
+    def save_ledger_scope(self, ledger_scope: SimulationLedgerScopeV1) -> SimulationLedgerScopeV1:
+        snapshot = deepcopy(self.__dict__)
+        try:
+            return self._save_immutable(
+                values=self.ledger_scopes,
+                hash_index=self.ledger_scope_hash_index,
+                object_id=ledger_scope.ledger_scope_id,
+                object_hash=ledger_scope.ledger_scope_hash,
+                value=ledger_scope,
+                object_name="ledger_scope",
+            )
+        except Exception:
+            self.__dict__.update(snapshot)
+            raise
+
+    def create_replay_bundle(
+        self,
+        *,
+        account: SimulationAccountV1,
+        ledger_scope: SimulationLedgerScopeV1,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        replay_job: LocalSimReplayJobV1,
+    ) -> tuple[
+        SimulationAccountV1,
+        SimulationLedgerScopeV1,
+        StrategyRuntimeRelease,
+        SimulationReleaseBinding,
+        LocalSimReplayJobV1,
+    ]:
+        LocalSimSuccessorRepository._validate_replay_bundle(
+            account=account,
+            release=release,
+            binding=binding,
+            replay_job=replay_job,
+        )
+        snapshot = deepcopy(self.__dict__)
+        try:
+            persisted_account, persisted_scope, persisted_release, persisted_binding = self.create_account_bundle(
+                account=account,
+                ledger_scope=ledger_scope,
+                release=release,
+                binding=binding,
+            )
+            persisted_replay = self.save_replay_job(replay_job)
+            return (
+                persisted_account,
+                persisted_scope,
+                persisted_release,
+                persisted_binding,
+                persisted_replay,
+            )
+        except Exception:
+            self.__dict__.update(snapshot)
+            raise
+
+    def create_selection_account_bundle(
+        self,
+        *,
+        account: SimulationAccountV1,
+        ledger_scope: SimulationLedgerScopeV1,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        selection_link: dict[str, Any],
+    ) -> tuple[
+        SimulationAccountV1,
+        SimulationLedgerScopeV1,
+        StrategyRuntimeRelease,
+        SimulationReleaseBinding,
+        dict[str, Any],
+    ]:
+        LocalSimSuccessorRepository._validate_selection_link(account=account, selection_link=selection_link)
+        snapshot = deepcopy(self.__dict__)
+        try:
+            persisted_account, persisted_scope, persisted_release, persisted_binding = self.create_account_bundle(
+                account=account,
+                ledger_scope=ledger_scope,
+                release=release,
+                binding=binding,
+            )
+            key = (str(selection_link["run_id"]), str(selection_link["simulation_account_id"]))
+            persisted_link = self.selection_links.get(key)
+            if persisted_link is None:
+                persisted_link = {**deepcopy(selection_link), "link_id": len(self.selection_links) + 1}
+                self.selection_links[key] = persisted_link
+            LocalSimSuccessorRepository._require_selection_link_identity(selection_link, persisted_link)
+            return persisted_account, persisted_scope, persisted_release, persisted_binding, deepcopy(persisted_link)
+        except Exception:
+            self.__dict__.update(snapshot)
+            raise
 
     def get_release(self, release_id: str) -> StrategyRuntimeRelease:
         try:
@@ -928,6 +2142,17 @@ class InMemoryLocalSimSuccessorRepository:
             raise DataUnavailableError(
                 "simulation release binding does not exist", context={"binding_id": binding_id}
             ) from exc
+
+    def list_releases_for_account(self, account_id: str, *, limit: int = 100) -> list[StrategyRuntimeRelease]:
+        self.get_account(account_id)
+        release_ids = {item.release_id for item in self.bindings.values() if item.strategy_id == account_id}
+        values = [item for item in self.releases.values() if item.release_id in release_ids]
+        return sorted(values, key=lambda item: (item.created_at, item.release_id), reverse=True)[:limit]
+
+    def list_bindings_for_account(self, account_id: str, *, limit: int = 100) -> list[SimulationReleaseBinding]:
+        self.get_account(account_id)
+        values = [item for item in self.bindings.values() if item.strategy_id == account_id]
+        return sorted(values, key=lambda item: (item.created_at, item.binding_id), reverse=True)[:limit]
 
     def create_successor_binding(
         self,
@@ -996,6 +2221,43 @@ class InMemoryLocalSimSuccessorRepository:
         self.accounts[account_id] = updated
         return updated
 
+    def transition_accounts_bulk(
+        self,
+        *,
+        expected_versions: dict[str, int],
+        target_status: SimulationAccountStatus,
+        updated_at: datetime,
+    ) -> list[SimulationAccountV1]:
+        snapshot = deepcopy(self.__dict__)
+        try:
+            allowed_from = _allowed_account_sources(target_status)
+            accounts = [self.get_account(account_id) for account_id in sorted(expected_versions)]
+            for account in accounts:
+                if account.version != expected_versions[account.account_id] or account.status not in allowed_from:
+                    raise InvalidStateTransitionError(
+                        "LocalSIM bulk lifecycle precondition failed",
+                        context={
+                            "reason_code": "LOCALSIM_BULK_LIFECYCLE_PRECONDITION_FAILED",
+                            "account_id": account.account_id,
+                        },
+                    )
+            updated = [
+                account.model_copy(
+                    update={
+                        "status": target_status,
+                        "version": account.version + 1,
+                        "updated_at": updated_at,
+                    }
+                )
+                for account in accounts
+            ]
+            for account in updated:
+                self.accounts[account.account_id] = account
+            return updated
+        except Exception:
+            self.__dict__.update(snapshot)
+            raise
+
     def create_lineage_bundle(
         self,
         *,
@@ -1004,6 +2266,16 @@ class InMemoryLocalSimSuccessorRepository:
     ) -> tuple[SimulationAccountV1, LegacyLocalSimAccountLineageV1]:
         snapshot = deepcopy(self.__dict__)
         try:
+            ledger_scope = self.get_ledger_scope(lineage.ledger_scope_id)
+            if (
+                ledger_scope.scope_kind is not SimulationLedgerScopeKind.LEGACY_PORTFOLIO
+                or ledger_scope.source_identity != lineage.legacy_account_id
+                or ledger_scope.native_account_id is not None
+            ):
+                raise InvalidStateTransitionError(
+                    "legacy LocalSIM lineage requires its immutable legacy ledger scope",
+                    context={"reason_code": "LOCALSIM_LINEAGE_LEDGER_SCOPE_MISMATCH"},
+                )
             if lineage.release_id not in self.releases or lineage.binding_id not in self.bindings:
                 raise DataUnavailableError(
                     "legacy LocalSIM lineage release or binding does not exist",
@@ -1049,6 +2321,66 @@ class InMemoryLocalSimSuccessorRepository:
     def get_lineage_by_legacy_account(self, legacy_account_id: str) -> LegacyLocalSimAccountLineageV1 | None:
         lineage_id = self.legacy_lineage_index.get(legacy_account_id)
         return self.lineages.get(lineage_id) if lineage_id is not None else None
+
+    def delete_prepared_lineage_bundle(
+        self,
+        *,
+        legacy_account_id: str,
+        expected_lineage_id: str,
+        expected_lineage_hash: str,
+        expected_account_id: str,
+        expected_account_hash: str,
+        expected_economic_facts_sha256: str,
+        expected_created_by: str,
+    ) -> None:
+        snapshot = deepcopy(self.__dict__)
+        try:
+            lineage = self.get_lineage_by_legacy_account(legacy_account_id)
+            if lineage is None:
+                raise DataUnavailableError(
+                    "partial LocalSIM lineage does not exist",
+                    context={"legacy_account_id": legacy_account_id},
+                )
+            account = self.get_account(expected_account_id)
+            if (
+                lineage.lineage_id != expected_lineage_id
+                or lineage.lineage_hash != expected_lineage_hash
+                or lineage.account_id != expected_account_id
+                or lineage.economic_facts_sha256 != expected_economic_facts_sha256
+                or lineage.status is not LegacyLocalSimLineageStatus.PREPARED
+                or lineage.version != 1
+                or lineage.created_by != expected_created_by
+                or account.account_hash != expected_account_hash
+                or account.version != 1
+                or account.created_by != expected_created_by
+                or account.created_at != lineage.created_at
+                or account.updated_at != account.created_at
+                or lineage.updated_at != lineage.created_at
+            ):
+                raise InvalidStateTransitionError(
+                    "partial LocalSIM lineage bundle identity is not repairable",
+                    context={"reason_code": "LOCALSIM_LINEAGE_PARTIAL_REPAIR_IDENTITY_MISMATCH"},
+                )
+            if (
+                any(job.simulation_account_id == expected_account_id for job in self.replay_jobs.values())
+                or any(scope.native_account_id == expected_account_id for scope in self.ledger_scopes.values())
+                or any(
+                    isinstance(binding.binding_config_json.get("metadata"), dict)
+                    and binding.binding_config_json["metadata"].get("localsim_account_id") == expected_account_id
+                    for binding in self.bindings.values()
+                )
+            ):
+                raise InvalidStateTransitionError(
+                    "partial LocalSIM lineage bundle is already consumed",
+                    context={"reason_code": "LOCALSIM_LINEAGE_PARTIAL_REPAIR_CONSUMED"},
+                )
+            del self.lineages[expected_lineage_id]
+            del self.legacy_lineage_index[legacy_account_id]
+            del self.accounts[expected_account_id]
+            del self.account_hash_index[expected_account_hash]
+        except Exception:
+            self.__dict__.update(snapshot)
+            raise
 
     def transition_lineage(
         self,
@@ -1101,6 +2433,23 @@ class InMemoryLocalSimSuccessorRepository:
                 "LocalSIM replay job does not exist", context={"replay_job_id": replay_job_id}
             ) from exc
 
+    def list_replay_jobs(
+        self,
+        *,
+        simulation_account_id: str | None = None,
+        status: LocalSimReplayStatus | None = None,
+        before: tuple[datetime, str] | None = None,
+        limit: int = 100,
+    ) -> list[LocalSimReplayJobV1]:
+        values = [
+            item
+            for item in self.replay_jobs.values()
+            if (simulation_account_id is None or item.simulation_account_id == simulation_account_id)
+            and (status is None or item.status is status)
+            and (before is None or (item.created_at, item.replay_job_id) < before)
+        ]
+        return sorted(values, key=lambda item: (item.created_at, item.replay_job_id), reverse=True)[:limit]
+
     def transition_replay_job(
         self,
         *,
@@ -1119,6 +2468,67 @@ class InMemoryLocalSimSuccessorRepository:
         updated = LocalSimReplayJobV1.model_validate(updated.model_dump())
         self.replay_jobs[replay_job_id] = updated
         return updated
+
+    def create_replay_catchup_successor(
+        self, *, replay_job_id: str, expected_version: int, release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding, successor_job: LocalSimReplayJobV1, updated_at: datetime,
+    ) -> LocalSimReplayJobV1:
+        current = self.get_replay_job(replay_job_id)
+        account = self.get_account(current.simulation_account_id)
+        LocalSimSuccessorRepository._validate_native_ledger_scope(
+            account=account, ledger_scope=self.get_ledger_scope(current.simulation_account_id),
+        )
+        LocalSimSuccessorRepository._validate_replay_catchup_source(
+            current=current, account=account, base_release=self.get_release(current.release_id),
+            release=release, binding=binding, successor_job=successor_job,
+        )
+        children = [
+            candidate for candidate in self.replay_jobs.values()
+            if candidate.simulation_account_id == current.simulation_account_id
+            and self.get_release(candidate.release_id).base_release_id == current.release_id
+            and (self.get_release(candidate.release_id).release_config_json.get("metadata") or {}).get(
+                "localsim_replay_predecessor_id"
+            ) == current.replay_job_id
+        ]
+        if len(children) > 1:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay catch-up lineage has multiple successors",
+                context={"reason_code": "LOCALSIM_REPLAY_CATCHUP_LINEAGE_FORK"},
+            )
+        if children:
+            child = children[0]
+            LocalSimSuccessorRepository._validate_replay_catchup_source(
+                current=current, account=account, base_release=self.get_release(current.release_id),
+                release=self.get_release(child.release_id), binding=self.get_binding(child.binding_id),
+                successor_job=child,
+            )
+            return child
+        if current.version != expected_version:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay catch-up predecessor CAS failed",
+                context={"reason_code": "LOCALSIM_REPLAY_CAS_CONFLICT"},
+            )
+        snapshot = deepcopy(self.__dict__)
+        try:
+            self._save_immutable(
+                values=self.releases, hash_index=self.release_hash_index,
+                object_id=release.release_id, object_hash=release.release_hash or "",
+                value=release, object_name="release",
+            )
+            self._save_immutable(
+                values=self.bindings, hash_index=self.binding_hash_index,
+                object_id=binding.binding_id, object_hash=binding.binding_hash or "",
+                value=binding, object_name="binding",
+            )
+            persisted = self.save_replay_job(successor_job)
+            self.transition_replay_job(
+                replay_job_id=current.replay_job_id, expected_version=current.version,
+                update={"status": LocalSimReplayStatus.CAUGHT_UP}, updated_at=updated_at,
+            )
+            return persisted
+        except Exception:
+            self.__dict__.update(snapshot)
+            raise
 
     def create_replay_live_successor(
         self,
@@ -1166,6 +2576,64 @@ class InMemoryLocalSimSuccessorRepository:
                     "live_binding_id": binding.binding_id,
                     "activation_trade_date": activation_trade_date,
                     "status": LocalSimReplayStatus.ACTIVATION_PENDING_SAFE_BOUNDARY,
+                },
+                updated_at=updated_at,
+            )
+            return persisted_release, persisted_binding, persisted_job
+        except Exception:
+            self.__dict__.update(snapshot)
+            raise
+
+    def create_and_activate_replay_live_successor(
+        self,
+        *,
+        replay_job_id: str,
+        expected_version: int,
+        account: SimulationAccountV1,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        activation_trade_date: date,
+        updated_at: datetime,
+    ) -> tuple[StrategyRuntimeRelease, SimulationReleaseBinding, LocalSimReplayJobV1]:
+        LocalSimSuccessorRepository._validate_new_account_binding(
+            account=account,
+            release=release,
+            binding=binding,
+        )
+        current = self.get_replay_job(replay_job_id)
+        if current.version != expected_version or current.status is not LocalSimReplayStatus.READY_FOR_LIVE:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay is not ready for atomic live activation",
+                context={"reason_code": "LOCALSIM_REPLAY_LIVE_SUCCESSOR_STATE_INVALID"},
+            )
+        persisted_account = self.get_account(account.account_id)
+        LocalSimSuccessorRepository._require_same_identity(account, persisted_account, object_name="account")
+        snapshot = deepcopy(self.__dict__)
+        try:
+            persisted_release = self._save_immutable(
+                values=self.releases,
+                hash_index=self.release_hash_index,
+                object_id=release.release_id,
+                object_hash=release.release_hash or "",
+                value=release,
+                object_name="release",
+            )
+            persisted_binding = self._save_immutable(
+                values=self.bindings,
+                hash_index=self.binding_hash_index,
+                object_id=binding.binding_id,
+                object_hash=binding.binding_hash or "",
+                value=binding,
+                object_name="binding",
+            )
+            persisted_job = self.transition_replay_job(
+                replay_job_id=replay_job_id,
+                expected_version=expected_version,
+                update={
+                    "live_release_id": release.release_id,
+                    "live_binding_id": binding.binding_id,
+                    "activation_trade_date": activation_trade_date,
+                    "status": LocalSimReplayStatus.LIVE_ACTIVE,
                 },
                 updated_at=updated_at,
             )

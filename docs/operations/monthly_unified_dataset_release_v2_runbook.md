@@ -1,0 +1,232 @@
+# 共享月度数据集发布 v2 运行手册
+
+本文是 `qe_hmm_full_v2` 新月份发布的操作手册。业务状态唯一保存在
+`MonthlyReleaseService`；API、CLI、MCP 和 UI 只是同一后端入口。
+
+## 1. 每月标准流程
+
+1. 确认上一自然月已闭合，并由后端解析最后交易日；不手工猜 cutoff。
+2. 调用 `plan`，核对 active predecessor、目标 generation/revision、三节点路径和九个 SOURCE gate。
+3. 用固定 idempotency key 提交一次 `prepare_only` operation。
+4. worker 在单一只读一致性 snapshot 中读取尾部与受管历史修订，完成 SOURCE gate；有缺口则输出 typed repair plan 并停止。
+5. 修复由既有 local_data 受控作业执行；DEV、生产授权、生产 apply、readback 分开。月更 worker 不执行隐式 DML。
+6. `resume` 后按 action plan 复用、追加、选择性重建或组件重建；只写新的私有 successor。
+7. 生成 HMM 派生资产、完整 manifest/profile candidate、release closure，并执行本地与 Windows/WSL/node1 consumer validation。
+8. 状态仅在六池、PIT、sector、dataset identity、QE/HMM/因子/荐股/择时/统一回测全部通过后成为 `READY_TO_ACTIVATE`。
+9. 获得独立 activation authorization 后执行一次 CAS 激活并读回；失败时保持旧 active。
+10. 激活后只验证新任务解析到新 identity，不运行正式训练或实验。
+
+## 2. CLI
+
+token 只从 `DATASET_RELEASE_OPERATOR_TOKEN_FILE` 指向的绝对普通文件读取，
+不得出现在命令、日志或 receipt 中。
+
+```powershell
+python scripts/monthly_unified_dataset_release.py plan --cutoff 2026-09-30 --idempotency-key monthly-202609-plan
+python scripts/monthly_unified_dataset_release.py run --cutoff 2026-09-30 --idempotency-key monthly-202609-run
+python scripts/monthly_unified_dataset_release.py status --operation-id dmr_<32hex>
+python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_<32hex>
+python scripts/monthly_unified_dataset_release.py resume --operation-id dmr_<32hex>
+```
+
+激活与回滚只在用户针对具体 operation 授权后执行：
+
+```powershell
+python scripts/monthly_unified_dataset_release.py activate --operation-id dmr_<32hex> --authorization-ref dsauth_<32hex>
+python scripts/monthly_unified_dataset_release.py rollback --operation-id dmr_<32hex> --authorization-ref dsauth_<32hex>
+```
+
+## 3. MCP
+
+`qlib_monthly_release_*` 工具与 CLI 调用同一 API。`plan/status/receipts`
+只读；submit/resume/cancel 使用 `RUN_MONTHLY_DATASET_RELEASE`；activate/rollback
+使用 `ACTIVATE_MONTHLY_DATASET_RELEASE` 并仍要求独立 authorization ref。
+
+## 4. Fail-closed 与恢复
+
+- SOURCE 未闭合：查看 gate receipt 和 typed repair plan，修复后 resume；不得缩小人口或放宽字段。
+- BUILD 中断：只复用 SHA/size/producer identity 全部有效的 checkpoint；无效输出不得被采用。
+- DEPLOY 单节点失败：旧 active 不变；只恢复同一 operation，不创建 QE/HMM 分支候选。
+- CONSUMER_VALIDATE 失败：记录具体 consumer、节点、窗口和身份；不得静默退回旧路径。
+- 激活并发冲突：CAS 失败且 active 不变；重新读取后决定是否仍需切换。
+
+### 已封存 SOURCE 的正式停牌依据补充（BUG-1961）
+
+新月更会在 SOURCE 中封存共享停牌公告依据。若旧 operation 已封存 SOURCE、
+BUILD 因未携带后续已审核的公告依据失败，使用同一受鉴权入口显式绑定：
+
+```powershell
+python scripts/monthly_unified_dataset_release.py bind-suspension --operation-id dmr_<32hex>
+python scripts/monthly_unified_dataset_release.py resume --operation-id dmr_<32hex>
+```
+
+绑定仅允许空请求，从正式共享 authority 获取依据，不接收调用方填写的停牌结论。
+它固定原 SOURCE receipt、source bundle、前驱和目标截止日，仅补充目标月份内的公告。
+BUILD 从 CAS 读取这份不可变依据，并将绑定及来源 manifest 身份写入停牌组件 metadata，
+由现有组件 receipt/manifest 钉住。原 SOURCE、已完成日线/分钟线/因子输出均保留。
+未绑定时仍按原 SOURCE 判断，不借用当前 checkout；公告冲突、畸形或矛盾的日内事件仍报错。
+绑定不会自动 resume、修改数据库、赋予 READY 或激活权限。
+
+### 4.1 已接受的来源质量差异（BUG-1815）
+
+缺行/必需字段空值与来源差异不是同一种问题。经用户明确接受的有限值日线—分钟线差异，
+可在同一 operation 的 SOURCE 封存前绑定为质量警告；不需要 Tushare 历史分钟权限，也不修改数据。
+
+```powershell
+python scripts/monthly_unified_dataset_release.py bind-quality --operation-id dmr_<32hex> --inputs X:\<本轮精确质量接受文件>.json
+python scripts/monthly_unified_dataset_release.py resume --operation-id dmr_<32hex>
+```
+
+输入使用 `aistock_monthly_source_quality_acceptance_v1`：绑定 operation、前驱 manifest、
+目标 cutoff、真实证据文件 SHA/size，以及明确的 symbol/date/字段/daily/minute 值。
+只支持 `PROVIDER_VOLUME_PRECISION_VARIANCE`（vol）和 `KNOWN_PROVIDER_PRICE_VARIANCE`（OHLC）。
+前者表示已观察并接受的来源精度差异，不声称已证明上游具体舍入算法。禁止 amount 差异、任意字段或缺失事实豁免。
+
+只对完整、唯一、有限的 240 根分钟线与唯一有效日线应用精确匹配。新键、新字段、值漂移、
+缺分钟、重复、NaN、PIT/停牌冲突仍按原合同处理。绑定 create-exclusive、幂等，不重写既存
+`monthly_repair_inputs`（包括获批的单日 margin_detail 延后），SOURCE 封存后不可更改。
+后续月份不继承这些键；新差异需要独立明确接受，不能把本轮授权变成全市场自动放宽。
+
+SOURCE 的物理完整性仍按真实分母计数；质量状态独立为 `ACCEPTED_WITH_WARNINGS`，
+不能称为“差异已修复”或“质量全部无异常”。候选保存
+`reports/monthly_source_quality.json`、精确接受文件及原证据字节，全部由 manifest 钉住并随三端部署。
+只有已接受警告不再阻断其余数据集发布；真实残余阻断仍报告具体键/字段。
+
+## 5. 独立状态报告
+
+最终报告必须分别列出：源码/CI、数据库 DDL/DML、source snapshot、candidate 构建、
+三节点部署、consumer validation、profile activation、运行态读回、训练/实验、进程控制。
+只有 release closure、consumer readback 和激活后 identity 均一致，才能报告本月发布完成。
+
+## 6. Durable worker
+
+API、CLI、MCP 只提交和查询 operation；实际六阶段工作只由代码固定的 worker registry 执行。
+worker 运行前需由运行态所有者配置以下绝对路径或节点身份，配置文件只保存位置，不保存凭据：
+
+- `AISTOCK_MONTHLY_RELEASE_STATE_ROOT`
+- `AISTOCK_ACTIVE_DATASET_PROFILE_PATH`
+- `AISTOCK_MONTHLY_CONTROLLER_RELEASE_ROOT`
+- `AISTOCK_MONTHLY_PROFILE_CANDIDATE_ROOT`
+- `AISTOCK_MONTHLY_RELEASE_ARTIFACT_ROOT`
+- `AISTOCK_MONTHLY_WSL_RELEASE_ROOT`
+- `AISTOCK_MONTHLY_NODE1_RELEASE_ROOT`
+- `AISTOCK_DATASET_ACTION_AUTHORIZATION_ROOT`
+- `AISTOCK_MONTHLY_HMM_AUTHORITY_PATH`
+- `AISTOCK_MONTHLY_WSL_DISTRO`
+- `AISTOCK_MONTHLY_WSL_PROJECT_ROOT`
+- `AISTOCK_MONTHLY_WSL_PYTHON`
+- `AISTOCK_MONTHLY_NODE1_SSH_HOST`
+- `AISTOCK_MONTHLY_NODE1_PROJECT_ROOT`
+- `AISTOCK_MONTHLY_NODE1_PYTHON`
+- `AISTOCK_MONTHLY_RELEASE_WORKER_ENABLED=true`
+- `AISTOCK_MONTHLY_RELEASE_WORKER_POLL_SECONDS=5`
+- `AISTOCK_MONTHLY_RELEASE_WORKER_SHUTDOWN_SECONDS=30`
+
+`AISTOCK_MONTHLY_NODE1_SSH_HOST` 必须写直接的 `user@hostname` 或 `user@IP`，不得依赖个人
+SSH config 中的 alias。正式 worker 固定使用 `ssh -F NUL`，仅采用系统默认密钥位置和显式参数，避免
+`C:\Users\<user>\.ssh\config` 的权限、所有者或个人别名漂移影响月更发布。
+
+RD-Agent Results API 首次部署动态 release reader 时，WSL 与 node1 各自只需一次性配置固定 registry 根：
+
+- WSL：`QE_DATASET_RELEASE_REGISTRY_ROOTS=<AISTOCK_MONTHLY_WSL_RELEASE_ROOT>/.aistock-release-registry`
+- node1：`QE_DATASET_RELEASE_REGISTRY_ROOTS=<AISTOCK_MONTHLY_NODE1_RELEASE_ROOT>/.aistock-release-registry`
+
+该环境变量指向稳定的 registry 目录，不指向某个月 candidate。部署阶段会按 dataset manifest identity
+create-exclusive 写入登记；运行中的 API 每次请求重新验证登记、candidate 目录名、manifest 字节 SHA 和
+canonical identity，因此后续月份不得再修改该环境变量或为数据切换重启 API。首次代码/环境配置生效仍需由运行态所有者执行一次目标服务重启。
+
+部署代码后先做无任务领取、无数据库连接、无候选写入的只读组合预检：
+
+```powershell
+python scripts/monthly_unified_dataset_release_worker.py --preflight
+```
+
+首次配置或正式 HMM 模型/预设发生变更时，必须先把已经批准且已绑定当前 active manifest 的完整窗口系数产物
+封存为 repo-external authority；不得由 worker 查询模型数据库、猜测 preset 或采用旧 release 产物。静态 state-label
+模型可由工具确定性生成空 config；动态模型必须显式提供已冻结 config：
+
+```powershell
+python scripts/dataset_release_hmm_authority.py `
+  --source-coefficients <approved-full-window-coefficients.json> `
+  --model-path <approved-models.json> `
+  --producer-script <repo>\scripts\precompute_hmm_coefficients.py `
+  --output-root <repo-external-create-exclusive-root> `
+  --authority-id <approved-authority-id> `
+  --asset-id qe-hmm-preset-a-full-window `
+  --expected-dataset-manifest-sha256 <active-manifest-identity> `
+  --backtest-lag-trade-days 1
+```
+
+生成目录同时保存模型、原正式系数产物、config、authority 与 bootstrap receipt 的真实字节和哈希；源 manifest、
+模型 SHA、日期网格、state labels 或动态 config 任一不闭合即失败。后续月更只读取
+`AISTOCK_MONTHLY_HMM_AUTHORITY_PATH` 指向的 authority；固定模型未变时无需逐月重建 authority。
+
+HMM producer 源码更新是独立的代码身份变更，即使模型、preset 和数据集未变，也不能沿用旧脚本哈希。
+修改 `scripts/precompute_hmm_coefficients.py` 的交付必须在用户重启前，用当前最终源码与实际已安装
+authority 执行同一个严格 loader 的只读核验；import smoke、单元测试或 CI 绿灯均不替代这一步：
+
+```powershell
+python scripts/dataset_release_hmm_authority.py --verify-only `
+  --authority-path <current-monthly-hmm-authority.json> `
+  --producer-script <final-repo>\scripts\precompute_hmm_coefficients.py
+```
+
+若因已审核的 producer 更新导致哈希不匹配，使用原包的批准模型、config、preset 和历史系数
+创建不可变 successor。显式旧 authority SHA 与已审核新 producer SHA 必须闭合，不得直接替换旧包
+中的哈希、覆盖旧包、自动接受任意源码漂移或重新生成历史系数：
+
+```powershell
+python scripts/dataset_release_hmm_authority.py `
+  --rebind-from-authority <current-monthly-hmm-authority.json> `
+  --expected-previous-authority-sha256 <pinned-current-authority-file-sha> `
+  --producer-script <final-repo>\scripts\precompute_hmm_coefficients.py `
+  --expected-producer-sha256 <reviewed-final-producer-file-sha> `
+  --output-root <new-repo-external-create-exclusive-root> `
+  --authority-id <new-versioned-authority-id>
+```
+
+工具逐项核验原 bootstrap receipt、模型/config 字节和已批准系数身份，不允许覆盖模型、preset、窗口
+或 lag。新包保存 predecessor 和 producer 变更回执；只读 verify 必须再次 PASS，之后按原有部署授权
+把 `AISTOCK_MONTHLY_HMM_AUTHORITY_PATH` 指向新包，并运行完整 worker `--preflight`，再交用户重启。
+这只是既有启动校验的前移，不增加人工审批、不执行数据构建或领取任务。
+
+BUG-1887 回归检查属于 HMM CI 的消费边界：必须覆盖旧 authority/新 producer 的明确失败、显式 rebind
+后同一严格 loader 的通过、原包字节不变，以及下一次未经审核的源码漂移再次失败。CI 不读取生产
+`.env` 或生产模型文件；真实部署绑定由上述 file-only preflight 验证，不能把 fixture 通过称为运行态通过。
+
+受控运行方式为：
+
+```powershell
+python scripts/monthly_unified_dataset_release_worker.py --once
+python scripts/monthly_unified_dataset_release_worker.py --drain --max-operations 10
+python scripts/monthly_unified_dataset_release_worker.py --serve --poll-seconds 5
+```
+
+`--drain` 必须有上限；`--serve` 仅消费已经持久化的 operation，并响应 SIGINT/SIGTERM
+协作退出。worker 不接受调用方指定 producer 命令、组件子集或候选路径。WSL 与 node1
+使用固定节点命令进行流式不可变部署和本机 readback；控制器成功不能替代节点成功。
+
+正式 AIstock 后端在 `AISTOCK_MONTHLY_RELEASE_WORKER_ENABLED=true` 时会先执行同一只读
+preflight，再启动固定的 `--serve` 子进程；配置不完整或 authority 漂移会使显式启用的后端
+启动 fail closed。HTTP 请求线程只写持久 operation，不执行数据构建。后端关闭时先有界终止
+子进程；超时才强制结束，未闭合 staging 仍由原 operation/checkpoint 在下次启动后恢复。
+因此首次配置需由后端运行态所有者重启一次，以后每月提交不再手工启动 worker。
+
+`prepare_only` 到 `READY_TO_ACTIVATE` 后停止。只有 operation 自身从提交时就绑定
+`activate_when_ready` 和精确 `dsauth_*`，worker 才能执行中央 profile CAS；不能从普通
+prepare 授权推导激活权限。首次部署 worker 代码可能需要运行态所有者安排进程更新，之后每月
+release 切换只改变中央 profile，不需要按月修改 QE/HMM/荐股路径或重启节点 API。
+
+## 7. Advisory 与择时离线准备绑定
+
+首次部署本版本并由运行态所有者重启 AIstock 后端后，Advisory 和 position_timing 的新建离线数据准备
+通过以下入口冻结共享 active release。两者复用 `AISTOCK_MONTHLY_RELEASE_STATE_ROOT`，不增加逐月路径配置：
+
+- `POST /api/v1/advisory/dataset-preparations`
+- `POST /api/v1/position-timing/dataset-preparations`
+
+请求头必须提供稳定的 `Idempotency-Key`，请求体仅包含 `start_date`、`end_date`。首次调用在
+`managed-consumer-tasks` 中 create-exclusive 保存 profile、manifest、consumer component binding 和窗口；
+同一业务键重试只读取既有回执，不重新解析 active profile。相同键改变窗口返回冲突，窗口超过冻结 cutoff、
+binding/hash 漂移或缺少 active profile 均 fail closed。切换 active profile 只影响新的业务键，不改写历史请求、
+研究结果或原 Advisory CAS；入口本身不读取收益、不启动训练/实验，也不执行数据库或运行态动作。

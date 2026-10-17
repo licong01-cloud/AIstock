@@ -50,6 +50,10 @@ def test_data_stats_overlays_audit_readiness_and_cache_state(monkeypatch):
     assert item["ready_date"] == "2026-05-18"
     assert item["audit_ready_date"] == "2026-05-18"
     assert item["stats_max_date"] == "2026-05-17"
+    assert item["physical_max_date"] is None
+    assert item["physical_max_date_source"] == "not_probed"
+    assert item["stats_date_source"] == "data_stats_cache"
+    assert item["readiness_status"] == "audit_success"
     assert item["cache_state"] == "stale"
     assert item["readiness_source"] == "dataset_date_refresh_audit"
     assert item["operator_action_required"] is False

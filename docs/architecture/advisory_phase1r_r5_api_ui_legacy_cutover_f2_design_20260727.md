@@ -250,7 +250,15 @@ Body：
       "package_id": "pkg_...",
       "target_count": 5,
       "review_policy": {},
-      "runtime_config": {},
+      "runtime_config": {
+        "top_k": 5,
+        "display_top_n": 5,
+        "runtime_profile": {
+          "selection": {
+            "top_k": 5
+          }
+        }
+      },
       "entry_price_basis": "next_open_executable",
       "exit_price_basis": "next_open_executable",
       "style_profile_ref": null,
@@ -261,6 +269,10 @@ Body：
   "end_trade_date": "2026-07-21"
 }
 ```
+
+`review_policy` 允许为空或只覆盖部分字段，但服务端必须在冻结 Program 前调用当前荐股与历史荐股共用的 `normalize_advisory_review_policy`。归一化结果必须完整包含 `rank_enter_threshold/rank_exit_threshold/rank_exit_confirm_days/daily_replacement_budget/stop_loss_bps/take_profit_bps/trailing_stop_bps/time_stop_days/take_profit_mode`；其中两个 rank 阈值默认分别绑定 `target_count` 与 `target_count * 2`，其余默认值沿用当前荐股权威合同。`program_config/review_policy/review_policy_hash` 必须同时记录归一化后的同一语义，不得冻结空对象后在逐日执行阶段补默认值或静默 fallback。该处理是请求合同归一化，不是 StrategyPackage 二次验证、业务门禁或审批。
+
+`RESEARCH_PROGRAM_SPEC.target_count` 是荐股列表目标容量；其 selection `top_k` 是平台运行合同，不属于 StrategyPackage 资产或准入结论。R5 UI 必须使用与当前荐股一致的确定性映射：`top_k = clamp(target_count, 1, 50)`，并同时写入顶层 `top_k/display_top_n` 与 `runtime_profile.selection.top_k`。该映射对单 Alpha 和原生多 Alpha 父包完全相同，不读取或改写 package manifest，不执行二次 package 校验，也不得在缺失时依赖推理层默认值或静默 fallback。
 
 服务端补充 `request_id/requested_at/requested_by/data_source/origin/research_scope/evidence_level/execution_prohibited`，并把 Header 映射为 domain `client_idempotency_key`。客户端不得提交：
 
@@ -776,7 +788,7 @@ R5 无 DDL，因此 `production_ddl_gate=noop`。DEV API mutation E2E 使用现�
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-740 | `backend/services/advisory_historical_range/service.py`; `backend/routers/advisory.py` | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `python -m nox -s advisory_historical_range_backend` = 280 passed, 5 skipped | verified | none |
-| F-741 | `backend/routers/advisory.py`; `backend/services/advisory_historical_range/api_models.py` | `backend/tests/advisory_historical_range/test_r5_route_isolation.py`; `backend/tests/advisory_historical_range/test_r5_api_contracts.py` | verified | none |
+| F-741 | `backend/routers/advisory.py`; `backend/services/advisory_historical_range/api_models.py` | `backend/tests/advisory_historical_range/test_r5_api_contracts.py`; `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | verified | none |
 | F-742 | `service.py` response-bound dispatcher、DB-only typed pre-claim failure record 和 claimed-work receipt boundary | `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py`; `backend/tests/advisory_historical_range/test_r5_command_service.py` | verified | none |
 | F-743 | strict create/command DTOs in `api_models.py` | `backend/tests/advisory_historical_range/test_r5_api_contracts.py` covers both Program source kinds | verified | none |
 | F-744 | mutation routes and `service.py` exact-retry/CAS paths | `backend/tests/advisory_historical_range/test_r5_command_service.py` exact retry and stale PLANNING CAS | verified | none |
@@ -789,7 +801,7 @@ R5 无 DDL，因此 `production_ddl_gate=noop`。DEV API mutation E2E 使用现�
 | F-751 | multi-Program create UI and segmented historical evidence view | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | verified | none |
 | F-752 | independent batch/operation polling and cursor loaders | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` terminal-batch and multi-page behavior | verified | none |
 | F-753 | legacy main-flow cutover in `page.tsx`; compatibility API retained | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` no-replay-request guard | verified | none |
-| F-754 | additive top-level legacy deprecation metadata | `backend/tests/advisory_historical_range/test_r5_route_isolation.py` | verified | none |
+| F-754 | additive top-level legacy deprecation metadata | `backend/tests/advisory_historical_range/test_r5_api_contracts.py::test_legacy_replay_response_advertises_historical_range_replacement` | verified | none |
 | F-755 | protected import and service-boundary isolation | `backend/tests/advisory_historical_range/test_r5_protected_module_isolation.py` | verified | none |
 | F-756 | explicit runtime composition and reconstructable background identities | `backend/tests/advisory_historical_range/test_r5_composition.py`; `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py` | verified | none |
 | F-757 | no DDL；R1-R4 execution algorithms 不变；共享 operation 状态机仅 additive 增加 typed pre-claim `QUEUED -> RETRYABLE_FAILED`，不伪造 attempt | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py`; `git diff --check` | verified | none |

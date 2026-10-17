@@ -1,0 +1,367 @@
+{
+  "actual": "The authoritative config defaults to github_models/deepseek-r1 and hard-codes deepseek-v4-pro; live Nightly run 33449504361 recorded deepseek_api 402 followed by github_models 410.",
+  "allowed_write_scope": [
+    "configs/validation/llm_triage.yaml",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "scripts/llm_provider_adapter.py",
+    "scripts/ci_failure_issue_summary.py",
+    "noxfile.py",
+    ".github/workflows/nightly.yml",
+    ".github/workflows/test.yml",
+    "backend/tests/scripts/test_llm_provider_adapter.py",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "docs/architecture/aistock_deepseek_github_models_intelligent_validation_design_20260608.md",
+    "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
+    "tests/aistock_validation/bugs/20260901_BUG-1295-nightly-github-workflows-use-retired-or-costly-legacy-llm-models-instead.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1295",
+  "closed_at": "2026-09-01T04:18:50Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-01T02:00:18.367959Z",
+  "description": "The authoritative config defaults to github_models/deepseek-r1 and hard-codes deepseek-v4-pro; live Nightly run 33449504361 recorded deepseek_api 402 followed by github_models 410.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260901-674437e19721",
+      "timestamp": "2026-09-01T02:00:18.367942Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Expanded scope to the previously unowned authoritative LLM config, Nightly summary provider contract, focused tests, and the directly conflicting architecture/runbook text.",
+      "timestamp": "2026-09-01T02:06:00Z"
+    },
+    {
+      "action": "expand_allowed_write_scope",
+      "actor": "codex",
+      "note": "Added noxfile.py after workflow-automation execution exposed one remaining active github_models smoke invocation.",
+      "timestamp": "2026-09-01T02:22:00Z"
+    }
+  ],
+  "evidence_uris": [
+    "https://github.com/licong01-cloud/AIstock/actions/runs/33449504361"
+  ],
+  "expected": "All GitHub validation workflows use deepseek-v4-flash through the existing DEEPSEEK_API_KEY/DEEPSEEK_BASE_URL env contract, with retired GitHub Models fallback disabled, config ownership explicit, and no secret copied into repository files.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/nightly.yml",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_llm_provider_adapter.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "configs/validation/llm_triage.yaml",
+      "docs/architecture/aistock_deepseek_github_models_intelligent_validation_design_20260608.md",
+      "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
+      "noxfile.py",
+      "scripts/ci_failure_issue_summary.py",
+      "scripts/llm_provider_adapter.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1295-nightly-github-workflows-use-retired-or-costly-legacy-llm-models-instead.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/nightly.yml",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_llm_provider_adapter.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "configs/validation/llm_triage.yaml",
+      "docs/architecture/aistock_deepseek_github_models_intelligent_validation_design_20260608.md",
+      "docs/operations/validation_llm_guarded_rollout_runbook_20260609.md",
+      "noxfile.py",
+      "scripts/ci_failure_issue_summary.py",
+      "scripts/llm_provider_adapter.py",
+      "tests/aistock_validation/bugs/20260901_BUG-1295-nightly-github-workflows-use-retired-or-costly-legacy-llm-models-instead.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "scripts/llm_provider_adapter.py",
+        ".github/workflows/nightly.yml",
+        ".github/workflows/test.yml",
+        "backend/tests/scripts/test_llm_provider_adapter.py",
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      ],
+      "impacted_modules": [
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "scripts",
+        "validation.runner",
+        "validation.center",
+        "platform.config",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "scripts/llm_provider_adapter.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        },
+        {
+          "file": ".github/workflows/nightly.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": ".github/workflows/test.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "dev_quality_tooling"
+        },
+        {
+          "file": "backend/tests/scripts/test_llm_provider_adapter.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "scripts/llm_provider_adapter.py",
+        ".github/workflows/nightly.yml",
+        ".github/workflows/test.yml",
+        "backend/tests/scripts/test_llm_provider_adapter.py",
+        "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "scripts/llm_provider_adapter.py",
+      ".github/workflows/nightly.yml",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_llm_provider_adapter.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "scripts/llm_provider_adapter.py",
+      ".github/workflows/nightly.yml",
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_llm_provider_adapter.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
+    ]
+  },
+  "first_seen_at": "2026-09-01T02:00:18.367959Z",
+  "fix_branch": null,
+  "fix_commit": "c9084fff06d041154ee046558f988f62be01a939",
+  "fixed_at": "2026-09-01T04:18:50Z",
+  "github_issue_number": 4106,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4106",
+  "last_seen_at": "2026-09-01T02:00:18.367959Z",
+  "module": "validation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4109",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "gh run view 33449504361 --repo licong01-cloud/AIstock",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0",
+    "guardrail_changed_files"
+  ],
+  "risk_area": "regression",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1295",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "903f1d5a6b243727",
+    "recorded_at": "2026-09-01T04:21:53.818205Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "551cefabd1dbe7e805f9b7b240d16d0a950b9b2b",
+    "source_merge_commit": "c9084fff06d041154ee046558f988f62be01a939",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4109",
+    "validation_evidence": [
+      "validation-receipt: id=d1c3335c41bf8228 commit=551cefabd1dbe7e805f9b7b240d16d0a950b9b2b kind=nox plan=validation_module_registry_l0 status=passed command=python_-m_nox_-s_validation_module_registry_l0 result=8_tests_14_of_14_mapped",
+      "validation-receipt: id=521ce54688142685 commit=551cefabd1dbe7e805f9b7b240d16d0a950b9b2b kind=nox plan=validation_catalog_integrity status=passed command=python_-m_nox_-s_validation_catalog_integrity result=7_tests_findings_0",
+      "validation-receipt: id=5d7f7f6fe3c3a52b commit=551cefabd1dbe7e805f9b7b240d16d0a950b9b2b kind=nox plan=guardrail_changed_files status=passed command=python_-m_nox_-s_guardrail_changed_files_--_--changed-only result=blocking_0_13_of_13_mapped"
+    ],
+    "validation_evidence_digest": "db317bc1c83b27a6734ddfb9136c6fe43002249d629dc817456839750117b9d0"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation"
+  ],
+  "title": "Nightly GitHub workflows use retired or costly legacy LLM models instead of DeepSeek V4 Flash",
+  "trigger_condition": {
+    "fingerprint": "674437e19721c190fcabca10",
+    "source_event_id": "FE-20260901-674437e19721"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=d1c3335c41bf8228 commit=551cefabd1dbe7e805f9b7b240d16d0a950b9b2b kind=nox plan=validation_module_registry_l0 status=passed command=python_-m_nox_-s_validation_module_registry_l0 result=8_tests_14_of_14_mapped",
+    "validation-receipt: id=521ce54688142685 commit=551cefabd1dbe7e805f9b7b240d16d0a950b9b2b kind=nox plan=validation_catalog_integrity status=passed command=python_-m_nox_-s_validation_catalog_integrity result=7_tests_findings_0",
+    "validation-receipt: id=5d7f7f6fe3c3a52b commit=551cefabd1dbe7e805f9b7b240d16d0a950b9b2b kind=nox plan=guardrail_changed_files status=passed command=python_-m_nox_-s_guardrail_changed_files_--_--changed-only result=blocking_0_13_of_13_mapped"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": true,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Batch compatible workflow/CI/docs changes into one PR with per-issue evidence.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

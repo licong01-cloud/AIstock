@@ -1,0 +1,247 @@
+{
+  "actual": "The official monthly v2 path does not carry source-specific historical security identity through sealed factor materialization or require a frozen moneyflow alias coverage receipt, and its activation verifier only checks the controller profile without proving WSL/node1 running dataset-identity resolves the new manifest. A future monthly release can therefore recreate BUG-1611 or report ACTIVATED_VERIFIED while node APIs remain bound to the predecessor.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20260928_BUG-1617-unified-monthly-release-omits-source-aliases-and-live-node-activation-re.json",
+    "backend/services/dataset_release/artifact_ready_build_source.py",
+    "backend/services/dataset_release/build_stage.py",
+    "backend/services/dataset_release/candidate_validator.py",
+    "backend/services/dataset_release/factor_materializer.py",
+    "backend/services/dataset_release/monthly_consumer_layout.py",
+    "backend/services/dataset_release/monthly_local_validation.py",
+    "backend/services/dataset_release/monthly_worker_nodes.py",
+    "backend/services/dataset_release/monthly_worker_runtime.py",
+    "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+    "backend/tests/dataset_release/test_candidate_validator.py",
+    "backend/tests/dataset_release/test_factor_materializer.py",
+    "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
+    "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+    "backend/tests/dataset_release/test_monthly_local_validation.py",
+    "backend/tests/dataset_release/test_monthly_shared_components.py",
+    "backend/tests/dataset_release/test_monthly_worker_runtime_cli.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "noxfile.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1617",
+  "closed_at": "2026-09-29T06:47:38.466999Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-28T17:20:57.129495Z",
+  "description": "The official monthly v2 path does not carry source-specific historical security identity through sealed factor materialization or require a frozen moneyflow alias coverage receipt, and its activation verifier only checks the controller profile without proving WSL/node1 running dataset-identity resolves the new manifest. A future monthly release can therefore recreate BUG-1611 or report ACTIVATED_VERIFIED while node APIs remain bound to the predecessor.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260928-925a8d5dd57c",
+      "timestamp": "2026-09-28T17:20:57.129475Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Every unified monthly release resolves frozen source-specific historical security codes, pins and verifies alias coverage, and reports activation verified only after both running QE nodes return the successor manifest identity.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-09-28T17:20:57.129495Z",
+  "fix_branch": null,
+  "fix_commit": "b3b3f813f81070d17c4b6b3d187eab94a215a4cf",
+  "fixed_at": "2026-09-29T03:30:33Z",
+  "github_issue_number": 5085,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5085",
+  "last_seen_at": "2026-09-28T17:20:57.129495Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5089",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_artifact_ready_build_source.py backend/tests/dataset_release/test_factor_materializer.py backend/tests/dataset_release/test_factor_partition_producer.py backend/tests/dataset_release/test_candidate_validator.py backend/tests/dataset_release/test_build_stage.py backend/tests/dataset_release/test_monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_local_validation.py backend/tests/dataset_release/test_monthly_worker_nodes.py backend/tests/dataset_release/test_monthly_worker_runtime_cli.py backend/tests/dataset_release/test_monthly_worker_composition.py backend/tests/dataset_release/test_monthly_official_adapters.py backend/tests/dataset_release/test_monthly_unified_v2.py backend/tests/dataset_release/test_runtime_release_registration.py -q -x -> 105 passed, 3 skipped",
+      "dataset_release targeted matrix fresh process -> 105 passed, 3 skipped"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1617\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1617",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "49bb81d497c00020334b561fed876462d405f390475050c7947ebae122df0a60",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "b3b3f813f81070d17c4b6b3d187eab94a215a4cf",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-09-29T06:35:28.667768Z",
+      "mode": "read_only",
+      "observed_identity": "62d3555447a7f25b6349098bf57d6955dbe1a000",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a7c8055fb9a22655c98b8be286991101191fc920f577085324b4c3489b097183",
+      "receipt_sha256": "38aa2610c3fc2a511fd767481028db3ce472f72468467ca3ce7756819dd0efa3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0c1e58a072fa0541f6e2ff029f79fe67f66ceba0a454912d51072018acfc6e0f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Unified monthly release omits source aliases and live node activation readback",
+  "trigger_condition": {
+    "fingerprint": "925a8d5dd57c66d6c6d13fbe",
+    "source_event_id": "FE-20260928-925a8d5dd57c"
+  },
+  "validation_evidence": [
+    "dataset_release targeted matrix fresh process -> 105 passed, 3 skipped"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

@@ -4,10 +4,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 from backend.services.simulation_data.daily_context import SimulationBrokerBackend
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    DataUnavailableError,
+    InvalidStateTransitionError,
+)
 
 from .models import SimulationReleaseBinding, StrategyRuntimeRelease, canonical_json_sha256
 from .successor_models import (
@@ -92,6 +96,34 @@ class LocalSimReplayCoordinator:
         account = self.repository.get_account(simulation_account_id)
         release = self.repository.get_release(release_id)
         binding = self.repository.get_binding(binding_id)
+        job = self.build_job(
+            account=account,
+            release=release,
+            binding=binding,
+            start_trade_date=start_trade_date,
+            end_trade_date=end_trade_date,
+            historical_source_id=historical_source_id,
+            historical_source_sha256=historical_source_sha256,
+            trading_days=trading_days,
+            created_by=created_by,
+        )
+        return self.repository.save_replay_job(job)
+
+    def build_job(
+        self,
+        *,
+        account: Any,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        start_trade_date: date,
+        end_trade_date: date,
+        historical_source_id: str,
+        historical_source_sha256: str,
+        trading_days: Sequence[date],
+        created_by: str,
+    ) -> LocalSimReplayJobV1:
+        """Build one replay cursor without persistence for an atomic product bundle."""
+
         if (
             self.historical_day_runner.historical_source_id != str(historical_source_id).strip()
             or self.historical_day_runner.historical_source_sha256 != str(historical_source_sha256).strip().lower()
@@ -156,7 +188,7 @@ class LocalSimReplayCoordinator:
             created_at=now,
             updated_at=now,
         )
-        return self.repository.save_replay_job(job)
+        return job
 
     def run_next_batch(
         self,
@@ -231,7 +263,20 @@ class LocalSimReplayCoordinator:
             try:
                 self.historical_day_runner(current, trade_date)
             except Exception as exc:
-                retryable = isinstance(exc, DataUnavailableError)
+                error_context = getattr(exc, "context", {}) or {}
+                retryable = isinstance(exc, DataUnavailableError) or (
+                    isinstance(exc, ArtifactGenerationFailedError)
+                    and error_context.get("reason_code") == "SIMULATION_SELECTION_INFERENCE_TIMEOUT"
+                    and error_context.get("thread_isolated") is True
+                )
+                failure_context = {"message": str(exc)[:1000], "trade_date": trade_date.isoformat()}
+                # Persist bounded operational facts, never provider stdout or environment contents.
+                for key in (
+                    "reason_code", "failure_stage", "thread_isolated", "started_at",
+                    "elapsed_seconds", "timeout_seconds",
+                ):
+                    if key in error_context:
+                        failure_context[key] = error_context[key]
                 self.repository.transition_replay_job(
                     replay_job_id=current.replay_job_id,
                     expected_version=current.version,
@@ -240,7 +285,7 @@ class LocalSimReplayCoordinator:
                             LocalSimReplayStatus.FAILED_RETRYABLE if retryable else LocalSimReplayStatus.FAILED_TERMINAL
                         ),
                         "failure_code": type(exc).__name__,
-                        "failure_context": {"message": str(exc)[:1000], "trade_date": trade_date.isoformat()},
+                        "failure_context": failure_context,
                     },
                     updated_at=self._now(),
                 )
@@ -262,6 +307,66 @@ class LocalSimReplayCoordinator:
                 updated_at=self._now(),
             )
         return current
+
+    @staticmethod
+    def is_recoverable_selection_timeout(job: LocalSimReplayJobV1) -> bool:
+        context = job.failure_context or {}
+        return (
+            job.status is LocalSimReplayStatus.FAILED_TERMINAL
+            and job.failure_code == "ArtifactGenerationFailedError"
+            and job.next_trade_date is not None
+            and job.live_release_id is None
+            and job.live_binding_id is None
+            and (
+                (
+                    context.get("reason_code") == "SIMULATION_SELECTION_INFERENCE_TIMEOUT"
+                    and context.get("thread_isolated") is True
+                )
+                or (
+                    "reason_code" not in context
+                    and context.get("message")
+                    == "simulation scheduler selection inference timed out; tick remains non-blocking"
+                )
+            )
+        )
+
+    def recover_selection_timeout(self, *, replay_job_id: str, expected_version: int) -> LocalSimReplayJobV1:
+        job = self.repository.get_replay_job(replay_job_id)
+        if job.version != expected_version or not self.is_recoverable_selection_timeout(job):
+            raise InvalidStateTransitionError(
+                "LocalSIM replay terminal failure is not a recoverable selection timeout",
+                context={"reason_code": "LOCALSIM_REPLAY_TIMEOUT_RECOVERY_INVALID"},
+            )
+        return self.repository.transition_replay_job(
+            replay_job_id=job.replay_job_id,
+            expected_version=job.version,
+            update={"status": LocalSimReplayStatus.FAILED_RETRYABLE},
+            updated_at=self._now(),
+        )
+
+    @staticmethod
+    def is_recoverable_historical_submit_window(job: LocalSimReplayJobV1) -> bool:
+        context = job.failure_context or {}
+        return (
+            job.status is LocalSimReplayStatus.FAILED_TERMINAL
+            and job.failure_code == "RuntimeConfigInvalidError"
+            and context.get("reason_code") == "SIMULATION_SUBMIT_OUTSIDE_TRADING_WINDOW"
+            and job.next_trade_date is not None
+            and context.get("trade_date") == job.next_trade_date.isoformat()
+            and job.live_release_id is None and job.live_binding_id is None
+        )
+
+    def recover_historical_submit_window(self, *, replay_job_id: str, expected_version: int) -> LocalSimReplayJobV1:
+        job = self.repository.get_replay_job(replay_job_id)
+        if job.version != expected_version or not self.is_recoverable_historical_submit_window(job):
+            raise InvalidStateTransitionError(
+                "LocalSIM terminal failure is not a historical submit-window rejection",
+                context={"reason_code": "LOCALSIM_REPLAY_WINDOW_RECOVERY_INVALID"},
+            )
+        return self.repository.transition_replay_job(
+            replay_job_id=job.replay_job_id, expected_version=job.version,
+            update={"status": LocalSimReplayStatus.FAILED_RETRYABLE}, updated_at=self._now(),
+        )
 
     def mark_ready_for_live(self, *, replay_job_id: str, expected_version: int) -> LocalSimReplayJobV1:
         job = self.repository.get_replay_job(replay_job_id)
@@ -304,6 +409,45 @@ class LocalSimReplayCoordinator:
                 context={"reason_code": "LOCALSIM_REPLAY_LIVE_RELEASE_LINEAGE_MISMATCH"},
             )
         _release, _binding, updated = self.repository.create_replay_live_successor(
+            replay_job_id=replay_job_id,
+            expected_version=expected_version,
+            account=account,
+            release=release,
+            binding=binding,
+            activation_trade_date=decision.activation_trade_date,
+            updated_at=self._now(),
+        )
+        return updated
+
+    def activate_live_successor_atomic(
+        self,
+        *,
+        replay_job_id: str,
+        expected_version: int,
+        release: StrategyRuntimeRelease,
+        binding: SimulationReleaseBinding,
+        decision: LocalSimSafeBoundaryDecisionV1,
+    ) -> LocalSimReplayJobV1:
+        """Create and activate the live authority in one safe-boundary transaction."""
+
+        job = self.repository.get_replay_job(replay_job_id)
+        if job.version != expected_version or job.status is not LocalSimReplayStatus.READY_FOR_LIVE:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay is not ready for atomic live activation",
+                context={"reason_code": "LOCALSIM_REPLAY_LIVE_SUCCESSOR_STATE_INVALID"},
+            )
+        if not decision.eligible:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay live activation requires an eligible safe boundary",
+                context={"reason_code": decision.reason_code},
+            )
+        account = self.repository.get_account(job.simulation_account_id)
+        if release.base_release_id != job.release_id:
+            raise InvalidStateTransitionError(
+                "LocalSIM replay live release must be a successor of the historical release",
+                context={"reason_code": "LOCALSIM_REPLAY_LIVE_RELEASE_LINEAGE_MISMATCH"},
+            )
+        _release, _binding, updated = self.repository.create_and_activate_replay_live_successor(
             replay_job_id=replay_job_id,
             expected_version=expected_version,
             account=account,

@@ -122,6 +122,32 @@ def test_symbols_by_date_preserves_frozen_opportunity_denominator():
     assert sum(map(len, result.values())) == denominator.total_opportunities
 
 
+def test_candidate_scope_uses_resolved_authority_window_not_cli_omission():
+    denominator = _denominator()
+
+    assert cli._candidate_scope(
+        denominator,
+        selected_dates=denominator.trading_dates,
+        selected_symbols=frozenset(),
+        max_trading_days=None,
+        expected_opportunities=denominator.total_opportunities,
+    ) == "full"
+    assert cli._candidate_scope(
+        denominator,
+        selected_dates=denominator.trading_dates[1:],
+        selected_symbols=frozenset(),
+        max_trading_days=None,
+        expected_opportunities=2,
+    ) == "sample"
+    assert cli._candidate_scope(
+        denominator,
+        selected_dates=denominator.trading_dates,
+        selected_symbols=frozenset({"300741.SZ"}),
+        max_trading_days=None,
+        expected_opportunities=2,
+    ) == "sample"
+
+
 def test_source_identity_collapses_exact_duplicates_and_rejects_conflicts():
     target = {}
     cli._insert_source_row(
@@ -147,7 +173,8 @@ def test_source_identity_collapses_exact_duplicates_and_rejects_conflicts():
         )
 
 
-def test_build_dry_run_is_bounded_and_never_calls_writer(monkeypatch, tmp_path):
+@pytest.mark.parametrize("explicit_window", [False, True])
+def test_build_dry_run_is_bounded_and_never_calls_writer(monkeypatch, tmp_path, explicit_window):
     denominator = _denominator()
     authority = _authority(denominator)
     connection = _Connection()
@@ -186,7 +213,11 @@ def test_build_dry_run_is_bounded_and_never_calls_writer(monkeypatch, tmp_path):
         lambda **kwargs: pytest.fail("dry-run must not write a candidate"),
     )
 
-    result = cli.build(_args(tmp_path, dry_run=True))
+    args = _args(tmp_path, dry_run=True)
+    if explicit_window:
+        args.start_date = denominator.window_start.isoformat()
+        args.end_date = denominator.window_end.isoformat()
+    result = cli.build(args)
 
     assert result["status"] == "PASS_DRY_RUN"
     assert result["candidate_scope"] == "full"
