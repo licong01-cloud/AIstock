@@ -6,8 +6,11 @@ or modification of the original SOURCE/finished price exports.
 from __future__ import annotations
 
 from datetime import date
+import hashlib
 
 from backend.data_service.suspension_day_authority import digest, frozen_authority, load_authority
+
+from .canonical import canonical_json_bytes
 
 BINDING = "monthly_suspension_authority"
 SCHEMA = "aistock_monthly_suspension_authority_binding_v1"
@@ -25,8 +28,11 @@ def build_authority(cas, snapshot, *, plan, operation_id, source_bundle_sha256):
         if plan.get(BINDING + "_ref") is not None:
             raise ValueError("suspension binding is incomplete")
         return authority, None
+    # The operation writer pins canonical JSON plus one LF, not the disclosure
+    # authority's newline-free semantic digest (which remains in provenance).
+    binding_file_sha256 = hashlib.sha256(canonical_json_bytes(binding) + b"\n").hexdigest()
     if (binding.get("schema_version") != SCHEMA or binding.get("operation_id") != operation_id
-            or digest(binding) != plan.get(BINDING + "_ref", {}).get("sha256")
+            or binding_file_sha256 != plan.get(BINDING + "_ref", {}).get("sha256")
             or binding.get("source_bundle_sha256") != source_bundle_sha256
             or binding.get("target_cutoff") != plan["target_cutoff"]
             or binding.get("predecessor_manifest_sha256") != plan["predecessor"]["dataset_manifest_sha256"]):

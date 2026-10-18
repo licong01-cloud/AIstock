@@ -430,11 +430,18 @@ def test_prev_close_binding_retains_source_and_is_idempotent(tmp_path, monkeypat
     calls = []
     def capture(inputs=None, **kwargs):
         calls.append(inputs)
+        if kind == "suspension":
+            from backend.data_service.suspension_day_authority import load_authority
+            return load_authority()
         return {"schema_version": correction.SCHEMA, "facts": []}
     method = {"prev_close": "capture_approved_corrections", "suspension": "capture_approved_authority",
               "minute": "capture_database_minutes"}[kind]
     monkeypatch.setattr(correction, method, capture)
     cas = type("CAS", (), {"put_json": lambda self, value: type("Ref", (), {"as_dict": lambda self: {"sha256": HEX, "size": 1, "relative_path": "fact"}})()})()
+    if kind == "suspension":
+        from backend.services.dataset_release.cas_store import CASStore
+        from backend.services.dataset_release.control_store import ControlStore
+        cas = CASStore(ControlStore.initialize(tmp_path / "suspension-control").root)
     def bind():
         if kind == "suspension":
             return service.bind_suspension_authority(operation, principal="operator:test", cas=cas)
@@ -462,6 +469,14 @@ def test_prev_close_binding_retains_source_and_is_idempotent(tmp_path, monkeypat
         assert plan[correction.BINDING]["database_write"] is False
         assert plan[correction.BINDING]["activation_authorized"] is False
         assert service.status(operation)["status"] == "FAILED"
+        if kind == "suspension":
+            from types import SimpleNamespace
+            authority, provenance = correction.build_authority(
+                cas, SimpleNamespace(source_manifest_ref=cas.put_json({})),
+                plan=plan, operation_id=operation, source_bundle_sha256=HEX)
+            assert [(row["ts_code"], row["trade_date"]) for row in authority["entries"]] == [
+                ("601238.SH", "2026-09-15")]
+            assert provenance["source_bundle_sha256"] == HEX
         path = service.store.operation_root(operation) / plan[correction.BINDING + "_ref"]["id"]
         path.write_bytes(path.read_bytes() + b" ")
         with pytest.raises(MonthlyReleaseConflict, match="binding changed"):

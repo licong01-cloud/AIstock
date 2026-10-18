@@ -237,7 +237,9 @@ targets:
           - backend/services/dataset_release/monthly_worker_nodes.py
           - backend/services/dataset_release/monthly_worker_runtime.py
         required_source_globs:
-          # This shared reader is loaded by the current supervised monthly worker.
+          # All monthly helpers already routed here are loaded by the supervised
+          # monthly worker, including helper-only fixes without runner changes.
+          - backend/services/dataset_release/monthly_*.py
           - backend/services/dataset_release/monthly_minute_repair.py
           - backend/services/dataset_release/monthly_prev_close_repair.py
           - backend/routers/monthly_dataset_releases.py

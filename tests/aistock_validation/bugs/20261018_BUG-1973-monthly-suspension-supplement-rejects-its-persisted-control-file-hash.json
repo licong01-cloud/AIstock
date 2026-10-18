@@ -17,7 +17,18 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-18T15:34:09.023375Z",
-  "description": "ValueError: suspension binding differs from sealed monthly SOURCE; no new missing market data.",
+  "description": "The formal suspension-binding writer pins canonical JSON plus one LF; BUILD compared the newline-free disclosure semantic digest to this file SHA256. Real operation attempt 276 rejected a valid immutable SOURCE supplement. Tests fabricated the same incorrect digest and did not connect the real binding writer to the shared-component reader. No new market-data absence.",
+  "design_compliance": {
+    "no_partial_delivery": "The producer-to-reader round-trip and real retained September binding pass; complete monthly publication and LocalSIM PIT policy acceptance are explicitly not claimed.",
+    "no_silent_errors": "Source, cutoff, predecessor, operation, CAS corruption and conflicting disclosure still reject; no manufactured market data or suppressed failures.",
+    "business_semantics_unchanged": "Only the persisted binding-file hash comparison is corrected. Disclosure provenance retains its existing semantic digest, price exports and published releases remain untouched.",
+    "no_extra_gate": "No new approval, source capture, full history scan or re-export. Existing monthly runtime route now also covers helper-only changes through its existing wildcard."
+  },
+  "review_evidence": [
+    "Round 1: RED reproduces the actual writer-format rejection and real service binding/read round-trip; corrected the reader instead of mutating stored identities.",
+    "Round 2: retained disclosure semantic hash and all existing identity/conflict checks; added operation mismatch and verified monthly versus legacy worker probe separation.",
+    "Round 3: 121 passed, 1 skipped in the final related matrix; real September CAS/binding fresh-process readback PASS with plan, SOURCE checkpoint and active profile byte hashes unchanged."
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -165,11 +176,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh process, real sealed September SOURCE/CAS/binding: X:/AIstock_dataset_candidates/data_repair_staging/BUG-1973-20261018/fresh-process-binding-proof.json SHA256 a432e539ce79ad7d1498415768da00ce12bfc75a19fc262bf3ee1a0c3f1556a0 -> PASS; one approved September disclosure entry, wrong operation rejected, protected plan/SOURCE/profile unchanged; no DB/candidate/profile/runtime writes.",
+      "RED->GREEN: formal control-file writer and MonthlyReleaseService.bind_suspension_authority now round-trip into build_authority; final targeted matrix 121 passed, 1 skipped."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
