@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1975",
-  "closed_at": null,
+  "closed_at": "2026-10-18T17:42:03Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -68,9 +68,9 @@
   },
   "first_seen_at": "2026-10-18T17:23:20.241265Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "13c472b7762c6b653e26b0c2ed57de96a82f3ac1",
   "fix_summary": "Extend only the existing maintenance recovery with a precise quote-gap mode. Prove official publication availability, missing frozen sw_daily fields and the same hole in a BUILD-pinned H5; keep worker/state locks, active/ready/deployment protections and all retained export signatures. Preserve per-attempt intent/checkpoint, move the never-ready root back to the same private staging, atomically retain FAILED while returning its stage to BUILD. SOURCE repair remains the existing authenticated provider-backed additive refresh. Three review passes covered safety/identity, recursive-lock and crash recovery, then scope/design semantics. No HMM/QE code, database mutation, model changes or price re-export.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-18T17:42:03Z",
   "fresh_process_validation": [
     "RED: quote source repack regression failed with unsupported quote_gap argument before fix; GREEN after fix.",
     "Real frozen candidate dry-run: 125269 retained file signatures unchanged, quote-source partition 139f52b0069f881415b7ae34087d42f16ad6f17e0ff634569526fc8b7b75d256 and output quote SHA ffb62feeec7c2689c434d4b7feb2b643f1632fd40228f17cd1007f57a14bf17b prove 801012.SI/2026-03-13 hole; applied=false, database_write=false, active_profile_write=false, exports_repeated=false."
@@ -82,6 +82,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6320",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -100,6 +101,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -109,7 +111,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1975",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5e0bda93cb5f4032",
+    "recorded_at": "2026-10-18T17:52:52.916759Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2695254c585eb6f5236fb40ed14357d5777b9ee2",
+    "source_merge_commit": "13c472b7762c6b653e26b0c2ed57de96a82f3ac1",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6320",
+    "validation_evidence": [
+      "rtk pytest backend/tests/dataset_release/test_monthly_build_recovery.py -q -> passed (16 tests); merged fresh-process apply preserved125269 export signatures and retracted only never-published packaging into original private staging; no database/profile write"
+    ],
+    "validation_evidence_digest": "d16fb893fa858816e6a820ac401bb1ac8427466c7ef7a3a13e15032336919a13"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -118,6 +141,9 @@
     "fingerprint": "83eff8e84831db8c8d636209",
     "source_event_id": "FE-20261018-83eff8e84831"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/dataset_release/test_monthly_build_recovery.py -q -> passed (16 tests); merged fresh-process apply preserved125269 export signatures and retracted only never-published packaging into original private staging; no database/profile write"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
