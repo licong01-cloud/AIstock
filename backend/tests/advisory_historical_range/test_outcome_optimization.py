@@ -57,6 +57,108 @@ def test_readonly_cache_reuses_objects_but_public_load_remains_mutable(tmp_path,
         store.load_readonly(ref)
 
 
+def _cache_probe_ref(store, value):
+    return store.publish_payload(artifact_kind=HistoricalRangeArtifactKind.REQUEST,
+        producer_contract_version="test_v1", payload_schema_version="test_v1",
+        resolved_request_hash="a" * 64, payload={"rows": [{"value": value}]}).ref
+
+
+def test_evicted_artifact_reuses_full_verification_and_preserves_mutable_load(tmp_path, monkeypatch):
+    store = HistoricalRangeOutcomeReadCache(root=tmp_path, max_entries=1)
+    first, second = (_cache_probe_ref(store, n) for n in (1, 2))
+    original, calls = HistoricalRangeArtifactStore.load, []
+    def counted(self, ref):
+        calls.append(ref)
+        return original(self, ref)
+    monkeypatch.setattr(HistoricalRangeArtifactStore, "load", counted)
+    expected = store.load_readonly(first).model_dump(mode="json")
+    store.load_readonly(second)
+    restored = store.load_readonly(first)
+    assert restored.model_dump(mode="json") == expected
+    assert calls == [first, second]
+    with pytest.raises(TypeError):
+        restored.payload["rows"][0]["value"] = 99
+    mutable = store.load(first)
+    mutable.payload["rows"][0]["value"] = 99
+    assert store.load_readonly(first).payload["rows"][0]["value"] == 1
+    assert len(store._cache) == 1
+
+
+@pytest.mark.parametrize("limits", [{"max_verified_entries": 1}, {"max_verified_bytes": 1}])
+def test_verification_proofs_remain_bounded_and_eviction_reverts_to_native(tmp_path, monkeypatch, limits):
+    store = HistoricalRangeOutcomeReadCache(root=tmp_path, max_bytes=1, **limits)
+    first, second = (_cache_probe_ref(store, n) for n in (1, 2))
+    original, calls = HistoricalRangeArtifactStore.load, []
+    def counted(self, ref):
+        calls.append(ref)
+        return original(self, ref)
+    monkeypatch.setattr(HistoricalRangeArtifactStore, "load", counted)
+    for ref in (first, second, first):
+        assert store.load_readonly(ref).payload["rows"]
+    assert calls == [first, second, first]
+    assert store._cached_bytes == 0
+    assert store._verified_bytes <= store._max_verified_bytes
+    assert len(store._verified_headers) <= store._max_verified_entries
+
+
+def test_evicted_artifact_rechecks_bytes_despite_identical_fingerprint(tmp_path, monkeypatch):
+    store = HistoricalRangeOutcomeReadCache(root=tmp_path, max_bytes=1)
+    ref = _cache_probe_ref(store, 1)
+    store.load_readonly(ref)
+    path = store.root / ref.relative_path
+    stamp = store._file_stamp(path.resolve())
+    raw = path.read_bytes()
+    changed = raw.replace(b'"value":1', b'"value":9')
+    assert changed != raw and len(changed) == len(raw)
+    path.write_bytes(changed)
+    monkeypatch.setattr(store, "_file_stamp", lambda _: stamp)
+    with pytest.raises(HistoricalRangeContractError, match="raw file hash"):
+        store.load_readonly(ref)
+
+
+def test_evicted_artifact_rejects_drift_during_verified_byte_read(tmp_path, monkeypatch):
+    store = HistoricalRangeOutcomeReadCache(root=tmp_path, max_bytes=1)
+    ref = _cache_probe_ref(store, 1)
+    store.load_readonly(ref)
+    read = store._read_bytes
+    def changing(path):
+        raw = read(path)
+        path.write_bytes(raw + b" ")
+        return raw
+    monkeypatch.setattr(store, "_read_bytes", changing)
+    with pytest.raises(ValueError, match="changed during"):
+        store.load_readonly(ref)
+
+
+@pytest.mark.parametrize("field", ["payload_schema_version", "file_sha256"])
+def test_verified_header_does_not_hide_a_changed_exact_ref(tmp_path, field):
+    store = HistoricalRangeOutcomeReadCache(root=tmp_path, max_bytes=1)
+    ref = _cache_probe_ref(store, 1)
+    store.load_readonly(ref)
+    changed = ref.model_copy(update={field: "bad_v1" if field == "payload_schema_version" else "f" * 64})
+    with pytest.raises(HistoricalRangeContractError):
+        store.load_readonly(changed)
+
+
+def test_parent_finalization_has_operation_local_verified_read_cache(tmp_path):
+    from pathlib import Path
+    from backend.services.advisory_historical_range.composition import build_explicit_historical_range_r5_runtime_factory
+    roots = {key: tmp_path / key for key in ("artifact", "runtime", "package", "policy", "evidence", "dataset")}
+    for root in roots.values():
+        root.mkdir()
+    factory = build_explicit_historical_range_r5_runtime_factory(conn_factory=lambda: None,
+        artifact_root=roots["artifact"], task_runtime_root=roots["runtime"],
+        package_asset_root=roots["package"], repository_root=Path(__file__).resolve().parents[3],
+        policy_component_root=roots["policy"], calculation_evidence_root=roots["evidence"],
+        dataset_store_root=roots["dataset"])
+    first, second = factory(), factory()
+    assert isinstance(first.artifact_store, HistoricalRangeOutcomeReadCache)
+    assert first.repository._artifact_store is first.artifact_store
+    assert first.artifact_store is not second.artifact_store
+    ref = _cache_probe_ref(first.artifact_store, 1)
+    assert first.artifact_store.load_readonly(ref).payload == second.artifact_store.load_readonly(ref).payload
+
+
 def test_fact_retains_validated_typed_artifact_without_changing_financial_hash(tmp_path, monkeypatch):
     fact = _fact(HistoricalRangeOutcomeReadCache(root=tmp_path))
     payload = fact.model_dump(mode="json")
