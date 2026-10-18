@@ -64,8 +64,10 @@
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_artifact_ready_source.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_source_quality.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py",
       "backend/tests/dataset_release/test_raw_volume_precision.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
       "backend/tests/scripts/test_monthly_unified_dataset_release.py",
       "scripts/monthly_unified_dataset_release.py",
       "tests/aistock_validation/bugs/20261017_BUG-1968-july-minute-completeness-audit-missed-246-traded-stock-days.json"
@@ -82,8 +84,10 @@
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_artifact_ready_source.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_source_quality.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py",
       "backend/tests/dataset_release/test_raw_volume_precision.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
       "backend/tests/scripts/test_monthly_unified_dataset_release.py",
       "scripts/monthly_unified_dataset_release.py",
       "tests/aistock_validation/bugs/20261017_BUG-1968-july-minute-completeness-audit-missed-246-traded-stock-days.json"
@@ -97,14 +101,30 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1968-july-minute-completeness-audit-missed-246-traded-stock-days.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
   "first_seen_at": "2026-10-17T18:14:02.165423Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "85b855ead8f4f733debfbc6dc7a3c1f07a140f4d",
+  "fixed_at": "2026-10-18T05:03:36Z",
   "github_issue_number": 6290,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6290",
   "last_seen_at": "2026-10-17T18:14:02.165423Z",
@@ -112,6 +132,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6293",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -136,7 +157,8 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending",
+    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -149,7 +171,29 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_expansion_reason": "User explicitly requested all three monthly blockers fixed: obsolete preparation-time active-profile equality, missing July database repair in sealed export, and rejection of formal TDX precision provenance. July production repair is already complete. No new production writes, active changes, service control or full re-export.",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1968",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "715dc24db23d5034",
+    "recorded_at": "2026-10-18T05:04:33.159333Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0422a8b2f181546e828ef5f3c3001ba985f280b1",
+    "source_merge_commit": "85b855ead8f4f733debfbc6dc7a3c1f07a140f4d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6293",
+    "validation_evidence": [
+      "validation-receipt: id=3cfbc8785a94c803 commit=0422a8b2f181546e828ef5f3c3001ba985f280b1 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, 0 blocking findings`",
+      "validation-receipt: id=ff01dd99c162ba92 commit=0422a8b2f181546e828ef5f3c3001ba985f280b1 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_monthly_source_quality.py::test_quality_binding_ignores_active_drift_but_rejects_sealed_source backend/tests/routers/test_monthly_dataset_releases.py::test_all_routes_require_dataset_release_operator backend/tests/routers/test_monthly_dataset_releases.py::test_prev_close_binding_is_preparation_only_and_forwards_exact_inputs -q` result=`5 passed; related matrix previously 223 passed, 5 platform skips`"
+    ],
+    "validation_evidence_digest": "c4c157ca281c996e3bfaa8927c92c907c469637bf154c3ac116df90019f640cf"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -158,6 +202,10 @@
     "fingerprint": "9a21d4cad2de85c0d1c8fee3",
     "source_event_id": "FE-20261017-9a21d4cad2de"
   },
+  "validation_evidence": [
+    "validation-receipt: id=3cfbc8785a94c803 commit=0422a8b2f181546e828ef5f3c3001ba985f280b1 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, 0 blocking findings`",
+    "validation-receipt: id=ff01dd99c162ba92 commit=0422a8b2f181546e828ef5f3c3001ba985f280b1 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_monthly_source_quality.py::test_quality_binding_ignores_active_drift_but_rejects_sealed_source backend/tests/routers/test_monthly_dataset_releases.py::test_all_routes_require_dataset_release_operator backend/tests/routers/test_monthly_dataset_releases.py::test_prev_close_binding_is_preparation_only_and_forwards_exact_inputs -q` result=`5 passed; related matrix previously 223 passed, 5 platform skips`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
