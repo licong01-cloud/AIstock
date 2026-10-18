@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "SOURCE captures publication evidence only for the release frozen industry codes; unrelated live catalog additions cannot block additive quote repair.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_industry_facts.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1976-monthly-quote-source-refresh-scans-outside-frozen-industry-catalog.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_industry_facts.py",
-      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1976-monthly-quote-source-refresh-scans-outside-frozen-industry-catalog.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_industry_facts.py",
@@ -112,15 +118,20 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
     "fresh_process_evidence": [
       "Explicit AIstock Python fresh process loaded this worktree capture_industry_quote_source against read-only REPEATABLE READ production data for2026-03-13: frozen catalog131, captured quotes131, unresolved0, repaired0; production database write=false, operation binding write=false, candidate/profile write=false, runtime_action=false. Local diagnostic CAS only: X:/AIstock_dataset_candidates/data_repair_staging/BUG-1976-20261019/catalog-source-smoke.",
-      "RED: test_quote_source_catalog_uses_only_frozen_codes[None] reproduced original row-bound exception. GREEN: four cases cover134-row live catalog, frozen missing code, duplicate frozen row and invalid is_pub."
+      "RED: test_quote_source_catalog_uses_only_frozen_codes[None] reproduced original row-bound exception. GREEN: four cases cover134-row live catalog, frozen missing code, duplicate frozen row and invalid is_pub.",
+      "AIstock fresh process read-only production SOURCE capture 2026-03-13:131 frozen codes,131 rows,0 unresolved; no binding/candidate/profile/database writes."
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
