@@ -1,4 +1,5 @@
 import hashlib
+import json
 import stat
 from datetime import date
 from pathlib import Path
@@ -139,3 +140,84 @@ def test_repack_rejects_unsafe_or_unexplained_candidates(tmp_path, monkeypatch, 
     with pytest.raises((ValueError, MonthlyBuildResumeError)):
         recover_unpublished_quote_policy(**args, apply=True)
     assert target.exists() and not staging.exists()
+
+
+def _quote_gap_fixture(tmp_path, monkeypatch):
+    import pandas as pd
+
+    args, target, staging, state, downstream, component = _fixture(tmp_path, monkeypatch)
+    plan = args["store"].read_plan("")
+    part = plan["monthly_industry_quote_source"]["quote_source"]["partitions"][0]
+    part["partition_key"] = "2026-03"
+    args["cas"].get_json_bounded = lambda *a, **kw: {"rows": []}
+    quote = component / "sector_quote_facts.h5"
+    pd.DataFrame({"datetime": pd.to_datetime(["2026-03-13"]), "instrument": ["801012.SI"],
+                  "sw2_pct_change": [float("nan")], "sw2_vol": [float("nan")],
+                  "sw2_amount": [float("nan")]}).set_index(["datetime", "instrument"]).to_hdf(
+        quote, key="data", format="table", data_columns=["datetime", "instrument"])
+    operation = args["store"].operation_root("")
+    build = args["store"].read_checkpoint("", "BUILD")
+    build["output_refs"].append({"id": f"candidate/{quote.relative_to(target).as_posix()}",
+                               "sha256": hashlib.sha256(quote.read_bytes()).hexdigest(), "size": quote.stat().st_size})
+    _write(operation / "receipts/build.json", build)
+    _write(operation / "checkpoints/build.json", {"plan_digest": _digest(plan), "request_digest": "request",
+        "receipt": {"path": "receipts/build.json",
+                    "sha256": hashlib.sha256((operation / "receipts/build.json").read_bytes()).hexdigest()}})
+    _write(operation / "state.json", state)
+    args["store"].read_state = lambda _op: json.loads((operation / "state.json").read_bytes())
+    # A previous policy recovery must not collide with a later source repair.
+    _write(operation / "quote-policy-repack.json", {"execution_attempt": 1})
+    return args, target, staging, state, downstream, component
+
+
+def test_quote_source_repack_retains_exports_and_allows_existing_source_refresh(tmp_path, monkeypatch):
+    args, target, staging, state, _, _ = _quote_gap_fixture(tmp_path, monkeypatch)
+    before = _signature(target / "minute_bin/close.bin")
+    key = ("801012.SI", "2026-03-13")
+    dry = recover_unpublished_quote_policy(**args, quote_gap=key)
+    assert not dry["applied"] and state["current_stage"] == "DERIVE" and target.exists()
+    result = recover_unpublished_quote_policy(**args, quote_gap=key, apply=True)
+    state = args["store"].read_state("")
+    assert result["applied"] and state["status"] == "FAILED" and state["current_stage"] == "BUILD"
+    assert json.loads((args["store"].operation_root("") / "state.json").read_bytes())["current_stage"] == "BUILD"
+    assert _signature(staging / "minute_bin/close.bin") == before
+    assert (staging / "qe_dataset_manifest.json").exists()
+    assert recover_unpublished_quote_policy(**args, quote_gap=key, apply=True) == result
+
+
+@pytest.mark.parametrize("case", ["finite-source", "unavailable", "deployed", "active", "changed-price"])
+def test_quote_source_repack_does_not_bypass_publication_or_data_identity(tmp_path, monkeypatch, case):
+    args, target, staging, _, downstream, _ = _quote_gap_fixture(tmp_path, monkeypatch)
+    if case == "finite-source":
+        args["cas"].get_json_bounded = lambda *a, **kw: {"rows": [{"index_code": "801012.SI",
+            "trade_date": "2026-03-13", "pct_change": 1, "vol": 2, "amount": 3}]}
+    if case == "unavailable":
+        key = ("801011.SI", "2026-03-13")
+    else:
+        key = ("801012.SI", "2026-03-13")
+    if case == "deployed":
+        downstream["DEPLOY"] = {}
+    if case == "active":
+        _write(args["active_profile"], {"generation": "new"})
+    if case == "changed-price":
+        (target / "minute_bin/close.bin").write_bytes(b"changed")
+    with pytest.raises((ValueError, MonthlyBuildResumeError)):
+        recover_unpublished_quote_policy(**args, quote_gap=key, apply=True)
+    assert target.exists() and not staging.exists()
+
+
+def test_quote_source_repack_recovers_failed_state_publication(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_build_recovery as recovery
+
+    args, target, staging, state, _, _ = _quote_gap_fixture(tmp_path, monkeypatch)
+    replace = recovery._replace_json
+    def interrupt(*args):
+        raise OSError("state write interrupted")
+    monkeypatch.setattr(recovery, "_replace_json", interrupt)
+    with pytest.raises(OSError, match="interrupted"):
+        recover_unpublished_quote_policy(**args, quote_gap=("801012.SI", "2026-03-13"), apply=True)
+    assert not target.exists() and staging.exists()
+    assert args["store"].read_state("")["current_stage"] == "DERIVE"
+    monkeypatch.setattr(recovery, "_replace_json", replace)
+    assert recover_unpublished_quote_policy(**args, quote_gap=("801012.SI", "2026-03-13"), apply=True)["applied"]
+    assert args["store"].read_state("")["current_stage"] == "BUILD"

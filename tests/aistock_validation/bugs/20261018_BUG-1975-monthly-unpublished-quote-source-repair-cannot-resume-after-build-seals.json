@@ -1,6 +1,8 @@
 {
   "actual": "September operation dmr_63a313d97fd046a38d5a876265565014 BUILD277 succeeded without re-export, but DERIVE fails on official quote sw2_pct_change at 801012.SI/2026-03-13. The operation still binds pre-BUG-1940 quote partition 139f52b0 with 12 missing industry keys despite immutable real-provider repair readback already available. Existing refresh requires FAILED BUILD with no BUILD checkpoint; the narrow prior recovery only admits obsolete quote-policy identity and cannot recover this idle, never-ready/never-deployed candidate. Need controlled unpublished packaging recovery retaining completed price exports, exact source amendment and same operation/candidate, early existing quote-audit readback, no active/profile/database mutation, no HMM/QE changes.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_build_recovery.py",
+    "backend/tests/dataset_release/test_monthly_build_recovery.py",
     "tests/aistock_validation/bugs/20261018_BUG-1975-monthly-unpublished-quote-source-repair-cannot-resume-after-build-seals.json"
   ],
   "assigned_agent": null,
@@ -21,8 +23,24 @@
       "timestamp": "2026-10-18T17:23:20.241247Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1940-quote-repair-20261016/real-source-readback.json",
+    "X:/AIstock_dataset_release_control/monthly/dmr_63a313d97fd046a38d5a876265565014/derive-hmm/attempt-277/frozen-input-bundle.json"
+  ],
+  "expected": "A proven quote-available hole may retract only idle, never-ready and never-deployed packaging to its original retained BUILD, preserving sealed SOURCE, original checkpoint, all accurate price exports and active identity. The existing authenticated additive quote refresh and normal resume still perform data repair and validation.",
+  "root_cause": "BUG-1940 source refresh was developed but its 12 true 2026-03-13 provider rows were never bound to this operation. BUILD sealed the old 139f52b0 quote partition. Existing unpublished recovery admitted only the obsolete publication policy, so the actual quote-source hole could not use the existing FAILED-BUILD refresh endpoint after DERIVE rejected it.",
+  "fix_summary": "Extend only the existing maintenance recovery with a precise quote-gap mode. Prove official publication availability, missing frozen sw_daily fields and the same hole in a BUILD-pinned H5; keep worker/state locks, active/ready/deployment protections and all retained export signatures. Preserve per-attempt intent/checkpoint, move the never-ready root back to the same private staging, atomically retain FAILED while returning its stage to BUILD. SOURCE repair remains the existing authenticated provider-backed additive refresh. Three review passes covered safety/identity, recursive-lock and crash recovery, then scope/design semantics. No HMM/QE code, database mutation, model changes or price re-export.",
+  "data_delivery_status": "BLOCKED_PENDING_FROZEN_QUOTE_REFRESH",
+  "design_compliance_review": {
+    "no_partial_success_claim": "PASS: tool completion is not candidate READY; DERIVE, deployment and consumer validation remain required.",
+    "no_silent_error": "PASS: absent/finite source proof, unavailable quote, changed exports, active identity and downstream checkpoints fail closed.",
+    "business_semantics_unchanged": "PASS: existing taxonomy, quote-availability, PIT, HMM/QE contracts and model windows are unchanged.",
+    "no_new_gate_or_approval": "PASS: reuse existing operator preparation, locks, SOURCE refresh and resume; no extra activation, research or resource approval."
+  },
+  "fresh_process_validation": [
+    "RED: quote source repack regression failed with unsupported quote_gap argument before fix; GREEN after fix.",
+    "Real frozen candidate dry-run: 125269 retained file signatures unchanged, quote-source partition 139f52b0069f881415b7ae34087d42f16ad6f17e0ff634569526fc8b7b75d256 and output quote SHA ffb62feeec7c2689c434d4b7feb2b643f1632fd40228f17cd1007f57a14bf17b prove 801012.SI/2026-03-13 hole; applied=false, database_write=false, active_profile_write=false, exports_repeated=false."
+  ],
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -35,9 +53,15 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py"
+    ]
   },
   "first_seen_at": "2026-10-18T17:23:20.241265Z",
   "fix_branch": null,
