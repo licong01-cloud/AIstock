@@ -882,7 +882,7 @@ CLOCK=D_CLOSE_UNCONDITIONAL_MARK_FUNCTION：分布权重只看D，不读g/m/scor
 
 0fit metadata检查1.714秒，绑定既存文件96c686...的5个元数据组件：20D池4908～4918/并集4920，131行业、全映射；open/close/factor文件齐，pre_close bin为0。它不是完整305D价格/时钟或可学通过。新同业指标采用显式调整后隔夜标价代理，不补造pre_close或更改生产参考价，UNKNOWN/legacy/native UNPROVEN保留；不转交数据窗口作业务补数，不把它变成原包门禁。
 
-两臂共用新文件快照/比例费用/五会话及同一价格overlay规则：matched26维、candidate29维，新增b/w观察及明确偏离变换，既有三头数学/每臂3fit、最多新6fit；当前实际0。NO_ADVICE不冒充拒买/模型TAKE/现金0，只表示对原槽无价格干预；真缺价仍UNKNOWN，全无建议必须Δ=0/0干预。原Top5/固定规则/新matched/candidate四臂，双净增量、已知避亏/漏盈、按真实动作计支持/MDE及未知分别判读，不改判旧负研究。精确5源码叶/3直接测试已实现：原生特征/五会话估值与三头纯数学复用，文件按角色先投影再批读、完整peer保留、固定HDF兼容、预测先于评价Y、六组件journal和immutable恢复。三轮同窗口复核及定向RED→GREEN完成；源码PR/CI和真实研究待各自交付，不把合成测试fit计研究。当前仍152研究fit+1旧index，0确认/启用，无后端重启需要。
+两臂共用新文件快照/比例费用/五会话及同一价格overlay规则：matched26维、candidate29维，新增b/w观察及明确偏离变换，既有三头数学/每臂3fit、最多新6fit；当前实际0。NO_ADVICE不冒充拒买/模型TAKE/现金0，只表示对原槽无价格干预；真缺价仍UNKNOWN，全无建议必须Δ=0/0干预。原Top5/固定规则/新matched/candidate四臂，双净增量、已知避亏/漏盈、按真实动作计支持/MDE及未知分别判读，不改判旧负研究。精确5源码叶/3直接测试已实现：原生特征/五会话估值与三头纯数学复用，文件按角色先投影再批读、完整peer保留、固定HDF兼容、预测先于评价Y、六组件journal和immutable恢复。21项稳定小矩阵及三轮复核后，首次启动在数据读取前暴露原WSL Python3.10与文件消费者Python3.11+的import冲突；只在本模块修正Windows同reader消费/显式WSL纯数学trained，不安装或改共享源码，不变经济合同。修正另做定向回归、节点入口smoke和新HEAD CI；真实prepare/fit仍未发生，当前152研究fit+1旧index，0确认/启用，无后端重启需要。
 
 ### 6.4 训练资源边界
 

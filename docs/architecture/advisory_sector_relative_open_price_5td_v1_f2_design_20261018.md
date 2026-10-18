@@ -1,4 +1,4 @@
-# 行业相对开盘条件下的五交易日买价价值 F2 详细设计 v1.1
+# 行业相对开盘条件下的五交易日买价价值 F2 详细设计 v1.2
 
 日期：2026-10-18；源码交付更新：2026-10-19。候选：`GP5-SECTOR-RELATIVE-OPEN-1`。
 
@@ -114,6 +114,8 @@ H固定T..T+4五个原交易会话，不压缩停牌，不延期找好价。名�
 输入粒度按D/T批量；phase/预测/数值状态不能用metadata或HTTP200冒充。resume以同identity复用已冻结特征、模型及预测，不重读latest资产或隐式重fit；缺完成模型须报告partial，不能覆盖STARTED。只记录真正发生的六个拟合，内部优化迭代/统计bootstrap不当新fit；当前仍152历史研究fit+1旧index，metadata0fit不增计。
 
 X盘放计划、临时脚本、测试及日志；新正式研究资产使用现有Advisory外部F根的新独立目录，不复制旧大资产。只通过现有公开节点/资源合同选择承载，不训练QE、不控制其它窗口；资源不足记录可恢复状态，不将“QE必须空闲”扩成纯文件prepare许可。backend重启仍user-owned，本设计及后续纯离线实现无需为运行而重启服务。
+
+执行节点兼容：冻结文件消费者链使用`datetime.UTC`，现有WSL拟合环境为Python3.10；不修改共享模块、不注入UTC shim、不安装环境。Windows现有AIstock环境保持同一reader完成prepare/forecast/valuation，纯数学`trained`阶段由显式登记的`node_wsl_distribution`和`node_python_uri`在现有WSL环境运行。共享原位immutable parquet，不复制数据或创建远端工作区；node库身份按原plan验证，reader自身Python/库版本进来源receipt。CLI `run`在Windows按原四阶段编排，WSL子进程只处理`trained`且不导入文件消费模块，训练仍仅WSL；所有临时全X。该执行修正不改变经济合同、监督、模型、特征或预算。
 
 ## Implementation Plan / 精确文件范围
 

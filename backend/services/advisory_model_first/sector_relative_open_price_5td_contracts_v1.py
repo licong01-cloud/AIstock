@@ -67,6 +67,7 @@ class SectorRelativeOpenStudyPlanV1(BaseModel):
     implementation_sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
     source_commit: str = Field(pattern=r"^[a-f0-9]{40}$")
     node_python_uri: str
+    node_wsl_distribution: str | None = Field(default=None, pattern=r"^[A-Za-z0-9._-]{1,64}$")
     qe_api_base: str
     library_versions: dict[str, str]
     temporary_root_uri: str = "X:/AIstock_temp/ADVISORY/sector_relative_open_5td"

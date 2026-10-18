@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import tempfile
 
 import pandas as pd
@@ -22,10 +22,6 @@ from backend.services.advisory_model_first.sector_relative_open_price_5td_contra
     ARMS, COMPONENTS, CONDITION_KINDS, CONTEXT_COLUMNS, FIT_BUDGET, HYPOTHESIS,
     KEY, PARAMETERS, PEER_POLICY, POLICY, POLICY_SHA256, PREVIOUS_FIT_COUNT,
     SCHEMA_SHA256, SectorRelativeOpenStudyPlanV1, node_path, sha,
-)
-from backend.services.advisory_model_first.sector_relative_open_price_5td_inputs_v1 import (
-    SectorOpenFileProjectionV1, build_sector_context_inputs_v1, frame_sha256, measure_sector_finance_v1,
-    prepare_sector_inputs_v1,
 )
 from backend.services.advisory_model_first.sector_relative_open_price_5td_model_v1 import (
     bundle_payload_v1, fit_component_v1, query_sector_relative_open_nodes_v1,
@@ -129,6 +125,7 @@ def preregister_sector_study_v1(*, plan, output_root):
 
 
 def prepare_sector_study_v1(*, plan, output_root, reader=None):
+    from backend.services.advisory_model_first.sector_relative_open_price_5td_inputs_v1 import prepare_sector_inputs_v1
     plan, root = _checked(plan, output_root)
     initial = _stage(plan, root, "preregistered")
     if (root/"prepared").exists():
@@ -160,6 +157,7 @@ def _budget():
 
 
 def _reader(plan, reader):
+    from backend.services.advisory_model_first.sector_relative_open_price_5td_inputs_v1 import SectorOpenFileProjectionV1
     reader = reader or SectorOpenFileProjectionV1(plan.file_source_binding)
     if reader.binding_hash != plan.file_source_binding["binding_hash"]:
         raise ValueError("study reader binding differs from the frozen common snapshot")
@@ -265,6 +263,7 @@ def train_sector_study_v1(*, plan, output_root, qe_observation_probe):
 
 
 def freeze_sector_forecasts_v1(*, plan, output_root, reader=None):
+    from backend.services.advisory_model_first.sector_relative_open_price_5td_inputs_v1 import build_sector_context_inputs_v1, frame_sha256
     plan, root = _checked(plan, output_root)
     trained = _stage(plan, root, "trained")
     target = root/"forecasts"/"trained"
@@ -294,6 +293,7 @@ def freeze_sector_forecasts_v1(*, plan, output_root, reader=None):
 
 def evaluate_sector_study_v1(*, plan, output_root, reader=None):
     from backend.services.advisory_model_first.sector_relative_open_price_5td_evaluation_v1 import evaluate_sector_relative_open_v1
+    from backend.services.advisory_model_first.sector_relative_open_price_5td_inputs_v1 import measure_sector_finance_v1
     plan, root = _checked(plan, output_root)
     trained = _stage(plan, root, "trained")
     if (root/"evaluated").exists():
@@ -325,6 +325,31 @@ def evaluate_sector_study_v1(*, plan, output_root, reader=None):
         result_class="NEGATIVE" if result["status"] == "EXACT_CANDIDATE_NOT_SUPPORTED" else "EXPLORATORY")
 
 
+def _fit_via_wsl(plan, *, plan_uri, output_root):
+    """Existing Windows file reader + explicit existing WSL pure-math process.
+
+    No asset copy, service API, installation or persisted remote workspace.
+    The child runs only the trained stage; inputs stay immutable in place.
+    """
+    import subprocess
+    if not plan.node_wsl_distribution:
+        raise ValueError("Windows controller needs its explicitly registered WSL distribution")
+    def mounted(value):
+        path = node_path(value)
+        windows = PureWindowsPath(str(path))
+        if windows.drive:
+            return "/mnt/"+windows.drive[0].lower()+"/"+"/".join(windows.parts[1:])
+        return path.as_posix()
+    command = ["wsl", "-d", plan.node_wsl_distribution, "--cd", mounted(Path(__file__).parents[3]), "--exec", "env",
+        "PYTHONDONTWRITEBYTECODE=1", "OMP_NUM_THREADS=2", "OPENBLAS_NUM_THREADS=2", "MKL_NUM_THREADS=2",
+        "TMPDIR="+mounted(plan.temporary_root_uri), plan.node_python_uri, "-u", "-m", __package__+".sector_relative_open_price_5td_pipeline_v1",
+        "--plan", mounted(plan_uri), "--output-root", mounted(output_root), "--stage", "trained"]
+    subprocess.run(command, check=True)
+    _, root = _checked(plan, output_root)
+    _stage(plan, root, "trained")
+    return root/"trained"
+
+
 def main():
     import argparse
     from backend.services.advisory_model_first.generic_population_price_5td_cli_v1 import public_qe_observation_v1
@@ -340,13 +365,13 @@ def main():
     for stage in ("preregistered", "prepared", "trained", "forecasts", "evaluated") if args.stage == "run" else (args.stage,):
         kwargs = dict(plan=plan, output_root=args.output_root)
         if stage in ("prepared", "forecasts", "evaluated"):
-            reader = reader or SectorOpenFileProjectionV1(plan.file_source_binding)
+            reader = _reader(plan, reader)
             kwargs["reader"] = reader
         if stage == "trained":
             kwargs["qe_observation_probe"] = lambda: public_qe_observation_v1(plan.qe_api_base)
         print(json.dumps(dict(stage=stage, status="STARTED", experiment_id=plan.experiment_id)), flush=True)
         with x_temporary_files(plan):
-            target = functions[stage](**kwargs)
+            target = _fit_via_wsl(plan, plan_uri=args.plan, output_root=args.output_root) if stage == "trained" and os.name == "nt" else functions[stage](**kwargs)
         print(json.dumps(dict(stage=stage, status="COMPLETE", path=str(target))), flush=True)
 
 

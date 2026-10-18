@@ -13,6 +13,7 @@ from backend.tests.advisory_model_first.test_sector_relative_open_price_5td_mode
     bundle as bundle, fitted_native as fitted_native, synthetic_domain, query,
 )
 from backend.services.advisory_model_first import sector_relative_open_price_5td_pipeline_v1 as pipeline
+from backend.services.advisory_model_first import sector_relative_open_price_5td_inputs_v1 as inputs
 from backend.services.advisory_model_first.sector_relative_open_price_5td_contracts_v1 import (
     ARMS, CONTEXT_COLUMNS, FEATURES, KEY, META, SectorRelativeOpenStudyPlanV1, sha,
 )
@@ -113,11 +114,12 @@ def stage_fixture(tmp_path, monkeypatch, bundle):
         file_source_binding=binding, train_start="2024-07-04", train_end="2025-05-30",
         evaluation_start="2025-06-03", evaluation_end="2025-09-30", implementation_sha256=pipeline.implementation_sha256(),
         source_commit="a"*40, node_python_uri="/existing/python", qe_api_base="http://127.0.0.1:8001/api/v1",
+        node_wsl_distribution="Ubuntu",
         library_versions={n: "synthetic" for n in ("numpy", "pandas", "scikit-learn", "scipy", "pyarrow", "pydantic")})
     domain, _ = synthetic_domain()
     domain["peer_status"] = "KNOWN"
     eval_rows, eval_days, _, _, calendar = evaluation_packet(bundle)
-    monkeypatch.setattr(pipeline, "prepare_sector_inputs_v1", lambda **kw: dict(roster=eval_rows[list(META)], days=eval_days,
+    monkeypatch.setattr(inputs, "prepare_sector_inputs_v1", lambda **kw: dict(roster=eval_rows[list(META)], days=eval_days,
         domain=domain, peer_panel=domain.iloc[:0], calendar=calendar,
         encoding=bundle["encoding"], source_receipt=dict(synthetic_only=True), source_stage_sha256="a"*64))
     pipeline.preregister_sector_study_v1(plan=plan, output_root=str(tmp_path/"studies"))
@@ -171,7 +173,7 @@ def test_forecast_is_published_before_finance_and_resume_never_refits_or_reloads
     reader = SimpleNamespace(binding_hash=plan.file_source_binding["binding_hash"], assert_unchanged=lambda: None,
         receipt=lambda: dict(synthetic_only=True))
     safe = [*META, *FEATURES, *CONTEXT_COLUMNS, "reference_cny", "observed_gap_bps"]
-    monkeypatch.setattr(pipeline, "build_sector_context_inputs_v1", lambda **kw: (eval_rows[safe].copy(), eval_rows[list(KEY)]))
+    monkeypatch.setattr(inputs, "build_sector_context_inputs_v1", lambda **kw: (eval_rows[safe].copy(), eval_rows[list(KEY)]))
     attempts = []
     def finance(**kw):
         root = output/plan.experiment_id
@@ -182,13 +184,27 @@ def test_forecast_is_published_before_finance_and_resume_never_refits_or_reloads
         if len(attempts) == 1:
             raise RuntimeError("synthetic finance read interruption")
         return eval_rows.copy()
-    monkeypatch.setattr(pipeline, "measure_sector_finance_v1", finance)
+    monkeypatch.setattr(inputs, "measure_sector_finance_v1", finance)
     with pytest.raises(RuntimeError, match="interruption"):
         pipeline.evaluate_sector_study_v1(plan=plan, output_root=str(output), reader=reader)
-    monkeypatch.setattr(pipeline, "build_sector_context_inputs_v1", lambda **kw: pytest.fail("frozen input reread"))
+    monkeypatch.setattr(inputs, "build_sector_context_inputs_v1", lambda **kw: pytest.fail("frozen input reread"))
     target = pipeline.evaluate_sector_study_v1(plan=plan, output_root=str(output), reader=reader)
     assert len(calls) == 6 and len(attempts) == 2
     result = json.loads((target/"evaluation.json").read_bytes())
     assert result["evaluation_original_rows"] == len(eval_rows) and not result["test_or_sealed_finance_consumed"]
-    monkeypatch.setattr(pipeline, "measure_sector_finance_v1", lambda **kw: pytest.fail("completed outcome reread"))
+    monkeypatch.setattr(inputs, "measure_sector_finance_v1", lambda **kw: pytest.fail("completed outcome reread"))
     assert pipeline.evaluate_sector_study_v1(plan=plan, output_root=str(output)) == target
+
+
+def test_windows_controller_delegates_only_trained_to_explicit_existing_WSL(bundle, tmp_path, monkeypatch):
+    import subprocess
+    plan, output, _ = stage_fixture(tmp_path, monkeypatch, bundle)
+    trained = pipeline.train_sector_study_v1(plan=plan, output_root=str(output), qe_observation_probe=observation)
+    commands = []
+    monkeypatch.setattr(subprocess, "run", lambda args, **kw: commands.append((args, kw)))
+    result = pipeline._fit_via_wsl(plan, plan_uri=str(tmp_path/"plan.json"), output_root=str(output))
+    assert result == trained and len(commands) == 1
+    args, options = commands[0]
+    assert args[:3] == ["wsl", "-d", "Ubuntu"] and args[-2:] == ["--stage", "trained"]
+    assert "/existing/python" in args and options == {"check": True}
+    assert all("/mnt/c/" not in v and "copy" not in v.lower() for v in args)

@@ -197,9 +197,13 @@ class SectorOpenFileProjectionV1(FileHistoricalRangeOutcomeSourceProvider):
         return out
 
     def receipt(self):
+        from importlib.metadata import version
+        import platform
         self.assert_unchanged()
         return dict(binding_hash=self.binding_hash, source_evidence="FROZEN_FILES_NON_VINTAGE_NATIVE_UNPROVEN",
             projections=self.read_receipts, projected_limit_bins=self.bin_receipts,
+            consumer_python_version=platform.python_version(),
+            consumer_library_versions={n: version(n) for n in ("numpy", "pandas", "pyarrow", "tables")},
             sql_queries=0, network_calls=0, new_native_receipt=False, source_vintage_upgraded=False)
 
 
