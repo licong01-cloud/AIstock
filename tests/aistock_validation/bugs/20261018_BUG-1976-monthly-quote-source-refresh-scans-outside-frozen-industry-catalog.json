@@ -14,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-18T17:47:00.950468Z",
-  "description": "SourceManifestError official industry publication catalog exceeds its row bound.",
+  "description": "SOURCE quote refresh queried the entire live SW2021/L2 catalog (134 rows) despite binding a frozen 131-code release projection. Three unrelated unpublished codes (801217.SI,801768.SI,801786.SI) tripped LIMIT132/131 row validation. Restrict the parameterized read to the frozen projection codes; preserve missing, duplicate and invalid publication rejection. Current read-only March13 evidence has all131 complete quotes; the operation still needs its stale frozen quote binding refreshed.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -109,9 +109,16 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "fresh_process_evidence": [
+      "Explicit AIstock Python fresh process loaded this worktree capture_industry_quote_source against read-only REPEATABLE READ production data for2026-03-13: frozen catalog131, captured quotes131, unresolved0, repaired0; production database write=false, operation binding write=false, candidate/profile write=false, runtime_action=false. Local diagnostic CAS only: X:/AIstock_dataset_candidates/data_repair_staging/BUG-1976-20261019/catalog-source-smoke.",
+      "RED: test_quote_source_catalog_uses_only_frozen_codes[None] reproduced original row-bound exception. GREEN: four cases cover134-row live catalog, frozen missing code, duplicate frozen row and invalid is_pub."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
     "runtime_impact": "worker_scheduler",
