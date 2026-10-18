@@ -119,8 +119,11 @@ def prepared(tmp_path):
 
 
 @pytest.mark.parametrize("crash", [False, True])
-def test_bounded_fill_is_cow_recoverable_and_idempotent(tmp_path, monkeypatch, crash):
+@pytest.mark.parametrize("packaging_started", [False, True])
+def test_bounded_fill_is_cow_recoverable_and_idempotent(tmp_path, monkeypatch, crash, packaging_started):
     resume, finalized, plan = prepared(tmp_path)
+    resume.record["finalization_started"] = packaging_started
+    _atomic(resume.path, resume.record)
     provider = resume.root / "minute_bin/qlib"
     path = provider / f"features/{CODE.lower()}/close.1min.bin"
     old_release = tmp_path / "old-release.bin"

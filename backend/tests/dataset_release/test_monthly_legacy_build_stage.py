@@ -355,9 +355,12 @@ def _retained_prev_close(tmp_path, dataset="daily_bin", repair_day="2026-08-31")
 
 @pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
 @pytest.mark.parametrize("repair_day", ["2026-08-31", "2026-09-01"])
-def test_exact_prev_close_correction_keeps_prices_source_and_append_proof(tmp_path, dataset, repair_day):
+@pytest.mark.parametrize("packaging_started", [False, True])
+def test_exact_prev_close_correction_keeps_prices_source_and_append_proof(tmp_path, dataset, repair_day, packaging_started):
     from backend.services.dataset_release import monthly_prev_close_repair as correction
     invocation, predecessor, original, finalized, resume, plan, freq = _retained_prev_close(tmp_path, dataset, repair_day)
+    resume.record["finalization_started"] = packaging_started
+    _atomic(resume.path, resume.record)
     before = {p: p.read_bytes() for p in resume.root.rglob("*.bin") if not p.name.startswith("prev_close.")}
     inherited = (predecessor / f"features/000001.sz/prev_close.{freq}.bin").read_bytes()
     updated = correction.apply_prev_close_corrections(resume, finalized=finalized, cas=invocation.cas, plan=plan)
@@ -397,6 +400,18 @@ def test_prev_close_correction_recovers_exact_files_without_reexport(tmp_path, m
     assert not correction._pending(resume.root).exists()
     target = resume.root / "daily_bin/qlib/features/000001.sz/prev_close.day.bin"
     assert struct.unpack("<fff", target.read_bytes()) == (0, 11, 6)
+
+
+def test_prev_close_failed_packaging_does_not_allow_published_root(tmp_path):
+    from backend.services.dataset_release import monthly_prev_close_repair as correction
+    invocation, _, _, finalized, resume, plan, _ = _retained_prev_close(tmp_path)
+    resume.record["finalization_started"] = True
+    root = resume.root
+    before = {p: p.read_bytes() for p in root.rglob("*.bin")}
+    resume.root = tmp_path / "published"
+    with pytest.raises(RuntimeError, match="private retained staging"):
+        correction.apply_prev_close_corrections(resume, finalized=finalized, cas=invocation.cas, plan=plan)
+    assert all(p.read_bytes() == raw for p, raw in before.items())
 
 
 @pytest.mark.parametrize("fault", [None, "unclosed", "source_hash", "nonfinite", "scope"])

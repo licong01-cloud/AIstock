@@ -204,8 +204,8 @@ def apply_prev_close_corrections(resume, *, finalized, cas, plan):
             if materialization["prev_close_correction"]["authority_ref"] != binding["authority_ref"]:
                 raise MonthlyBuildResumeError("prev_close correction authority changed")
             continue
-        if resume.record.get("finalization_started") is True:
-            raise MonthlyBuildResumeError("prev_close correction cannot amend publication already started")
+        # Packaging may have failed before publication. Only the verified
+        # private staging is writable; its packaging retry marker is not a seal.
         counts, amendments = Counter(), []
         provider = root / dataset / "qlib"
         calendar = read_calendar(provider / f"calendars/{freq}.txt")
