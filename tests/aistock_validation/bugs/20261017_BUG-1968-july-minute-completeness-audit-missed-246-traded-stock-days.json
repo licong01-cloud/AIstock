@@ -15,6 +15,8 @@
     "backend/tests/dataset_release/test_monthly_unified_v2.py",
     "backend/tests/dataset_release/test_raw_volume_precision.py",
     "backend/tests/dataset_release/test_artifact_ready_source.py",
+    "backend/tests/dataset_release/test_monthly_source_quality.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
     "backend/tests/scripts/test_monthly_unified_dataset_release.py"
   ],
   "assigned_agent": null,

@@ -142,7 +142,7 @@ def test_quality_binding_is_idempotent_and_does_not_rewrite_repairs_or_activate(
         load_bound_source_quality(plan, operation_id=operation_id)
 
 
-def test_quality_binding_rejects_stale_active_and_sealed_source(tmp_path):
+def test_quality_binding_ignores_active_drift_but_rejects_sealed_source(tmp_path):
     from backend.tests.dataset_release.test_monthly_unified_v2 import _service, _request, Pipeline
     from backend.services.dataset_release.monthly_unified import MonthlyReleaseConflict
     service = _service(tmp_path, Pipeline())
@@ -152,8 +152,12 @@ def test_quality_binding_rejects_stale_active_and_sealed_source(tmp_path):
     value['operation_id'] = operation_id
     value['predecessor_dataset_manifest_sha256'] = plan['predecessor']['dataset_manifest_sha256']
     service.active_profile.write_bytes(service.active_profile.read_bytes() + b' ')
-    with pytest.raises(MonthlyReleaseConflict, match='predecessor changed'):
-        service.bind_source_quality_inputs(operation_id, inputs=value, principal='operator')
+    active_before = service.active_profile.read_bytes()
+    result = service.bind_source_quality_inputs(operation_id, inputs=value, principal='operator')
+    assert result['publication_allowed'] is False
+    assert service.active_profile.read_bytes() == active_before
+    bound_plan = service.store.read_plan(operation_id)
+    assert bound_plan['predecessor'] == plan['predecessor']
     service.store.replace_plan(operation_id, {**plan, 'plan_state': 'SOURCE_SNAPSHOT_FROZEN'})
     with pytest.raises(MonthlyReleaseConflict, match='before any SOURCE seal'):
         service.bind_source_quality_inputs(operation_id, inputs=value, principal='operator')

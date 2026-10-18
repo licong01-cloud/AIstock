@@ -206,7 +206,7 @@ def test_all_routes_require_dataset_release_operator(tmp_path: Path) -> None:
         for route in app.routes
         if isinstance(route, APIRoute) and route.path.startswith("/api/v1/qlib/monthly-releases")
     ]
-    assert len(routes) == 16
+    assert len(routes) == 17
     for route in routes:
         dependencies = {dependency.call for dependency in route.dependant.dependencies}
         assert require_dataset_release_operator in dependencies, route.path
@@ -231,7 +231,7 @@ def test_history_binding_route_is_authenticated_and_cannot_accept_sql_or_activat
     assert calls == [(operation_id, "dataset-operator:test", command.endswith("refresh"))]
 
 
-@pytest.mark.parametrize("kind", ["prev_close", "suspension"])
+@pytest.mark.parametrize("kind", ["prev_close", "suspension", "minute"])
 def test_prev_close_binding_is_preparation_only_and_forwards_exact_inputs(tmp_path, kind):
     client, _, app = _client(tmp_path)
     calls = []
@@ -242,10 +242,13 @@ def test_prev_close_binding_is_preparation_only_and_forwards_exact_inputs(tmp_pa
         def bind_suspension_authority(self, operation_id, *, principal):
             calls.append((operation_id, {}, principal))
             return {"status": "BOUND"}
+        def bind_minute_repairs(self, operation_id, *, inputs, principal):
+            calls.append((operation_id, inputs, principal))
+            return {"status": "BOUND"}
     app.dependency_overrides[api.get_monthly_release_service] = lambda: Service()
     operation = "dmr_" + "a" * 32
     body = {"schema_version": "aistock_monthly_repair_inputs_request_v1", "inputs": {"plan_sha256": "a" * 64}}
-    endpoint = "prev-close-repairs" if kind == "prev_close" else "suspension-authority"
+    endpoint = {"prev_close": "prev-close-repairs", "suspension": "suspension-authority", "minute": "minute-repairs"}[kind]
     if kind == "suspension":
         body = {}
     assert client.post(f"/api/v1/qlib/monthly-releases/{operation}/{endpoint}", json={**body, "activate": True}).status_code == 422
