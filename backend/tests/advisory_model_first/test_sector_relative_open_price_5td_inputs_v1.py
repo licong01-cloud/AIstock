@@ -108,9 +108,12 @@ def test_shared_batch_preserves_original_package_order_and_only_reads_three_dail
         **{KEY[0]: d, KEY[1]: calendar[calendar.get_loc(d)+1], KEY[2]: s},
         selection_effective_rank=i+1, candidate_group_size=5)
         for p in ("second", "first") for d in calendar[20:22] for i, s in enumerate(symbols[:5])])
+    # A Top5 projection from original Top50 has non-contiguous pandas indices;
+    # those indices are not candidate identity and must not break native joins.
+    roster.index = np.arange(len(roster))*50
     values, panel = build_sector_context_inputs_v1(roster=roster, reader=reader,
         calendar=[d.date().isoformat() for d in calendar], cutoff=calendar[22].date())
-    pd.testing.assert_frame_equal(values.loc[:, roster.columns], roster)
+    pd.testing.assert_frame_equal(values.loc[:, roster.columns], roster.reset_index(drop=True))
     assert len(panel) == 16 and len(values) == 20
     assert values.peer_observed_count.eq(7).all()
     roles = [r["role"] for r in reader.read_receipts if r["role"] in ("D_HISTORY", "PEER_D_CLOSE", "T_OPEN")]

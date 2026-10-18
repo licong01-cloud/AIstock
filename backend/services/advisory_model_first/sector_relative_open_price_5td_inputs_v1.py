@@ -290,7 +290,7 @@ def build_sector_context_inputs_v1(*, roster, reader, calendar, cutoff):
     output, panels = [], []
     for first in range(0, len(dates), CHUNK_DAYS):
         selected = dates[first:first+CHUNK_DAYS]
-        original = roster.loc[roster[KEY[0]].isin(selected)].copy()
+        original = roster.loc[roster[KEY[0]].isin(selected)].reset_index(drop=True)
         symbols = sorted(set(original.instrument))
         position = sessions.index(pd.Timestamp(selected[0]).date())
         if position < 19:
