@@ -169,31 +169,18 @@ def test_main_publishes_temp_only_after_successful_preflight(tmp_path, monkeypat
         assert output.read_bytes() == prior
 
 
-def test_prebuilt_windows_environment_is_ready_without_installing(tmp_path: Path) -> None:
-    payload = verify_environment(_env(tmp_path), system="Windows", prefix=str(tmp_path), required_modules=())
-
-    assert payload["status"] == "ready"
-    assert payload["environment_name"] == "AIstock-CI"
-    assert payload["missing_modules"] == []
-
-
-def test_environment_fingerprint_mismatch_fails_closed(tmp_path: Path) -> None:
-    payload = verify_environment(
-        _env(tmp_path, AISTOCK_CI_ENV_FINGERPRINT="fp-old"),
-        system="Windows",
-        prefix=str(tmp_path),
-        required_modules=(),
-    )
-
-    assert payload["status"] == "environment_mismatch"
-    assert "environment fingerprint mismatch" in payload["failure_reasons"]
-
-
-def test_non_windows_environment_fails_closed_without_fallback(tmp_path: Path) -> None:
-    payload = verify_environment(_env(tmp_path), system="Linux", prefix=str(tmp_path), required_modules=())
-
-    assert payload["status"] == "environment_mismatch"
-    assert any("expected Windows" in reason for reason in payload["failure_reasons"])
+@pytest.mark.parametrize("system,fingerprint,reason", [
+    ("Windows", "fp-v1", None), ("Windows", "fp-old", "environment fingerprint mismatch"),
+    ("Linux", "fp-v1", "expected Windows"),
+])
+def test_prebuilt_environment_identity_without_installing(tmp_path, system, fingerprint, reason):
+    payload = verify_environment(_env(tmp_path, AISTOCK_CI_ENV_FINGERPRINT=fingerprint),
+                                 system=system, prefix=str(tmp_path), required_modules=())
+    assert payload["status"] == ("environment_mismatch" if reason else "ready")
+    if reason:
+        assert any(reason in item for item in payload["failure_reasons"])
+    else:
+        assert payload["environment_name"] == "AIstock-CI" and not payload["missing_modules"]
 
 
 def test_named_environment_cannot_mask_a_production_prefix(tmp_path: Path) -> None:
