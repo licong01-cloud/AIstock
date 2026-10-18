@@ -27,13 +27,18 @@
   "evidence_uris": [],
   "expected": "All due workflows independently reconcile or dispatch once within budget, failures persist safely and return nonzero without falsely certifying validation.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_aistock_runner_health.py",
+      "scripts/aistock_runner_health.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1970-nightly-scheduled-dispatcher-exits-before-due-workflows-without-durable.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/scripts/test_aistock_runner_health.py",
       "scripts/aistock_runner_health.py",
-      "scripts/configure_aistock_github_runner.ps1",
-      "backend/tests/scripts/test_aistock_runner_health.py"
+      "tests/aistock_validation/bugs/20261018_BUG-1970-nightly-scheduled-dispatcher-exits-before-due-workflows-without-durable.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/aistock_runner_health.py",
@@ -123,10 +128,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
