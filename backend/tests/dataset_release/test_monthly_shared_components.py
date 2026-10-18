@@ -136,9 +136,10 @@ def test_suspend_export_preserves_explicit_intraday_ranges_with_resume(tmp_path,
     assert evidence["day_resolutions"][0]["state"] == "INTRADAY_SUSPENDED"
 
 
-@pytest.mark.parametrize("corruption", [None, "source", "cutoff", "predecessor", "binding", "authority", "conflict"])
+@pytest.mark.parametrize("corruption", [None, "source", "cutoff", "predecessor", "operation", "binding", "authority", "conflict"])
 def test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallback(tmp_path, corruption):
-    from backend.data_service.suspension_day_authority import digest, load_authority, SCHEMA, POLICY
+    from backend.data_service.suspension_day_authority import load_authority, SCHEMA, POLICY
+    from backend.services.dataset_release.monthly_unified import _canonical_payload, _write_exclusive
     from backend.services.dataset_release.monthly_suspension_repair import BINDING, SCHEMA as BINDING_SCHEMA, build_authority
     cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
     snapshot = SimpleNamespace(source_manifest_ref=cas.put_json({}))
@@ -154,7 +155,9 @@ def test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallba
     binding = {"schema_version": BINDING_SCHEMA, "operation_id": "test", "source_bundle_sha256": "a" * 64,
         "target_cutoff": "2026-09-30", "predecessor_manifest_sha256": "b" * 64,
         "authority_ref": cas.put_json(approved).as_dict()}
-    plan = {BINDING: binding, BINDING + "_ref": {"sha256": digest(binding)},
+    binding_path = tmp_path / "binding.json"
+    _write_exclusive(binding_path, binding)
+    plan = {BINDING: binding, BINDING + "_ref": {"sha256": hashlib.sha256(binding_path.read_bytes()).hexdigest()},
         "target_cutoff": "2026-09-30", "predecessor": {"dataset_manifest_sha256": "b" * 64}}
     if corruption == "source":
         binding["source_bundle_sha256"] = "c" * 64
@@ -162,6 +165,8 @@ def test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallba
         binding["target_cutoff"] = "2026-10-31"
     elif corruption == "predecessor":
         binding["predecessor_manifest_sha256"] = "c" * 64
+    elif corruption == "operation":
+        binding["operation_id"] = "another-operation"
     elif corruption == "binding":
         plan[BINDING + "_ref"]["sha256"] = "c" * 64
     elif corruption == "authority":
@@ -172,7 +177,7 @@ def test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallba
         original["entries"][0]["announcement_id"] += "-other"
         snapshot.source_manifest_ref = cas.put_json({"suspension_day_authority": original})
     if corruption != "binding":
-        plan[BINDING + "_ref"]["sha256"] = digest(binding)
+        plan[BINDING + "_ref"]["sha256"] = hashlib.sha256(_canonical_payload(binding)).hexdigest()
     if corruption is not None:
         with pytest.raises((ValueError, RuntimeError), match="suspension|CAS|blob"):
             build_authority(cas, snapshot, plan=plan, operation_id="test", source_bundle_sha256="a" * 64)
