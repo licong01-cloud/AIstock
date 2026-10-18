@@ -1,6 +1,6 @@
 # Advisory 历史收益文件批处理设计
 
-版本：v1.3；关联 BUG-1946 / Issue #6202、BUG-1950、BUG-1954 / Issue #6233、BUG-1967 / Issue #6280；等级 F2；状态：BUG-1967 定向源码回归和完整只读验证通过；既往验证保留，当前 CI、合入、用户重启和业务完成分别登记。
+版本：v1.4；关联 BUG-1946 / Issue #6202、BUG-1950、BUG-1954 / Issue #6233、BUG-1967 / Issue #6280、BUG-1969 / Issue #6292；等级 F2；状态：BUG-1967 已合入并完成用户重启后的验证及原生 TCN 四阶段结算；BUG-1969 定向源码回归及真实完整原生只读收尾验证通过，CI、合入、用户重启和运行态性能另行登记。
 
 ## 1. 背景、目标、范围与边界
 
@@ -75,6 +75,18 @@ REFRESH_OUTCOMES_RUN 自己持有 fenced lease，不得借父任务心跳证明�
 
 临时状态/报告仅在 X 盘（WSL 对应 `/mnt/x/AIstock_temp`），单客户端锁和原子替换只作用于自己的新状态文件。不得停止旧客户端、控制后端、修改旧 checkpoint 或自动发起生产结算。源码性能验证只读使用既存产物/事实，不发布 summary、不提交金融事实、不改数据库。
 
+### 5.3 BUG-1969：大产物淘汰后的验证复用与父收尾
+
+真实 TCN 20 日窗口的明细、列表、区间和最终汇总于 2026-10-18 03:12 完成，分别处理 4,046、160、8 项结算目标及一份最终 SUMMARY；整轮约 89 分 45 秒，其中最终汇总约 21 分 05 秒。目标数量不是独立股票数，整轮结算耗时不等于每日推理耗时。5 日推荐净收益样本均值/胜率为 LSTM 1.8136%/57.9477%（994/1,000）、TCN 2.1580%/73.9479%（499/500），是各自候选统计，不是账户累计收益或价格模型增量价值。两者候选数、冻结来源及政策身份不同；基准缺失仍为明确缺口，不能据此声称已确认超额收益。SOURCE_INCOMPLETE 和 ENTRY_UNAVAILABLE 不升级为 COMPLETE，不重写旧事实。
+
+采样约 30 MB 的原生候选产物，带 cProfile 的 4 次原生只读读取约 41.17 秒，已有对象缓存约 10.09 秒；热点主要是重复规范化和合同验证，不是读取磁盘。此为有 profiler 开销的热点对照，不能外推整轮稳定提速倍数。128 MiB 缓存淘汰后完整重验、父操作仍使用无缓存 store，是本次修复范围。
+
+- 保留原有 128 MiB/4,096 项封存对象 LRU；增加按序列化头重量最多 16 MiB/4,096 项的轻量验证头 LRU，不保留大 payload，也不创建磁盘副本。这些是缓存重量边界，不是进程 RSS 承诺。超预算时正常淘汰并退回原生完整验证，不构成新门禁。
+- 首次仍执行原生文件 SHA256、规范 JSON、完整 ref、envelope/schema/payload 校验。轻量头仅在首次验证及读前/读后指纹一致后保存，完整 key 和指纹包含文件及路径身份。对象淘汰后须重新安全读取文件并核对完整字节 SHA256，只有与已验证 ref 的原字节一致，才重建同一封存 payload 并复用已验证的 typed header，不重复 envelope 规范化；不能仅凭时间戳放行。
+- 文件变更、读中漂移、完整 ref/路径/身份错配继续失败；首次和缓存重建均保留原生消费者的 run/day/upstream、业务类型和最终快照校验。普通 `load` 仍是可变深拷贝，不得污染封存对象或验证头。fresh process 必须从首次完整验证开始。
+- R5 父操作及其 repository 使用独立的操作级读取缓存；不同 runtime 不共享缓存对象，不把缓存命中当另一运行的金融结果。子结算和汇总继续原有私有缓存边界；未修改 SelectionSignalKernel、LocalSIM、QE、HMM、数据或公共 canonical 算法。
+- 不更改收益/成熟度/费用、候选/排序/TopK、原有 summary 模式、租约/CAS 或旧断点。源码身份按现有规则真实更新；既存事实和产物不覆盖。只读源码验证不发布业务结果，运行态加载仍须用户重启后独立验证。
+
 ## 6. Design Acceptance Index / 设计验收矩阵
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
@@ -95,6 +107,7 @@ REFRESH_OUTCOMES_RUN 自己持有 fenced lease，不得借父任务心跳证明�
 | F-014 | outcome_file_inputs.py / summary_service.py：可选行业缺口显式化而非虚构行业 | backend/tests/advisory_historical_range/test_outcome_optimization.py | PASS | none |
 | F-015 | outcome_continuation.py：依赖分发、分页、父子 lease、精确重试及 X 盘单写者 | backend/tests/advisory_historical_range/test_outcome_optimization.py | PASS | none |
 | F-016 | 精确 diff、真实只读 loader/calculate；金融字段/hash 保持与模式隔离 | backend/tests/advisory_historical_range/test_outcome_optimization.py；BUG-1967 runtime_contract 的完整只读报告 | PASS | none |
+| F-017 | outcome_file_inputs.py / composition.py：有界轻量验证头、逐字节复验与父收尾缓存 | backend/tests/advisory_historical_range/test_outcome_optimization.py；BUG-1969 runtime_contract 引用的 bug1969-native-source-smoke-v1.json | PASS | 源码及只读验证通过；运行激活待用户重启，整轮性能待独立实测 |
 
 ## 7. 实施方案与验证方案
 
@@ -125,6 +138,14 @@ BUG-1954 四项复审：①真实全量只读 loader/calculate 与闭包验证�
 BUG-1967 的 DESIGN-COMPLIANCE-001 四项复审：①交付全部登记优化及真实完整只读链路，不以小样本/假成功代替；②首次校验、真正缺价、冲突、CAS 与失败仍明确报错，ONLY 无 SUMMARY 不得成功；③仅显式汇总模式、可选行业缺口呈现及真实 producer 身份变化按 §5.2 同步，费用/收益/选股/成熟度不变；④无新研究审批、整库 HEAD 或 QE 空闲门禁，后端重启仍由用户执行。矩阵 PASS 只指上述源码合同，CI、源码合入和后端激活另记。
 
 首轮扩展 CI 为 497 通过、2 跳过、4 个父任务兼容场景失败（旧测试请求没有新 summary_mode）。随后将父标记改为从实际子收据聚合，四个原失败场景与真实 DEFER 父子标记场景共 5 项定向回归通过，不修改旧测试或降低验证要求。至此本地覆盖 84 个不同场景；最终 CI 以修复后的新 HEAD 独立结果为准，不重跑旧 run 冒充修复版本。
+
+### 7.2 BUG-1969 定向审核与真实原生只读验证
+
+两项核心场景在原实现 RED、修复后 GREEN；补充验证头的数量/字节上限淘汰、伪造相同指纹时仍校验字节、读中漂移、完整 ref 元数据/文件 hash 变化、可变副本与运行隔离，新增 8 个场景通过。末轮相关小矩阵覆盖缓存、文件适配、composition、原生产物、服务/模块边界和闭包 memoization，共 57 项通过；changed-file Ruff 与 diff check 通过。两轮本地审查分别核对完整 ref/字节证明、失效与有界退回，以及运行隔离、可变调用兼容和未触及金融/共享算法；不重复运行宽矩阵制造通过次数。
+
+fresh-process 对既有 TCN 最终 SUMMARY 父收据 `ahrop_ede34d946b8873c24638cdf909be8c3f` 调用原生 repository 的 attempt 和 result 校验；只读读取真实持久化 attempt，随后验证器禁止数据库访问。完整 attempt/上游闭包约 161.663 秒，结果核验约 0.818 秒；原生完整加载 5,214 个 OUTCOME（含必要旧版本依赖），20 个 CANDIDATE_ARTIFACT、20 个 DAY_RECEIPT 等，20 个大型候选各完整验证一次。额外强制淘汰真实 30,094,473 字节候选产物，冷验证约 3.537 秒，随后三次逐字节 SHA 验证的重读共 2.887 秒；payload、typed header 与原生读取逐项相等。对象/验证头缓存重量分别约 127.92 MiB/12.96 MiB，验证头数量4,096，均在上限内；这些重量不是 RSS。两项源码指纹在测量前后相同，原金融产物和任务状态不变。
+
+上述 `bug1969-native-source-smoke-v1.json` 证明当前源码可正确消费既存完整链，不是一次新结算、已激活后端或稳定整轮提速承诺。没有 evaluator、publish、状态推进、行情 SQL、数据修改、进程控制、QE 训练或 LocalSIM 操作；只读数据库事务回滚。BUG-1969 的 DESIGN-COMPLIANCE-001 四项通过：①完整原生收尾链非 mock-only；②所有首次验证、重读字节 hash、文件漂移、真缺价及原生失败保持；③收益、费用、PIT、排序/TopK、lease/CAS、接口和既有结果不改，缓存合同已同步 §5.3；④没有新增审批、研究/交易门槛或全局 QE 空闲要求。必需 CI、源码合入与用户重启后的运行态验收分开记录。
 
 ### LocalSIM 窗口提示词
 

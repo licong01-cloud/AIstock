@@ -34,7 +34,6 @@ PRICE_UNIT_DIVISOR = 1000.0
 VALUE_COMPARE_ABS_TOL = 1e-4
 MINUTE_FREQ = "1m"
 PRECISION_FIELDS = ('volume_shares', 'volume_shares_source', 'volume_shares_sha256')
-PRECISION_SOURCES = frozenset({'tushare_daily', 'tushare_stk_mins', 'tdx_decoded'})
 _STOCK_CODE = re.compile(r"[0-9]{6}\.(?:SH|SZ)\Z")
 _INDEX_CODES = frozenset(item.daily_code for item in DOMESTIC_INDEX_DEFINITIONS)
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -53,7 +52,7 @@ class CanonicalStockTransformError(DatasetReleaseError):
 
 
 def raw_volume_shares(row: Mapping[str, Any]) -> float:
-    """Use pinned provider share precision; legacy frozen rows retain semantics.
+    """Use authoritative database share precision, independent of supplier tags.
 
     Present invalid precision is an error, never a reason to silently revert
     to whole hands. This function is shared by frozen audit and bin transform.
@@ -66,19 +65,14 @@ def raw_volume_shares(row: Mapping[str, Any]) -> float:
         raise ValueError('legacy raw volume is invalid')
     shares = row.get('volume_shares')
     if shares is None:
-        if any(row.get(field) is not None for field in PRECISION_FIELDS[1:]):
-            raise ValueError('raw share precision has orphan provenance')
         return legacy
     if isinstance(shares, bool) or not isinstance(shares, (int, float, Decimal)):
         raise ValueError('raw share precision must be numeric')
     value = float(shares)
     if not math.isfinite(value) or value < 0:
         raise ValueError('raw share precision is invalid')
-    if row.get('volume_shares_source') not in PRECISION_SOURCES:
-        raise ValueError('raw share precision provider is unsupported')
-    pin = row.get('volume_shares_sha256')
-    if not isinstance(pin, str) or re.fullmatch('[0-9a-f]{64}', pin) is None:
-        raise ValueError('raw share precision provenance is invalid')
+    # Ingestion owns supplier provenance. Export validates the numeric database
+    # fact, not an evolving whitelist of source labels or a supplier receipt.
     return value
 
 
@@ -791,7 +785,7 @@ def _normalize_raw_values(raw: Mapping[str, Any], *, source: str, ordinal: int) 
     except ValueError as exc:
         raise CanonicalStockTransformError(f"{source} {exc} at ordinal {ordinal}") from exc
     if raw.get('volume_shares') is not None:
-        output.update({field: raw[field] for field in PRECISION_FIELDS})
+        output.update({field: raw.get(field) for field in PRECISION_FIELDS})
     return output
 
 

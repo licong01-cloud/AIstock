@@ -222,6 +222,8 @@ def validate_qlib_month(
     calendar = read_calendar(provider / f"calendars/{frequency}.txt")
     from .monthly_prev_close_repair import correction_pins
     corrected_pins, corrected_month = correction_pins(materialization, provider=provider, cas=cas)
+    from .monthly_minute_repair import correction_pins as minute_correction_pins
+    corrected_pins.update(minute_correction_pins(materialization, provider=provider, cas=cas))
     month_start = cutoff.replace(day=1).isoformat()
     if calendar[-1][:10] != cutoff.isoformat():
         raise MonthlyLegacyValidationError("native month calendar cutoff differs")
