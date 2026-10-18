@@ -625,13 +625,79 @@ def test_dispatch_rest_route_preserves_payload_and_existing_proxy_exclusions(mon
     calls = []
     monkeypatch.setenv("NO_PROXY", "localhost")
     monkeypatch.setattr(health.subprocess, "run", lambda args, **kwargs:
-                        (calls.append((args, kwargs)) or subprocess.CompletedProcess(args, 0, "")))
+                        (calls.append((args, kwargs)) or subprocess.CompletedProcess(args, 0, b"")))
     health._dispatch_api("repos/example/repo/dispatches", {"event_type": "scheduled"})
     args, kwargs = calls[0]
     assert args[-3:] == ["POST", "--input", "-"]
     assert json.loads(kwargs["input"]) == {"event_type": "scheduled"}
     assert "localhost" in kwargs["env"]["NO_PROXY"] and "api.github.com" in kwargs["env"]["NO_PROXY"]
     assert kwargs["timeout"] == 30 and kwargs["capture_output"]
+
+
+@pytest.mark.parametrize("output,valid", [
+    (json.dumps({"title": "夜间任务 ®"}, ensure_ascii=False).encode("utf-8"), True),
+    (b"\xff", False), (b"[]", False), (b"{broken", False),
+])
+def test_dispatch_api_decodes_utf8_independent_of_windows_locale(monkeypatch, output, valid):
+    def run(args, **kwargs):
+        assert not kwargs.get("text") and "encoding" not in kwargs
+        return subprocess.CompletedProcess(args, 0, output)
+    monkeypatch.setattr(health.subprocess, "run", run)
+    if valid:
+        assert health._dispatch_api("repos/example/repo/actions/runs") == {"title": "夜间任务 ®"}
+    else:
+        with pytest.raises(ValueError):
+            health._dispatch_api("repos/example/repo/actions/runs")
+
+
+@pytest.mark.parametrize("failure", ["decode", "receipt", "shape"])
+def test_dispatch_failure_is_durable_and_does_not_starve_later_workflows(monkeypatch, tmp_path, failure):
+    monkeypatch.setattr(health, "SCHEDULED_WORKFLOWS", {
+        "nightly.yml": ("aistock_nightly", 3, 7, 180), "codeql.yml": ("aistock_codeql", 4, 27, 75)})
+    broken = tmp_path / "2026-10-18-nightly.yml.json"
+    if failure == "receipt":
+        broken.write_text("{broken", encoding="utf-8")
+    posts = []
+    def request(path, payload=None):
+        if payload is not None:
+            posts.append(payload)
+            return {}
+        if "nightly.yml" in path:
+            if failure == "decode":
+                raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid")
+            return {"workflow_runs": [None]}
+        return {"workflow_runs": []}
+    kwargs = dict(state_root=tmp_path, apply=True, now=datetime.fromisoformat("2026-10-18T04:27:00+08:00"),
+                  request=request)
+    for _ in range(2):
+        report = health.dispatch_scheduled_cycle(**kwargs)
+        assert report["blocking"] and len(report["workflows"]) == 2
+        assert report["validation_status"] == "not_executed"
+        assert json.loads((tmp_path / "last-tick.json").read_text())["blocking"] == report["blocking"]
+    assert posts == [{"event_type": "aistock_codeql", "client_payload": {"cycle_date": "2026-10-18"}}]
+    if failure == "receipt":
+        assert broken.read_text() == "{broken"
+    else:
+        assert json.loads(broken.read_text())["error_phase"] == "query"
+    monkeypatch.setattr(health, "dispatch_scheduled_cycle", lambda **_: report)
+    assert health.main(["dispatch-scheduled", "--state-root", str(tmp_path), "--apply"]) == 2
+
+
+def test_dispatch_query_recovery_clears_error_without_replaying_intent(monkeypatch, tmp_path):
+    monkeypatch.setattr(health, "SCHEDULED_WORKFLOWS", {"nightly.yml": ("aistock_nightly", 3, 7, 180)})
+    path = tmp_path / "2026-10-18-nightly.yml.json"
+    path.write_text(json.dumps({"workflow": "nightly.yml", "cycle_date": "2026-10-18",
+                               "status": "uncertain", "error_type": "RuntimeError", "error_phase": "dispatch"}))
+    def request(url, payload=None):
+        assert payload is None
+        return {"workflow_runs": [{"display_title": "AIstock schedule nightly.yml 2026-10-18", "id": 42,
+                                   "event": "repository_dispatch", "head_branch": "main", "head_sha": "a" * 40,
+                                   "status": "in_progress"}]}
+    report = health.dispatch_scheduled_cycle(state_root=tmp_path, apply=True,
+        now=datetime.fromisoformat("2026-10-18T03:07:00+08:00"), request=request)
+    receipt = json.loads(path.read_text())
+    assert not report["blocking"] and receipt["run_id"] == 42
+    assert "error_type" not in receipt and "error_phase" not in receipt
 
 
 @pytest.mark.parametrize("action", ["aistock_nightly", "unknown"])

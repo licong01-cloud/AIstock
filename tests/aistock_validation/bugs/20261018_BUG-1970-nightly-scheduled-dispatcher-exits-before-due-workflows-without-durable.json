@@ -15,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-18T04:47:49.273965Z",
-  "description": "Main Nightly and CodeQL absent for two cycles and failure details unavailable.",
+  "description": "2026-10-17/18 main Nightly and CodeQL were absent. Reproduced root cause: subprocess text decoding used Windows GBK for gh UTF-8 JSON, causing a reader-thread UnicodeDecodeError and stdout=None, then an uncaught AttributeError before last-tick persistence. Fix captures bytes and decodes strict UTF-8 on the caller thread; isolates malformed workflow receipts/responses with safe phase/type diagnostics, preserving POST intent and allowing later workflows to proceed. No task configuration change or business execution.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
