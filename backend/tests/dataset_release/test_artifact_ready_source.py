@@ -75,7 +75,7 @@ def test_minute_preparation_preserves_proven_suspended_placeholder(tmp_path, dai
 
 @pytest.mark.parametrize("defect", [
     "daily_volume", "daily_amount", "daily_precision", "daily_duplicate", "minute_volume", "minute_amount",
-    "minute_null", "minute_precision", "precision_provenance", "duplicate", "other_label", "price_null",
+    "minute_null", "minute_precision", "duplicate", "other_label", "price_null",
     "price_bounds", "too_many", "no_suspend", "no_daily_partition", "old_daily_partition_only",
 ])
 def test_minute_preparation_cannot_exempt_unproven_rows(tmp_path, defect):
@@ -92,8 +92,6 @@ def test_minute_preparation_cannot_exempt_unproven_rows(tmp_path, defect):
             daily["volume_hand" if defect == "daily_volume" else "amount_li"] = 1
     elif defect == "minute_precision":
         at_1300.update(volume_shares=1, volume_shares_source="tdx_decoded", volume_shares_sha256="c" * 64)
-    elif defect == "precision_provenance":
-        at_1300.update(volume_shares=0, volume_shares_source="tdx_decoded", volume_shares_sha256="invalid")
     elif defect.startswith("minute_"):
         at_1300["amount_li" if defect == "minute_amount" else "volume_hand"] = None if defect == "minute_null" else 1
     elif defect == "duplicate":

@@ -1536,8 +1536,6 @@ class MonthlyReleaseService:
             ) or plan.get("plan_state") != "AWAITING_SOURCE_SNAPSHOT":
                 raise MonthlyReleaseConflict("monthly repair inputs can only bind before any SOURCE seal")
             predecessor = plan["predecessor"]
-            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
-                raise MonthlyReleaseConflict("active predecessor changed before repair binding")
             try:
                 prefix = load_legacy_prefix(Path(predecessor["candidate_root"]),
                     expected_manifest_sha256=predecessor["dataset_manifest_sha256"],
@@ -1547,8 +1545,6 @@ class MonthlyReleaseService:
                     target_cutoff=date.fromisoformat(plan["target_cutoff"]))
             except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
                 raise MonthlyReleaseRequestInvalid("monthly repair input validation failed", context={"cause": str(exc)}) from exc
-            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
-                raise MonthlyReleaseConflict("active predecessor changed during repair binding")
             digest = _digest(normalized)
             relative = f"inputs/repair-{digest}.json"
             path = root / relative
@@ -1616,6 +1612,57 @@ class MonthlyReleaseService:
             self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
             return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
 
+    def bind_minute_repairs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str,
+                            cas=None, connection_factory=None) -> dict[str, Any]:
+        """Freeze exact historical database rows for the SAME retained export."""
+        from .monthly_minute_repair import BINDING, SCHEMA, capture_database_minutes
+        from .monthly_prev_close_repair import SUPPLEMENT_KEYS
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing = plan.get(BINDING)
+            if existing is not None:
+                ref = plan[BINDING + "_ref"]
+                path = root / ref["id"]
+                if (existing.get("inputs") != inputs or _read_json(path, label="minute binding") != existing
+                        or _file_sha256(path) != ref["sha256"] or path.stat().st_size != ref["size"]):
+                    raise MonthlyReleaseConflict("minute correction binding changed")
+                return {"status": "BOUND", "reference": ref, "authority_ref": existing["authority_ref"]}
+            state = self.store.read_state(operation_id)
+            source = self.store.read_checkpoint(operation_id, "SOURCE")
+            if (state["status"] != ReleaseState.FAILED.value or state["current_stage"] != "BUILD" or source is None
+                    or any(self.store.read_checkpoint(operation_id, s) is not None for s in STAGES if s != "SOURCE")):
+                raise MonthlyReleaseConflict("minute correction requires idle sealed SOURCE and unfinished BUILD")
+            bundles = [r for r in source["input_refs"] if Path(r["id"]).name == "frozen-source-bundle.json"]
+            if len(bundles) != 1:
+                raise MonthlyReleaseConflict("minute correction SOURCE bundle is ambiguous")
+            if cas is None:
+                from .monthly_runtime import MonthlyRuntimeSettings
+                from .cas_store import CASStore
+                cas = CASStore(MonthlyRuntimeSettings.from_env().artifact_root)
+            if connection_factory is None:
+                from .index_sources import independent_postgres_connection_factory
+                connection_factory = independent_postgres_connection_factory
+            try:
+                authority = capture_database_minutes(inputs, cutoff=date.fromisoformat(plan["target_cutoff"]),
+                                                     connection_factory=connection_factory)
+            except (ValueError, KeyError, TypeError) as exc:
+                raise MonthlyReleaseRequestInvalid("database minute correction input is invalid",
+                                                  context={"cause": str(exc)}) from exc
+            binding = {"schema_version": SCHEMA, "operation_id": operation_id, "inputs": dict(inputs),
+                "base_plan_digest": _digest({k: v for k, v in plan.items() if k not in SUPPLEMENT_KEYS}),
+                "source_receipt_canonical_sha256": source["canonical_sha256"],
+                "source_bundle_sha256": bundles[0]["sha256"], "target_cutoff": plan["target_cutoff"],
+                "predecessor_manifest_sha256": plan["predecessor"]["dataset_manifest_sha256"],
+                "authority_ref": cas.put_json(authority).as_dict(), "bound_by": principal,
+                "database_write": False, "activation_authorized": False}
+            relative = f"inputs/minute-repair-{_digest(binding)}.json"
+            path = root / relative
+            _write_exclusive(path, binding)
+            ref = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
+            self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
+            return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
+
     def bind_suspension_authority(self, operation_id: str, *, principal: str, cas=None) -> dict[str, Any]:
         """Pin approved disclosures to an idle sealed SOURCE; never resume it."""
         from .monthly_prev_close_repair import SUPPLEMENT_KEYS
@@ -1636,8 +1683,8 @@ class MonthlyReleaseService:
             if (state["status"] != ReleaseState.FAILED.value or state["current_stage"] != "BUILD" or source is None
                     or any(self.store.read_checkpoint(operation_id, s) is not None for s in STAGES if s != "SOURCE")):
                 raise MonthlyReleaseConflict("suspension binding requires idle, sealed SOURCE and unfinished BUILD")
-            if _file_sha256(self.active_profile) != plan["predecessor"]["profile_sha256"]:
-                raise MonthlyReleaseConflict("active predecessor changed before suspension binding")
+            # Preparation is pinned to its immutable SOURCE, not to the current
+            # active pointer. Only activation requires the active-profile CAS.
             bundles = [r for r in source["input_refs"] if Path(r["id"]).name == "frozen-source-bundle.json"]
             if len(bundles) != 1:
                 raise MonthlyReleaseConflict("suspension binding SOURCE bundle is ambiguous")
@@ -1664,8 +1711,6 @@ class MonthlyReleaseService:
             else:
                 _write_exclusive(path, binding)
             ref = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
-            if _file_sha256(self.active_profile) != plan["predecessor"]["profile_sha256"]:
-                raise MonthlyReleaseConflict("active predecessor changed during suspension binding")
             self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
             return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
 
@@ -1712,8 +1757,6 @@ class MonthlyReleaseService:
             ):
                 raise MonthlyReleaseConflict("industry supplement requires idle, sealed SOURCE and uncompleted BUILD")
             predecessor = plan["predecessor"]
-            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
-                raise MonthlyReleaseConflict("active predecessor changed before history binding")
             source = checkpoint  # read_checkpoint already verifies the canonical receipt and file SHA.
             bundles = [ref for ref in source["input_refs"] if Path(ref["id"]).name == "frozen-source-bundle.json"]
             if len(bundles) != 1:
@@ -1788,8 +1831,6 @@ class MonthlyReleaseService:
             else:
                 _write_exclusive(facts_path, facts)
             facts_ref = {"id": facts_relative, "sha256": _file_sha256(facts_path), "size": facts_path.stat().st_size}
-            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
-                raise MonthlyReleaseConflict("active predecessor changed during history capture")
             self.store.replace_plan(operation_id, {**plan, "monthly_industry_history": value,
                 "monthly_industry_history_ref": reference, "monthly_industry_quote_source": facts,
                 "monthly_industry_quote_source_ref": facts_ref})
@@ -1829,8 +1870,6 @@ class MonthlyReleaseService:
                     or any(self.store.read_checkpoint(operation_id, stage) is not None for stage in STAGES)
                     or plan.get("plan_state") != "AWAITING_SOURCE_SNAPSHOT"):
                 raise MonthlyReleaseConflict("source quality inputs can only bind before any SOURCE seal")
-            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
-                raise MonthlyReleaseConflict("active predecessor changed before quality binding")
             digest = acceptance_file_sha256(normalized)
             relative = f"inputs/quality-{digest}.json"
             path = root / relative
@@ -1847,8 +1886,6 @@ class MonthlyReleaseService:
                     raise MonthlyReleaseConflict("existing source quality binding differs")
             else:
                 _write_exclusive(path, receipt)
-            if _file_sha256(self.active_profile) != predecessor["profile_sha256"]:
-                raise MonthlyReleaseConflict("active predecessor changed during quality binding")
             self.store.replace_plan(operation_id, {**plan, "monthly_source_quality_inputs": normalized,
                 "monthly_source_quality_binding_path": str(path),
                 "monthly_source_quality_inputs_ref": {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}})
@@ -2050,7 +2087,8 @@ class MonthlyReleaseService:
                     }
                 )
                 from .monthly_prev_close_repair import SUPPLEMENT_KEYS
-                supplement_names = ("monthly_industry_history", "monthly_prev_close_repairs", "monthly_suspension_authority")
+                supplement_names = ("monthly_industry_history", "monthly_prev_close_repairs",
+                                    "monthly_suspension_authority", "monthly_minute_repairs")
                 source_supplements = [plan[name] for name in supplement_names if plan.get(name) is not None] if stage == "SOURCE" else []
                 if source_supplements:
                     # Only explicit supplements are amended. Verify the ORIGINAL plan,

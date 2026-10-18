@@ -193,6 +193,18 @@ def bind_monthly_prev_close_repairs(
                 inputs=request.inputs, principal=principal.principal_id))}
 
 
+@router.post("/{operation_id}/minute-repairs")
+def bind_monthly_minute_repairs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_minute_binding_response_v1",
+            "data": _call(lambda: service.bind_minute_repairs(operation_id,
+                inputs=request.inputs, principal=principal.principal_id))}
+
+
 @router.post("/{operation_id}/suspension-authority")
 def bind_monthly_suspension_authority(
     operation_id: str,

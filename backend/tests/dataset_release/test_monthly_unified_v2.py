@@ -363,7 +363,7 @@ def test_history_binding_uses_readonly_snapshot_and_never_changes_source(tmp_pat
     monkeypatch.setattr(monthly_sector_mapping, "load_predecessor_sector_mapping", lambda prefix: {"code_map": {}})
     if case == "active_drift":
         service.active_profile.write_bytes(service.active_profile.read_bytes() + b" ")
-    if case in {"source_unsealed", "active_drift"}:
+    if case == "source_unsealed":
         with pytest.raises(MonthlyReleaseConflict):
             service.bind_industry_history(operation, principal="dataset-operator:test", connection_factory=Connection, quote_cas=object())
         assert not calls
@@ -409,11 +409,13 @@ def test_history_binding_uses_readonly_snapshot_and_never_changes_source(tmp_pat
 
 
 @pytest.mark.parametrize("sealed", [False, True])
-@pytest.mark.parametrize("kind", ["prev_close", "suspension"])
+@pytest.mark.parametrize("kind", ["prev_close", "suspension", "minute"])
 def test_prev_close_binding_retains_source_and_is_idempotent(tmp_path, monkeypatch, sealed, kind):
     from backend.services.dataset_release import monthly_prev_close_repair as correction
     if kind == "suspension":
         from backend.services.dataset_release import monthly_suspension_repair as correction
+    elif kind == "minute":
+        from backend.services.dataset_release import monthly_minute_repair as correction
     class SourcePipeline(Pipeline):
         def run_stage(self, **kwargs):
             value = dict(super().run_stage(**kwargs))
@@ -429,17 +431,25 @@ def test_prev_close_binding_retains_source_and_is_idempotent(tmp_path, monkeypat
     def capture(inputs=None, **kwargs):
         calls.append(inputs)
         return {"schema_version": correction.SCHEMA, "facts": []}
-    monkeypatch.setattr(correction, "capture_approved_corrections" if kind == "prev_close" else "capture_approved_authority", capture)
+    method = {"prev_close": "capture_approved_corrections", "suspension": "capture_approved_authority",
+              "minute": "capture_database_minutes"}[kind]
+    monkeypatch.setattr(correction, method, capture)
     cas = type("CAS", (), {"put_json": lambda self, value: type("Ref", (), {"as_dict": lambda self: {"sha256": HEX, "size": 1, "relative_path": "fact"}})()})()
     def bind():
         if kind == "suspension":
             return service.bind_suspension_authority(operation, principal="operator:test", cas=cas)
+        if kind == "minute":
+            return service.bind_minute_repairs(operation, inputs={"exact": True}, principal="operator:test",
+                                               cas=cas, connection_factory=lambda: None)
         return service.bind_prev_close_repairs(operation, inputs={"exact": True}, principal="operator:test", cas=cas)
     if not sealed:
         with pytest.raises(MonthlyReleaseConflict):
             bind()
         assert calls == []
         return
+    # Preparation retains its sealed SOURCE even when another release is active.
+    active_bytes = service.active_profile.read_bytes() + b" "
+    service.active_profile.write_bytes(active_bytes)
     result = bind()
     assert result["status"] == "BOUND" and len(calls) == 1
     assert bind() == result
@@ -463,6 +473,7 @@ def test_prev_close_binding_retains_source_and_is_idempotent(tmp_path, monkeypat
         service.run(operation)
         assert service.status(operation)["status"] == "READY_TO_ACTIVATE"
         assert service.store.read_checkpoint(operation, "SOURCE") == before
+    assert service.active_profile.read_bytes() == active_bytes
 
 
 def _adoptable_successor(
