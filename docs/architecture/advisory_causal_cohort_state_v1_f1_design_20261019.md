@@ -68,12 +68,44 @@
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-301 | 本设计Background/模型与预算 | artifact: docs/analysis/advisory_prediction_action_diagnostic_20261019.md | DESIGN_REVIEW_PASS | none |
-| F-302 | 本设计数据与时钟 | artifact: docs/architecture/advisory_causal_cohort_state_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
-| F-303 | 本设计数据与时钟/Verification Plan | artifact: docs/architecture/advisory_causal_cohort_state_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
-| F-304 | 本设计模型与预算 | artifact: docs/architecture/advisory_causal_cohort_state_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
-| F-305 | 本设计评价和结论 | artifact: docs/architecture/advisory_causal_cohort_state_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
-| F-306 | 本设计模型与预算/Production Gates | artifact: docs/architecture/advisory_causal_cohort_state_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
-| F-307 | 本设计Implementation/Verification Plan | artifact: docs/architecture/advisory_causal_cohort_state_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
+| F-301 | causal_cohort_state_study_v1.py::run_study / 本文Research Result | artifact: docs/analysis/advisory_prediction_action_diagnostic_20261019.md；新run prepared receipt | IMPLEMENTED_RESEARCH_COMPLETE | none |
+| F-302 | causal_cohort_state_study_v1.py::build_cohorts/run_study | test: test_cohort_fixed_slots_cash_unknown_and_empty_original_day；test_original_identity_rejects_mutations；真实305D基线对账 | IMPLEMENTED_VERIFIED | none |
+| F-303 | causal_cohort_state_study_v1.py::predict_state | test: test_projection_before_future_finance_and_exact_horizon；test_unknown_not_skipped_static_freezes_and_source_untouched | IMPLEMENTED_VERIFIED | none |
+| F-304 | causal_cohort_state_study_v1.py::freeze_forecasts/evaluate_states | test: test_native_statistics_attribution_cluster_denominator_and_no_advice；真实24D NO_ADVICE | IMPLEMENTED_VERIFIED | none |
+| F-305 | causal_cohort_state_study_v1.py::run_study/evaluate_states | test: test_unknown_finance_prevents_confirmation_and_remains_unknown；新run trained/evaluated身份及本文Research Result | IMPLEMENTED_RESEARCH_COMPLETE | none |
+| F-306 | causal_cohort_state_study_v1.py::run_study | test: test_real_stage_chain_exact_retry_and_identity；新registry四记录/既存原run未改 | IMPLEMENTED_VERIFIED | none |
+| F-307 | 精确一源码/一直测及三文档；本节四项符合性 | test: backend/tests/advisory_model_first/test_causal_cohort_state_study_v1.py；artifact: 本文Research Result | LOCAL_REVIEW_PASS_CI_PENDING | none |
 
-设计审核：第一轮澄清原五槽、组终值风险和单股风险不同；第二轮禁止跳过未知凑20日，明确先过滤H再向预测函数暴露数值；第三轮明确旧expanding研究已做过、不宣称全新算法、不变旧政策且无生产接入。上述矩阵只代表设计自审，不代表源码或研究完成。
+设计审核：第一轮澄清原五槽、组终值风险和单股风险不同；第二轮禁止跳过未知凑20日，明确先过滤H再向预测函数暴露数值；第三轮明确旧expanding研究已做过、不宣称全新算法、不变旧政策且无生产接入。随后完成源码、测试及一次真实研究，结果如下；本窗口多轮自审不冒充独立外审。
+
+## Research Result / 2026-10-19一次真实研究
+
+干净producer `bc045e7b086f5b86e93202125daab1d4ad4f4697`，run `advcohortstate_f10e3bf268322af7b04ed5bc`，正式根`F:/Dev/AIstock_model_artifacts/advisory_causal_cohort_state_v1_20261019/`。新plan SHA `f10e3bf268322af7b04ed5bc10ef3763c572ffd0169e81aef9e2181ca24030aa`；trained `176392b502a36014b67d0bcdba2195e2d3cb2310fdd8aee399fa5cd099b824b9`；evaluated `6eb989c4ec54dfd0c98f5a169c95bf7fb0e5f854441f31bed118d0b2bebaa86b`。原生registry四阶段登记，源产物只读，网络连接被driver禁止。
+
+305原D/3050研究Top5槽完整，286个已知cohort；评价86D/860槽、81成熟D/810槽。0 physical fit、2统计估计器、1候选、86日状态更新；累计仍158研究fit＋1旧index，不能加成160fit。研究计算1.478秒，不是设计/审核总耗时；没有为了长任务时数增加训练或循环。
+
+| 原81成熟D四臂 | 固定五槽5TD均值/bps |
+|---|---:|
+| 原包baseline | 128.389817 |
+| 原固定规则 | 121.630581 |
+| static empirical | 128.389817 |
+| rolling20 | 130.588447 |
+
+candidate相对baseline和static均+2.198630bps，同时95%区间均[−8.787359,18.248385]，MDE80 18.451300bps。避亏14.368816−漏盈12.170186=+2.198630bps。唯一stockD干预69、7D/81=8.642%；81成熟日中50 TAKE/7 SKIP/24 NO_ADVICE。全86日为50/12/24，额外5个SKIP尚未成熟，不能算已验证干预。四臂该组终值800bps超额尾损均0，仅说明本指标无观察事件，不代表无路径风险。
+
+按包全量报告：LSTM增量+5.907386bps、区间[−13.651974,26.599747]；TCN−1.510125bps、区间[−5.325591,11.956404]，均7干预D；不选LSTM救结果。统计输出全部导航，不属于独立确认、日收益、NAV或真实成交。
+
+**NO_ADVICE来源及解释边界**：24D为2025-06-03..07-04，历史窗口中包含原训练快照在2025-05-26..05-30标为IMMATURE的50槽；随D前进，本研究没有将原截断标签重新结算。不是24个当前评价日行情缺失，也不是判定这24日不该荐股；原包基线全量保留。不把缺状态归为真实模型预测失败，也不为此旧候选补数/扩窗重跑。它限制了该精确文件协议的覆盖，不能据此否定所有实时滚动方法。
+
+共同有预测的57日，static/rolling RMSE=375.594523/407.750346bps，Brier=0.238203/0.243158。此共同口径来自只读冻结forecasts与原baseline的核算，0新模型/阈值搜索。evaluated中各自有效口径为static81日、rolling57日，不能直接把两个不同分母当配对比较。已观测57日也没有出现值得确认的预测优势，不将其推广为全局不可学。
+
+结果`EXACT_CANDIDATE_NOT_SUPPORTED / NAVIGATION_ONLY / NOT_ACTIVATED`。既定点增量、区间及干预条件未满足；R4/R5不执行。不调整20/800/阈值，不重跑此候选，不等待自然市场数据。只完成该离线研究，完整收益型价格产品仍未交付。
+
+## 源码审核与DESIGN-COMPLIANCE-001
+
+1. 禁止简化交付：F1范围完整为离线状态研究，不声称买卖价产品或生产接入完成；真实文件研究与合成测试分别报告。
+2. 禁止静默错误：源stage/包run/manifest/原日/排名/目标核对；未知保留，NO_ADVICE仅让原包恒等继续，不伪装现金或模型预测。
+3. 禁止改变业务逻辑：复用原固定五槽目标/成本与原双端点统计；只在新研究注册日级动作，旧生产、源码政策和产物不变。
+4. 禁止私增门禁：源身份/时钟属于本研究复现验证，不增加QE策略包使用审批；无DB、服务或数据owner任务。
+
+源码第一轮检查修正paired_statistics的原端点键适配；第二轮分离准备3050槽与评价860槽，避免元数据覆盖；第三轮检查零候选现金、未来标签毒化、未知不跳过、原生stage exact retry及各包完整性。最终17项直接测试、Ruff、F1 7/7、diff检查通过；公共CI待本PR。没有运行无关模块套件、修改所有权或发起QE实验。数据库/依赖/运行态=noop，后端不需要重启。
