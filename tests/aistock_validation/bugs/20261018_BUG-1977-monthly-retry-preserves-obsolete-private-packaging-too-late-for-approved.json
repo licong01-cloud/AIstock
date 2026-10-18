@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1977",
-  "closed_at": null,
+  "closed_at": "2026-10-18T18:25:30.097542Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-18T18:06:26.671688Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "43641c3bca15f1acbddfcab24974333bff3ff9d8",
+  "fixed_at": "2026-10-18T18:18:44Z",
   "github_issue_number": 6325,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6325",
   "last_seen_at": "2026-10-18T18:06:26.671688Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6327",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -132,9 +133,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1977/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1977",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "43641c3bca15f1acbddfcab24974333bff3ff9d8",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-18T18:25:03.691876Z",
+      "mode": "read_only",
+      "observed_identity": "43641c3bca15f1acbddfcab24974333bff3ff9d8",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3a54e52ac1d27ae4e178c4ddef540e0fd537f8601f1fd8d97a676a72b07b987c",
+      "receipt_sha256": "8c8005c0cf7433da0f3e39117d68507ee190bd2bbce637712ef43d4b1d4c22b3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c52ed05cafae7fae13743da563eba2280d6a24cec1d6011b494823de6e7c4b60",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -144,7 +168,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1977",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d05fc2592b8b740d",
+    "recorded_at": "2026-10-18T18:19:21.103113Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "04c57d05de45a50d3c58b0766dd0f972c7ff921e",
+    "source_merge_commit": "43641c3bca15f1acbddfcab24974333bff3ff9d8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6327",
+    "validation_evidence": [
+      "python -m nox -s l0 --reuse-existing-virtualenvs -> passed (0 findings)",
+      "rtk pytest backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_sector_mapping.py -q -> passed (134 passed, 1 skipped); changed-file Ruff compile diff check passed; three reviews passed"
+    ],
+    "validation_evidence_digest": "7e64cde550d8cd68eb00b7130fe367fe35a34a5dbcda387b4214d10c40d229e7"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -153,6 +199,11 @@
     "fingerprint": "2b7c5b2dc3cc4fe6e815f198",
     "source_event_id": "FE-20261018-2b7c5b2dc3cc"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 --reuse-existing-virtualenvs -> passed (0 findings)",
+    "rtk pytest backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_sector_mapping.py -q -> passed (134 passed, 1 skipped); changed-file Ruff compile diff check passed; three reviews passed",
+    "post-restart-verify --target worker-scheduler --expected-identity 43641c3bca15f1acbddfcab24974333bff3ff9d8 -> passed (runtime identity and native worker smoke); rtk pytest runner/resume/sector mapping -> passed (134 passed 1 skipped)"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
