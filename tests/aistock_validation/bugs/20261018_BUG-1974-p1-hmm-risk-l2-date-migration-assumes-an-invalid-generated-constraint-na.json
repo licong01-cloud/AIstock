@@ -1,0 +1,261 @@
+{
+  "actual": "constraint risk_l2_run_risk_l2_capability_status_check of relation risk_l2_run does not exist; SQLSTATE 42704.",
+  "allowed_write_scope": [
+    "backend/db/migrations/extend_hmm_risk_risk_l2_date_inference_20261018.sql",
+    "backend/tests/hmm_risk/test_risk_l2_date_product.py",
+    "tests/aistock_validation/bugs/20261018_BUG-1974-p1-hmm-risk-l2-date-migration-assumes-an-invalid-generated-constraint-na.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1974",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-18T15:52:17.489872Z",
+  "description": "constraint risk_l2_run_risk_l2_capability_status_check of relation risk_l2_run does not exist; SQLSTATE 42704.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261018-14717af517c1",
+      "timestamp": "2026-10-18T15:52:17.489854Z"
+    }
+  ],
+  "evidence_uris": [
+    "PR #6306; authorized existing aistock_dev exact migration rollback failure 2026-10-18; original schema and row counts verified restored."
+  ],
+  "expected": "Migration accepts original PostgreSQL-generated names by validating the precise historical capability contract, rejects ambiguity or foreign contracts, and supports transactional rollback with both original historical rows and 262 date-inference rows unchanged after rollback.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/db/migrations/extend_hmm_risk_risk_l2_date_inference_20261018.sql",
+      "backend/tests/hmm_risk/test_risk_l2_date_product.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1974-p1-hmm-risk-l2-date-migration-assumes-an-invalid-generated-constraint-na.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/db/migrations/extend_hmm_risk_risk_l2_date_inference_20261018.sql",
+      "backend/tests/hmm_risk/test_risk_l2_date_product.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1974-p1-hmm-risk-l2-date-migration-assumes-an-invalid-generated-constraint-na.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/db/migrations/extend_hmm_risk_risk_l2_date_inference_20261018.sql",
+        "backend/tests/hmm_risk/test_risk_l2_date_product.py"
+      ],
+      "impacted_modules": [
+        "platform.db",
+        "qe.archive",
+        "paper_v2",
+        "selection_center",
+        "strategy_package",
+        "validation.center",
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/db/migrations/extend_hmm_risk_risk_l2_date_inference_20261018.sql",
+          "impact_modules": [
+            "qe.archive",
+            "paper_v2",
+            "selection_center",
+            "strategy_package",
+            "validation.center"
+          ],
+          "primary_module": "platform.db",
+          "risk_level": "high",
+          "rule_id": "platform_database"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_risk_l2_date_product.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/db/migrations/extend_hmm_risk_risk_l2_date_inference_20261018.sql",
+        "backend/tests/hmm_risk/test_risk_l2_date_product.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/db/migrations/extend_hmm_risk_risk_l2_date_inference_20261018.sql",
+      "backend/tests/hmm_risk/test_risk_l2_date_product.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/db/migrations/extend_hmm_risk_risk_l2_date_inference_20261018.sql",
+      "backend/tests/hmm_risk/test_risk_l2_date_product.py"
+    ]
+  },
+  "first_seen_at": "2026-10-18T15:52:17.489872Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fix_summary": "Resolve exactly one validated historical capability CHECK by referenced columns and exact PostgreSQL-deparsed predicate under the existing ALTER table lock, then quote its actual name. Missing, ambiguous, unvalidated or foreign contracts abort the transaction. No model, service or dataset behavior changes.",
+  "fixed_at": null,
+  "github_issue_number": 6315,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6315",
+  "last_seen_at": "2026-10-18T15:52:17.489872Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "pending_user_authorization",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "AISTOCK_HMM_DEV_ROLLBACK_AUTHORIZED=1 python -m pytest backend/tests/hmm_risk/test_risk_l2_date_product.py::test_existing_dev_date_migration_preserves_contract_and_rolls_back[original] -q --no-cov",
+  "required_verification": [
+    "l0",
+    "validation_catalog_integrity",
+    "hmm_risk_pr_slice"
+  ],
+  "review_results": [
+    "Author review round 1: removed whitespace normalization from predicate comparison so distinct SQL text literals cannot collapse to the accepted historical contract.",
+    "Author review round 2: verified exact HMM-only SQL scope, transaction ownership, no commit path, historical 424-day/55544-row branch and no-outcome date branch remain unchanged; no blocking findings."
+  ],
+  "risk_area": "bug",
+  "root_cause": "The original multi-column inline capability CHECK is named risk_l2_run_check1 by PostgreSQL, not risk_l2_run_risk_l2_capability_status_check. Prior MemoryDB tests did not execute the migration against PostgreSQL.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "database",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "P1 HMM risk L2 date migration assumes an invalid generated constraint name",
+  "trigger_condition": {
+    "fingerprint": "14717af517c1eb75d01dcf87",
+    "source_event_id": "FE-20261018-14717af517c1"
+  },
+  "verification_budget": {
+    "budget": "deep",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "45-60%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "deep",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "45-60%"
+    }
+  }
+}

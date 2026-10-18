@@ -3,6 +3,8 @@
 from copy import deepcopy
 from datetime import date
 import json
+import os
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -198,3 +200,136 @@ def test_all_natural_na_retains_full_catalog_and_no_research_capability(evidence
     assert len(value.rows) == 262 and value.run["risk_l2_capability_status"] == "NOT_AVAILABLE"
     assert value.run["compact_summary"]["prediction_coverage"] == 0
     assert all(row["warning"] is None and row["probability"] is None for row in value.rows)
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(
+    os.environ.get("AISTOCK_HMM_DEV_ROLLBACK_AUTHORIZED") != "1",
+    reason="requires explicit existing-aistock_dev rollback validation authorization",
+)
+@pytest.mark.parametrize("layout", ["original", "renamed", "missing", "ambiguous", "changed", "unvalidated"])
+def test_existing_dev_date_migration_preserves_contract_and_rolls_back(evidence, layout):
+    """Execute real PostgreSQL DDL/writer, never commit or connect to production."""
+    from contextlib import contextmanager
+
+    from dotenv import dotenv_values
+    import psycopg2
+    from psycopg2 import sql
+
+    values = dotenv_values("F:/Dev/AIstock/.env")
+    fields = {k: values.get("TDX_DB_DEV_" + k) for k in ("HOST", "PORT", "USER", "PASSWORD", "NAME")}
+    if not all(fields.values()) or fields["NAME"] != "aistock_dev":
+        pytest.fail("explicit authorized existing DEV configuration required")
+    conn = psycopg2.connect(
+        host=fields["HOST"],
+        port=int(fields["PORT"]),
+        user=fields["USER"],
+        password=fields["PASSWORD"],
+        dbname="aistock_dev",
+        connect_timeout=5,
+        application_name="HMM-date-migration-rollback-test",
+    )
+    tables = ("hmm_risk.risk_l2_run", "hmm_risk.risk_l2_prediction")
+
+    def snapshot():
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT current_database()")
+            assert cursor.fetchone() == ("aistock_dev",)
+            result = []
+            for table in tables:
+                cursor.execute("SELECT count(*) FROM " + table)
+                result.append(cursor.fetchone())
+                cursor.execute(
+                    "SELECT conname,pg_get_constraintdef(oid),obj_description(oid,'pg_constraint'),convalidated "
+                    "FROM pg_constraint WHERE conrelid=%s::regclass ORDER BY conname",
+                    (table,),
+                )
+                result.append(cursor.fetchall())
+            return result
+
+    class BorrowedConnection:
+        info = conn.info
+
+        def cursor(self):
+            return conn.cursor()
+
+        def commit(self):
+            pytest.fail("rollback validation must not commit")
+
+    @contextmanager
+    def borrow():
+        # psycopg2 connection.__exit__ commits; only this outer test owns it.
+        yield BorrowedConnection()
+
+    before = None
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SET LOCAL lock_timeout='5s'; SET LOCAL statement_timeout='30s'")
+        before = snapshot()
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT c.conname,pg_get_expr(c.conbin,c.conrelid) FROM pg_constraint c "
+                "WHERE c.conrelid='hmm_risk.risk_l2_run'::regclass AND c.contype='c' AND "
+                "(SELECT array_agg(a.attname::text ORDER BY a.attname) FROM pg_attribute a "
+                "WHERE a.attrelid=c.conrelid AND a.attnum=ANY(c.conkey)) "
+                "=ARRAY['effect_status','risk_l2_capability_status']"
+            )
+            checks = cursor.fetchall()
+            assert len(checks) == 1, "original existing DEV migration baseline required"
+            name, predicate = checks[0]
+            if layout == "renamed":
+                cursor.execute(
+                    sql.SQL("ALTER TABLE hmm_risk.risk_l2_run RENAME CONSTRAINT {} TO {}").format(
+                        sql.Identifier(name), sql.Identifier('HMM capability "renamed"')
+                    )
+                )
+            elif layout in {"missing", "changed", "unvalidated"}:
+                cursor.execute(
+                    sql.SQL("ALTER TABLE hmm_risk.risk_l2_run DROP CONSTRAINT {}").format(sql.Identifier(name))
+                )
+                if layout == "changed":
+                    cursor.execute(
+                        "ALTER TABLE hmm_risk.risk_l2_run ADD CONSTRAINT foreign_capability "
+                        "CHECK(effect_status<>'' AND risk_l2_capability_status<>'')"
+                    )
+                elif layout == "unvalidated":
+                    cursor.execute(
+                        "ALTER TABLE hmm_risk.risk_l2_run ADD CONSTRAINT unvalidated_capability CHECK ("
+                        + predicate
+                        + ") NOT VALID"
+                    )
+            elif layout == "ambiguous":
+                cursor.execute(
+                    "ALTER TABLE hmm_risk.risk_l2_run ADD CONSTRAINT duplicate_capability CHECK (" + predicate + ")"
+                )
+            migration = (
+                Path(__file__).resolve().parents[2]
+                / "db/migrations/extend_hmm_risk_risk_l2_date_inference_20261018.sql"
+            )
+            header, wrapper, body = migration.read_text(encoding="utf-8").partition("\nBEGIN;\n")
+            assert wrapper and all(not line or line.startswith("--") for line in header.splitlines())
+            assert body.rstrip().endswith("COMMIT;")
+            body = body.rstrip()[: -len("COMMIT;")]
+            assert all(token not in body for token in ("COMMIT;", "ROLLBACK;", "BEGIN;"))
+            if layout not in {"original", "renamed"}:
+                with pytest.raises(psycopg2.errors.RaiseException, match="original HMM risk capability"):
+                    cursor.execute(body)
+                return
+            cursor.execute(body)
+        value = importer.from_assets(*evidence)
+        repo = product.RiskL2PredictionRepository(conn_factory=borrow)
+        assert repo.write_product(value, database_target="aistock_dev")["inserted_rows"] == 262
+        assert repo.write_product(value, database_target="aistock_dev")["inserted_rows"] == 0
+        for day in value.run["dates"]:
+            detail = repo.read_date(date.fromisoformat(day), run_id=value.run["run_id"])
+            assert len(detail["rows"]) == 131
+            assert detail["day_summary"]["outcome_status_counts"] == {importer.OUTCOME: 131}
+            assert all(row["event"] is None and row["realized_return"] is None for row in detail["rows"])
+    finally:
+        conn.rollback()
+        try:
+            if before is not None:
+                assert snapshot() == before, "DEV schema/comments/counts must restore exactly after rollback"
+        finally:
+            conn.rollback()
+            conn.close()
