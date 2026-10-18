@@ -106,6 +106,10 @@ def _plan(tmp_path: Path, profile=None):
         "config_id": "config-fixed",
         "status": "completed",
         "model_path": str(model),
+        "metrics_json": {
+            "train_period": "2021-01-04 ~ 2022-12-30",
+            "val_period": "2023-01-03 ~ 2024-06-28",
+        },
     }
     inputs = ext.resolve_active_input(profile or _profile(tmp_path))
     plan = ext.build_plan(
@@ -179,6 +183,71 @@ def test_extension_start_cannot_relabel_post_fit_history_as_no_leakage(tmp_path)
             signal_presets=["preset_A"],
             enabled=True,
         )
+
+
+@pytest.mark.parametrize(
+    "metrics",
+    [
+        None,
+        "not-json",
+        {"train_period": "2023-02-13 ~ 2026-02-13", "val_period": "2026-02-24 ~ 2026-05-19"},
+        {"train_period": "2021-01-04 ~ 2022-12-30", "val_period": "2023-01-03 ~ 2024-07-01"},
+        {"train_period": "2021-01-04 ~ 2022-12-30", "val_period": "2023-01-03 ~ 2024-02-30"},
+    ],
+)
+def test_temporal_snapshot_authority_cannot_be_replaced_by_mutable_config_dates(tmp_path, metrics):
+    plan, config, snapshot, inputs = _plan(tmp_path)
+    snapshot["metrics_json"] = metrics
+    with pytest.raises(ext.CoefficientExtensionError, match="model_asof_invalid"):
+        ext.build_plan(
+            config_id="config-fixed",
+            config=config,
+            snapshot=snapshot,
+            signal_preset="preset_A",
+            preset_coeffs=plan["preset_coeffs"],
+            inputs=inputs,
+        )
+
+
+def test_temporal_authority_is_frozen_in_plan_asset_and_registration(tmp_path, monkeypatch):
+    plan, config, snapshot, inputs = _plan(tmp_path)
+    expected = {
+        "history_start": "2019-12-05",
+        "train_start": "2021-01-04",
+        "train_end": "2022-12-30",
+        "validation_start": "2023-01-03",
+        "validation_end": "2024-06-28",
+        "origin_authority": "snapshot_metrics_original_precompute_origin_v1",
+    }
+    assert plan["model_inference_origin"] == expected
+    window = ext.publish_window(_payload(plan), plan, "2024-07-01", "2024-07-02")
+    asset = json.loads((Path(plan["model_path"]).parent / window["coefficient_filename"]).read_text())
+    assert asset["strict_no_leakage"] is True
+    assert asset["model_inference_origin"] == window["model_inference_origin"] == expected
+    service = HMMTrainingService()
+    monkeypatch.setattr(service, "_get_config", lambda _: {"config_json": config})
+    monkeypatch.setattr(service, "get_snapshot", lambda _: snapshot)
+    monkeypatch.setattr(ext, "resolve_active_input", lambda: inputs)
+    snapshot["metrics_json"] = json.dumps(snapshot["metrics_json"])
+    service._assert_coefficient_extension_current(plan)
+    snapshot["metrics_json"] = json.loads(snapshot["metrics_json"])
+    snapshot["metrics_json"]["val_period"] = "2023-01-03 ~ 2024-06-27"
+    with pytest.raises(RuntimeError, match="binding_changed"):
+        service._assert_coefficient_extension_current(plan)
+
+
+@pytest.mark.parametrize("damage", ["missing", "history_start", "overlap"])
+def test_temporal_readback_never_promotes_a_plan_without_valid_origin(tmp_path, damage):
+    plan, *_ = _plan(tmp_path)
+    if damage == "missing":
+        plan.pop("model_inference_origin")
+    elif damage == "history_start":
+        plan["model_inference_origin"]["history_start"] = "2020-01-01"
+    else:
+        plan["model_inference_origin"]["validation_end"] = plan["test_start"]
+    with pytest.raises(ext.CoefficientExtensionError, match="model_asof_invalid"):
+        ext.publish_window(_payload(plan), plan, plan["test_start"], plan["backtest_end"])
+    assert not list(tmp_path.glob("coefficients_*.json"))
 
 
 @pytest.mark.parametrize("change", ["weights", "parameter", "preset", "policy_schema", "disabled"])
