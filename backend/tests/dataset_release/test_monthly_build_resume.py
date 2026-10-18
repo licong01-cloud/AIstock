@@ -10,13 +10,169 @@ import sys
 from types import SimpleNamespace
 
 import pytest
+import numpy as np
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
+from backend.services.dataset_release import monthly_minute_repair as minute_repair_subject
+from backend.services.dataset_release.canonical_stock_transformer import _minute_session_times
+from backend.services.dataset_release.stock_schema import QLIB_STOCK_FIELDS
 
 from backend.services.dataset_release.cas_store import CASStore
 from backend.services.dataset_release.control_store import ControlStore
 from backend.services.dataset_release.monthly_build_resume import (
-    MonthlyBuildResume, MonthlyBuildResumeError, materialization_attempt, retained_staging_root,
+    MonthlyBuildResume, MonthlyBuildResumeError, materialization_attempt, retained_staging_root, _atomic, _signature,
 )
 from backend.services.dataset_release.monthly_worker import ProducerContext
+
+
+DAY, CODE = "2026-07-10", "603900.SH"
+
+
+def facts():
+    return [dict(trade_time=f"{DAY} {t}", ts_code=CODE,
+                 open_li=10000, high_li=11000, low_li=9000, close_li=10000,
+                 volume_hand=1, amount_li=1050500, volume_shares=105,
+                 volume_shares_source="tdx_wire_shares", volume_shares_sha256=None)
+            for t in _minute_session_times()]
+
+
+@pytest.mark.parametrize("defect", [None, "missing", "duplicate", "invalid"])
+def test_capture_authoritative_database_session_without_supplier_gates(defect):
+    rows, calls = facts(), []
+    if defect == "missing":
+        rows.pop()
+    if defect == "duplicate":
+        rows[-1] = rows[0]
+    if defect == "invalid":
+        rows[0]["volume_shares"] = float("nan")
+    records = []
+    for row in rows:
+        row = {**row, "trade_time": datetime.fromisoformat(row["trade_time"]).replace(tzinfo=ZoneInfo("Asia/Shanghai"))}
+        records.append(tuple(row[f] for f in minute_repair_subject._FIELDS))
+    class Connection:
+        def set_session(self, **kw):
+            calls.append(kw)
+        def cursor(self):
+            return self
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        def execute(self, sql, params=None):
+            calls.append((sql, params))
+        def fetchone(self):
+            return ("aistock", "snapshot")
+        def fetchall(self):
+            return records
+        def rollback(self):
+            calls.append("rollback")
+        def close(self):
+            calls.append("close")
+    inputs = {"stock_dates": [{"ts_code": CODE, "trade_date": DAY}]}
+    if defect:
+        with pytest.raises((ValueError, RuntimeError)):
+            minute_repair_subject.capture_database_minutes(inputs, cutoff=date(2026, 9, 30), connection_factory=Connection)
+    else:
+        result = minute_repair_subject.capture_database_minutes(inputs, cutoff=date(2026, 9, 30), connection_factory=Connection)
+        assert result["row_count"] == 240 and result["stock_dates"] == 1
+        assert result["database_write"] is False
+        assert result["facts"] == facts()
+    assert calls[0] == {"readonly": True, "isolation_level": "REPEATABLE READ"}
+    assert calls[-1] == "close"
+    assert all(not isinstance(c, tuple) or c[0].startswith("SELECT ") for c in calls)
+
+
+def prepared(tmp_path):
+    artifact_root = tmp_path / "cas"
+    ControlStore.initialize(artifact_root)
+    cas = CASStore(artifact_root)
+    root = tmp_path / ".staging" / "retained"
+    root.mkdir(parents=True)
+    minute = root / "minute_bin/qlib"
+    daily = root / "daily_bin/qlib"
+    for provider, freq, calendar in (
+        (minute, "1min", [r["trade_time"] for r in facts()] + ["2026-09-01 09:31:00"]),
+        (daily, "day", [DAY, "2026-09-01"]),
+    ):
+        (provider / "calendars").mkdir(parents=True)
+        (provider / f"calendars/{freq}.txt").write_text("\n".join(calendar) + "\n")
+        (provider / f"features/{CODE.lower()}").mkdir(parents=True)
+    for field, value in (("factor", .5), ("up_limit_price", 11), ("down_limit_price", 9), ("prev_close", 10)):
+        np.array([0, value, value], dtype="<f4").tofile(daily / f"features/{CODE.lower()}/{field}.day.bin")
+    for field in QLIB_STOCK_FIELDS:
+        np.array([0, *([np.nan] * 240), 1], dtype="<f4").tofile(minute / f"features/{CODE.lower()}/{field}.1min.bin")
+    materialization = {"dataset": "minute_bin", "cutoff": "2026-09-30"}
+    _atomic(root / "minute_bin/materialization_receipt.json", materialization)
+    ref = cas.put_json(materialization).as_dict()
+    finalized = {"finalize_receipt_ref": cas.put_json({"minute_receipt_ref": ref}).as_dict()}
+    original_steps = {"finalize-bins": cas.put_json(finalized).as_dict()}
+    resume = SimpleNamespace(root=root, cas=cas, path=root.parent / "resume.json",
+        context=SimpleNamespace(operation_id="dmr_test", checkpoint=lambda: None),
+        record={"binding_digest": "bound", "steps": original_steps,
+                "files": {p.relative_to(root).as_posix(): _signature(p) for p in root.rglob("*") if p.is_file()}})
+    _atomic(resume.path, resume.record)
+    authority = {"schema_version": minute_repair_subject.SCHEMA, "facts": facts(), "row_count": 240, "stock_dates": 1}
+    plan = {"target_cutoff": "2026-09-30", "predecessor": {"dataset_manifest_sha256": "a" * 64}}
+    plan[minute_repair_subject.BINDING] = {"operation_id": "dmr_test", "target_cutoff": plan["target_cutoff"],
+        "predecessor_manifest_sha256": "a" * 64, "authority_ref": cas.put_json(authority).as_dict()}
+    return resume, finalized, plan
+
+
+@pytest.mark.parametrize("crash", [False, True])
+def test_bounded_fill_is_cow_recoverable_and_idempotent(tmp_path, monkeypatch, crash):
+    resume, finalized, plan = prepared(tmp_path)
+    provider = resume.root / "minute_bin/qlib"
+    path = provider / f"features/{CODE.lower()}/close.1min.bin"
+    old_release = tmp_path / "old-release.bin"
+    os.link(path, old_release)
+    old = old_release.read_bytes()
+    if crash:
+        from backend.services.dataset_release import monthly_prev_close_repair as transaction
+        original = transaction._replace
+        count = [0]
+        def interrupt(path, payload):
+            count[0] += 1
+            if count[0] == 3:
+                raise OSError("injected interruption")
+            original(path, payload)
+        monkeypatch.setattr(transaction, "_replace", interrupt)
+        with pytest.raises(OSError, match="injected"):
+            minute_repair_subject.apply_minute_corrections(resume, finalized=finalized, cas=resume.cas, plan=plan)
+        monkeypatch.setattr(transaction, "_replace", original)
+        resume.record = minute_repair_subject.recover_minute_correction(root=resume.root, journal=resume.path,
+                                                          record=resume.record, cas=resume.cas)
+        finalized = resume.cas.get_json(resume.record["steps"]["finalize-bins"])
+    result = minute_repair_subject.apply_minute_corrections(resume, finalized=finalized, cas=resume.cas, plan=plan)
+    values = np.fromfile(path, dtype="<f4")
+    assert np.array_equal(values, np.array([0, *([5] * 240), 1], dtype="<f4"))
+    volume = np.fromfile(path.with_name("volume.1min.bin"), dtype="<f4")
+    assert (volume[1:241] == 210).all()
+    assert old_release.read_bytes() == old  # Shared published inode never written.
+    inner = resume.cas.get_json(result["finalize_receipt_ref"])
+    materialization = resume.cas.get_json(inner["minute_receipt_ref"])
+    assert materialization["minute_correction"]["filled_cells"] == 240 * 12
+    assert len(minute_repair_subject.correction_pins(materialization, provider=provider, cas=resume.cas)) == 12
+    signatures = dict(resume.record["files"])
+    assert minute_repair_subject.apply_minute_corrections(resume, finalized=result, cas=resume.cas, plan=plan) == result
+    assert resume.record["files"] == signatures
+    assert not minute_repair_subject._pending(resume.root).exists()
+    # Every file pin survives a completely new reader.
+    assert json.loads(resume.path.read_bytes())["files"] == signatures
+
+
+def test_correction_cannot_overwrite_finite_quotes_or_touch_published_root(tmp_path):
+    resume, finalized, plan = prepared(tmp_path)
+    path = resume.root / f"minute_bin/qlib/features/{CODE.lower()}/open.1min.bin"
+    values = np.fromfile(path, dtype="<f4")
+    values[1] = 999
+    values.tofile(path)
+    before = path.read_bytes()
+    with pytest.raises(MonthlyBuildResumeError, match="overwrite a valid fact"):
+        minute_repair_subject.apply_minute_corrections(resume, finalized=finalized, cas=resume.cas, plan=plan)
+    assert path.read_bytes() == before and not minute_repair_subject._pending(resume.root).exists()
+    resume.root = Path(tmp_path / "published")
+    with pytest.raises(MonthlyBuildResumeError, match="private retained staging"):
+        minute_repair_subject.apply_minute_corrections(resume, finalized=finalized, cas=resume.cas, plan=plan)
 
 
 def _fixture(tmp_path):
