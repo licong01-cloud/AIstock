@@ -49,12 +49,17 @@ def test_invalid_precision_never_silently_falls_back(bad):
         _normalize_raw_values(fact, source='minute', ordinal=2)
 
 
-@pytest.mark.parametrize('field,value', [('volume_shares_source', None),
+@pytest.mark.parametrize('field,value', [('volume_shares_source', 'tdx_wire_shares'),
+                                         ('volume_shares_source', None),
                                          ('volume_shares_source', 'invented'),
                                          ('volume_shares_sha256', 'bad')])
-def test_precision_requires_provider_provenance(field, value):
-    with pytest.raises(ValueError):
-        raw_volume_shares(row(**{**precision(), field: value}))
+def test_database_numeric_precision_does_not_requalify_supplier_metadata(field, value):
+    assert raw_volume_shares(row(**{**precision(), field: value})) == 925050
+
+
+def test_legacy_null_precision_does_not_require_origin_metadata_cleanup():
+    assert raw_volume_shares(row(volume_shares=None, volume_shares_source='tdx_wire_shares')) == 925000
+    assert _normalize_raw_values(row(volume_shares=105), source="minute", ordinal=0)["volume_shares"] == 105
 
 
 @pytest.mark.parametrize('query_id', ['kline_daily_raw', 'kline_minute_raw'])
