@@ -18,6 +18,7 @@
     "backend/tests/scripts/test_monthly_unified_dataset_release.py"
   ],
   "assigned_agent": null,
+  "backend_restart_required": true,
   "bug_id": "BUG-1968",
   "closed_at": null,
   "closure_requirements": [
@@ -27,6 +28,12 @@
   ],
   "created_at": "2026-10-17T18:14:02.165423Z",
   "description": "July production repair is complete and read back: 246 additional stock-days / 59040 real minute bars plus the earlier 603900 repair, 247 / 59280 total. Continuation exposed three exporter defects: outdated supplier-label allowlist, stale active-profile equality during preparation, and no bounded historical minute amendment for retained monthly exports. Fix the existing monthly operation and preserve valid exports; no new database writes, published release/profile changes or service control.",
+  "design_compliance_review": {
+    "business_semantics_unchanged": "PASS: official 12 fields, CNY/share units, same-candidate daily QFQ and raw limits, unchanged PIT/strategy/profile and sealed SOURCE.",
+    "no_extra_gates": "PASS: remove supplier origin/hash allowlist and preparation active equality; retain numerical integrity, immutable output and separately authorized activation CAS.",
+    "no_partial_success_claim": "PASS: production DB repaired; formal candidate update remains pending new runtime and bind-minutes/resume; no READY claim.",
+    "no_silent_error": "PASS: invalid present precision, missing/duplicate minute keys and conflicting finite bins still fail; no provider-label requalification."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -43,11 +50,43 @@
     "X:/AIstock_dataset_candidates/data_repair_staging/minute-july-full-audit-20261018-r1/monthly-resume-readback.json#sha256=6661f5b09e61806500e95bfae04a6e831e8f1f3fa039ef68797362db8c166acd"
   ],
   "expected": "Database-authoritative numeric export accepts provenance labels without supplier allowlists. The same sealed monthly operation captures bounded historical minute corrections and atomically repairs only affected private bins, retains completed exports, and continues preparation independently of the active profile. Publication activation remains separately authorized CAS.",
-  "scope_expansion_reason": "User explicitly requested all three monthly blockers fixed: obsolete preparation-time active-profile equality, missing July database repair in sealed export, and rejection of formal TDX precision provenance. July production repair is already complete. No new production writes, active changes, service control or full re-export.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1968-july-minute-completeness-audit-missed-246-traded-stock-days.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_artifact_ready_source.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_raw_volume_precision.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1968-july-minute-completeness-audit-missed-246-traded-stock-days.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -83,32 +122,30 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
     "fresh_process_evidence": [
       "Fresh Python formal capture_database_minutes read production in one read-only repeatable-read snapshot: 247 stock-days, 59280 bars, 1.006s, no DML; X:/AIstock_dataset_candidates/data_repair_staging/minute-july-full-audit-20261018-r1/monthly-minute-db-capture.json SHA256 fad5368a1a8ae5eeafa0948b2017b6615f31711d361014df74f6a137b1b2170c.",
       "Fresh Python apply_minute_corrections on hardlinked exact retained bin bytes: 4 real stock-days, 960 bars, 48 feature files; all 12 fields read back finite, idempotence PASS, source bytes/inodes unchanged. X:/AIstock_dataset_candidates/data_repair_staging/minute-july-full-audit-20261018-r1/real-bin-correction-proof.json. Actual monthly staging and active profile were not modified.",
-      "RED: 5 source-label/metadata tests failed against old transformer. GREEN related matrix: 223 passed, 5 platform skips; crash recovery, finite-value preservation, COW published-inode isolation, unchanged sealed SOURCE under active drift and actual orchestration resume PASS."
+      "RED: 5 source-label/metadata tests failed against old transformer. GREEN related matrix: 223 passed, 5 platform skips; crash recovery, finite-value preservation, COW published-inode isolation, unchanged sealed SOURCE under active drift and actual orchestration resume PASS.",
+      "Actual production read-only capture and exact retained-bin COW proof: X:/AIstock_dataset_candidates/data_repair_staging/minute-july-full-audit-20261018-r1/real-bin-correction-proof.json; no actual staging/profile changes or new DML."
     ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
-    "target_ids": ["worker-scheduler"],
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014"
-  },
-  "backend_restart_required": true,
-  "design_compliance_review": {
-    "no_partial_success_claim": "PASS: production DB repaired; formal candidate update remains pending new runtime and bind-minutes/resume; no READY claim.",
-    "no_silent_error": "PASS: invalid present precision, missing/duplicate minute keys and conflicting finite bins still fail; no provider-label requalification.",
-    "business_semantics_unchanged": "PASS: official 12 fields, CNY/share units, same-candidate daily QFQ and raw limits, unchanged PIT/strategy/profile and sealed SOURCE.",
-    "no_extra_gates": "PASS: remove supplier origin/hash allowlist and preparation active equality; retain numerical integrity, immutable output and separately authorized activation CAS."
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "User explicitly requested all three monthly blockers fixed: obsolete preparation-time active-profile equality, missing July database repair in sealed export, and rejection of formal TDX precision provenance. July production repair is already complete. No new production writes, active changes, service control or full re-export.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
