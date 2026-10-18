@@ -34,8 +34,9 @@ def capture_industry_quote_source(connection, *, cas, projection, repair_provide
     codes = sorted({entry["canonical_l2_code"] for entry in projection.payload["entries"] if entry["taxonomy_version"] == "SW2021"})
     from .sw_l2_quote_policy import publication_catalog, quote_publication_policy_identity
     with connection.cursor() as cursor:
+        # SOURCE binds this release's frozen taxonomy, not later catalog entries.
         cursor.execute("SELECT index_code,src,level,is_pub FROM market.sw_index_classify"
-            " WHERE src='SW2021' AND level='L2' ORDER BY index_code LIMIT 132", ())
+            " WHERE src='SW2021' AND level='L2' AND index_code=ANY(%s) ORDER BY index_code LIMIT 132", (codes,))
         catalog_rows = cursor.fetchall()
     if len(catalog_rows) > 131:
         raise SourceManifestError("official industry publication catalog exceeds its row bound")

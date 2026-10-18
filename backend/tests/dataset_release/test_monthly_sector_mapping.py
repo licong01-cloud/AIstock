@@ -963,3 +963,59 @@ def test_retained_context_refresh_requires_exact_source_lineage(monkeypatch, bou
     with pytest.raises(MonthlyBuildResumeError, match="durable completed-export journal" if bound else "differs from frozen quote"):
         history.apply_retained_history(SimpleNamespace(get=lambda _: prior, path=None), context=context,
             compiled=SimpleNamespace(physical_plan={}), prepare={}, cas=None, profile=None)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "duplicate", "invalid_publication"])
+def test_quote_source_catalog_uses_only_frozen_codes(predecessor, fault):
+    from backend.services.dataset_release import monthly_industry_facts as subject
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    binding = load_predecessor_sector_mapping(predecessor)
+    rows, _, _ = _facts(binding)
+    codes = [entry["canonical_l2_code"] for entry in binding["code_map"]["entries"]]
+    if fault == "missing":
+        rows = [row for row in rows if row["index_code"] != codes[0]]
+    elif fault == "duplicate":
+        rows.append(dict(rows[0]))
+    elif fault == "invalid_publication":
+        rows[0] = {**rows[0], "is_pub": "2"}
+    queries = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def execute(self, sql, params):
+            assert sql.startswith("SELECT ") and "sw_index_classify" in sql
+            queries.append((sql, params))
+
+        def fetchall(self):
+            sql, params = queries[-1]
+            selected = [row for row in rows if row["index_code"] in params[0]] if "index_code=ANY(%s)" in sql else rows
+            return [tuple(row[key] for key in ("index_code", "src", "level", "is_pub"))
+                    for row in sorted(selected, key=lambda row: row["index_code"])[:132]]
+
+    control = predecessor.root / "control"
+    ControlStore.initialize(control)
+    projection = SimpleNamespace(sha256="a" * 64, payload={"start_date": "2020-09-01", "end_date": "2020-09-30",
+        "entries": [{"taxonomy_version": "SW2021", "canonical_l2_code": code} for code in codes]})
+
+    def capture():
+        return subject.capture_industry_quote_source(SimpleNamespace(cursor=Cursor), cas=CASStore(control),
+                                                     projection=projection)
+
+    if fault == "duplicate":
+        with pytest.raises(SourceManifestError, match="row bound"):
+            capture()
+    elif fault:
+        with pytest.raises(policy.SWL2QuotePolicyError, match="omits" if fault == "missing" else "invalid"):
+            capture()
+    else:
+        source = capture()
+        assert set(source["publication_catalog"]) == set(codes)
+        assert source["quote_fact_audit"]["unresolved_key_count"] == 0
+        assert source["projection_sha256"] == projection.sha256
+    assert len(queries) == 1 and queries[0][1] == (sorted(codes),)
