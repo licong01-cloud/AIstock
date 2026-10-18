@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-18T18:06:26.671688Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "43641c3bca15f1acbddfcab24974333bff3ff9d8",
+  "fixed_at": "2026-10-18T18:18:44Z",
   "github_issue_number": 6325,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6325",
   "last_seen_at": "2026-10-18T18:06:26.671688Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6327",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -133,6 +134,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -144,7 +146,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1977",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d05fc2592b8b740d",
+    "recorded_at": "2026-10-18T18:19:21.103113Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "04c57d05de45a50d3c58b0766dd0f972c7ff921e",
+    "source_merge_commit": "43641c3bca15f1acbddfcab24974333bff3ff9d8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6327",
+    "validation_evidence": [
+      "python -m nox -s l0 --reuse-existing-virtualenvs -> passed (0 findings)",
+      "rtk pytest backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_sector_mapping.py -q -> passed (134 passed, 1 skipped); changed-file Ruff compile diff check passed; three reviews passed"
+    ],
+    "validation_evidence_digest": "7e64cde550d8cd68eb00b7130fe367fe35a34a5dbcda387b4214d10c40d229e7"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -153,6 +177,10 @@
     "fingerprint": "2b7c5b2dc3cc4fe6e815f198",
     "source_event_id": "FE-20261018-2b7c5b2dc3cc"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 --reuse-existing-virtualenvs -> passed (0 findings)",
+    "rtk pytest backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_sector_mapping.py -q -> passed (134 passed, 1 skipped); changed-file Ruff compile diff check passed; three reviews passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
