@@ -431,8 +431,10 @@ def test_formal_runner_uses_existing_monthly_worker_process_runtime_probe():
     assert target["probe_mode"] == "monthly_release_worker_process"
 
 
-def test_retry_reuses_real_native_bin_and_never_calls_writer_again(tmp_path, monkeypatch):
-    from backend.services.dataset_release.monthly_build_resume import retained_staging_root
+@pytest.mark.parametrize("retained_packaging", [False, True])
+def test_retry_reuses_real_native_bin_and_never_calls_writer_again(tmp_path, monkeypatch, retained_packaging):
+    from backend.services.dataset_release.monthly_build_resume import MonthlyBuildResume, retained_staging_root
+    from backend.services.dataset_release import monthly_industry_history, monthly_minute_repair, monthly_prev_close_repair
 
     runner, context, initial, compiled, operation, _, provider = _native_month_fixture(tmp_path)
     context = replace(context, plan={**context.plan, "candidate_root": str(tmp_path / "september")})
@@ -450,6 +452,26 @@ def test_retry_reuses_real_native_bin_and_never_calls_writer_again(tmp_path, mon
     runner = replace(runner, consumer_smoke=BrokenSmoke())
     with pytest.raises(RuntimeError, match="downstream reader"):
         runner.execute(context=context, staging_root=staging, compiled=compiled)
+    if retained_packaging:
+        journal = MonthlyBuildResume(context=context, compiled=compiled, release_root=tmp_path,
+                                     staging_root=staging, cas=runner.cas)
+        journal.begin_finalization()
+        (staging / "qe_dataset_manifest.json").write_bytes(b"retained-private-manifest")
+        (staging / "reports").mkdir()
+        (staging / "reports/private.json").write_bytes(b"retained-private-receipt")
+    repairs = []
+
+    def check_order(name, original):
+        def apply(resume, **kwargs):
+            assert not (resume.root / "qe_dataset_manifest.json").exists(), "obsolete packaging blocks approved repair"
+            repairs.append(name)
+            return original(resume, **kwargs)
+        return apply
+
+    for module, name in ((monthly_prev_close_repair, "apply_prev_close_corrections"),
+                         (monthly_minute_repair, "apply_minute_corrections"),
+                         (monthly_industry_history, "apply_retained_history")):
+        monkeypatch.setattr(module, name, check_order(name, getattr(module, name)))
     target = staging / "daily_bin/qlib/features/000001.sz/close.day.bin"
     before = target.stat()
     monkeypatch.setattr(runner_module, "append_legacy_qlib_month", lambda *a, **k: pytest.fail("re-exported valid bins"))
@@ -462,6 +484,11 @@ def test_retry_reuses_real_native_bin_and_never_calls_writer_again(tmp_path, mon
     assert struct.unpack("<fff", target.read_bytes()) == (0, 10, 12)
     assert target.stat().st_mtime_ns == before.st_mtime_ns
     assert struct.unpack("<ff", (provider / "features/000001.sz/close.day.bin").read_bytes()) == (0, 10)
+    assert repairs == ["apply_prev_close_corrections", "apply_minute_corrections", "apply_retained_history"]
+    if retained_packaging:
+        saved = staging.parent / f".unfinished.{context.operation_id}.packaging.before-3"
+        assert (saved / "qe_dataset_manifest.json").read_bytes() == b"retained-private-manifest"
+        assert (saved / "reports/private.json").read_bytes() == b"retained-private-receipt"
 
 
 def test_partial_minute_failure_never_reexports_completed_daily(tmp_path, monkeypatch):
