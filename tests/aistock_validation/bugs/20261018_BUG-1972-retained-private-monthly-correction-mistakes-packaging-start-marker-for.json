@@ -5,6 +5,8 @@
     "backend/services/dataset_release/monthly_prev_close_repair.py",
     "backend/tests/dataset_release/test_monthly_build_resume.py",
     "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     "tests/aistock_validation/bugs/20261018_BUG-1972-retained-private-monthly-correction-mistakes-packaging-start-marker-for.json"
   ],
   "assigned_agent": null,
@@ -154,6 +156,7 @@
     "business_semantics_unchanged": "PASS: no PIT, source facts, units, model, strategy, pool, cutoff or LocalSIM state changed.",
     "no_extra_gate": "PASS: removes a packaging marker misused as publication approval; no new framework, supplier check, full-history scan or approval."
   },
+  "scope_expansion_reason": "Runtime probe routing includes monthly helpers in source_globs but lacks either repair helper in required_source_globs, rejecting the real supervised-worker target for this fix. Add only those two exact anchors and regression cases; retain process supervision and identity probes.",
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
