@@ -138,8 +138,8 @@ def apply_minute_corrections(resume, *, finalized, cas, plan):
         if materialization["minute_correction"]["authority_ref"] != binding["authority_ref"]:
             raise MonthlyBuildResumeError("minute correction authority changed")
         return finalized
-    if resume.record.get("finalization_started"):
-        raise MonthlyBuildResumeError("cannot amend publication after finalization")
+    # Failed packaging also leaves finalization_started=True. The private
+    # retained staging check above, not that retry marker, is the write boundary.
     root = resume.root
     provider = root / "minute_bin/qlib"
     positions = {v: i for i, v in enumerate(read_calendar(provider / "calendars/1min.txt"))}

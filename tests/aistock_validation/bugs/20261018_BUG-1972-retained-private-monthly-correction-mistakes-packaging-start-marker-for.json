@@ -4,6 +4,7 @@
     "backend/services/dataset_release/monthly_minute_repair.py",
     "backend/services/dataset_release/monthly_prev_close_repair.py",
     "backend/tests/dataset_release/test_monthly_build_resume.py",
+    "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
     "tests/aistock_validation/bugs/20261018_BUG-1972-retained-private-monthly-correction-mistakes-packaging-start-marker-for.json"
   ],
   "assigned_agent": null,
@@ -128,17 +129,30 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "fresh_process_evidence": [
+      "RED: six previously-started-packaging cases fail on both old marker guards; GREEN: 74 related tests pass, including unchanged prices, hardlinked predecessor isolation, idempotence, interrupted replacement recovery and published-root rejection.",
+      "Fresh-process formal correction on exact retained real bin bytes with finalization_started=true: 4 stock-days/960 real minutes, 48 feature files, 12 fields complete, source bytes unchanged. X:/AIstock_dataset_candidates/data_repair_staging/minute-july-full-audit-20261018-r1/real-packaging-retry-proof.json SHA256 396ad9cefdb42a6697a30c71883fae4fc353558941e57b577cc14b1f871f52a3. Actual candidate/profile/DB not written."
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
     "target_ids": [
       "worker-scheduler"
     ]
+  },
+  "design_compliance_review": {
+    "no_simplified_success": "PASS: fixes both marker-only rejections; formal runtime/candidate completion remains pending after source merge and restart.",
+    "no_silent_error": "PASS: private staging, exact binding, finite-value preservation, COW, crash recovery and immutable published paths remain enforced.",
+    "business_semantics_unchanged": "PASS: no PIT, source facts, units, model, strategy, pool, cutoff or LocalSIM state changed.",
+    "no_extra_gate": "PASS: removes a packaging marker misused as publication approval; no new framework, supplier check, full-history scan or approval."
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
