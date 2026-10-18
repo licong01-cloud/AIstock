@@ -139,20 +139,34 @@ def test_job_temp_missing_drive_and_cross_job_redirect_fail(tmp_path, monkeypatc
         ci_env.prepare_test_temp(_job_env())
 
 
-def test_main_publishes_temp_only_after_successful_preflight(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["verify", "bootstrap", "unwritable"])
+def test_main_publishes_temp_only_after_successful_preflight(tmp_path, monkeypatch, capsys, mode):
+    bootstrap = mode != "verify"
     monkeypatch.setattr(ci_env, "TEST_TEMP_ROOT", tmp_path / "ci-temp")
-    monkeypatch.setattr(ci_env, "verify_environment", lambda: {"status": "ready", "failure_reasons": []})
+    def verify():
+        assert not bootstrap, "bootstrap must not require activated Conda"
+        return {"status": "ready", "failure_reasons": []}
+    monkeypatch.setattr(ci_env, "verify_environment", verify)
     for key, value in _job_env().items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("AISTOCK_CI_TEST_TEMP_REQUIRED", "1")
     output = tmp_path / "github-env"
     monkeypatch.setenv("GITHUB_ENV", str(output))
-    assert ci_env.main() == 0
-    assert "PYTEST_DEBUG_TEMPROOT=" in output.read_text(encoding="utf-8")
-    prior = output.read_bytes()
-    monkeypatch.setenv("GITHUB_JOB", "../escape")
-    assert ci_env.main() == 1
-    assert output.read_bytes() == prior
+    if mode == "unwritable":
+        monkeypatch.setattr(ci_env, "prepare_test_temp", lambda _: (_ for _ in ()).throw(PermissionError("X unavailable")))
+    assert ci_env.main(prepare_temp_only=bootstrap) == (1 if mode == "unwritable" else 0)
+    receipt = json.loads(capsys.readouterr().out)
+    if bootstrap:
+        assert receipt["schema_version"] == "aistock_ci_temp_bootstrap_v1" and receipt["environment_verified"] is False
+    assert output.exists() is (mode != "unwritable")
+    if mode == "unwritable":
+        assert "X-only" in receipt["failure_reasons"][0]
+    else:
+        assert "PYTEST_DEBUG_TEMPROOT=" in output.read_text(encoding="utf-8")
+        prior = output.read_bytes()
+        monkeypatch.setenv("GITHUB_JOB", "../escape")
+        assert ci_env.main(prepare_temp_only=bootstrap) == 1
+        assert output.read_bytes() == prior
 
 
 def test_prebuilt_windows_environment_is_ready_without_installing(tmp_path: Path) -> None:
@@ -161,26 +175,6 @@ def test_prebuilt_windows_environment_is_ready_without_installing(tmp_path: Path
     assert payload["status"] == "ready"
     assert payload["environment_name"] == "AIstock-CI"
     assert payload["missing_modules"] == []
-
-
-@pytest.mark.parametrize("storage_available", [True, False])
-def test_temp_bootstrap_precedes_environment_verification_without_attesting_it(tmp_path, monkeypatch, capsys, storage_available):
-    monkeypatch.setattr(ci_env, "TEST_TEMP_ROOT", tmp_path / "ci-temp")
-    monkeypatch.setattr(ci_env, "verify_environment", lambda: pytest.fail("bootstrap must not require activated Conda"))
-    for key, value in _job_env().items():
-        monkeypatch.setenv(key, value)
-    output = tmp_path / "github-env"
-    monkeypatch.setenv("GITHUB_ENV", str(output))
-    if not storage_available:
-        monkeypatch.setattr(ci_env, "prepare_test_temp", lambda _: (_ for _ in ()).throw(PermissionError("X unavailable")))
-    assert ci_env.main(prepare_temp_only=True) == (0 if storage_available else 1)
-    receipt = json.loads(capsys.readouterr().out)
-    assert receipt["schema_version"] == "aistock_ci_temp_bootstrap_v1" and receipt["environment_verified"] is False
-    assert output.exists() is storage_available
-    if storage_available:
-        assert "PYTEST_DEBUG_TEMPROOT=" in output.read_text(encoding="utf-8")
-    else:
-        assert "X-only" in receipt["failure_reasons"][0]
 
 
 def test_environment_fingerprint_mismatch_fails_closed(tmp_path: Path) -> None:
