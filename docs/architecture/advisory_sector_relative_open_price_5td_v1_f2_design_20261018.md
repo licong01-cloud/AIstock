@@ -1,8 +1,8 @@
-# 行业相对开盘条件下的五交易日买价价值 F2 详细设计 v1.0
+# 行业相对开盘条件下的五交易日买价价值 F2 详细设计 v1.1
 
-日期：2026-10-18。候选：`GP5-SECTOR-RELATIVE-OPEN-1`。
+日期：2026-10-18；源码交付更新：2026-10-19。候选：`GP5-SECTOR-RELATIVE-OPEN-1`。
 
-状态：**DESIGN_ONLY / SOURCE_NOT_IMPLEMENTED / REAL_FIT_0 / NOT_ACTIVATED**。这是蓝图§16.0 P4的一项新信息问题设计，不是已有模型的升级、盈利承诺或生产参考价修复。源码、真实研究、经济确认与角色启用分别交付；本版不训练、不发布预测、不绑定生产。
+状态：**SOURCE_IMPLEMENTED / LOCAL_CONTRACTS_VERIFIED / REAL_FIT_0 / NOT_ACTIVATED**。精确五个源码叶及三个直接测试已实现，当前尚未启动真实研究；这是蓝图§16.0 P4的一项新信息问题，不是已有模型的升级、盈利承诺或生产参考价修复。源码PR/CI、真实研究、经济确认与角色启用分别交付；源码交付不冒充模型收益通过，不绑定生产。
 
 ## Background / Goal
 
@@ -83,7 +83,7 @@ H固定T..T+4五个原交易会话，不压缩停牌，不延期找好价。名�
 
 训练编码/支持只用train可见输入；label H用于监督/purge，不用于支持桶。既有g 2.5%～97.5%/100bps桶>=30独立stockD且>=5D、m 100bps桶>=5D定义保持，但由新共同快照重算。b支持为train min..max及100bps桶>=5D；w/q定义域[0,1]、不另搜索桶。两臂共同支持，缺上下文/洞为NO_ADVICE，不向matched或其它模型请求伪预测，不为撑覆盖放宽。
 
-新查询为`query_sector_relative_open_nodes_v1(..., price_cny, reference_cny, market_condition, peer_condition, condition_kind)`及`sector_relative_open_price_set_v1(..., legal_low_cny, legal_high_cny, tick_cny)`。接口为待实现声明，不是已有API。D调用必须显式`HYPOTHETICAL_T_OPEN`，T观察为`OBSERVED_T_OPEN_VALUATION`；无默认m=b=0/w=.5，结果保存来源/观察时点及`UNCALIBRATED / actual_fill=false / deployable=false`。
+新查询为`query_sector_relative_open_nodes_v1(..., price_cny, reference_cny, market_condition, peer_condition, condition_kind)`及`sector_relative_open_price_set_v1(..., legal_low_cny, legal_high_cny, tick_cny)`，已在本模块model叶实现为离线纯函数，不是HTTP API或已启用角色。D调用必须显式`HYPOTHETICAL_T_OPEN`，T观察为`OBSERVED_T_OPEN_VALUATION`；无默认m=b=0/w=.5，结果保存来源/观察时点及`UNCALIBRATED / actual_fill=false / deployable=false`。
 
 在调用方已知合法tick全集上以原128节点分块及上限枚举，按`E[R]>0`、`E[U]>0`导出可为空/多段的条件建议；`E[U]=E[R]-E[max(-R-800,0)]`沿既有Beta尾积分，不以`U(E[R])`假装期望效用。UNKNOWN洞不跨接、不得截断后称完整。行业条件固定且leave-one-out，不随候选假设价格改变，避免将候选自身开盘重复嵌入背景。集合不是任意限价干预、开盘分布覆盖或成交保证；不能用未来日内高低证明触价成交。
 
@@ -117,7 +117,7 @@ X盘放计划、临时脚本、测试及日志；新正式研究资产使用现�
 
 ## Implementation Plan / 精确文件范围
 
-设计阶段仅本文及蓝图两文件。本版**不声称下面实现或真实研究已完成**。后续按已有授权在独立任务中实现，修改范围先登记：
+设计阶段仅本文及蓝图两文件；本次按既有授权在独立树实现下面精确范围。当前**源码本地验证不等于真实研究或经济确认完成**，没有扩大公共模块范围：
 
 1. `backend/services/advisory_model_first/sector_relative_open_price_5td_contracts_v1.py`：独立schema/clock/params/政策/来源身份。
 2. `backend/services/advisory_model_first/sector_relative_open_price_5td_inputs_v1.py`：原名单和共同文件快照、D/T字段投影、PIT peer panel、leave-one-out与来源计数。
@@ -157,7 +157,7 @@ X盘放计划、临时脚本、测试及日志；新正式研究资产使用现�
 
 ## Production Gates
 
-本版仅两文档和X盘只读metadata脚本：`production_ddl_gate=noop`、`database_write=noop`、`dependency_change=noop`、`data_activation=noop`、`backend_restart_required=false`、`model_role_activation=false`。这些是现有操作状态，不是新门禁。没有修改QE/模拟盘/共享算法或启动正式实验；运行态/盈利没有因文档通过被验收。
+本版仅Advisory五源码叶、三直接测试和两文档：`production_ddl_gate=noop`、`database_write=noop`、`dependency_change=noop`、`data_activation=noop`、`backend_restart_required=false`、`model_role_activation=false`。这些是现有操作状态，不是新门禁。未修改QE/模拟盘/共享算法；合成测试拟合不计真实研究，真实研究尚0fit，未启动正式实验。源码通过不等于运行态或盈利验收。
 
 ## Design Acceptance Index
 
@@ -175,16 +175,20 @@ X盘放计划、临时脚本、测试及日志；新正式研究资产使用现�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-930 | 本文Goal及Contracts §1 | artifact: docs/architecture/advisory_market_open_hurdle_price_5td_v1_f2_design_20261011.md；本文查重反例 | DESIGN_SPECIFIED_ONLY | approved_by_user: 当前授权是下一详细设计；不把非恒等坐标称残差信息或收益 |
-| F-931 | 本文Contracts §1/2与计划inputs | artifact: docs/architecture/advisory_sector_relative_open_price_5td_v1_f2_design_20261018.md | DESIGN_SPECIFIED_ONLY | approved_by_user: PIT/数值/新label的实现与真实消费尚未执行，不能称已可用 |
-| F-932 | 本文Contracts §2/7与计划inputs/pipeline | artifact: X:/AIstock_temp/ADVISORY/business-next-20261018/sector_open_metadata_spike_v1.json | METADATA_ONLY_DESIGN_SPECIFIED | approved_by_user: 只五组件hash/表头/20D成员，未验305D价格、时钟、标签或大H5hash |
-| F-933 | 本文Contracts §3/4与计划contracts/model | artifact: docs/architecture/advisory_sector_relative_open_price_5td_v1_f2_design_20261018.md | DESIGN_SPECIFIED_ONLY | approved_by_user: 新六fit尚未发生，旧152+1不变；完整金融监督仍须真实prepare |
-| F-934 | 本文Contracts §4/5与计划model/evaluation | artifact: docs/architecture/advisory_sector_relative_open_price_5td_v1_f2_design_20261018.md | DESIGN_SPECIFIED_ONLY | approved_by_user: 新overlay仅研究协议，未改原生产或重评分旧结果 |
-| F-935 | 本文Contracts §6与计划evaluation | artifact: docs/architecture/advisory_sector_relative_open_price_5td_v1_f2_design_20261018.md | DESIGN_SPECIFIED_ONLY | approved_by_user: 0评价/确认/激活；阈值固定先于本新假设的Y读取，不外推NAV/成交 |
-| F-936 | 本文Implementation/Verification及设计审核记录 | artifact: docs/architecture/advisory_sector_relative_open_price_5td_v1_f2_design_20261018.md | DESIGN_SPECIFIED_ONLY | approved_by_user: 本版仅两文档；源码/CI合入/运行/经济独立交付，不新增包资格或生产操作 |
+| F-930 | backend/services/advisory_model_first/sector_relative_open_price_5td_contracts_v1.py；本文Goal | artifact: docs/architecture/advisory_market_open_hurdle_price_5td_v1_f2_design_20261011.md；单候选查重 | SOURCE_IMPLEMENTED | approved_by_user: 只检验新增T信息，不把非恒等称收益或独立OOS |
+| F-931 | backend/services/advisory_model_first/sector_relative_open_price_5td_inputs_v1.py | backend/tests/advisory_model_first/test_sector_relative_open_price_5td_inputs_v1.py | LOCAL_CONTRACTS_VERIFIED | approved_by_user: 真实305D消费尚未运行；原生估值、未来poison、PIT与合法停牌直接回归不能冒充真实覆盖 |
+| F-932 | backend/services/advisory_model_first/sector_relative_open_price_5td_inputs_v1.py；pipeline叶 | backend/tests/advisory_model_first/test_sector_relative_open_price_5td_inputs_v1.py | LOCAL_CONTRACTS_VERIFIED | approved_by_user: 新进程hash一次、角色批读、legacy限价slice身份明确；不升级原生receipt/vintage，真实prepare待运行 |
+| F-933 | backend/services/advisory_model_first/sector_relative_open_price_5td_model_v1.py；contracts叶 | backend/tests/advisory_model_first/test_sector_relative_open_price_5td_model_v1.py | LOCAL_CONTRACTS_VERIFIED | approved_by_user: 26/29维及JSON/native parity已测，真实新fit仍0、旧152+1不变，合成拟合非研究证据 |
+| F-934 | backend/services/advisory_model_first/sector_relative_open_price_5td_model_v1.py；evaluation叶 | backend/tests/advisory_model_first/test_sector_relative_open_price_5td_model_v1.py；test_sector_relative_open_price_5td_study_v1.py | LOCAL_CONTRACTS_VERIFIED | approved_by_user: 完整tick/UNKNOWN洞及全NO_ADVICE的Δ=0已测，未改生产或重评分旧结果 |
+| F-935 | backend/services/advisory_model_first/sector_relative_open_price_5td_evaluation_v1.py | backend/tests/advisory_model_first/test_sector_relative_open_price_5td_study_v1.py | LOCAL_CONTRACTS_VERIFIED | approved_by_user: 双primary和归因/日期支持已实现，0真实评价/确认/启用；group终值尾损非路径止损/NAV |
+| F-936 | backend/services/advisory_model_first/sector_relative_open_price_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_sector_relative_open_price_5td_study_v1.py | LOCAL_CONTRACTS_VERIFIED | approved_by_user: 三轮同窗口复核、源码合入/真实研究/经济分报；仅原子完成模型可恢复，STARTED不得隐式重拟合，不新增包门禁 |
 
 ## Design Review / 当前交付边界
 
 三轮本窗口复核（不是独立外审）：第一轮查重旧市场m/g、D-sector/分布/人口及共识，限定T新同业信息，不将非恒等当可学。第二轮修订无pre_close时不补价、共同文件快照、feature/金融先投影及分角色批读，避免借全量outcome reader提前解码H；区分q=0覆盖事实、空peer未知、合法缺报价及坏数。第三轮核对26/29维、最多6fit、E[U]尾积分、NO_ADVICE仅基线不变而非金融0、双配对分母与原152+1研究lineage；首轮F2发现缺回退/风险/生产状态章节，已补实体内容。最终F2、diff、引用及HEAD的CI/合入独立读回；数值可产和真实模型仍未验证。
 
-DESIGN-COMPLIANCE-001：①当前只交付完整详细设计及有界metadata检查，不宣称模型完成；②错误显式失败，缺信息/NO_ADVICE/现金与真未知分开；③原生产评分、排序、参考价、策略包及历史结果不改，新研究政策明示；④无新增包资格/审批/全覆盖前置，支持仅为该新模型定义，原包业务不受阻。后端/DB/DDL/依赖/数据激活/训练均未操作，本版无重启要求。
+2026-10-19源码三轮本窗口复核（非独立外审）：第一轮修正固定HDF块顺序假设、限价float32沿原生li精度、缺价/停牌原因与费用T入场坐标；第二轮验证26/29维、JSON/native预测、201tick跨块、D行业迁移/未来OHLC和factor隔离；第三轮核对NO_ADVICE原槽恒等、干预按动作不看事后盈亏、周报日期范围、source binding、预测先于Y及partial不重fit。所有发现均以直接RED→GREEN或源码读回修正，不加旧模型救参数。
+
+本地小矩阵21项通过（10.93秒），Ruff通过；L0的7个P2复杂度提示已逐项复核、0阻断：上限305D/30500原名单，模型只原Top5；读取按20D批次/角色复用，peer每D完整池、每候选leave-one-out向量计算而非两两全市场比较，金融标签按唯一stockD计算一次。训练仅26/29维六个固定拟合，评价按日期先配对、不做逐股票独立bootstrap；完整价格函数128节点分块且最多100000tick。没有大型资产复制、全量未来OHLC载入、无限全市场两两组合或新缓存平台。完整模块计划交PR CI执行，不重复本地广测。
+
+DESIGN-COMPLIANCE-001：①交付完整离线源码，不把单测/合成拟合称真实研究或可盈利；②错误显式失败，NO_ADVICE/现金/金融UNKNOWN分开；③原生产评分、排序、参考价、策略包及历史结果不改，新研究政策与费用明示；④无新增包资格/审批/全覆盖前置，支持仅为本模型定义。未操作后端/DB/DDL/依赖/数据激活或QE，真实研究待独立执行，本版无重启要求。
