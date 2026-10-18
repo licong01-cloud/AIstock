@@ -6,7 +6,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1971",
-  "closed_at": null,
+  "closed_at": "2026-10-18T05:15:05Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -74,8 +74,8 @@
   },
   "first_seen_at": "2026-10-18T05:05:46.527555Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9a0e085cec1b4aff418b26a9c2e4dc45bc047e83",
+  "fixed_at": "2026-10-18T05:15:05Z",
   "github_issue_number": 6299,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6299",
   "last_seen_at": "2026-10-18T05:05:46.527555Z",
@@ -83,6 +83,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6302",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -100,6 +101,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -109,7 +111,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1971",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "87673ef9600574a3",
+    "recorded_at": "2026-10-18T05:15:49.808499Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7a3247198228c4bdd3f3b3f14d30a65842b715a4",
+    "source_merge_commit": "9a0e085cec1b4aff418b26a9c2e4dc45bc047e83",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6302",
+    "validation_evidence": [
+      "validation-receipt: id=35387b8f678706e3 commit=7a3247198228c4bdd3f3b3f14d30a65842b715a4 kind=pytest plan=direct status=passed command=`pytest backend/tests/scripts/test_issue_flow.py::test_ci_frontend_quality_uses_verified_direct_entrypoints_without_bin_shims -q -p no:cacheprovider` result=`1 passed`",
+      "validation-receipt: id=d6f96d6034ca922b commit=7a3247198228c4bdd3f3b3f14d30a65842b715a4 kind=nox plan=validation_center_backend status=passed command=`python -m nox -s validation_center_backend` result=`291 passed; coverage line=79.82 branch=62.9; pytest elapsed=92.27 seconds`",
+      "validation-receipt: id=747a885d8116bd41 commit=7a3247198228c4bdd3f3b3f14d30a65842b715a4 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/tests/scripts/test_issue_flow.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "71036311636e2aeea73188ec58037ed0ddfa54dacc70c3346fde5084050c2158"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation.runner"
   ],
@@ -118,6 +143,11 @@
     "fingerprint": "ee1a5b41a72e7339da93e810",
     "source_event_id": "FE-20261018-ee1a5b41a72e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=35387b8f678706e3 commit=7a3247198228c4bdd3f3b3f14d30a65842b715a4 kind=pytest plan=direct status=passed command=`pytest backend/tests/scripts/test_issue_flow.py::test_ci_frontend_quality_uses_verified_direct_entrypoints_without_bin_shims -q -p no:cacheprovider` result=`1 passed`",
+    "validation-receipt: id=d6f96d6034ca922b commit=7a3247198228c4bdd3f3b3f14d30a65842b715a4 kind=nox plan=validation_center_backend status=passed command=`python -m nox -s validation_center_backend` result=`291 passed; coverage line=79.82 branch=62.9; pytest elapsed=92.27 seconds`",
+    "validation-receipt: id=747a885d8116bd41 commit=7a3247198228c4bdd3f3b3f14d30a65842b715a4 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/tests/scripts/test_issue_flow.py` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
