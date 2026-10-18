@@ -235,6 +235,9 @@ class MatureMonthlyPhysicalBuildRunner:
                 )
                 finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
                 resume.save("finalize-bins", finalized_ref, roots=("daily_bin", "minute_bin", "index_context", "factor_bundle"))
+            # A retry may retain obsolete packaging from an unpublished attempt.
+            # Preserve it before corrections; completed physical exports stay put.
+            resume.begin_finalization()
             from .monthly_quote_catalog import refresh_retained_quote_catalog
             from .monthly_prev_close_repair import apply_prev_close_corrections
             finalized = apply_prev_close_corrections(resume, finalized=finalized, cas=self.cas, plan=context.plan)
@@ -267,7 +270,6 @@ class MatureMonthlyPhysicalBuildRunner:
             )
         )
         validated_ref = self._seal_stage(validated, expected="validate")
-        resume.begin_finalization()
         return self.finalizer.execute(
             context=context,
             staging_root=staging_root,
