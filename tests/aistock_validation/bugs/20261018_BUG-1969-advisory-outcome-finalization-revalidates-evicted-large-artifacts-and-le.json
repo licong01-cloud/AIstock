@@ -30,14 +30,22 @@
   ],
   "expected": "有界操作级大对象缓存及轻量验证头可在淘汰后复用完整校验结论；重读字节SHA不符或身份/文件漂移继续失败；父操作使用同等只读验证缓存；所有金融产物保持不变。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/advisory_historical_range/outcome_file_inputs.py",
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261018_BUG-1969-advisory-outcome-finalization-revalidates-evicted-large-artifacts-and-le.json",
       "backend/services/advisory_historical_range/composition.py",
+      "backend/services/advisory_historical_range/outcome_file_inputs.py",
       "backend/tests/advisory_historical_range/test_outcome_optimization.py",
       "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261018_BUG-1969-advisory-outcome-finalization-revalidates-evicted-large-artifacts-and-le.json",
+      "backend/services/advisory_historical_range/composition.py",
+      "backend/services/advisory_historical_range/outcome_file_inputs.py",
+      "backend/tests/advisory_historical_range/test_outcome_optimization.py",
+      "docs/architecture/advisory_historical_outcome_file_batch_design_v1_20261017.md"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_historical_range/outcome_file_inputs.py",
@@ -130,7 +138,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "python X:/AIstock_temp/ADVISORY/outcomes-next-20261018/audit_existing_outcomes.py",
+  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_outcome_optimization.py::test_evicted_artifact_reuses_full_verification_and_preserves_mutable_load backend/tests/advisory_historical_range/test_outcome_optimization.py::test_parent_finalization_has_operation_local_verified_read_cache -q",
   "required_verification": [
     "l0",
     "advisory_historical_range_backend"
@@ -138,11 +146,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_0e93d579a57c0d4393e711f350b87b1f/operations?limit=50",
+    "fresh_process_evidence": [
+      "Fresh Python process: two core regressions RED then GREEN; eight new adversarial/parent-cache scenarios passed; one final related matrix 57 passed. No service restart, financial evaluation, publish, DDL/DML or production task execution.",
+      "X:/AIstock_temp/ADVISORY/outcomes-next-20261018/bug1969-native-source-smoke-v1.json -> READ_ONLY_NATIVE_CHAIN_PASS: real TCN final SUMMARY operation ahrop_ede34d946b8873c24638cdf909be8c3f, exact persisted attempt and result native validation; attempt 161.663s, result 0.818s; 20 large candidate artifacts each fully validated once. Two source file SHA256 values unchanged throughout. SELECT-only rollback for persisted attempt; validation repository forbids database access. No financial evaluator, artifact publish, mutation or runtime activation.",
+      "Same fresh-process smoke forces eviction of a 30,094,473-byte real candidate artifact: cold full validation 3.537s, three byte-SHA-verified reloads 2.887s; full payload and typed header equal native load. Cache and header weights remain within declared bounds. This is a read-only sample/closure measurement, not whole-run performance or return evidence.",
+      "X:/AIstock_temp/ADVISORY/outcomes-next-20261018/bug1969-native-source-smoke-v1.json -> READ_ONLY_NATIVE_CHAIN_PASS; exact TCN persisted attempt/result closure; no publish, evaluator, service control or DB writes; final two source fingerprints stable.",
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -B X:/AIstock_temp/ADVISORY/outcomes-next-20261018/verify_bug1969_native_chain.py -> READ_ONLY_NATIVE_CHAIN_PASS; report X:/AIstock_temp/ADVISORY/outcomes-next-20261018/bug1969-native-source-smoke-v1.json; native persisted receipt closure, source fingerprints stable, SELECT-only rollback, no financial evaluation or publish.",
+      "python -B X:/AIstock_temp/ADVISORY/outcomes-next-20261018/verify_bug1969_native_chain.py -> READ_ONLY_NATIVE_CHAIN_PASS; report X:/AIstock_temp/ADVISORY/outcomes-next-20261018/bug1969-native-source-smoke-v1.json; source fingerprints stable, SELECT-only rollback, no financial evaluation or publish",
+      "python -B X:/AIstock_temp/ADVISORY/outcomes-next-20261018/verify_bug1969_native_chain.py -> READ_ONLY_NATIVE_CHAIN_PASS; X:/AIstock_temp/ADVISORY/outcomes-next-20261018/bug1969-native-source-smoke-v1.json; stable exact source hashes, native receipt closure, SELECT-only rollback, no financial evaluation or publish"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

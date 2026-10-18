@@ -623,9 +623,10 @@ def build_explicit_historical_range_r5_runtime_factory(
 
     def runtime() -> HistoricalRangeRuntime:
         query = PostgresHistoricalRangeQueryRepository(conn_factory=conn_factory)
+        parent_artifact_store = HistoricalRangeOutcomeReadCache(root=artifact_root)
         repository = PostgresHistoricalRangeRepository(
             conn_factory=conn_factory,
-            artifact_store=artifact_store,
+            artifact_store=parent_artifact_store,
         )
         read_only_factory = historical_read_only_connection_factory(conn_factory)
         package_repository = StrategyPackageRepository(conn_factory=read_only_factory)
@@ -780,7 +781,7 @@ def build_explicit_historical_range_r5_runtime_factory(
             outcome_requests=outcome_requests,
             bridge_requests=bridge_requests,
             options_projector=lambda: _project_historical_range_options(conn_factory),
-            artifact_store=artifact_store,
+            artifact_store=parent_artifact_store,
             outcome_service_factory=outcome_service_factory,
         )
 
