@@ -3,12 +3,42 @@
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
+-- PostgreSQL names this multi-column inline CHECK independently of the column
+-- declaration. Discover it by its exact historical contract, never by name.
+DO $migration$
+DECLARE
+    capability_check text;
+    matches integer;
+    original_contract boolean;
+    expected_predicate constant text :=
+      '(((effect_status = ''DEVELOPMENT_RISK_EFFECT_REACHED_FORWARD_UNCONFIRMED''::text) '
+      || 'AND (risk_l2_capability_status = ''RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED''::text)) '
+      || 'OR ((effect_status <> ''DEVELOPMENT_RISK_EFFECT_REACHED_FORWARD_UNCONFIRMED''::text) '
+      || 'AND (risk_l2_capability_status = ''NOT_AVAILABLE''::text)))';
+BEGIN
+    -- Retain the ALTER's table lock while discovering and replacing the check.
+    LOCK TABLE hmm_risk.risk_l2_run IN ACCESS EXCLUSIVE MODE;
+    SELECT count(*), min(c.conname::text),
+           bool_and(c.convalidated AND pg_get_expr(c.conbin, c.conrelid) = expected_predicate)
+      INTO matches, capability_check, original_contract
+      FROM pg_constraint c
+     WHERE c.conrelid = 'hmm_risk.risk_l2_run'::regclass AND c.contype = 'c'
+       AND (SELECT array_agg(a.attname::text ORDER BY a.attname)
+              FROM pg_attribute a
+             WHERE a.attrelid = c.conrelid AND a.attnum = ANY(c.conkey))
+           = ARRAY['effect_status', 'risk_l2_capability_status'];
+    IF matches <> 1 OR original_contract IS DISTINCT FROM true THEN
+        RAISE EXCEPTION 'Expected exactly one validated original HMM risk capability constraint, found %', matches;
+    END IF;
+    EXECUTE format('ALTER TABLE hmm_risk.risk_l2_run DROP CONSTRAINT %I', capability_check);
+END
+$migration$;
+
 ALTER TABLE hmm_risk.risk_l2_run
     DROP CONSTRAINT risk_l2_run_validation_basis_check,
     DROP CONSTRAINT risk_l2_run_dates_check,
     DROP CONSTRAINT risk_l2_run_expected_row_count_check,
     DROP CONSTRAINT risk_l2_run_effect_status_check,
-    DROP CONSTRAINT risk_l2_run_risk_l2_capability_status_check,
     ADD CONSTRAINT risk_l2_run_dates_array_v2 CHECK
       (jsonb_typeof(dates) = 'array' AND jsonb_array_length(dates) > 0),
     ADD CONSTRAINT risk_l2_run_basis_contract_v2 CHECK (
