@@ -11,7 +11,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1972",
-  "closed_at": null,
+  "closed_at": "2026-10-18T14:35:01.826543Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -19,6 +19,12 @@
   ],
   "created_at": "2026-10-18T05:36:28.613521Z",
   "description": "Same durable September operation attempt275 failed in apply_minute_corrections line142; candidate remains unpublished and active v18 untouched.",
+  "design_compliance_review": {
+    "business_semantics_unchanged": "PASS: no PIT, source facts, units, model, strategy, pool, cutoff or LocalSIM state changed.",
+    "no_extra_gate": "PASS: removes a packaging marker misused as publication approval; no new framework, supplier check, full-history scan or approval.",
+    "no_silent_error": "PASS: private staging, exact binding, finite-value preservation, COW, crash recovery and immutable published paths remain enforced.",
+    "no_simplified_success": "PASS: fixes both marker-only rejections; formal runtime/candidate completion remains pending after source merge and restart."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -32,13 +38,26 @@
   ],
   "expected": "Bounded corrections work before retry packaging in private staging even after a failed packaging attempt; published writes remain forbidden.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261018_BUG-1972-retained-private-monthly-correction-mistakes-packaging-start-marker-for.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_minute_repair.py",
       "backend/services/dataset_release/monthly_prev_close_repair.py",
-      "backend/tests/dataset_release/test_monthly_build_resume.py"
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261018_BUG-1972-retained-private-monthly-correction-mistakes-packaging-start-marker-for.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_minute_repair.py",
@@ -110,8 +129,8 @@
   },
   "first_seen_at": "2026-10-18T05:36:28.613521Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "90f4c020c65d86e8fabecd69e2b54c3b64777a6a",
+  "fixed_at": "2026-10-18T05:51:12Z",
   "github_issue_number": 6307,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6307",
   "last_seen_at": "2026-10-18T05:36:28.613521Z",
@@ -119,6 +138,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6308",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -131,18 +151,42 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "fresh_process_evidence": [
       "RED: six previously-started-packaging cases fail on both old marker guards; GREEN: 74 related tests pass, including unchanged prices, hardlinked predecessor isolation, idempotence, interrupted replacement recovery and published-root rejection.",
       "Fresh-process formal correction on exact retained real bin bytes with finalization_started=true: 4 stock-days/960 real minutes, 48 feature files, 12 fields complete, source bytes unchanged. X:/AIstock_dataset_candidates/data_repair_staging/minute-july-full-audit-20261018-r1/real-packaging-retry-proof.json SHA256 396ad9cefdb42a6697a30c71883fae4fc353558941e57b577cc14b1f871f52a3. Actual candidate/profile/DB not written."
     ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_dataset_candidates/data_repair_staging/minute-july-full-audit-20261018-r1/post-restart-verify-BUG-1972.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1972",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "840fd562daa53ca5c6ae03964bf90547826655331028dd32e2d9a5e8c524174e",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "90f4c020c65d86e8fabecd69e2b54c3b64777a6a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-18T14:34:43.981684Z",
+      "mode": "read_only",
+      "observed_identity": "8112af6a7093d899a56f09ea472229a774642c24",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "7fdc393f3993e540f9b9a30482224bb534c78ef3a24bac31d34b09472cfaa178",
+      "receipt_sha256": "495cce5328f3b690bccc4a381811a404e3124f9e327873936aeea59fe12cd2ee",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "9866fd951fb829ca9fffbd261f9df16be4f86e71fa076a5cfddaeae1815be7b8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -150,16 +194,34 @@
       "worker-scheduler"
     ]
   },
-  "design_compliance_review": {
-    "no_simplified_success": "PASS: fixes both marker-only rejections; formal runtime/candidate completion remains pending after source merge and restart.",
-    "no_silent_error": "PASS: private staging, exact binding, finite-value preservation, COW, crash recovery and immutable published paths remain enforced.",
-    "business_semantics_unchanged": "PASS: no PIT, source facts, units, model, strategy, pool, cutoff or LocalSIM state changed.",
-    "no_extra_gate": "PASS: removes a packaging marker misused as publication approval; no new framework, supplier check, full-history scan or approval."
-  },
-  "scope_expansion_reason": "Runtime probe routing includes monthly helpers in source_globs but lacks either repair helper in required_source_globs, rejecting the real supervised-worker target for this fix. Add only those two exact anchors and regression cases; retain process supervision and identity probes.",
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "Runtime probe routing includes monthly helpers in source_globs but lacks either repair helper in required_source_globs, rejecting the real supervised-worker target for this fix. Add only those two exact anchors and regression cases; retain process supervision and identity probes.",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1972",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "72792bff6cd890cd",
+    "recorded_at": "2026-10-18T05:51:52.165980Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ee8560287426589eec79bdbb9384706d1ec75912",
+    "source_merge_commit": "90f4c020c65d86e8fabecd69e2b54c3b64777a6a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6308",
+    "validation_evidence": [
+      "validation-receipt: id=9485d5d7ea13bb29 commit=ee8560287426589eec79bdbb9384706d1ec75912 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed, 0 blocking findings; committed files validated by explicit diff range separately`",
+      "validation-receipt: id=61057747468c831c commit=ee8560287426589eec79bdbb9384706d1ec75912 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, 0 blocking findings`",
+      "validation-receipt: id=dc7ccfb20488baab commit=ee8560287426589eec79bdbb9384706d1ec75912 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_legacy_build_stage.py -q` result=`74 passed`",
+      "validation-receipt: id=7fca3deca7723288 commit=ee8560287426589eec79bdbb9384706d1ec75912 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k release_sources_select_their_own_process_probe -q` result=`15 passed`"
+    ],
+    "validation_evidence_digest": "0069ed8429c12808b61e3739190ec78848ced48852088bd38f603b3768970d51"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -168,6 +230,13 @@
     "fingerprint": "2e88c0059eaa8a69af45e8cf",
     "source_event_id": "FE-20261018-2e88c0059eaa"
   },
+  "validation_evidence": [
+    "validation-receipt: id=9485d5d7ea13bb29 commit=ee8560287426589eec79bdbb9384706d1ec75912 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed, 0 blocking findings; committed files validated by explicit diff range separately`",
+    "validation-receipt: id=61057747468c831c commit=ee8560287426589eec79bdbb9384706d1ec75912 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed, 0 blocking findings`",
+    "validation-receipt: id=dc7ccfb20488baab commit=ee8560287426589eec79bdbb9384706d1ec75912 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_legacy_build_stage.py -q` result=`74 passed`",
+    "validation-receipt: id=7fca3deca7723288 commit=ee8560287426589eec79bdbb9384706d1ec75912 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py -k release_sources_select_their_own_process_probe -q` result=`15 passed`",
+    "post-restart-verify --bug-id BUG-1972 --target worker-scheduler -> passed, runtime includes 90f4c020c65d86e8fabecd69e2b54c3b64777a6a and exactly one supervised worker"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
