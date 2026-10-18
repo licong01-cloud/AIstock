@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Preserve obsolete private packaging once before retained corrections, then rebuild packaging with repaired frozen facts; never repeat completed native exports.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1977-monthly-retry-preserves-obsolete-private-packaging-too-late-for-approved.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_mature_build_runner.py",
-      "backend/tests/dataset_release/test_monthly_mature_build_runner.py"
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1977-monthly-retry-preserves-obsolete-private-packaging-too-late-for-approved.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_mature_build_runner.py",
@@ -102,29 +108,33 @@
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "rtk pytest backend/tests/dataset_release/test_monthly_mature_build_runner.py::test_retry_reuses_real_native_bin_and_never_calls_writer_again -q",
-  "root_cause": "Retry ordering defect: begin_finalization ran after apply_retained_history, which correctly rejects a manifest-bearing root. Private packaging markers were mistaken for publication before the existing preservation step could run.",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
   "review_results": [
     "Round 1: reproduced retained-packaging regression RED (1 failed, 1 passed), moved only the existing preservation call, failed node GREEN.",
     "Round 2: verified completed native writer calls are prohibited on retry, exact daily bytes and mtime are unchanged, predecessor bytes are unchanged, and obsolete manifest/reports bytes are preserved at the existing operation/attempt-scoped destination.",
     "Round 3: reviewed first-attempt/no-packaging, interrupted-minute, repeated-finalization and published-root guards; final related matrix 134 passed, 1 skipped. No new gate, history scan, database write, publication or process control was introduced.",
     "DESIGN-COMPLIANCE-001: existing durable runner contract fully retained; no simplified success, placeholder/fallback facts, consumer/model changes or out-of-scope framework. Actual September continuation still requires the user-owned worker restart and the existing API resume; tests are not release readiness."
   ],
-  "required_verification": [
-    "l0",
-    "qlib_data_backend"
-  ],
   "risk_area": "bug",
+  "root_cause": "Retry ordering defect: begin_finalization ran after apply_retained_history, which correctly rejects a manifest-bearing root. Private packaging markers were mistaken for publication before the existing preservation step could run.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
       "Fresh Python/pytest process loaded tracked mature runner and actual native writer fixture: RED packaged retry failed; GREEN exact failed node passed; final runner/resume/sector mapping matrix 134 passed, 1 skipped. Retried exports remain byte/mtime identical and obsolete private packaging is preserved before all correction entrypoints. Published-root static repair rejection remains tested.",
       "python -m ruff check changed runner/tests -> All checks passed; python -m py_compile changed runner/tests -> passed; git diff --check -> passed. No production/source DB access, candidate/profile mutation or process control."
     ],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
