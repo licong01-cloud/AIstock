@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1730",
-  "closed_at": null,
+  "closed_at": "2026-10-17T13:21:48.523053Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-05T02:10:20.170847Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3aa559f71dd7056b3ccca38f7a09ef230df77273",
+  "fixed_at": "2026-10-05T02:16:18Z",
   "github_issue_number": 5472,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5472",
   "last_seen_at": "2026-10-05T02:10:20.170847Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5473",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -128,9 +129,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1730/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1730",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "d5dfe9b718d3a23de3da51d528eeabf83fab50bec97eae9bfb76acd819e74c9c",
+      "expected_identity": "3aa559f71dd7056b3ccca38f7a09ef230df77273",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T13:16:18.122806Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2dc5d2fe6aaf42aa6320ca0da85c39a1ed12a54c4d61fce74cc973dcab918bd1",
+      "receipt_sha256": "71d51f36e26f5ca4080aaceeae19587c37483d61d19a697342658b64cdf6e63e",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "aace9e8371143c33d7a6308e20bad0b5d02f005e95a12810c56706a85062d05e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -140,7 +164,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1730",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "17fcf92262b6db9a",
+    "recorded_at": "2026-10-05T02:16:50.718096Z",
+    "runtime_contract_digest": "fbc628dc15c3ba7e3606d62e70600408eb554abdff0145bcf5ea3ab94fa8f2d8",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b207e8f1fadbd621c3817d8002d75e6e0bef02bb",
+    "source_merge_commit": "3aa559f71dd7056b3ccca38f7a09ef230df77273",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5473",
+    "validation_evidence": [
+      "AIstock pytest 19 passed; L0 and exact-head CI SUCCESS; runtime unchanged"
+    ],
+    "validation_evidence_digest": "0f16bcd90ae0a996856f8d4286bb4ecdc26409615c6c16f2e680e6489bb69b5e"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -149,6 +194,10 @@
     "fingerprint": "118407d105498e0ba07b95d2",
     "source_event_id": "FE-20261005-118407d10549"
   },
+  "validation_evidence": [
+    "AIstock pytest 19 passed; L0 and exact-head CI SUCCESS; runtime unchanged",
+    "Current runtime identity and business-smoke verified; source validation retained by receipt 17fcf92262b6db9a"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

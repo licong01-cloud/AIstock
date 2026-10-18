@@ -1181,7 +1181,13 @@ class StrategyPackageSelectionArtifactService:
         cutoff_date: date | None = None,
         historical_read_only: bool = False,
     ) -> list[SelectionScoreArtifact]:
-        if data_source != "DB_HISTORICAL":
+        if data_source == "DATASET_FILES":
+            file_provider, _ = self._resolve_live_provider(runtime_config)
+            require_identity = getattr(file_provider, "require_frozen_file_input_identity", None)
+            if not callable(require_identity) or not require_identity():
+                raise DataUnavailableError("file inference requires an explicitly bound file-capable provider",
+                    context={"reason_code": "FROZEN_FILE_INFERENCE_PROVIDER_REQUIRED", "package_id": package_id})
+        elif data_source != "DB_HISTORICAL":
             raise DataUnavailableError(
                 "live StrategyPackage factor inference currently requires DB_HISTORICAL daily data",
                 context={"package_id": package_id, "data_source": data_source},

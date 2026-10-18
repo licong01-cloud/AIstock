@@ -626,34 +626,43 @@ def apply_retained_history(resume, *, context, compiled, prepare, cas, profile):
         if prior["projection_sha256"] != projection.sha256:
             raise MonthlyBuildResumeError("retained industry projection differs from frozen authority")
         if prior.get("industry_context_contract") == CONTRACT:
+            refresh_quote_context = False
             source = load_frozen_industry_quote_source(cas, context_plan=context.plan,
                 build_inputs=compiled.physical_plan.get("build_inputs", {}), projection=projection)
             if source is not None and not prior.get("historical_projection_reused"):
                 expected = hashlib.sha256(canonical_json_bytes(source)).hexdigest()
                 if prior.get("context_identity", {}).get("quote_source_sha256") != expected:
-                    raise MonthlyBuildResumeError("retained industry context differs from frozen quote source")
-            if prior.get("static_sector_join_contract") == STATIC_SECTOR_CONTRACT:
+                    binding = context.plan.get("monthly_industry_quote_source") or {}
+                    previous = prior.get("context_identity", {}).get("quote_source_sha256")
+                    if (not isinstance(previous, str) or len(previous) != 64 or
+                            previous not in {binding.get("supersedes_quote_source_sha256"), binding.get("rebuild_from_quote_source_sha256")}):
+                        raise MonthlyBuildResumeError("retained industry context differs from frozen quote source")
+                    # Explicit additive SOURCE refresh only: rematerialize the
+                    # two industry-bearing files, never completed price exports.
+                    refresh_quote_context = True
+            if not refresh_quote_context and prior.get("static_sector_join_contract") == STATIC_SECTOR_CONTRACT:
                 return prepare
             # Upgrade the old writer's month only. Retain the already verified
             # historical projection, sector H5, source snapshot and price bins.
-            nested = copy.deepcopy(load_sealed_build_json(cas, prepare["prepare_receipt_ref"]))
-            factor = copy.deepcopy(load_sealed_build_json(cas, nested["refs"]["factor_receipt"]))
-            entries = factor_file_receipts(factor)
-            from .monthly_build_resume import _signature
-            for name in ("sector_data.h5", "static_factors.parquet"):
-                if entries[name].get("target_signature") != _signature(resume.root / "factor_bundle" / name):
-                    raise MonthlyBuildResumeError("static sector repair lost its pinned inputs")
-            cutoff = date.fromisoformat(context.plan["target_cutoff"])
-            after = (cutoff.replace(day=1) - date.resolution).isoformat()
-            identity = {"contract": STATIC_SECTOR_CONTRACT, "after": after,
-                        "sector_sha256": entries["sector_data.h5"]["sha256"],
-                        "static_sha256": entries["static_factors.parquet"]["sha256"]}
-            tail = _materialize_static_tail(resume.root, projection=projection, context_identity=identity,
-                after=after, checkpoint=context.checkpoint, progress=context.progress)
-            result = {**prior, "files": tail["files"], "static_sector_join_contract": STATIC_SECTOR_CONTRACT,
-                      "static_sector_tail": {key: value for key, value in tail.items() if key != "files"}}
-            return _commit_history_result(resume, result=result, projection=projection, nested=nested,
-                                          factor=factor, entries=entries, prepare=prepare, cas=cas)
+            if not refresh_quote_context:
+                nested = copy.deepcopy(load_sealed_build_json(cas, prepare["prepare_receipt_ref"]))
+                factor = copy.deepcopy(load_sealed_build_json(cas, nested["refs"]["factor_receipt"]))
+                entries = factor_file_receipts(factor)
+                from .monthly_build_resume import _signature
+                for name in ("sector_data.h5", "static_factors.parquet"):
+                    if entries[name].get("target_signature") != _signature(resume.root / "factor_bundle" / name):
+                        raise MonthlyBuildResumeError("static sector repair lost its pinned inputs")
+                cutoff = date.fromisoformat(context.plan["target_cutoff"])
+                after = (cutoff.replace(day=1) - date.resolution).isoformat()
+                identity = {"contract": STATIC_SECTOR_CONTRACT, "after": after,
+                            "sector_sha256": entries["sector_data.h5"]["sha256"],
+                            "static_sha256": entries["static_factors.parquet"]["sha256"]}
+                tail = _materialize_static_tail(resume.root, projection=projection, context_identity=identity,
+                    after=after, checkpoint=context.checkpoint, progress=context.progress)
+                result = {**prior, "files": tail["files"], "static_sector_join_contract": STATIC_SECTOR_CONTRACT,
+                          "static_sector_tail": {key: value for key, value in tail.items() if key != "files"}}
+                return _commit_history_result(resume, result=result, projection=projection, nested=nested,
+                                              factor=factor, entries=entries, prepare=prepare, cas=cas)
         # An earlier verified ID-only repair is retained as an input. Replace
         # only sector/static context under new pins, never re-export prices.
     if resume.path is None:
