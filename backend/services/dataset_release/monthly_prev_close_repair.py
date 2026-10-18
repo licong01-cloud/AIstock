@@ -24,7 +24,8 @@ SCHEMA = "aistock_monthly_prev_close_correction_v1"
 BINDING = "monthly_prev_close_repairs"
 SUPPLEMENT_KEYS = {BINDING, BINDING + "_ref", "monthly_industry_history", "monthly_industry_history_ref",
                    "monthly_industry_quote_source", "monthly_industry_quote_source_ref",
-                   "monthly_suspension_authority", "monthly_suspension_authority_ref"}
+                   "monthly_suspension_authority", "monthly_suspension_authority_ref",
+                   "monthly_minute_repairs", "monthly_minute_repairs_ref"}
 
 
 def capture_approved_corrections(inputs, *, repair_root: Path, cutoff: date):
@@ -135,36 +136,34 @@ def _allowed(relative):
             or re.fullmatch(r"daily_bin/qlib/features/\d{6}\.(sz|sh)/prev_close\.day\.bin|minute_bin/qlib/features/\d{6}\.(sz|sh)/prev_close\.1min\.bin", relative) is not None)
 
 
-def recover_prev_close(*, root, journal, record, cas):
-    intent = _pending(root)
+def recover_prev_close(*, root, journal, record, cas, schema=SCHEMA, intent_path=None, allowed_path=_allowed):
+    intent = intent_path if intent_path is not None else _pending(root)
     _plain(intent)
     if not intent.exists():
         return record
-    if intent.stat().st_size > 8 * 1024 * 1024:
-        raise MonthlyBuildResumeError("prev_close commit intent is oversized")
     commit = json.loads(intent.read_bytes())
-    if (commit.get("schema_version") != SCHEMA or commit.get("binding_digest") != record["binding_digest"]
+    if (commit.get("schema_version") != schema or commit.get("binding_digest") != record["binding_digest"]
             or record["steps"] not in (commit["original_steps"], commit["target_steps"])
-            or not commit.get("files") or not all(_allowed(p) for p in commit["files"])):
+            or not commit.get("files") or not all(allowed_path(p) for p in commit["files"])):
         raise MonthlyBuildResumeError("prev_close commit identity differs")
-    payloads = {}
     for relative, entry in commit["files"].items():
         path = root / relative
         signature = _signature(path)
         raw = path.read_bytes()
-        target = cas.get_bytes(cas.validate_reference_metadata(entry["target_ref"]))
+        cas.get_bytes(cas.validate_reference_metadata(entry["target_ref"]))
         digest = hashlib.sha256(raw).hexdigest()
         if digest != entry["target_ref"]["sha256"] and (
                 digest != entry["original_sha256"] or list(signature) != entry["original_signature"]):
             raise MonthlyBuildResumeError("prev_close commit input changed")
         if _signature(path) != signature:
             raise MonthlyBuildResumeError("prev_close input changed during read")
-        payloads[relative] = target
     result = copy.deepcopy(record)
-    for relative, payload in payloads.items():
+    # One feature file at a time; a historical repair may touch thousands of
+    # files, but must not retain all their payloads in process memory.
+    for relative, entry in commit["files"].items():
+        payload = cas.get_bytes(cas.validate_reference_metadata(entry["target_ref"]))
         path = root / relative
         raw = path.read_bytes()
-        entry = commit["files"][relative]
         if raw != payload:
             if (hashlib.sha256(raw).hexdigest() != entry["original_sha256"]
                     or list(_signature(path)) != entry["original_signature"]):
@@ -301,6 +300,14 @@ def correction_pins(materialization, *, provider, cas):
         before = _signature(path)
         raw = path.read_bytes()
         ref = entry["target_ref"]
+        # A subsequent bounded minute correction may fill NaNs in this file.
+        # Its original SHA must close exactly on this previous correction.
+        later = next((r for r in materialization.get("minute_correction", {}).get("files", [])
+                      if r["relative_path"] == relative), None)
+        if later is not None:
+            if later["original_sha256"] != ref["sha256"]:
+                raise MonthlyBuildResumeError("minute/prev_close correction lineage differs")
+            ref = later["target_ref"]
         if hashlib.sha256(raw).hexdigest() != ref["sha256"] or len(raw) != ref["size"] or _signature(path) != before:
             raise MonthlyBuildResumeError("prev_close corrected bytes differ")
         result[path] = {"target_sha256": ref["sha256"], "target_size": ref["size"], "target_signature": list(before)}
