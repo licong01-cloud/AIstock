@@ -28,12 +28,18 @@
   ],
   "expected": "Migration accepts original PostgreSQL-generated names by validating the precise historical capability contract, rejects ambiguity or foreign contracts, and supports transactional rollback with both original historical rows and 262 date-inference rows unchanged after rollback.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/db/migrations/extend_hmm_risk_risk_l2_date_inference_20261018.sql",
+      "backend/tests/hmm_risk/test_risk_l2_date_product.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1974-p1-hmm-risk-l2-date-migration-assumes-an-invalid-generated-constraint-na.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/db/migrations/extend_hmm_risk_risk_l2_date_inference_20261018.sql",
-      "backend/tests/hmm_risk/test_risk_l2_date_product.py"
+      "backend/tests/hmm_risk/test_risk_l2_date_product.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1974-p1-hmm-risk-l2-date-migration-assumes-an-invalid-generated-constraint-na.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/db/migrations/extend_hmm_risk_risk_l2_date_inference_20261018.sql",
@@ -92,6 +98,7 @@
   "first_seen_at": "2026-10-18T15:52:17.489872Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "Resolve exactly one validated historical capability CHECK by referenced columns and exact PostgreSQL-deparsed predicate under the existing ALTER table lock, then quote its actual name. Missing, ambiguous, unvalidated or foreign contracts abort the transaction. No model, service or dataset behavior changes.",
   "fixed_at": null,
   "github_issue_number": 6315,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6315",
@@ -105,25 +112,26 @@
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "AISTOCK_HMM_DEV_ROLLBACK_AUTHORIZED=1 python -m pytest backend/tests/hmm_risk/test_risk_l2_date_product.py::test_existing_dev_date_migration_preserves_contract_and_rolls_back[original] -q --no-cov",
-  "root_cause": "The original multi-column inline capability CHECK is named risk_l2_run_check1 by PostgreSQL, not risk_l2_run_risk_l2_capability_status_check. Prior MemoryDB tests did not execute the migration against PostgreSQL.",
-  "fix_summary": "Resolve exactly one validated historical capability CHECK by referenced columns and exact PostgreSQL-deparsed predicate under the existing ALTER table lock, then quote its actual name. Missing, ambiguous, unvalidated or foreign contracts abort the transaction. No model, service or dataset behavior changes.",
-  "review_results": [
-    "Author review round 1: removed whitespace normalization from predicate comparison so distinct SQL text literals cannot collapse to the accepted historical contract.",
-    "Author review round 2: verified exact HMM-only SQL scope, transaction ownership, no commit path, historical 424-day/55544-row branch and no-outcome date branch remain unchanged; no blocking findings."
-  ],
   "required_verification": [
     "l0",
     "validation_catalog_integrity",
     "hmm_risk_pr_slice"
   ],
+  "review_results": [
+    "Author review round 1: removed whitespace normalization from predicate comparison so distinct SQL text literals cannot collapse to the accepted historical contract.",
+    "Author review round 2: verified exact HMM-only SQL scope, transaction ownership, no commit path, historical 424-day/55544-row branch and no-outcome date branch remain unchanged; no blocking findings."
+  ],
   "risk_area": "bug",
+  "root_cause": "The original multi-column inline capability CHECK is named risk_l2_run_check1 by PostgreSQL, not risk_l2_run_risk_l2_capability_status_check. Prior MemoryDB tests did not execute the migration against PostgreSQL.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "database",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
