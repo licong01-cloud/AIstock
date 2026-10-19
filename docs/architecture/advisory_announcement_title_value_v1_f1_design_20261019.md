@@ -1,5 +1,7 @@
 # Advisory 公告标题增量价值单一研究 F1 详细设计 v1.0
 
+> 2026-10-19用户后续决定：**DEFERRED_BY_USER / 待执行**。保留本设计及基础数据需求，不再作为当前主线的前置或继续寻找/补采任务；输入未验证、源码与研究仍未开始。先执行[现有输入的独立排序研究](advisory_group_centered_rank_5td_v1_f1_design_20261019.md)。恢复公告使用时再按本文核对文件/版本，不自动降级或启动。
+
 日期2026-10-19；当前交付为设计，**没有源码实现、数据就绪、训练或收益结果**。状态`DESIGN_DEFINED_INPUT_UNVERIFIED`。唯一假设`ANNOUNCEMENT_TITLE_VALUE_1`；`RISK_MANAGED_ADVISORY / EXPLORATORY_SCREEN / NAVIGATION_ONLY`。源文件可用性未证明，不等于数据库没有公告；不以此限制原策略包使用或日频荐股。
 
 ## Background / 业务问题与依据
