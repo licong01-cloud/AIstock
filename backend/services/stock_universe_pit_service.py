@@ -18,6 +18,7 @@ from .canonical_equity_pit import (
     CANONICAL_PIT_SCOPE,
     CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT,
     CANONICAL_PIT_UNIVERSE_KEY,
+    PREVIOUS_CANONICAL_PIT_UNIVERSE_KEY,
     CanonicalPitAuthorityResolver,
     PitConsumerBinding,
     require_canonical_consumer_binding,
@@ -1246,7 +1247,7 @@ class StockUniversePitService:
                 )
             universe_key = authority_binding.universe_key
             consumer = consumer or "stock_universe"
-        canonical_query = universe_key == CANONICAL_PIT_UNIVERSE_KEY
+        canonical_query = universe_key in {CANONICAL_PIT_UNIVERSE_KEY, PREVIOUS_CANONICAL_PIT_UNIVERSE_KEY}
         if canonical_query:
             if authority_binding is None:
                 raise StockUniversePitError("canonical PIT query requires a resolver-issued authority_binding")

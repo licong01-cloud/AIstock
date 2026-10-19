@@ -38,8 +38,9 @@ from backend.services.canonical_equity_pit import (
     CANONICAL_PIT_RULE_VERSION,
     CANONICAL_PIT_SCOPE,
     CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT,
-    CANONICAL_PIT_UNIVERSE_KEY,
     canonical_rule_parameters_digest,
+    canonical_rolling_key,
+    PREVIOUS_CANONICAL_PIT_RULE_VERSION,
 )
 
 
@@ -912,9 +913,16 @@ def audit_canonical_terminal_evidence(
     announcement_events: Iterable[EventRow],
     start_date: dt.date | None = None,
     end_date: dt.date | None = None,
+    rule_version: str = CANONICAL_PIT_RULE_VERSION,
 ) -> dict[str, Any]:
-    """Require terminal evidence only for securities exposed in the dataset window."""
+    """Accept confirmed lifecycle facts in v3; preserve announcement-only v2.
 
+    A lifecycle fact acts on delist_date, never on an invented announcement
+    date. Paused listings with no effective boundary still need evidence.
+    """
+
+    canonical_rolling_key(rule_version)
+    stocks = list(stocks)
     terminal_codes = {
         event.ts_code
         for event in announcement_events
@@ -940,12 +948,21 @@ def audit_canonical_terminal_evidence(
             and (end_date is None or (stock.delist_date is not None and stock.delist_date <= end_date))
         )
     )
-    missing = sorted(set(required).difference(terminal_codes))
+    lifecycle_codes = {
+        stock.ts_code for stock in stocks
+        if str(stock.list_status or "").upper() == "D" and stock.delist_date is not None
+        and stock.list_date is not None and stock.list_date <= stock.delist_date
+        and (end_date is None or stock.delist_date <= end_date)
+    } if rule_version != PREVIOUS_CANONICAL_PIT_RULE_VERSION else set()
+    missing = sorted(set(required).difference(terminal_codes | lifecycle_codes))
     receipt = {
         "required_terminal_security_count": len(required),
         "pre_window_terminal_security_count": len(pre_window),
         "pre_window_terminal_security_codes": pre_window,
         "announcement_terminal_evidence_count": len(set(required).intersection(terminal_codes)),
+        "lifecycle_terminal_evidence_count": len(set(required).intersection(lifecycle_codes)),
+        "lifecycle_only_terminal_security_codes": sorted(set(required).intersection(lifecycle_codes).difference(terminal_codes)),
+        "rule_version": rule_version,
         "missing_terminal_evidence_count": len(missing),
         "missing_terminal_evidence_codes": missing,
         "status": "ready" if not missing else "blocked",
@@ -1550,10 +1567,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         raise RuntimeError(f"unsupported --ipo-filter-unit: {ipo_filter_unit}")
     if scope == CANONICAL_PIT_SCOPE:
         canonical_errors = []
-        if args.universe_key != CANONICAL_PIT_UNIVERSE_KEY:
+        if args.universe_key != canonical_rolling_key(rule_version):
             canonical_errors.append("universe_key")
-        if rule_version != CANONICAL_PIT_RULE_VERSION:
-            canonical_errors.append("rule_version")
         if ipo_filter_unit != "trading_sessions" or args.ipo_filter_days != CANONICAL_PIT_IPO_TRADING_SESSIONS:
             canonical_errors.append("ipo_warmup")
         if canonical_errors:
@@ -1608,6 +1623,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 announcement_events=st_events + confirmed_delisting_events,
                 start_date=start_date,
                 end_date=end_date,
+                rule_version=rule_version,
             )
             if canonical_scope
             else None
@@ -1671,7 +1687,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "write_mode": write_mode,
             "incremental_from": incremental_from.isoformat() if incremental_from else None,
             "st_pit": True,
-            "rule_parameters_digest": canonical_rule_parameters_digest() if canonical_scope else None,
+            "rule_parameters_digest": canonical_rule_parameters_digest(rule_version) if canonical_scope else None,
             "exception_ledger_status": exception_ledger["status"] if exception_ledger else None,
             "exception_ledger": exception_ledger,
             "st_snapshot_continuity": st_snapshot_continuity,

@@ -1,6 +1,11 @@
 {
   "actual": "PIT migration audit requires a full data release; physical provider pins are treated as policy identities; live default is legacy generation zero.",
   "allowed_write_scope": [
+    "backend/services/canonical_pit_inference_boundary.py",
+    "configs/datasets/qe_backtest_monthly_v2.yaml",
+    "scripts/build_stock_universe_pit_spans.py",
+    "backend/tests/test_stock_universe_pit_spans.py",
+    "backend/services/dataset_release/pit.py",
     "backend/tests/paper_trading_v2/test_auto_run.py",
     "backend/tests/paper_trading_v2/test_capture_field_wiring.py",
     "backend/tests/paper_trading_v2/test_day_runner.py",
@@ -33,7 +38,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-19T14:29:10.083761Z",
-  "description": "PIT migration audit requires a full data release; physical provider pins are treated as policy identities; live default is legacy generation zero.",
+  "description": "PIT migration audit requires a full data release; physical provider pins are treated as policy identities; live default is legacy generation zero. Production migration additionally exposed mandatory announcement classification despite confirmed stock_basic D/delist_date. User approved a separately versioned lifecycle-fact terminal fallback, preserving v2 and all immutable bindings; no announcement/event-fact fabrication or extra production fact writes.",
   "design_compliance_001": {
     "item_by_item": "F-015..F-019 implemented and verified; F2 design validator passed. Complete factual exporter neutralization explicitly remains outside this BUG.",
     "no_fake_completion": "Production default remains legacy generation zero; recent coverage and forward-only persisted-profile migration are pending, not reported globally active.",

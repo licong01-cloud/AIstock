@@ -67,6 +67,29 @@ def test_binding_pairs_one_fact_release_with_independent_pit_versions():
                                calendar=first.payload["trading_calendar"], source_commit="c" * 40)
 
 
+def test_previous_v2_release_remains_readable_without_rehashing(tmp_path):
+    current = version()
+    old_snapshot = replace(current.snapshot, universe_key=policy.PREVIOUS_CANONICAL_PIT_UNIVERSE_KEY,
+                           rule_version=policy.PREVIOUS_CANONICAL_PIT_RULE_VERSION,
+                           parameter_hash=policy.canonical_rule_parameters_digest(policy.PREVIOUS_CANONICAL_PIT_RULE_VERSION))
+    # Rebuild snapshot identity using the same frozen rows, not a relabelled digest.
+    old_snapshot = freeze_pit_snapshot(
+        [("000001.SZ", date(2026, 7, 1), date(2026, 8, 31), "IPO_WARMUP", None)],
+        universe_key=old_snapshot.universe_key, rule_version=old_snapshot.rule_version,
+        scope_start=old_snapshot.scope_start, cutoff=old_snapshot.cutoff,
+        state_identity=old_snapshot.state_identity, source_fingerprint_sha256=old_snapshot.source_fingerprint_sha256,
+        parameter_hash=old_snapshot.parameter_hash,
+    )
+    old = releases.build_release(old_snapshot, calendar=current.payload["trading_calendar"], source_commit="c" * 40)
+    path = releases.publish_release(old, tmp_path)
+    before = path.read_bytes()
+    assert releases.read_release(path).digest == old.digest
+    pair = releases.bind_fact_release(old, dataset_manifest_sha256="f" * 64,
+                                     start=date(2026, 7, 1), cutoff=date(2026, 8, 31))
+    assert pair["pit_binding"]["rule_version"] == policy.PREVIOUS_CANONICAL_PIT_RULE_VERSION
+    assert path.read_bytes() == before
+
+
 def test_read_rejects_non_version_filename(tmp_path):
     first = version()
     path = tmp_path / "active.json"

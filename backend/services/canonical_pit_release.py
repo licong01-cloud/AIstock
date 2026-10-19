@@ -57,7 +57,7 @@ class PitRelease:
 def build_release(snapshot: FrozenPitSnapshot, *, calendar, source_commit: str,
                   predecessor_digest: str | None = None) -> PitRelease:
     require_canonical_source_snapshot(snapshot)
-    if snapshot.parameter_hash != canonical_rule_parameters_digest():
+    if snapshot.parameter_hash != canonical_rule_parameters_digest(snapshot.rule_version):
         raise ValueError("independent PIT snapshot rule parameters differ")
     days = [date.fromisoformat(str(value)).isoformat() for value in calendar]
     if not days or days != sorted(set(days)) or days[0] < snapshot.scope_start.isoformat() or days[-1] > snapshot.cutoff.isoformat():
@@ -67,7 +67,7 @@ def build_release(snapshot: FrozenPitSnapshot, *, calendar, source_commit: str,
     if predecessor_digest is not None:
         _sha(predecessor_digest)
     payload = {"schema_version": SCHEMA, "authority_id": CANONICAL_PIT_AUTHORITY_ID,
-               "rule_parameters_digest": canonical_rule_parameters_digest(),
+               "rule_parameters_digest": canonical_rule_parameters_digest(snapshot.rule_version),
                "snapshot": snapshot.as_dict(), "trading_calendar": days,
                "calendar_sha256": _digest(days), "source_commit": source_commit,
                "predecessor_digest": predecessor_digest}
@@ -156,7 +156,7 @@ def bind_fact_release(release: PitRelease, *, dataset_manifest_sha256: str,
     )
     binding = DatasetPitBinding(
         authority_id=frozen.authority_id, authority_status=str(frozen.authority_status), scope="full",
-        rolling_universe_key=CANONICAL_PIT_UNIVERSE_KEY, frozen_universe_key=frozen.universe_key,
+        rolling_universe_key=release.snapshot.universe_key, frozen_universe_key=frozen.universe_key,
         rule_version=frozen.rule_version, rule_parameters_digest=frozen.rule_parameters_digest,
         cutoff=frozen.cutoff, rolling_cutoff_spans_sha256=frozen.snapshot_digest,
         frozen_snapshot_digest=frozen.snapshot_digest, release_id=frozen.release_id,

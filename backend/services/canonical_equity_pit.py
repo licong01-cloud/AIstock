@@ -21,8 +21,10 @@ from ..db.pg_pool import get_conn
 
 
 CANONICAL_PIT_AUTHORITY_ID = "aistock_equity_pit_canonical"
-CANONICAL_PIT_UNIVERSE_KEY = "aistock_equity_pit_canonical_v2"
-CANONICAL_PIT_RULE_VERSION = "shsz_a_252td_st_delist_asof_v2"
+CANONICAL_PIT_UNIVERSE_KEY = "aistock_equity_pit_canonical_v3"
+CANONICAL_PIT_RULE_VERSION = "shsz_a_252td_st_delist_asof_v3"
+PREVIOUS_CANONICAL_PIT_RULE_VERSION = "shsz_a_252td_st_delist_asof_v2"
+PREVIOUS_CANONICAL_PIT_UNIVERSE_KEY = "aistock_equity_pit_canonical_v2"
 CANONICAL_PIT_SCOPE = "canonical_all_listed"
 CANONICAL_PIT_IPO_TRADING_SESSIONS = 252
 CANONICAL_PIT_SNAPSHOT_PREFIX = "aistock_equity_pit_snapshot_"
@@ -62,7 +64,7 @@ CANONICAL_RULE_PARAMETERS: Mapping[str, Any] = {
     "excluded_boards": ["B_SHARE", "BSE"],
     "ipo_warmup": {"unit": "exchange_trading_session", "count": CANONICAL_PIT_IPO_TRADING_SESSIONS},
     "st_knowledge_policy": "announcement_asof_effective_date_confirmed_v2",
-    "terminal_policy": "announcement_asof_then_delist_date_v2",
+    "terminal_policy": "announcement_asof_or_confirmed_delist_date_v3",
     "data_availability_changes_membership": False,
     "execution_tradability_changes_membership": False,
 }
@@ -79,9 +81,21 @@ LEGACY_RULE_PARAMETERS: Mapping[str, Any] = {
 }
 
 
-def canonical_rule_parameters_digest() -> str:
+def canonical_rolling_key(rule_version: str = CANONICAL_PIT_RULE_VERSION) -> str:
+    if rule_version == CANONICAL_PIT_RULE_VERSION:
+        return CANONICAL_PIT_UNIVERSE_KEY
+    if rule_version == PREVIOUS_CANONICAL_PIT_RULE_VERSION:
+        return PREVIOUS_CANONICAL_PIT_UNIVERSE_KEY
+    raise CanonicalPitContractError(f"unsupported canonical PIT policy: {rule_version!r}")
+
+
+def canonical_rule_parameters_digest(rule_version: str = CANONICAL_PIT_RULE_VERSION) -> str:
+    canonical_rolling_key(rule_version)
+    parameters = dict(CANONICAL_RULE_PARAMETERS)
+    if rule_version == PREVIOUS_CANONICAL_PIT_RULE_VERSION:
+        parameters["terminal_policy"] = "announcement_asof_then_delist_date_v2"
     payload = json.dumps(
-        CANONICAL_RULE_PARAMETERS,
+        parameters,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
@@ -249,11 +263,15 @@ class CanonicalPitAuthorityResolver:
 
 
 def _validate_activation_target_shape(target: PitActivationTarget) -> None:
+    try:
+        rolling_key = canonical_rolling_key(target.target_rule_version)
+    except CanonicalPitContractError as exc:
+        raise CanonicalPitContractError("activation target target_rule_version differs from canonical contract") from exc
     expected = {
         "authority_id": CANONICAL_PIT_AUTHORITY_ID,
-        "target_rule_version": CANONICAL_PIT_RULE_VERSION,
-        "target_rolling_key": CANONICAL_PIT_UNIVERSE_KEY,
-        "rule_parameters_digest": canonical_rule_parameters_digest(),
+        "target_rule_version": target.target_rule_version,
+        "target_rolling_key": rolling_key,
+        "rule_parameters_digest": canonical_rule_parameters_digest(target.target_rule_version),
     }
     for field, value in expected.items():
         if getattr(target, field) != value:
@@ -503,11 +521,14 @@ def require_canonical_consumer_binding(
         _require_frozen_release_identity(binding)
         return binding
 
-    expected_digest = canonical_rule_parameters_digest()
+    try:
+        expected_digest = canonical_rule_parameters_digest(binding.rule_version)
+    except CanonicalPitContractError as exc:
+        raise CanonicalPitContractError(f"non-canonical PIT binding for {consumer_name}: unsupported policy") from exc
     expected = {
         "authority_id": CANONICAL_PIT_AUTHORITY_ID,
         "authority_status": PitAuthorityStatus.ACTIVE_CANONICAL,
-        "rule_version": CANONICAL_PIT_RULE_VERSION,
+        "rule_version": binding.rule_version,
         "rule_parameters_digest": expected_digest,
     }
     actual = {
@@ -519,7 +540,7 @@ def require_canonical_consumer_binding(
     mismatches = {key: {"expected": value, "actual": actual[key]} for key, value in expected.items() if actual[key] != value}
     if mismatches:
         raise CanonicalPitContractError(f"non-canonical PIT binding for {consumer_name}: {mismatches}")
-    if binding.universe_key != CANONICAL_PIT_UNIVERSE_KEY and not binding.universe_key.startswith(
+    if binding.universe_key != canonical_rolling_key(binding.rule_version) and not binding.universe_key.startswith(
         CANONICAL_PIT_SNAPSHOT_PREFIX
     ):
         raise CanonicalPitContractError(f"unsupported canonical PIT materialization: {binding.universe_key!r}")
@@ -532,7 +553,7 @@ def require_canonical_consumer_binding(
 
 def require_canonical_rolling_universe_key(universe_key: str) -> str:
     normalized = str(universe_key or "").strip()
-    if normalized != CANONICAL_PIT_UNIVERSE_KEY:
+    if normalized not in {CANONICAL_PIT_UNIVERSE_KEY, PREVIOUS_CANONICAL_PIT_UNIVERSE_KEY}:
         raise CanonicalPitContractError(
             f"rolling consumers must use {CANONICAL_PIT_UNIVERSE_KEY!r}; received {normalized!r}"
         )
@@ -550,6 +571,8 @@ def require_same_canonical_policy(
             binding, consumer=consumer,
             immutable_snapshot_required=binding.universe_key.startswith(CANONICAL_PIT_SNAPSHOT_PREFIX),
         )
+    if (expected.rule_version, expected.rule_parameters_digest) != (observed.rule_version, observed.rule_parameters_digest):
+        raise CanonicalPitContractError("canonical PIT policies differ; explicit policy migration is required")
     return observed
 
 
@@ -607,12 +630,12 @@ def require_dataset_runtime_pit_policy(
         for name in ("day_pins", "minute_pins"):
             pins = components.get(name)
             if (not isinstance(pins, Mapping)
-                    or pins.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY
+                    or pins.get("universe_key") != canonical_rolling_key(binding.rule_version)
                     or pins.get("rule_version") != binding.rule_version):
                 raise CanonicalPitContractError(f"dataset {name} differs from global canonical PIT policy")
         factor = components.get("factor_meta")
         if factor is not None and (not isinstance(factor, Mapping)
-                                  or factor.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY):
+                                  or factor.get("universe_key") != canonical_rolling_key(binding.rule_version)):
             raise CanonicalPitContractError("dataset factor_meta differs from global canonical PIT policy")
     try:
         cutoff = date.fromisoformat(str(profile["cutoff"]))
@@ -634,6 +657,9 @@ def _require_frozen_release_identity(binding: PitConsumerBinding) -> None:
 
 
 __all__ = [
+    "PREVIOUS_CANONICAL_PIT_RULE_VERSION",
+    "PREVIOUS_CANONICAL_PIT_UNIVERSE_KEY",
+    "canonical_rolling_key",
     "CANONICAL_PIT_AUTHORITY_ID",
     "CANONICAL_PIT_IPO_TRADING_SESSIONS",
     "CANONICAL_PIT_RULE_VERSION",

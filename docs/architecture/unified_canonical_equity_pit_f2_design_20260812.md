@@ -237,6 +237,7 @@ rule_version == shsz_a_252td_st_delist_asof_v2
 | F-017 | `StockUniversePitService.get_eligible_codes`; shared default binding; new saved-profile creation/versioning | `backend/tests/test_stock_universe_pit_service.py::test_canonical_query_accepts_validated_binding`; `backend/tests/test_canonical_pit_release.py::test_new_saved_profile_versions_inherit_global_pointer` | implemented_local_verified | none |
 | F-018 | `publish_release`; `read_release`; `validate_release` | `backend/tests/test_canonical_pit_release.py` | implemented_local_verified | none |
 | F-019 | `rehearse_activation` | `backend/tests/test_canonical_pit_release.py`; `python scripts/manage_canonical_pit_release.py --action rehearse-activation --target dev` -> DEV_ROLLBACK_VALIDATED, generation 1 then restored 0 | implemented_local_verified | none |
+| F-020 | `audit_canonical_terminal_evidence`; version-aware canonical validators | lifecycle-only exit, missing date, earlier announcement and preserved v2 tests; DEV current-cutoff readback | in_progress | DEV/readback pending |
 
 ## 9. Rollout / Rollback
 
@@ -271,6 +272,31 @@ rule_version == shsz_a_252td_st_delist_asof_v2
 - `backend_restart_owner=user`
 - `cleanup=not_requested`
 - `historical_dataset_mutation=forbidden`
+
+## 11.1 Approved terminal-fact policy amendment (BUG-1990, 2026-10-20)
+
+The shared authority and singleton pointer remain unchanged. The current producer
+uses `aistock_equity_pit_canonical_v3` and
+`shsz_a_252td_st_delist_asof_v3`, with terminal policy
+`announcement_asof_or_confirmed_delist_date_v3`. This is an independent PIT
+policy revision, not a new quote dataset or a module-owned policy.
+
+- A confirmed `market.stock_basic` `list_status=D` and valid `delist_date`
+  establish exclusion starting on that date's first exchange session. No
+  classification/event-signal insertion or full announcement archive is required.
+- Existing trustworthy announcement-as-of terminal events retain their earlier
+  causal effective date. Lifecycle fallback never invents an announcement or
+  backdates knowledge; it cannot exclude a security before `delist_date`.
+- Missing or contradictory lifecycle dates and unbounded paused listings are
+  still unresolved, not defaulted. ST and IPO rules remain unchanged.
+- Minimal provenance is the source table/code, lifecycle date, source fingerprint
+  and independent rule/version identity. Additional evidence archives are not a
+  publication prerequisite.
+- Canonical v2 parameters/digest and existing member/event rows remain untouched.
+  Frozen v2 releases stay readable under v2; v2/v3 cannot be declared the same
+  policy. Fresh source consumers inherit the singleton, not a module default.
+- The monthly producer uses this same shared policy implementation. No quote,
+  minute, factor or prior immutable release is rebuilt for this amendment.
 
 ## 12. DESIGN-COMPLIANCE-001
 

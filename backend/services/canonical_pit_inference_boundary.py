@@ -16,14 +16,14 @@ from typing import Any, Mapping
 
 from .canonical_equity_pit import (
     CANONICAL_PIT_AUTHORITY_ID,
-    CANONICAL_PIT_RULE_VERSION,
-    CANONICAL_PIT_UNIVERSE_KEY,
+    PREVIOUS_CANONICAL_PIT_RULE_VERSION,
     LEGACY_NONCANONICAL_SNAPSHOT_PREFIXES,
     LEGACY_PIT_RULE_VERSION,
     LEGACY_PIT_UNIVERSE_KEY,
     PitAuthorityStatus,
     PitConsumerBinding,
     canonical_rule_parameters_digest,
+    canonical_rolling_key,
     legacy_rule_parameters_digest,
 )
 
@@ -165,9 +165,8 @@ def _live_pointer_identity(
                 "retrospective inference requires an explicit frozen PIT identity after canonical activation"
             )
         if (
-            binding.universe_key != CANONICAL_PIT_UNIVERSE_KEY
-            or binding.rule_version != CANONICAL_PIT_RULE_VERSION
-            or binding.rule_parameters_digest != canonical_rule_parameters_digest()
+            binding.universe_key != canonical_rolling_key(binding.rule_version)
+            or binding.rule_parameters_digest != canonical_rule_parameters_digest(binding.rule_version)
             or binding.activation_generation < 1
             or _sha(binding.activation_envelope_digest, "activation_envelope_digest")
             != binding.activation_envelope_digest
@@ -190,13 +189,13 @@ def _live_pointer_identity(
 
 
 def _rolling_identity(value: Mapping[str, Any]) -> InferencePitIdentity:
-    _require_common(value, canonical=True)
+    rule_version = _require_common(value, canonical=True)
     generation = _strict_int(value.get("activation_generation"), "activation_generation")
     if generation < 1:
         raise CanonicalPitInferenceBoundaryError("active canonical rolling inference requires generation >= 1")
-    key = str(value.get("universe_key") or CANONICAL_PIT_UNIVERSE_KEY)
-    if key != CANONICAL_PIT_UNIVERSE_KEY:
-        raise CanonicalPitInferenceBoundaryError("rolling inference must use the canonical v2 rolling key")
+    key = str(value.get("universe_key") or canonical_rolling_key(rule_version))
+    if key != canonical_rolling_key(rule_version):
+        raise CanonicalPitInferenceBoundaryError("rolling inference key and canonical policy differ")
     envelope = _sha(value.get("activation_envelope_digest"), "activation_envelope_digest")
     expected_source_commit = _identifier(value.get("expected_source_commit"), "expected_source_commit")
     state_source_digest = _sha(value.get("state_source_digest"), "state_source_digest")
@@ -208,8 +207,8 @@ def _rolling_identity(value: Mapping[str, Any]) -> InferencePitIdentity:
         authority_id=CANONICAL_PIT_AUTHORITY_ID,
         authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
         universe_key=key,
-        rule_version=CANONICAL_PIT_RULE_VERSION,
-        rule_parameters_digest=canonical_rule_parameters_digest(),
+        rule_version=rule_version,
+        rule_parameters_digest=canonical_rule_parameters_digest(rule_version),
         activation_generation=generation,
         activation_envelope_digest=envelope,
         expected_source_commit=expected_source_commit,
@@ -221,7 +220,7 @@ def _rolling_identity(value: Mapping[str, Any]) -> InferencePitIdentity:
 
 
 def _frozen_identity(value: Mapping[str, Any]) -> InferencePitIdentity:
-    _require_common(value, canonical=True)
+    rule_version = _require_common(value, canonical=True)
     release_id = _identifier(value.get("release_id"), "release_id")
     cutoff = _date(value.get("cutoff"), "cutoff")
     snapshot_digest = _sha(value.get("snapshot_digest") or value.get("frozen_snapshot_digest"), "snapshot_digest")
@@ -234,8 +233,8 @@ def _frozen_identity(value: Mapping[str, Any]) -> InferencePitIdentity:
         authority_id=CANONICAL_PIT_AUTHORITY_ID,
         authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
         universe_key=frozen_key,
-        rule_version=CANONICAL_PIT_RULE_VERSION,
-        rule_parameters_digest=canonical_rule_parameters_digest(),
+        rule_version=rule_version,
+        rule_parameters_digest=canonical_rule_parameters_digest(rule_version),
         snapshot_digest=snapshot_digest,
         cutoff=cutoff,
         release_id=release_id,
@@ -282,14 +281,20 @@ def _legacy_identity(value: Mapping[str, Any]) -> InferencePitIdentity:
     )
 
 
-def _require_common(value: Mapping[str, Any], *, canonical: bool) -> None:
+def _require_common(value: Mapping[str, Any], *, canonical: bool) -> str:
     if canonical and value.get("authority_id") not in {None, CANONICAL_PIT_AUTHORITY_ID}:
         raise CanonicalPitInferenceBoundaryError("canonical PIT authority_id differs")
-    if canonical and value.get("rule_version") not in {None, CANONICAL_PIT_RULE_VERSION}:
-        raise CanonicalPitInferenceBoundaryError("canonical PIT rule_version differs")
+    # The original v2 wire format omitted rule_version. Its meaning must not
+    # follow the newest producer constant when an old immutable task is read.
+    rule_version = str(value.get("rule_version") or PREVIOUS_CANONICAL_PIT_RULE_VERSION)
+    try:
+        expected_digest = canonical_rule_parameters_digest(rule_version)
+    except ValueError as exc:
+        raise CanonicalPitInferenceBoundaryError("canonical PIT rule_version differs") from exc
     supplied_digest = value.get("rule_parameters_digest")
-    if supplied_digest is not None and _sha(supplied_digest, "rule_parameters_digest") != canonical_rule_parameters_digest():
+    if supplied_digest is not None and _sha(supplied_digest, "rule_parameters_digest") != expected_digest:
         raise CanonicalPitInferenceBoundaryError("canonical PIT rule_parameters_digest differs")
+    return rule_version
 
 
 def _strict_int(value: Any, field: str) -> int:
