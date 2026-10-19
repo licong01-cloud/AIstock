@@ -11,6 +11,7 @@ from backend.services.dataset_release.canonical import canonical_json_bytes
 from backend.services.dataset_release.monthly_profile_candidate import (
     MonthlyProfileCandidateError,
     SealedMonthlyProfileCandidateBuilder,
+    _predecessor_profile,
 )
 from backend.services.dataset_release.monthly_worker import ProducerContext
 
@@ -333,6 +334,66 @@ def test_profile_builder_rejects_predecessor_drift(tmp_path: Path) -> None:
             release_closure_path=closure,
             derived_asset_registry_path=registry,
         )
+
+
+def test_profile_builder_recovers_only_exact_legacy_candidate_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, closure, registry = _fixture(tmp_path)
+    predecessor = Path(str(context.plan["predecessor"]["profile_path"]))
+    frozen = _bytes(tmp_path / "candidates" / "old-profile.json", predecessor.read_bytes())
+    predecessor.write_bytes(b'{"consumers":{}}\n')
+    active_bytes = predecessor.read_bytes()
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_active_dataset_profile.load_qe_profile",
+        lambda path: {"path": path},
+    )
+    monkeypatch.setattr(
+        "backend.services.quantevolver.qe_active_dataset_profile.validate_controller_snapshot",
+        lambda _profile: None,
+    )
+    output = SealedMonthlyProfileCandidateBuilder().execute(
+        context, release_closure_path=closure, derived_asset_registry_path=registry,
+    )
+    assert json.loads(output.read_bytes())["consumers"]["qe"]["defaults"]["train_start"] == "2018-08-01"
+    assert predecessor.read_bytes() == active_bytes
+    assert _sha(frozen) == context.plan["predecessor_profile_ref"]["sha256"]
+
+
+def test_profile_builder_does_not_adopt_another_legacy_candidate(tmp_path: Path) -> None:
+    context, closure, registry = _fixture(tmp_path)
+    predecessor = Path(str(context.plan["predecessor"]["profile_path"]))
+    original = predecessor.read_bytes()
+    _bytes(tmp_path / "candidates" / "wrong-profile.json", original.replace(b"2018", b"2019"))
+    predecessor.write_bytes(b"different active\n")
+    with pytest.raises(MonthlyProfileCandidateError, match="predecessor profile bytes differ"):
+        SealedMonthlyProfileCandidateBuilder().execute(
+            context, release_closure_path=closure, derived_asset_registry_path=registry,
+        )
+
+
+@pytest.mark.parametrize("kind", ["linked_candidate", "linked_parent", "corrupt_snapshot"])
+def test_predecessor_recovery_rejects_links_and_snapshot_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind: str,
+) -> None:
+    context, _closure, _registry = _fixture(tmp_path)
+    path = Path(str(context.plan["predecessor"]["profile_path"]))
+    original = path.read_bytes()
+    if kind == "corrupt_snapshot":
+        path = tmp_path / "receipts" / "predecessor-profile.json"
+        _bytes(path, b"corrupt")
+        context.plan["predecessor"]["profile_path"] = str(path)
+        context.plan["predecessor_profile_ref"]["id"] = path.name
+    else:
+        path.write_bytes(b"new active")
+    frozen = _bytes(path.parent / "candidates" / "old.json", original)
+    if kind != "corrupt_snapshot":
+        monkeypatch.setattr(
+            "backend.services.dataset_release.monthly_profile_candidate._is_link",
+            lambda item: item == (frozen if kind == "linked_candidate" else frozen.parent),
+        )
+    with pytest.raises(MonthlyProfileCandidateError, match="predecessor profile bytes differ"):
+        _predecessor_profile(context.plan["predecessor"], context.plan["predecessor_profile_ref"])
 
 
 def test_profile_builder_never_overwrites_existing_target(tmp_path: Path) -> None:
