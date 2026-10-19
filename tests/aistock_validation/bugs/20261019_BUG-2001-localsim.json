@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2001",
-  "closed_at": null,
+  "closed_at": "2026-10-19T19:49:27Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -30,16 +30,16 @@
   "expected": "金额完整单行；LocalSIM内以一条可关闭的人类可读提醒保留数据准备入口；左侧导航与其他页面行为不变。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261019_BUG-2001-localsim.json",
       "frontend/src/app/DataAlertsToast.tsx",
       "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+      "tests/aistock_validation/bugs/20261019_BUG-2001-localsim.json",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261019_BUG-2001-localsim.json",
       "frontend/src/app/DataAlertsToast.tsx",
       "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+      "tests/aistock_validation/bugs/20261019_BUG-2001-localsim.json",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
@@ -104,8 +104,8 @@
   },
   "first_seen_at": "2026-10-19T19:24:42.801118Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6a9b84490024edf16dcd5b01449e08f2348150d7",
+  "fixed_at": "2026-10-19T19:49:27Z",
   "github_issue_number": 6393,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6393",
   "last_seen_at": "2026-10-19T19:24:42.801118Z",
@@ -114,6 +114,7 @@
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
   "ownership_scope_note": "Classify existing DataAlertsToast in frontend_common; change presentation only on LocalSIM routes, preserve polling, server records and non-LocalSIM behavior.",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6395",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -136,6 +137,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
@@ -145,7 +147,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2001",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "096e41ffc71dcc02",
+    "recorded_at": "2026-10-19T19:53:55.690720Z",
+    "runtime_contract_digest": "d51ba2fa10c2b5f10e3eb2b0d26499735cf84f953e80ec8afe900a899b096ccb",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ad164851988588aac09e9d87720d39b7038b1295",
+    "source_merge_commit": "6a9b84490024edf16dcd5b01449e08f2348150d7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6395",
+    "validation_evidence": [
+      "npm exec --offline --call node X:/AIstock_temp/LOCALSIM/BUG-2001/verify-native-ui-r2.cjs -> passed 4 actual UI checks; no mocked API or injected styles; native-ui-receipt.json PASSED"
+    ],
+    "validation_evidence_digest": "ac6f6b15207ad45415af0e354d532f91e8172db29ad1f2ddcdfe94694dd794a8"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -188,15 +211,18 @@
     "alert_component_transport": "native GET body; isolated component CORS shim",
     "business_api_mocked": false,
     "component_receipt": "X:/AIstock_temp/LOCALSIM/BUG-2001/readability-alerts-receipt.json",
+    "narrow_receipt": "X:/AIstock_temp/LOCALSIM/BUG-2001/readability-narrow-receipt.json",
     "protected_navigation_files_changed": false,
     "type_check": "npm exec --offline --call node check-types.cjs passed",
     "viewport_screenshots": [
       "X:/AIstock_temp/LOCALSIM/BUG-2001/metrics-1280.png",
       "X:/AIstock_temp/LOCALSIM/BUG-2001/metrics-1440.png",
       "X:/AIstock_temp/LOCALSIM/BUG-2001/metrics-1920.png"
-    ],
-    "narrow_receipt": "X:/AIstock_temp/LOCALSIM/BUG-2001/readability-narrow-receipt.json"
+    ]
   },
+  "validation_evidence": [
+    "npm exec --offline --call node X:/AIstock_temp/LOCALSIM/BUG-2001/verify-native-ui-r2.cjs -> passed 4 actual UI checks; no mocked API or injected styles; native-ui-receipt.json PASSED"
+  ],
   "verification_budget": {
     "budget": "light_ui",
     "ci_premerge_plans": [],
