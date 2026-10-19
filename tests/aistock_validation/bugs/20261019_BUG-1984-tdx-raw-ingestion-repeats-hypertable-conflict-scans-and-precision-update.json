@@ -1,0 +1,245 @@
+{
+  "actual": "Each roughly 240-row symbol batch repeatedly joins the large raw hypertable before and after insert; four concurrent statements observed running four to five minutes.",
+  "allowed_write_scope": [
+    "tdx-api-main/web/raw_rows.go",
+    "tdx-api-main/web/integrity_test.go",
+    "tdx-api-main/web/minute_init_task.go",
+    "tests/aistock_validation/bugs/20261019_BUG-1984-tdx-raw-ingestion-repeats-hypertable-conflict-scans-and-precision-update.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1984",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-19T10:12:02.861830Z",
+  "description": "Each roughly 240-row symbol batch repeatedly joins the large raw hypertable before and after insert; four concurrent statements observed running four to five minutes.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261019-505b5eb0b020",
+      "timestamp": "2026-10-19T10:12:02.861830Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "New raw keys take a direct bulk COPY/insert path; only existing conflicting keys are compared or precision-enriched, with atomic failure and unchanged existing valid facts.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "tdx-api-main/web/raw_rows.go",
+      "tdx-api-main/web/integrity_test.go",
+      "tdx-api-main/web/minute_init_task.go"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "tdx-api-main/web/raw_rows.go",
+        "tdx-api-main/web/integrity_test.go",
+        "tdx-api-main/web/minute_init_task.go"
+      ],
+      "impacted_modules": [
+        "local_data"
+      ],
+      "matched_rules": [
+        {
+          "file": "tdx-api-main/web/raw_rows.go",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tdx_go"
+        },
+        {
+          "file": "tdx-api-main/web/integrity_test.go",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tdx_go"
+        },
+        {
+          "file": "tdx-api-main/web/minute_init_task.go",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tdx_go"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "tdx-api-main/web/raw_rows.go",
+        "tdx-api-main/web/integrity_test.go",
+        "tdx-api-main/web/minute_init_task.go"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tdx-api-main/web/raw_rows.go",
+      "tdx-api-main/web/integrity_test.go",
+      "tdx-api-main/web/minute_init_task.go"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tdx-api-main/web/raw_rows.go",
+      "tdx-api-main/web/integrity_test.go",
+      "tdx-api-main/web/minute_init_task.go"
+    ]
+  },
+  "first_seen_at": "2026-10-19T10:12:02.861830Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6357,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6357",
+  "last_seen_at": "2026-10-19T10:12:02.861830Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "tdx-go-backend",
+    "target_ids": [
+      "tdx-go-backend"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "TDX raw ingestion repeats hypertable conflict scans and precision updates for new minute rows",
+  "trigger_condition": {
+    "fingerprint": "505b5eb0b02017103144c8ff",
+    "source_event_id": "FE-20261019-505b5eb0b020"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
