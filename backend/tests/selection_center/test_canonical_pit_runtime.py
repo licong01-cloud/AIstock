@@ -137,6 +137,13 @@ def test_selection_admission_freezes_one_pointer_generation_and_downstream_inher
     assert frozen[CANONICAL_PIT_RUNTIME_LEASE_KEY] == lease.as_dict()
 
 
+def test_new_admission_cannot_silently_inherit_legacy_migration_policy() -> None:
+    with pytest.raises(CanonicalPitRuntimeError, match="canonical"):
+        freeze_canonical_pit_runtime_binding(
+            migrate_runtime_config_to_canonical_pointer(_legacy_config()),
+            trade_date=date(2026, 7, 31), authority_resolver=_Resolver(_binding()))
+
+
 def test_external_supplied_lease_must_match_the_live_pointer() -> None:
     migrated = migrate_runtime_config_to_canonical_pointer(_legacy_config())
     stale, _lease = freeze_canonical_pit_runtime_binding(
