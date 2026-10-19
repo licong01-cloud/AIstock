@@ -18,11 +18,11 @@ R1冻结预测诊断及成熟cohort状态均未支持价格/弃权增量，继�
 
 输入仅原九个D字段`FEATURES`及missing indicators；rank只用于原顺序、同分tie和未知槽保留，不作为学习字段。T开盘、H、收益、状态、包ID和其它候选的未来收益不进入预测。标签仅训练内`hypothetical_liquidation_net_bps`，原T开盘至T+4收盘、买0.95/sell5.95bps各一次；只有AVAILABLE且H<=train_end的样本监督。CASH/UNKNOWN/IMMATURE不伪造训练0，原行保留；这使训练对象是有完整条件估值的历史样本，无法证明无缺失选择偏差。
 
-同(stock,D,T)跨包只有一个经济样本，特征/目标/状态冲突失败、不平均。两学习臂训练人口完全相同；训练中位数/均值/标准差仅在可测训练簇拟合。全缺失训练字段明确失败，常量列标准差取1仅用于数值规范化并记录。无一个D字段可知时`NO_RANK_ADVICE`，保留原槽；部分缺失显式mask＋训练中位数，不查库填值。
+同(stock,D,T)跨包只有一个经济样本，特征/目标/状态冲突失败、不平均。两学习臂训练人口完全相同；训练中位数/均值/标准差仅在可测训练簇拟合。整个训练期缺失的字段显式列入`inactive_source_fields`，两臂均不学习该字段/其常量mask，不把未知填成已知0；后续出现该列也不能临时启用。常量已知列标准差取1仅用于数值规范化并记录。无一个训练活跃D字段可知时`NO_RANK_ADVICE`，保留原槽；部分缺失显式mask＋训练中位数，不查库填值。
 
 ## Model / 唯一变化与预算
 
-固定18维编码，Ridge alpha10、solver=lsqr、tol1e-6、max_iter2000、fit_intercept=True。控制`absolute`拟合原X/y；候选`centered`对**训练中唯一stockD并集**按D分别减X均值和y均值后拟合。不是按单包重复计算质量，也不生成n²配对。两臂相同训练尺度/参数；中心化只移除日期截距，未使用评价日y均值。预测candidate对每包D已知X作同日中心化（等价于减一个共同分数，不改变组内排序），控制原X；输出是相对分数，不是收益率/概率或价格。
+最多九原量＋九mask；仅按训练全缺状态确定共同活跃列，不按结果筛特征。Ridge alpha10、solver=lsqr、tol1e-6、max_iter2000、fit_intercept=True。控制`absolute`拟合原X/y；候选`centered`对**训练中唯一stockD并集**按D分别减X均值和y均值后拟合。不是按单包重复计算质量，也不生成n²配对。两臂相同训练尺度/参数；中心化只移除日期截距，未使用评价日y均值。预测candidate对每包D已知X作同日中心化（等价于减一个共同分数，不改变组内排序），控制原X；输出是相对分数，不是收益率/概率或价格。
 
 恰好2次预测器fit、1候选；不试其它正则、模型、TopK或seed。既有WSL Conda执行，2线程、8GB预算、最多30000训练簇。未收敛、预算或源身份错误明确技术失败；不静默换solver或截样本。发布训练结果/完整评价D排序后才解码评价收益。中断fit有STARTED记录时不自动再次fit；完成后只读原阶段，不重训。原子stage、registry、统计复用，不建新平台。
 
@@ -73,3 +73,7 @@ T是否可买只在标签评价处理：原生CASH_ENTRY_NOT_EXECUTABLE为现金
 | F-327 | 本文Scope/Production Gates | artifact: docs/architecture/advisory_group_centered_rank_5td_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
 
 初始三视角自审：①不将旧ranking概念包装为全新信息；②同日去均值只限训练/预测X，未来未知不得改变Top10；③完整未知/成本/原槽/双端点与生产边界。仅设计通过，实施与真实结果尚未完成，不宣称独立外审。
+
+### 实际输入修订（尚未拟合时）
+
+首个prepare `advgroupcentered_f0942f1cb64c5e464acd21a0`在训练前发现旧源`market_up_ratio`整个训练期21900原行均缺失，其余八列有数据；0fit、0评价收益解码。原设计将全缺列视为计算错误，不必要地阻断了可用八列。已显式改为两臂共同不参与学习并报告结构性缺失，不补零/删股票/向数据owner发补采需求。旧准备产物保留，新合同/代码身份重新登记；该修订早于任何模型结果，非阴性后选特征或救阈值。此限制不代表当前数据库缺少市场宽度，也不影响原策略包。

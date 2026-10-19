@@ -68,7 +68,7 @@ def test_prediction_keeps_unknown_slots_and_never_uses_outcomes(packet):
     pd.testing.assert_frame_equal(m.predict_ranks(poison,fitted),prediction)
     tied = copy.deepcopy(fitted)
     for model in tied["models"].values():
-        model["coef"] = [0.]*18
+        model["coef"] = [0.]*len(fitted["center"])
     pp = m.predict_ranks(inputs,tied)
     assert pp.centered_rank.equals(pp.baseline_rank)
 
@@ -117,8 +117,15 @@ def test_unknown_training_feature_or_nonfinite_input_fails(packet):
     rows,_,_,_ = packet
     bad = rows.copy()
     bad["ret_1"] = np.nan
-    with pytest.raises(ValueError,match="entire training"):
-        fit(bad)
+    fitted = fit(bad)
+    assert fitted["inactive_source_fields"] == ["ret_1"]
+    predictions = m.predict_ranks(bad,fitted)
+    bad["ret_1"] = 999.
+    pd.testing.assert_frame_equal(predictions,m.predict_ranks(bad,fitted))
+    empty = rows.copy()
+    empty.loc[:,m.FEATURES] = np.nan
+    with pytest.raises(ValueError,match="insufficient"):
+        fit(empty)
     bad["ret_1"] = np.inf
     with pytest.raises(ValueError,match="nonfinite"):
         fit(bad)

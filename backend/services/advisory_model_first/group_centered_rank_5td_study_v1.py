@@ -27,6 +27,7 @@ FINANCE = ("valuation_status", "hypothetical_liquidation_net_bps", "valuation_gr
            "observed_gap_bps", "exit_execution_status", "valuation_policy_sha256", "label_information_end")
 CONTRACT = dict(schema="group_centered_rank_5td_v1", top_k=10, features=list(FEATURES),
     target="ORIGINAL_FIXED_FIVE_SESSION_NET_NOMINAL", missing="PIN_ORIGINAL_SLOT_NO_RANK_ADVICE",
+    structural_missing="TRAIN_ALL_UNKNOWN_INACTIVE_FOR_BOTH_ARMS_NOT_ZERO_OBSERVATION",
     alpha=10., solver="lsqr", tol=1e-6, max_iter=2000, group="UNIQUE_STOCK_D_T_UNION_DATE",
     objective_contract="ALPHA_RANKING", decision_use="NAVIGATION_ONLY", fit_count=2,
     valuation_policy_sha256=VALUATION_POLICY_SHA256, measurement_policy=POLICY, statistics=STATISTICS)
@@ -116,8 +117,8 @@ def _center(x, groups):
 def train_models(rows, *, train_start, train_end, before_fit=lambda arm: None, after_fit=lambda arm: None):
     train = training_rows(rows, train_start=train_start, train_end=train_end)
     raw = _numeric(train)
-    if np.isnan(raw).all(axis=0).any():
-        raise ValueError("entire training feature unavailable")
+    active = np.flatnonzero(~np.isnan(raw).all(axis=0))
+    raw = raw[:, active]
     median = np.nanmedian(raw, axis=0)
     filled = np.where(np.isnan(raw), median, raw)
     x = np.column_stack((filled, np.isnan(raw).astype(float)))
@@ -140,6 +141,7 @@ def train_models(rows, *, train_start, train_end, before_fit=lambda arm: None, a
                            iterations=None if model.n_iter_ is None else model.n_iter_.tolist())
         after_fit(arm)
     return dict(schema=CONTRACT["schema"], policy_sha256=POLICY_HASH, models=models,
+        active_columns=active.tolist(), inactive_source_fields=[name for i,name in enumerate(FEATURES) if i not in active],
         median=median.tolist(), center=center.tolist(), scale=scale.tolist(), constant_columns=np.flatnonzero(constant).tolist(),
         train_start=str(train_start), train_end=str(train_end), train_clusters=len(train), train_days=int(train[KEY[0]].nunique()),
         training_key_sha256=sha([[pd.Timestamp(d).isoformat(), pd.Timestamp(t).isoformat(), s] for d,t,s in train.loc[:, KEY].itertuples(index=False, name=None)]))
@@ -152,7 +154,7 @@ def predict_ranks(inputs, fitted):
     frame = inputs.loc[:, INPUTS].copy().reset_index(drop=True)
     if frame.duplicated(["package_id", *KEY]).any():
         raise ValueError("duplicate prediction key")
-    raw = _numeric(frame)
+    raw = _numeric(frame)[:, fitted["active_columns"]]
     known = np.isfinite(raw).any(axis=1)
     x = np.column_stack((np.where(np.isnan(raw), np.array(fitted["median"]), raw), np.isnan(raw).astype(float)))
     x = (x-np.array(fitted["center"]))/np.array(fitted["scale"])
