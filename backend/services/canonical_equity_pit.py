@@ -586,19 +586,34 @@ def require_dataset_runtime_pit_policy(
     rolling-at-cutoff versus frozen-membership digest validation.
     """
     require_canonical_new_task_binding(binding, consumer="dataset_publication")
-    components = profile.get("components")
-    if not isinstance(components, Mapping):
-        raise CanonicalPitContractError("dataset PIT components are missing")
-    for name in ("day_pins", "minute_pins"):
-        pins = components.get(name)
-        if (not isinstance(pins, Mapping)
-                or pins.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY
-                or pins.get("rule_version") != binding.rule_version):
-            raise CanonicalPitContractError(f"dataset {name} differs from global canonical PIT policy")
-    factor = components.get("factor_meta")
-    if factor is not None and (not isinstance(factor, Mapping)
-                              or factor.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY):
-        raise CanonicalPitContractError("dataset factor_meta differs from global canonical PIT policy")
+    if "pit_binding" in profile:
+        # A policy-neutral fact release may reference an independently versioned
+        # PIT. Provider catalog names are not buy eligibility or policy identity.
+        from .dataset_release.pit import DatasetPitBinding, PitSnapshotError
+        try:
+            frozen = DatasetPitBinding.from_release_manifest(profile["pit_binding"])
+            require_same_canonical_policy(binding, frozen.consumer_binding(consumer="dataset_publication"),
+                                          consumer="dataset_publication")
+        except (TypeError, ValueError, PitSnapshotError) as exc:
+            raise CanonicalPitContractError(f"dataset independent PIT binding is invalid: {exc}") from exc
+        if frozen.cutoff < date.fromisoformat(str(profile["cutoff"])):
+            raise CanonicalPitContractError("dataset independent PIT coverage is insufficient")
+    else:
+        # Compatibility for existing immutable direct-v2 releases. Do not
+        # reinterpret or mutate historical pins to claim a new PIT identity.
+        components = profile.get("components")
+        if not isinstance(components, Mapping):
+            raise CanonicalPitContractError("dataset PIT components are missing")
+        for name in ("day_pins", "minute_pins"):
+            pins = components.get(name)
+            if (not isinstance(pins, Mapping)
+                    or pins.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY
+                    or pins.get("rule_version") != binding.rule_version):
+                raise CanonicalPitContractError(f"dataset {name} differs from global canonical PIT policy")
+        factor = components.get("factor_meta")
+        if factor is not None and (not isinstance(factor, Mapping)
+                                  or factor.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY):
+            raise CanonicalPitContractError("dataset factor_meta differs from global canonical PIT policy")
     try:
         cutoff = date.fromisoformat(str(profile["cutoff"]))
     except (KeyError, TypeError, ValueError) as exc:

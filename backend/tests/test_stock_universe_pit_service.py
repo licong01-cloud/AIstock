@@ -147,6 +147,21 @@ def test_canonical_query_requires_resolver_binding_before_database_access() -> N
         )
 
 
+def test_unspecified_new_query_rejects_legacy_global_pointer_without_implicit_rebuild():
+    from backend.services.canonical_equity_pit import CanonicalPitContractError, legacy_rule_parameters_digest
+    class Resolver:
+        def resolve_live_binding(self):
+            return PitConsumerBinding(
+                authority_id=CANONICAL_PIT_AUTHORITY_ID,
+                authority_status=PitAuthorityStatus.DEPLOYED_LEGACY_PENDING_MIGRATION,
+                universe_key="shsz_st_pit_active_v1", rule_version="st_pub_next_trade_restore_active_l_v1",
+                rule_parameters_digest=legacy_rule_parameters_digest(), activation_generation=0,
+            )
+    with pytest.raises(CanonicalPitContractError):
+        StockUniversePitService(authority_resolver=Resolver()).get_eligible_codes(
+            trade_date=dt.date(2026, 7, 31), consumer="selection")
+
+
 def test_canonical_query_accepts_validated_binding(monkeypatch) -> None:
     class Cursor:
         def __enter__(self):
@@ -179,6 +194,8 @@ def test_canonical_query_accepts_validated_binding(monkeypatch) -> None:
         rule_parameters_digest=canonical_rule_parameters_digest(),
         activation_generation=1,
         activation_envelope_digest="a" * 64,
+        expected_source_commit="b" * 40,
+        state_source_digest="c" * 64,
         coverage_start=dt.date(2018, 8, 1),
         coverage_end=dt.date(2026, 7, 31),
     )
@@ -199,6 +216,10 @@ def test_canonical_query_accepts_validated_binding(monkeypatch) -> None:
         ensure=True,
         authority_binding=binding,
         consumer="selection",
+    ) == ["000001.SZ", "600000.SH"]
+    # Unspecified new queries resolve the singleton, never the old v1 default.
+    assert service.get_eligible_codes(
+        trade_date=dt.date(2026, 7, 31), consumer="selection",
     ) == ["000001.SZ", "600000.SH"]
 
 

@@ -44,6 +44,7 @@ def _portfolio_fixture(*, custom_params: dict | None = None):
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
+        pit_authority_resolver=ActiveCanonicalPitResolver(),
     )
     portfolio = service.create_portfolio(
         package_id=manifest.package_id,
@@ -334,6 +335,7 @@ def test_paper_day_runner_accepts_unversioned_runtime_profile_override_with_gene
 
     result = PaperTradingDayRunner(
         repository=paper_repo,
+        pit_authority_resolver=ActiveCanonicalPitResolver(),
         calendar_provider=FakeCalendar(),
         market_data_provider=PaperV2MinuteMarketDataProvider(
             limit_price_provider=FakeLimitProvider(),
@@ -371,6 +373,7 @@ def test_paper_day_runner_replaces_legacy_platform_default_binding_for_behavior_
 
     result = PaperTradingDayRunner(
         repository=paper_repo,
+        pit_authority_resolver=ActiveCanonicalPitResolver(),
         calendar_provider=FakeCalendar(),
         market_data_provider=PaperV2MinuteMarketDataProvider(
             limit_price_provider=FakeLimitProvider(),

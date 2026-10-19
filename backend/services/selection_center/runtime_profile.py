@@ -19,6 +19,7 @@ from backend.services.selection_center.canonical_pit_runtime import (
     CANONICAL_PIT_RUNTIME_LEASE_KEY,
     CANONICAL_PIT_RUNTIME_PROFILE_KEY,
     SelectionPitRuntimeLease,
+    migrate_runtime_config_to_canonical_pointer,
     validate_canonical_pit_runtime_profile,
 )
 from backend.services.trading_core.errors import (
@@ -417,6 +418,8 @@ def attach_default_runtime_profile_binding(runtime_config: dict[str, Any]) -> di
         "generated_effective_runtime_config",
     }:
         return config
+    if CANONICAL_PIT_RUNTIME_PROFILE_KEY not in config and CANONICAL_PIT_RUNTIME_LEASE_KEY not in config:
+        config = migrate_runtime_config_to_canonical_pointer(config)
     config[RUNTIME_PROFILE_BINDING_KEY] = {
         "source": "generated_effective_runtime_config",
         "profile_version_id": GENERATED_RUNTIME_PROFILE_VERSION_ID,
