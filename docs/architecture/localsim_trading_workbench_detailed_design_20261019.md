@@ -18,7 +18,7 @@
 | --- | --- |
 | 策略包 / 账户 / 运行等机器标识 | 所有用户可感知位置均不显示，包括折叠诊断和导出 |
 | 股票编码 | 本轮按用户“编码不得显示”的要求，统一显示证券简称和市场；不显示数字代码或交易所后缀 |
-| 模型缩写 | 不用缩写代替策略名；确需说明模型时使用可理解的中文介绍，不在交易主视图展示架构参数 |
+| 模型与因子命名 | 按2026-10-20用户要求，原生名称不可读时组合模型中文含义、Alpha158启用信息及因子数量；不展示种子编号、架构参数或包身份 |
 | 身份排查 | 后端受控日志保留原身份；用户通过账户名称、发生时间、交易日和操作上下文定位，不另造短码 |
 | 交易引擎 | 保留现有推理、订单、成交、持仓、资金、费用、估值和恢复合同 |
 | 历史数据 | 读取已提交经济事实；不因浏览页面触发补数、重新推理、估值重算或回放 |
@@ -51,7 +51,7 @@
 
 统一展示投影执行：去首尾空白 → 检查空值、控制字符、标识结构和已知身份字段 → 输出经过转义的可读文本。UUID、摘要、路径、实验 / 回放编号和仅机器生成的名称不能作为兜底名称；名称里夹带这些内容也整项拒绝，不只检查整串相等。使用可测试的确定性规则和业务字段白名单，不调用语言模型猜名字，不维护策略包 ID 白名单。优先中文描述，含义无法确认的机器名称使用缺名提示；保留“沪深300增强”等正常业务名称中的数字。前端最后一道字段级检查与后端保持同一合同，服务异常时也不回退显示原值。
 
-缺策略名显示“策略名称待完善”，附已有可解释用途；缺账户名显示“历史模拟账户”或“日常模拟账户”。这些是展示投影，不改原生记录，不编造模型能力或策略收益。原型使用“多因子精选”“趋势轮动”“稳健均衡组合”等演示名，不能把这些示例名绑定到生产包。
+缺少可读原生名称时，从账户冻结manifest对应的原生模型与因子元数据生成名称，例如“LSTM长短期记忆＋Alpha158价量因子＋26项因子”。旧manifest的model_type为空时，只从原生model_id提取已认识的模型族词，不显示种子身份或猜测模型能力；陌生模型显示“自定义模型”。不读取模型权重，不维护包ID映射。冻结身份不匹配时显示元数据待核验，不取其他版本的模型信息。账户缺名使用该策略名称加“模拟账户”，不修改原生记录。
 
 重名先使用用途、创建时间和初始资金等可读上下文区分；仍冲突时显示“同名账户一 / 二”，按完整账户列表的创建时间和内部主键稳定排序生成，仅用于展示。分页、搜索或排序不改变编号；新增更早记录需触发整组重算且原选择仍按内部键保持。不同包同名、同包多账户均保留独立行，不合并资产。不能用 ID 后四位解决重名。
 
@@ -98,21 +98,21 @@ flowchart TB
 
 ### 4.1 总览
 
-按既定页面图顺序展示标题及刷新、待处理摘要、实时汇总四卡、收益走势及资产分布、策略账户表、简短系统状态。创建配置收进独立入口。默认筛选为全部账户，支持策略 / 账户名搜索、运行阶段筛选和资产截止日排序；点击行或详情按钮均进入明确账户。
+按2026-10-20用户补充要求，依次展示标题及刷新、待处理摘要、逐策略账户资产与盈亏卡、策略账户表、简短系统状态。删除跨账户实时合计主卡；默认全部账户，支持策略 / 账户名搜索、运行阶段筛选和资产截止日排序；点击账户进入其独立持仓与交易。
 
 | 区块 | 字段与行为 |
 | --- | --- |
 | 待处理摘要 | 受影响账户数、可读账户名、发生日、影响与入口；无原始日志 |
-| 实时四卡 | 可比实时账户总资产、今日净盈亏、可比累计收益、运行 / 受阻数量；标注纳入范围 |
-| 曲线 | 仅使用同口径真实序列；无合法基准时不显示示例基准或超额收益 |
+| 逐策略卡 | 每账户分别展示总资产、持仓资产、现金、累计估值盈亏及收益率、持仓浮盈、估值日盈亏和今日盈亏；各自标明时点和缺失原因 |
+| 曲线 | 进入账户后展示其真实收盘序列；不在总览拼接不同账户的估值时点 |
 | 策略行 | 策略名 / 账户名、用途、阶段、估值时点、资产、累计净盈亏及方法、持仓数 / 仓位、完成日和下一事项 |
 | 系统状态 | 后端核验时间、页面读取时间分别展示；全局前置检查通过的含义与每账户接续状态分开 |
 
-历史回放账户在各自行上展示经济时钟，不加入今日实时合计。多个实时账户也必须对齐估值边界和收益方法才可汇总；不齐时显示可比子集和排除原因。累计组合收益不得对账户百分比求算术平均；没有统一口径时只列账户收益。真实零持仓应有完整快照证明，读取失败不显示“零只”。
+所有账户分别展示经济时钟与资产，不汇总金额或平均收益率。历史回放停留在过去的估值，不作为今天的资产或今日盈亏。兼容接口原有可比合计字段保留，但新界面不消费。真实零持仓应有完整快照证明，读取失败不显示“零只”。
 
 ### 4.2 策略账户详情
 
-固定顶部显示策略名、账户名、运行用途、阶段、初始资金、币种、经济截止时间、最近读取时间与切换账户。六卡为总资产、累计净盈亏、今日 / 最近估值日净盈亏、持仓浮盈、市值、可用现金；冻结资金单列说明。卡片没有足够数据时显示缺失原因。
+固定顶部显示策略名、账户名、运行用途、阶段、初始资金、币种、经济截止时间、最近读取时间与切换账户。摘要分别为本账户总资产、持仓资产、现金余额、累计估值盈亏及收益率、估值日盈亏、今日盈亏、持仓浮盈和较上次估值变动；明确不同时间口径。可用与冻结现金没有独立权威记录时在资金摘要说明，不遮蔽已知现金余额。区间筛选和其他账户不得改变顶部累计指标。
 
 中部沿用收益曲线与持仓费用摘要，下部标签为持仓、成交、委托、区间盈亏、资金流水、回放运行、交易监控。所有标签共享同一账户上下文。切换账户取消旧请求，响应身份与当前选择不符时丢弃，不能短暂呈现上一账户内容。
 
@@ -164,6 +164,10 @@ flowchart TB
 无外部流入流出且边界完整时可采用净盈亏 / 期初净资产。存在资金流时只使用现有权威、可验证的方法；若尚无方法，保留金额并显示收益率暂不可计算，不在本次另造时间加权或资金加权算法。累计收益与区间收益注明方法，不混用。
 
 ### 6.2 按日与按股票
+
+2026-10-20补充：账户顶部的累计估值盈亏独立于本节完整收盘区间。正式初始资金、截至本次估值的全部成交/现金逐笔对应、现金桥接、持仓数量桥接及末值构成均通过时，可展示“当前权威NAV－正式初始资金”；该fill-only账本合同的零净外部流入必须经桥接证明。未知分类或不平衡时保持未知，不将差额推算为资金流。盘中估值必须标明时点，不冒充收盘收益或收益证明；累计费用只按已记账费用统计，不重复扣除。旧账户另须核对原组合期初资金，不能因旧账户当前资产很大就把资产减登记资金当作收益。
+
+估值日盈亏使用该账户前一交易日合法收盘至本次估值，首日仅可使用已证明的正式期初。缺少前收盘时说明具体缺口；两次盘中估值的差只能标为“较上次估值变动”，不得作为日盈亏。今日盈亏另外检查北京时间日期，历史断点只展示自身估值日，今天没有估值时显示“尚无今日估值”。以上增加只读展示字段，不修改现有`/pnl`收盘区间与完整性合同。
 
 | 维度 | 字段 | 完整性要求 |
 | --- | --- | --- |
@@ -236,7 +240,7 @@ flowchart TB
 
 | 视口 | 布局 |
 | --- | --- |
-| 内容区可用宽度 1600 / 1440 | 摘要六卡、双栏图表、紧凑持仓表；监控四分区；左侧原导航保持不变 |
+| 内容区可用宽度 1600 / 1440 | 账户独立摘要卡、双栏图表、紧凑持仓表；监控四分区；左侧原导航保持不变 |
 | 内容区可用宽度 1024 左右 | 卡片三列、图表可纵排；保留账户与时点，表格独立横向滚动；不改外层导航 |
 | 内容区可用宽度 390 | 卡片两列、图表纵排、监控单列；股票首列固定，内容区不横向溢出；原导航行为由既有外壳决定 |
 
@@ -283,19 +287,19 @@ CSV 为 UTF-8（兼容常用表格软件），金额作为精确文本写出；�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-001 | LSUI-01 账户总览；localsim_workbench.py::overview / _aggregate_overview；trading-workbench.tsx::TradingWorkbench | backend/tests/simulation_runtime/test_localsim_workbench.py::test_realtime_aggregate_excludes_historical_and_misaligned_economic_clocks；validation-receipt: 12e125c9 | PASS | none |
-| F-002 | LSUI-02 持仓与资金；localsim_workbench.py::_positions / view；持仓及六张资产卡 | backend/tests/simulation_runtime/test_localsim_workbench.py::test_historical_holdings_are_run_scoped_and_empty_latest_is_real_zero；artifact: real-optimized-r4.json（三账户真实勾稽） | PASS | none |
+| F-001 | LSUI-01 账户总览；localsim_workbench.py::overview；TradingWorkbench逐策略账户卡，不消费跨账户合计 | frontend/tests/paper-v2/localsim-trading-workbench.spec.ts（逐账户资产/盈亏与原导航）；BUG-1994 source-db-readback.json（总览/详情十进制一致） | PASS | none |
+| F-002 | LSUI-02 持仓与资金；localsim_workbench.py::_positions / view；独立账户资产摘要 | backend/tests/simulation_runtime/test_localsim_workbench.py；BUG-1994真实三账户资产/现金/持仓勾稽 | PASS | none |
 | F-003 | LSUI-03 个股下钻；trading-workbench.tsx::stockFilters / fullStock / 个股抽屉 | frontend/tests/paper-v2/localsim-trading-workbench.spec.ts；validation-receipt: 12e125c9（历史日、已清仓、焦点与筛选继承） | PASS | none |
 | F-004 | LSUI-04 成交与委托；localsim_workbench.py::view；trading-workbench.tsx::OrderDialog | backend/tests/simulation_runtime/test_localsim_workbench.py::test_order_association_contains_all_partial_fills_without_cross_order_rows；frontend/tests/paper-v2/localsim-trading-workbench.spec.ts（121 条全部部分成交） | PASS | none |
 | F-005 | LSUI-05 区间与逐股盈亏；localsim_workbench.py::_pnl；区间分析与逐日下钻 | backend/tests/simulation_runtime/test_localsim_workbench.py::test_closed_stock_and_actual_five_yuan_fees_reconcile_without_repricing；财务专属 37 passed；artifact: real-oracle-r3.json | PASS | none |
 | F-006 | LSUI-06 资金与费用；localsim_workbench.py::view / _pnl；资金和费用表 | backend/tests/simulation_runtime/test_localsim_workbench.py（实际 5 元两笔，仅扣一次；缺分项与未知外部流保持未知） | PASS | none |
 | F-007 | LSUI-07 全界面无原始 JSON；显式列白名单；配置、回放、状态及旧页迁移 | frontend/tests/paper-v2/localsim-trading-workbench.spec.ts（全部七标签、弹窗、失败与导出） | PASS | none |
-| F-008 | LSUI-08 回放 / 实时及时间；localsim_workbench.py::_summary / _is_close；独立运行与读取时钟 | backend/tests/simulation_runtime/test_localsim_workbench.py::test_intraday_snapshot_cannot_become_close_to_close_return；artifact: real-oracle-r3.json | PASS | none |
+| F-008 | LSUI-08 回放/实时及时钟；_summary / _is_close；apply_valuation_metrics独立累计、估值日与今天 | backend/tests/simulation_runtime/test_localsim_workbench_metrics.py（22项）；工作台11项；原有收盘区间37项 | PASS | none |
 | F-009 | LSUI-09 并列监控；trading-workbench.tsx::section / monitor，同账户同版本四区 | frontend/tests/paper-v2/localsim-trading-workbench.spec.ts；validation-receipt: 12e125c9（所有标签 / 监控） | PASS | none |
 | F-010 | LSUI-10 未知、过期与市场约束；presentation.ts；readback-status.tsx；localsim_workbench.py::_mark_description | frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts；backend/tests/simulation_runtime/test_localsim_workbench.py（真缺价保留、完整性损坏、暂停估值） | PASS | none |
 | F-011 | LSUI-11 交易和共享边界；仅只读 GET / 展示服务；既有控制 API 沿用 | validation-receipt: 24926900（模拟核心及附加定向回归）；artifact: real-optimized-r4.json；源文件范围审查 | PASS | none |
 | F-012 | LSUI-12 全面禁止机器标识；localsim_workbench_presentation.py；workbench.ts::human；固定可见路由 | frontend/tests/paper-v2/localsim-trading-workbench.spec.ts::noOpaque；backend/tests/simulation_runtime/test_localsim_workbench.py::test_names_never_fall_back_to_machine_strings | PASS | none |
-| F-013 | LSUI-13 缺名与重名；localsim_workbench.py::overview；中文受控兜底 / 创建时间 / 稳定重名顺序 | backend/tests/simulation_runtime/test_localsim_workbench.py（恶意名称、数字业务名、同账户独立事实）；artifact: real-readonly-r2.json（三账户缺名投影） | PASS | none |
+| F-013 | LSUI-13 原生可读名、冻结模型＋因子组合与稳定重名；strategy_name / account_name / overview | backend/tests/simulation_runtime/test_localsim_workbench_metrics.py；BUG-1994 source-db-readback.json（三账户原生名称） | PASS | none |
 | F-014 | LSUI-14 稳定读取和资源隔离；localsim_workbench.py::_load / _pack / _unpack；前端取消、响应身份与版本核对 | backend/tests/simulation_runtime/test_localsim_workbench.py::test_repeatable_read_cache_and_cursor_pin_old_facts_but_revalidate_account_scope；frontend/tests/paper-v2/localsim-trading-workbench.spec.ts（慢响应与跨账户拒绝） | PASS | none |
 | F-015 | LSUI-15 完整导出与响应式；localsim_workbench.py::export；流式 CSV 响应；专属 CSS 容器查询 | backend/tests/simulation_runtime/test_localsim_workbench.py::test_full_csv_has_more_than_two_pages_and_safe_account_metadata；frontend/tests/paper-v2/localsim-trading-workbench.spec.ts（1440 / 实际内容宽 390 / 极窄外壳不溢出） | PASS | none |
 | F-016 | LSUI-16 左侧原导航保持不变；公共 Sidebar / 菜单 / layout / globals 均无差异；仅内容样式 | frontend/tests/paper-v2/localsim-trading-workbench.spec.ts（原生折叠展开、260 像素宽度及旧入口）；git diff protected-files 无差异 | PASS | none |

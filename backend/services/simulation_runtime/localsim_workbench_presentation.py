@@ -28,6 +28,49 @@ def market(symbol: str | None) -> str:
     )
 
 
+MODEL_LABELS = {
+    "LSTM": "LSTM长短期记忆", "TCN": "TCN时序卷积", "GRU": "GRU门控循环",
+    "ALSTM": "ALSTM注意力记忆", "TRANSFORMER": "Transformer注意力",
+    "LIGHTGBM": "LightGBM梯度提升", "XGBOOST": "XGBoost梯度提升",
+    "MLP": "MLP多层感知", "LINEAR": "线性模型", "CATBOOST": "CatBoost梯度提升",
+}
+
+
+def strategy_name(package: dict, account_manifest: str | None = None) -> str:
+    """Project frozen model/factor metadata, without using a package-ID alias."""
+    if account_manifest and package.get("manifest_sha256") != account_manifest:
+        return "冻结策略（模型与因子资料待核验）"
+    label = readable(package.get("display_name"), readable(package.get("package_name"), ""))
+    if label:
+        return label
+    manifest = package.get("manifest_json") or {}
+    models = manifest.get("model_asset") or []
+    models = [models] if isinstance(models, dict) else models
+    families = []
+    for model in models:
+        # Legacy native manifests encode model family in the seed model_id.
+        # Only recognized family words are projected; never display the seed identity.
+        declared = str(model.get("model_type") or "")
+        source = declared or str(model.get("model_id") or "")
+        family = next((v for k, v in MODEL_LABELS.items()
+                       if re.search(r"(?<![A-Za-z0-9])"+k+r"(?![A-Za-z0-9])", source, re.I)), None)
+        label = family or readable(declared, "自定义模型")
+        if label not in families:
+            families.append(label)
+    model_label = " / ".join(families) if 0 < len(families) <= 3 else "多模型组合" if families else "量化选股"
+    parts = [model_label]
+    if (manifest.get("runtime_assets") or {}).get("alpha158", {}).get("enabled") is True:
+        parts.append("Alpha158价量因子")
+    factors = manifest.get("factor_set") or []
+    if factors:
+        parts.append(f"{len(factors)}项因子")
+    return "＋".join(parts)
+
+
+def account_name(account: dict, package: dict) -> str:
+    return readable(account.get("account_name"), strategy_name(package, account.get("manifest_sha256"))+" · 模拟账户")
+
+
 STATES = {
     "ACTIVE": "启用", "PAUSED": "暂停", "RETIRED": "已停用",
     "PENDING": "等待开始", "RUNNING": "历史回放", "REPLAYING": "历史回放",

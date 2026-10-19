@@ -14,6 +14,10 @@ export interface Summary {
   position_ratio: string | null;
   completed_date: string | null; next_date: string | null; start_date: string | null; end_date: string | null;
   source: string; issue: string; cost_basis: string;
+  cumulative_pnl: string | null; cumulative_return_pct: string | null; cumulative_fees: string | null; cumulative_note: string;
+  valuation_day: string | null; valuation_day_pnl: string | null; valuation_day_note: string;
+  today_pnl: string | null; today_note: string;
+  valuation_change: string | null; previous_valuation_at: string | null; change_note: string;
 }
 export interface Row {
   key: string; security?: string | null; order_key?: string | null;

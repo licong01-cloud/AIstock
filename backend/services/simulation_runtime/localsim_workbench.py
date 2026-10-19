@@ -24,7 +24,8 @@ from backend.services.simulation_execution.localsim.models import LocalSimMarket
 from .localsim_workbench_models import (
     WorkbenchAccount, WorkbenchOverview, WorkbenchResult, WorkbenchRow, WorkbenchSummary,
 )
-from .localsim_workbench_presentation import market, problem, readable, state
+from .localsim_workbench_presentation import account_name, market, problem, readable, state, strategy_name
+from .localsim_workbench_metrics import apply_valuation_metrics
 
 TZ = ZoneInfo("Asia/Shanghai")
 ZERO = Decimal(0)
@@ -134,8 +135,10 @@ class LocalSimWorkbenchService:
                     THEN jsonb_build_object('marks',run_payload_json->'local_sim_valuation_completion_v1'->'marks') END AS completion
                 FROM paper_v2.simulation_daily_run WHERE run_id IN
                 (SELECT run_id FROM paper_v2.run WHERE portfolio_id = %s)""", (data["scope"],))
-            cur.execute("SELECT display_name, package_name FROM strategy_pkg.package WHERE package_id = %s", (account.package_id,))
+            cur.execute("SELECT display_name, package_name, manifest_sha256, manifest_json FROM strategy_pkg.package WHERE package_id = %s", (account.package_id,))
             data["package"] = dict(cur.fetchone() or {})
+            cur.execute("SELECT initial_cash FROM paper_v2.portfolio WHERE portfolio_id = %s", (data["scope"],))
+            data["capital_origin"] = dict(cur.fetchone() or {})
             dates = [day(s["trade_date"]) for s in data["snapshots"]]
             if dates:
                 data["calendar"] = self._read(cur, "SELECT cal_date FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date BETWEEN %s AND %s ORDER BY cal_date", (min(dates), max(dates)))
@@ -218,8 +221,7 @@ class LocalSimWorkbenchService:
         if a["status"] != "ACTIVE":
             stage = state(a["status"])
         result = WorkbenchSummary(
-            name=readable(a["account_name"], "模拟账户名称待完善"),
-            strategy=readable(pkg.get("display_name"), readable(pkg.get("package_name"), "策略名称待完善")),
+            name=account_name(a, pkg), strategy=strategy_name(pkg, a.get("manifest_sha256")),
             stage=stage, status=state(a["status"]), initial_capital=text(a["initial_capital"]),
             created_at=clock(a["created_at"]),
             cost_basis="账本平均成本不含交易费用，费用单列" if data["native"] else "历史导入成本，费用包含关系尚待核验",
@@ -244,6 +246,7 @@ class LocalSimWorkbenchService:
             result.position_ratio = text(money(snap["market_value"])/money(snap["nav"])*100) if complete and money(snap["nav"]) else None
             if complete:
                 result.unrealized = text(sum((money(p["market_value"]) - money(p["avg_cost"]) * int(p["quantity"]) for p in ps.values()), ZERO))
+        apply_valuation_metrics(data, result, positions=self._positions, is_close=self._is_close)
         return result
 
     def view(self, account_id: str, kind: str = "summary", *, start: date | None = None,
@@ -473,6 +476,8 @@ class LocalSimWorkbenchService:
             cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY")
             cur.execute("SET LOCAL statement_timeout = '20s'")
             records = self._read(cur, """SELECT a.account_id, a.account_name, a.initial_capital, a.created_at, a.status,
+                a.manifest_sha256 AS account_manifest_sha256, p.manifest_sha256, p.manifest_json,
+                old.initial_cash AS legacy_initial_cash,
                 p.display_name, p.package_name, s.nav, s.cash, s.market_value, s.snapshot_time, s.position_count,
                 COALESCE(n.ledger_scope_id,l.ledger_scope_id) AS ledger_scope_id, n.scope_kind,
                 j.status AS replay_status, j.completed_trade_date, j.next_trade_date, j.failure_code,
@@ -481,6 +486,7 @@ class LocalSimWorkbenchService:
                 LEFT JOIN strategy_pkg.package p ON p.package_id = a.package_id
                 LEFT JOIN paper_v2.simulation_ledger_scope_v1 n ON n.native_account_id = a.account_id
                 LEFT JOIN paper_v2.legacy_localsim_account_lineage_v1 l ON l.account_id = a.account_id
+                LEFT JOIN paper_v2.portfolio old ON old.portfolio_id = COALESCE(n.ledger_scope_id,l.ledger_scope_id)
                 LEFT JOIN LATERAL (SELECT * FROM paper_v2.daily_snapshots d WHERE d.portfolio_id = COALESCE(n.ledger_scope_id,l.ledger_scope_id)
                     ORDER BY trade_date DESC LIMIT 1) s ON TRUE
                 LEFT JOIN LATERAL (SELECT * FROM paper_v2.localsim_replay_job_v1 r WHERE r.simulation_account_id = a.account_id
@@ -503,15 +509,17 @@ class LocalSimWorkbenchService:
         counts: dict[str, int] = {}
         total_names: dict[str, int] = {}
         for r in records:
-            label = readable(r["account_name"], "模拟账户名称待完善")
+            label = account_name({**r, "manifest_sha256": r.get("account_manifest_sha256")}, r)
             total_names[label] = total_names.get(label, 0)+1
         result = []
         for r in records:
-            label = readable(r["account_name"], "模拟账户名称待完善")
+            label = account_name({**r, "manifest_sha256": r.get("account_manifest_sha256")}, r)
             counts[label] = counts.get(label, 0)+1
             if total_names[label] > 1:
                 label += " · 同名账户" + str(counts[label])
-            data = {**scoped.get(r["ledger_scope_id"], {k: [] for k in batches}), "account": r, "package": r,
+            data = {**scoped.get(r["ledger_scope_id"], {k: [] for k in batches}),
+                "account": {**r, "manifest_sha256": r.get("account_manifest_sha256")}, "package": r,
+                "capital_origin": {"initial_cash": r.get("legacy_initial_cash")},
                 "native": r["scope_kind"] == "SUCCESSOR_NATIVE", "calendar": calendar, "replays": [], "events": [], "orders": []}
             if r["replay_status"]:
                 data["replays"] = [{**r, "status": r["replay_status"]}]
