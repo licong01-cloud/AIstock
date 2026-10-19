@@ -28,12 +28,18 @@
   ],
   "expected": "Requested strict coefficient window starts strictly after frozen snapshot train and semantic-calibration boundaries; missing, overlapping or drifting authority fails closed before inference/publish/register; legal forward windows retain existing semantics.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_data_source/coefficient_extension.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1978-hmm-frozen-coefficient-extension-trusts-mutable-dates-instead-of-snapsho.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/hmm_data_source/coefficient_extension.py",
-      "backend/tests/hmm_data_source/test_coefficient_extension.py"
+      "backend/tests/hmm_data_source/test_coefficient_extension.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1978-hmm-frozen-coefficient-extension-trusts-mutable-dates-instead-of-snapsho.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_data_source/coefficient_extension.py",
@@ -116,11 +122,15 @@
       "C:/Users/lc999/miniconda3/envs/AIstock/python.exe isolated stdin socket-poison smoke -> PASS; imported backend.routers.hmm_training, backend.routers.health and HMM coefficient_extension from task worktree; valid forward origin unchanged; 3 missing/malformed/overlapping authorities rejected; network/database attempts=0; fits=0; no service start; runtime_verified=false"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
