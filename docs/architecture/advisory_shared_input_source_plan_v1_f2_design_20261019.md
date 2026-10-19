@@ -1,6 +1,6 @@
 # Advisory / LocalSIM 共享输入来源计划 F2 详细设计
 
-日期：2026-10-19。分类 F2/T3；用户批准实现三种来源模式，源码限 Advisory ownership。继承 `advisory_shared_selection_signal_kernel_detailed_design_20261014.md`、`localsim_shared_frozen_file_inputs_20261017.md` 及 `selection_provider_clocks_v1`，不复制其算法。当前：继续修正政策身份与物理快照身份的混淆，并将冻结发布原生身份接入文件推理；定向回归通过，真实文件验证进行中。数据库 canonical 激活仍待数据 owner，整体 F2 尚未通过，不宣称可立即运行接续或可合入。
+日期：2026-10-19。分类 F2/T3；用户批准实现三种来源模式，源码限 Advisory ownership。继承 `advisory_shared_selection_signal_kernel_detailed_design_20261014.md`、`localsim_shared_frozen_file_inputs_20261017.md` 及 `selection_provider_clocks_v1`，不复制其算法。当前：已修正政策身份与物理快照身份的混淆，并将冻结发布原生身份接入文件推理；64项定向回归、LSTM/TCN真实文件推理对照及原生文件恢复通过。数据库 canonical 激活仍待数据 owner，跨来源连续日/原生TopK全链路未通过，整体 F2 尚未通过，不宣称两端可立即运行接续或可合入。
 
 ## Background / 背景
 
@@ -68,7 +68,7 @@
 | F-333 | inference_inputs.py / CLI / 原生 kernel | backend/tests/advisory_historical_range/test_input_source_plan.py；test_selection_signal_kernel.py | PASS | none |
 | F-334 | input_source_plan.py / 原生 reader | backend/tests/advisory_historical_range/test_input_source_plan.py；真实readiness.json | PASS | none |
 | F-335 | CLI / kernel / composition.py | backend/tests/advisory_historical_range/test_input_source_plan.py；test_strategy_package_live_inference.py | PASS | none |
-| F-336 | 原生只读验证 | artifact: X:/AIstock_temp/ADVISORY/shared-source-plan-20261019/native-r4/progress.json；native-r3/progress.json | BLOCKED | 新文件验证进行中；canonical DB激活、跨界连续日及原生TopK完整验证未通过，不得升级证据 |
+| F-336 | 原生只读验证 | artifact: X:/AIstock_temp/ADVISORY/shared-source-plan-20261019/native-r4/progress.json；native-r4/lstm-resume.json | BLOCKED | 文件推理/恢复通过；canonical DB激活、跨界连续日及原生TopK完整验证未通过，不得升级证据 |
 | F-337 | 本文接入交付 | artifact: docs/architecture/advisory_shared_input_source_plan_v1_f2_design_20261019.md | PASS | none |
 
 ## Rollout / Rollback / Production Gates
@@ -161,3 +161,18 @@ LSTM 实际模型窗口从2024-11-05开始，由原生 resolver 决定；没有�
 56项直接相关测试通过（source-plan、CLI、kernel、batch adapter），涵盖新增文件身份继承、不访问 live pointer、错误日期/成员/hash、DB身份冻结和coverage漂移。不是跨模块全量验收。R4真实文件验证使用同日、同政策、同成员的原单源入口与新计划入口，对照原LSTM/TCN，不再用legacy人口作为canonical基线。
 
 只读运行状态：`DEPLOYED_LEGACY_PENDING_MIGRATION`，generation=0。新主线明确要求数据owner完成授权canonical迁移后才能启用新在线任务。不能制造generation/envelope或由本窗口写库/激活；此项与文件推理可独立验证。LocalSIM owner仍需把自身任务创建/session/provider/分钟读入接到公共计划，源码合入、后端用户重启、LocalSIM接续分别验收。
+
+R13最终验证：另8项文件输入/推理只读测试通过，本轮直接矩阵合计64项；Ruff、diff-check通过。精确11文件ownership全部mapped；L0无阻断，1项既有P2字符串join提示已审阅。源码提交 `6a149833dbc0a7ea597ed51b2b9f32e1f8b94ee2` 已推送PR #6356，其HEAD的CI verdict SUCCESS；PR仍DRAFT，F2校验仍拒绝未完成的F-336，未合入或清理工作树。
+
+真实R4使用活动v18冻结发布，C=2026-08-28、D/T=2026-08-31。两臂使用原模型权重、冻结processor和同一文件/PIT成员；所登记执行源码的内容身份全程不变。以下是推理级技术验证，不是原生TopK/资格/生产账户/收益验证。
+
+| 模型 | 原单源入口秒 | 新计划入口秒 | 两臂峰值RSS KiB | 完整评分/人口/UNKNOWN |
+|---|---:|---:|---|---|
+| LSTM | 295.79 | 293.14 | 7840956 / 7849688 | 4917 / 4917 / 0 |
+| TCN | 289.33 | 317.02 | 7882676 / 7903156 | 4917 / 4917 / 0 |
+
+两种模型的完整评分及顺序、原始成员、UNKNOWN、实际输入摘要逐项相同。全运行期约10秒采样一次磁盘，占用观测最大值约1.52GiB；这是**采样最大值**，不是无遗漏的瞬时峰值。TCN新入口耗时较长且与小型恢复验证存在共享I/O负载，单次测量不声明速度提升或统计性能回归。没有复制大型权重或数据发布。
+
+LSTM原生CLI `--resume` 在全新进程28.34秒完成，resource_loads=0；原scores.json与commit.json字节hash不变。收据 `native-r4/lstm-resume.json`。该收据只证明文件来源原生恢复；数据库重读摘要/漂移仍由定向测试验证，真实DB续段未放行。
+
+剩余顺序：①数据owner交付真实canonical活动binding/coverage，不要求重建已有v18文件；②本窗口用新任务冻结同政策计划，验证文件最后日→数据库首日的完整历史窗口、原生TopK/资格及失败恢复；③LocalSIM owner接自身调度/分钟/provider/断点，复用公共计划而非另建选源算法。两端运行及用户重启状态独立报告，不能把本次文件推理通过替代这些步骤。
