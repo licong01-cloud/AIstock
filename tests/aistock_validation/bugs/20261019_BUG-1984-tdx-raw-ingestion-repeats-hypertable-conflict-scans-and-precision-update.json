@@ -27,13 +27,18 @@
   "evidence_uris": [],
   "expected": "New raw keys take a direct bulk COPY/insert path; only existing conflicting keys are compared or precision-enriched, with atomic failure and unchanged existing valid facts.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261019_BUG-1984-tdx-raw-ingestion-repeats-hypertable-conflict-scans-and-precision-update.json",
+      "tdx-api-main/web/integrity_test.go",
+      "tdx-api-main/web/raw_rows.go"
+    ],
     "added_files": [],
     "changed_files": [
-      "tdx-api-main/web/raw_rows.go",
+      "tests/aistock_validation/bugs/20261019_BUG-1984-tdx-raw-ingestion-repeats-hypertable-conflict-scans-and-precision-update.json",
       "tdx-api-main/web/integrity_test.go",
-      "tdx-api-main/web/minute_init_task.go"
+      "tdx-api-main/web/raw_rows.go"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "tdx-api-main/web/raw_rows.go",
@@ -111,11 +116,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1&start_date=2026-10-15&end_date=2026-10-16",
+    "fresh_process_evidence": [
+      "RED: original writer enters the existing-fact QueryRow even for an entirely new batch; the new-key regression fails. GREEN: minute and daily new keys perform only staging COPY and key-safe insert, with no ANALYZE, fact scan or precision update.",
+      "Existing aistock_dev, session-local tables cloned from actual raw schemas: new insert, exact replay, mixed new/legacy keys, NULL-only precision enrichment and atomic conflict rollback passed. Individual fixture transactions took 8-14 ms. Real DEV minute hypertable replay of 240 existing October15 facts passed in 3.135 seconds; the real-table transaction was rolled back. No production data or runtime writes.",
+      "Adjacent-path audit: daily raw shares this repaired writer. Daily_basic field coverage is computed on the fetched batch in memory; stk_limit readback is scoped to the fetched date. Adj_factor scheduled work deliberately performs one full-history restatement reconciliation; no second generic daily write path is invoked. Suspend coverage check is scheduled separately (recent 60 trading days, weekly historical audit), not on each minute batch. No new gate or changed applicability/stock-pool contract.",
+      "Fresh-process offline Go tests load persistent writer changes; existing DEV SQL insert/replay/enrichment/conflict rollback passed; actual DEV hypertable 240-row replay passed with rollback. Production runtime unchanged."
+    ],
+    "health_ref": "http://127.0.0.1:19080/api/health",
+    "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "tdx-go-backend"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "tdx-go-backend",
