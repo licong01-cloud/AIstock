@@ -100,6 +100,42 @@ def test_silent_rule_or_parameter_drift_is_rejected() -> None:
         require_canonical_consumer_binding(_binding(rule_parameters_digest="d" * 64), consumer="training")
 
 
+def test_policy_identity_allows_frozen_and_rolling_physical_names() -> None:
+    frozen = _binding(universe_key=f"{CANONICAL_PIT_SNAPSHOT_PREFIX}release",
+                      snapshot_digest="a" * 64, cutoff=date(2026, 8, 31), release_id="release")
+    assert pit.require_same_canonical_policy(_binding(), frozen, consumer="advisory") == frozen
+    with pytest.raises(CanonicalPitContractError):
+        pit.require_same_canonical_policy(_binding(), _binding(rule_version="legacy"), consumer="simulation")
+    with pytest.raises(CanonicalPitContractError, match="archived reproduction"):
+        pit.require_same_canonical_policy(_binding(), _binding(reproduction_mode=True), consumer="reproduction")
+
+
+def test_global_profile_policy_checks_both_providers_without_requiring_equal_cutoffs() -> None:
+    profile = {"cutoff": "2026-08-31", "components": {
+        "day_pins": {"universe_key": CANONICAL_PIT_UNIVERSE_KEY, "rule_version": CANONICAL_PIT_RULE_VERSION},
+        "minute_pins": {"universe_key": CANONICAL_PIT_UNIVERSE_KEY, "rule_version": CANONICAL_PIT_RULE_VERSION},
+    }}
+    binding = pit.CanonicalPitAuthorityResolver._binding_from_row(
+        _active_row(end_date=date(2026, 10, 19)))
+    result = pit.require_dataset_runtime_pit_policy(profile, binding)
+    assert result["rule_version"] == CANONICAL_PIT_RULE_VERSION
+    assert result["activation_generation"] == 1
+    profile["components"]["minute_pins"]["rule_version"] = "legacy"
+    with pytest.raises(CanonicalPitContractError, match="minute_pins"):
+        pit.require_dataset_runtime_pit_policy(profile, binding)
+
+
+def test_dataset_runtime_policy_rejects_missing_identity_and_uncovered_cutoff() -> None:
+    binding = pit.CanonicalPitAuthorityResolver._binding_from_row(_active_row())
+    with pytest.raises(CanonicalPitContractError, match="day_pins"):
+        pit.require_dataset_runtime_pit_policy({"cutoff": "2026-07-31", "components": {}}, binding)
+    profile = {"cutoff": "2026-08-31", "components": {
+        name: {"universe_key": CANONICAL_PIT_UNIVERSE_KEY, "rule_version": CANONICAL_PIT_RULE_VERSION}
+        for name in ("day_pins", "minute_pins")}}
+    with pytest.raises(CanonicalPitContractError, match="coverage"):
+        pit.require_dataset_runtime_pit_policy(profile, binding)
+
+
 def _active_row(**overrides):
     values = {
         "authority_id": pit.CANONICAL_PIT_AUTHORITY_ID,

@@ -539,6 +539,78 @@ def require_canonical_rolling_universe_key(universe_key: str) -> str:
     return normalized
 
 
+def require_same_canonical_policy(
+    expected: PitConsumerBinding, observed: PitConsumerBinding, *, consumer: str,
+) -> PitConsumerBinding:
+    """Compare rule authority, not rolling/snapshot storage names or dates."""
+    for binding in (expected, observed):
+        if binding.reproduction_mode:
+            raise CanonicalPitContractError("archived reproduction is not the global canonical policy")
+        require_canonical_consumer_binding(
+            binding, consumer=consumer,
+            immutable_snapshot_required=binding.universe_key.startswith(CANONICAL_PIT_SNAPSHOT_PREFIX),
+        )
+    return observed
+
+
+def require_canonical_new_task_binding(
+    binding: PitConsumerBinding, *, consumer: str, trade_date: date | None = None,
+) -> PitConsumerBinding:
+    """New online work cannot adopt the legacy migration pointer.
+
+    The low-level resolver still exposes that pointer to the authorized
+    migration/CAS and historical lease readback paths; it is not a second
+    policy selectable by a new task.
+    """
+    require_canonical_consumer_binding(binding, consumer=consumer)
+    require_canonical_rolling_universe_key(binding.universe_key)
+    if (type(binding.activation_generation) is not int or binding.activation_generation < 1
+            or not _SHA256_RE.fullmatch(str(binding.activation_envelope_digest or ""))
+            or not str(binding.expected_source_commit or "").strip()
+            or not _SHA256_RE.fullmatch(str(binding.state_source_digest or ""))):
+        raise CanonicalPitContractError("canonical runtime activation identity is incomplete")
+    if (type(binding.coverage_start) is not date or type(binding.coverage_end) is not date
+            or binding.coverage_start > binding.coverage_end):
+        raise CanonicalPitContractError("canonical runtime coverage is invalid")
+    if trade_date is not None and not binding.coverage_start <= trade_date <= binding.coverage_end:
+        raise CanonicalPitContractError("canonical runtime coverage does not include requested trade_date")
+    return binding
+
+
+def require_dataset_runtime_pit_policy(
+    profile: Mapping[str, Any], binding: PitConsumerBinding,
+) -> dict[str, Any]:
+    """Bind unified publication to the same canonical rule as new online work.
+
+    This is policy/coverage readback, not a substitute for the monthly
+    rolling-at-cutoff versus frozen-membership digest validation.
+    """
+    require_canonical_new_task_binding(binding, consumer="dataset_publication")
+    components = profile.get("components")
+    if not isinstance(components, Mapping):
+        raise CanonicalPitContractError("dataset PIT components are missing")
+    for name in ("day_pins", "minute_pins"):
+        pins = components.get(name)
+        if (not isinstance(pins, Mapping)
+                or pins.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY
+                or pins.get("rule_version") != binding.rule_version):
+            raise CanonicalPitContractError(f"dataset {name} differs from global canonical PIT policy")
+    factor = components.get("factor_meta")
+    if factor is not None and (not isinstance(factor, Mapping)
+                              or factor.get("universe_key") != CANONICAL_PIT_UNIVERSE_KEY):
+        raise CanonicalPitContractError("dataset factor_meta differs from global canonical PIT policy")
+    try:
+        cutoff = date.fromisoformat(str(profile["cutoff"]))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CanonicalPitContractError("dataset PIT cutoff is invalid") from exc
+    if not binding.coverage_start <= cutoff <= binding.coverage_end:
+        raise CanonicalPitContractError("dataset cutoff exceeds canonical runtime coverage")
+    return {"authority_id": binding.authority_id, "rule_version": binding.rule_version,
+            "rule_parameters_digest": binding.rule_parameters_digest,
+            "activation_generation": binding.activation_generation,
+            "activation_envelope_digest": binding.activation_envelope_digest}
+
+
 def _require_frozen_release_identity(binding: PitConsumerBinding) -> None:
     if not str(binding.release_id or "").strip() or binding.cutoff is None:
         raise CanonicalPitContractError("immutable/reproduction PIT requires release_id and cutoff")
@@ -566,4 +638,7 @@ __all__ = [
     "activate_canonical_pit_authority",
     "require_canonical_consumer_binding",
     "require_canonical_rolling_universe_key",
+    "require_same_canonical_policy",
+    "require_canonical_new_task_binding",
+    "require_dataset_runtime_pit_policy",
 ]

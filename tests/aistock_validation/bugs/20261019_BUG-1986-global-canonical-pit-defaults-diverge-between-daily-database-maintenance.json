@@ -3,16 +3,12 @@
   "allowed_write_scope": [
     "backend/services/canonical_equity_pit.py",
     "backend/services/tushare_sync_engine.py",
-    "backend/services/stock_universe_pit_service.py",
     "backend/inference_engine.py",
     "backend/services/selection_center/canonical_pit_runtime.py",
-    "backend/services/dataset_release/monthly_unified.py",
     "backend/tests/test_canonical_equity_pit.py",
     "backend/tests/test_tushare_sync_engine.py",
-    "backend/tests/test_stock_universe_pit_service.py",
     "backend/tests/selection_center/test_canonical_pit_runtime.py",
-    "backend/tests/dataset_release/test_monthly_unified_v2.py",
-    "backend/tests/test_qe_hmm_canonical_pit_integration.py",
+    "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
     "tests/aistock_validation/bugs/20261019_BUG-1986-global-canonical-pit-defaults-diverge-between-daily-database-maintenance.json"
   ],
   "assigned_agent": null,
@@ -40,32 +36,24 @@
     "changed_files": [
       "backend/services/canonical_equity_pit.py",
       "backend/services/tushare_sync_engine.py",
-      "backend/services/stock_universe_pit_service.py",
       "backend/inference_engine.py",
       "backend/services/selection_center/canonical_pit_runtime.py",
-      "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/test_canonical_equity_pit.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/test_stock_universe_pit_service.py",
       "backend/tests/selection_center/test_canonical_pit_runtime.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py",
-      "backend/tests/test_qe_hmm_canonical_pit_integration.py"
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "actual_bug_scope_after_worker_split",
     "ownership": {
       "changed_files": [
         "backend/services/canonical_equity_pit.py",
         "backend/services/tushare_sync_engine.py",
-        "backend/services/stock_universe_pit_service.py",
         "backend/inference_engine.py",
         "backend/services/selection_center/canonical_pit_runtime.py",
-        "backend/services/dataset_release/monthly_unified.py",
         "backend/tests/test_canonical_equity_pit.py",
         "backend/tests/test_tushare_sync_engine.py",
-        "backend/tests/test_stock_universe_pit_service.py",
         "backend/tests/selection_center/test_canonical_pit_runtime.py",
-        "backend/tests/dataset_release/test_monthly_unified_v2.py",
-        "backend/tests/test_qe_hmm_canonical_pit_integration.py"
+        "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py"
       ],
       "impacted_modules": [
         "qlib_data",
@@ -105,17 +93,6 @@
           "rule_id": "local_data_tushare_sync_engine"
         },
         {
-          "file": "backend/services/stock_universe_pit_service.py",
-          "impact_modules": [
-            "selection_center",
-            "qe.core",
-            "paper_v2"
-          ],
-          "primary_module": "local_data",
-          "risk_level": "high",
-          "rule_id": "local_data_stock_universe_pit"
-        },
-        {
           "file": "backend/inference_engine.py",
           "impact_modules": [
             "tests.backend"
@@ -134,17 +111,6 @@
           "primary_module": "selection_center",
           "risk_level": "high",
           "rule_id": "selection_center_services"
-        },
-        {
-          "file": "backend/services/dataset_release/monthly_unified.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
         },
         {
           "file": "backend/tests/test_canonical_equity_pit.py",
@@ -170,17 +136,6 @@
           "rule_id": "local_data_tushare_sync_engine"
         },
         {
-          "file": "backend/tests/test_stock_universe_pit_service.py",
-          "impact_modules": [
-            "selection_center",
-            "qe.core",
-            "paper_v2"
-          ],
-          "primary_module": "local_data",
-          "risk_level": "high",
-          "rule_id": "local_data_stock_universe_pit"
-        },
-        {
           "file": "backend/tests/selection_center/test_canonical_pit_runtime.py",
           "impact_modules": [
             "paper_v2",
@@ -190,27 +145,6 @@
           "primary_module": "selection_center",
           "risk_level": "high",
           "rule_id": "selection_center_services"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_monthly_unified_v2.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/test_qe_hmm_canonical_pit_integration.py",
-          "impact_modules": [
-            "hmm",
-            "qe.core"
-          ],
-          "primary_module": "hmm.evolution",
-          "risk_level": "high",
-          "rule_id": "hmm_evolution_services"
         }
       ],
       "risk_levels": [
@@ -220,47 +154,35 @@
       "suggested_scope": [
         "backend/services/canonical_equity_pit.py",
         "backend/services/tushare_sync_engine.py",
-        "backend/services/stock_universe_pit_service.py",
         "backend/inference_engine.py",
         "backend/services/selection_center/canonical_pit_runtime.py",
-        "backend/services/dataset_release/monthly_unified.py",
         "backend/tests/test_canonical_equity_pit.py",
         "backend/tests/test_tushare_sync_engine.py",
-        "backend/tests/test_stock_universe_pit_service.py",
         "backend/tests/selection_center/test_canonical_pit_runtime.py",
-        "backend/tests/dataset_release/test_monthly_unified_v2.py",
-        "backend/tests/test_qe_hmm_canonical_pit_integration.py"
+        "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
       "backend/services/canonical_equity_pit.py",
       "backend/services/tushare_sync_engine.py",
-      "backend/services/stock_universe_pit_service.py",
       "backend/inference_engine.py",
       "backend/services/selection_center/canonical_pit_runtime.py",
-      "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/test_canonical_equity_pit.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/test_stock_universe_pit_service.py",
       "backend/tests/selection_center/test_canonical_pit_runtime.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py",
-      "backend/tests/test_qe_hmm_canonical_pit_integration.py"
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/services/canonical_equity_pit.py",
       "backend/services/tushare_sync_engine.py",
-      "backend/services/stock_universe_pit_service.py",
       "backend/inference_engine.py",
       "backend/services/selection_center/canonical_pit_runtime.py",
-      "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/test_canonical_equity_pit.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/test_stock_universe_pit_service.py",
       "backend/tests/selection_center/test_canonical_pit_runtime.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py",
-      "backend/tests/test_qe_hmm_canonical_pit_integration.py"
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py"
     ]
   },
   "first_seen_at": "2026-10-19T13:14:04.948988Z",
@@ -290,7 +212,7 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": ["Isolated AIstock python -B loaded canonical policy helpers, Selection admission, inference and canonical daily hook from persistent BUG-1986 source; no DB access or process control"],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -437,5 +359,18 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "fix_summary": {
+    "root_cause": "Daily maintenance refreshed legacy v1, new consumer admission accepted migration pointer, and physical snapshot names were confused with policy identity.",
+    "shared_policy": "aistock_equity_pit_canonical/shsz_a_252td_st_delist_asof_v2",
+    "worker_followup": "BUG-1987 owns monthly activation readback; no worker source in this PR.",
+    "deployment_constraint": "Do not restart into strict new-task admission before authorized canonical registry/profile migration. Current legacy pointer is not silently promoted. Production migration and activation remain pending.",
+    "verification": "223 targeted tests passed; RED then GREEN; lint and diff check passed.",
+    "design_compliance": [
+      "No source merge claimed as production migration.",
+      "No fabricated default policy, snapshot or successful activation.",
+      "Existing immutable task leases retained; new tasks reject legacy policy.",
+      "Reuse existing canonical resolver and release CAS; no new scheduler, dependency or approval framework."
+    ]
   }
 }
