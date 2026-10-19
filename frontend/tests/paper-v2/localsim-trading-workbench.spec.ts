@@ -190,4 +190,3 @@ test("account lifecycle controls submit only after a deliberate confirmation usi
   await expect(page.getByRole("button",{name:"恢复账户",exact:true})).toBeVisible();
   expect(state.seen.filter(r=>r.method==="POST")).toEqual([{method:"POST",path:base+"/accounts/"+a+"/pause",query:"",body:{schema_version:"localsim_lifecycle_request_v1",expected_version:7}}]);await noOpaque(page);
 });
-
