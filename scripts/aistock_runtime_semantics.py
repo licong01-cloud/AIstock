@@ -2041,6 +2041,12 @@ _LOCALSIM_CUTOVER_REQUIRED_RELATIONS = frozenset({
 })
 
 
+def _validate_localsim_replay_recovery(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    from backend.services.simulation_runtime.localsim_replay_recovery import validate_replay_recovery_check
+
+    return validate_replay_recovery_check(payload)
+
+
 def _validate_localsim_workbench(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     from backend.services.simulation_runtime.localsim_workbench_metrics import validate_workbench_overview
 
