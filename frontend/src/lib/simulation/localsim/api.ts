@@ -27,7 +27,7 @@ export class LocalSimApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     cache: "no-store",
     ...init,
@@ -54,8 +54,8 @@ export const localSimApi = {
     return request(`/trading-calendar/status${suffix}`);
   },
 
-  async listPackages(): Promise<Array<{ package_id: string; package_name?: string; package_status: string }>> {
-    const data = await request<{ packages: Array<{ package_id: string; package_name?: string; package_status: string }> }>(
+  async listPackages(): Promise<Array<{ package_id: string; display_name?: string; package_name?: string; package_status: string; created_at?: string }>> {
+    const data = await request<{ packages: Array<{ package_id: string; display_name?: string; package_name?: string; package_status: string; created_at?: string }> }>(
       "/strategy-packages?view=summary&limit=200",
     );
     return data.packages || [];
@@ -112,8 +112,8 @@ export const localSimApi = {
     return data;
   },
 
-  async getAccount(accountId: string): Promise<LocalSimControlResponse> {
-    return request(`/simulation-runtime/localsim/accounts/${encodeURIComponent(accountId)}`);
+  async getAccount(accountId: string, signal?: AbortSignal): Promise<LocalSimControlResponse> {
+    return request(`/simulation-runtime/localsim/accounts/${encodeURIComponent(accountId)}`, {signal});
   },
 
   async createAccount(payload: {

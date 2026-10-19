@@ -1324,7 +1324,7 @@ plans:
     max_duration_seconds: 300
     evidence_kinds: [pytest, compileall]
   - plan_key: localsim_control_plane_ui
-    title: LocalSIM control plane mocked UI status and readback contract
+    title: LocalSIM workbench and native control plane mocked UI contracts
     module: simulation.localsim_successor_core
     level: L2
     command_key: nox_localsim_control_plane_ui
@@ -1341,13 +1341,14 @@ plans:
     writes_business_state: false
     runner_enabled: true
     mock_api_used: true
-    max_duration_seconds: 180
+    max_duration_seconds: 600
     evidence_kinds: [playwright]
     change_applicability:
       include:
         - frontend/src/app/simulation/localsim/**
         - frontend/src/lib/simulation/localsim/**
         - frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts
+        - frontend/tests/paper-v2/localsim-trading-workbench.spec.ts
       no_match_reason: localsim_change_does_not_touch_the_frontend_control_plane
   - plan_key: localsim_successor_core_dev_db
     title: LocalSIM successor account lineage replay DEV PostgreSQL validation

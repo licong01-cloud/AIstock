@@ -573,7 +573,7 @@ def l0(session: nox.Session) -> None:
     )
 
 
-def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
+def _run_mocked_frontend_target(session: nox.Session, target: str | tuple[str, ...], *, extra_env: dict[str, str] | None = None) -> None:
     """Run one module-owned Playwright target without starting production services."""
 
     _ensure_frontend_node_modules(session)
@@ -584,12 +584,13 @@ def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
             "node",
             "node_modules/@playwright/test/cli.js",
             "test",
-            target,
+            *((target,) if isinstance(target, str) else target),
             env=_env(
                 {
                     "BACKEND_PORT": "8012",
                     "FRONTEND_PORT": "3012",
                     "NEXT_PUBLIC_API_BASE": "http://127.0.0.1:8012/api/v1",
+                    **(extra_env or {}),
                 }
             ),
             external=True,
@@ -601,7 +602,12 @@ def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
 @nox.session(venv_backend="none")
 def localsim_control_plane_ui(session: nox.Session) -> None:
     """Run the LocalSIM readback and status UI contract with mocked APIs."""
-    _run_mocked_frontend_target(session, "tests/paper-v2/localsim-unified-control-plane.spec.ts")
+    task_temp = Path(os.environ.get("RUNNER_TEMP") or ("X:/AIstock_temp/LOCALSIM/workbench-validation" if os.name == "nt" else str(ROOT / "tmp" / "localsim-workbench")))
+    task_temp.mkdir(parents=True, exist_ok=True)
+    _run_mocked_frontend_target(session, (
+        "tests/paper-v2/localsim-unified-control-plane.spec.ts",
+        "tests/paper-v2/localsim-trading-workbench.spec.ts",
+    ), extra_env={"TEMP": str(task_temp), "TMP": str(task_temp)})
 
 
 @nox.session(venv_backend="none")
