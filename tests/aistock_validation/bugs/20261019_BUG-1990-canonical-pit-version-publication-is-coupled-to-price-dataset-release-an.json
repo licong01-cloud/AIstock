@@ -26,6 +26,12 @@
   ],
   "created_at": "2026-10-19T14:29:10.083761Z",
   "description": "PIT migration audit requires a full data release; physical provider pins are treated as policy identities; live default is legacy generation zero.",
+  "design_compliance_001": {
+    "item_by_item": "F-015..F-019 implemented and verified; F2 design validator passed. Complete factual exporter neutralization explicitly remains outside this BUG.",
+    "no_fake_completion": "Production default remains legacy generation zero; recent coverage and forward-only persisted-profile migration are pending, not reported globally active.",
+    "no_unapproved_simplification": "Reuses official five-field spans, canonical rule digest and existing singleton CAS; no private module policy or second active pointer.",
+    "remaining_gaps": "Production canonical coverage stops September 30; DEV ST source stops September 30. DEV/production differ in two lifecycle boundaries (600297,601028); no production facts overwritten."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -37,6 +43,21 @@
   "evidence_uris": [],
   "expected": "One global new-task PIT default; independent immutable PIT versions; fact datasets reference policy snapshots without controlling quote visibility; no monthly rebuild prerequisite.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/canonical_pit_release.py",
+      "backend/services/selection_center/runtime_profile.py",
+      "backend/services/stock_universe_pit_service.py",
+      "backend/tests/paper_trading_v2/test_runtime_profile.py",
+      "backend/tests/test_canonical_pit_release.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "scripts/manage_canonical_pit_release.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1990-canonical-pit-version-publication-is-coupled-to-price-dataset-release-an.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [
       "backend/services/canonical_pit_release.py",
       "backend/tests/test_canonical_pit_release.py",
@@ -44,11 +65,20 @@
     ],
     "changed_files": [
       "backend/services/canonical_equity_pit.py",
-      "backend/tests/test_canonical_equity_pit.py",
+      "backend/services/canonical_pit_release.py",
+      "backend/services/selection_center/runtime_profile.py",
+      "backend/services/stock_universe_pit_service.py",
+      "backend/tests/paper_trading_v2/test_runtime_profile.py",
+      "backend/tests/test_canonical_pit_release.py",
+      "backend/tests/test_stock_universe_pit_service.py",
       "docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md",
-      "noxfile.py"
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "scripts/manage_canonical_pit_release.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1990-canonical-pit-version-publication-is-coupled-to-price-dataset-release-an.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/canonical_equity_pit.py",
@@ -183,6 +213,7 @@
   "first_seen_at": "2026-10-19T14:29:10.083761Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "Independent content-addressed PIT versions and fact/PIT binding reuse official contracts without monthly price export. Shared new defaults reference the singleton; persisted task identities are not rewritten. Production pointer/profile migration remains separately authorized and is NOT complete.",
   "fixed_at": null,
   "github_issue_number": 6371,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6371",
@@ -205,18 +236,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "fresh_process_evidence": [
       "Fresh AIstock python loaded independent PIT producer, global query default and CLI; 91 direct policy/version/Selection/Paper tests passed. Earlier source/sync/W6/QE integration matrix: 269 passed; monthly-unified regression: 77 passed, 1 skipped.",
       "Existing DEV CAS rehearsal: canonical generation 1 verified then rolled back to legacy generation 0; exact independent release digest f7e7df40edf5d0c57a0da3b6707141e2c4e7026af1702950a6982a7144c81755; production database write=false.",
       "DEV recent-coverage extension was rejected by missing October ST source; original September metadata restored and entire captured release exactly matched the pre-test digest; member rows unchanged. Production read-only coverage plan remains REBUILD_REQUIRED through October 19."
     ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -226,13 +261,6 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "fix_summary": "Independent content-addressed PIT versions and fact/PIT binding reuse official contracts without monthly price export. Shared new defaults reference the singleton; persisted task identities are not rewritten. Production pointer/profile migration remains separately authorized and is NOT complete.",
-  "design_compliance_001": {
-    "item_by_item": "F-015..F-019 implemented and verified; F2 design validator passed. Complete factual exporter neutralization explicitly remains outside this BUG.",
-    "no_unapproved_simplification": "Reuses official five-field spans, canonical rule digest and existing singleton CAS; no private module policy or second active pointer.",
-    "no_fake_completion": "Production default remains legacy generation zero; recent coverage and forward-only persisted-profile migration are pending, not reported globally active.",
-    "remaining_gaps": "Production canonical coverage stops September 30; DEV ST source stops September 30. DEV/production differ in two lifecycle boundaries (600297,601028); no production facts overwritten."
-  },
   "status": "open",
   "suspected_modules": [
     "local_data"
