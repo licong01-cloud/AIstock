@@ -156,8 +156,9 @@ func filterSuspendedMinutePlaceholders(ctx context.Context, query func(context.C
 	return filtered, nil
 }
 
-// COPY into a transaction-local staging table, reject conflicting existing
-// facts, then insert new keys and fill only NULL precision provenance.
+// Insert new keys first. Only keys rejected by ON CONFLICT remain in staging
+// for fact comparison or NULL-only precision enrichment. The caller owns the
+// transaction and must roll it back on any error, including a replay conflict.
 func copyRawRows(ctx context.Context, tx pgx.Tx, table pgx.Identifier, columns []string, rows [][]any, chunkSize int) (int, error) {
 	if len(rows) == 0 {
 		return 0, nil
@@ -178,16 +179,32 @@ func copyRawRows(ctx context.Context, tx pgx.Tx, table pgx.Identifier, columns [
 			return 0, err
 		}
 	}
-	// COPY does not provide the planner with current temporary-table
-	// cardinality. Analyze before bounded joins against large hypertables.
-	if _, err := tx.Exec(ctx, "ANALYZE tdx_raw_stage"); err != nil {
-		return 0, err
-	}
 	key := "a.ts_code=b.ts_code AND a.trade_date=b.trade_date"
+	keyCols := "ts_code,trade_date"
 	dateCol := "a.trade_date"
 	if table[1] == "kline_minute_raw" {
 		key = "a.ts_code=b.ts_code AND a.trade_time=b.trade_time AND a.freq=b.freq"
+		keyCols = "ts_code,trade_time,freq"
 		dateCol = "a.trade_time"
+	}
+	cols := make([]string, len(columns))
+	for i, col := range columns {
+		cols[i] = pgx.Identifier{col}.Sanitize()
+	}
+	c := strings.Join(cols, ",")
+	// RETURNING drives deletion of exactly the newly inserted stage keys.
+	// This also handles mixed new/replayed batches without re-reading new facts.
+	result, err := tx.Exec(ctx, "WITH inserted AS (INSERT INTO "+name+" ("+c+") SELECT "+c+" FROM tdx_raw_stage ON CONFLICT DO NOTHING RETURNING "+keyCols+") DELETE FROM tdx_raw_stage b USING inserted a WHERE "+key)
+	if err != nil {
+		return 0, err
+	}
+	inserted := int(result.RowsAffected())
+	if inserted == len(rows) {
+		return inserted, nil // ordinary daily ingestion: no target-table checks/updates
+	}
+	// Only duplicate keys require statistics and a lookup of existing facts.
+	if _, err := tx.Exec(ctx, "ANALYZE tdx_raw_stage"); err != nil {
+		return 0, err
 	}
 	lo, hi := rows[0][0].(time.Time), rows[0][0].(time.Time)
 	for _, row := range rows {
@@ -199,38 +216,33 @@ func copyRawRows(ctx context.Context, tx pgx.Tx, table pgx.Identifier, columns [
 			hi = d
 		}
 	}
-	bound := " AND " + dateCol + " BETWEEN $1 AND $2 AND a.ts_code=ANY($3::text[])"
-	symbolSet := map[string]bool{}
-	var symbols []string
-	for _, row := range rows {
-		symbol := row[1].(string)
-		if !symbolSet[symbol] {
-			symbolSet[symbol] = true
-			symbols = append(symbols, symbol)
-		}
-	}
+	// The lateral primary-key equality already restricts the symbol. Retain
+	// only the date bound for up-front hypertable chunk pruning.
+	bound := " AND " + dateCol + " BETWEEN $1 AND $2"
 	var lower, upper any = lo, hi
 	if table[1] == "kline_daily_raw" {
 		lower = lo.In(protocol.ExchangeLocation).Format("2006-01-02")
 		upper = hi.In(protocol.ExchangeLocation).Format("2006-01-02")
 	}
-	var conflict bool
-	q := "SELECT EXISTS(SELECT 1 FROM " + name + " a JOIN tdx_raw_stage b ON " + key + " WHERE (ROW(a.open_li,a.high_li,a.low_li,a.close_li,a.volume_hand,a.amount_li,a.adjust_type) IS DISTINCT FROM ROW(b.open_li,b.high_li,b.low_li,b.close_li,b.volume_hand,b.amount_li,b.adjust_type) OR (a.volume_shares IS NOT NULL AND b.volume_shares IS NOT NULL AND a.volume_shares<>b.volume_shares))" + bound + ")"
-	if err := tx.QueryRow(ctx, q, lower, upper, symbols).Scan(&conflict); err != nil {
+	var existing int
+	var conflict, needsPrecision bool
+	// LIMIT 1 keeps the lookup parameterized by each exact staged primary key
+	// rather than planning a large hypertable join for a few replayed minutes.
+	q := "SELECT count(*),COALESCE(bool_or(ROW(a.open_li,a.high_li,a.low_li,a.close_li,a.volume_hand,a.amount_li,a.adjust_type) IS DISTINCT FROM ROW(b.open_li,b.high_li,b.low_li,b.close_li,b.volume_hand,b.amount_li,b.adjust_type) OR (a.volume_shares IS NOT NULL AND b.volume_shares IS NOT NULL AND a.volume_shares<>b.volume_shares)),false),COALESCE(bool_or(a.volume_shares IS NULL AND a.volume_shares_source IS NULL AND a.volume_shares_sha256 IS NULL AND b.volume_shares IS NOT NULL),false) FROM tdx_raw_stage b CROSS JOIN LATERAL (SELECT a.* FROM " + name + " a WHERE " + key + bound + " LIMIT 1) a"
+	if err := tx.QueryRow(ctx, q, lower, upper).Scan(&existing, &conflict, &needsPrecision); err != nil {
 		return 0, err
+	}
+	if existing != len(rows)-inserted {
+		return 0, fmt.Errorf("existing raw key readback differs from staged duplicate keys")
 	}
 	if conflict {
 		return 0, fmt.Errorf("existing raw facts conflict; explicit bounded repair required")
 	}
-	cols := make([]string, len(columns))
-	for i, c := range columns {
-		cols[i] = pgx.Identifier{c}.Sanitize()
+	if !needsPrecision {
+		return inserted, nil // exact replay: no no-op UPDATE
 	}
-	c := strings.Join(cols, ",")
-	result, err := tx.Exec(ctx, "INSERT INTO "+name+" ("+c+") SELECT "+c+" FROM tdx_raw_stage ON CONFLICT DO NOTHING")
-	if err != nil {
-		return 0, err
-	}
-	_, err = tx.Exec(ctx, "UPDATE "+name+" a SET volume_shares=b.volume_shares,volume_shares_source=b.volume_shares_source,volume_shares_sha256=b.volume_shares_sha256 FROM tdx_raw_stage b WHERE "+key+" AND a.volume_shares IS NULL AND a.volume_shares_source IS NULL AND a.volume_shares_sha256 IS NULL AND b.volume_shares IS NOT NULL"+bound, lower, upper, symbols)
-	return int(result.RowsAffected()), err
+	// Conflict resolution uses primary-key probes, not another hypertable join.
+	// Valid existing precision and all original OHLCV/amount remain untouched.
+	_, err = tx.Exec(ctx, "INSERT INTO "+name+" AS a ("+c+") SELECT "+c+" FROM tdx_raw_stage WHERE volume_shares IS NOT NULL ON CONFLICT ("+keyCols+") DO UPDATE SET volume_shares=EXCLUDED.volume_shares,volume_shares_source=EXCLUDED.volume_shares_source,volume_shares_sha256=EXCLUDED.volume_shares_sha256 WHERE a.volume_shares IS NULL AND a.volume_shares_source IS NULL AND a.volume_shares_sha256 IS NULL")
+	return inserted, err
 }
