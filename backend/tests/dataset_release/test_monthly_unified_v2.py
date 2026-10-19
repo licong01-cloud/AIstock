@@ -836,6 +836,36 @@ def test_request_is_idempotent_even_after_active_profile_advances(tmp_path: Path
     assert second["operation_id"] == first["operation_id"]
 
 
+def test_submit_freezes_predecessor_profile_before_active_advances(tmp_path: Path) -> None:
+    service = _service(tmp_path, Pipeline())
+    original = service.active_profile.read_bytes()
+    state = service.submit(_request())
+    plan = service.store.read_plan(state["operation_id"])
+    frozen = Path(plan["predecessor"]["profile_path"])
+    assert frozen != service.active_profile
+    assert frozen.is_relative_to(service.store.operation_root(state["operation_id"]))
+    _active(service.active_profile, cutoff="2026-09-30")
+    assert frozen.read_bytes() == original
+    assert _sha(frozen) == plan["predecessor_profile_ref"]["sha256"]
+    assert service.submit(_request())["operation_id"] == state["operation_id"]
+
+
+def test_submit_rejects_profile_change_between_snapshot_and_freeze(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    service = _service(tmp_path, Pipeline())
+    create = service.store.create
+
+    def raced_create(**kwargs):
+        _active(service.active_profile, cutoff="2026-09-30")
+        return create(**kwargs)
+
+    monkeypatch.setattr(service.store, "create", raced_create)
+    with pytest.raises(MonthlyReleaseError, match="predecessor profile bytes differ"):
+        service.submit(_request())
+    assert not list(service.store.operations.glob("*/plan.json"))
+
+
 def test_same_idempotency_key_rejects_different_request(tmp_path: Path) -> None:
     service = _service(tmp_path, Pipeline())
     service.submit(_request())

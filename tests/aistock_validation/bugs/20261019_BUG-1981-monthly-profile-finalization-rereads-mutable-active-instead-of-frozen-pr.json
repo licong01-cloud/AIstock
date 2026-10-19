@@ -30,14 +30,22 @@
   ],
   "expected": "Profile finalization uses exact submitted predecessor bytes despite later active changes; true byte drift remains rejected and completed BUILD/DERIVE remain reusable.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261019_BUG-1981-monthly-profile-finalization-rereads-mutable-active-instead-of-frozen-pr.json",
       "backend/services/dataset_release/monthly_profile_candidate.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_profile_candidate.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261019_BUG-1981-monthly-profile-finalization-rereads-mutable-active-instead-of-frozen-pr.json",
+      "backend/services/dataset_release/monthly_profile_candidate.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_profile_candidate.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_profile_candidate.py",
@@ -137,19 +145,37 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_profile_candidate.py::test_profile_builder_recovers_only_exact_legacy_candidate_bytes backend/tests/dataset_release/test_monthly_unified_v2.py::test_submit_freezes_predecessor_profile_before_active_advances backend/tests/dataset_release/test_monthly_unified_v2.py::test_submit_rejects_profile_change_between_snapshot_and_freeze -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
   ],
+  "review_results": [
+    "Round 1: three direct RED failures reproduced legacy active drift, absent per-operation snapshot, and a snapshot-to-submit race. The same three nodes passed GREEN after preserving exact predecessor bytes create-exclusively before plan publication.",
+    "Round 2: reviewed exact-hash/size legacy recovery, single-read JSON parsing, linked-file/ancestor rejection, and immutable-snapshot corruption rejection. No current-profile substitution, source query, activation/CAS relaxation, or plan/checkpoint rewrite. Three adversarial nodes passed.",
+    "Round 3: final small profile/control-plane matrix 82 passed, 1 skipped, including activation/rollback and failed-stage resume invariants. Ruff, L0, compile and diff checks passed. Fresh process resolved the real September plan to its exact v15 generation/manifest while active SHA stayed unchanged.",
+    "DESIGN-COMPLIANCE-001: complete fix to the actual pointer-lifetime defect; unknown or altered predecessor bytes still fail; existing model, PIT, release, CAS and authorization semantics remain unchanged; no additional data gate, approval, full-history scan or framework. September BUILD/DERIVE retained; runtime effectiveness remains pending user restart and formal resume."
+  ],
   "risk_area": "bug",
+  "root_cause": "The monthly plan retained the mutable global active profile path with v15 SHA256 56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f. After an independently authorized v18 activation, LOCAL_VALIDATE reread v18 bytes and rejected them even though the exact v15 candidate profile and SOURCE/BUILD/DERIVE checkpoints still existed. No market data was missing at this failure point.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "Fresh pytest: direct RED 3 failed, exact failed nodes GREEN 3 passed; link/snapshot adversarial checks 3 passed; final related matrix 82 passed, 1 skipped in 11.04s. Ruff, L0, py_compile and git diff --check passed.",
+      "Fresh read-only process loaded persistent _predecessor_profile implementation with the actual September operation plan: resolved generation 20260928-v15-unified-moneyflow1 and manifest 2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc; active SHA unchanged; database/candidate/profile writes false.",
+      "Actual September plan resolves exact v15 predecessor generation and manifest in isolated process; active SHA unchanged; database/candidate/profile writes false",
+      "Real sealed September profile construction and existing load_qe_profile/validate_controller_snapshot passed in a fresh process in 9.77s, using only an X:/AIstock_temp/BUG-1981-real-profile-preflight/september-profile.json output (SHA256 5f883e407ed7107cf06e04d0becba65f2ee466c6eb845eb74b41f198982eca4c). No candidate/active writes or database access."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",

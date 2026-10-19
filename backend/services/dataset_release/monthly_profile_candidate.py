@@ -65,12 +65,62 @@ def _sha256(path: Path) -> str:
 def _read_canonical(path: Path, *, label: str) -> dict[str, Any]:
     try:
         raw = path.read_bytes()
+    except OSError as exc:
+        raise MonthlyProfileCandidateError(f"{label} is unreadable") from exc
+    return _canonical_payload(raw, label=label)
+
+
+def _canonical_payload(raw: bytes, *, label: str) -> dict[str, Any]:
+    try:
         value = json.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise MonthlyProfileCandidateError(f"{label} is unreadable") from exc
     if not isinstance(value, dict) or raw != canonical_json_bytes(value) + b"\n":
         raise MonthlyProfileCandidateError(f"{label} is not canonical JSON")
     return value
+
+
+def _predecessor_profile(
+    predecessor: Mapping[str, Any], reference: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Read the submitted bytes, never substitute the currently active identity."""
+    path = Path(str(predecessor.get("profile_path") or ""))
+
+    def matching_bytes(candidate: Path) -> bytes | None:
+        if not candidate.is_absolute() or any(
+            _is_link(part) for part in (candidate, *candidate.parents)
+        ):
+            return None
+        try:
+            if not candidate.is_file() or candidate.stat().st_size != reference.get("size"):
+                return None
+            raw = candidate.read_bytes()
+        except OSError:
+            return None
+        if len(raw) != reference.get("size") or hashlib.sha256(raw).hexdigest() != reference.get("sha256"):
+            return None
+        return raw
+
+    raw = matching_bytes(path)
+    if raw is not None:
+        return _canonical_payload(raw, label="predecessor profile")
+    # Pre-snapshot operations recorded the mutable active path. Recover only an
+    # already existing, byte-identical profile from its regular candidates dir.
+    # New operations point inside their own receipts and never use this fallback.
+    if (
+        path.is_absolute()
+        and path.name == reference.get("id")
+        and path.name != "predecessor-profile.json"
+    ):
+        candidates = path.parent / "candidates"
+        if candidates.is_dir() and not any(
+            _is_link(part) for part in (candidates, *candidates.parents)
+        ):
+            for candidate in sorted(candidates.glob("*.json")):
+                raw = matching_bytes(candidate)
+                if raw is not None:
+                    return _canonical_payload(raw, label="predecessor profile")
+    raise MonthlyProfileCandidateError("predecessor profile bytes differ")
 
 
 def _plain_file(root: Path, relative: str, *, label: str) -> Path:
@@ -138,16 +188,7 @@ class SealedMonthlyProfileCandidateBuilder:
             raise MonthlyProfileCandidateError("candidate root is unavailable") from exc
         if _is_link(candidate) or not root.is_dir() or output.exists():
             raise MonthlyProfileCandidateError("profile target or candidate root is invalid")
-        predecessor_path = Path(str(predecessor.get("profile_path") or ""))
-        if (
-            not predecessor_path.is_absolute()
-            or _is_link(predecessor_path)
-            or not predecessor_path.is_file()
-            or _sha256(predecessor_path) != predecessor_ref.get("sha256")
-            or predecessor_path.stat().st_size != predecessor_ref.get("size")
-        ):
-            raise MonthlyProfileCandidateError("predecessor profile bytes differ")
-        base = _read_canonical(predecessor_path, label="predecessor profile")
+        base = _predecessor_profile(predecessor, predecessor_ref)
 
         manifest_path = _plain_file(root, "qe_dataset_manifest.json", label="dataset manifest")
         manifest = _read_canonical(manifest_path, label="dataset manifest")
