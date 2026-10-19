@@ -109,7 +109,9 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Isolated AIstock python -B loaded persistent MonthlyReleaseService.activate and verified canonical policy readback before CAS and after consumer verification; no DB or service access."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -119,7 +121,8 @@
     "target_id": "worker-scheduler",
     "target_ids": [
       "worker-scheduler"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -237,5 +240,28 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "fix_summary": {
+    "root_cause": "Monthly activation switched the global frozen profile without reading the separately active rolling canonical PIT policy.",
+    "source_dependency": "BUG-1986 / PR #6365 shared canonical policy helpers",
+    "changes": [
+      "Bind authorized activation intent to shared rule, parameters digest and activation generation/envelope.",
+      "Recheck before CAS and after consumer verification; drift remains ACTIVATED_VERIFY_FAILED.",
+      "Permit normal same-policy rolling watermark extension without requiring frozen/rolling physical IDs or cutoff dates to be equal.",
+      "Check rollback against the same runtime policy; do not write the DB pointer."
+    ],
+    "verification": "RED five cases, GREEN five; related matrix 73 passed/1 skipped plus four fixture regression failures corrected and rerun 4 passed; Ruff/l0/fresh-process PASS.",
+    "reviews": [
+      "Policy/physical identity and cutoff semantics reviewed.",
+      "Authorization, CAS, generation drift and idempotent retry reviewed; no false atomic cross-filesystem/DB guarantee.",
+      "Quote adoption fixtures corrected to bind actual catalog pins; reused release data not altered."
+    ],
+    "deployment_constraint": "Production pointer migration still requires real full PIT bundle, DEV validation and separate target authorization. Source merge is not activation. Do not restart into strict canonical admission while default pointer remains legacy.",
+    "design_compliance": [
+      "No partial deployment represented as complete.",
+      "No fake PIT identity or silent successful activation.",
+      "Historical candidates and native leases unchanged.",
+      "Reuse existing CAS and authorization, no new scheduler or approval platform."
+    ]
   }
 }

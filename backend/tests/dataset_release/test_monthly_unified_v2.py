@@ -699,6 +699,9 @@ def _quote_only_successor(tmp_path: Path, service: MonthlyReleaseService) -> dic
     active = json.loads(service.active_profile.read_text(encoding='utf-8'))
     active['components'].update(dataset_manifest_sha256=old['dataset_manifest_sha256'],
                                 dataset_manifest_file_sha256=_sha(baseline / 'qe_dataset_manifest.json'))
+    active['components']['minute_pins'].update(
+        instruments_sha256=pins['minute_provider_catalog']['sha256'],
+        meta_export_sha256=pins['minute_meta_export']['sha256'])
     active['node_bindings'] = {'wsl2-5080': {'candidate_root': '/mnt/releases/baseline'},
                               'rdagent-node1': {'candidate_root': '/home/releases/baseline'}}
     _canonical(service.active_profile, active)
@@ -731,7 +734,10 @@ def _quote_only_successor(tmp_path: Path, service: MonthlyReleaseService) -> dic
     _canonical(candidate / 'qe_dataset_manifest.json', new)
     target = json.loads(values['profile_candidate'].read_text(encoding='utf-8'))
     _canonical(values['profile_candidate'], {**active, **{k: target[k] for k in ['generation', 'controller_paths', 'node_bindings']},
-        'components': {**active['components'], 'dataset_manifest_sha256': new['dataset_manifest_sha256'],
+        'components': {**active['components'], 'minute_pins': {**active['components']['minute_pins'],
+                       'instruments_sha256': new_pins['minute_provider_catalog']['sha256'],
+                       'meta_export_sha256': new_pins['minute_meta_export']['sha256']},
+                       'dataset_manifest_sha256': new['dataset_manifest_sha256'],
                        'dataset_manifest_file_sha256': _sha(candidate / 'qe_dataset_manifest.json')}})
     readback = {'schema_version': 'aistock_minute_quote_catalog_readback_v1', 'status': 'PASS',
                 'dataset_manifest_sha256': new['dataset_manifest_sha256'],
