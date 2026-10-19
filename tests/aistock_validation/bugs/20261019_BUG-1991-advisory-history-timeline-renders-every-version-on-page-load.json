@@ -36,12 +36,18 @@
   ],
   "expected": "Episode returns render a bounded page; all records and original ordering remain accessible. Task changes and smaller refreshed results cannot leave stale or blank pages; pagination does not issue API writes or refetch unrelated models.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "frontend/src/app/paper-v2/advisory/page.tsx",
+      "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+      "tests/aistock_validation/bugs/20261019_BUG-1991-advisory-history-timeline-renders-every-version-on-page-load.json"
+    ],
     "added_files": [],
     "changed_files": [
       "frontend/src/app/paper-v2/advisory/page.tsx",
-      "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts"
+      "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
+      "tests/aistock_validation/bugs/20261019_BUG-1991-advisory-history-timeline-renders-every-version-on-page-load.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "frontend/src/app/paper-v2/advisory/page.tsx",
@@ -111,10 +117,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
