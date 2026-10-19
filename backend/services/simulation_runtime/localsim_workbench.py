@@ -32,6 +32,15 @@ MAX_ROWS = 200_000
 _SIGNING_KEY = secrets.token_bytes(32)
 _CACHE: OrderedDict[tuple[str, str], tuple[float, dict]] = OrderedDict()
 _LOCK = RLock()
+READ_COLUMNS = {
+    "snapshots": "snapshot_id,run_id,portfolio_id,trade_date,cash,market_value,nav,position_count,snapshot_time,metadata",
+    "positions": "position_id,run_id,portfolio_id,trade_date,symbol,stock_name,quantity,available_quantity,avg_cost,market_price,market_value",
+    "orders": "order_id,run_id,portfolio_id,symbol,stock_name,side,quantity,limit_price,status,filled_quantity,created_at,updated_at",
+    "cash": "cash_id,run_id,portfolio_id,fill_id,trade_date,symbol,stock_name,side,notional,fee,cash_delta,cash_after,created_at",
+    "runs": "run_id,portfolio_id,trade_date,status,started_at,completed_at,md5(COALESCE(runtime_config::text,'')) AS runtime_identity",
+    "fills": "fill_id,run_id,order_id,symbol,stock_name,side,quantity,price,trade_time,created_at",
+    "events": "event_id,run_id,order_id,event_type,event_time,reason",
+}
 
 
 def money(value: Any) -> Decimal:
@@ -116,11 +125,13 @@ class LocalSimWorkbenchService:
                 ("fills", "fills", "run_id IN (SELECT run_id FROM paper_v2.run WHERE portfolio_id = %s)"),
                 ("events", "order_events", "run_id IN (SELECT run_id FROM paper_v2.run WHERE portfolio_id = %s)"),
             ):
-                data[name] = self._read(cur, f"SELECT * FROM paper_v2.{table} WHERE {where}", (data["scope"],))
-            data["replays"] = self._read(cur, "SELECT * FROM paper_v2.localsim_replay_job_v1 WHERE simulation_account_id = %s ORDER BY created_at DESC, replay_job_id DESC", (account_id,))
+                data[name] = self._read(cur, f"SELECT {READ_COLUMNS[name]} FROM paper_v2.{table} WHERE {where}", (data["scope"],))
+            data["replays"] = self._read(cur, "SELECT replay_job_id,status,start_trade_date,end_trade_date,next_trade_date,completed_trade_date,activation_trade_date,historical_source_id,failure_code,created_at,updated_at FROM paper_v2.localsim_replay_job_v1 WHERE simulation_account_id = %s ORDER BY created_at DESC, replay_job_id DESC", (account_id,))
             data["valuation"] = self._read(cur, """SELECT run_id, status,
-                run_payload_json->'local_sim_projection_outbox_v1' AS outbox,
-                run_payload_json->'local_sim_valuation_completion_v1' AS completion
+                jsonb_build_object('outbox_id',run_payload_json->'local_sim_projection_outbox_v1'->'outbox_id',
+                    'projection_payload',jsonb_build_object('marks',run_payload_json->'local_sim_projection_outbox_v1'->'projection_payload'->'marks')) AS outbox,
+                CASE WHEN run_payload_json->'local_sim_valuation_completion_v1' IS NOT NULL
+                    THEN jsonb_build_object('marks',run_payload_json->'local_sim_valuation_completion_v1'->'marks') END AS completion
                 FROM paper_v2.simulation_daily_run WHERE run_id IN
                 (SELECT run_id FROM paper_v2.run WHERE portfolio_id = %s)""", (data["scope"],))
             cur.execute("SELECT display_name, package_name FROM strategy_pkg.package WHERE package_id = %s", (account.package_id,))
@@ -174,7 +185,7 @@ class LocalSimWorkbenchService:
             if item["run_id"] != snap["run_id"]:
                 continue
             outbox = item.get("outbox") or {}
-            if metadata.get("local_sim_outbox_id") != outbox.get("outbox_id"):
+            if not outbox.get("outbox_id") or metadata.get("local_sim_outbox_id") != outbox.get("outbox_id"):
                 continue
             payload = item.get("completion") or outbox.get("projection_payload") or {}
             for raw in payload.get("marks") or []:
@@ -190,7 +201,7 @@ class LocalSimWorkbenchService:
                     reference = mark.suspension_reference or {}
                     quote_date = day(reference.get("quote_date") or reference.get("reference_trade_date"))
                     return "停牌参考价" + (f"，报价截至 {quote_date}" if quote_date else "，历史报价日期沿用原估值凭证")
-                return "历史分钟收盘估值" if mark.provenance.value == "HISTORICAL_MINUTE_CLOSE" else "实时分钟估值，价格时点 " + clock(mark.as_of_time)
+                return ("历史分钟估值，价格时点 " if mark.provenance.value == "HISTORICAL_MINUTE_CLOSE" else "实时分钟估值，价格时点 ") + clock(mark.as_of_time)
         return "账本记录估值；详细参考价来源尚未获得可匹配的原生凭证"
 
     @staticmethod
@@ -244,6 +255,8 @@ class LocalSimWorkbenchService:
             _fail("开始日期不能晚于结束日期")
         if group_by not in {"date", "security"} or not 1 <= page_size <= 200:
             _fail("查询选项不合法")
+        if kind == "pnl" and group_by == "date" and (security or search):
+            _fail("证券筛选请使用按股票统计；按日视图表示账户整体")
         if sort not in {"time", "name", "date", "value", "pnl", "unrealized", "quantity", "price", "fees"}:
             _fail("排序选项不合法")
         filters = [account_id, kind, str(start), str(end), str(as_of), security, side, status, group_by, page_size, order_key, search, sort, descending]
@@ -342,7 +355,7 @@ class LocalSimWorkbenchService:
                     name="历史回放进度", status=state(j["status"]), description=problem(j.get("failure_code"))))
         else:
             _fail("不支持的查询类型")
-        rows = [r for r in rows if (not start or r.date >= str(start)) and (not end or r.date <= str(end))
+        rows = [r for r in rows if (kind in {"positions", "summary"} or (not start or r.date >= str(start)) and (not end or r.date <= str(end)))
                 and (not security or r.security == security) and (not side or r.side == state(side)) and (not status or r.status == state(status))
                 and (not order_key or r.order_key == order_key) and (not search or search.strip() in r.name)]
         numeric_sort = sort in {"value", "pnl", "unrealized", "quantity", "price", "fees"}
@@ -476,8 +489,9 @@ class LocalSimWorkbenchService:
             scopes = list({r["ledger_scope_id"] for r in records if r["ledger_scope_id"]})
             batches = {}
             for name, table in (("snapshots", "daily_snapshots"), ("positions", "positions"), ("cash", "cash_ledger"), ("runs", "run")):
-                batches[name] = self._read(cur, f"SELECT * FROM paper_v2.{table} WHERE portfolio_id = ANY(%s)", (scopes,))
-            batches["fills"] = self._read(cur, "SELECT f.*, r.portfolio_id FROM paper_v2.fills f JOIN paper_v2.run r USING (run_id) WHERE r.portfolio_id = ANY(%s)", (scopes,))
+                batches[name] = self._read(cur, f"SELECT {READ_COLUMNS[name]} FROM paper_v2.{table} WHERE portfolio_id = ANY(%s)", (scopes,))
+            fill_columns = ",".join("f."+column for column in READ_COLUMNS["fills"].split(","))
+            batches["fills"] = self._read(cur, f"SELECT {fill_columns}, r.portfolio_id FROM paper_v2.fills f JOIN paper_v2.run r USING (run_id) WHERE r.portfolio_id = ANY(%s)", (scopes,))
             dates = [day(s["trade_date"]) for s in batches["snapshots"]]
             calendar = self._read(cur, "SELECT cal_date FROM market.trading_calendar WHERE is_trading = TRUE AND cal_date BETWEEN %s AND %s ORDER BY cal_date", (min(dates), max(dates))) if dates else []
         if len({r["account_id"] for r in records}) != len(records):

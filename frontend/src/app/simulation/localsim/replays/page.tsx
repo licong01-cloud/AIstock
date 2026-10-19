@@ -26,8 +26,8 @@ export default function ReplaysPage(){
     await Promise.all([replays.refresh(),readiness.refresh()]);setAccounts(await request<Overview>(base+"/workbench/overview"));setNotice("回放已按正式合同创建；交易与实时接续进度请以原任务状态为准。");
   }catch{setError("创建回放未通过原生服务验证，请核对范围、输入覆盖与配置；未自动改用其他数据源。");}finally{setBusy(false);}}
   return <main className={styles.shell}><header className={styles.header}><div><h1>历史回放</h1><p>独立账户与账本；范围、行情来源和政策按原生合同冻结。</p></div><nav className={styles.nav}><Link href="/simulation/localsim/workbench">交易工作台</Link><Link href="/simulation/localsim/configure">创建与配置</Link></nav></header>
-    {(error||catalog.error||replays.error)&&<p role="alert" className={styles.error}>{error||catalog.error||READ_ERROR}</p>}{notice&&<p role="status" className={styles.ready}>{notice}</p>}
-    <LocalSimReadbackStatus readiness={readiness} scheduler={scheduler} onRefresh={()=>{catalog.reload();void Promise.all([readiness.refresh(),scheduler.refresh(),replays.refresh()]);}}/>
+    {(error||catalog.error||replays.error)&&<p role="alert" className={styles.error}>{error||catalog.error||READ_ERROR}</p>}{catalog.error&&<button className={styles.button} onClick={catalog.reload}>重新读取配置目录</button>}{notice&&<p role="status" className={styles.ready}>{notice}</p>}
+    <LocalSimReadbackStatus readiness={readiness} scheduler={scheduler} onRefresh={()=>{void Promise.all([readiness.refresh(),scheduler.refresh(),replays.refresh()]);}}/>
     <section className={styles.card}><h2>创建新的历史回放</h2><p className={styles.muted}>新任务使用原有数据集文件来源；覆盖或政策不满足时由服务拒绝，不静默回退数据库。此表单不会重置已有任务。</p><div className={styles.form}>
       <label className={styles.field}>策略<select value={catalog.packageId} onChange={e=>catalog.setPackageId(e.target.value)}><option value="">请选择策略</option>{catalog.packages.map((p,i)=><option key={p.package_id} value={p.package_id}>{packageLabel(p,i)}</option>)}</select></label>
       <label className={styles.field}>账户名称<input value={name} onChange={e=>setName(e.target.value)} maxLength={100}/></label><label className={styles.field}>初始资金（元）<input type="number" min="1" step="0.01" value={capital} onChange={e=>setCapital(e.target.value)}/></label>

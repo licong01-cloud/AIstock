@@ -69,6 +69,17 @@ def test_historical_holdings_are_run_scoped_and_empty_latest_is_real_zero():
     assert service.view("a", "positions", as_of=date(2026, 1, 4)).status == "partial"
 
 
+def test_holdings_use_asof_independently_of_the_other_tabs_period():
+    result = Service().view("a", "positions", as_of=date(2026, 1, 5), start=date(2026, 1, 6), end=date(2026, 1, 6))
+    assert result.total_count == 1 and result.items[0].date == "2026-01-05"
+
+
+def test_security_filter_cannot_be_misrepresented_as_whole_account_daily_pnl():
+    with pytest.raises(RuntimeConfigInvalidError):
+        Service().view("a", "pnl", security="600000.SH")
+    assert Service().view("a", "pnl", security="600000.SH", group_by="security").total_count == 1
+
+
 @pytest.mark.parametrize("fault", ["missing_start", "missing_day", "unknown_cash", "unbalanced_cash", "partial_positions"])
 def test_incomplete_evidence_never_becomes_zero_or_fake_complete(fault):
     data = facts()

@@ -30,8 +30,8 @@ export default function ConfigurePage(){
   const selectedHmm=hmm.find(h=>h.snapshot===config.hmm.snapshot_id);
   return <main className={styles.shell}>
     <header className={styles.header}><div><h1>模拟账户创建与配置</h1><p>选择业务规则；原生服务验证冻结身份、不可变版本及生效日期。</p></div><nav className={styles.nav}><Link href="/simulation/localsim/workbench">交易工作台</Link><Link href="/simulation/localsim/replays">历史回放</Link></nav></header>
-    {(error||catalog.error)&&<p role="alert" className={styles.error}>{error||catalog.error}</p>}{notice&&<p role="status" className={styles.ready}>{notice}</p>}
-    <LocalSimReadbackStatus readiness={readiness} scheduler={scheduler} onRefresh={()=>{catalog.reload();void Promise.all([readiness.refresh(),scheduler.refresh()]);}}/>
+    {(error||catalog.error)&&<p role="alert" className={styles.error}>{error||catalog.error}</p>}{catalog.error&&<button className={styles.button} onClick={catalog.reload}>重新读取配置目录</button>}{notice&&<p role="status" className={styles.ready}>{notice}</p>}
+    <LocalSimReadbackStatus readiness={readiness} scheduler={scheduler} onRefresh={()=>{void Promise.all([readiness.refresh(),scheduler.refresh()]);}}/>
     <div className={styles.grid}><section className={`${styles.card} ${styles.half}`}><h2>选择策略与配置档案</h2><div className={styles.form}>
       <label className={`${styles.field} ${styles.wide}`}>策略<select value={catalog.packageId} onChange={e=>catalog.setPackageId(e.target.value)}><option value="">请选择策略</option>{catalog.packages.map((p,i)=><option key={p.package_id} value={p.package_id}>{packageLabel(p,i)}</option>)}</select></label>
       <label className={styles.field}>配置档案<select value={profileId} onChange={e=>setProfileId(e.target.value)}><option value="">请选择配置档案</option>{catalog.profiles.map((p,i)=><option key={p.profile_id} value={p.profile_id}>{profileLabel(p,i)}</option>)}</select></label>
