@@ -1792,6 +1792,21 @@ rules:
     layer: docs
     risk_level: medium
     ownership_reason: Codex and Claude project instructions make development standards discoverable to agent sessions.
+  - rule_id: localsim_workbench_design
+    priority: 51
+    include:
+      - docs/design/localsim_trading_workbench_overview_20261019.md
+      - docs/design/localsim_trading_workbench_20261019/index.html
+      - docs/design/localsim_trading_workbench_20261019/overview.png
+      - docs/design/localsim_trading_workbench_20261019/strategy-detail.png
+      - docs/design/localsim_trading_workbench_20261019/historical-trades.png
+      - docs/design/localsim_trading_workbench_20261019/period-pnl.png
+      - docs/design/localsim_trading_workbench_20261019/trading-monitor.png
+    primary_module: docs.architecture
+    impact_modules: [simulation.localsim_successor_core]
+    layer: docs
+    risk_level: low
+    ownership_reason: Approved LocalSIM workbench overview and visual design assets define the scoped frontend implementation.
   - rule_id: docs_architecture
     priority: 50
     include:

@@ -96,7 +96,7 @@ class WorkbenchResult(BaseModel):
     items: list[WorkbenchRow] = Field(default_factory=list)
     total_count: int
     next_cursor: str | None = None
-    missing_dates: list[str] = Field(default_factory=list)
+    missing_dates: list[str]
     warnings: list[str] = Field(default_factory=list)
     requested_start: str | None = None
     requested_end: str | None = None
