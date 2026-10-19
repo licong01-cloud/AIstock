@@ -3,7 +3,8 @@
   "allowed_write_scope": [
     "tests/aistock_validation/catalog/file_ownership.yaml",
     "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
-    "tests/aistock_validation/bugs/20261019_BUG-2001-localsim.json"
+    "tests/aistock_validation/bugs/20261019_BUG-2001-localsim.json",
+    "frontend/src/app/DataAlertsToast.tsx"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2001",
@@ -28,12 +29,20 @@
   ],
   "expected": "金额完整单行；LocalSIM内以一条可关闭的人类可读提醒保留数据准备入口；左侧导航与其他页面行为不变。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261019_BUG-2001-localsim.json",
+      "frontend/src/app/DataAlertsToast.tsx",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/catalog/file_ownership.yaml",
-      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css"
+      "tests/aistock_validation/bugs/20261019_BUG-2001-localsim.json",
+      "frontend/src/app/DataAlertsToast.tsx",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "tests/aistock_validation/catalog/file_ownership.yaml",
@@ -104,6 +113,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "ownership_scope_note": "Classify existing DataAlertsToast in frontend_common; change presentation only on LocalSIM routes, preserve polling, server records and non-LocalSIM behavior.",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -113,14 +123,20 @@
     "l0",
     "validation_module_registry_l0"
   ],
+  "review_evidence": [
+    "Review 1: all measured financial values fit one line at 1280/1440/1920; no formatter or metric semantics changed.",
+    "Review 2: LocalSIM collapses human alert summaries; other routes keep original alerts; navigation and dismissal send no acknowledgement or state writes."
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "frontend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -156,15 +172,28 @@
     "schema_version": "aistock_ui_issue_intake_hints_v1",
     "scope_source": "inferred_from_module_route_and_changed_files",
     "ui_component_scope": [
-      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "frontend/src/app/DataAlertsToast.tsx",
       "frontend/src/app/simulation/localsim/components/trading-workbench.module.css"
     ],
     "ui_issue": true,
-    "ui_route": "/aistock_validation/catalog/file_ownership.yaml",
+    "ui_route": "/simulation/localsim/workbench",
     "ui_routes": [
-      "/aistock_validation/catalog/file_ownership.yaml"
+      "/simulation/localsim/workbench"
     ],
     "visual_acceptance_required": true
+  },
+  "ui_route": "/simulation/localsim/workbench",
+  "ui_verification_evidence": {
+    "alert_component_transport": "native GET body; isolated component CORS shim",
+    "business_api_mocked": false,
+    "component_receipt": "X:/AIstock_temp/LOCALSIM/BUG-2001/readability-alerts-receipt.json",
+    "protected_navigation_files_changed": false,
+    "type_check": "npm exec --offline --call node check-types.cjs passed",
+    "viewport_screenshots": [
+      "X:/AIstock_temp/LOCALSIM/BUG-2001/metrics-1280.png",
+      "X:/AIstock_temp/LOCALSIM/BUG-2001/metrics-1440.png",
+      "X:/AIstock_temp/LOCALSIM/BUG-2001/metrics-1920.png"
+    ]
   },
   "verification_budget": {
     "budget": "light_ui",
