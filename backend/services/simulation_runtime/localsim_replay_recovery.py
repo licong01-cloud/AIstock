@@ -5,7 +5,9 @@ from __future__ import annotations
 from copy import deepcopy
 from datetime import UTC, date, datetime
 import ast
+import json
 from pathlib import Path
+from math import isfinite
 import re
 from typing import Any, Literal
 
@@ -25,6 +27,10 @@ ECONOMIC_TABLES = ("run", "orders", "order_events", "fills", "cash_ledger", "pos
 ROLLED_BACK_LOCAL_SIM_FAILURES = frozenset({
     ("LOCAL_SIM_PERSISTENCE_FAILED", "STK_LIMIT_PRE_CLOSE_INVALID"),
     ("LOCAL_SIM_MARK_VALIDATION_FAILED", "LOCALSIM_SUSPENDED_DAILY_FACT_INVALID"),
+})
+RECOVERABLE_DB_INPUT_FAILURES = frozenset({
+    "market.stk_limit pre_close is required and cannot be derived",
+    "historical DB returned no minute bars",
 })
 ECONOMIC_PAYLOAD_KEYS = (
     "local_sim_execution_states_v1", "local_sim_economic_receipts_v1",
@@ -54,6 +60,40 @@ class LocalSimReplayRecoveryCheckV1(BaseModel):
     trade_date: date | None = None
     economic_counts: dict[str, int]
     native_input: dict[str, Any] = Field(default_factory=dict)
+
+
+def validate_replay_recovery_check(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    """Pure target-owned smoke for a ready, side-effect-free historical input check."""
+    try:
+        check = LocalSimReplayRecoveryCheckV1.model_validate_json(json.dumps(payload), strict=True)
+        if (not check.ready or check.reason_codes or check.version < 1 or not check.replay_job_id
+                or not check.run_id or check.trade_date is None
+                or re.fullmatch(r"[0-9a-f]{64}", check.snapshot_sha256) is None
+                or set(check.economic_counts) != set(ECONOMIC_TABLES)
+                or any(type(n) is not int or n != 0 for n in check.economic_counts.values())):
+            raise ValueError("ready recovery needs original identity and zero economic effects")
+        native = check.native_input
+        if (native.get("trade_date") != check.trade_date.isoformat() or not native.get("symbol")
+                or native.get("source") not in {"DB_HISTORICAL", "DATASET_FILES"}):
+            raise ValueError("native input must match the failed historical day")
+        if native.get("eligibility") == "FULL_DAY_SUSPENDED":
+            from backend.services.simulation_execution.localsim.suspension import (
+                validate_suspended_native_pre_close, validate_suspension_reference,
+            )
+            if "valuation_native_pre_close" in native:
+                validate_suspended_native_pre_close(native["valuation_native_pre_close"],
+                                                   symbol=native["symbol"], trade_date=check.trade_date)
+            else:
+                validate_suspension_reference(native.get("valuation_reference", {}),
+                                              symbol=native["symbol"], trade_date=check.trade_date)
+        elif (type(native.get("bar_count")) is not int or native["bar_count"] <= 0
+              or isinstance(native.get("prev_close"), bool)
+              or not isfinite(float(native.get("prev_close"))) or float(native["prev_close"]) <= 0):
+            raise ValueError("tradable input requires native minute bars and a positive pre_close")
+        return "passed", None, {"ready": True, "zero_economic_effects": True,
+                                "native_source": native["source"]}
+    except (ValueError, TypeError, KeyError, DataUnavailableError) as exc:
+        return "failed", f"LocalSIM replay recovery contract failed: {exc}", {}
 
 
 def economic_fact_counts(cur: Any, run_id: str) -> dict[str, int]:
@@ -358,13 +398,14 @@ class LocalSimReplayRecoveryService:
             require_no_economic_effects(operational, counts, now=self.clock())
             failure = run["run_payload_json"].get("submit_failure", {})
             context = failure.get("context", {})
-            exact_message = "market.stk_limit pre_close is required and cannot be derived"
             if not (
                 (failure.get("type") == "DataUnavailableError"
                  and (failure.get("stage"), context.get("reason_code")) in ROLLED_BACK_LOCAL_SIM_FAILURES)
                 or (failure.get("type") == "BrokerConnectivityError"
                     and failure.get("stage") == "LOCAL_SIM_SUBMIT_FAILED"
-                    and context.get("source") == "DB_HISTORICAL" and context.get("cause") == exact_message)
+                    and not file_dataset and context.get("source") == "DB_HISTORICAL"
+                    and isinstance(context.get("cause"), str)
+                    and context.get("cause") in RECOVERABLE_DB_INPUT_FAILURES)
             ) or job["failure_code"] not in {"DataUnavailableError", "BrokerConnectivityError", "_BindingRetryAttemptError"}:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_FAILURE_UNSUPPORTED")
             if job["status"] == "FAILED_RETRYABLE" and (

@@ -7,7 +7,7 @@ import pytest
 from backend.services.simulation_runtime.localsim_replay import local_sim_calendar_snapshot_sha256
 from backend.services.simulation_runtime.localsim_replay_recovery import (
     ECONOMIC_TABLES, RECOVERY_KEY, LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryService,
-    recovery_rebuild_receipt, require_no_economic_effects,
+    recovery_rebuild_receipt, require_no_economic_effects, validate_replay_recovery_check,
 )
 from backend.services.simulation_runtime.models import canonical_json_sha256, SimulationBrokerBackend, SimulationDailyRunStatus
 from backend.services.simulation_runtime.scheduler import SimulationLifecycleScheduler
@@ -152,6 +152,122 @@ def test_repaired_native_input_is_ready_without_editing_original_job_or_day():
                       "min_bars": 1, "require_suspend_status": True}]
     assert snapshot == before
     assert service.inspect("replay-original").snapshot_sha256 == check.snapshot_sha256
+
+
+def _missing_minute_snapshot():
+    snapshot = _snapshot()
+    snapshot["run"]["run_payload_json"]["submit_failure"]["context"]["cause"] = (
+        "historical DB returned no minute bars"
+    )
+    return snapshot
+
+
+def test_repaired_missing_minute_uses_original_native_source_without_changing_any_facts():
+    snapshot = _missing_minute_snapshot()
+    original = deepcopy(snapshot)
+    service, calls = _service(snapshot)
+    check = service.inspect("replay-original")
+    assert check.ready and check.reason_codes == []
+    assert check.native_input == {"symbol": "001205.SZ", "trade_date": "2026-01-21",
+                                "source": "DB_HISTORICAL", "prev_close": 15.30, "bar_count": 1}
+    assert calls == [{"symbol": "001205.SZ", "trade_date": DAYS[1], "source": MinuteDataSource.DB_HISTORICAL,
+                      "min_bars": 1, "require_suspend_status": True}]
+    assert snapshot == original
+    assert service.inspect("replay-original").snapshot_sha256 == check.snapshot_sha256
+
+
+@pytest.mark.parametrize("error", [
+    DataUnavailableError("historical DB returned no minute bars"),
+    DataUnavailableError("no authoritative pre_close", context={"reason_code": "STK_LIMIT_PRE_CLOSE_INVALID"}),
+])
+def test_missing_minute_recovery_keeps_real_input_gaps_blocked(error):
+    snapshot = _missing_minute_snapshot()
+    service, calls = _service(snapshot, market_error=error)
+    check = service.inspect("replay-original")
+    assert not check.ready and check.reason_codes == [error.context.get("reason_code", "DataUnavailableError")]
+    assert len(calls) == 1 and check.native_input == {}
+
+
+@pytest.mark.parametrize("field,value", [
+    ("source", "TDX_REALTIME"), ("source", "DATASET_FILES"),
+    ("cause", "unknown minute error"), ("cause", "insufficient minute bars for requested execution context"),
+    ("cause", []), ("cause", {}),
+    ("trade_date", "2026-01-20"), ("symbol", ""),
+])
+def test_minute_recovery_does_not_accept_other_sources_causes_or_failure_identity(field, value):
+    snapshot = _missing_minute_snapshot()
+    snapshot["run"]["run_payload_json"]["submit_failure"]["context"][field] = value
+    service, calls = _service(snapshot)
+    check = service.inspect("replay-original")
+    assert not check.ready and not calls
+
+
+@pytest.mark.parametrize("table", ECONOMIC_TABLES)
+def test_minute_recovery_refuses_all_existing_economic_effects(table):
+    snapshot = _missing_minute_snapshot()
+    snapshot["economic_counts"][table] = 1
+    service, calls = _service(snapshot)
+    check = service.inspect("replay-original")
+    assert check.reason_codes == ["LOCALSIM_REPLAY_RECOVERY_ECONOMIC_FACTS_PRESENT"] and not calls
+
+
+def test_minute_recovery_rechecks_native_input_on_every_inspection():
+    snapshot = _missing_minute_snapshot()
+    service, _ = _service(snapshot)
+    first = service.inspect("replay-original")
+    assert first.ready
+
+    def unavailable(**_):
+        raise DataUnavailableError("historical DB returned no minute bars")
+
+    service.market_provider.load_symbol_input = unavailable
+    second = service.inspect("replay-original")
+    assert not second.ready and second.snapshot_sha256 != first.snapshot_sha256
+
+
+def test_ready_minute_recovery_json_has_an_endpoint_owned_workflow_semantic_contract():
+    from scripts.aistock_issue_workflow import _business_smoke_semantic_contract
+
+    service, _ = _service(_missing_minute_snapshot())
+    payload = service.inspect("replay-original").model_dump(mode="json")
+    contract, validator = _business_smoke_semantic_contract(
+        "/api/v1/simulation-runtime/localsim/replays/replay-original/recovery")
+    assert contract == "localsim_replay_recovery"
+    assert validator(payload)[0] == "passed"
+
+
+@pytest.mark.parametrize("fault", [
+    "old_http_ok", "blocked", "effects", "missing_effect_count", "wrong_day", "realtime",
+    "zero_bars", "bool_bars", "nan_price", "zero_price", "no_snapshot", "wrong_version_type",
+])
+def test_recovery_post_restart_semantic_rejects_false_positive_transport_success(fault):
+    service, _ = _service(_missing_minute_snapshot())
+    payload = service.inspect("replay-original").model_dump(mode="json")
+    if fault == "old_http_ok":
+        payload = {"ok": True}
+    elif fault == "blocked":
+        payload.update(ready=False, reason_codes=["DataUnavailableError"])
+    elif fault == "effects":
+        payload["economic_counts"]["fills"] = 1
+    elif fault == "missing_effect_count":
+        payload["economic_counts"].pop("orders")
+    elif fault == "wrong_day":
+        payload["native_input"]["trade_date"] = "2026-01-20"
+    elif fault == "realtime":
+        payload["native_input"]["source"] = "TDX_REALTIME"
+    elif fault == "zero_bars":
+        payload["native_input"]["bar_count"] = 0
+    elif fault == "bool_bars":
+        payload["native_input"]["bar_count"] = True
+    elif fault == "nan_price":
+        payload["native_input"]["prev_close"] = "NaN"
+    elif fault == "zero_price":
+        payload["native_input"]["prev_close"] = 0
+    elif fault == "no_snapshot":
+        payload["snapshot_sha256"] = ""
+    else:
+        payload["version"] = "8"
+    assert validate_replay_recovery_check(payload)[0] == "failed"
 
 
 @pytest.mark.parametrize("activity,reason", [
