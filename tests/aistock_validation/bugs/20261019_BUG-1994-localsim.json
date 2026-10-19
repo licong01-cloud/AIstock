@@ -20,7 +20,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1994",
-  "closed_at": null,
+  "closed_at": "2026-10-19T18:45:32.153793Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -317,10 +317,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/LOCALSIM/BUG-1994/post-restart-20261020/runtime-receipt.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1994",
+      "business_smoke_semantic": {
+        "contract_id": "localsim_workbench_valuation",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+      "expected_identity": "3906b55882d80677b486782b4e4fd6320521ddf5",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-19T18:43:00.997594Z",
+      "mode": "read_only",
+      "observed_identity": "2db54e36fb3997b6061c8f08acff5cbc19110238",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "12c836036182131f5957ffde722718abb6eb5a354a718f483eb2b2738b1c02bd",
+      "receipt_sha256": "1dd4c2c63e4ab1e9d361de2bdc75456a93fa439f4b339ae6b4fc872f78f6fd37",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "24d605bd33c2fa8d19bef3f0a0e8c1827e3bf4be65db34274159f9a02782a77d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -355,7 +377,7 @@
     ],
     "validation_evidence_digest": "460eab1b1c919d94b4db777aa44268061a7b21f782e6861d2c77bbbd9bc02f0d"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -406,7 +428,8 @@
   "validation_evidence": [
     "pytest backend/tests/simulation_runtime/test_localsim_workbench.py backend/tests/simulation_runtime/test_localsim_workbench_metrics.py -> 59 financial/query contracts passed; 11 additional post-restart semantic contracts passed",
     "nox -s localsim_workbench_ui -> 11 browser contracts passed",
-    "nox -s l0 -> passed"
+    "nox -s l0 -> passed",
+    "pytest backend/tests/simulation_runtime/test_localsim_workbench_metrics.py -> financial and runtime semantic contracts passed; live post-restart business semantic passed"
   ],
   "verification_budget": {
     "budget": "standard",
