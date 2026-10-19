@@ -42,21 +42,20 @@
   "expected": "每个策略账户名称可读，资产和有证据支持的盈亏分别展示，未知指标说明具体缺少的依据并标明估值日期。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261019_BUG-1994-localsim.json",
       "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/services/simulation_runtime/localsim_workbench_metrics.py",
       "backend/services/simulation_runtime/localsim_workbench_models.py",
       "backend/services/simulation_runtime/localsim_workbench_presentation.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
+      "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md",
       "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md",
       "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
       "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
       "frontend/src/lib/simulation/localsim/workbench.ts",
       "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
-      "frontend/tsconfig.json",
       "scripts/aistock_issue_workflow.py",
       "scripts/aistock_runtime_semantics.py",
-      "backend/services/simulation_runtime/localsim_workbench_metrics.py",
-      "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
-      "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
+      "tests/aistock_validation/bugs/20261019_BUG-1994-localsim.json"
     ],
     "added_files": [
       "backend/services/simulation_runtime/localsim_workbench_metrics.py",
@@ -64,21 +63,20 @@
       "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261019_BUG-1994-localsim.json",
       "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/services/simulation_runtime/localsim_workbench_metrics.py",
       "backend/services/simulation_runtime/localsim_workbench_models.py",
       "backend/services/simulation_runtime/localsim_workbench_presentation.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
+      "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md",
       "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md",
       "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
       "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
       "frontend/src/lib/simulation/localsim/workbench.ts",
       "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
-      "frontend/tsconfig.json",
       "scripts/aistock_issue_workflow.py",
       "scripts/aistock_runtime_semantics.py",
-      "backend/services/simulation_runtime/localsim_workbench_metrics.py",
-      "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
-      "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
+      "tests/aistock_validation/bugs/20261019_BUG-1994-localsim.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -285,8 +283,8 @@
   },
   "first_seen_at": "2026-10-19T17:49:05.427680Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3906b55882d80677b486782b4e4fd6320521ddf5",
+  "fixed_at": "2026-10-19T18:20:24Z",
   "github_issue_number": 6377,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6377",
   "last_seen_at": "2026-10-19T17:49:05.427680Z",
@@ -294,6 +292,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6379",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -319,6 +318,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -332,7 +332,30 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_cleanup_note": "Only restore the task-runner-added .next-dev-3087 include in frontend/tsconfig.json after runner completion; no source config change delivered.",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1994",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "41084a14089a24e7",
+    "recorded_at": "2026-10-19T18:21:15.197048Z",
+    "runtime_contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "a81d1627ce5e05fb2f402dfaca71d96ff2bdc924",
+    "source_merge_commit": "3906b55882d80677b486782b4e4fd6320521ddf5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6379",
+    "validation_evidence": [
+      "pytest backend/tests/simulation_runtime/test_localsim_workbench.py backend/tests/simulation_runtime/test_localsim_workbench_metrics.py -> 59 financial/query contracts passed; 11 additional post-restart semantic contracts passed",
+      "nox -s localsim_workbench_ui -> 11 browser contracts passed",
+      "nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "460eab1b1c919d94b4db777aa44268061a7b21f782e6861d2c77bbbd9bc02f0d"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -380,6 +403,11 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "pytest backend/tests/simulation_runtime/test_localsim_workbench.py backend/tests/simulation_runtime/test_localsim_workbench_metrics.py -> 59 financial/query contracts passed; 11 additional post-restart semantic contracts passed",
+    "nox -s localsim_workbench_ui -> 11 browser contracts passed",
+    "nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
