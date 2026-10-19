@@ -36,9 +36,31 @@ from backend.services.dataset_release.monthly_unified import (
     build_stage_receipt,
 )
 from backend.services.dataset_release.monthly_worker import MonthlyReleaseWorker
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID, CANONICAL_PIT_UNIVERSE_KEY, CANONICAL_PIT_RULE_VERSION,
+    PitAuthorityStatus, PitConsumerBinding, canonical_rule_parameters_digest,
+)
 
 
 HEX = "a" * 64
+
+
+def _pit_pins() -> dict[str, Any]:
+    return {name: {"universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+                   "rule_version": CANONICAL_PIT_RULE_VERSION}
+            for name in ("day_pins", "minute_pins")}
+
+
+def _runtime_pit(**overrides) -> PitConsumerBinding:
+    values = dict(authority_id=CANONICAL_PIT_AUTHORITY_ID,
+                  authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+                  universe_key=CANONICAL_PIT_UNIVERSE_KEY, rule_version=CANONICAL_PIT_RULE_VERSION,
+                  rule_parameters_digest=canonical_rule_parameters_digest(),
+                  activation_generation=1, activation_envelope_digest="a" * 64,
+                  expected_source_commit="source-commit", state_source_digest="b" * 64,
+                  coverage_start=date(2018, 8, 1), coverage_end=date(2026, 9, 30))
+    values.update(overrides)
+    return PitConsumerBinding(**values)
 
 
 def _canonical(path: Path, value: Mapping[str, Any]) -> None:
@@ -64,6 +86,7 @@ def _active(path: Path, *, cutoff: str = "2026-08-31") -> None:
             "cutoff": cutoff,
             "controller_paths": {"candidate_root": str(baseline)},
             "components": {
+                **_pit_pins(),
                 "dataset_manifest_sha256": HEX,
                 "dataset_manifest_file_sha256": _sha(manifest),
             },
@@ -139,6 +162,7 @@ class Pipeline:
                     "release_id": plan["release_id"],
                     "cutoff": plan["target_cutoff"],
                     "components": {
+                        **_pit_pins(),
                         "dataset_manifest_sha256": self.manifest,
                         "release_closure_sha256": HEX,
                         "derived_asset_registry_sha256": HEX,
@@ -279,6 +303,7 @@ def _service(tmp_path: Path, pipeline: Pipeline) -> MonthlyReleaseService:
         generation_factory=lambda request: f"{request.target_cutoff:%Y%m%d}-v2",
         revision_factory=lambda request: f"{request.target_cutoff:%Y%m%d}-unified",
         allowed_cutoff_resolver=lambda: date(2026, 9, 30),
+        pit_authority_resolver=_runtime_pit,
     )
 
 
@@ -550,6 +575,7 @@ def _adoptable_successor(
                 "rdagent-node1": {"candidate_root": "/home/releases/v15-candidate"},
             },
             "components": {
+                **_pit_pins(),
                 "dataset_manifest_sha256": manifest_identity,
                 "dataset_manifest_file_sha256": _sha(manifest),
             },
@@ -1167,6 +1193,69 @@ def test_blocked_cancel_finishes_without_another_source_attempt(
     assert service.status(operation_id)["attempt"] == first["attempt"]
     assert pipeline.calls == ["SOURCE"]
     assert service.resume(operation_id)["status"] == "PLANNED"
+
+
+def _activate_ready(service: MonthlyReleaseService, operation_id: str, *, verify_after=None):
+    plan = service.store.read_plan(operation_id)
+    auth_root = service.store.root / "authorizations"
+    auth_root.mkdir(exist_ok=True)
+    authorization_id = "dsauth_" + "e" * 32
+    auth_path = auth_root / f"{authorization_id}.json"
+    if not auth_path.exists():
+        _authorization(auth_path, authorization_id=authorization_id, operation_id=operation_id,
+                       action="ACTIVATE", principal="operator", cutoff=plan["target_cutoff"],
+                       predecessor=plan["predecessor"]["profile_sha256"],
+                       target=_sha(Path(plan["profile_candidate"])))
+    return service.activate(operation_id, authorization_store=ActionAuthorizationStore(auth_root),
+                            authorization_ref=authorization_id, principal="operator",
+                            verify_after=verify_after or (lambda ready: {
+                                "status": "PASS", "dataset_manifest_sha256": ready["dataset_manifest_sha256"]}))
+
+
+@pytest.mark.parametrize("overrides", [
+    {"rule_version": "legacy"}, {"activation_generation": 0},
+    {"coverage_end": date(2026, 8, 31)},
+])
+def test_activation_rejects_mixed_runtime_pit_before_profile_cas(tmp_path: Path, overrides) -> None:
+    service = _service(tmp_path, Pipeline())
+    operation_id = service.submit(_request())["operation_id"]
+    assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
+    before = service.active_profile.read_bytes()
+    service.pit_authority_resolver = lambda: _runtime_pit(**overrides)
+    with pytest.raises(MonthlyReleaseError, match="PIT"):
+        _activate_ready(service, operation_id)
+    assert service.active_profile.read_bytes() == before
+    assert service.store.read_state(operation_id)["status"] == "READY_TO_ACTIVATE"
+
+
+def test_activation_readback_detects_policy_generation_drift(tmp_path: Path) -> None:
+    service = _service(tmp_path, Pipeline())
+    operation_id = service.submit(_request())["operation_id"]
+    assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
+
+    def drift(ready):
+        service.pit_authority_resolver = lambda: _runtime_pit(activation_generation=2)
+        return {"status": "PASS", "dataset_manifest_sha256": ready["dataset_manifest_sha256"]}
+
+    assert _activate_ready(service, operation_id, verify_after=drift)["status"] == "ACTIVATED_VERIFY_FAILED"
+    service.pit_authority_resolver = _runtime_pit
+    assert _activate_ready(service, operation_id)["status"] == "ACTIVATED_VERIFIED"
+    receipt = json.loads((service.store.operation_root(operation_id) / "receipts/activation.json").read_text())
+    assert receipt["apply_state"] == "ALREADY_APPLIED"
+    assert receipt["runtime_pit_policy"]["activation_generation"] == 1
+
+
+def test_activation_allows_same_policy_watermark_extension(tmp_path: Path) -> None:
+    service = _service(tmp_path, Pipeline())
+    operation_id = service.submit(_request())["operation_id"]
+    assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
+
+    def advance(ready):
+        service.pit_authority_resolver = lambda: _runtime_pit(
+            coverage_end=date(2026, 10, 19), state_source_digest="c" * 64)
+        return {"status": "PASS", "dataset_manifest_sha256": ready["dataset_manifest_sha256"]}
+
+    assert _activate_ready(service, operation_id, verify_after=advance)["status"] == "ACTIVATED_VERIFIED"
 
 
 def test_activation_requires_exact_authorization_and_supports_safe_rollback(tmp_path: Path) -> None:
