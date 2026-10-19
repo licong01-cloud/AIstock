@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Read an explicit same-day market session from the frozen minute provider and retain real data-quality failures.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261019_BUG-2002-monthly-qlib-minute-consumer-probe-queries-midnight-instead-of-the-tradi.json",
       "backend/services/dataset_release/monthly_node_probe.py",
       "backend/tests/dataset_release/test_monthly_node_probe.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261019_BUG-2002-monthly-qlib-minute-consumer-probe-queries-midnight-instead-of-the-tradi.json",
+      "backend/services/dataset_release/monthly_node_probe.py",
+      "backend/tests/dataset_release/test_monthly_node_probe.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_node_probe.py",
@@ -109,11 +115,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "RED: both date-bound variants failed with node Qlib minute read returned no rows on the old source. The regression uses exact Timestamp filtering rather than pandas partial-date slicing, matching Qlib semantics.",
+      "GREEN: python -m pytest backend/tests/dataset_release/test_monthly_node_probe.py backend/tests/dataset_release/test_monthly_node_probe_runner.py backend/tests/dataset_release/test_monthly_consumer_validation.py -q -> 34 passed. Ruff, compileall, diff check and nox l0 passed.",
+      "Fresh WSL process from the task worktree called the unchanged formal _qlib_counts entry on the deployed September candidate: day=1, minute=240, all sampled OHLCV finite, backtest_end=2026-09-29. The same source previously returned zero minute rows at midnight.",
+      "Review 1: exact timestamp filtering reproduces the real failure; review 2: backtest_end precedence and test_end fallback are unchanged and empty, NaN/Inf and short reads still fail; review 3: only explicit same-day session bounds change, with no candidate mutation, data fabrication, full export, database write, activation, experiment or service control. DESIGN-COMPLIANCE-001 four checks passed.",
+      "The changed function is executed by fresh WSL/node1 python -m monthly_node_probe subprocesses; the controller still requires normal worker-scheduler runtime aftercare. No runtime exemption or health-only evidence is claimed.",
+      "WSL fresh process imported task worktree monthly_node_probe._qlib_counts on unchanged September candidate -> daily=1 minute=240 finite OHLCV; database_write=false activation=false runtime_action=false"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
