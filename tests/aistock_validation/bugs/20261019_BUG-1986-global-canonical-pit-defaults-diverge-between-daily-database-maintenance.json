@@ -202,7 +202,7 @@
   },
   "first_seen_at": "2026-10-19T13:14:04.948988Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "d74d1e585bf68e34317d86ea45ce0793c157d9fd",
   "fix_summary": {
     "deployment_constraint": "Do not restart into strict new-task admission before authorized canonical registry/profile migration. Current legacy pointer is not silently promoted. Production migration and activation remain pending.",
     "design_compliance": [
@@ -216,7 +216,7 @@
     "verification": "223 targeted tests passed; RED then GREEN; lint and diff check passed.",
     "worker_followup": "BUG-1987 owns monthly activation readback; no worker source in this PR."
   },
-  "fixed_at": null,
+  "fixed_at": "2026-10-19T13:53:02Z",
   "github_issue_number": 6363,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6363",
   "last_seen_at": "2026-10-19T13:14:04.948988Z",
@@ -224,6 +224,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6365",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -253,6 +254,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -264,7 +266,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1986",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "cb91007c7d80e751",
+    "recorded_at": "2026-10-19T13:54:03.859596Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "51f707a0b1e1fb51397d4c8ff2a0aa1b25b92a98",
+    "source_merge_commit": "d74d1e585bf68e34317d86ea45ce0793c157d9fd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6365",
+    "validation_evidence": [
+      "python -m pytest backend/tests/test_canonical_equity_pit.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/test_tushare_sync_engine.py backend/tests/dataset_release/test_canonical_pit_w6_contracts.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q -> 223 passed",
+      "nox -s validation_catalog_integrity -> passed; PR6365 current HEAD CI green"
+    ],
+    "validation_evidence_digest": "be834cfa4663e776eb1b4356cbac4734e3a8f1b3a58cad4e50c4bb1708a2b961"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -273,6 +297,10 @@
     "fingerprint": "411317fec88f87028adc0307",
     "source_event_id": "FE-20261019-411317fec88f"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_canonical_equity_pit.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/test_tushare_sync_engine.py backend/tests/dataset_release/test_canonical_pit_w6_contracts.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q -> 223 passed",
+    "nox -s validation_catalog_integrity -> passed; PR6365 current HEAD CI green"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
