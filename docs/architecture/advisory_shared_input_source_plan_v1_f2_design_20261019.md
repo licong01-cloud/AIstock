@@ -1,6 +1,6 @@
 # Advisory / LocalSIM 共享输入来源计划 F2 详细设计
 
-日期：2026-10-19。分类 F2/T3；用户批准实现三种来源模式，源码限 Advisory ownership。继承 `advisory_shared_selection_signal_kernel_detailed_design_20261014.md`、`localsim_shared_frozen_file_inputs_20261017.md` 及 `selection_provider_clocks_v1`，不复制其算法。当前：源码与定向回归完成；真实文件/混合等价因原生 PIT 政策不一致阻断，整体 F2 尚未通过，不宣称可运行接续或可合入。
+日期：2026-10-19。分类 F2/T3；用户批准实现三种来源模式，源码限 Advisory ownership。继承 `advisory_shared_selection_signal_kernel_detailed_design_20261014.md`、`localsim_shared_frozen_file_inputs_20261017.md` 及 `selection_provider_clocks_v1`，不复制其算法。当前：继续修正政策身份与物理快照身份的混淆，并将冻结发布原生身份接入文件推理；定向回归通过，真实文件验证进行中。数据库 canonical 激活仍待数据 owner，整体 F2 尚未通过，不宣称可立即运行接续或可合入。
 
 ## Background / 背景
 
@@ -27,7 +27,8 @@
 - 模式 `FILE_ONLY` / `DATABASE_ONLY` / `FILE_THEN_DATABASE`。调用方提供 consumer_scope、run_id、有序唯一 C/D/T、原生政策与其 hash、完整请求交易日日历、每日允许的最早历史起点。同日多模型可提供所有原生窗口的共同最早边界；实际模型起点仍由原生 resolver 决定并写入实际输入收据，不强制各模型使用同一长度，不猜模型类别、因子窗口或包 ID。
 - 文件计划冻结整个 binding、manifest/hash、日/分钟日历、因子、PIT、停牌、行业组件的声明覆盖。minute 覆盖影响整日边界，但不由此模块实现分钟执行。C 输入历史、D 停牌、C risk/行业/参考价、T 目标各保留；HMM 仍使用既有合法可见时钟，不生成系数。
 - 公共建计划接口允许注入已由消费者官方注册取得的 binding；新任务默认调用官方 resolver，恢复只 `validate_source_plan`，不读 active profile。调用方保存完整计划而非仅截止日。计划必须绑定本 consumer/run；同输入另一消费者可独立创建计划，不能当成本次缓存命中。
-- 文件日必须提供原 manifest 或请求内的显式原生 PIT identity；不能临时查询数据库活动指针补身份。共享代码只检查声明存在，完整身份仍由唯一原生 parser 校验，不自行构造权威收据。日历/模型输入 C、停牌 D、分钟覆盖 T 分别检查，不能要求 D 才消费的停牌组件必须覆盖前一 C。
+- 文件日从已冻结发布的原生 PIT 成员区间按 C 解析成员，构造现有 frozen-candidate 消费声明，并交唯一原生 parser 校验；这不是伪造 activation/receipt。声明绑定发布、成员文件内容 hash 和 C，不能使用今天的全市场成员替代历史成员。已有显式 request/manifest 身份必须与该发布/C/成员完全一致，不能静默覆盖。全过程不查询数据库活动指针。日历/模型输入 C、停牌 D、分钟覆盖 T 分别检查。
+- 政策身份与物理存储身份分开：canonical authority、rule version、parameters digest 必须一致；合法 rolling key 与发布 snapshot key 不要求字符串相等。复用主线公共 canonical 校验，不增加第二种 PIT 算法。文件物理 key、发布 hash、实际成员摘要仍分别保留。数据库日注册时冻结官方活动 canonical 运行身份；未完成全局激活不能伪造 generation/envelope，也不能继续借 legacy 指针运行新任务。
 - 政策含原生 policy hash、PIT universe/rule、已实现 reader 的单位/复权合同版本。文件 PIT 元数据与原生政策一致；不凭调用方字符串把不一致数据升级为匹配。数据库 reader 使用现有原生口径，执行时仍验证原生 PIT，不擅自修补。
 - 计划 hash 是声明/边界身份，不冒充实际 DB 内容。每个执行日返回来源、计划 hash、C/D/T、文件 binding 或 DB 实际输入摘要及明示证据级别。真实价格/特征/人口摘要用于漂移比较；日历日期解析摘要只标日期解析，不声称全表内容 hash。
 - 无可信不可变 DB revision 时，每 DB 日新 session（不跨日命中可变源），仍在日内复用读入分区；精确恢复对已完成 DB 日重新只读推理并比较实际输入摘要及完整评分，禁止直接信任旧断点。不覆盖旧产物。若不一致报 `SOURCE_INPUT_DRIFT`，由消费者新任务处理，不自动重算覆盖。
@@ -67,7 +68,7 @@
 | F-333 | inference_inputs.py / CLI / 原生 kernel | backend/tests/advisory_historical_range/test_input_source_plan.py；test_selection_signal_kernel.py | PASS | none |
 | F-334 | input_source_plan.py / 原生 reader | backend/tests/advisory_historical_range/test_input_source_plan.py；真实readiness.json | PASS | none |
 | F-335 | CLI / kernel / composition.py | backend/tests/advisory_historical_range/test_input_source_plan.py；test_strategy_package_live_inference.py | PASS | none |
-| F-336 | 原生只读验证 | artifact: X:/AIstock_temp/ADVISORY/shared-source-plan-20261019/native-r3/progress.json；native-r2/progress.json | BLOCKED | 文件/混合真实等价和原生TopK仍缺；源政策不一致，不得改PASS或升级证据 |
+| F-336 | 原生只读验证 | artifact: X:/AIstock_temp/ADVISORY/shared-source-plan-20261019/native-r4/progress.json；native-r3/progress.json | BLOCKED | 新文件验证进行中；canonical DB激活、跨界连续日及原生TopK完整验证未通过，不得升级证据 |
 | F-337 | 本文接入交付 | artifact: docs/architecture/advisory_shared_input_source_plan_v1_f2_design_20261019.md | PASS | none |
 
 ## Rollout / Rollback / Production Gates
@@ -90,7 +91,7 @@ DESIGN-COMPLIANCE-001 四项：①未简化交付，F-336明确BLOCKED，整体�
 
 ## 公共接入示例 / LocalSIM handoff
 
-以下为代码接口示例，不启动账户、回放或任何正式任务。`native_policy` 的 universe/rule/policy hash 必须来自调用方冻结政策；不能为了通过文件校验改写为文件里的值。
+以下为代码接口示例，不启动账户、回放或任何正式任务。`native_policy` 的 policy hash 来自调用方冻结选股政策；新任务的 PIT authority/rule 使用全局 canonical 政策，物理 release/snapshot 身份由冻结发布解析。不得用 legacy 股票池作 canonical 对照，也不能为通过测试修改已登记旧任务的政策。
 
 ```python
 from contextlib import ExitStack
@@ -125,7 +126,7 @@ CLI：原 `--historical-plan <本次子块>` 增加 `--source-plan-file <全任�
 
 LocalSIM owner 需接上自己的任务持久化与来源路由：文件日用既有文件 provider；DB 日全历史走原 DB reader；分钟行情/停牌估值/账户/账本/断点仍归其 owner。不能仅在模型推理切换来源而把其余 provider 偷偷留在另一来源；须让自身所需组件覆盖进入同一计划，并自行验收 D 停牌、C risk/行业/参考价。旧任务/旧产物不自动改计划；DB checkpoint 的实际输入验证不可省略。
 
-## 当前验证与 owner 缺口（2026-10-19）
+## 首轮验证记录（2026-10-19，R1–R10，非最终源码验收）
 
 直接相关 58 项测试 PASS，随后身份摘要修订的2项定向回归 PASS（属于58项内的子集，不合计为60项）；Ruff PASS。提交后对全部11个精确文件重新扫描：ownership 11/11 mapped、0 ambiguous/unmapped；L0 0 blocking、1项P2提示。该提示位于 batch provider 的命令参数字符串 `join`，不是股票×日期×特征的关联运算；实际调度复用同一 workspace/source-plan 执行，日期绑定 workspace 仍按原生身份逐日运行，不承诺跨日消除这部分工作。此前 changed-only 扫描0 finding不替代本次完整精确范围结果。是同窗口多轮自审与定向回归，不冒称独立外审。涵盖三模式、C<D、整日切换、首DB日全窗口、active更新不重解、内部缺洞不回退、旧单源兼容、数据库checkpoint漂移与原日文件不覆盖；完整生产两端结果尚未证明。
 
@@ -151,4 +152,12 @@ LSTM 实际模型窗口从2024-11-05开始，由原生 resolver 决定；没有�
 
 独立草稿 PR #6356；源码提交 `9ce67d9a8` 的 CI run `39232982569` verdict通过。F2验证仍明确拒绝 F-336，CI绿不等于真实混合来源/原生TopK/停牌资格和LocalSIM接续验收通过。后续文档收据提交不改上述推理源码，也不把旧测量改绑新HEAD。
 
-精确交接：请 Selection/PIT authority owner 确认这两个已批准包的正式推理应消费哪一原生 PIT 政策，并提供现有公开身份合同；数据 owner 只在该政策确定后提供同政策合法文件发布或确认现有匹配资产。不要求本窗口切换指针、改股票池、重训或改包；不得以两套政策名称不同就推定数据缺失。问题是**跨来源政策无法证明一致**。源码验证、真实全评分/TopK/UNKNOWN/停牌等价及 LocalSIM 接续分别保留状态，F-336 暂未满足，不可宣布可合入/运行验收完成。
+首轮缺口结论修正：新任务的政策已由全局统一 canonical 方向确定，不需要再问策略包 owner 选择政策，也不需要重训/改包。之前的字符串 equality 还混淆了合法 snapshot key 和 rolling key，这是本共享适配自身应修复的问题。历史旧政策两臂对照仅说明旧输入下的诊断结果，不代表 v18 验收。
+
+## 接续审核与验证（R11 起）
+
+同步主线 BUG-1986 / PR #6365，复用 `require_same_canonical_policy`、`require_canonical_new_task_binding`；不修改公共 PIT owner 源码。新增 RED→GREEN 证明同政策 frozen snapshot 被旧 equality 错拒；修复后保留 authority、参数 digest、发布 completeness 的拒绝条件。文件日以生产者已冻结成员文件按 C 解析原生 identity；显式旧声明不匹配时失败。数据库任务注册只读冻结原生活动身份，恢复不重查 active profile 或 live pointer。已有无来源计划的调用不改为本新合同。
+
+56项直接相关测试通过（source-plan、CLI、kernel、batch adapter），涵盖新增文件身份继承、不访问 live pointer、错误日期/成员/hash、DB身份冻结和coverage漂移。不是跨模块全量验收。R4真实文件验证使用同日、同政策、同成员的原单源入口与新计划入口，对照原LSTM/TCN，不再用legacy人口作为canonical基线。
+
+只读运行状态：`DEPLOYED_LEGACY_PENDING_MIGRATION`，generation=0。新主线明确要求数据owner完成授权canonical迁移后才能启用新在线任务。不能制造generation/envelope或由本窗口写库/激活；此项与文件推理可独立验证。LocalSIM owner仍需把自身任务创建/session/provider/分钟读入接到公共计划，源码合入、后端用户重启、LocalSIM接续分别验收。

@@ -1634,9 +1634,9 @@ class InferenceEngine:
 
         source_route = getattr(self.input_session, "source_plan_route", None)
         if source_route is not None:
-            from .services.advisory_historical_range.input_source_plan import validate_file_pit_declaration
-            validate_file_pit_declaration(source_route, request_identity=pit_identity,
-                                          manifest_identity=manifest_inference_pit_identity(manifest))
+            from .services.advisory_historical_range.input_source_plan import session_pit_identity
+            pit_identity = session_pit_identity(self.input_session, request_identity=pit_identity,
+                                                manifest_identity=manifest_inference_pit_identity(manifest))
         resolved_pit_identity = _resolve_inference_pit_identity_for_run(
             manifest=manifest,
             pit_identity=pit_identity,

@@ -16,7 +16,7 @@ POLICY = {"policy_hash": "a" * 64, "universe_key": "TEST_PIT", "rule_version": "
           "reader_contract": sources.READER_CONTRACT}
 
 
-def _snapshot(tmp_path, *, gap=None, market_start=None):
+def _snapshot(tmp_path, *, gap=None, market_start=None, policy=POLICY):
     profile_path = make_dataset(tmp_path)
     profile = json.loads(profile_path.read_bytes())
     path = tmp_path / "qe_dataset_manifest.json"
@@ -31,7 +31,7 @@ def _snapshot(tmp_path, *, gap=None, market_start=None):
     for key in ("day_meta_export", "minute_meta_export", "factor_meta"):
         file = tmp_path / manifest["components"][key]["path"]
         meta = json.loads(file.read_bytes())
-        meta.update(dates, universe_key="TEST_PIT", rule_version="test-v1",
+        meta.update(dates, universe_key=policy["universe_key"], rule_version=policy["rule_version"],
                     pit_ensure={"start_date": CALENDAR[0]})
         if key == "minute_meta_export" and market_start:
             meta["start"] = market_start
@@ -41,9 +41,10 @@ def _snapshot(tmp_path, *, gap=None, market_start=None):
     suspend.write_text(json.dumps({**dates, "start": market_start or dates["start"]}), encoding="utf-8")
     manifest["components"]["suspend_meta"] = {"path": suspend.name, "sha256": hashlib.sha256(suspend.read_bytes()).hexdigest()}
     manifest["components"]["sector_membership_spans"].update(dates)
-    manifest["st_pit_manifest"] = {"universe_key": "TEST_PIT", "rule_version": "test-v1", "cutoff_trade_date": CALENDAR[2]}
+    manifest["st_pit_manifest"] = {"universe_key": policy["universe_key"], "rule_version": policy["rule_version"], "cutoff_trade_date": CALENDAR[2]}
     path.write_text(json.dumps(manifest), encoding="utf-8")
     profile["components"]["dataset_manifest_file_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    profile["cutoff"] = CALENDAR[2]
     profile_path.write_text(json.dumps(profile), encoding="utf-8")
     return sources.freeze_file_source(profile_path=profile_path)
 
@@ -204,6 +205,89 @@ def test_native_window_guard_does_not_change_C_D_or_shorten_history():
     with pytest.raises(sources.SourcePlanError, match="PIT_POLICY_MISMATCH"):
         sources.validate_native_window(route, start=date(2026, 1, 19), cutoff=clocks.data_cutoff,
                                        decision=clocks.decision_date, pit_binding=binding)
+
+
+def test_canonical_policy_accepts_frozen_storage_key_not_different_authority():
+    from dataclasses import replace
+    from backend.services.canonical_equity_pit import (
+        CANONICAL_PIT_AUTHORITY_ID, CANONICAL_PIT_UNIVERSE_KEY, CANONICAL_PIT_RULE_VERSION,
+        PitConsumerBinding, PitAuthorityStatus, canonical_rule_parameters_digest,
+    )
+    binding = PitConsumerBinding(authority_id=CANONICAL_PIT_AUTHORITY_ID,
+        authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+        universe_key="aistock_equity_pit_snapshot_release1", rule_version=CANONICAL_PIT_RULE_VERSION,
+        rule_parameters_digest=canonical_rule_parameters_digest(), release_id="release1",
+        snapshot_digest="a" * 64, cutoff=date(2026, 1, 21))
+    route = {**sources.resolve_day_source(_plan(), _clocks(_plan()["days"][0])),
+             "universe_key": CANONICAL_PIT_UNIVERSE_KEY, "rule_version": CANONICAL_PIT_RULE_VERSION,
+             "pit_policy": {"authority_id": CANONICAL_PIT_AUTHORITY_ID,
+                            "rule_parameters_digest": canonical_rule_parameters_digest()}}
+    sources.validate_native_window(route, start=date(2026, 1, 19), cutoff=date(2026, 1, 19),
+                                   decision=date(2026, 1, 20), pit_binding=binding)
+    for changed in (replace(binding, rule_parameters_digest="b" * 64),
+                    replace(binding, authority_id="other"), replace(binding, snapshot_digest=None)):
+        with pytest.raises(sources.SourcePlanError, match="PIT_POLICY_MISMATCH"):
+            sources.validate_native_window(route, start=date(2026, 1, 19), cutoff=date(2026, 1, 19),
+                                           decision=date(2026, 1, 20), pit_binding=changed)
+
+
+def _canonical_policy():
+    from backend.services.canonical_equity_pit import CANONICAL_PIT_UNIVERSE_KEY, CANONICAL_PIT_RULE_VERSION
+    return {**POLICY, "universe_key": CANONICAL_PIT_UNIVERSE_KEY, "rule_version": CANONICAL_PIT_RULE_VERSION}
+
+
+def test_file_identity_inherits_frozen_publisher_membership_without_live_pointer(tmp_path, monkeypatch):
+    from backend.services.canonical_equity_pit import CanonicalPitAuthorityResolver
+    from backend.services.canonical_pit_inference_boundary import resolve_inference_pit_identity
+    monkeypatch.setattr(CanonicalPitAuthorityResolver, "resolve_live_binding",
+                        lambda _: pytest.fail("file mode queried live pointer"))
+    snapshot = _snapshot(tmp_path, policy=_canonical_policy())
+    plan = sources.build_source_plan(mode="FILE_ONLY", consumer_scope="LOCALSIM", run_id="private",
+        days=_plan()["days"][:2], trading_calendar=CALENDAR, native_policy=_canonical_policy(), file_source=snapshot)
+    session = sources.create_input_session(plan, _clocks(plan["days"][0]), consumer_scope="LOCALSIM",
+                                           run_id="private", max_bytes=0)
+    try:
+        identity = sources.session_pit_identity(session, request_identity=None, manifest_identity=None)
+        parsed = resolve_inference_pit_identity(identity, version_tag="historical")
+        assert parsed.universe_codes == (SYMBOL, "603616.SH") and str(parsed.universe_as_of) == CALENDAR[0]
+        assert identity["snapshot_digest"] == snapshot["binding"]["files"]["day_selection_universe"]["sha256"]
+        assert sources.session_pit_identity(session, request_identity=identity, manifest_identity=None) == identity
+        for changed in ({**identity, "universe_as_of": CALENDAR[1]},
+                        {**identity, "universe_codes": ["600001.SH"]}, {**identity, "snapshot_digest": "c" * 64}):
+            with pytest.raises(sources.SourcePlanError, match="DECLARED_PIT_IDENTITY_MISMATCH"):
+                sources.session_pit_identity(session, request_identity=changed, manifest_identity=None)
+        session.source_plan_route = sources.resolve_day_source(plan, _clocks(plan["days"][1]))
+        assert sources.session_pit_identity(session, request_identity=None, manifest_identity=None)["universe_as_of"] == CALENDAR[1]
+    finally:
+        session.close()
+
+
+def test_canonical_database_identity_is_frozen_and_retry_cannot_read_new_pointer(monkeypatch):
+    from backend.services.canonical_equity_pit import (
+        CanonicalPitAuthorityResolver, PitConsumerBinding, PitAuthorityStatus, CANONICAL_PIT_AUTHORITY_ID,
+        canonical_rule_parameters_digest,
+    )
+    policy = _canonical_policy()
+    binding = PitConsumerBinding(authority_id=CANONICAL_PIT_AUTHORITY_ID, authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+        universe_key=policy["universe_key"], rule_version=policy["rule_version"],
+        rule_parameters_digest=canonical_rule_parameters_digest(), activation_generation=1,
+        activation_envelope_digest="a" * 64, expected_source_commit="commit", state_source_digest="b" * 64,
+        coverage_start=date(2026, 1, 19), coverage_end=date(2026, 1, 22))
+    calls = []
+    monkeypatch.setattr(CanonicalPitAuthorityResolver, "resolve_live_binding", lambda _: calls.append(1) or binding)
+    plan = sources.build_source_plan(mode="DATABASE_ONLY", consumer_scope="ADVISORY", run_id="private",
+        days=_plan()["days"], trading_calendar=CALENDAR, native_policy=policy)
+    assert calls == [1]
+    monkeypatch.setattr(CanonicalPitAuthorityResolver, "resolve_live_binding", lambda _: pytest.fail("retry queried live pointer"))
+    restored = sources.validate_source_plan(plan, consumer_scope="ADVISORY", run_id="private")
+    route = sources.resolve_day_source(restored, _clocks(plan["days"][-1]))
+    assert sources.session_pit_identity(SimpleNamespace(source_plan_route=route), request_identity=None,
+                                        manifest_identity=None)["activation_generation"] == 1
+    bad = deepcopy(plan)
+    bad["runtime_pit_identity"]["coverage_end"] = CALENDAR[0]
+    bad["plan_hash"] = sources.digest({k: v for k, v in bad.items() if k != "plan_hash"})
+    with pytest.raises(ValueError, match="coverage"):
+        sources.validate_source_plan(bad, consumer_scope="ADVISORY", run_id="private")
 
 
 def test_shared_cli_switches_whole_days_and_rechecks_database_checkpoint(tmp_path, monkeypatch):

@@ -42,6 +42,32 @@ def _sha(value: str) -> bool:
     return isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)
 
 
+def _policy_fields(policy: dict) -> dict | None:
+    from backend.services.canonical_equity_pit import (
+        CANONICAL_PIT_AUTHORITY_ID, CANONICAL_PIT_UNIVERSE_KEY, CANONICAL_PIT_RULE_VERSION,
+        canonical_rule_parameters_digest,
+    )
+    if policy["universe_key"] != CANONICAL_PIT_UNIVERSE_KEY:
+        return None  # Existing explicitly frozen noncanonical plans retain their exact contract.
+    expected = {"authority_id": CANONICAL_PIT_AUTHORITY_ID,
+                "rule_parameters_digest": canonical_rule_parameters_digest()}
+    if (policy["rule_version"] != CANONICAL_PIT_RULE_VERSION
+            or policy.get("pit_policy", expected) != expected):
+        raise SourcePlanError("SOURCE_PIT_POLICY_MISMATCH", owner="Advisory")
+    return expected
+
+
+def freeze_runtime_pit_identity() -> dict:
+    """Read the authority once at registration, never on source-plan retry."""
+    from backend.services.canonical_equity_pit import (
+        CanonicalPitAuthorityResolver, require_canonical_new_task_binding,
+    )
+    from backend.services.canonical_pit_inference_boundary import InferencePitIdentity, InferencePitMode
+    binding = require_canonical_new_task_binding(
+        CanonicalPitAuthorityResolver().resolve_live_binding(), consumer="inference")
+    return InferencePitIdentity(mode=InferencePitMode.ROLLING_RUNTIME, binding=binding).as_dict()
+
+
 def freeze_file_source(*, profile_path=None, binding=None, root_override=None,
                        consumer_scope="ADVISORY", run_id="source-metadata-registration") -> dict:
     """Use the existing authority resolver, no copying and no data generation."""
@@ -173,7 +199,23 @@ def build_source_plan(*, mode: str, consumer_scope: str, run_id: str, days: list
     body["component_coverage"] = _coverage(file, native_policy) if file is not None else {}
     body["routes"] = _routes(body)
     body["first_database_day"] = next((v["decision_date"] for v in body["routes"] if v["source"] == "DATABASE"), None)
+    if _policy_fields(native_policy) is not None and body["first_database_day"] is not None:
+        body["runtime_pit_identity"] = freeze_runtime_pit_identity()
+        _validate_runtime_identity(body)
     return {**body, "plan_hash": digest(body)}
+
+
+def _validate_runtime_identity(body: dict) -> None:
+    if _policy_fields(body["native_policy"]) is None or body["first_database_day"] is None:
+        return
+    from backend.services.canonical_pit_inference_boundary import resolve_inference_pit_identity, InferencePitMode
+    from backend.services.canonical_equity_pit import require_canonical_new_task_binding
+    identity = resolve_inference_pit_identity(body.get("runtime_pit_identity"), version_tag="historical")
+    if identity.mode is not InferencePitMode.ROLLING_RUNTIME:
+        raise SourcePlanError("SOURCE_RUNTIME_PIT_IDENTITY_INVALID", owner="Selection/PIT")
+    for row in body["routes"]:
+        if row["source"] == "DATABASE":
+            require_canonical_new_task_binding(identity.binding, consumer="inference", trade_date=_day(row["data_cutoff"]))
 
 
 def validate_source_plan(plan: dict, *, consumer_scope: str, run_id: str) -> dict:
@@ -190,6 +232,7 @@ def validate_source_plan(plan: dict, *, consumer_scope: str, run_id: str) -> dic
     first = next((v["decision_date"] for v in body["routes"] if v["source"] == "DATABASE"), None)
     if first != body["first_database_day"]:
         raise SourcePlanError("SOURCE_PLAN_BOUNDARY_MISMATCH")
+    _validate_runtime_identity(body)
     return {**body, "plan_hash": plan["plan_hash"]}
 
 
@@ -199,7 +242,9 @@ def resolve_day_source(plan: dict, clocks: SelectionSignalDayV1) -> dict:
         raise SourcePlanError("SOURCE_DAY_CLOCK_MISMATCH", clocks=clocks.to_dict())
     return {**deepcopy(rows[0]), "plan_hash": plan["plan_hash"], "policy_hash": plan["native_policy"]["policy_hash"],
             "reader_contract": READER_CONTRACT, "universe_key": plan["native_policy"]["universe_key"],
-            "rule_version": plan["native_policy"]["rule_version"]}
+            "rule_version": plan["native_policy"]["rule_version"],
+            "pit_policy": _policy_fields(plan["native_policy"]),
+            "runtime_pit_identity": deepcopy(plan.get("runtime_pit_identity")) if rows[0]["source"] == "DATABASE" else None}
 
 
 def create_input_session(plan: dict, clocks: SelectionSignalDayV1, *, consumer_scope: str,
@@ -262,8 +307,56 @@ def validate_native_window(route: dict, *, start: date, cutoff: date, decision: 
     if (str(cutoff) != route["data_cutoff"] or str(decision) != route["decision_date"]
             or not _day(route["history_start"]) <= start <= cutoff):
         raise SourcePlanError("SOURCE_NATIVE_WINDOW_MISMATCH", route=route, observed_start=str(start))
-    if (pit_binding.universe_key != route["universe_key"] or pit_binding.rule_version != route["rule_version"]):
+    canonical = route.get("pit_policy")
+    if canonical is not None:
+        from backend.services.canonical_equity_pit import require_same_canonical_policy, CanonicalPitContractError
+        try:
+            # Native helper validates canonical authority/parameters and frozen
+            # release completeness, independently of the physical storage name.
+            require_same_canonical_policy(pit_binding, pit_binding, consumer="inference")
+        except CanonicalPitContractError as exc:
+            raise SourcePlanError("SOURCE_PIT_POLICY_MISMATCH", owner="Selection/PIT") from exc
+        if (pit_binding.rule_version != route["rule_version"]
+                or any(getattr(pit_binding, key) != value for key, value in canonical.items())):
+            raise SourcePlanError("SOURCE_PIT_POLICY_MISMATCH", owner="Advisory")
+    elif (pit_binding.universe_key != route["universe_key"] or pit_binding.rule_version != route["rule_version"]):
         raise SourcePlanError("SOURCE_PIT_POLICY_MISMATCH", owner="Data")
+
+
+def session_pit_identity(session, *, request_identity, manifest_identity):
+    """Translate producer-owned membership into the EXISTING native envelope.
+
+    No activation receipt, stock eligibility rule or live pointer is fabricated.
+    A supplied declaration is checked, never silently replaced with new members.
+    """
+    route = getattr(session, "source_plan_route", None)
+    supplied = request_identity if request_identity is not None else manifest_identity
+    if route is None or route.get("pit_policy") is None:
+        validate_file_pit_declaration(route, request_identity=request_identity, manifest_identity=manifest_identity)
+        return request_identity
+    from backend.services.canonical_pit_inference_boundary import resolve_inference_pit_identity
+    if route["source"] == "DATASET_FILES":
+        dataset = session.file_dataset
+        if dataset is None or dataset.identity != route["file_binding_hash"]:
+            raise SourcePlanError("SOURCE_FILE_INPUT_IDENTITY_MISMATCH")
+        if dataset.universe_key != route["universe_key"] or dataset.rule_version != route["rule_version"]:
+            raise SourcePlanError("SOURCE_PIT_POLICY_MISMATCH", owner="Data")
+        binding = dataset.binding
+        expected = {"mode": "canonical_v2_frozen_candidate", **route["pit_policy"],
+                    "rule_version": route["rule_version"], "release_id": binding["profile"]["release_id"],
+                    "cutoff": binding["profile"]["cutoff"], "universe_as_of": route["data_cutoff"],
+                    "snapshot_digest": binding["files"]["day_selection_universe"]["sha256"],
+                    "universe_codes": dataset.members(_day(route["data_cutoff"]), universe_key=dataset.universe_key)}
+    else:
+        expected = route.get("runtime_pit_identity")
+        if expected is None:
+            raise SourcePlanError("SOURCE_RUNTIME_PIT_IDENTITY_REQUIRED", owner="Selection/PIT")
+    parsed = resolve_inference_pit_identity(expected, version_tag="historical")
+    if supplied is not None:
+        observed = resolve_inference_pit_identity(supplied, version_tag="historical")
+        if observed != parsed:
+            raise SourcePlanError("SOURCE_DECLARED_PIT_IDENTITY_MISMATCH")
+    return expected
 
 
 def validate_file_pit_declaration(route: dict | None, *, request_identity, manifest_identity) -> None:
