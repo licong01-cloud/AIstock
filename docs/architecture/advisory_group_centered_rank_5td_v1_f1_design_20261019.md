@@ -2,6 +2,8 @@
 
 日期2026-10-19。用户要求公告数据暂列待执行，先尝试其它方向；公告标题研究`DEFERRED_BY_USER`，不删除设计或认定无价值，不再作为当前主线依赖。本研究`ALPHA_RANKING / EXPLORATORY_SCREEN / NAVIGATION_ONLY`，唯一假设`GROUP_CENTERED_RANK_5TD_1`。设计完成时0新fit，实施/研究结果另记。
 
+当前：离线源码与一次真实两fit/完整评价完成，`EXACT_CANDIDATE_NOT_SUPPORTED`，不进入确认或生产；PR/CI交付另报告。累计160次实际研究fit＋1旧index，另有此前2个cohort统计估计器，不是160个独立假设。
+
 ## Background / 为什么测试此问题
 
 R1冻结预测诊断及成熟cohort状态均未支持价格/弃权增量，继续校准拒买阈值没有依据。本次缩小产品职责：在每日原Top50中固定选Top10，不预测安全买价、不决定现金。问题是**同日共同收益作为干扰项时，用同一低复杂度模型消除它，能否改善候选内排序和原Top10收益**。
@@ -64,16 +66,39 @@ T是否可买只在标签评价处理：原生CASH_ENTRY_NOT_EXECUTABLE为现金
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-321 | 本文Background/Scope | artifact: docs/architecture/advisory_group_centered_rank_5td_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
-| F-322 | 本文Contracts | artifact: docs/architecture/advisory_group_centered_rank_5td_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
-| F-323 | 本文Model | artifact: docs/architecture/advisory_group_centered_rank_5td_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
-| F-324 | 本文Policy | artifact: docs/architecture/advisory_group_centered_rank_5td_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
-| F-325 | 本文Verification Plan | artifact: docs/architecture/advisory_group_centered_rank_5td_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
-| F-326 | 本文Model/Implementation Plan | artifact: docs/architecture/advisory_group_centered_rank_5td_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
-| F-327 | 本文Scope/Production Gates | artifact: docs/architecture/advisory_group_centered_rank_5td_v1_f1_design_20261019.md | DESIGN_REVIEW_PASS | none |
+| F-321 | 本文Background/Scope；蓝图§6.3.11/12 | artifact: docs/architecture/advisory_group_centered_rank_5td_v1_f1_design_20261019.md | SOURCE_AND_RESEARCH_COMPLETE | none |
+| F-322 | group_centered_rank_5td_study_v1.py validate_roster/training_rows | backend/tests/advisory_model_first/test_group_centered_rank_5td_study_v1.py::test_native_roster_and_date_identity | SOURCE_AND_RESEARCH_COMPLETE | none |
+| F-323 | 同叶train_models/predict_ranks | backend/tests/advisory_model_first/test_group_centered_rank_5td_study_v1.py::test_training_clock_dedup_centering_and_future_poison | SOURCE_AND_RESEARCH_COMPLETE | none |
+| F-324 | 同叶predict_ranks/evaluate_ranks | backend/tests/advisory_model_first/test_group_centered_rank_5td_study_v1.py::test_prediction_keeps_unknown_slots_and_never_uses_outcomes | SOURCE_AND_RESEARCH_COMPLETE | none |
+| F-325 | 同叶evaluate_ranks；真实结果段 | backend/tests/advisory_model_first/test_group_centered_rank_5td_study_v1.py::test_evaluation_cash_unknown_costs_and_attribution | SOURCE_AND_RESEARCH_COMPLETE | none |
+| F-326 | 同叶run_study/原生stage及registry | backend/tests/advisory_model_first/test_group_centered_rank_5td_study_v1.py::test_native_stages_exact_retry_and_source_drift | SOURCE_AND_RESEARCH_COMPLETE | none |
+| F-327 | 本文Scope/Production Gates/审修记录 | backend/tests/advisory_model_first/test_group_centered_rank_5td_study_v1.py::test_unknown_training_feature_or_nonfinite_input_fails | SOURCE_AND_RESEARCH_COMPLETE | none |
 
 初始三视角自审：①不将旧ranking概念包装为全新信息；②同日去均值只限训练/预测X，未来未知不得改变Top10；③完整未知/成本/原槽/双端点与生产边界。仅设计通过，实施与真实结果尚未完成，不宣称独立外审。
 
 ### 实际输入修订（尚未拟合时）
 
 首个prepare `advgroupcentered_f0942f1cb64c5e464acd21a0`在训练前发现旧源`market_up_ratio`整个训练期21900原行均缺失，其余八列有数据；0fit、0评价收益解码。原设计将全缺列视为计算错误，不必要地阻断了可用八列。已显式改为两臂共同不参与学习并报告结构性缺失，不补零/删股票/向数据owner发补采需求。旧准备产物保留，新合同/代码身份重新登记；该修订早于任何模型结果，非阴性后选特征或救阈值。此限制不代表当前数据库缺少市场宽度，也不影响原策略包。
+
+## Research Result / 一次真实研究
+
+Producer `b821985e7`（完整身份见preregistered）；独立根`F:/Dev/AIstock_model_artifacts/advisory_group_centered_rank_5td_v1_20261019/advgroupcentered_9db90cc22308ce507a0e79ff`，plan SHA `9db90cc22308ce507a0e79ff4d796d75f37b516f3a63248cf91f49752d23936e`。原始305D/30500行身份完整，训练19426唯一stockD/214D；共同八原量＋八mask。既有WSL sklearn1.7.2、两线程，两个STARTED/COMPLETE，0SQL/QE/DB/服务。run主体2.893秒、结束RSS约282MiB；不把这等同于全部开发审查耗时或峰值内存。
+
+评价保留86D/8600原Top50、每臂1720个Top10槽；81成熟D/1620槽。三臂成熟未知槽0；原包/absolute/centered不可买现金分别2/1/3槽；每臂各1条退出执行未证明，终值仍是政策假设估值而非已实现收益。
+
+| 同口径指标 | 原包Top10 | absolute | centered |
+|---|---:|---:|---:|
+| 固定十槽五会话净估值均值bps | 95.336410 | 91.750967 | 86.138597 |
+| 共同已知样本日均RankIC | -0.021127 | 0.012779 | 0.029375 |
+| 已知可估值槽胜率 | 51.36% | 54.17% | 53.49% |
+| 相邻日Top10集合更换比例（非资金换手） | 35.29% | 74.06% | 56.35% |
+
+centered−原包=-9.197813bps，同时95%区间[-74.355792,45.528060]；centered−absolute=-5.612370bps，[-46.915177,27.239985]。双比较均81完整配对D；MDE80分别81.77/49.78bps。干预分别2564/1830唯一stockD、均81/81D，不是零干预或仅偶然几次调整；预测全排序相关性改善没有转化为Top10净增量。相对原包换入贡献73.386591、移出82.584404，精确对账-9.197813；相对absolute57.801695−63.414066=-5.612370。三臂组尾损均0只说明这个窗口该阈值无观察，不证明安全。
+
+包分层：LSTM原包/absolute/centered=62.390101/113.630589/118.439372bps；TCN=128.282719/69.871345/53.837822bps。两包方向相反，不事后选择LSTM上线或用总体RankIC覆盖TCN损失；完整月份在evaluation.json，不按月份反选阈值。结果仅停止此精确通用候选，不证明所有排序不可学，也不把新排序合同结果归因于原价格模型或市场宽度未补齐。
+
+## 实施审修与DESIGN-COMPLIANCE-001
+
+同窗口三轮（非独立外审）：第一轮查D/T/H、重复簇质量、训练内编码及中心化；第二轮核未知固定槽、原生费用/现金、不读未来状态和完整日期统计；第三轮加入阶段身份/源漂移/partial fit禁止自动重训，发现全缺字段不应阻断现有八量，在任何fit前同步合同并新增精确回归。6项直接小矩阵通过，修改后只补跑受影响节点（断点1项、结构缺失/预测2项），Ruff通过；F1/蓝图结构与必需CI在交付时再次核对。源码不需要后端重启，0经济确认/角色激活。
+
+四项：①完整离线研究交付，不宣称价格功能/生产盈利完成；②未知与输入限制明示，无删股/补价/伪成功；③全缺字段技术修订事前明确，模型/阈值在收益读取后不改变；④无策略包资格门、数据窗口等待或新增生产审批。公告仍待执行，不自动切回或派生同族第三fit。
