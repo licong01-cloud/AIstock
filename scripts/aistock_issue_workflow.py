@@ -3420,6 +3420,7 @@ _validate_advisory_historical_operations = _runtime_semantics._validate_advisory
 _validate_advisory_sector_entry_original_list = _runtime_semantics._validate_advisory_sector_entry_original_list
 _validate_hmm_rotation_l2_overview = _runtime_semantics._validate_hmm_rotation_l2_overview
 _validate_hmm_daily_coefficient_jobs = _runtime_semantics._validate_hmm_daily_coefficient_jobs
+_validate_hmm_coefficient_extension = _runtime_semantics._validate_hmm_coefficient_extension
 _validate_hmm_workers = _runtime_semantics._validate_hmm_workers
 _validate_hmm_risk_l2_overview = _runtime_semantics._validate_hmm_risk_l2_overview
 _validate_research_pipeline_health = _runtime_semantics._validate_research_pipeline_health
@@ -3445,6 +3446,8 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
      "strategy_package_selection_artifact_readback", _validate_selection_artifacts),
     (re.compile(r"^/api/v1/hmm-training/snapshots/[^/]+/daily-coefficients/jobs$"),
      "hmm_database_daily_coefficient_jobs", _validate_hmm_daily_coefficient_jobs),
+    (re.compile(r"^/api/v1/hmm-training/configs/[^/]+/coefficient-extension$"),
+     "hmm_frozen_coefficient_extension", _validate_hmm_coefficient_extension),
     (re.compile(r"^/api/kline-all/tdx$"), "tdx_raw_kline_facts", _validate_tdx_raw_kline),
     (re.compile(r"^/api/v1/hmm-evolution/workers$"), "hmm_worker_liveness", _validate_hmm_workers),
     (re.compile(r"^/api/v1/hmm-risk/risk-l2/overview$"), "hmm_risk_l2_overview", _validate_hmm_risk_l2_overview),
@@ -3620,6 +3623,7 @@ def _evaluate_business_smoke_semantics(
         "factor_metrics_results",
         "hmm_rotation_l2_overview",
         "hmm_database_daily_coefficient_jobs",
+        "hmm_frozen_coefficient_extension",
         "advisory_entry_price_status",
         "advisory_sector_entry_original_list",
         "advisory_returns_metrics_v2",

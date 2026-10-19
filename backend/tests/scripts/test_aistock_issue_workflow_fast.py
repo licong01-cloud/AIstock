@@ -826,12 +826,6 @@ def test_selection_artifact_semantic_native_readback(target, value):
         assert semantic["facts"]["error_code"] == "DATA_UNAVAILABLE"
 
 
-def _entry_price_status_semantic(payload: Any, *, program_id: str = "advp_test") -> dict[str, Any]:
-    return _business_semantic(
-        f"http://127.0.0.1:8001/api/v1/advisory/programs/{program_id}/entry-price/status", payload, "e" * 64,
-    )
-
-
 @pytest.mark.parametrize("case", ["valid", "no_future", "weekend", "false_ok", "not_calendar", "empty", "duplicate", "reverse",
                                    "future", "latest", "next", "count", "bounds", "date", "lookback", "query_as_of", "nested"])
 def test_advisory_calendar_defaults_semantics(case):
@@ -1058,44 +1052,28 @@ def _entry_price_payload(configured=False):
     }
 
 
-@pytest.mark.parametrize("configured", [False, True])
-def test_entry_price_status_semantic_contract_accepts_safe_readback(configured) -> None:
+@pytest.mark.parametrize("configured,override,reason", [
+    (False, {}, None), (True, {}, None),
+    (False, {"ok": False}, "ok=true"),
+    (False, {"errors": ["readback failed"]}, "without errors"),
+    (False, {"schema_version": "wrong"}, "schema_version"),
+    (False, {"program_id": "advp_other"}, "does not match"),
+    (False, {"configured": "false"}, "configured must be boolean"),
+    (False, {"status": "CONFIGURED"}, "must be NOT_CONFIGURED"),
+    (False, {"database_written": True}, "database_written=false"),
+    (False, {"configured": True, "status": "CONFIGURED", "binding_activated": True}, "binding_activated=false"),
+])
+def test_entry_price_status_semantic_contract(configured, override, reason):
+    """Shared setup retains both positive and every original negative oracle."""
     payload = _entry_price_payload(configured)
-    semantic = _entry_price_status_semantic(payload)
-    assert semantic["contract_id"] == "advisory_entry_price_status"
-    assert semantic["verdict"] == "passed"
-    assert semantic["facts"] == {key: payload[key] for key in (
-        "program_id", "configured", "status", "database_written"
-    )}
-
-
-@pytest.mark.parametrize(
-    ("override", "reason"),
-    [
-        ({"ok": False}, "ok=true"),
-        ({"errors": ["readback failed"]}, "without errors"),
-        ({"schema_version": "wrong"}, "schema_version"),
-        ({"program_id": "advp_other"}, "does not match"),
-        ({"configured": "false"}, "configured must be boolean"),
-        ({"status": "CONFIGURED"}, "must be NOT_CONFIGURED"),
-        ({"database_written": True}, "database_written=false"),
-        (
-            {"configured": True, "status": "CONFIGURED", "binding_activated": True},
-            "binding_activated=false",
-        ),
-    ],
-)
-def test_entry_price_status_semantic_contract_rejects_invalid_or_unsafe_readback(
-    override: dict[str, Any],
-    reason: str,
-) -> None:
-    payload = _entry_price_payload()
     payload.update(override)
-
-    semantic = _entry_price_status_semantic(payload)
-
-    assert semantic["verdict"] == "failed"
-    assert reason in semantic["reason"]
+    semantic = _business_semantic("http://127.0.0.1:8001/api/v1/advisory/programs/advp_test/entry-price/status", payload, "e" * 64)
+    assert semantic["contract_id"] == "advisory_entry_price_status"
+    assert semantic["verdict"] == ("passed" if reason is None else "failed")
+    if reason is None:
+        assert semantic["facts"] == {key: payload[key] for key in ("program_id", "configured", "status", "database_written")}
+    else:
+        assert reason in semantic["reason"]
 
 
 def _rotation_l2_overview_payload(run_id: str = "a" * 64) -> dict[str, Any]:
@@ -1113,37 +1091,11 @@ def _rotation_l2_overview_payload(run_id: str = "a" * 64) -> dict[str, Any]:
     }
 
 
-def _rotation_l2_semantic(
-    payload: Any,
-    *,
-    query: str = "run_id=" + "a" * 64,
-) -> dict[str, Any]:
-    return _business_semantic(
-        f"http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?{query}",
-        payload, "d" * 64,
-    )
-
-
-def test_rotation_l2_overview_semantic_contract_binds_complete_run() -> None:
-    semantic = _rotation_l2_semantic(_rotation_l2_overview_payload())
-
-    assert semantic["contract_id"] == "hmm_rotation_l2_overview"
-    assert semantic["verdict"] == "passed"
-    assert semantic["facts"] == {
-        "run_id": "a" * 64,
-        "model_hash": "b" * 64,
-        "canonical_row_sha256": "c" * 64,
-        "trade_date": "2026-09-26",
-        "as_of_date": "2026-09-25",
-        "sector_count": 131,
-        "available_count": 119,
-    }
-
-
 _ROTATION_RUN_QUERY = "run_id=" + "a" * 64
 
 
 @pytest.mark.parametrize("query,envelope,fields,reason", [
+    (_ROTATION_RUN_QUERY, {}, {}, None),
     (_ROTATION_RUN_QUERY, {"status": "failed"}, {}, "status=ok"),
     (_ROTATION_RUN_QUERY, {"ok": False}, {}, "status=ok"),
     (_ROTATION_RUN_QUERY, {"errors": ["readback failed"]}, {}, "status=ok"),
@@ -1159,14 +1111,18 @@ _ROTATION_RUN_QUERY = "run_id=" + "a" * 64
     (_ROTATION_RUN_QUERY, {}, {"trade_date": "2026-9-26"}, "ISO date"),
     (_ROTATION_RUN_QUERY, {}, {"as_of_date": "2026-09-26"}, "must precede"),
 ])
-def test_rotation_l2_overview_semantic_contract_rejects_invalid_readback(query, envelope, fields, reason):
-    """One negative oracle, preserving every envelope/query/row case."""
+def test_rotation_l2_overview_semantic_contract(query, envelope, fields, reason):
+    """One setup retains the full-run mapping and every original rejection."""
     payload = _rotation_l2_overview_payload()
     payload.update(envelope)
     payload["data"].update(fields)
-    semantic = _rotation_l2_semantic(payload, query=query)
-    assert semantic["verdict"] == "failed"
-    assert reason in semantic["reason"]
+    semantic = _business_semantic(f"http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?{query}", payload, "d" * 64)
+    assert semantic["contract_id"] == "hmm_rotation_l2_overview"
+    assert semantic["verdict"] == ("passed" if reason is None else "failed")
+    if reason is None:
+        assert semantic["facts"] == payload["data"]
+    else:
+        assert reason in semantic["reason"]
 
 
 def test_unknown_business_smoke_endpoint_remains_fail_closed() -> None:
@@ -1178,6 +1134,81 @@ def test_unknown_business_smoke_endpoint_remains_fail_closed() -> None:
     assert semantic["contract_id"] is None
     assert semantic["verdict"] == "failed"
     assert "no target-owned business-smoke semantic contract" in semantic["reason"]
+
+
+def _extension_probe():
+    policy = dict(schema_version="hmm_coefficient_extension_policy_v1", enabled=True, snapshot_id="snapshot-1",
+                  model_sha256="a" * 64, config_sha256="b" * 64, coefficient_start="2026-06-01", signal_presets=["balanced"])
+    identity = dict(generation="generation-1", release_id="release-1", dataset_manifest_sha256="c" * 64,
+                    dataset_manifest_file_sha256="d" * 64, active_profile_sha256="e" * 64)
+    origin = dict(train_start="2023-02-13", train_end="2026-02-13", validation_start="2026-02-24",
+                  validation_end="2026-05-19", history_start="2023-01-26", origin_authority="snapshot_metrics_original_precompute_origin_v1")
+    plan = dict(config_id="config-1", snapshot_id="snapshot-1", signal_preset="balanced", model_sha256="a" * 64,
+                source_mode="qe_frozen_file", generation_mode="frozen_window_extension_v1", policy=dict(policy),
+                test_start="2026-06-01", backtest_end="2026-08-31", windows=[["2026-06-01", "2026-08-31"]],
+                generator_sha256="f" * 64, model_inference_origin=origin, dataset_identity=identity, preset_coeffs={"bull": 1.1})
+    key = dict(policy=policy, preset="balanced", preset_coeffs=plan["preset_coeffs"], model_inference_origin=origin,
+               input_identity=identity, start=plan["test_start"], end=plan["backtest_end"], generator_sha256="f" * 64)
+    plan["extension_key"] = hashlib.sha256((json.dumps(key, sort_keys=True, separators=(",", ":")) + "\n").encode()).hexdigest()
+    filename = f"coefficients_balanced_2026-06-01_2026-08-31__auto_{plan['extension_key'][:16]}__{'9' * 16}.json"
+    window = dict(role="automatic_frozen_model_extension", preset="balanced", test_start="2026-06-01", backtest_end="2026-08-31",
+                  strict_no_leakage=True, snapshot_id="snapshot-1", config_id="config-1", model_sha256="a" * 64,
+                  dataset_generation="generation-1", release_id="release-1", dataset_manifest_identity="c" * 64,
+                  dataset_manifest_file_sha256="d" * 64, active_profile_sha256="e" * 64, coefficient_filename=filename,
+                  coefficient_sha256="9" * 64, coefficient_bytes=123, extension_key=plan["extension_key"], generator_sha256="f" * 64)
+    result = dict(status="REGISTERED", training_performed=False, output_path="F:/models/" + filename, artifact_sha256="9" * 64,
+                  windows=[window], dataset_identity=dict(identity), extension_key=plan["extension_key"], model_sha256="a" * 64, generator_sha256="f" * 64)
+    job = dict(job_id="job-1", config_id="config-1", snapshot_id="snapshot-1", signal_preset="balanced",
+               generation_mode="frozen_window_extension_v1", status="COMPLETED", result_status="REGISTERED", plan_json=plan,
+               result_json=result, output_path=result["output_path"], artifact_sha256="9" * 64, completed_at="2026-10-18T00:00:00+08:00")
+    for obj in (job, plan):
+        obj.update(as_of_trade_date="2026-08-31", effective_trade_date="2026-08-31", input_data_max_dates={"frozen_release": "2026-08-31"})
+    return dict(config_id="config-1", policy=policy, jobs=[job])
+
+
+@pytest.mark.parametrize("field,value", [
+    ("valid", None), ("pinned", None), ("history", None), ("payload", None), ("payload", {}), ("config_id", "other"), ("policy", None), ("policy.enabled", False),
+    ("policy.model_sha256", "bad"), ("policy.signal_presets", ["balanced", "balanced"]), ("policy.coefficient_start", "2026-02-30"),
+    ("jobs", []), ("jobs", [None]), ("duplicate", None), ("ambiguous", None), ("query", "?job_id=missing"), ("query", "?job_id=&job_id=job-1"),
+    *(("jobs.0." + k, v) for k, v in (("status", "PENDING"), ("status", "RUNNING"), ("status", "FAILED"),
+        ("error_message", "failed"), ("plan_json", None), ("result_json", None), ("config_id", "other"), ("snapshot_id", "other"),
+        ("result_status", "GENERATED"), ("completed_at", "2026-10-18T00:00:00"), ("artifact_sha256", "8" * 64),
+        ("as_of_trade_date", "2026-08-30"), ("input_data_max_dates", {"database_daily": "2026-08-31"}),
+        ("completed_at", "2026-08-30T00:00:00+08:00"), ("completed_at", "2099-01-01T00:00:00+08:00"))),
+    *(("jobs.0.plan_json." + k, v) for k, v in (("model_inference_origin", None), ("model_inference_origin.validation_end", "2026-06-01"),
+        ("model_inference_origin.origin_authority", "mutable_config"), ("model_sha256", "8" * 64), ("source_mode", "database_daily"),
+        ("extension_key", "8" * 64), ("windows", []), ("dataset_identity.active_profile_sha256", "bad"))),
+    *(("jobs.0.result_json." + k, v) for k, v in (("training_performed", True), ("status", "FAILED"), ("windows", []),
+        ("windows.0.strict_no_leakage", False), ("windows.0.test_start", "2024-07-01"), ("windows.0.snapshot_id", "other"),
+        ("windows.0.coefficient_bytes", True), ("windows.0.coefficient_filename", "other.json"), ("output_path", "F:/other.json"))),
+])
+def test_coefficient_extension_semantic_contract(field, value):
+    payload, query = _extension_probe(), ""
+    if field in {"duplicate", "ambiguous", "history"}:
+        row = json.loads(json.dumps(payload["jobs"][0]))
+        if field != "duplicate":
+            row["job_id"] = "job-2"
+        if field == "history":
+            row["generation_mode"], row["status"] = "daily_asof_prediction_v1", "RUNNING"
+        payload["jobs"].append(row)
+    elif field == "pinned":
+        payload["jobs"].append({**payload["jobs"][0], "job_id": "job-2"})
+        query = "?job_id=job-1"
+    elif field == "query":
+        query = value
+    elif field == "payload":
+        payload = value
+    elif field != "valid":
+        obj, *parts = payload, *field.split(".")
+        for part in parts[:-1]:
+            obj = obj[int(part)] if isinstance(obj, list) else obj[part]
+        obj[parts[-1]] = value
+    semantic = _business_semantic("http://127.0.0.1:8001/api/v1/hmm-training/configs/config-1/coefficient-extension" + query, payload, "f" * 64)
+    assert semantic["contract_id"] == "hmm_frozen_coefficient_extension"
+    assert semantic["verdict"] == ("passed" if field in {"valid", "pinned", "history"} else "failed")
+    if semantic["verdict"] == "passed":
+        assert semantic["facts"]["acceptance_scope"] == "one_registered_frozen_extension"
+        assert semantic["facts"]["artifact_bytes_verified"] is False
 
 
 def _daily_job_probe():
@@ -1650,6 +1681,7 @@ def test_runtime_catalog_validation_error_cannot_be_downgraded(invalid_runtime_c
     ("/api/v1/advisory/historical-range-batches/ahrb_test/operations", True),
     ("/api/v1/factor-metrics/results", True),
     ("/api/v1/hmm-training/snapshots/snapshot-1/daily-coefficients/jobs", True),
+    ("/api/v1/hmm-training/configs/fc0683a9-6ca0-4d55-b053-17c2360c3c40/coefficient-extension", True),
     ("/api/v1/advisory/programs/advp_test/sector-entry-price?target_trade_date=2026-08-28&list_version_id=list-test", True),
 ])
 def test_runtime_preflight_checks_semantic_registration_without_http(path, registered) -> None:
