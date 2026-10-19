@@ -13,6 +13,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any, Mapping
 
+from backend.services.hmm_data_source.daily_input import DailyInputError, snapshot_inference_origin
 from backend.services.quantevolver.qe_active_dataset_profile import (
     _require_plain_existing_chain,
     load_active_qe_profile,
@@ -263,6 +264,16 @@ def resolve_active_input(profile: Any | None = None) -> dict[str, Any]:
     }
 
 
+def _model_inference_origin(metrics: Any, start: str) -> dict[str, str]:
+    try:
+        return snapshot_inference_origin(metrics, as_of=date.fromisoformat(start))
+    except (DailyInputError, TypeError, ValueError) as exc:
+        raise CoefficientExtensionError(
+            "hmm_coefficient_extension_model_asof_invalid",
+            "coefficient window must follow frozen snapshot training/semantic calibration",
+        ) from exc
+
+
 def build_plan(
     *,
     config_id: str,
@@ -289,6 +300,9 @@ def build_plan(
     if not model_path.is_file() or file_sha256(model_path) != policy["model_sha256"]:
         _fail("model bytes changed", "hmm_coefficient_extension_model_identity_mismatch")
     start = policy["coefficient_start"]
+    # Config dates are mutable and cannot establish when this model/semantic
+    # mapping became usable. Use the same frozen authority as database_daily.
+    origin = _model_inference_origin(snapshot.get("metrics_json"), start)
     dates = [d for d in inputs["calendar"] if d >= start]
     if not dates or dates[0] != start:
         _fail("coefficient_start must exist in the frozen calendar")
@@ -313,6 +327,7 @@ def build_plan(
             "policy": policy,
             "preset": signal_preset,
             "preset_coeffs": preset_coeffs,
+            "model_inference_origin": origin,
             "input_identity": inputs["identity"],
             "start": start,
             "end": end,
@@ -333,6 +348,7 @@ def build_plan(
         "preset_coeffs": dict(preset_coeffs),
         "model_path": str(model_path),
         "model_sha256": policy["model_sha256"],
+        "model_inference_origin": origin,
         "generator_sha256": file_sha256(
             Path(__file__).resolve().parents[3] / "scripts" / "precompute_hmm_coefficients.py"
         ),
@@ -353,6 +369,18 @@ def build_plan(
 
 
 def window_payload(payload: Mapping[str, Any], plan: Mapping[str, Any], start: str, end: str) -> dict[str, Any]:
+    origin = plan.get("model_inference_origin")
+    if not isinstance(origin, dict):
+        _fail("missing frozen snapshot boundaries", "hmm_coefficient_extension_model_asof_invalid")
+    checked_origin = _model_inference_origin(
+        {
+            "train_period": f"{origin.get('train_start')} ~ {origin.get('train_end')}",
+            "val_period": f"{origin.get('validation_start')} ~ {origin.get('validation_end')}",
+        },
+        start,
+    )
+    if checked_origin != origin:
+        _fail("frozen snapshot boundaries changed", "hmm_coefficient_extension_model_asof_invalid")
     expected_identity = plan["dataset_identity"]
     if payload.get("dataset_identity") != expected_identity or payload.get("model_sha256") != plan["model_sha256"]:
         _fail("generated artifact identity differs from the frozen plan")
@@ -441,6 +469,7 @@ def window_payload(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
             "coefficient_start": start,
             "coefficient_end": end,
             "strict_no_leakage": True,
+            "model_inference_origin": checked_origin,
             "snapshot_id": plan["snapshot_id"],
             "config_id": plan["config_id"],
             "extension_key": plan["extension_key"],
@@ -494,6 +523,7 @@ def publish_window(payload: Mapping[str, Any], plan: Mapping[str, Any], start: s
         "snapshot_id": plan["snapshot_id"],
         "config_id": plan["config_id"],
         "model_sha256": plan["model_sha256"],
+        "model_inference_origin": result["model_inference_origin"],
         "dataset_generation": identity["generation"],
         "release_id": identity["release_id"],
         "dataset_manifest_identity": identity["dataset_manifest_sha256"],
