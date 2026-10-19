@@ -1,6 +1,7 @@
 {
   "actual": "All nine runs succeeded but archive-status=not_archived and archive-detail returns snapshot_not_found; no capture env switch is configured.",
   "allowed_write_scope": [
+    "noxfile.py",
     "backend/services/qe_archive/event_capture.py",
     "backend/services/multi_alpha/durable_orchestrator.py",
     "backend/services/multi_alpha/combine_backtest.py",
@@ -48,15 +49,15 @@
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
+      "noxfile.py",
       "backend/services/qe_archive/event_capture.py",
       "backend/services/multi_alpha/durable_orchestrator.py",
-      "backend/services/multi_alpha/combine_backtest.py",
-      "backend/services/multi_alpha/durable_repository.py",
       "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
       "backend/tests/multi_alpha/test_archive_health.py",
-      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py"
+      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1982-multi-alpha-formal-completion-silently-disables-default-qe-warehouse-del.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "actual_git_diff",
     "ownership": {
       "changed_files": [
         "backend/services/qe_archive/event_capture.py",
