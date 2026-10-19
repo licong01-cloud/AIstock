@@ -56,4 +56,6 @@
 
 实际宽 390 的右侧内容已单独截图与回归（整窗宽 698）；原 260 像素公共左栏完全不变。整窗 390 时只检查全局不横向溢出，不宣称已改造既有移动外壳。业务金额十进制格式化，正负号与盈亏颜色并存。
 
-源码、CI、合入、根 main 同步与运行加载分别记录。生产 DDL / DML、训练、补数、模型部署、服务控制、回放接续均未执行；无新增依赖。用户重启目标为 `backend_main`，操作流程见 `docs/operations/backend_main_runtime_restart_runbook.md`；合入后仍需由用户重启并进行只读身份与页面业务验证。
+源码、CI、合入、根 main 同步与运行加载分别记录。生产 DDL / DML、训练、补数、模型部署、服务控制、回放接续均未执行；无新增依赖。用户重启目标为 `backend-main`，操作流程见 `docs/operations/backend_main_runtime_restart_runbook.md`；合入后仍需由用户重启并进行只读身份与页面业务验证。
+
+原始验证回执（含失败回执）已按明确的八个本任务 job 前缀逐文件归档至 `X:/AIstock_temp/LOCALSIM/workbench-implementation/validation-receipts/`；`relocation-manifest.json` 保留原路径、新路径、大小和 SHA-256，并已逐文件读回校验。未移动其他窗口产物，未删除分支、工作树、模型或数据。源码工作树不保留环境失败的完整日志；上述提交绑定的简短技术结论已在本记录持久化。
