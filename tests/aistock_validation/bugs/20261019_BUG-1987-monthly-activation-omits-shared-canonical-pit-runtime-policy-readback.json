@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1987-monthly-activation-omits-shared-canonical-pit-runtime-policy-readback.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1987-monthly-activation-omits-shared-canonical-pit-runtime-policy-readback.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py",
@@ -89,6 +95,29 @@
   "first_seen_at": "2026-10-19T13:20:05.238709Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": {
+    "changes": [
+      "Bind authorized activation intent to shared rule, parameters digest and activation generation/envelope.",
+      "Recheck before CAS and after consumer verification; drift remains ACTIVATED_VERIFY_FAILED.",
+      "Permit normal same-policy rolling watermark extension without requiring frozen/rolling physical IDs or cutoff dates to be equal.",
+      "Check rollback against the same runtime policy; do not write the DB pointer."
+    ],
+    "deployment_constraint": "Production pointer migration still requires real full PIT bundle, DEV validation and separate target authorization. Source merge is not activation. Do not restart into strict canonical admission while default pointer remains legacy.",
+    "design_compliance": [
+      "No partial deployment represented as complete.",
+      "No fake PIT identity or silent successful activation.",
+      "Historical candidates and native leases unchanged.",
+      "Reuse existing CAS and authorization, no new scheduler or approval platform."
+    ],
+    "reviews": [
+      "Policy/physical identity and cutoff semantics reviewed.",
+      "Authorization, CAS, generation drift and idempotent retry reviewed; no false atomic cross-filesystem/DB guarantee.",
+      "Quote adoption fixtures corrected to bind actual catalog pins; reused release data not altered."
+    ],
+    "root_cause": "Monthly activation switched the global frozen profile without reading the separately active rolling canonical PIT policy.",
+    "source_dependency": "BUG-1986 / PR #6365 shared canonical policy helpers",
+    "verification": "RED five cases, GREEN five; related matrix 73 passed/1 skipped plus four fixture regression failures corrected and rerun 4 passed; Ruff/l0/fresh-process PASS."
+  },
   "fixed_at": null,
   "github_issue_number": 6364,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6364",
@@ -112,17 +141,21 @@
     "fresh_process_evidence": [
       "Isolated AIstock python -B loaded persistent MonthlyReleaseService.activate and verified canonical policy readback before CAS and after consumer verification; no DB or service access."
     ],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
     "target_ids": [
       "worker-scheduler"
-    ],
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -240,28 +273,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "fix_summary": {
-    "root_cause": "Monthly activation switched the global frozen profile without reading the separately active rolling canonical PIT policy.",
-    "source_dependency": "BUG-1986 / PR #6365 shared canonical policy helpers",
-    "changes": [
-      "Bind authorized activation intent to shared rule, parameters digest and activation generation/envelope.",
-      "Recheck before CAS and after consumer verification; drift remains ACTIVATED_VERIFY_FAILED.",
-      "Permit normal same-policy rolling watermark extension without requiring frozen/rolling physical IDs or cutoff dates to be equal.",
-      "Check rollback against the same runtime policy; do not write the DB pointer."
-    ],
-    "verification": "RED five cases, GREEN five; related matrix 73 passed/1 skipped plus four fixture regression failures corrected and rerun 4 passed; Ruff/l0/fresh-process PASS.",
-    "reviews": [
-      "Policy/physical identity and cutoff semantics reviewed.",
-      "Authorization, CAS, generation drift and idempotent retry reviewed; no false atomic cross-filesystem/DB guarantee.",
-      "Quote adoption fixtures corrected to bind actual catalog pins; reused release data not altered."
-    ],
-    "deployment_constraint": "Production pointer migration still requires real full PIT bundle, DEV validation and separate target authorization. Source merge is not activation. Do not restart into strict canonical admission while default pointer remains legacy.",
-    "design_compliance": [
-      "No partial deployment represented as complete.",
-      "No fake PIT identity or silent successful activation.",
-      "Historical candidates and native leases unchanged.",
-      "Reuse existing CAS and authorization, no new scheduler or approval platform."
-    ]
   }
 }
