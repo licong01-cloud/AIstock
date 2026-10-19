@@ -1,0 +1,454 @@
+{
+  "actual": "真实三个账户名称均为待完善，累计盈亏为空；原生回放仅有盘中估值被收盘区间检查一并遮蔽。",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/localsim_workbench.py",
+    "backend/services/simulation_runtime/localsim_workbench_models.py",
+    "backend/services/simulation_runtime/localsim_workbench_presentation.py",
+    "backend/tests/simulation_runtime/test_localsim_workbench.py",
+    "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
+    "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+    "frontend/src/lib/simulation/localsim/workbench.ts",
+    "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
+    "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md",
+    "backend/services/simulation_runtime/localsim_workbench_metrics.py",
+    "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
+    "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md",
+    "tests/aistock_validation/bugs/20261019_BUG-1994-localsim.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1994",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-19T17:49:05.427680Z",
+  "description": "真实三个账户名称均为待完善，累计盈亏为空；原生回放仅有盘中估值被收盘区间检查一并遮蔽。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261019-12948d4aa163",
+      "timestamp": "2026-10-19T17:49:05.427661Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/LOCALSIM/workbench-implementation/post-restart-api-receipt.json"
+  ],
+  "expected": "每个策略账户名称可读，资产和有证据支持的盈亏分别展示，未知指标说明具体缺少的依据并标明估值日期。",
+  "file_scope_contract": {
+    "added_files": [
+      "backend/services/simulation_runtime/localsim_workbench_metrics.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
+      "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
+    ],
+    "changed_files": [
+      "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/services/simulation_runtime/localsim_workbench_models.py",
+      "backend/services/simulation_runtime/localsim_workbench_presentation.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench.py",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+      "frontend/src/lib/simulation/localsim/workbench.ts",
+      "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
+      "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/localsim_workbench.py",
+        "backend/services/simulation_runtime/localsim_workbench_models.py",
+        "backend/services/simulation_runtime/localsim_workbench_presentation.py",
+        "backend/tests/simulation_runtime/test_localsim_workbench.py",
+        "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
+        "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+        "frontend/src/lib/simulation/localsim/workbench.ts",
+        "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
+        "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md",
+        "backend/services/simulation_runtime/localsim_workbench_metrics.py",
+        "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
+        "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "simulation.localsim_successor_core",
+        "platform.db",
+        "strategy_package",
+        "docs.architecture",
+        "validation.module_quality",
+        "docs.analysis"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/localsim_workbench.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/localsim_workbench_models.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/localsim_workbench_presentation.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_workbench.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "frontend/src/lib/simulation/localsim/workbench.ts",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "backend/services/simulation_runtime/localsim_workbench_metrics.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/localsim_workbench.py",
+        "backend/services/simulation_runtime/localsim_workbench_models.py",
+        "backend/services/simulation_runtime/localsim_workbench_presentation.py",
+        "backend/tests/simulation_runtime/test_localsim_workbench.py",
+        "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
+        "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+        "frontend/src/lib/simulation/localsim/workbench.ts",
+        "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
+        "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md",
+        "backend/services/simulation_runtime/localsim_workbench_metrics.py",
+        "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
+        "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/services/simulation_runtime/localsim_workbench_models.py",
+      "backend/services/simulation_runtime/localsim_workbench_presentation.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench.py",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+      "frontend/src/lib/simulation/localsim/workbench.ts",
+      "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
+      "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md",
+      "backend/services/simulation_runtime/localsim_workbench_metrics.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
+      "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/services/simulation_runtime/localsim_workbench_models.py",
+      "backend/services/simulation_runtime/localsim_workbench_presentation.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench.py",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+      "frontend/src/lib/simulation/localsim/workbench.ts",
+      "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
+      "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md",
+      "backend/services/simulation_runtime/localsim_workbench_metrics.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
+      "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
+    ]
+  },
+  "first_seen_at": "2026-10-19T17:49:05.427680Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6377,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6377",
+  "last_seen_at": "2026-10-19T17:49:05.427680Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM工作台策略命名和逐账户盈亏展示不完整",
+  "trigger_condition": {
+    "fingerprint": "12948d4aa163a490ed2f63e3",
+    "source_event_id": "FE-20261019-12948d4aa163"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:simulation_runtime",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/services/simulation_runtime/localsim_workbench_models.py",
+      "backend/services/simulation_runtime/localsim_workbench_presentation.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench.py",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+      "frontend/src/lib/simulation/localsim/workbench.ts",
+      "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
+      "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md",
+      "backend/services/simulation_runtime/localsim_workbench_metrics.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
+      "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
+    ],
+    "ui_issue": true,
+    "ui_route": "/services/simulation_runtime/localsim_workbench.py",
+    "ui_routes": [
+      "/services/simulation_runtime/localsim_workbench.py"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
