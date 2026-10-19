@@ -129,3 +129,16 @@ def test_new_shared_runtime_defaults_use_pointer_without_rewriting_saved_version
     saved = {**original, "runtime_profile_activation": {"source": "runtime_config_activation",
              "profile_version_id": "saved-version", "config_sha256": "f" * 64, "trade_enabled": True}}
     assert attach_default_runtime_profile_binding(saved) == saved
+
+
+def test_new_saved_profile_versions_inherit_global_pointer():
+    from backend.tests.paper_trading_v2.test_runtime_profile import _portfolio_fixture
+    from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_RUNTIME_PROFILE_KEY
+    _, _, service, _, portfolio = _portfolio_fixture()
+    profile, first = service.create_runtime_profile(portfolio_id=portfolio.portfolio_id,
+        profile_name="new global default", config_json={"top_k": 2})
+    second = service.create_runtime_profile_version(portfolio_id=portfolio.portfolio_id,
+        profile_id=profile.profile_id, config_json={"top_k": 1})
+    for version in (first, second):
+        assert version.config_json[CANONICAL_PIT_RUNTIME_PROFILE_KEY]["authority_id"] == policy.CANONICAL_PIT_AUTHORITY_ID
+        assert "st_universe_key" not in version.config_json["runtime_profile"]["risk_policy"]

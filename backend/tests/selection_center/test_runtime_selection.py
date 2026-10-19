@@ -56,6 +56,10 @@ from backend.services.trading_core.errors import (
     UnsupportedFeatureError,
 )
 from backend.tests.strategy_package.test_manifest_v1 import admit_manifest_for_test, make_manifest
+from backend.tests.paper_trading_v2.test_day_runner import canonical_pit_unit_authority as canonical_pit_unit_authority
+
+
+pytestmark = pytest.mark.usefixtures("canonical_pit_unit_authority")
 
 
 class NoopRefreshAudit:

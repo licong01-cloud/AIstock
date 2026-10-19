@@ -1,6 +1,14 @@
 {
   "actual": "PIT migration audit requires a full data release; physical provider pins are treated as policy identities; live default is legacy generation zero.",
   "allowed_write_scope": [
+    "backend/tests/paper_trading_v2/test_auto_run.py",
+    "backend/tests/paper_trading_v2/test_capture_field_wiring.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/tests/paper_trading_v2/test_session.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/paper_trading_v2/test_canonical_pit_control.py",
+    "backend/services/paper_trading_v2/service.py",
     "backend/tests/paper_trading_v2/test_runtime_profile.py",
     "backend/services/selection_center/runtime_profile.py",
     "scripts/ci_change_classifier.py",

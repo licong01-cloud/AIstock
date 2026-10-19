@@ -20,9 +20,13 @@ from backend.services.paper_trading_v2.service import PaperTradingV2PortfolioSer
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.trading_core.errors import InvalidStateTransitionError, RuntimeConfigInvalidError
 from backend.tests.paper_trading_v2.test_day_runner import (
+    canonical_pit_unit_authority as canonical_pit_unit_authority,
     make_paper_enabled_manifest,
     save_manifest_with_default_execution_policy,
 )
+
+
+pytestmark = pytest.mark.usefixtures("canonical_pit_unit_authority")
 
 
 def _seed_service() -> tuple[PaperTradingV2PortfolioService, InMemoryPaperTradingV2Repository, str]:

@@ -24,6 +24,8 @@ from __future__ import annotations
 from datetime import date
 from typing import Any
 
+import pytest
+
 from backend.services.paper_trading_v2.day_runner import PaperTradingDayRunner
 from backend.services.paper_trading_v2.market_data import (
     PaperV2MinuteMarketDataProvider,
@@ -37,6 +39,7 @@ from backend.services.selection_center.tradability import TradabilityFilter
 from backend.services.strategy_package.repository import InMemoryStrategyPackageRepository
 from backend.services.trading_core.models import Fill, OrderSide
 from backend.tests.paper_trading_v2.test_day_runner import (
+    canonical_pit_unit_authority as canonical_pit_unit_authority,
     FakeCalendar,
     FakeLimitProvider,
     FakeSuspendLookup,
@@ -47,6 +50,9 @@ from backend.tests.paper_trading_v2.test_day_runner import (
     make_raw_bars,
     runtime_with_authoritative_scores,
 )
+
+
+pytestmark = pytest.mark.usefixtures("canonical_pit_unit_authority")
 
 
 class RecordingInMemoryRepo(InMemoryPaperTradingV2Repository):

@@ -48,6 +48,10 @@ from backend.services.trading_core.models import (
 from backend.services.trading_core.oms import OMS
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
 from backend.tests.paper_trading_v2.test_day_runner import ActiveCanonicalPitResolver, DriftingCanonicalPitResolver
+from backend.tests.paper_trading_v2.test_day_runner import canonical_pit_unit_authority as canonical_pit_unit_authority
+
+
+pytestmark = pytest.mark.usefixtures("canonical_pit_unit_authority")
 
 
 class FakeCalendar:

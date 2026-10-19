@@ -234,7 +234,7 @@ rule_version == shsz_a_252td_st_delist_asof_v2
 | F-014 | v1/v2 profile split; CLI/runbook/production gates | `backend/tests/test_canonical_equity_pit.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md --tier F2` | implemented_local_verified | none |
 | F-015 | `backend/services/canonical_pit_release.py`; `scripts/manage_canonical_pit_release.py` | `backend/tests/test_canonical_pit_release.py`; `manage_canonical_pit_release.py --action freeze --target dev` | implemented_local_verified | none |
 | F-016 | `require_dataset_runtime_pit_policy` | `backend/tests/test_canonical_pit_release.py::test_independent_pit_binding_does_not_require_provider_catalog_names` | implemented_local_verified | none |
-| F-017 | `StockUniversePitService.get_eligible_codes` | `backend/tests/test_stock_universe_pit_service.py::test_canonical_query_accepts_validated_binding` | implemented_local_verified | none |
+| F-017 | `StockUniversePitService.get_eligible_codes`; shared default binding; new saved-profile creation/versioning | `backend/tests/test_stock_universe_pit_service.py::test_canonical_query_accepts_validated_binding`; `backend/tests/test_canonical_pit_release.py::test_new_saved_profile_versions_inherit_global_pointer` | implemented_local_verified | none |
 | F-018 | `publish_release`; `read_release`; `validate_release` | `backend/tests/test_canonical_pit_release.py` | implemented_local_verified | none |
 | F-019 | `rehearse_activation` | `backend/tests/test_canonical_pit_release.py`; `python scripts/manage_canonical_pit_release.py --action rehearse-activation --target dev` -> DEV_ROLLBACK_VALIDATED, generation 1 then restored 0 | implemented_local_verified | none |
 

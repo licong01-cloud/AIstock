@@ -11,6 +11,7 @@ from backend.services.canonical_equity_pit import (
     CANONICAL_PIT_AUTHORITY_ID,
     CANONICAL_PIT_RULE_VERSION,
     CANONICAL_PIT_UNIVERSE_KEY,
+    CanonicalPitAuthorityResolver,
     PitAuthorityStatus,
     PitConsumerBinding,
     canonical_rule_parameters_digest,
@@ -71,6 +72,20 @@ from backend.services.trading_core.models import (
     RunStatus,
 )
 from backend.tests.strategy_package.test_manifest_v1 import admit_manifest_for_test, make_manifest
+
+
+pytestmark = pytest.mark.usefixtures("canonical_pit_unit_authority")
+
+
+@pytest.fixture
+def canonical_pit_unit_authority(monkeypatch):
+    """Opt-in in-memory suites supply the global authority, never a live DB.
+
+    Explicit injected drift/failure resolvers still exercise their real guards;
+    DEV/production integration suites do not opt into this fixture.
+    """
+    monkeypatch.setattr(CanonicalPitAuthorityResolver, "resolve_live_binding",
+                        lambda _self: ActiveCanonicalPitResolver().binding)
 
 
 class ActiveCanonicalPitResolver:
@@ -1503,14 +1518,10 @@ def test_day_runner_stops_before_order_write_when_canonical_pit_generation_drift
         start_date=date(2024, 1, 2),
         data_source=MinuteDataSource.TDX_REALTIME,
     )
-    _profile, legacy_version = portfolio_service.create_runtime_profile(
+    _profile, canonical_version = portfolio_service.create_runtime_profile(
         portfolio_id=portfolio.portfolio_id,
         profile_name="canonical PIT profile",
         config_json={"runtime_profile": {"selection": {"top_k": 2}}},
-    )
-    canonical_version = portfolio_service.migrate_runtime_profile_version_to_canonical_pit(
-        portfolio_id=portfolio.portfolio_id,
-        profile_version_id=legacy_version.profile_version_id,
     )
     portfolio_service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
@@ -1594,11 +1605,7 @@ def test_day_runner_risk_policy_blocks_buy_and_forces_existing_position_exit() -
         config_json=runtime_config,
         created_by="unit_test",
     )
-    canonical_version = profile_service.migrate_runtime_profile_version_to_canonical_pit(
-        portfolio_id=portfolio.portfolio_id,
-        profile_version_id=version.profile_version_id,
-        created_by="unit_test",
-    )
+    canonical_version = version
     activation = profile_service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 3),
