@@ -1143,10 +1143,21 @@ def test_by_code_batched_refuses_to_mirror_empty_payload(monkeypatch):
     assert result.failed_batches == 1
     assert result.inserted_rows == 0
     assert any(
-        "SELECT COUNT(*) FROM market.sw_index_member WHERE l2_code = %s" in sql
+        "SELECT EXISTS(SELECT 1 FROM market.sw_index_member WHERE l2_code = %s)" in sql
         for sql, _ in conn.executed
     )
     assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
+
+
+@pytest.mark.parametrize("exists", [False, True])
+def test_by_code_existence_probe_does_not_count_history(exists):
+    conn = _FakeConn()
+    conn.fetchone_value = (exists,)
+    assert TushareSyncEngine()._has_code_rows(conn, SW_DAILY, "801012.SI") is exists
+    assert conn.executed == [(
+        "SELECT EXISTS(SELECT 1 FROM market.sw_daily WHERE ts_code = %s)",
+        ("801012.SI",),
+    )]
 
 
 def test_by_code_batched_accepts_empty_payload_when_local_empty(monkeypatch):
@@ -1160,6 +1171,7 @@ def test_by_code_batched_accepts_empty_payload_when_local_empty(monkeypatch):
     assert result.failed_batches == 0
     assert result.inserted_rows == 0
     assert not any("DELETE FROM market.sw_index_member" in sql for sql, _ in conn.executed)
+    assert sum("SELECT EXISTS(" in sql for sql, _ in conn.executed) == 1
 
 
 def test_by_code_batched_keeps_upsert_when_replace_by_code_disabled(monkeypatch):
