@@ -573,7 +573,7 @@ def l0(session: nox.Session) -> None:
     )
 
 
-def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
+def _run_mocked_frontend_target(session: nox.Session, target: str | tuple[str, ...], *, extra_env: dict[str, str] | None = None) -> None:
     """Run one module-owned Playwright target without starting production services."""
 
     _ensure_frontend_node_modules(session)
@@ -584,12 +584,13 @@ def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
             "node",
             "node_modules/@playwright/test/cli.js",
             "test",
-            target,
+            *((target,) if isinstance(target, str) else target),
             env=_env(
                 {
                     "BACKEND_PORT": "8012",
                     "FRONTEND_PORT": "3012",
                     "NEXT_PUBLIC_API_BASE": "http://127.0.0.1:8012/api/v1",
+                    **(extra_env or {}),
                 }
             ),
             external=True,
@@ -598,10 +599,22 @@ def _run_mocked_frontend_target(session: nox.Session, target: str) -> None:
         os.chdir(old_cwd)
 
 
+def _run_localsim_frontend_target(session: nox.Session, target: str) -> None:
+    task_temp = Path(os.environ.get("RUNNER_TEMP") or ("X:/AIstock_temp/LOCALSIM/workbench-validation" if os.name == "nt" else str(ROOT / "tmp" / "localsim-workbench")))
+    task_temp.mkdir(parents=True, exist_ok=True)
+    _run_mocked_frontend_target(session, (target, *session.posargs), extra_env={"TEMP": str(task_temp), "TMP": str(task_temp), "NODE_PATH": str(ROOT / "frontend" / "node_modules")})
+
+
 @nox.session(venv_backend="none")
 def localsim_control_plane_ui(session: nox.Session) -> None:
-    """Run the LocalSIM readback and status UI contract with mocked APIs."""
-    _run_mocked_frontend_target(session, "tests/paper-v2/localsim-unified-control-plane.spec.ts")
+    """Run the native LocalSIM control-plane readback UI contract."""
+    _run_localsim_frontend_target(session, "tests/paper-v2/localsim-unified-control-plane.spec.ts")
+
+
+@nox.session(venv_backend="none")
+def localsim_workbench_ui(session: nox.Session) -> None:
+    """Run the LocalSIM economic workbench UI contract."""
+    _run_localsim_frontend_target(session, "tests/paper-v2/localsim-trading-workbench.spec.ts")
 
 
 @nox.session(venv_backend="none")
@@ -838,6 +851,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_postgres_source.py",
         "backend/tests/dataset_release/test_shared_consumer_coverage.py",
         "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+        "backend/tests/test_canonical_equity_pit.py",
         "backend/tests/dataset_release/test_monthly_source_producer.py",
         "backend/tests/dataset_release/test_monthly_unified_v2.py",
         "backend/tests/dataset_release/test_monthly_worker.py",
@@ -881,6 +895,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         ),
         test_globs=(
             "backend/tests/qlib_exporter/test_*.py",
+            "backend/tests/test_canonical_equity_pit.py",
             "backend/tests/dataset_release/test_*.py",
             "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
             "backend/tests/routers/test_managed_dataset_preparations.py",
@@ -891,6 +906,7 @@ def qlib_data_backend(session: nox.Session) -> None:
             "backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py",
         ),
         overrides={
+            "backend/services/canonical_equity_pit.py": "backend/tests/test_canonical_equity_pit.py",
             "scripts/build_dataset_release_successor.py": "backend/tests/dataset_release/test_release_successor.py",
             "scripts/repair_qe_adj_factor_candidate.py": "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
             "backend/services/dataset_release/adj_factor_candidate_repair.py": "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
@@ -1926,6 +1942,7 @@ def qe_archive_backend(session: nox.Session) -> None:
         "backend/tests/test_qe_execution_templates_schema.py",
         "backend/tests/test_qe_archive_repository_static.py",
         "backend/tests/qe_archive/test_qe_asset_lifecycle.py",
+        "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
         "backend/tests/qe_templates/test_template_validator.py",
         "backend/tests/test_aistock_qe_mcp_servers.py",
         "backend/tests/unified_engine/test_qe_completion_contract.py",

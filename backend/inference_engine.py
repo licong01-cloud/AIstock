@@ -53,7 +53,9 @@ from .services.advisory_historical_range.inference_session import (
 )
 from .services.advisory_historical_range.inference_inputs import InferenceInputSession, frame_identity
 from .services.advisory_historical_range.inference_features import InferenceFeatureSession
-from .services.canonical_equity_pit import CanonicalPitAuthorityResolver, PitAuthorityStatus
+from .services.canonical_equity_pit import (
+    CanonicalPitAuthorityResolver, PitAuthorityStatus, require_canonical_new_task_binding,
+)
 from .services.canonical_pit_inference_boundary import (
     CanonicalPitInferenceBoundaryError,
     InferencePitIdentity,
@@ -82,7 +84,10 @@ def _resolve_inference_pit_identity_for_run(
     declared = pit_identity is not None or manifest_inference_pit_identity(manifest) is not None
     live_binding = None
     if not declared:
-        live_binding = (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding()
+        live_binding = require_canonical_new_task_binding(
+            (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding(),
+            consumer="inference",
+        )
     return resolve_inference_pit_identity(
         pit_identity,
         manifest=manifest,
