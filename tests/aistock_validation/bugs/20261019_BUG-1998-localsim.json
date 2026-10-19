@@ -155,8 +155,8 @@
   },
   "first_seen_at": "2026-10-19T18:56:52.698859Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "67a0177ae02b1158d9faab7d96bc1c4bc3d4bd2b",
+  "fixed_at": "2026-10-19T19:26:41Z",
   "github_issue_number": 6385,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6385",
   "last_seen_at": "2026-10-19T18:56:52.698859Z",
@@ -164,6 +164,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6392",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -185,6 +186,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -197,7 +199,28 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_expansion_note": "Native persistence currently rejects historical valuation_refresh with zero new fills, and no-rebalance days have no first projection. Extend the existing close-only persistence branch with original-projection proof or a proven no-order completed plan; preserve cash/fill facts and broker_called. No new execution or valuation algorithm.",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1998",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ee4cde1bfbd04687",
+    "recorded_at": "2026-10-19T19:28:34.123874Z",
+    "runtime_contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "cf8a422b4087f94f2713f1fc55796b38f1203940",
+    "source_merge_commit": "67a0177ae02b1158d9faab7d96bc1c4bc3d4bd2b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6392",
+    "validation_evidence": [
+      "pytest backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py and related matrix -> 52 passed"
+    ],
+    "validation_evidence_digest": "d24089d9fd4aca747e4905c9d0b28ffad74e02f242ef20c9fd23eaa28836449e"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -206,6 +229,9 @@
     "fingerprint": "f15037a692539b3f43a64d35",
     "source_event_id": "FE-20261019-f15037a69253"
   },
+  "validation_evidence": [
+    "pytest backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py and related matrix -> 52 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
