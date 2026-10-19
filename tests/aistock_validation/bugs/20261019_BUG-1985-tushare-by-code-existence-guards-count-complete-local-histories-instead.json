@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "BY_CODE empty-mirror guards use a short-circuit indexed existence probe, with identical empty/nonempty decisions.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261019_BUG-1985-tushare-by-code-existence-guards-count-complete-local-histories-instead.json",
       "backend/services/tushare_sync_engine.py",
       "backend/tests/test_tushare_sync_engine.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261019_BUG-1985-tushare-by-code-existence-guards-count-complete-local-histories-instead.json",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/tushare_sync_engine.py",
@@ -112,11 +118,24 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "RED to GREEN: the existing empty-provider/local-history regression requires SELECT EXISTS rather than COUNT(*). A second regression showed an empty SW member payload queried the same local key twice; the shared per-code decision now probes once. Nonempty provider payloads do not probe local history.",
+      "Fresh-process pytest backend/tests/test_tushare_sync_engine.py: 133 passed. Empty upstream with existing local history still refuses destructive replacement; empty/empty remains a valid no-op. Current and ended SW member identities and append-only historical source facts remain protected. No provider, runtime, dataset or production database writes.",
+      "Three review passes: all former count callers need only boolean existence; cache is per-code/per-response and cannot leak between symbols; existing source-error, row-limit, append-only SW and empty-mirror semantics preserved. DESIGN-COMPLIANCE-001 four items passed. No new gate, threshold, dependency or business contract.",
+      "Fresh-process tests load persistent TushareSyncEngine._has_code_rows and verify one short-circuit existence probe per empty provider code; DEV read-only present/absent results passed; no runtime or database writes."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
