@@ -140,6 +140,10 @@ class LocalSimHistoricalReplayDayExecutor:
                     "status": item.status,
                 },
             )
+        self.lifecycle_scheduler.complete_localsim_replay_close(
+            run_id=run.run_id, trade_date=trade_date, strategy_id=job.simulation_account_id,
+            binding_id=job.binding_id, release_id=job.release_id,
+        )
 
 
 class LocalSimReplaySafeBoundaryAuthorityProtocol(Protocol):
