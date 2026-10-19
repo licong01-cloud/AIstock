@@ -38,7 +38,7 @@
     "item_by_item": "F-015..F-019 implemented and verified; F2 design validator passed. Complete factual exporter neutralization explicitly remains outside this BUG.",
     "no_fake_completion": "Production default remains legacy generation zero; recent coverage and forward-only persisted-profile migration are pending, not reported globally active.",
     "no_unapproved_simplification": "Reuses official five-field spans, canonical rule digest and existing singleton CAS; no private module policy or second active pointer.",
-    "remaining_gaps": "Production canonical coverage stops September 30; DEV ST source stops September 30. DEV/production differ in two lifecycle boundaries (600297,601028); no production facts overwritten."
+    "remaining_gaps": "Production canonical coverage stops September 30 and default remains generation zero. DEV missing-only ST alignment (1608 rows) and PIT extension through October 19 passed; current-window CAS rehearsal rolled back. September DEV/production differ in two lifecycle boundaries (600297,601028); never copy DEV derived members over production."
   },
   "events": [
     {
@@ -221,7 +221,7 @@
   "first_seen_at": "2026-10-19T14:29:10.083761Z",
   "fix_branch": null,
   "fix_commit": null,
-  "fix_summary": "Independent content-addressed PIT versions and fact/PIT binding reuse official contracts without monthly price export. Shared new defaults reference the singleton; persisted task identities are not rewritten. Production pointer/profile migration remains separately authorized and is NOT complete.",
+  "fix_summary": "Independent content-addressed PIT versions and fact/PIT binding reuse official contracts without monthly price export. Shared unbound tasks and newly created saved profiles/versions reference the singleton; historical saved identities are not rewritten. Production pointer migration remains separately authorized and is NOT complete.",
   "fixed_at": null,
   "github_issue_number": 6371,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6371",
@@ -248,7 +248,8 @@
     "fresh_process_evidence": [
       "Fresh AIstock python loaded independent PIT producer, global query default and CLI; 91 direct policy/version/Selection/Paper tests passed. Earlier source/sync/W6/QE integration matrix: 269 passed; monthly-unified regression: 77 passed, 1 skipped.",
       "Existing DEV CAS rehearsal: canonical generation 1 verified then rolled back to legacy generation 0; exact independent release digest f7e7df40edf5d0c57a0da3b6707141e2c4e7026af1702950a6982a7144c81755; production database write=false.",
-      "DEV recent-coverage extension was rejected by missing October ST source; original September metadata restored and entire captured release exactly matched the pre-test digest; member rows unchanged. Production read-only coverage plan remains REBUILD_REQUIRED through October 19."
+      "Initial DEV recent-coverage extension was rejected by missing October ST source; original September metadata restored before retry. Then copied exactly 1608 missing DEV ST facts from read-only production (SHA256 57e5d62f271f756b7c8248525fb11be5af6d78196bde784f7826c6c234be4215), overwrote no existing values. Existing producer rebuilt DEV PIT through October 19; receipt 224da74eef07cf9ba0efd753826ec2d06972a22ddf9c69c840600996ccb048bc passed. Independent current version digest 1437baf13e4d85ea27f5f0c100f6a392c391925716ff333e944ce3c1f77b248b (5346 symbols,5665 spans) passed CAS rehearsal then rolled back to generation zero. Production read-only coverage plan remains REBUILD_REQUIRED; source fingerprint ef4e52327d58935c80661072d6444bf72a2d15162e23db5233d5b3e1d1ac2ed8.",
+      "New persisted-profile default RED then GREEN; 29 version/creation/history-control tests passed, and exact generation drift / forced-exit nodes remained GREEN. Production READY-profile read-only plan found zero migration targets; plan digest 0d272d9044aede5432f1bbc92ffcc6104768cbd8a099558445529a73cd68fc2f."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
