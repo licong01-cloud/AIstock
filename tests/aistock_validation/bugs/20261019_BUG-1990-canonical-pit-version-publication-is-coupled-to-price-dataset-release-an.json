@@ -1,6 +1,8 @@
 {
   "actual": "PIT migration audit requires a full data release; physical provider pins are treated as policy identities; live default is legacy generation zero.",
   "allowed_write_scope": [
+    "backend/tests/paper_trading_v2/test_live_approval_candidate.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
     "backend/services/canonical_pit_inference_boundary.py",
     "configs/datasets/qe_backtest_monthly_v2.yaml",
     "scripts/build_stock_universe_pit_spans.py",
@@ -255,7 +257,7 @@
       "Existing DEV CAS rehearsal: canonical generation 1 verified then rolled back to legacy generation 0; exact independent release digest f7e7df40edf5d0c57a0da3b6707141e2c4e7026af1702950a6982a7144c81755; production database write=false.",
       "Initial DEV recent-coverage extension was rejected by missing October ST source; original September metadata restored before retry. Then copied exactly 1608 missing DEV ST facts from read-only production (SHA256 57e5d62f271f756b7c8248525fb11be5af6d78196bde784f7826c6c234be4215), overwrote no existing values. Existing producer rebuilt DEV PIT through October 19; receipt 224da74eef07cf9ba0efd753826ec2d06972a22ddf9c69c840600996ccb048bc passed. Independent current version digest 1437baf13e4d85ea27f5f0c100f6a392c391925716ff333e944ce3c1f77b248b (5346 symbols,5665 spans) passed CAS rehearsal then rolled back to generation zero. Production read-only coverage plan remains REBUILD_REQUIRED; source fingerprint ef4e52327d58935c80661072d6444bf72a2d15162e23db5233d5b3e1d1ac2ed8.",
       "New persisted-profile default RED then GREEN; 29 version/creation/history-control tests passed, and exact generation drift / forced-exit nodes remained GREEN. Production READY-profile read-only plan found zero migration targets; plan digest 0d272d9044aede5432f1bbc92ffcc6104768cbd8a099558445529a73cd68fc2f.",
-      "Approved terminal lifecycle fallback and old frozen identity RED then GREEN. Final related policy/producer/export/binding matrix 230 passed; affected Selection/Paper profile creation matrix 74 passed. Ruff, compile, catalog integrity, module registry and changed-file guardrails passed with zero blocking findings.",
+      "Approved terminal lifecycle fallback and old frozen identity RED then GREEN. Final related policy/producer/export/binding matrix 230 passed; affected Selection/Paper profile creation matrix 74 passed. CI found three obsolete setup migrations in live approval/MiniQMT tests after profiles inherited global PIT; reproduced RED, retained all execution/identity assertions and asserted NO_OP_ALREADY_CANONICAL, then all three passed. Ruff, compile, catalog integrity, module registry and changed-file guardrails passed with zero blocking findings.",
       "V3 DEV source apply through 2026-10-19 passed; receipt digest a1af4ad267d63431ab989cb022398eb44bc99cbfe1f641b1365b9961b5ab0dbd. Exactly two DEV lifecycle source rows (601059,601198) aligned to existing read-only production D/2026-10-19 facts. Independent DEV release d8f9fac9ba42dc92249b944aa1a032e6d5df7fee740e0a6d41242621e1135cc8 (5346 symbols,5665 spans), source commit 410cf93c49d2b5df921a9a4fea023f09c82832bb, CAS generation 1 then rollback to legacy generation 0. Production readback receipt X:/AIstock_temp/BUG-1990-terminal-facts-20261020/dev-production-readback-r1.json SHA256 310c608e201573599e1de75266e6beb1a92ef6cb4c9a1ca79ffc5050f5e809f3 proves old v2 spans unchanged. Production apply/activation not performed."
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
