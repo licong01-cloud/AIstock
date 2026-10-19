@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import date
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -11,6 +12,7 @@ from backend.services.dataset_release.monthly_runtime import (
     SubmissionOnlyPipeline,
 )
 from backend.services.dataset_release.monthly_unified import MonthlyReleaseRequest
+from backend.services.dataset_release.monthly_worker import MonthlyProducerError, _artifact_refs
 
 
 def _environment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, Path]:
@@ -60,6 +62,25 @@ def test_submission_runtime_cannot_execute_data_stage(
     assert isinstance(service.pipeline, SubmissionOnlyPipeline)
     with pytest.raises(MonthlyRuntimeConfigurationError, match="code-registered worker"):
         service.pipeline.run_stage()
+
+
+def test_worker_runtime_accepts_planned_profile_root_not_arbitrary_paths(monkeypatch, tmp_path):
+    roots = _environment(monkeypatch, tmp_path)
+    settings = MonthlyRuntimeSettings.from_env()
+    registry = SimpleNamespace(pipeline=lambda **kwargs: SimpleNamespace(**kwargs))
+    service = settings.worker_service(registry)
+    profile = roots["profiles"] / "candidate.json"
+    profile.write_bytes(b"{}\n")
+    refs, _ = _artifact_refs(
+        [{"id": profile.name, "path": str(profile)}],
+        roots=service.pipeline.artifact_roots, label="output",
+    )
+    assert refs[0]["id"] == profile.name
+    outside = tmp_path / "unplanned.json"
+    outside.write_bytes(b"{}\n")
+    with pytest.raises(MonthlyProducerError, match="escaped"):
+        _artifact_refs([{"id": outside.name, "path": str(outside)}],
+                       roots=service.pipeline.artifact_roots, label="output")
 
 
 def test_runtime_rejects_noncanonical_node_root(

@@ -14,6 +14,7 @@ import tempfile
 from typing import Any, Mapping
 
 from .canonical import canonical_json_bytes, ensure_sha256
+from .monthly_file_identity import file_sha256
 from .monthly_worker import ProducerContext
 from .profile_contract import (
     ACTIVE_PROFILE_SCHEMA_V4,
@@ -55,11 +56,26 @@ def _is_link(path: Path) -> bool:
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return file_sha256(path)
+
+
+def _existing_profile_payload(path: Path) -> bytes | None:
+    for part in (path, *path.parents):
+        if _is_link(part):
+            raise MonthlyProfileCandidateError("profile target path is linked")
+    if not path.exists():
+        return None
+    if not path.is_file():
+        raise MonthlyProfileCandidateError("profile target is not a regular file")
+    before = path.stat()
+    raw = path.read_bytes()
+    after = path.stat()
+    if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+        after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns,
+    ):
+        raise MonthlyProfileCandidateError("profile target changed during readback")
+    _canonical_payload(raw, label="profile target")
+    return raw
 
 
 def _read_canonical(path: Path, *, label: str) -> dict[str, Any]:
@@ -186,8 +202,9 @@ class SealedMonthlyProfileCandidateBuilder:
             root = candidate.resolve(strict=True)
         except OSError as exc:
             raise MonthlyProfileCandidateError("candidate root is unavailable") from exc
-        if _is_link(candidate) or not root.is_dir() or output.exists():
+        if _is_link(candidate) or not root.is_dir():
             raise MonthlyProfileCandidateError("profile target or candidate root is invalid")
+        _existing_profile_payload(output)
         base = _predecessor_profile(predecessor, predecessor_ref)
 
         manifest_path = _plain_file(root, "qe_dataset_manifest.json", label="dataset manifest")
@@ -478,6 +495,25 @@ class SealedMonthlyProfileCandidateBuilder:
         }
         output.parent.mkdir(parents=True, exist_ok=True)
         payload = canonical_json_bytes(profile) + b"\n"
+        from backend.services.quantevolver.qe_active_dataset_profile import (
+            load_qe_profile,
+            validate_controller_snapshot,
+        )
+
+        def reuse_identical() -> bool:
+            existing = _existing_profile_payload(output)
+            if existing is None:
+                return False
+            if existing != payload:
+                raise MonthlyProfileCandidateError("profile target differs from the planned candidate")
+            validated = load_qe_profile(output)
+            validate_controller_snapshot(validated)
+            if _existing_profile_payload(output) != payload:
+                raise MonthlyProfileCandidateError("profile target changed during validation")
+            return True
+
+        if reuse_identical():
+            return output
         descriptor, temporary_name = tempfile.mkstemp(
             prefix=f".{output.name}.", suffix=".validate", dir=output.parent
         )
@@ -487,17 +523,16 @@ class SealedMonthlyProfileCandidateBuilder:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
-            from backend.services.quantevolver.qe_active_dataset_profile import (
-                load_qe_profile,
-                validate_controller_snapshot,
-            )
-
             validated = load_qe_profile(temporary)
             validate_controller_snapshot(validated)
-            with output.open("xb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
+            try:
+                with output.open("xb") as handle:
+                    handle.write(payload)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+            except FileExistsError:
+                if not reuse_identical():
+                    raise MonthlyProfileCandidateError("profile target disappeared during publication")
         finally:
             temporary.unlink(missing_ok=True)
         return output.resolve(strict=True)
