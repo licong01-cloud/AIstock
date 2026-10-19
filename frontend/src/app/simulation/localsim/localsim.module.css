@@ -1,4 +1,4 @@
-.shell { min-height: 100vh; padding: 28px; background: #f4f7fb; color: #172033; }
+.shell { width: 100%; min-width: 0; max-width: calc(100vw - 308px); overflow-wrap: anywhere; min-height: 100vh; padding: 28px; background: #f4f7fb; color: #172033; }
 .header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-start; margin-bottom: 22px; }
 .header h1 { margin: 0 0 8px; font-size: 30px; }
 .header p { margin: 0; color: #60708a; }
@@ -49,3 +49,7 @@
 .replayBlocked { border-color: hsl(var(--destructive, 0 72% 51%)); background: hsl(var(--destructive-background, 0 86% 97%)); color: hsl(var(--destructive, 0 72% 40%)); }
 @media (max-width: 1000px) { .statusGrid { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 900px) { .half { grid-column: span 12; } .form { grid-template-columns: 1fr; } }
+
+.field { min-width: 0; }
+.field input, .field select { min-width: 0; max-width: 100%; }
+@media(max-width:600px) { .shell { padding: 6px; } .header { flex-direction: column; align-items: stretch; } .grid { display: block; } .card { margin: 10px 0; padding: 8px; min-width: 0; overflow: auto; } .form { grid-template-columns: minmax(0,1fr); } .statusGrid { grid-template-columns: minmax(0,1fr); } .button { max-width: 100%; white-space: normal; } }
