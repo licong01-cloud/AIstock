@@ -33,18 +33,32 @@
   "evidence_uris": [],
   "expected": "All new consumers inherit one canonical authority; frozen and rolling physical IDs share rule identity and cutoff parity; daily maintenance advances canonical facts without silently claiming success; publication cannot expose mixed policies.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/canonical_equity_pit.py",
-      "backend/services/tushare_sync_engine.py",
+    "actual_changed_files": [
       "backend/inference_engine.py",
+      "backend/services/canonical_equity_pit.py",
       "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
       "backend/tests/test_canonical_equity_pit.py",
       "backend/tests/test_tushare_sync_engine.py",
-      "backend/tests/selection_center/test_canonical_pit_runtime.py",
-      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py"
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1986-global-canonical-pit-defaults-diverge-between-daily-database-maintenance.json"
     ],
-    "changed_files_source": "actual_bug_scope_after_worker_split",
+    "added_files": [],
+    "changed_files": [
+      "backend/inference_engine.py",
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1986-global-canonical-pit-defaults-diverge-between-daily-database-maintenance.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/canonical_equity_pit.py",
@@ -189,6 +203,19 @@
   "first_seen_at": "2026-10-19T13:14:04.948988Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": {
+    "deployment_constraint": "Do not restart into strict new-task admission before authorized canonical registry/profile migration. Current legacy pointer is not silently promoted. Production migration and activation remain pending.",
+    "design_compliance": [
+      "No source merge claimed as production migration.",
+      "No fabricated default policy, snapshot or successful activation.",
+      "Existing immutable task leases retained; new tasks reject legacy policy.",
+      "Reuse existing canonical resolver and release CAS; no new scheduler, dependency or approval framework."
+    ],
+    "root_cause": "Daily maintenance refreshed legacy v1, new consumer admission accepted migration pointer, and physical snapshot names were confused with policy identity.",
+    "shared_policy": "aistock_equity_pit_canonical/shsz_a_252td_st_delist_asof_v2",
+    "verification": "223 targeted tests passed; RED then GREEN; lint and diff check passed.",
+    "worker_followup": "BUG-1987 owns monthly activation readback; no worker source in this PR."
+  },
   "fixed_at": null,
   "github_issue_number": 6363,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6363",
@@ -212,21 +239,27 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "backend_restart_owner": "user",
-    "fresh_process_evidence": ["Isolated AIstock python -B loaded canonical policy helpers, Selection admission, inference and canonical daily hook from persistent BUG-1986 source; no DB access or process control"],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "Isolated AIstock python -B loaded canonical policy helpers, Selection admission, inference and canonical daily hook from persistent BUG-1986 source; no DB access or process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "worker_scheduler",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": [
+    "planned_target_ids": [
       "backend-main",
       "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
@@ -363,18 +396,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "fix_summary": {
-    "root_cause": "Daily maintenance refreshed legacy v1, new consumer admission accepted migration pointer, and physical snapshot names were confused with policy identity.",
-    "shared_policy": "aistock_equity_pit_canonical/shsz_a_252td_st_delist_asof_v2",
-    "worker_followup": "BUG-1987 owns monthly activation readback; no worker source in this PR.",
-    "deployment_constraint": "Do not restart into strict new-task admission before authorized canonical registry/profile migration. Current legacy pointer is not silently promoted. Production migration and activation remain pending.",
-    "verification": "223 targeted tests passed; RED then GREEN; lint and diff check passed.",
-    "design_compliance": [
-      "No source merge claimed as production migration.",
-      "No fabricated default policy, snapshot or successful activation.",
-      "Existing immutable task leases retained; new tasks reject legacy policy.",
-      "Reuse existing canonical resolver and release CAS; no new scheduler, dependency or approval framework."
-    ]
   }
 }
