@@ -15,6 +15,12 @@
   ],
   "created_at": "2026-10-19T18:44:38.772953Z",
   "description": "load_frozen_coefficient_inputs raises incomplete burn-in quote values for an authority-declared non-published sector before coefficient generation.",
+  "design_compliance_review": {
+    "business_semantics_preserved": "Same 131-code catalog, shared sparse IDs, PIT mapping, moneyflow, causal boundaries, preset, model, and coefficient algorithm; no inferred stock-count or market-performance rule.",
+    "no_extra_gate": "No new thresholds or approvals; the existing monthly producer-hash check is preserved and its separate activation requirement is reported.",
+    "no_silent_error": "Only authority-declared quote absence is omitted; published quote gaps and forbidden quote values remain explicit failures; membership is retained.",
+    "no_simplified_delivery": "Complete reader semantics plus positive and negative regressions; no model, algorithm, parameter, window, or dataset change."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -25,13 +31,37 @@
   ],
   "evidence_uris": [],
   "expected": "Honor hash-pinned quote availability in burn-in and output; do not fabricate quotes or coefficients for non-published sectors; retain strict failure for real missing published quotes.",
+  "file_preflight_result": {
+    "active_sectors": 131,
+    "all_six_component_hashes_match": true,
+    "catalog_sectors": 131,
+    "coefficient_sectors": 124,
+    "database_calls": 0,
+    "dataset_generation": "20261015-v18-unified-quote1",
+    "dataset_manifest_sha256": "f82670728cd6cde06bbc834481187794d081070689648c06b88786a7782e435b",
+    "dataset_write": false,
+    "fits": 0,
+    "membership_stocks": 4923,
+    "network_calls": 0,
+    "quote_unavailable_sectors_at_end": 7,
+    "trade_dates": 73,
+    "window": "2026-05-20..2026-08-31",
+    "windows": "PASS",
+    "wsl": "PASS"
+  },
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
+      "scripts/precompute_hmm_coefficients.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1995-hmm-frozen-reader-rejects-authorized-quote-cessation-during-burn-in.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py",
       "scripts/precompute_hmm_coefficients.py",
-      "backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py"
+      "tests/aistock_validation/bugs/20261019_BUG-1995-hmm-frozen-reader-rejects-authorized-quote-cessation-during-burn-in.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/precompute_hmm_coefficients.py",
@@ -95,6 +125,7 @@
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6382",
   "last_seen_at": "2026-10-19T18:44:38.772953Z",
   "module": "hmm",
+  "monthly_authority_activation": "pending_separate_authority_rebind_authorization; do not sync canonical runtime root to the new producer until the installed authority is compatible",
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
@@ -102,50 +133,27 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "resolution_summary": "Honor hash-pinned publication cessation during burn-in, preserve complete pre-authority warm-up and all PIT identities, and exclude only authority-declared unavailable quote dates without fabricating observations or coefficients. Published-data gaps and any non-null out-of-availability quote still fail closed.",
-  "review_summary": [
-    "Round 1: reproduced five RED cases; fixed branch precedence and added coverage for unavailable warm-up with preserved moneyflow/membership and each forbidden quote column; five failed nodes GREEN.",
-    "Round 2: checked pre-authority and in-span warm-up completeness, output quote availability, sparse shared IDs, unchanged source data, no fallback, and monthly producer-hash coupling; no blocking source finding remains. Runtime-root synchronization requires a separately authorized monthly authority rebind."
-  ],
-  "design_compliance_review": {
-    "no_simplified_delivery": "Complete reader semantics plus positive and negative regressions; no model, algorithm, parameter, window, or dataset change.",
-    "no_silent_error": "Only authority-declared quote absence is omitted; published quote gaps and forbidden quote values remain explicit failures; membership is retained.",
-    "business_semantics_preserved": "Same 131-code catalog, shared sparse IDs, PIT mapping, moneyflow, causal boundaries, preset, model, and coefficient algorithm; no inferred stock-count or market-performance rule.",
-    "no_extra_gate": "No new thresholds or approvals; the existing monthly producer-hash check is preserved and its separate activation requirement is reported."
-  },
-  "file_preflight_result": {
-    "windows": "PASS",
-    "wsl": "PASS",
-    "dataset_generation": "20261015-v18-unified-quote1",
-    "dataset_manifest_sha256": "f82670728cd6cde06bbc834481187794d081070689648c06b88786a7782e435b",
-    "window": "2026-05-20..2026-08-31",
-    "trade_dates": 73,
-    "catalog_sectors": 131,
-    "active_sectors": 131,
-    "coefficient_sectors": 124,
-    "quote_unavailable_sectors_at_end": 7,
-    "membership_stocks": 4923,
-    "all_six_component_hashes_match": true,
-    "database_calls": 0,
-    "network_calls": 0,
-    "fits": 0,
-    "dataset_write": false
-  },
-  "monthly_authority_activation": "pending_separate_authority_rebind_authorization; do not sync canonical runtime root to the new producer until the installed authority is compatible",
   "reproduce_command": "WSL fresh-process load_frozen_coefficient_inputs: history_start=2023-01-26 test_start=2026-05-20 backtest_end=2026-08-31 active=v18 manifest=f82670728cd6cde06bbc834481187794d081070689648c06b88786a7782e435b",
   "required_verification": [
     "l0",
     "paper_v2_backend",
     "hmm_data_source_backend"
   ],
+  "resolution_summary": "Honor hash-pinned publication cessation during burn-in, preserve complete pre-authority warm-up and all PIT identities, and exclude only authority-declared unavailable quote dates without fabricating observations or coefficients. Published-data gaps and any non-null out-of-availability quote still fail closed.",
+  "review_summary": [
+    "Round 1: reproduced five RED cases; fixed branch precedence and added coverage for unavailable warm-up with preserved moneyflow/membership and each forbidden quote column; five failed nodes GREEN.",
+    "Round 2: checked pre-authority and in-span warm-up completeness, output quote availability, sparse shared IDs, unchanged source data, no fallback, and monthly producer-hash coupling; no blocking source finding remains. Runtime-root synchronization requires a separately authorized monthly authority rebind."
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
