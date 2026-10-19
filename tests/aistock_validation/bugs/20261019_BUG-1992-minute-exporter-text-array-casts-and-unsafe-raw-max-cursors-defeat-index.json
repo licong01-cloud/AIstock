@@ -146,11 +146,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "RED: six targeted minute export/query and cursor tests failed on the previous source. GREEN: native bpchar scalar/array predicates, bounded replay-start cursor, same-day/future/bootstrap handling and non-minute compatibility passed.",
+      "Fresh-process related matrix: 196 passed, 1 skipped across exporter, scheduler, Go integration and daily recovery tests. Changed-file Ruff and git diff --check passed.",
+      "Existing aistock_dev minute_perf_20261019 fixtures only: 18 alternating old/new SQL cases over identical 28024330-row September datasets, including 336 compressed chunks. All actual rows and result SHA256 values matched. Read-only repeatable-read transaction rolled back; no DDL, DML, collector or service control.",
+      "DEV median month/4-stock export: compressed 137.262 to 31.161 ms; 7-day chunks 1727.627 to 26.892 ms; 30-day chunks 1560.260 to 27.713 ms. Larger compressed batches and cursor execution are not universally faster; full plan/timing evidence remains in X:/AIstock_temp/BUG-1992-minute-sql-20261020/dev-sql-comparison.json.",
+      "Legacy audit success is not adopted as a committed completeness watermark. Both minute range routes reuse a bounded timestamp-index probe and replay the observed date; exact requested windows, persisted repair targets and existing completion/conflict/precision checks remain unchanged. No full-history minute MAX fallback. Runtime application remains pending user restart."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -161,6 +172,13 @@
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
+  "validation_evidence": [
+    "DEV source identities: BUG-1984 merge 75889488293951f2cecdf83ff5b2fb090f41b8ad is already contained in origin/main; Go writer and public CI/workflow are unchanged by this BUG.",
+    "Review 1: all three actual minute query entries exercise native bpchar predicates with unchanged half-open Shanghai timestamp bounds and data columns. No typmod means overlength code parameters are not silently truncated.",
+    "Review 2: exact-window Go path bypasses cursor, latest partially ingested date is replayed, future facts rejected, no unbounded minute fallback, non-minute audit/date behavior preserved. Already committed data is not deleted or re-exported.",
+    "Review 3: 18 DEV SQL result-equality cases and 196-pass related regression, Ruff and diff checks. No reduction in completeness/conflict/precision validation. No new gate, approval, schema, dependency or service.",
+    "DESIGN-COMPLIANCE-001: complete requested shared SQL repair; genuine errors remain visible; model/pool/units and publication contracts unchanged; no additional approvals or resource gates. Source/PR/CI/runtime states reported independently."
+  ],
   "suspected_modules": [
     "local_data"
   ],
