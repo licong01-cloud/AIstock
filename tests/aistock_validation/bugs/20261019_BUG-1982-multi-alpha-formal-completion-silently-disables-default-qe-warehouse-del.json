@@ -31,14 +31,14 @@
     {
       "action": "implementation_review",
       "actor": "codex",
-      "timestamp": "2026-10-19T03:55:08Z",
-      "note": "Three review rounds: formal default delivery and explicit opt-outs; existing X/policy exclusions and worker NOOP audit; recovery-selected successful child results retained while stale attempts excluded. No changes to experiment models, metrics, query semantics, schema or pipeline. Direct/legacy diagnostic adapters remain opt-in. Production data and the nine historical source runs were not modified."
+      "note": "Three review rounds: formal default delivery and explicit opt-outs; existing X/policy exclusions and worker NOOP audit; recovery-selected successful child results retained while stale attempts excluded. No changes to experiment models, metrics, query semantics, schema or pipeline. Direct/legacy diagnostic adapters remain opt-in. Production data and the nine historical source runs were not modified.",
+      "timestamp": "2026-10-19T03:55:08Z"
     },
     {
       "action": "design_compliance_001_review",
       "actor": "codex",
-      "timestamp": "2026-10-19T03:55:08Z",
-      "note": "1 Complete durable producer-to-worker delivery, no placeholders. 2 Existing archive_error retry and typed NOOP skip reasons retained; no silent discard. 3 Computation/financial semantics unchanged; negative/zero results and valid partial recovery retained. 4 Reuse existing lifecycle X and archive policy, no new approval or research gate. Backend restart and post-restart warehouse readback remain pending user action."
+      "note": "1 Complete durable producer-to-worker delivery, no placeholders. 2 Existing archive_error retry and typed NOOP skip reasons retained; no silent discard. 3 Computation/financial semantics unchanged; negative/zero results and valid partial recovery retained. 4 Reuse existing lifecycle X and archive policy, no new approval or research gate. Backend restart and post-restart warehouse readback remain pending user action.",
+      "timestamp": "2026-10-19T03:55:08Z"
     }
   ],
   "evidence_uris": [
@@ -47,17 +47,26 @@
   ],
   "expected": "Eligible formal Multi-alpha results automatically enqueue durable Archive delivery with explicit disable/skip honored; tests and diagnostic capture remain opt-in.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "noxfile.py",
-      "backend/services/qe_archive/event_capture.py",
+    "actual_changed_files": [
       "backend/services/multi_alpha/durable_orchestrator.py",
+      "backend/services/qe_archive/event_capture.py",
       "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
       "backend/tests/multi_alpha/test_archive_health.py",
       "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+      "noxfile.py",
       "tests/aistock_validation/bugs/20261019_BUG-1982-multi-alpha-formal-completion-silently-disables-default-qe-warehouse-del.json"
     ],
-    "changed_files_source": "actual_git_diff",
+    "added_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/durable_orchestrator.py",
+      "backend/services/qe_archive/event_capture.py",
+      "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+      "backend/tests/multi_alpha/test_archive_health.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1982-multi-alpha-formal-completion-silently-disables-default-qe-warehouse-del.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/qe_archive/event_capture.py",
@@ -222,7 +231,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
     "fresh_process_evidence": [
       "Fresh Python pytest process: default durable runtime RED (archive_pass=0) then GREEN; default/explicit-disable/duplicate outbox contracts passed with in-memory repositories, no DB or process control.",
-      "Related matrix: 52 passed, one partial-recovery regression exposed selected-child result handling; corrected and exact nodeid passed. Preserve valid selected child metrics even without assembled scheme rows; do not use stale/unselected attempts."
+      "Related matrix: 52 passed, one partial-recovery regression exposed selected-child result handling; corrected and exact nodeid passed. Preserve valid selected child metrics even without assembled scheme rows; do not use stale/unselected attempts.",
+      "Fresh Python process on final HEAD 7f803355c runs both changed test files with in-memory outbox/repository only; runtime default enabled, explicit opt-out and idempotence exercised; no DB writes or service control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
