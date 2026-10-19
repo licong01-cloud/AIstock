@@ -125,7 +125,8 @@
   ],
   "review_evidence": [
     "Review 1: all measured financial values fit one line at 1280/1440/1920; no formatter or metric semantics changed.",
-    "Review 2: LocalSIM collapses human alert summaries; other routes keep original alerts; navigation and dismissal send no acknowledgement or state writes."
+    "Review 2: LocalSIM collapses human alert summaries; other routes keep original alerts; navigation and dismissal send no acknowledgement or state writes.",
+    "CI review: corrected 390px document overflow with confined numeric scrolling and wrapping status badges; real 390/640/900 viewport overview and holding checks passed, sidebar remains 260px."
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -193,7 +194,8 @@
       "X:/AIstock_temp/LOCALSIM/BUG-2001/metrics-1280.png",
       "X:/AIstock_temp/LOCALSIM/BUG-2001/metrics-1440.png",
       "X:/AIstock_temp/LOCALSIM/BUG-2001/metrics-1920.png"
-    ]
+    ],
+    "narrow_receipt": "X:/AIstock_temp/LOCALSIM/BUG-2001/readability-narrow-receipt.json"
   },
   "verification_budget": {
     "budget": "light_ui",
