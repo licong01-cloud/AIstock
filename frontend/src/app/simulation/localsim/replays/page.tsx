@@ -10,7 +10,7 @@ import { LocalSimReadbackStatus } from "../components/readback-status";
 import { LocalSimReplayStatus } from "../components/replay-status";
 import styles from "../localsim.module.css";
 
-const readReplays=async(signal:AbortSignal)=>{let page=await localSimApi.listReplays(undefined,signal);const items=[...page.items];while(page.next_cursor){if(items.length>10000)throw Error();page=await localSimApi.listReplays(page.next_cursor,signal);items.push(...page.items);}return {...page,items};};
+const readReplays=async(signal:AbortSignal)=>{let page=await localSimApi.listReplays(undefined,signal);const items=[...page.items];while(page.next_cursor){if(items.length>10000)throw Error(READ_ERROR);page=await localSimApi.listReplays(page.next_cursor,signal);items.push(...page.items);}return {...page,items};};
 const dateIso=(d:Date)=>d.toLocaleDateString("en-CA",{timeZone:"Asia/Shanghai"});
 export default function ReplaysPage(){
   const router=useRouter(),catalog=useControlCatalog(),readiness=useLocalSimReadback(localSimApi.readiness),scheduler=useLocalSimReadback(localSimApi.schedulerVerification),replays=useLocalSimReadback(readReplays);
@@ -18,7 +18,8 @@ export default function ReplaysPage(){
   const [name,setName]=useState("历史回放模拟账户"),[capital,setCapital]=useState("5000000"),[start,setStart]=useState(""),[end,setEnd]=useState("");
   const [error,setError]=useState(""),[notice,setNotice]=useState(""),[busy,setBusy]=useState(false);
   useEffect(()=>{let valid=true;const last=new Date();last.setDate(last.getDate()-1);const first=new Date();first.setMonth(first.getMonth()-6);
-    Promise.all([request<Overview>(base+"/workbench/overview"),localSimApi.tradingCalendarStatus(dateIso(first)),localSimApi.tradingCalendarStatus(dateIso(last))]).then(([a,s,e])=>{if(valid){setAccounts(a);setStart(s.latest_completed_trading_day||"");setEnd(e.latest_completed_trading_day||"");}}).catch(()=>{if(valid)setError(READ_ERROR);});return()=>{valid=false;};},[]);
+    void request<Overview>(base+"/workbench/overview").then(a=>{if(valid)setAccounts(a);}).catch(()=>{if(valid)setError(READ_ERROR);});
+    Promise.all([localSimApi.tradingCalendarStatus(dateIso(first)),localSimApi.tradingCalendarStatus(dateIso(last))]).then(([s,e])=>{if(valid){setStart(s.latest_completed_trading_day||"");setEnd(e.latest_completed_trading_day||"");}}).catch(()=>{if(valid)setError(READ_ERROR);});return()=>{valid=false;};},[]);
   useEffect(()=>{setVersionId(catalog.versions.find(v=>v.validation_status==="VALIDATED")?.profile_version_id||"");setPolicyId(catalog.policies[0]?.policy_id||"");},[catalog.versions,catalog.policies]);
   const ready=readiness.data?.ready&&!readiness.stale&&!readiness.error&&!catalog.loading&&!catalog.error;
   async function create(){if(!ready||busy)return;setBusy(true);setError("");setNotice("");try{
@@ -26,7 +27,7 @@ export default function ReplaysPage(){
     await Promise.all([replays.refresh(),readiness.refresh()]);setAccounts(await request<Overview>(base+"/workbench/overview"));setNotice("回放已按正式合同创建；交易与实时接续进度请以原任务状态为准。");
   }catch{setError("创建回放未通过原生服务验证，请核对范围、输入覆盖与配置；未自动改用其他数据源。");}finally{setBusy(false);}}
   return <main className={styles.shell}><header className={styles.header}><div><h1>历史回放</h1><p>独立账户与账本；范围、行情来源和政策按原生合同冻结。</p></div><nav className={styles.nav}><Link href="/simulation/localsim/workbench">交易工作台</Link><Link href="/simulation/localsim/configure">创建与配置</Link></nav></header>
-    {(error||catalog.error||replays.error)&&<p role="alert" className={styles.error}>{error||catalog.error||READ_ERROR}</p>}{catalog.error&&<button className={styles.button} onClick={catalog.reload}>重新读取配置目录</button>}{notice&&<p role="status" className={styles.ready}>{notice}</p>}
+    {Array.from(new Set([error,catalog.error,replays.error?READ_ERROR:""])).filter(Boolean).map(message=><p key={message} role="alert" className={styles.error}>{message}</p>)}{catalog.error&&<button className={styles.button} onClick={catalog.reload}>重新读取配置目录</button>}{notice&&<p role="status" className={styles.ready}>{notice}</p>}
     <LocalSimReadbackStatus readiness={readiness} scheduler={scheduler} onRefresh={()=>{void Promise.all([readiness.refresh(),scheduler.refresh(),replays.refresh()]);}}/>
     <section className={styles.card}><h2>创建新的历史回放</h2><p className={styles.muted}>新任务使用原有数据集文件来源；覆盖或政策不满足时由服务拒绝，不静默回退数据库。此表单不会重置已有任务。</p><div className={styles.form}>
       <label className={styles.field}>策略<select value={catalog.packageId} onChange={e=>catalog.setPackageId(e.target.value)}><option value="">请选择策略</option>{catalog.packages.map((p,i)=><option key={p.package_id} value={p.package_id}>{packageLabel(p,i)}</option>)}</select></label>

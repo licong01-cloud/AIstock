@@ -19,6 +19,7 @@ export function useControlCatalog() {
   const [packages,setPackages]=useState<PackageChoice[]>([]),[packageId,setPackageId]=useState("");
   const [profiles,setProfiles]=useState<LocalSimRuntimeProfile[]>([]),[versions,setVersions]=useState<VersionChoice[]>([]),[policies,setPolicies]=useState<PolicyChoice[]>([]);
   const [error,setError]=useState(""),[loading,setLoading]=useState(true),[revision,setRevision]=useState(0);
+  useEffect(()=>{const clear=()=>{["localsim-configure-selection","localsim-replay-selection","localsim-workbench-selection"].forEach(key=>sessionStorage.removeItem(key));setPackageId("");setPackages([]);setProfiles([]);setVersions([]);setPolicies([]);};window.addEventListener("logout",clear);return()=>window.removeEventListener("logout",clear);},[]);
   useEffect(()=>{const q=new URLSearchParams(window.location.search);if(q.get("package_id")){sessionStorage.setItem("localsim-configure-selection",JSON.stringify({packageId:q.get("package_id"),topK:Number(q.get("top_k"))}));history.replaceState(history.state,"",window.location.pathname);}},[]);
   useEffect(()=>{let valid=true;localSimApi.listPackages().then(rows=>{if(valid){setPackages(rows);let preferred="";try{preferred=JSON.parse(sessionStorage.getItem("localsim-configure-selection")||"null")?.packageId||"";}catch{}setPackageId(id=>rows.some(p=>p.package_id===id)?id:rows.some(p=>p.package_id===preferred)?preferred:rows[0]?.package_id||"");}}).catch(()=>{if(valid)setError("策略目录读取失败，请刷新重试。");});return()=>{valid=false;};},[revision]);
   useEffect(()=>{

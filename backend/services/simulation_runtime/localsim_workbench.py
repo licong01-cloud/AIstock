@@ -551,9 +551,11 @@ class LocalSimWorkbenchService:
 
     def export(self, account_id: str, kind: str, **params: Any) -> str:
         headers = {"name": "证券名称", "market": "市场", "date": "交易日", "time": "北京时间", "side": "买卖方向", "status": "业务状态",
-            "quantity": "数量", "available": "可卖数量", "filled": "成交数量", "price": "价格", "cost": "成本价", "value": "估值市值或资产",
+            "quantity": "数量", "available": "可卖数量", "frozen": "冻结数量", "filled": "成交数量", "remaining": "未成交数量", "price": "价格", "cost": "成本价", "value": "估值市值或资产",
             "amount": "成交金额", "fees": "交易费用合计", "cash_delta": "资金净变动", "balance": "资金余额", "pnl": "净盈亏",
-            "realized": "已实现费用前", "unrealized_change": "浮盈变动", "opening_quantity": "期初数量", "closing_quantity": "期末数量", "description": "业务说明"}
+            "commission": "佣金分项", "tax": "税费分项", "unrealized": "浮动盈亏", "return_pct": "盈亏比例百分数", "weight": "账户占比百分数",
+            "realized": "已实现费用前", "unrealized_change": "浮盈变动", "opening_quantity": "期初数量", "closing_quantity": "期末数量",
+            "buy_quantity": "区间买入数量", "sell_quantity": "区间卖出数量", "buy_amount": "区间买入金额", "sell_amount": "区间卖出金额", "description": "业务说明"}
         collected = []
         first = self.view(account_id, kind, page_size=200, **params)
         page = first
@@ -565,6 +567,8 @@ class LocalSimWorkbenchService:
         out = io.StringIO(newline="")
         writer = csv.writer(out)
         writer.writerow([self._csv_cell(v) for v in ["模拟盘账户", first.summary.name, "策略", first.summary.strategy]])
+        writer.writerow(["币种", "人民币元", "估值口径", first.summary.valuation_kind, "成本口径", first.summary.cost_basis])
+        writer.writerow(["读取时间", first.generated_at, "明细总数", first.total_count, "持仓估值日", str(params.get("as_of") or "最近权威估值日")])
         writer.writerow(["查询开始", first.requested_start or "全部", "查询结束", first.requested_end or "全部", "实际起点", first.actual_start or "待核验", "实际终点", first.actual_end or "待核验"])
         writer.writerow(["覆盖说明", "完整" if first.status == "complete" else "部分数据", *first.warnings])
         writer.writerow(list(headers.values()))

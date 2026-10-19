@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { chinaTime, cutoverBlockerText, onlyInFlightBlocker } from "@/lib/simulation/localsim/presentation";
 import type { LocalSimCutoverReadiness, LocalSimSchedulerVerification } from "@/lib/simulation/localsim/types";
 import type { LocalSimReadback } from "@/lib/simulation/localsim/use-readback";
+import { safeDate } from "@/lib/simulation/localsim/workbench";
 import styles from "../localsim.module.css";
 
 type Props = {
@@ -57,7 +58,7 @@ export function LocalSimReadbackStatus({ readiness, scheduler, onRefresh }: Prop
         <AlertTitle className={styles.statusTitle}>当日调度核验 · {healthTitle}</AlertTitle>
         <AlertDescription className={styles.statusContent}>
           {scheduler.error && <p>调度核验读取失败。请刷新重试。</p>}
-          {health && <p>核验日期：{current?.trade_date || "未返回"}；调度器：{health.running ? "运行" : "停止"}；线程：{health.thread_alive ? "存活" : "不可用"}；调度循环：{health.scheduler_loop_health?.status === "HEALTHY" ? "健康" : "需要检查"}；当日阻塞：{current?.blocker_count ?? "未返回"}。</p>}
+          {health && <p>核验日期：{safeDate(current?.trade_date)}；调度器：{health.running ? "运行" : "停止"}；线程：{health.thread_alive ? "存活" : "不可用"}；调度循环：{health.scheduler_loop_health?.status === "HEALTHY" ? "健康" : "需要检查"}；当日阻塞：{Number.isInteger(current?.blocker_count)?current?.blocker_count:"未返回"}。</p>}
           <p>此项仅核验当日调度。历史回放的进度和失败原因需查看各任务，切流就绪也不代表历史回放已验收。</p>
           <p>页面最近读取：{chinaTime(scheduler.updatedAt)}{scheduler.refreshing ? " · 正在刷新" : ""}</p>
         </AlertDescription>

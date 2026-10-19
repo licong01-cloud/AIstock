@@ -10,6 +10,7 @@ from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
+from fastapi.responses import StreamingResponse
 
 from backend.infra.qmt_client import get_qmt_client_singleton
 from backend.services.miniqmt_execution_runtime import (
@@ -1011,7 +1012,7 @@ def localsim_workbench_export(
         output = service.export(account_id, kind, start=start, end=end, as_of=as_of,
                                 security=security, side=side, status=status, group_by=group_by, snapshot_set=snapshot_set,
                                 order_key=order_key, search=search, sort=sort, descending=descending)
-        return Response(output, media_type="text/csv; charset=utf-8",
+        return StreamingResponse((output[offset:offset+65536].encode("utf-8") for offset in range(0, len(output), 65536)), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": "attachment; filename*=UTF-8''%E6%A8%A1%E6%8B%9F%E7%9B%98%E6%98%8E%E7%BB%86.csv", "Cache-Control": "no-store"})
     except TradingCoreError as exc:
         _raise_localsim_http(exc)

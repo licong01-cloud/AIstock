@@ -607,6 +607,7 @@ def localsim_control_plane_ui(session: nox.Session) -> None:
     _run_mocked_frontend_target(session, (
         "tests/paper-v2/localsim-unified-control-plane.spec.ts",
         "tests/paper-v2/localsim-trading-workbench.spec.ts",
+        *session.posargs,
     ), extra_env={"TEMP": str(task_temp), "TMP": str(task_temp), "NODE_PATH": str(ROOT / "frontend" / "node_modules")})
 
 

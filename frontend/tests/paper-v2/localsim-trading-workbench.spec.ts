@@ -5,7 +5,7 @@ const a="simacct_private_a", b="simacct_private_b", symbol="600000.SH";
 const stamp="2026-01-06T15:00:00+08:00";
 const base="/simulation-runtime/localsim";
 type Seen={method:string;path:string;query:string;body:unknown};
-type State={many?:boolean;fail?:boolean;wrongIdentity?:boolean;malicious?:boolean;gate?:Promise<void>;paused?:boolean;seen:Seen[]};
+type State={many?:boolean;fail?:boolean;wrongIdentity?:boolean;badAccount?:boolean;malicious?:boolean;gate?:Promise<void>;paused?:boolean;seen:Seen[]};
 const accountName=(id:string)=>id===a?"历史模拟账户甲":"日常模拟账户乙";
 function summary(id:string){
   return {name:accountName(id),strategy:"沪深300增强",stage:"历史回放",status:"启用",initial_capital:"10000",created_at:"2026-01-01T00:00:00Z",
@@ -42,7 +42,7 @@ async function mock(page:Page,state:State){
         if(view==="pause")state.paused=true;
         return json(route,{ok:true,schema_version:"localsim_control_response_v1",account:{account_id:id,account_name:accountName(id),status:state.paused?"PAUSED":"ACTIVE",version:8}});
       }
-      if(!view)return json(route,{ok:true,schema_version:"localsim_control_response_v1",account:{account_id:id,account_name:accountName(id),status:state.paused?"PAUSED":"ACTIVE",version:7}});
+      if(!view)return json(route,{ok:true,schema_version:"localsim_control_response_v1",account:{account_id:state.badAccount?b:id,account_name:accountName(id),status:state.paused?"PAUSED":"ACTIVE",version:7}});
       if(view==="summary"&&id===a&&state.gate)await state.gate;
       if(state.fail)return json(route,{detail:{message:"qe_20261007_141342_0221 C:/private/model.json",code:"RAW_FAILURE"}},500);
       if(view==="export")return route.fulfill({contentType:"text/csv; charset=utf-8",body:"\ufeff证券名称,数量,实际费用\n"+Array.from({length:state.many?121:2},()=>"测试证券,100,5.00").join("\n")});
@@ -79,6 +79,7 @@ test("overview keeps separate accounts and the original navigation, with honest 
   await expect(page.getByRole("button",{name:"详情",exact:true})).toHaveCount(2);
   await expect(page.getByText("历史回放不纳入实时合计；按各账户经济日查看", {exact:true})).toBeVisible();
   await expect(page.locator("aside.sidebar")).toHaveCount(1);
+  await page.locator(".sidebar-group-title").filter({hasText:"策略包与模拟交易"}).click();
   await expect(page.locator(".sidebar a[href='/simulation/localsim']")).toHaveCount(1);
   expect((await page.locator("aside.sidebar").boundingBox())!.width).toBeCloseTo(260,0);
   await noOpaque(page);await page.screenshot({path:info.outputPath("overview-wide.png"),fullPage:true});
@@ -156,6 +157,14 @@ test("legacy account links validate identity and open the same fixed workbench",
   const state:State={seen:[]};await mock(page,state);await page.goto("/simulation/localsim/accounts/"+a+"/performance");
   await expect(page).toHaveURL(/\/simulation\/localsim\/workbench$/);
   await expect(tabs(page).getByRole("button",{name:"区间盈亏",exact:true})).toHaveAttribute("aria-current","page");await noOpaque(page);
+});
+
+test("an invalid legacy account link returns to the fixed overview with a visible identity error",async({page})=>{
+  const state:State={seen:[],badAccount:true};await mock(page,state);await page.goto("/simulation/localsim/accounts/"+a+"/ledger");
+  await expect(page).toHaveURL(/\/simulation\/localsim\/workbench$/);
+  await expect(page.getByText("原账户入口未通过核验，请从总览重新选择。",{exact:false})).toBeVisible();
+  await expect(page.getByRole("heading",{name:"模拟盘总览",exact:true})).toBeVisible();await noOpaque(page);
+  expect(state.seen.filter(r=>r.method!=="GET")).toEqual([]);
 });
 
 test("configuration and replay pages preserve native controls without exposing technical strings",async({page})=>{

@@ -108,6 +108,7 @@ async function mockLocalSimApi(page: Page, requests: Array<{ method: string; pat
     const method = request.method();
     const body = request.postDataJSON?.();
     requests.push({ method, path, body });
+    if (method === "GET" && path === "/simulation-runtime/localsim/workbench/overview") return json(route, {items:[],complete:true,generated_at:new Date().toISOString(),included_count:0,excluded_count:0,curve:[]});
     if (method === "GET" && path === "/simulation-runtime/localsim/cutover-readiness") {
       await state.readinessGate?.();
       if (state.readinessStatus) return json(route, { detail: { code: "READBACK_UNAVAILABLE", message: "切流核验暂不可用" } }, state.readinessStatus);

@@ -71,6 +71,10 @@ export function chinaTime(value: string | number | null | undefined): string {
   if (value==null || (typeof value==="string"&&!/^\d{4}-\d{2}-\d{2}/.test(value)) || !Number.isFinite(new Date(value).getTime())) return "尚未提供";
   return new Date(value).toLocaleString("zh-CN", { timeZone:"Asia/Shanghai", hour12:false });
 }
+export function profitAmount(value: string | number | null | undefined): string {
+  const formatted = amount(value);
+  return formatted !== "暂不可计算" && !String(value).startsWith("-") && /[1-9]/.test(formatted) ? "+" + formatted : formatted;
+}
 export function safeDate(value: string | null | undefined): string {
   return value && /^\d{4}-\d{2}-\d{2}$/.test(value) ? value : "尚未提供";
 }

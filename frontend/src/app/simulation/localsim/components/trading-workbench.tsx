@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { localSimApi, request } from "@/lib/simulation/localsim/api";
-import { accountPath, amount, base, chinaTime, Filters, human, Overview, query, READ_ERROR, readView, readAllView, Result, Row, safeDate, Tab, TAB_NAMES, rememberAccount, selectionKey } from "@/lib/simulation/localsim/workbench";
+import { accountPath, amount, profitAmount, base, chinaTime, Filters, human, Overview, query, READ_ERROR, readView, readAllView, Result, Row, safeDate, Tab, TAB_NAMES, rememberAccount, selectionKey } from "@/lib/simulation/localsim/workbench";
 import { useLocalSimReadback } from "@/lib/simulation/localsim/use-readback";
 import styles from "./trading-workbench.module.css";
 
@@ -28,12 +28,12 @@ function stockFilters(filters: Filters, row: Row, tab: Tab): Filters {
 
 function gain(value: unknown) { return value == null ? "" : String(value).startsWith("-") ? styles.loss : styles.gain; }
 function Metric({ label, value, note, profit=false }: { label:string; value:string|null|undefined; note?:string; profit?:boolean }) {
-  return <div className={styles.metric}><span>{label}</span><strong className={profit?gain(value):""}>{amount(value)}</strong>{note&&<small>{note}</small>}</div>;
+  return <div className={styles.metric}><span>{label}</span><strong className={profit?gain(value):""}>{profit?profitAmount(value):amount(value)}</strong>{note&&<small>{note}</small>}</div>;
 }
 function Table({ rows, columns, onStock, onOrder, onDay }: { rows:Row[]; columns:Column[]; onStock?:(r:Row)=>void; onOrder?:(r:Row)=>void; onDay?:(r:Row)=>void }) {
   return <div className={styles.tablewrap}><table><thead><tr>{columns.map(([key,label,type])=><th key={key} className={type==="money"||type==="count"?styles.numeric:""}>{label}</th>)}{onOrder&&<th>业务关联</th>}</tr></thead><tbody>{rows.map(row=><tr key={row.key}>{columns.map(([key,,type])=>{
     const value = row[key];
-    let content = type==="money" ? amount(value as string|null) + (value!=null && (key==="weight"||key==="return_pct")?"%":"") : type==="count" ? amount(value as number|null,0) : type==="date" ? safeDate(value as string) : type==="time" ? chinaTime(value as string) : human(value, value===""?"—":"信息待核验");
+    let content = type==="money" ? (["pnl","unrealized","realized","unrealized_change","cash_delta"].includes(key)?profitAmount(value as string|null):amount(value as string|null)) + (value!=null && (key==="weight"||key==="return_pct")?"%":"") : type==="count" ? amount(value as number|null,0) : type==="date" ? safeDate(value as string) : type==="time" ? chinaTime(value as string) : human(value, value===""?"—":"信息待核验");
     return <td key={key} className={`${type==="money"||type==="count"?styles.numeric:""} ${["pnl","unrealized","realized","unrealized_change","cash_delta"].includes(key)?gain(value):""}`}>{key==="name"&&row.security&&onStock?<button className={styles.link} onClick={()=>onStock(row)}>{content}<small>{human(row.market,"市场待核验")}</small></button>:key==="date"&&onDay?<button className={styles.link} onClick={()=>onDay(row)}>{content}</button>:content}{!row.known&&key==="name"&&<small>部分信息待核验</small>}</td>;
   })}{onOrder&&<td><button className={styles.link} onClick={()=>onOrder(row)}>查看关联委托</button></td>}</tr>)}</tbody></table>{!rows.length&&<p className={styles.empty}>当前已读取的筛选结果中没有记录；完整性与覆盖范围见下方说明。</p>}</div>;
 }
@@ -50,6 +50,7 @@ function Curve({ result, points }: { result?:Result; points?:Row[] }) {
 export default function TradingWorkbench() {
   const [selection,setSelection]=useState<Selection>(empty),[overview,setOverview]=useState<Overview|null>(null),[bundle,setBundle]=useState<Bundle|null>(null);
   const [error,setError]=useState(""),[busy,setBusy]=useState(false),[refresh,setRefresh]=useState(0),[search,setSearch]=useState(""),[stage,setStage]=useState("");
+  const [entryError,setEntryError]=useState(false),[failedAt,setFailedAt]=useState<string|null>(null);
   const [drawer,setDrawer]=useState<Row|null>(null),[drawerData,setDrawerData]=useState<Result|null>(null),[drawerError,setDrawerError]=useState("");
   const [drawerPnl,setDrawerPnl]=useState<Result|null>(null);
   const [ready,setReady]=useState<{ready:boolean;time:string;count:number}|null>(null),[readAt,setReadAt]=useState<string|null>(null);
@@ -61,14 +62,15 @@ export default function TradingWorkbench() {
   selectionRef.current=selection;bundleRef.current=bundle;
   const dialog=useRef<HTMLDivElement>(null), returnFocus=useRef<HTMLElement|null>(null);
   const change=useCallback((next:Selection, replace=false)=>{
-    pageRequest.current?.abort();setSelection(next);setDrawer(null);setDrawerData(null);setOrderDetail(null);
+    pageRequest.current?.abort();setSelection(next);setDrawer(null);setDrawerData(null);setOrderDetail(null);if(next.accountId)setEntryError(false);
     sessionStorage.setItem(storageKey,JSON.stringify(next));
     const url=new URL(window.location.href);url.pathname="/simulation/localsim/workbench";url.search="";url.hash="";
     (replace?history.replaceState:history.pushState).call(history,{localsim:next},"",url);
   },[]);
   useEffect(()=>{
     const restore=()=>{try{const v=history.state?.localsim || JSON.parse(sessionStorage.getItem(storageKey)||"null");if(v&&typeof v.accountId==="string"&&v.tab in TAB_NAMES&&v.filters&&typeof v.filters==="object")setSelection(v);else setSelection(empty);}catch{sessionStorage.removeItem(storageKey);setSelection(empty);}};
-    const logout=()=>{sessionStorage.removeItem(storageKey);setSelection(empty);setBundle(null);};
+    const logout=()=>{[storageKey,"localsim-replay-selection","localsim-configure-selection"].forEach(key=>sessionStorage.removeItem(key));setSelection(empty);setBundle(null);setOverview(null);overviewRef.current=null;overviewReadAt.current=0;history.replaceState({...history.state,localsim:empty},"","/simulation/localsim/workbench");};
+    if(sessionStorage.getItem("localsim-entry-error")){setEntryError(true);sessionStorage.removeItem("localsim-entry-error");}
     restore();window.addEventListener("popstate",restore);window.addEventListener("logout",logout);
     return()=>{window.removeEventListener("popstate",restore);window.removeEventListener("logout",logout);};
   },[]);
@@ -80,7 +82,7 @@ export default function TradingWorkbench() {
   },[selection.accountId]);
   useEffect(()=>{
     const controller=new AbortController();
-    const timeout=setTimeout(()=>{controller.abort();loading.current=false;setBusy(false);setReady(null);setError(READ_ERROR);},30000);
+    const timeout=setTimeout(()=>{controller.abort();loading.current=false;setBusy(false);setReady(null);setFailedAt(new Date().toISOString());setError(READ_ERROR);},30000);
     async function load(){
       loading.current=true;
       setBusy(true);
@@ -104,7 +106,7 @@ export default function TradingWorkbench() {
           setBundle({accountId:id,filters:JSON.stringify(selection.filters),summary,income,views:Object.fromEntries(keys.map((k,i)=>[k,responses[i]]))});
         }
         if(!controller.signal.aborted){setError("");setReadAt(new Date().toISOString());}
-      }catch{if(!controller.signal.aborted)setError(READ_ERROR);}finally{clearTimeout(timeout);if(!controller.signal.aborted){loading.current=false;setBusy(false);}}
+      }catch{if(!controller.signal.aborted){setFailedAt(new Date().toISOString());setError(READ_ERROR);}}finally{clearTimeout(timeout);if(!controller.signal.aborted){loading.current=false;setBusy(false);}}
     }
     void load();
     void localSimApi.readiness(controller.signal).then(r=>{if(!controller.signal.aborted)setReady({ready:r.ready,time:r.checked_at,count:r.in_flight_economic_run_count});}).catch(()=>{if(!controller.signal.aborted)setReady(null);});
@@ -161,14 +163,14 @@ export default function TradingWorkbench() {
   const drawerStock=drawerPnl?.items.find(r=>r.security===drawer?.security);
   return <div className={styles.shell}>
     <header className={styles.heading}><div><h1>{selection.accountId?human(overviewName||summary?.name,"模拟账户详情"):"模拟盘总览"}</h1><p>以账户为中心查看持仓、交易与收益 · 金额单位：人民币元</p></div><div className={styles.actions}><span className={styles.muted}>页面最近读取：{chinaTime(readAt)}</span><button onClick={()=>{overviewReadAt.current=0;setRefresh(v=>v+1);}} disabled={busy}>{busy?"读取中…":"刷新"}</button><Link href="/simulation/localsim/configure">创建与配置</Link></div></header>
-    {error&&<div role="alert" className={styles.notice}>{error}<small>下方如有数据，为最后一次成功读取的内容。</small></div>}
+    {(error||entryError)&&<div role="alert" className={styles.notice}>{error||"原账户入口未通过核验，请从总览重新选择。"}<small>下方如有数据，为最后一次成功读取的内容。{error&&failedAt?`失败时间 ${chinaTime(failedAt)}`:""}</small></div>}
     {!selection.accountId?<>
       {!!blocked&&<div className={styles.notice}><b>{blocked} 个账户需要处理</b>{overview?.items.filter(a=>a.summary.stage.includes("受阻")).map(a=><button key={a.key} onClick={()=>change({accountId:a.key,tab:"events",filters:{}})}>{human(a.summary.name)} · 已完成 {safeDate(a.summary.completed_date)}</button>)}</div>}
       <div className={styles.cards}><Metric label="可比实时账户总资产" value={overview?.nav} note={`纳入 ${overview?.included_count??0} 个；其他 ${overview?.excluded_count??0} 个按各自经济日查看`}/><Metric label="最近同日净盈亏" value={overview?.daily_pnl} profit note={chinaTime(overview?.economic_as_of)}/><Metric label="可比累计净盈亏" value={overview?.pnl} profit note={overview?.return_pct==null?"边界或口径不一致时不合成收益率":`统一期初收益率 ${amount(overview.return_pct)}%`}/><div className={styles.metric}><span>策略账户 / 回放受阻</span><strong>{overview?`${overview.items.length} / ${blocked}`:"尚未读取"}</strong><small>每个账户保持独立账本</small></div></div>
       <p className={styles.muted}>{human(overview?.explanation,"历史回放不加入实时合计；仅汇总同一估值时点的实时账户。")}</p>
       <div className={styles.chartrow}><section className={styles.panel}><div className={styles.panelhead}><h2>可比实时账户资产走势</h2><span>相同日期逐点核对，不插值</span></div><Curve points={overview?.curve}/></section><section className={styles.panel}><div className={styles.panelhead}><h2>各账户资产分布</h2><span>各自截止日 · 不相加为今日</span></div><dl>{overview?.items.map(a=><div key={a.key}><dt><button className={styles.link} onClick={()=>change({accountId:a.key,tab:"positions",filters:{}})}>{human(a.summary.name)}</button></dt><dd>{amount(a.summary.nav)}<small>{chinaTime(a.summary.economic_as_of)}</small></dd></div>)}</dl></section></div>
       <section className={styles.panel}><div className={styles.panelhead}><h2>我的策略账户</h2><div className={styles.actions}><input aria-label="搜索策略账户" placeholder="搜索策略或账户名称" value={search} onChange={e=>setSearch(e.target.value)}/><select aria-label="运行阶段筛选" value={stage} onChange={e=>setStage(e.target.value)}><option value="">全部阶段</option>{Array.from(new Set(overview?.items.map(a=>a.summary.stage))).map(s=><option key={s} value={s}>{human(s,"状态待核验")}</option>)}</select><select aria-label="资产截止时间排序" value={accountSort} onChange={e=>setAccountSort(e.target.value)}><option value="newest">资产时点从近到远</option><option value="oldest">资产时点从远到近</option></select></div></div>
-      <div className={styles.tablewrap}><table><thead><tr><th>策略 / 账户</th><th>运行阶段</th><th>资产截止时间</th><th>总资产</th><th>累计净盈亏 / 收益率</th><th>持仓数 / 仓位</th><th>完成 / 下一交易日</th><th>下一事项</th><th/></tr></thead><tbody>{accounts.map(a=><tr key={a.key}><td><button className={styles.link} onClick={()=>change({accountId:a.key,tab:"positions",filters:{}})}>{human(a.summary.strategy)}<small>{human(a.summary.name)}</small></button><small>初始资金 {amount(a.summary.initial_capital)}</small></td><td><span className={styles.badge}>{human(a.summary.stage,"阶段待核验")}</span></td><td>{chinaTime(a.summary.economic_as_of)}</td><td className={styles.numeric}>{amount(a.summary.nav)}</td><td className={styles.numeric}><span className={gain(a.summary.pnl)}>{amount(a.summary.pnl)}</span><small>{a.summary.return_pct==null?"收益率暂不可计算":amount(a.summary.return_pct)+"%"}</small><small>正式期初至完整收盘；证据不足则未知</small></td><td className={styles.numeric}>{amount(a.summary.position_count,0)}<small>{a.summary.position_ratio==null?"仓位待核验":amount(a.summary.position_ratio)+"%"}</small></td><td>{safeDate(a.summary.completed_date)}<small>下一日 {safeDate(a.summary.next_date)}</small></td><td>{human(a.summary.issue,"请进入账户核验")}</td><td><button onClick={()=>change({accountId:a.key,tab:"positions",filters:{}})}>详情</button></td></tr>)}</tbody></table></div>{!accounts.length&&<p className={styles.empty}>{overview?"此筛选下没有账户":"正在读取账户列表…"}</p>}</section>
+      <div className={styles.tablewrap}><table><thead><tr><th>策略 / 账户</th><th>运行阶段</th><th>资产截止时间</th><th>总资产</th><th>累计净盈亏 / 收益率</th><th>持仓数 / 仓位</th><th>完成 / 下一交易日</th><th>下一事项</th><th/></tr></thead><tbody>{accounts.map(a=><tr key={a.key} tabIndex={0} aria-label={`查看 ${human(a.summary.name)} 的账户详情`} onClick={e=>{if(!(e.target as HTMLElement).closest("button"))change({accountId:a.key,tab:"positions",filters:{}});}} onKeyDown={e=>{if(e.key==="Enter"&&e.target===e.currentTarget)change({accountId:a.key,tab:"positions",filters:{}});}}><td><button className={styles.link} onClick={()=>change({accountId:a.key,tab:"positions",filters:{}})}>{human(a.summary.strategy)}<small>{human(a.summary.name)}</small></button><small>初始资金 {amount(a.summary.initial_capital)}</small><small>创建于 {safeDate(a.summary.created_at.slice(0,10))}</small></td><td><span className={styles.badge}>{human(a.summary.stage,"阶段待核验")}</span></td><td>{chinaTime(a.summary.economic_as_of)}</td><td className={styles.numeric}>{amount(a.summary.nav)}</td><td className={styles.numeric}><span className={gain(a.summary.pnl)}>{profitAmount(a.summary.pnl)}</span><small>{a.summary.return_pct==null?"收益率暂不可计算":amount(a.summary.return_pct)+"%"}</small><small>正式期初至完整收盘；证据不足则未知</small></td><td className={styles.numeric}>{amount(a.summary.position_count,0)}<small>{a.summary.position_ratio==null?"仓位待核验":amount(a.summary.position_ratio)+"%"}</small></td><td>{safeDate(a.summary.completed_date)}<small>下一日 {safeDate(a.summary.next_date)}</small></td><td>{human(a.summary.issue,"请进入账户核验")}</td><td><button onClick={()=>change({accountId:a.key,tab:"positions",filters:{}})}>详情</button></td></tr>)}</tbody></table></div>{!accounts.length&&<p className={styles.empty}>{overview?"此筛选下没有账户":"正在读取账户列表…"}</p>}</section>
     </>:<>
       <div className={styles.accountbar}><button onClick={()=>change(empty)}>返回总览</button><select aria-label="切换策略账户" value={selection.accountId} onChange={e=>{setSecurityName("");change({accountId:e.target.value,tab:"positions",filters:{}});}}>{overview?.items.map(a=><option key={a.key} value={a.key}>{human(a.summary.name)} · {human(a.summary.strategy)}</option>)}</select><span className={styles.badge}>{human(summary?.stage,"阶段待核验")}</span><span>资产截止 {chinaTime(summary?.economic_as_of)}</span></div>
       {summary&&<div className={styles.notice}><b>{human(summary.issue,"请核验当前进度")}</b><span>{human(summary.valuation_kind,"估值状态待核验")} · {human(summary.source,"来源待核验")}</span></div>}
@@ -209,7 +211,7 @@ function OrderDialog({row,parts,error,close,onStock}:{row:Row;parts:Result[];err
 }
 
 function AccountControls({accountId,ready}:{accountId:string;ready:boolean}){
-  const load=useCallback(async(signal:AbortSignal)=>{const result=await localSimApi.getAccount(accountId,signal);if(result.account?.account_id!==accountId)throw Error();return result.account;},[accountId]);
+  const load=useCallback(async(signal:AbortSignal)=>{const result=await localSimApi.getAccount(accountId,signal);if(result.account?.account_id!==accountId)throw Error(READ_ERROR);return result.account;},[accountId]);
   const readback=useLocalSimReadback(load),[pending,setPending]=useState<"pause"|"resume"|"retire"|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState("");
   const fresh=ready&&!readback.error&&!readback.stale&&readback.data?.account_id===accountId;
   const labels={pause:"暂停",resume:"恢复",retire:"停用"};
@@ -219,6 +221,6 @@ function AccountControls({accountId,ready}:{accountId:string;ready:boolean}){
 
 export function LegacyAccountEntry({accountId,tab}:{accountId:string;tab:Tab}){
   const router=useRouter(),[error,setError]=useState(false);
-  useEffect(()=>{const controller=new AbortController();localSimApi.getAccount(accountId,controller.signal).then(result=>{if(controller.signal.aborted)return;if(result.account?.account_id!==accountId)throw Error();rememberAccount(accountId,tab);router.replace("/simulation/localsim/workbench");}).catch(()=>{if(!controller.signal.aborted)setError(true);});return()=>controller.abort();},[accountId,tab,router]);
+  useEffect(()=>{const controller=new AbortController();localSimApi.getAccount(accountId,controller.signal).then(result=>{if(controller.signal.aborted)return;if(result.account?.account_id!==accountId)throw Error(READ_ERROR);rememberAccount(accountId,tab);router.replace("/simulation/localsim/workbench");}).catch(()=>{if(!controller.signal.aborted){setError(true);sessionStorage.removeItem(storageKey);sessionStorage.setItem("localsim-entry-error","1");router.replace("/simulation/localsim/workbench");}});return()=>controller.abort();},[accountId,tab,router]);
   return <div className={styles.shell}>{error?<p role="alert">{READ_ERROR}</p>:<p>正在验证账户归属并打开交易工作台…</p>}<Link href="/simulation/localsim/workbench">返回模拟盘总览</Link></div>;
 }

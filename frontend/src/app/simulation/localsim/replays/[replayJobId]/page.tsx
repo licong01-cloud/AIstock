@@ -10,8 +10,8 @@ import styles from "../../localsim.module.css";
 export default function ReplayDetailPage(){
   const router=useRouter(),segment=String(useParams<{replayJobId:string}>().replayJobId||"");
   const [id,setId]=useState(""),[error,setError]=useState(""),[busy,setBusy]=useState(false);
-  useEffect(()=>{setId(segment==="details"?sessionStorage.getItem("localsim-replay-selection")||"":segment);},[segment]);
-  const load=useCallback(async(signal:AbortSignal)=>{if(!id)throw Error();const value=await localSimApi.getReplay(id,signal);if(!value.replay||value.replay.replay_job_id!==id)throw Error();if(!signal.aborted){rememberReplay(id);if(segment!=="details")history.replaceState(history.state,"","/simulation/localsim/replays/details");}return value.replay;},[id,segment]);
+  useEffect(()=>{setId(current=>segment==="details"?current||sessionStorage.getItem("localsim-replay-selection")||"":segment);},[segment]);
+  const load=useCallback(async(signal:AbortSignal)=>{try{if(!id)throw Error(READ_ERROR);const value=await localSimApi.getReplay(id,signal);if(!value.replay||value.replay.replay_job_id!==id)throw Error(READ_ERROR);if(!signal.aborted){rememberReplay(id);if(segment!=="details")history.replaceState(history.state,"","/simulation/localsim/replays/details");}return value.replay;}catch{if(id&&!signal.aborted&&segment!=="details"){sessionStorage.removeItem("localsim-replay-selection");history.replaceState(history.state,"","/simulation/localsim/replays/details");}throw Error(READ_ERROR);}},[id,segment]);
   const readback=useLocalSimReadback(load),r=readback.data;
   async function cancel(){if(!r||busy||readback.stale||readback.error)return;setBusy(true);setError("");try{await localSimApi.cancelReplay(id,r.version);await readback.refresh();}catch{setError("取消操作未通过原任务验证，请刷新后核查状态。");}finally{setBusy(false);}}
   return <main className={styles.shell}><header className={styles.header}><div><h1>回放任务详情</h1><p>计划、执行与估值分别核验，页面读取不会恢复或重建回放。</p></div><nav className={styles.nav}><Link href="/simulation/localsim/replays">回放列表</Link><Link href="/simulation/localsim/workbench">交易工作台</Link></nav></header>
