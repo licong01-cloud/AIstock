@@ -83,6 +83,18 @@ class WorkbenchSummary(BaseModel):
     source: str = "来源待核验"
     issue: str = ""
     cost_basis: str = "账本持仓成本；交易费用单列，不重复扣减"
+    cumulative_pnl: str | None = None
+    cumulative_return_pct: str | None = None
+    cumulative_fees: str | None = None
+    cumulative_note: str = "尚无已核验的期初资金和估值"
+    valuation_day: str | None = None
+    valuation_day_pnl: str | None = None
+    valuation_day_note: str = "尚无权威估值"
+    today_pnl: str | None = None
+    today_note: str = "今天尚无权威估值"
+    valuation_change: str | None = None
+    previous_valuation_at: str | None = None
+    change_note: str = "尚无两次可核对的估值"
 
 
 class WorkbenchResult(BaseModel):

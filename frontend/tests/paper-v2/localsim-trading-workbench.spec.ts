@@ -5,14 +5,17 @@ const a="simacct_private_a", b="simacct_private_b", symbol="600000.SH";
 const stamp="2026-01-06T15:00:00+08:00";
 const base="/simulation-runtime/localsim";
 type Seen={method:string;path:string;query:string;body:unknown};
-type State={many?:boolean;fail?:boolean;wrongIdentity?:boolean;badAccount?:boolean;malicious?:boolean;gate?:Promise<void>;paused?:boolean;seen:Seen[]};
+type State={many?:boolean;fail?:boolean;wrongIdentity?:boolean;badAccount?:boolean;malicious?:boolean;pointOnly?:boolean;gate?:Promise<void>;paused?:boolean;seen:Seen[]};
 const accountName=(id:string)=>id===a?"历史模拟账户甲":"日常模拟账户乙";
 function summary(id:string){
-  return {name:accountName(id),strategy:"沪深300增强",stage:"历史回放",status:"启用",initial_capital:"10000",created_at:"2026-01-01T00:00:00Z",
-    economic_as_of:stamp,valuation_kind:"已完成收盘估值",nav:id===a?"10190":"20200",cash:"10190",value:"0",available_cash:null,frozen_cash:null,
+  return {name:accountName(id),strategy:id===a?"LSTM长短期记忆＋Alpha158价量因子＋26项因子":"TCN时序卷积＋Alpha158价量因子＋24项因子",stage:"历史回放",status:"启用",initial_capital:id===a?"10000":"20000",created_at:"2026-01-01T00:00:00Z",
+    economic_as_of:stamp,valuation_kind:"已完成收盘估值",nav:id===a?"10190":"20200",cash:id===a?"10190":"18000",value:id===a?"0":"2200",available_cash:null,frozen_cash:null,
     opening_nav:"10000",closing_nav:"10190",net_flows:"0",pnl:"190",daily_pnl:"95",daily_date:"2026-01-06",return_pct:"1.9",realized:"200",
-    unrealized:"0",unrealized_change:"0",fees:"10",position_count:0,position_ratio:"0",completed_date:"2026-01-06",next_date:"2026-01-07",
-    start_date:"2026-01-05",end_date:"2026-08-31",source:"数据集文件",issue:"等待下一处理步骤",cost_basis:"账本平均成本不含交易费用，费用单列",comparable_live:false};
+    unrealized:id===a?"0":"200",unrealized_change:"0",fees:"10",position_count:id===a?0:1,position_ratio:id===a?"0":"10.891089",completed_date:"2026-01-06",next_date:"2026-01-07",
+    start_date:"2026-01-05",end_date:"2026-08-31",source:"数据集文件",issue:"等待下一处理步骤",cost_basis:"账本平均成本不含交易费用，费用单列",comparable_live:false,
+    cumulative_pnl:id===a?"190":"200",cumulative_return_pct:id===a?"1.9":"1",cumulative_fees:"10",cumulative_note:"正式期初至本账户估值；实际费用已计入",
+    valuation_day:"2026-01-06",valuation_day_pnl:"95",valuation_day_note:"前一交易日收盘至本次估值",today_pnl:null,today_note:"今天尚无权威估值；最近资产时点为一月六日",
+    valuation_change:"95",previous_valuation_at:"2026-01-05T15:00:00+08:00",change_note:"两次估值净变化，不能代替日盈亏"};
 }
 const securityRow={key:symbol,security:symbol,name:"测试证券",market:"上海市场",date:"2026-01-05",time:"2026-01-05T15:00:00+08:00",side:"买入",status:"",description:"历史分钟收盘估值",known:true};
 const curve=[{key:"2026-01-06",date:"2026-01-06",value:"10190",pnl:"95",fees:"5",opening_value:"10095",cash_delta:"0",known:true},{key:"2026-01-05",date:"2026-01-05",value:"10095",pnl:"95",fees:"5",opening_value:"10000",cash_delta:"0",known:true}];
@@ -53,10 +56,10 @@ async function mock(page:Page,state:State){
       if(view==="orders")rows=[{...securityRow,key:"order_private",order_key:"order_private",quantity:300,filled:200,remaining:100,status:"部分成交",price:"12"}];
       if(view==="events")rows=[{...securityRow,key:"event_private_1",order_key:"order_private",name:"委托状态变化",status:"已受理"},{...securityRow,key:"event_private_2",order_key:"order_private",name:"委托状态变化",status:"部分成交"}];
       if(view==="cash-flows")rows=[{...securityRow,key:"cash_private",order_key:"order_private",amount:"1200",fees:"5",cash_delta:"1195",balance:"10190"}];
-      if(view==="pnl")rows=url.searchParams.get("group_by")==="security"?[{...securityRow,opening_quantity:0,closing_quantity:0,opening_value:"0",value:"0",buy_quantity:100,sell_quantity:100,buy_amount:"1000",sell_amount:"1200",fees:"10",pnl:"190",realized:"200",unrealized_change:"0"}]:curve;
+      if(view==="pnl")rows=state.pointOnly?[]:url.searchParams.get("group_by")==="security"?[{...securityRow,opening_quantity:0,closing_quantity:0,opening_value:"0",value:"0",buy_quantity:100,sell_quantity:100,buy_amount:"1000",sell_amount:"1200",fees:"10",pnl:"190",realized:"200",unrealized_change:"0"}]:curve;
       const q=url.searchParams.get("search");if(q)rows=rows.filter(r=>String(r.name||"").includes(q));
       const offset=Number((url.searchParams.get("cursor")||"").split("_").at(-1))||0,size=Number(url.searchParams.get("page_size")||50);
-      return json(route,{schema_version:"localsim_workbench_v1",account_id:state.wrongIdentity&&view!=="summary"?(id===a?b:a):id,snapshot_set:id+"_private_generation",generated_at:stamp,status:"complete",summary:summary(id),items:rows.slice(offset,offset+size),total_count:rows.length,next_cursor:offset+size<rows.length?"cursor_private_"+(offset+size):null,missing_dates:[],warnings:[],actual_start:"2026-01-05",actual_end:"2026-01-06"});
+      return json(route,{schema_version:"localsim_workbench_v1",account_id:state.wrongIdentity&&view!=="summary"?(id===a?b:a):id,snapshot_set:id+"_private_generation",generated_at:stamp,status:state.pointOnly?"partial":"complete",summary:{...summary(id),...(state.pointOnly?{pnl:null,return_pct:null}:{})},items:rows.slice(offset,offset+size),total_count:rows.length,next_cursor:offset+size<rows.length?"cursor_private_"+(offset+size):null,missing_dates:[],warnings:state.pointOnly?["没有已完成收盘估值"]:[],actual_start:"2026-01-05",actual_end:"2026-01-06"});
     }
     return json(route,{items:[],count:0,alerts:[]});
   });
@@ -73,11 +76,20 @@ async function noOpaque(page:Page){
   expect(await page.title()).not.toMatch(/simacct_|qe_|lsreplay_/);
 }
 
-test("overview keeps separate accounts and the original navigation, with honest comparable totals",async({page},info)=>{
+test("overview shows separate strategy assets and profit and preserves original navigation",async({page},info)=>{
   const state:State={seen:[]};await mock(page,state);await page.setViewportSize({width:1440,height:1000});await page.goto("/simulation/localsim");
   await expect(page.getByRole("heading",{name:"模拟盘总览",exact:true})).toBeVisible();
   await expect(page.getByRole("button",{name:"详情",exact:true})).toHaveCount(2);
-  await expect(page.getByText("历史回放不纳入实时合计；按各账户经济日查看", {exact:true})).toBeVisible();
+  const cards=page.getByRole("region",{name:"逐策略资产与盈亏"});
+  await expect(cards.getByRole("article")).toHaveCount(2);
+  const first=cards.getByRole("article",{name:accountName(a),exact:true});
+  const second=cards.getByRole("article",{name:accountName(b),exact:true});
+  await expect(first.getByRole("group",{name:"账户总资产",exact:true})).toContainText("10,190.00");
+  await expect(second.getByRole("group",{name:"账户总资产",exact:true})).toContainText("20,200.00");
+  await expect(first.getByRole("group",{name:"累计估值盈亏",exact:true})).toContainText("+190.00");
+  await expect(second.getByRole("group",{name:"累计估值盈亏",exact:true})).toContainText("+200.00");
+  await expect(page.getByText("可比实时账户总资产",{exact:true})).toHaveCount(0);
+  await expect(first.getByRole("group",{name:"今日盈亏",exact:true})).toContainText("尚无今日估值");
   await expect(page.locator("aside.sidebar")).toHaveCount(1);
   await page.locator(".sidebar-group-title").filter({hasText:"策略包与模拟交易"}).click();
   await expect(page.locator(".sidebar a[href='/simulation/localsim']")).toHaveCount(1);
@@ -111,6 +123,23 @@ test("historical holdings, cleared-stock drill-down, dates, focus and fixed addr
   await expect(page.getByText("股票：测试证券", {exact:false})).toBeVisible();
   expect(state.seen.some(r=>r.path.endsWith("/trades")&&r.query.includes("security=600000.SH")&&r.query.includes("end=2026-01-05"))).toBeTruthy();
   await noOpaque(page);await page.screenshot({path:info.outputPath("account-holdings.png"),fullPage:true});
+});
+
+test("account header keeps lifecycle profit separate from period filters and other accounts",async({page},info)=>{
+  const state:State={seen:[],pointOnly:true};await mock(page,state);await seed(page);await page.goto("/simulation/localsim/workbench");
+  const header=page.getByLabel("本策略账户资产与盈亏",{exact:true});
+  await expect(header.getByRole("group",{name:"累计估值盈亏",exact:true})).toContainText("+190.00");
+  await expect(header.getByRole("group",{name:"现金余额",exact:true})).toContainText("10,190.00");
+  await expect(header.getByRole("group",{name:"估值日盈亏",exact:true})).toContainText("2026-01-06");
+  await expect(header.getByRole("group",{name:"今日盈亏",exact:true})).toContainText("尚无今日估值");
+  await tabs(page).getByRole("button",{name:"区间盈亏",exact:true}).click();
+  await page.getByText("开始日期",{exact:true}).locator("input").fill("2026-01-06");
+  await expect(header.getByRole("group",{name:"累计估值盈亏",exact:true})).toContainText("+190.00");
+  await page.getByLabel("切换策略账户").selectOption(b);
+  await expect(header.getByRole("group",{name:"累计估值盈亏",exact:true})).toContainText("+200.00");
+  await expect(header.getByRole("group",{name:"总资产",exact:true})).toContainText("20,200.00");
+  await noOpaque(page);await page.screenshot({path:info.outputPath("account-independent-metrics.png"),fullPage:true});
+  expect(state.seen.filter(r=>r.method!=="GET")).toEqual([]);
 });
 
 test("complete stable pagination and full CSV keep duplicate-looking fills",async({page})=>{

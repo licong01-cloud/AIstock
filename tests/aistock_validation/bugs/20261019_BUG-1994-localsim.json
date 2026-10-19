@@ -13,7 +13,10 @@
     "backend/services/simulation_runtime/localsim_workbench_metrics.py",
     "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
     "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md",
-    "tests/aistock_validation/bugs/20261019_BUG-1994-localsim.json"
+    "tests/aistock_validation/bugs/20261019_BUG-1994-localsim.json",
+    "frontend/tsconfig.json",
+    "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_runtime_semantics.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1994",
@@ -38,23 +41,46 @@
   ],
   "expected": "每个策略账户名称可读，资产和有证据支持的盈亏分别展示，未知指标说明具体缺少的依据并标明估值日期。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261019_BUG-1994-localsim.json",
+      "backend/services/simulation_runtime/localsim_workbench.py",
+      "backend/services/simulation_runtime/localsim_workbench_models.py",
+      "backend/services/simulation_runtime/localsim_workbench_presentation.py",
+      "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
+      "frontend/src/lib/simulation/localsim/workbench.ts",
+      "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
+      "frontend/tsconfig.json",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "backend/services/simulation_runtime/localsim_workbench_metrics.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
+      "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
+    ],
     "added_files": [
       "backend/services/simulation_runtime/localsim_workbench_metrics.py",
       "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
       "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261019_BUG-1994-localsim.json",
       "backend/services/simulation_runtime/localsim_workbench.py",
       "backend/services/simulation_runtime/localsim_workbench_models.py",
       "backend/services/simulation_runtime/localsim_workbench_presentation.py",
-      "backend/tests/simulation_runtime/test_localsim_workbench.py",
-      "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
+      "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md",
       "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.tsx",
       "frontend/src/lib/simulation/localsim/workbench.ts",
       "frontend/tests/paper-v2/localsim-trading-workbench.spec.ts",
-      "docs/architecture/localsim_trading_workbench_detailed_design_20261019.md"
+      "frontend/tsconfig.json",
+      "scripts/aistock_issue_workflow.py",
+      "scripts/aistock_runtime_semantics.py",
+      "backend/services/simulation_runtime/localsim_workbench_metrics.py",
+      "backend/tests/simulation_runtime/test_localsim_workbench_metrics.py",
+      "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/localsim_workbench.py",
@@ -280,11 +306,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
+    "fresh_process_evidence": [
+      "Fresh Python process loaded persistent LocalSIM workbench source and read production facts using READ ONLY transactions; overview/detail exact decimal values and frozen model/factor names match. X:/AIstock_temp/LOCALSIM/BUG-1994/source-db-readback.json",
+      "Fresh Python loaded persistent source and exact-decimal financial/naming readback from READ ONLY database transactions -> passed; X:/AIstock_temp/LOCALSIM/BUG-1994/source-db-readback.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -292,7 +328,9 @@
       "backend-main"
     ]
   },
+  "runtime_smoke_scope_note": "Register the new LocalSIM workbench endpoint with the existing target-owned read-only semantic verifier, without changing workflow gates, restart authority, or business state.",
   "schema_version": "aistock_validation_bug_v1",
+  "scope_cleanup_note": "Only restore the task-runner-added .next-dev-3087 include in frontend/tsconfig.json after runner completion; no source config change delivered.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
@@ -336,9 +374,9 @@
       "docs/analysis/localsim_workbench_account_metrics_bugfix_20261020.md"
     ],
     "ui_issue": true,
-    "ui_route": "/services/simulation_runtime/localsim_workbench.py",
+    "ui_route": "/simulation/localsim/workbench",
     "ui_routes": [
-      "/services/simulation_runtime/localsim_workbench.py"
+      "/simulation/localsim/workbench"
     ],
     "visual_acceptance_required": true
   },
