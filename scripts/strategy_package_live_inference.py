@@ -448,7 +448,8 @@ def _run_owned_historical_plan(args: argparse.Namespace, runtime_workspace: Path
                 route = source_plans.resolve_day_source(source_plan, clocks)
                 # DB days always reread mutable data, including on resume.
                 # A file session retains frozen raw partitions across dates.
-                if inputs is None or route["source"] == "DATABASE":
+                if inputs is None or (route["source"] == "DATABASE"
+                                      and getattr(inputs, "source_plan_route", None) != route):
                     if inputs is not None:
                         inputs.close()
                     inputs = source_plans.create_input_session(

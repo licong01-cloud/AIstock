@@ -340,3 +340,53 @@ def test_shared_cli_switches_whole_days_and_rechecks_database_checkpoint(tmp_pat
     failed = json.loads(output.read_bytes())
     assert failed["status"] == "FAILED" and failed["source_gap_receipt"]["reason_code"] == "SOURCE_INPUT_DRIFT"
     assert all(Path(p).read_bytes() == data for p, data in originals.items())
+
+
+@pytest.mark.parametrize("mode", ["DATABASE_ONLY", "FILE_THEN_DATABASE"])
+def test_planned_multi_model_reuses_input_session_within_database_day_only(tmp_path, monkeypatch, mode):
+    import sys
+    from backend.services.advisory_historical_range.inference_inputs import InferenceInputSession
+    from backend.tests.advisory_historical_range.test_strategy_package_live_inference import _batch_args
+    from scripts import strategy_package_live_inference as runner
+
+    snapshot = _snapshot(tmp_path / "data") if mode == "FILE_THEN_DATABASE" else None
+    plan = _plan(mode, snapshot, run="test-owned-run")
+    path = tmp_path / "source-plan.json"
+    path.write_text(json.dumps(plan), encoding="utf-8")
+    requests = [{**{k: row[k] for k in ("decision_date", "data_cutoff", "target_trade_date")},
+                 "request_id": leg} for row in plan["days"] for leg in ("leg-A", "leg-B")]
+    output = _batch_args(tmp_path, monkeypatch, requests)
+    sys.argv[sys.argv.index("--input-revision") + 1] = plan["plan_hash"]
+    sys.argv.extend(["--source-plan-file", str(path)])
+    sessions, observed = [], []
+    monkeypatch.setattr(runner, "InferenceEngine", lambda **kwargs: SimpleNamespace(**kwargs))
+
+    def session(plan, clocks, **kwargs):
+        route = sources.resolve_day_source(plan, clocks)
+        value = InferenceInputSession(consumer_scope=kwargs["consumer_scope"], run_id=kwargs["run_id"],
+                                      source_identity=sources.digest(route))
+        if route["source"] == "DATASET_FILES":
+            value.file_dataset = SimpleNamespace(close=lambda: None)
+        sessions.append(value)
+        return value
+
+    def run(engine, workspace, trade_date, cutoff_date, readonly, output_path, **kwargs):
+        route = engine.input_session.source_plan_route
+        observed.append(engine.input_session)
+        result = _payload(route)
+        if route["source"] == "DATASET_FILES":
+            result["input_context"]["frozen_file_binding_hash"] = route["file_binding_hash"]
+        result["metadata"]["effective_trade_date"] = cutoff_date
+        return result
+
+    monkeypatch.setattr(sources, "create_input_session", session)
+    monkeypatch.setattr(runner, "_run_request", run)
+    assert runner.main() == 0
+    index = json.loads(output.read_bytes())
+    assert len(index["results"]) == len(requests) == 6
+    assert len({row["output_path"] for row in index["results"]}) == 6
+    for ordinal, route in enumerate(plan["routes"]):
+        assert observed[2 * ordinal] is observed[2 * ordinal + 1]
+        if ordinal and route["source"] == "DATABASE":
+            assert observed[2 * ordinal] is not observed[2 * ordinal - 1]
+    assert len(sessions) == (3 if mode == "DATABASE_ONLY" else 2)

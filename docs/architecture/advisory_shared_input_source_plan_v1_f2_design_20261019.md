@@ -1,6 +1,6 @@
 # Advisory / LocalSIM 共享输入来源计划 F2 详细设计
 
-日期：2026-10-19。分类 F2/T3；用户批准实现三种来源模式，源码限 Advisory ownership。继承 `advisory_shared_selection_signal_kernel_detailed_design_20261014.md`、`localsim_shared_frozen_file_inputs_20261017.md` 及 `selection_provider_clocks_v1`，不复制其算法。当前：已修正政策身份与物理快照身份的混淆，并将冻结发布原生身份接入文件推理；64项定向回归、LSTM/TCN真实文件推理对照及原生文件恢复通过。数据库 canonical 激活仍待数据 owner，跨来源连续日/原生TopK全链路未通过，整体 F2 尚未通过，不宣称两端可立即运行接续或可合入。
+日期：2026-10-19；接续更新：2026-10-20。分类 F2/T3；用户批准实现三种来源模式，源码限 Advisory ownership。继承 `advisory_shared_selection_signal_kernel_detailed_design_20261014.md`、`localsim_shared_frozen_file_inputs_20261017.md` 及 `selection_provider_clocks_v1`，不复制其算法。当前：已修正政策身份与物理快照身份的混淆，并将冻结发布原生身份接入文件推理；66项定向回归、LSTM/TCN真实文件推理对照及原生文件恢复通过。新增对既存原生评分的真实 `SelectionSignalKernel.run` 文件过滤/Top50对照通过；没有重跑推理或冒充LocalSIM生产验收。数据库 canonical 活动指针本次只读仍为待迁移旧政策，跨来源连续日及数据库原生全链路未验证，整体 F2 尚未通过，不宣称两端可立即运行接续或可合入。
 
 ## Background / 背景
 
@@ -68,7 +68,7 @@
 | F-333 | inference_inputs.py / CLI / 原生 kernel | backend/tests/advisory_historical_range/test_input_source_plan.py；test_selection_signal_kernel.py | PASS | none |
 | F-334 | input_source_plan.py / 原生 reader | backend/tests/advisory_historical_range/test_input_source_plan.py；真实readiness.json | PASS | none |
 | F-335 | CLI / kernel / composition.py | backend/tests/advisory_historical_range/test_input_source_plan.py；test_strategy_package_live_inference.py | PASS | none |
-| F-336 | 原生只读验证 | artifact: X:/AIstock_temp/ADVISORY/shared-source-plan-20261019/native-r4/progress.json；native-r4/lstm-resume.json | BLOCKED | 文件推理/恢复通过；canonical DB激活、跨界连续日及原生TopK完整验证未通过，不得升级证据 |
+| F-336 | 原生只读验证 | artifact: X:/AIstock_temp/ADVISORY/shared-source-plan-20261019/native-r4/progress.json；native-r4/lstm-resume.json；native-r14/file-kernel.json；native-r14/runtime-readback.json | BLOCKED | 文件推理/恢复及既存原生评分的文件过滤/Top50对照通过；canonical DB活动指针仍旧政策待迁移，真实跨界连续日及数据库原生全链路未验证，不得升级证据 |
 | F-337 | 本文接入交付 | artifact: docs/architecture/advisory_shared_input_source_plan_v1_f2_design_20261019.md | PASS | none |
 
 ## Rollout / Rollback / Production Gates
@@ -176,3 +176,17 @@ R13最终验证：另8项文件输入/推理只读测试通过，本轮直接矩
 LSTM原生CLI `--resume` 在全新进程28.34秒完成，resource_loads=0；原scores.json与commit.json字节hash不变。收据 `native-r4/lstm-resume.json`。该收据只证明文件来源原生恢复；数据库重读摘要/漂移仍由定向测试验证，真实DB续段未放行。
 
 剩余顺序：①数据owner交付真实canonical活动binding/coverage，不要求重建已有v18文件；②本窗口用新任务冻结同政策计划，验证文件最后日→数据库首日的完整历史窗口、原生TopK/资格及失败恢复；③LocalSIM owner接自身调度/分钟/provider/断点，复用公共计划而非另建选源算法。两端运行及用户重启状态独立报告，不能把本次文件推理通过替代这些步骤。
+
+## R14 接续审阅范围（2026-10-20）
+
+最新主线已同步。审阅发现CLI在计划来源为数据库时，每个模型请求都会新建session，与“每DB日新session、同日多模型复用已读输入”的既定设计不符。在已登记的 `scripts/strategy_package_live_inference.py` 和 `test_input_source_plan.py` 内增加定向RED→GREEN回归并修复：同日请求保留输入session，跨DB日必定重建，跨消费者/任务不共享。仅改变输入对象生命周期，不改变模型、原生历史窗口或任何选股算法。
+
+两轮接续审阅：第一轮从三模式/多模型生命周期发现以上问题，两个新用例在原实现下均失败，修复后两个用例及原漂移恢复用例通过；第二轮检查跨DB日、文件跨日、部分失败、逐模型独立输出和精确恢复，不再发现需修改的缺陷。66项直接相关回归通过；测试替身只证明生命周期与拒绝合同，不替代真实数据库接续验收。
+
+`native-r14/file-kernel.json`：读取R4已完成且逐文件hash核对的原生LSTM/TCN评分，交原生artifact准备、原生HMM关闭分支、唯一原生computation与实际 `SelectionSignalKernel.run`。两模型两臂均4917评分/4917人口/0 UNKNOWN，Top50、完整原始排序、排除项及成员状态逐项一致；原生停牌读取D=2026-08-31，risk时钟C=2026-08-28。行情与停牌来自同一冻结文件；数据库只读查询策略包身份，不读市场行情。使用预先明确的相同原生Top50政策（HMM/risk关闭、停牌过滤开启、行业黑名单为空），不修改任何既存任务政策。raw阶段沿用既有历史artifact的DB_HISTORICAL语义信封，物理文件来源在原生input context及来源收据中明确记录；没有伪称为数据库行情。本次6.13秒仅为既存评分到选股内核的验证耗时，不是模型推理耗时；不包含参考价加富、HMM开启、LocalSIM适配/生产验收或收益证明。
+
+运行差异已复核：canonical root环境的实际目标为127.0.0.1:5432/aistock，后端ready且源码为主线 `2db54e36fb3997b6061c8f08acff5cbc19110238`，并非误连DEV。官方 `CanonicalPitAuthorityResolver.resolve_live_binding()` 仍读回 `DEPLOYED_LEGACY_PENDING_MIGRATION`，rule=`st_pub_next_trade_restore_active_l_v1`；新任务要求的政策为 `shsz_a_252td_st_delist_asof_v2`。因此“全局统一源码已实现”和“生产权威指针已激活”不是同一事实。本窗口不激活、不补写或改数据，不绕过公共PIT合同，不把旧政策当canonical运行。数据owner只需交付既有官方激活流程的有效binding及coverage读回；业务连续日、全模型历史窗口、过滤和恢复验证仍由本窗口完成，不外包给数据owner。现有v18文件不因此要求重建。
+
+DESIGN-COMPLIANCE-001接续结论：①F-336保留BLOCKED，不把部分真实验证宣布为全量完成；②旧指针、不一致输入及漂移仍明确失败，不填值/回退/伪造状态；③原生模型、评分、过滤、递补、TopK和C/D/T不变，生命周期修复已同步设计；④没有新增策略准入、审批或人工门禁，仅遵守主线既有canonical身份合同。PR仍为草稿，源码合入、运行加载与LocalSIM接续均未验收。
+
+R14最终静态结果：11个精确文件ownership全部映射；Ruff与diff-check通过，L0无阻断，既有P2命令字符串join提示不涉及数据合并且未改变。F2校验仍因F-336未完成而明确FAIL，不把扫描/单测通过等同于F2通过。结束前再次以只读事务读回：DB权威generation=0、物理key=`shsz_st_pit_active_v1`、旧rule不变，声明覆盖2018-08-01至2026-10-19；这不是“行情数据缺失”结论，更不要求重建数据，只说明活动政策未切到canonical。现有草稿PR保存当前进展，等待owner完成既有激活边界后继续真实混合验证。
