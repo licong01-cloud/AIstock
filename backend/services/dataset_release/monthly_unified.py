@@ -24,6 +24,9 @@ import time
 from typing import Any, Callable, Iterator, Mapping, Protocol, Sequence
 import uuid
 
+from backend.services.canonical_equity_pit import (
+    CanonicalPitAuthorityResolver, PitConsumerBinding, require_dataset_runtime_pit_policy,
+)
 from .canonical import canonical_json_bytes, ensure_sha256
 from .monthly_error_diagnostics import monthly_error_diagnostics, monthly_error_message
 
@@ -1029,6 +1032,7 @@ class MonthlyReleaseService:
         generation_factory: Callable[[MonthlyReleaseRequest], str],
         revision_factory: Callable[[MonthlyReleaseRequest], str],
         allowed_cutoff_resolver: Callable[[], date] | None = None,
+        pit_authority_resolver: Callable[[], PitConsumerBinding] | None = None,
     ) -> None:
         self.store = store
         self.active_profile = active_profile
@@ -1039,6 +1043,15 @@ class MonthlyReleaseService:
         self.generation_factory = generation_factory
         self.revision_factory = revision_factory
         self.allowed_cutoff_resolver = allowed_cutoff_resolver
+        self.pit_authority_resolver = (
+            pit_authority_resolver or CanonicalPitAuthorityResolver().resolve_live_binding
+        )
+
+    def _runtime_pit_policy(self, profile: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            return require_dataset_runtime_pit_policy(profile, self.pit_authority_resolver())
+        except Exception as exc:
+            raise MonthlyReleaseNotReady(f"shared canonical PIT policy is not ready: {exc}") from exc
 
     def _validate_target_cutoff(self, requested: date) -> None:
         if self.allowed_cutoff_resolver is None:
@@ -2427,6 +2440,8 @@ class MonthlyReleaseService:
             )
             expected_old = str(plan["predecessor"]["profile_sha256"])
             expected_new = candidate_profile_ref["sha256"]
+            profile = _read_json(profile_candidate, label="candidate profile")
+            runtime_pit_policy = self._runtime_pit_policy(profile)
             activation_path = root / "receipts" / "activation.json"
             ready_path = root / "receipts" / "ready.json"
             activation = {
@@ -2448,6 +2463,7 @@ class MonthlyReleaseService:
                 "readback_state": "PENDING",
                 "rollback_ref": None,
                 "dataset_manifest_sha256": ready["dataset_manifest_sha256"],
+                "runtime_pit_policy": runtime_pit_policy,
                 "database_write_performed": False,
                 "runtime_action_performed": False,
             }
@@ -2460,6 +2476,7 @@ class MonthlyReleaseService:
                     "ready_ref",
                     "authorization_ref",
                     "dataset_manifest_sha256",
+                    "runtime_pit_policy",
                 ):
                     if prior_activation.get(field) != activation[field]:
                         raise MonthlyReleaseConflict("activation intent differs from the durable intent")
@@ -2507,6 +2524,10 @@ class MonthlyReleaseService:
                     "dataset_manifest_sha256"
                 ) != ready["dataset_manifest_sha256"]:
                     raise MonthlyReleaseError("activation readback identity differs")
+                current_pit_policy = self._runtime_pit_policy(profile)
+                if current_pit_policy != runtime_pit_policy:
+                    raise MonthlyReleaseError("shared canonical PIT policy changed during activation")
+                verification["runtime_pit_policy"] = current_pit_policy
             except Exception as exc:
                 activation.update(
                     {
@@ -2581,8 +2602,11 @@ class MonthlyReleaseService:
                 predecessor_profile_sha256=activated_sha,
                 target_profile_sha256=target_sha,
             )
+            predecessor_profile = _read_json(previous_profile, label="predecessor profile")
+            runtime_pit_policy = self._runtime_pit_policy(predecessor_profile)
             receipt = {
                 "schema_version": "aistock_monthly_release_rollback_v2",
+                "runtime_pit_policy": runtime_pit_policy,
                 "operation_id": operation_id,
                 "authorization": authorization,
                 "restored_profile_sha256": target_sha,
@@ -2626,6 +2650,8 @@ class MonthlyReleaseService:
                 verification = dict(verify_after(plan["predecessor"]))
                 if verification.get("profile_sha256") != target_sha:
                     raise MonthlyReleaseError("rollback readback identity differs")
+                if self._runtime_pit_policy(predecessor_profile) != runtime_pit_policy:
+                    raise MonthlyReleaseError("shared canonical PIT policy changed during rollback")
             except Exception as exc:
                 receipt["readback_state"] = "FAILED"
                 receipt.pop("canonical_sha256", None)
