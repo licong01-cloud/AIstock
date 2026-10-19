@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Receiver stderr and sender cause survive stream failure; cleanup cannot replace primary error; successful and timeout paths retain exact-byte contract.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/tests/dataset_release/test_monthly_remote_deploy.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1997-monthly-streaming-deploy-masks-receiver-permission-errors-with-broken-pi.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_immutable_deploy.py",
-      "backend/tests/dataset_release/test_monthly_remote_deploy.py"
+      "backend/tests/dataset_release/test_monthly_remote_deploy.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1997-monthly-streaming-deploy-masks-receiver-permission-errors-with-broken-pi.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_immutable_deploy.py",
@@ -122,6 +128,7 @@
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
