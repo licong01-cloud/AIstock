@@ -1680,6 +1680,25 @@ class TDXScheduler:
             availability_date = self._next_trading_day(availability_date)
         return availability_date
 
+    def _minute_replay_start(self) -> dt.date:
+        """Locate committed recent facts, not a completeness watermark.
+
+        Use the time index with chunk-prunable bounds, never full-history MAX.
+        Legacy success audits may predate whole-population/bar checks, so they
+        cannot justify advancing past this day. Existing repair targets retain
+        responsibility for holes before it; exact requested windows bypass it.
+        """
+        rows = self._fetchall(
+            """SELECT (trade_time AT TIME ZONE 'Asia/Shanghai')::date AS mx
+                 FROM market.kline_minute_raw
+                WHERE trade_time >= CURRENT_DATE - INTERVAL '45 days' AND freq='1m'
+                ORDER BY trade_time DESC LIMIT 1"""
+        )
+        value = rows[0].get("mx") if rows else None
+        if value is None:
+            raise RuntimeError("TDX incremental has no recent cursor; specify an exact date window")
+        return value if isinstance(value, dt.date) else dt.date.fromisoformat(str(value))
+
     def _compute_auto_range(self, dataset: str) -> Tuple[Optional[dt.date], Optional[dt.date]]:
         """Return (start_date, end_date) for incremental catch-up.
 
@@ -1716,6 +1735,15 @@ class TDXScheduler:
         }
         if not table_name:
             return None, None
+
+        if dataset == "kline_minute_raw":
+            latest_date = self._latest_completed_trading_day()
+            if latest_date is None:
+                return None, None
+            start_date = self._minute_replay_start()
+            if start_date > latest_date:
+                raise RuntimeError("TDX source maximum date is beyond latest trading date")
+            return start_date, latest_date
 
         current_max: Optional[dt.date] = None
         if use_refresh_audit_cursor:
@@ -5079,13 +5107,16 @@ class TDXScheduler:
                 if start_date > end_date or end_date > latest_trading:
                     raise RuntimeError("explicit TDX date window is invalid")
             else:
-                max_rows = self._fetchall(
-                    f"SELECT MAX({spec['date_col']})::date AS mx FROM {spec['table']} "
-                    f"WHERE {spec['date_col']} >= CURRENT_DATE - INTERVAL '45 days'"
-                )
-                current_max = max_rows[0]["mx"] if max_rows else None
-                if current_max is None:
-                    raise RuntimeError("TDX incremental has no recent cursor; specify an exact date window")
+                if dataset == "kline_minute_raw":
+                    current_max = self._minute_replay_start()
+                else:
+                    max_rows = self._fetchall(
+                        f"SELECT MAX({spec['date_col']})::date AS mx FROM {spec['table']} "
+                        f"WHERE {spec['date_col']} >= CURRENT_DATE - INTERVAL '45 days'"
+                    )
+                    current_max = max_rows[0]["mx"] if max_rows else None
+                    if current_max is None:
+                        raise RuntimeError("TDX incremental has no recent cursor; specify an exact date window")
                 # A MAX timestamp proves neither a complete day nor all symbols.
                 # Re-read the latest observed day; Go inserts identical keys
                 # idempotently and rejects conflicting existing raw facts.
