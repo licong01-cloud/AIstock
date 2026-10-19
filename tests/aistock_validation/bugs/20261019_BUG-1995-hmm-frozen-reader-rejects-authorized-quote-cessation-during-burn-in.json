@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1995",
-  "closed_at": null,
+  "closed_at": "2026-10-19T19:07:42Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -119,8 +119,8 @@
   },
   "first_seen_at": "2026-10-19T18:44:38.772953Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "bc7ff63f3b52da70326e1aca008614076d50d916",
+  "fixed_at": "2026-10-19T19:07:42Z",
   "github_issue_number": 6382,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6382",
   "last_seen_at": "2026-10-19T18:44:38.772953Z",
@@ -129,6 +129,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6387",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -152,6 +153,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -161,7 +163,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1995",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ae40387778ebe6aa",
+    "recorded_at": "2026-10-19T19:08:24.343360Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3ae84b5e60795066eae679c44f5fd4c1ba19be71",
+    "source_merge_commit": "bc7ff63f3b52da70326e1aca008614076d50d916",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6387",
+    "validation_evidence": [
+      "validation-receipt: id=07e2b23ca4e451c3 commit=3ae84b5e60795066eae679c44f5fd4c1ba19be71 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py backend/tests/hmm_data_source/test_coefficient_extension.py backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py -q` result=`81 passed, 1 skipped`",
+      "validation-receipt: id=67f7b4e076347842 commit=3ae84b5e60795066eae679c44f5fd4c1ba19be71 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 l0` result=`passed, 8 registry tests, 0 blocking L0 findings`",
+      "validation-receipt: id=181b7957d623f0e1 commit=3ae84b5e60795066eae679c44f5fd4c1ba19be71 kind=nox plan=l0 status=passed command=`python -m nox -s validation_module_registry_l0 l0` result=`passed, 8 registry tests, 0 blocking L0 findings`",
+      "validation-receipt: id=4ae5241017178aeb commit=3ae84b5e60795066eae679c44f5fd4c1ba19be71 kind=ruff plan=direct status=passed command=`rtk ruff check scripts/precompute_hmm_coefficients.py backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py` result=`passed`",
+      "validation-receipt: id=49b93295252d6a51 commit=3ae84b5e60795066eae679c44f5fd4c1ba19be71 kind=compile plan=direct status=passed command=`python -m py_compile scripts/precompute_hmm_coefficients.py backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py` result=`passed`",
+      "validation-receipt: id=6a4e69f7640af181 commit=3ae84b5e60795066eae679c44f5fd4c1ba19be71 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "b38e59db4c084861b02207d6882dac6814e555a31b2ae178021f249675462b60"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "hmm"
   ],
@@ -170,6 +198,14 @@
     "fingerprint": "1f10ceb459619c6d41942e5e",
     "source_event_id": "FE-20261019-1f10ceb45961"
   },
+  "validation_evidence": [
+    "validation-receipt: id=07e2b23ca4e451c3 commit=3ae84b5e60795066eae679c44f5fd4c1ba19be71 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py backend/tests/hmm_data_source/test_coefficient_extension.py backend/tests/hmm_data_source/test_monthly_hmm_producer_binding.py -q` result=`81 passed, 1 skipped`",
+    "validation-receipt: id=67f7b4e076347842 commit=3ae84b5e60795066eae679c44f5fd4c1ba19be71 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 l0` result=`passed, 8 registry tests, 0 blocking L0 findings`",
+    "validation-receipt: id=181b7957d623f0e1 commit=3ae84b5e60795066eae679c44f5fd4c1ba19be71 kind=nox plan=l0 status=passed command=`python -m nox -s validation_module_registry_l0 l0` result=`passed, 8 registry tests, 0 blocking L0 findings`",
+    "validation-receipt: id=4ae5241017178aeb commit=3ae84b5e60795066eae679c44f5fd4c1ba19be71 kind=ruff plan=direct status=passed command=`rtk ruff check scripts/precompute_hmm_coefficients.py backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py` result=`passed`",
+    "validation-receipt: id=49b93295252d6a51 commit=3ae84b5e60795066eae679c44f5fd4c1ba19be71 kind=compile plan=direct status=passed command=`python -m py_compile scripts/precompute_hmm_coefficients.py backend/tests/hmm_data_source/test_precompute_hmm_coefficients.py` result=`passed`",
+    "validation-receipt: id=6a4e69f7640af181 commit=3ae84b5e60795066eae679c44f5fd4c1ba19be71 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
