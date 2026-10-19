@@ -21,6 +21,7 @@
 - `frontend/src/app/simulation/localsim/configure/page.tsx`、现有账户详情 / 账本 / 绩效页与回放列表 / 详情、`localsim.module.css` 及专属展示组件。
 - `frontend/tests/paper-v2/localsim-trading-workbench.spec.ts`、现有 `localsim-unified-control-plane.spec.ts`（更新已变更的入口、业务标签与安全错误断言，保留控制面不变量）。
 - `noxfile.py`、`tests/aistock_validation/catalog/test_plans.yaml`、`file_ownership.yaml`、`module_registry.yaml`：将新工作台测试纳入 LocalSIM 验证入口、直接 CI 执行目标及归属，不启动生产服务或数据库写验证。
+- `backend/services/validation/plan_catalog.py`：只登记新工作台 nox 命令，沿用既有执行白名单。
 
 禁止改动：公共左侧导航组件、菜单数据、根 layout、全局样式；订单 / 资金 / 持仓写入、回放控制合同、共享选股、PIT、数据生产及数据库结构。临时产物放 X 盘，不复制大型模型或数据。
 
@@ -51,6 +52,8 @@
 - F1：16 个 LSUI 项目保持稳定，对应新增校验器所需验收别名；`python scripts/aistock_feature_workflow.py validate --design docs/architecture/localsim_trading_workbench_detailed_design_20261019.md --tier F1` PASS，16 items / 16 rows / 0 warnings。新增工作台用例由独立 CI target 直接执行，不以目录归属或类型检查代替执行覆盖。
 
 PR #6375 补充审核：验证中心启动接口返回 HTTP 500，改用同一工作树的原生 nox 定向执行。`validation_module_registry_l0` 8 passed；`guardrail_changed_files -- --changed-only` 通过，37 个变更文件全部有明确归属、无歧义、无新增阻断。补齐七个已批准设计资产的精确归属，未扩大模块扫描范围。`missing_dates` 改为必传的完整性合同，服务原本已显式传入；避免在投影构造时省略覆盖缺口，未增加任何行情或收益默认值。移除切换流式响应后遗留的未用导入，按 Ruff 格式化新测试；变更 Python 文件 Ruff 全部通过，工作台财务合同复跑 37 passed。PR 元数据补齐设计验收索引与精确写入范围，原生 pr-check 的范围、设计和功能关联检查均 passed，不新增 BUG 或扩充写入权限。
+
+CI 首轮发现新计划的命令白名单缺项，已通过原生 `validation_catalog_integrity` 本地复现；补齐唯一 `nox_localsim_workbench_ui` 映射，保持目录完整性检查启用。最终范围 38 文件，完整性目录、归属与 guardrail 三个原生 nox 计划复验全部通过；CI 的其余已执行轻量门禁（L0、PR 质量、Semgrep）通过，重型计划等待最新提交的完整 CI，以其为合入依据。
 
 ## 已知事实与运行边界
 
