@@ -1,6 +1,7 @@
 {
   "actual": "v18 canonical v2 cutoff Aug31; DB canonical through Sep30; runtime default legacy through Oct19.",
   "allowed_write_scope": [
+    "noxfile.py",
     "backend/services/canonical_equity_pit.py",
     "backend/services/tushare_sync_engine.py",
     "backend/inference_engine.py",
@@ -211,6 +212,9 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "backend_restart_owner": "user",
     "fresh_process_evidence": ["Isolated AIstock python -B loaded canonical policy helpers, Selection admission, inference and canonical daily hook from persistent BUG-1986 source; no DB access or process control"],
     "inference_basis": "planned_scope",
