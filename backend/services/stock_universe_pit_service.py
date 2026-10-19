@@ -18,9 +18,11 @@ from .canonical_equity_pit import (
     CANONICAL_PIT_SCOPE,
     CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT,
     CANONICAL_PIT_UNIVERSE_KEY,
+    PREVIOUS_CANONICAL_PIT_UNIVERSE_KEY,
     CanonicalPitAuthorityResolver,
     PitConsumerBinding,
     require_canonical_consumer_binding,
+    require_canonical_new_task_binding,
     require_canonical_rolling_universe_key,
 )
 
@@ -1230,12 +1232,22 @@ class StockUniversePitService:
         self,
         *,
         trade_date: dt.date,
-        universe_key: str = DEFAULT_ST_PIT_UNIVERSE_KEY,
+        universe_key: str | None = None,
         ensure: bool = True,
         authority_binding: PitConsumerBinding | None = None,
         consumer: str | None = None,
     ) -> list[str]:
-        canonical_query = universe_key == CANONICAL_PIT_UNIVERSE_KEY
+        if universe_key is None:
+            # New unbound reads inherit the sole global authority. Explicit
+            # saved historical identities keep their original path below.
+            if authority_binding is None:
+                authority_binding = require_canonical_new_task_binding(
+                    self._authority_resolver.resolve_live_binding(),
+                    consumer=str(consumer or "stock_universe"), trade_date=trade_date,
+                )
+            universe_key = authority_binding.universe_key
+            consumer = consumer or "stock_universe"
+        canonical_query = universe_key in {CANONICAL_PIT_UNIVERSE_KEY, PREVIOUS_CANONICAL_PIT_UNIVERSE_KEY}
         if canonical_query:
             if authority_binding is None:
                 raise StockUniversePitError("canonical PIT query requires a resolver-issued authority_binding")

@@ -27,6 +27,33 @@ def test_canonical_terminal_evidence_contract_is_explicit_and_versioned() -> Non
     assert CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT == "issuer_bound_stock_delisting_v2"
 
 
+def test_lifecycle_fact_policy_has_distinct_version_and_preserves_v2() -> None:
+    assert pit.CANONICAL_PIT_RULE_VERSION == "shsz_a_252td_st_delist_asof_v3"
+    assert pit.CANONICAL_PIT_UNIVERSE_KEY == "aistock_equity_pit_canonical_v3"
+    old = _binding(universe_key="aistock_equity_pit_canonical_v2",
+                   rule_version="shsz_a_252td_st_delist_asof_v2",
+                   rule_parameters_digest=pit.canonical_rule_parameters_digest("shsz_a_252td_st_delist_asof_v2"))
+    assert pit.require_canonical_consumer_binding(old, consumer="qe") == old
+    assert old.rule_parameters_digest == "a1190959631b8d5ca3d265125dc9f152ad97cdd3eeba170d22f04e2b68b97641"
+    assert old.rule_parameters_digest != pit.canonical_rule_parameters_digest()
+    with pytest.raises(pit.CanonicalPitContractError, match="polic"):
+        pit.require_same_canonical_policy(_binding(), old, consumer="advisory")
+
+
+def test_old_frozen_inference_identity_is_not_relabelled_to_v3() -> None:
+    from backend.services.canonical_pit_inference_boundary import resolve_inference_pit_identity
+    old = {"mode": "canonical_v2_frozen_candidate", "release_id": "old-release",
+           "cutoff": "2026-08-31", "snapshot_digest": "a" * 64,
+           "universe_as_of": "2026-08-31", "universe_codes": ["000001.SZ"]}
+    first = resolve_inference_pit_identity(old, version_tag="frozen")
+    assert first.binding.rule_version == pit.PREVIOUS_CANONICAL_PIT_RULE_VERSION
+    explicit = {**old, "rule_version": pit.CANONICAL_PIT_RULE_VERSION,
+                "rule_parameters_digest": pit.canonical_rule_parameters_digest()}
+    second = resolve_inference_pit_identity(explicit, version_tag="frozen")
+    assert second.binding.rule_version == pit.CANONICAL_PIT_RULE_VERSION
+    assert first.binding.rule_parameters_digest != second.binding.rule_parameters_digest
+
+
 def test_pit_authority_status_preserves_string_enum_contract() -> None:
     status = PitAuthorityStatus.ACTIVE_CANONICAL
 

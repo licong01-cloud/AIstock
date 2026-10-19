@@ -44,6 +44,7 @@ def _portfolio_fixture(*, custom_params: dict | None = None):
     service = PaperTradingV2PortfolioService(
         package_repository=package_repo,
         repository=paper_repo,
+        pit_authority_resolver=ActiveCanonicalPitResolver(),
     )
     portfolio = service.create_portfolio(
         package_id=manifest.package_id,
@@ -69,6 +70,10 @@ def test_runtime_profile_version_hash_and_audit_are_persisted() -> None:
     assert profile.current_version_id == version.profile_version_id
     assert version.config_sha256
     assert version.config_json == {
+        "canonical_pit_authority_profile": {
+            "schema_version": "canonical_authority_pointer_v1",
+            "authority_id": "aistock_equity_pit_canonical",
+        },
         "runtime_profile": {
             "industry_blacklist": [],
             "hmm": {
@@ -87,7 +92,6 @@ def test_runtime_profile_version_hash_and_audit_are_persisted() -> None:
                 "enabled": False,
                 "policy_version": "platform_risk_policy_v1",
                 "providers": ["st_pit"],
-                "st_universe_key": "shsz_st_pit_active_v1",
                 "event_signal_profile_id": None,
                 "event_signal_asof_policy": "disabled",
                 "event_signal_merge_policy": "disabled",
@@ -132,11 +136,7 @@ def test_runtime_profile_activation_is_copied_into_day_run() -> None:
         config_json={"runtime_profile": {"selection": {"top_k": 2}, "tradability": {"exclude_suspended": True}}},
         created_by="unit_test",
     )
-    canonical_version = service.migrate_runtime_profile_version_to_canonical_pit(
-        portfolio_id=portfolio.portfolio_id,
-        profile_version_id=version.profile_version_id,
-        created_by="unit_test",
-    )
+    canonical_version = version
     activation = service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 2),
@@ -184,10 +184,7 @@ def test_runtime_profile_activation_replace_and_late_change_are_rejected() -> No
         profile_name="replace test",
         config_json={"runtime_profile": {"selection": {"top_k": 2}}},
     )
-    canonical_version = service.migrate_runtime_profile_version_to_canonical_pit(
-        portfolio_id=portfolio.portfolio_id,
-        profile_version_id=version.profile_version_id,
-    )
+    canonical_version = version
     first = service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 2),
@@ -334,6 +331,7 @@ def test_paper_day_runner_accepts_unversioned_runtime_profile_override_with_gene
 
     result = PaperTradingDayRunner(
         repository=paper_repo,
+        pit_authority_resolver=ActiveCanonicalPitResolver(),
         calendar_provider=FakeCalendar(),
         market_data_provider=PaperV2MinuteMarketDataProvider(
             limit_price_provider=FakeLimitProvider(),
@@ -371,6 +369,7 @@ def test_paper_day_runner_replaces_legacy_platform_default_binding_for_behavior_
 
     result = PaperTradingDayRunner(
         repository=paper_repo,
+        pit_authority_resolver=ActiveCanonicalPitResolver(),
         calendar_provider=FakeCalendar(),
         market_data_provider=PaperV2MinuteMarketDataProvider(
             limit_price_provider=FakeLimitProvider(),

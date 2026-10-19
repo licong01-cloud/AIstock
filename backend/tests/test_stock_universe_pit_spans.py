@@ -469,10 +469,39 @@ def test_confirmed_delisting_event_can_close_st_snapshot_gap() -> None:
     assert result["reconstructed_snapshot_day_count"] == 1
 
 
+@pytest.mark.parametrize("code", ["601059.SH", "601198.SH"])
+def test_confirmed_lifecycle_exits_without_announcement_chain(code) -> None:
+    day = dt.date(2026, 10, 19)
+    stock = StockRow(code, "sample", "SSE", "D", dt.date(2000, 1, 1), day)
+    receipt = audit_canonical_terminal_evidence(
+        [stock], announcement_events=[], start_date=dt.date(2018, 8, 1), end_date=day,
+    )
+    assert receipt["status"] == "ready"
+    assert receipt["lifecycle_terminal_evidence_count"] == 1
+    assert receipt["lifecycle_only_terminal_security_codes"] == [code]
+    assert receipt["announcement_terminal_evidence_count"] == 0
+    assert receipt["missing_terminal_evidence_count"] == 0
+    days = [dt.date(2026, 10, 16), day]
+    events = _stock_basic_terminal_events([stock], TradingCalendar(days), allow_paused_list_date_fallback=False)
+    spans = _build_spans([stock], events, universe_key="v3", start_date=days[0], end_date=day,
+                         ipo_filter_days=0, ipo_filter_unit="trading_sessions", calendar=TradingCalendar(days))
+    assert [(span.eligible_start, span.eligible_end) for span in spans] == [(days[0], days[0])]
+    assert events[0].action_date == day
+    assert events[0].source_pub_date is None  # Never invent an earlier knowledge time.
+
+
+@pytest.mark.parametrize("status,delist_date", [("D", None), ("P", None)])
+def test_terminal_fact_policy_does_not_invent_missing_lifecycle_dates(status, delist_date) -> None:
+    stock = StockRow("600000.SH", "sample", "SSE", status, dt.date(2000, 1, 1), delist_date)
+    with pytest.raises(pit_builder.CanonicalPitEvidenceError):
+        audit_canonical_stock_lifecycle([stock])
+        audit_canonical_terminal_evidence([stock], announcement_events=[])
+
+
 def test_canonical_terminal_evidence_rejects_unclassified_delisted_security() -> None:
     stock = StockRow("600000.SH", "sample", "SSE", "D", dt.date(2000, 1, 1), dt.date(2025, 1, 1))
     try:
-        audit_canonical_terminal_evidence([stock], announcement_events=[])
+        audit_canonical_terminal_evidence([stock], announcement_events=[], rule_version="shsz_a_252td_st_delist_asof_v2")
     except RuntimeError as exc:
         assert "600000.SH" in str(exc)
     else:
@@ -528,6 +557,7 @@ def test_terminal_evidence_still_requires_in_window_delisting() -> None:
             announcement_events=[],
             start_date=dt.date(2018, 8, 1),
             end_date=dt.date(2026, 7, 31),
+            rule_version="shsz_a_252td_st_delist_asof_v2",
         )
     except RuntimeError as exc:
         assert "600000.SH" in str(exc)

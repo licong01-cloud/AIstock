@@ -77,7 +77,7 @@ from .models import (
     compute_runtime_config_sha256,
 )
 from .repository import PaperTradingV2Repository
-from .canonical_pit_control import plan_paper_runtime_profile_migration
+from .canonical_pit_control import migrate_runtime_config_to_canonical_pointer, plan_paper_runtime_profile_migration
 from .auto_run import (
     MINIQMT_ACCOUNT_GROUP_BINDING_MODE,
     auto_run_live_source_for_broker,
@@ -1219,7 +1219,9 @@ class PaperTradingV2PortfolioService:
         reason: str | None = None,
     ) -> tuple[PaperRuntimeProfile, PaperRuntimeProfileVersion]:
         portfolio = self.repository.get_portfolio(portfolio_id)
-        config = self._normalize_runtime_profile_config(config_json, manifest=portfolio.frozen_manifest)
+        config = migrate_runtime_config_to_canonical_pointer(
+            self._normalize_runtime_profile_config(config_json, manifest=portfolio.frozen_manifest)
+        )
         profile = PaperRuntimeProfile(
             portfolio_id=portfolio_id,
             package_id=portfolio.package_id,
@@ -1286,7 +1288,9 @@ class PaperTradingV2PortfolioService:
                 "retired runtime profile cannot receive new versions",
                 context={"portfolio_id": portfolio_id, "profile_id": profile_id},
             )
-        config = self._normalize_runtime_profile_config(config_json, manifest=portfolio.frozen_manifest)
+        config = migrate_runtime_config_to_canonical_pointer(
+            self._normalize_runtime_profile_config(config_json, manifest=portfolio.frozen_manifest)
+        )
         versions = self.repository.list_runtime_profile_versions(profile_id, limit=10_000)
         next_no = max((item.version_no for item in versions), default=0) + 1
         current = next((item for item in versions if item.profile_version_id == profile.current_version_id), None)

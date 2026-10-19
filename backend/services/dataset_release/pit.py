@@ -22,12 +22,11 @@ import pandas as pd
 
 from backend.services.canonical_equity_pit import (
     CANONICAL_PIT_AUTHORITY_ID,
-    CANONICAL_PIT_RULE_VERSION,
     CANONICAL_PIT_SNAPSHOT_PREFIX,
-    CANONICAL_PIT_UNIVERSE_KEY,
     PitAuthorityStatus,
     PitConsumerBinding,
     canonical_rule_parameters_digest,
+    canonical_rolling_key,
     require_canonical_consumer_binding,
 )
 
@@ -74,7 +73,7 @@ def require_canonical_source_snapshot(snapshot: "FrozenPitSnapshot") -> PitConsu
         authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
         universe_key=snapshot.universe_key,
         rule_version=snapshot.rule_version,
-        rule_parameters_digest=canonical_rule_parameters_digest(),
+        rule_parameters_digest=canonical_rule_parameters_digest(snapshot.rule_version),
         snapshot_digest=snapshot.spans_sha256,
         cutoff=snapshot.cutoff,
     )
@@ -93,10 +92,8 @@ def require_canonical_frozen_snapshot(
 ) -> PitConsumerBinding:
     """Prove a frozen release is the rolling canonical rule at its cutoff."""
 
-    if snapshot.universe_key != CANONICAL_PIT_UNIVERSE_KEY:
+    if snapshot.universe_key != canonical_rolling_key(snapshot.rule_version):
         raise PitSnapshotError("frozen PIT source is not the active canonical rolling universe")
-    if snapshot.rule_version != CANONICAL_PIT_RULE_VERSION:
-        raise PitSnapshotError("frozen PIT rule version differs from canonical authority")
     _require_sha256(rolling_cutoff_spans_sha256, field="rolling_cutoff_spans_sha256")
     if snapshot.spans_sha256 != rolling_cutoff_spans_sha256:
         raise PitSnapshotError("frozen PIT digest differs from rolling canonical digest at cutoff")
@@ -104,8 +101,8 @@ def require_canonical_frozen_snapshot(
         authority_id=CANONICAL_PIT_AUTHORITY_ID,
         authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
         universe_key=f"{CANONICAL_PIT_SNAPSHOT_PREFIX}{str(release_id).strip()}",
-        rule_version=CANONICAL_PIT_RULE_VERSION,
-        rule_parameters_digest=canonical_rule_parameters_digest(),
+        rule_version=snapshot.rule_version,
+        rule_parameters_digest=canonical_rule_parameters_digest(snapshot.rule_version),
         snapshot_digest=snapshot.spans_sha256,
         cutoff=snapshot.cutoff,
         release_id=str(release_id).strip(),
@@ -239,7 +236,7 @@ class DatasetPitBinding:
             raise PitSnapshotError("release manifest/PIT cutoff differ")
         if expected_scope and binding.scope != expected_scope:
             raise PitSnapshotError("release manifest/PIT scope differ")
-        if binding.rolling_universe_key != CANONICAL_PIT_UNIVERSE_KEY:
+        if binding.rolling_universe_key != canonical_rolling_key(binding.rule_version):
             raise PitSnapshotError("release rolling PIT key is not canonical")
         expected_frozen_key = f"{CANONICAL_PIT_SNAPSHOT_PREFIX}{release_id}"
         if binding.frozen_universe_key != expected_frozen_key:
@@ -272,7 +269,7 @@ def build_dataset_pit_binding(
         authority_id=consumer.authority_id,
         authority_status=consumer.authority_status.value,
         scope=normalized_scope,
-        rolling_universe_key=CANONICAL_PIT_UNIVERSE_KEY,
+        rolling_universe_key=snapshot.universe_key,
         frozen_universe_key=consumer.universe_key,
         rule_version=consumer.rule_version,
         rule_parameters_digest=consumer.rule_parameters_digest,

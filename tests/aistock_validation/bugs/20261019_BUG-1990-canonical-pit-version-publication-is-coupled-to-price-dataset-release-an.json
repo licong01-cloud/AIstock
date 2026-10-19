@@ -1,0 +1,405 @@
+{
+  "actual": "PIT migration audit requires a full data release; physical provider pins are treated as policy identities; live default is legacy generation zero.",
+  "allowed_write_scope": [
+    "backend/tests/paper_trading_v2/test_live_approval_candidate.py",
+    "backend/tests/paper_trading_v2/test_minqmtsim_backend.py",
+    "backend/services/canonical_pit_inference_boundary.py",
+    "configs/datasets/qe_backtest_monthly_v2.yaml",
+    "scripts/build_stock_universe_pit_spans.py",
+    "backend/tests/test_stock_universe_pit_spans.py",
+    "backend/services/dataset_release/pit.py",
+    "backend/tests/paper_trading_v2/test_auto_run.py",
+    "backend/tests/paper_trading_v2/test_capture_field_wiring.py",
+    "backend/tests/paper_trading_v2/test_day_runner.py",
+    "backend/tests/paper_trading_v2/test_live_session.py",
+    "backend/tests/paper_trading_v2/test_session.py",
+    "backend/tests/selection_center/test_runtime_selection.py",
+    "backend/tests/paper_trading_v2/test_canonical_pit_control.py",
+    "backend/services/paper_trading_v2/service.py",
+    "backend/tests/paper_trading_v2/test_runtime_profile.py",
+    "backend/services/selection_center/runtime_profile.py",
+    "scripts/ci_change_classifier.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "backend/services/stock_universe_pit_service.py",
+    "backend/tests/test_stock_universe_pit_service.py",
+    "backend/services/canonical_equity_pit.py",
+    "backend/tests/test_canonical_equity_pit.py",
+    "docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md",
+    "noxfile.py",
+    "backend/services/canonical_pit_release.py",
+    "backend/tests/test_canonical_pit_release.py",
+    "scripts/manage_canonical_pit_release.py",
+    "tests/aistock_validation/bugs/20261019_BUG-1990-canonical-pit-version-publication-is-coupled-to-price-dataset-release-an.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1990",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-19T14:29:10.083761Z",
+  "description": "PIT migration audit requires a full data release; physical provider pins are treated as policy identities; live default is legacy generation zero. Production migration additionally exposed mandatory announcement classification despite confirmed stock_basic D/delist_date. User approved a separately versioned lifecycle-fact terminal fallback, preserving v2 and all immutable bindings; no announcement/event-fact fabrication or extra production fact writes.",
+  "design_compliance_001": {
+    "item_by_item": "F-015..F-020 implementation verified, including independently versioned v3 terminal lifecycle facts and preserved v2 digest/bindings. Complete factual exporter neutralization explicitly remains outside this BUG.",
+    "no_fake_completion": "Production default remains legacy generation zero; recent coverage and forward-only persisted-profile migration are pending, not reported globally active.",
+    "no_unapproved_simplification": "Reuses official five-field spans, canonical rule digest and existing singleton CAS. User approved confirmed D/delist_date fallback under a distinct v3 policy; no invented announcement time, module-owned policy or second active pointer.",
+    "remaining_gaps": "New v3 is DEV validated through October 19, but production default remains legacy generation zero. V3 production source application and pointer activation remain pending and cannot precede source merge/user restart. Old v2 production spans are byte-equivalent to the prior frozen snapshot. Never copy DEV derived members over production."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261019-5b3955168afc",
+      "timestamp": "2026-10-19T14:29:10.083761Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "One global new-task PIT default; independent immutable PIT versions; fact datasets reference policy snapshots without controlling quote visibility; no monthly rebuild prerequisite.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/canonical_pit_release.py",
+      "backend/services/selection_center/runtime_profile.py",
+      "backend/services/stock_universe_pit_service.py",
+      "backend/tests/paper_trading_v2/test_runtime_profile.py",
+      "backend/tests/test_canonical_pit_release.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "scripts/manage_canonical_pit_release.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1990-canonical-pit-version-publication-is-coupled-to-price-dataset-release-an.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [
+      "backend/services/canonical_pit_release.py",
+      "backend/tests/test_canonical_pit_release.py",
+      "scripts/manage_canonical_pit_release.py"
+    ],
+    "changed_files": [
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/canonical_pit_release.py",
+      "backend/services/selection_center/runtime_profile.py",
+      "backend/services/stock_universe_pit_service.py",
+      "backend/tests/paper_trading_v2/test_runtime_profile.py",
+      "backend/tests/test_canonical_pit_release.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "scripts/manage_canonical_pit_release.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1990-canonical-pit-version-publication-is-coupled-to-price-dataset-release-an.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/canonical_equity_pit.py",
+        "backend/tests/test_canonical_equity_pit.py",
+        "docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md",
+        "noxfile.py",
+        "backend/services/canonical_pit_release.py",
+        "backend/tests/test_canonical_pit_release.py",
+        "scripts/manage_canonical_pit_release.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "docs.architecture",
+        "validation.module_quality",
+        "validation.runner",
+        "validation.center",
+        "validation.guardrails",
+        "tests.backend",
+        "tests.frontend",
+        "platform.db",
+        "scripts"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/canonical_equity_pit.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/test_canonical_equity_pit.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "docs.architecture",
+          "risk_level": "low",
+          "rule_id": "docs_architecture"
+        },
+        {
+          "file": "noxfile.py",
+          "impact_modules": [
+            "validation.center",
+            "validation.guardrails",
+            "validation.module_quality",
+            "tests.backend",
+            "tests.frontend"
+          ],
+          "primary_module": "validation.runner",
+          "risk_level": "high",
+          "rule_id": "noxfile_validation_runner"
+        },
+        {
+          "file": "backend/services/canonical_pit_release.py",
+          "impact_modules": [
+            "platform.db"
+          ],
+          "primary_module": "platform.api",
+          "risk_level": "high",
+          "rule_id": "platform_api"
+        },
+        {
+          "file": "backend/tests/test_canonical_pit_release.py",
+          "impact_modules": [],
+          "primary_module": "tests.backend",
+          "risk_level": "medium",
+          "rule_id": "backend_tests_default"
+        },
+        {
+          "file": "scripts/manage_canonical_pit_release.py",
+          "impact_modules": [],
+          "primary_module": "scripts",
+          "risk_level": "medium",
+          "rule_id": "scripts_default"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "low",
+        "high",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/canonical_equity_pit.py",
+        "backend/tests/test_canonical_equity_pit.py",
+        "docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md",
+        "noxfile.py",
+        "backend/services/canonical_pit_release.py",
+        "backend/tests/test_canonical_pit_release.py",
+        "scripts/manage_canonical_pit_release.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/canonical_equity_pit.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md",
+      "noxfile.py",
+      "backend/services/canonical_pit_release.py",
+      "backend/tests/test_canonical_pit_release.py",
+      "scripts/manage_canonical_pit_release.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/canonical_equity_pit.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md",
+      "noxfile.py",
+      "backend/services/canonical_pit_release.py",
+      "backend/tests/test_canonical_pit_release.py",
+      "scripts/manage_canonical_pit_release.py"
+    ]
+  },
+  "first_seen_at": "2026-10-19T14:29:10.083761Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fix_summary": "Independent content-addressed PIT versions and fact/PIT binding reuse official contracts without monthly price export. Shared new-task defaults use the singleton; historical saved identities remain unchanged. Separately versioned v3 accepts confirmed lifecycle exits without announcement classification, preserves earlier trustworthy events and exact v2 digest. DEV rebuild/freeze/readback/CAS rollback passed. Production v3 apply, pointer activation and user-owned restart are NOT complete.",
+  "fixed_at": null,
+  "github_issue_number": 6371,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6371",
+  "last_seen_at": "2026-10-19T14:29:10.083761Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend",
+    "validation_catalog_integrity",
+    "platform_api_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "Fresh AIstock python loaded independent PIT producer, global query default and CLI; 91 direct policy/version/Selection/Paper tests passed. Earlier source/sync/W6/QE integration matrix: 269 passed; monthly-unified regression: 77 passed, 1 skipped.",
+      "Existing DEV CAS rehearsal: canonical generation 1 verified then rolled back to legacy generation 0; exact independent release digest f7e7df40edf5d0c57a0da3b6707141e2c4e7026af1702950a6982a7144c81755; production database write=false.",
+      "Initial DEV recent-coverage extension was rejected by missing October ST source; original September metadata restored before retry. Then copied exactly 1608 missing DEV ST facts from read-only production (SHA256 57e5d62f271f756b7c8248525fb11be5af6d78196bde784f7826c6c234be4215), overwrote no existing values. Existing producer rebuilt DEV PIT through October 19; receipt 224da74eef07cf9ba0efd753826ec2d06972a22ddf9c69c840600996ccb048bc passed. Independent current version digest 1437baf13e4d85ea27f5f0c100f6a392c391925716ff333e944ce3c1f77b248b (5346 symbols,5665 spans) passed CAS rehearsal then rolled back to generation zero. Production read-only coverage plan remains REBUILD_REQUIRED; source fingerprint ef4e52327d58935c80661072d6444bf72a2d15162e23db5233d5b3e1d1ac2ed8.",
+      "New persisted-profile default RED then GREEN; 29 version/creation/history-control tests passed, and exact generation drift / forced-exit nodes remained GREEN. Production READY-profile read-only plan found zero migration targets; plan digest 0d272d9044aede5432f1bbc92ffcc6104768cbd8a099558445529a73cd68fc2f.",
+      "Approved terminal lifecycle fallback and old frozen identity RED then GREEN. Final related policy/producer/export/binding matrix 230 passed; affected Selection/Paper profile creation matrix 74 passed. CI found three obsolete setup migrations in live approval/MiniQMT tests after profiles inherited global PIT; reproduced RED, retained all execution/identity assertions and asserted NO_OP_ALREADY_CANONICAL, then all three passed. Ruff, compile, catalog integrity, module registry and changed-file guardrails passed with zero blocking findings.",
+      "V3 DEV source apply through 2026-10-19 passed; receipt digest a1af4ad267d63431ab989cb022398eb44bc99cbfe1f641b1365b9961b5ab0dbd. Exactly two DEV lifecycle source rows (601059,601198) aligned to existing read-only production D/2026-10-19 facts. Independent DEV release d8f9fac9ba42dc92249b944aa1a032e6d5df7fee740e0a6d41242621e1135cc8 (5346 symbols,5665 spans), source commit 410cf93c49d2b5df921a9a4fea023f09c82832bb, CAS generation 1 then rollback to legacy generation 0. Production readback receipt X:/AIstock_temp/BUG-1990-terminal-facts-20261020/dev-production-readback-r1.json SHA256 310c608e201573599e1de75266e6beb1a92ef6cb4c9a1ca79ffc5050f5e809f3 proves old v2 spans unchanged. Production apply/activation not performed."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Canonical PIT version publication is coupled to price dataset release and physical provider keys",
+  "trigger_condition": {
+    "fingerprint": "5b3955168afc50df7a0f330e",
+    "source_event_id": "FE-20261019-5b3955168afc"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data",
+        "platform_api"
+      ],
+      "plans": [
+        "qlib_data_backend",
+        "platform_api_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_catalog_integrity"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data",
+          "platform_api"
+        ],
+        "plans": [
+          "qlib_data_backend",
+          "platform_api_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_catalog_integrity"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

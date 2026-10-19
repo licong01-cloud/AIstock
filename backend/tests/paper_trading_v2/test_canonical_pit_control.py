@@ -18,7 +18,7 @@ from backend.services.paper_trading_v2.canonical_pit_control import (
     classify_paper_runtime_config,
     plan_paper_runtime_profile_migration,
 )
-from backend.services.paper_trading_v2.models import PaperRuntimeProfileVersion
+from backend.services.paper_trading_v2.models import PaperRuntimeProfile, PaperRuntimeProfileVersion
 from backend.services.selection_center.canonical_pit_runtime import (
     CANONICAL_PIT_RUNTIME_PROFILE_KEY,
     migrate_runtime_config_to_canonical_pointer,
@@ -73,10 +73,20 @@ def test_profile_classification_is_fail_closed() -> None:
 
 def test_inventory_and_readiness_require_current_active_profile_to_be_canonical() -> None:
     _package_repo, paper_repo, service, _manifest, portfolio = _portfolio_fixture()
-    _profile, legacy_version = service.create_runtime_profile(
+    # Historical rows predate global-default creation; do not manufacture new
+    # legacy profiles through the production creation API.
+    profile = paper_repo.save_runtime_profile(PaperRuntimeProfile(
         portfolio_id=portfolio.portfolio_id,
+        package_id=portfolio.package_id,
         profile_name="legacy profile",
+    ))
+    legacy_version = paper_repo.save_runtime_profile_version(PaperRuntimeProfileVersion(
+        profile_id=profile.profile_id,
+        version_no=1,
         config_json=_legacy_config(),
+    ))
+    paper_repo.update_runtime_profile_current_version(
+        profile_id=profile.profile_id, current_version_id=legacy_version.profile_version_id,
     )
     control = PaperCanonicalPitControlService(
         repository=paper_repo,

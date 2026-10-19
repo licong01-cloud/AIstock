@@ -1357,6 +1357,9 @@ rules:
     include:
       - scripts/build_stock_universe_pit_spans.py
       - scripts/prepare_canonical_pit_monthly.py
+      - scripts/manage_canonical_pit_release.py
+      - backend/services/canonical_pit_release.py
+      - backend/tests/test_canonical_pit_release.py
       - backend/services/stock_universe_pit_service.py
       - backend/routers/stock_universe.py
       - backend/tests/test_stock_universe_pit_spans.py

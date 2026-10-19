@@ -92,6 +92,25 @@ reproduction；普通新任务即使手工传入旧 key 也必须被拒绝。
 冲突不静默降级。权威来源冲突、ST 空洞无法由前后状态加事件闭合、终止上市事件缺少证据时生成
 exception ledger 并阻止候选 signoff。
 
+### 3.5 Independent PIT versions (BUG-1990, user-approved 2026-10-19)
+
+共享事实、PIT 版本和任务绑定分层：事实描述真实可用数据，PIT 描述选股资格；二者在消费时绑定。
+PIT 统一及版本发布不再以前置完成月度行情导出为条件。原 rollout 中“完整 candidate”可由完整 PIT
+authority 资产独立满足，不要求为了 PIT 激活重建 day/minute/H5/index/HMM 组件。
+
+- 唯一运行默认仍是数据库 `stock_universe_pit_authority_pointer`，不增加文件侧 active 指针。
+- PIT-only 文件使用现有五字段 `FrozenPitSnapshot`，含规则参数、来源状态、日历及内容身份；
+  create-exclusive 发布，版本谱系引用前驱 digest，不依赖价格 manifest 或下载时间生成身份。
+- 行情与 PIT 可以独立更新。共享 profile 显式引用 `pit_binding` 时，比较规则权威和覆盖，不以
+  provider catalog 的物理 universe_key 判定选股政策。旧 release 的原始 pins 保留，不就地改名。
+- 一份事实文件可绑定多个已登记 PIT 快照；新业务默认只有一个活动规则，旧任务的冻结 lease 不改变。
+  这不允许普通新业务启用归档规则，也不证明旧文件具备新人口需要的所有事实。
+- 初次 v1→canonical 迁移复用既有数据库 CAS、版本表和事件表。独立 PIT source readback、ready/clean、
+  规则参数、异常账本和重叠检查替代无关价格组件验收；不伪造旧 W8 或完整行情 candidate 通过回执。
+- `manage_canonical_pit_release.py` 只提供 freeze/verify 和现有 DEV 库事务内的 CAS 回滚演练；
+  生产迁移另需精确授权。DEV、生产应用、后端重启及消费者验收分别报告。
+- 本次不把所有事实导出器改成全证券范围；该项属于后续事实导出解耦，不能声称已完成全量行情支持。
+
 ## 4. Contracts / API, DB and artifact contracts
 
 ### 4.1 Canonical rule contract
@@ -167,6 +186,13 @@ rule_version == shsz_a_252td_st_delist_asof_v2
 | F-012 | 失败/无引用候选仅登记为清理候选，自动流程不删除任何数据。 |
 | F-013 | 小样本和真实构建均受现有内存、并发、磁盘门禁约束，不回归全量 frames 聚合。 |
 | F-014 | 生产 DDL/DML、真实导出、activation、restart、cleanup 保持独立 gate。 |
+| F-015 | PIT-only 版本可独立发布，不需要重导或激活行情 release。 |
+| F-016 | 同一事实身份可引用独立 PIT；规则权威一致，不比较物理目录名。 |
+| F-017 | 默认新股票池查询继承全局指针；保存的历史显式身份不改写。 |
+| F-018 | 版本内容寻址、不可覆盖、前驱可追溯；来源漂移和真实缺口不得伪通过。 |
+| F-019 | 现有 DEV 库完整 CAS 演练后回滚，生产与数据集激活均未执行。 |
+
+| F-020 | Confirmed D/delist_date supports terminal exclusion in v3; prior v2 identity and historical bindings remain unchanged. |
 
 ## 6. Implementation Plan / 实施方案
 
@@ -208,6 +234,12 @@ rule_version == shsz_a_252td_st_delist_asof_v2
 | F-012 | `RetentionDecision.automatic_deletion_allowed=false` | `backend/tests/dataset_release/test_retention.py` | implemented_local_verified | none |
 | F-013 | resource supervisor; bounded D/P-only daily overlay; date-only ST audit | `backend/tests/dataset_release/test_synthetic_benchmark.py`; full `backend/tests/dataset_release` run | implemented_local_verified | none |
 | F-014 | v1/v2 profile split; CLI/runbook/production gates | `backend/tests/test_canonical_equity_pit.py`; `python scripts/aistock_feature_workflow.py validate --design docs/architecture/unified_canonical_equity_pit_f2_design_20260812.md --tier F2` | implemented_local_verified | none |
+| F-015 | `backend/services/canonical_pit_release.py`; `scripts/manage_canonical_pit_release.py` | `backend/tests/test_canonical_pit_release.py`; `manage_canonical_pit_release.py --action freeze --target dev` | implemented_local_verified | none |
+| F-016 | `require_dataset_runtime_pit_policy` | `backend/tests/test_canonical_pit_release.py::test_independent_pit_binding_does_not_require_provider_catalog_names` | implemented_local_verified | none |
+| F-017 | `StockUniversePitService.get_eligible_codes`; shared default binding; new saved-profile creation/versioning | `backend/tests/test_stock_universe_pit_service.py::test_canonical_query_accepts_validated_binding`; `backend/tests/test_canonical_pit_release.py::test_new_saved_profile_versions_inherit_global_pointer` | implemented_local_verified | none |
+| F-018 | `publish_release`; `read_release`; `validate_release` | `backend/tests/test_canonical_pit_release.py` | implemented_local_verified | none |
+| F-019 | `rehearse_activation` | `backend/tests/test_canonical_pit_release.py`; `python scripts/manage_canonical_pit_release.py --action rehearse-activation --target dev` -> DEV_ROLLBACK_VALIDATED, generation 1 then restored 0 | implemented_local_verified | none |
+| F-020 | `audit_canonical_terminal_evidence`; version-aware canonical validators | `backend/tests/test_stock_universe_pit_spans.py`; `backend/tests/test_canonical_equity_pit.py`; `backend/tests/test_canonical_pit_release.py`; DEV receipt `X:/AIstock_dataset_release_control/operator_receipts/BUG-1990-dev-terminal-facts-apply-r3.json`; CAS rehearsal DEV_ROLLBACK_VALIDATED | implemented_local_verified | none |
 
 ## 9. Rollout / Rollback
 
@@ -242,6 +274,41 @@ rule_version == shsz_a_252td_st_delist_asof_v2
 - `backend_restart_owner=user`
 - `cleanup=not_requested`
 - `historical_dataset_mutation=forbidden`
+
+## 11.1 Approved terminal-fact policy amendment (BUG-1990, 2026-10-20)
+
+The shared authority and singleton pointer remain unchanged. The current producer
+uses `aistock_equity_pit_canonical_v3` and
+`shsz_a_252td_st_delist_asof_v3`, with terminal policy
+`announcement_asof_or_confirmed_delist_date_v3`. This is an independent PIT
+policy revision, not a new quote dataset or a module-owned policy.
+
+- A confirmed `market.stock_basic` `list_status=D` and valid `delist_date`
+  establish exclusion starting on that date's first exchange session. No
+  classification/event-signal insertion or full announcement archive is required.
+- Existing trustworthy announcement-as-of terminal events retain their earlier
+  causal effective date. Lifecycle fallback never invents an announcement or
+  backdates knowledge; it cannot exclude a security before `delist_date`.
+- Missing or contradictory lifecycle dates and unbounded paused listings are
+  still unresolved, not defaulted. ST and IPO rules remain unchanged.
+- Minimal provenance is the source table/code, lifecycle date, source fingerprint
+  and independent rule/version identity. Additional evidence archives are not a
+  publication prerequisite.
+- Canonical v2 parameters/digest and existing member/event rows remain untouched.
+  Frozen v2 releases stay readable under v2; v2/v3 cannot be declared the same
+  policy. Fresh source consumers inherit the singleton, not a module default.
+- The monthly producer uses this same shared policy implementation. No quote,
+  minute, factor or prior immutable release is rebuilt for this amendment.
+
+DEV verification used the existing database, not a new test database. The
+versioned v3 source has 5,346 symbols and 5,665 spans through 2026-10-19. Its
+independent release digest is
+`d8f9fac9ba42dc92249b944aa1a032e6d5df7fee740e0a6d41242621e1135cc8`.
+CAS rehearsal validated generation 1 and rolled back to the original legacy
+generation 0. The two lifecycle-only securities, 601059.SH and 601198.SH, both
+exit before the first 2026-10-19 session; original v2 production spans and the
+active quote dataset remain unchanged. This verifies implementation, not
+production migration or post-restart business acceptance.
 
 ## 12. DESIGN-COMPLIANCE-001
 

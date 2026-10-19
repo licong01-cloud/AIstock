@@ -38,10 +38,14 @@ from backend.services.trading_core.errors import (
 )
 from backend.services.trading_core.models import RunStatus
 from backend.tests.paper_trading_v2.test_day_runner import (
+    canonical_pit_unit_authority as canonical_pit_unit_authority,
     ActiveCanonicalPitResolver,
     save_manifest_with_default_execution_policy,
 )
 from backend.tests.strategy_package.test_manifest_v1 import make_manifest
+
+
+pytestmark = pytest.mark.usefixtures("canonical_pit_unit_authority")
 
 
 def make_paper_manifest():
@@ -207,11 +211,7 @@ def test_replay_only_session_create_tick_and_progress() -> None:
         config_json={"runtime_profile": {"selection": {"top_k": 20}}},
         created_by="unit_test",
     )
-    canonical_version = portfolio_service.migrate_runtime_profile_version_to_canonical_pit(
-        portfolio_id=portfolio.portfolio_id,
-        profile_version_id=version.profile_version_id,
-        created_by="unit_test",
-    )
+    canonical_version = version
     activation = portfolio_service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,
         trade_date=date(2024, 1, 2),
@@ -262,14 +262,10 @@ def test_replay_only_session_create_tick_and_progress() -> None:
 def test_session_tick_fails_before_replay_when_canonical_pit_generation_drifts() -> None:
     package_repo, paper_repo, portfolio = make_portfolio(data_source=MinuteDataSource.DB_HISTORICAL)
     portfolio_service = PaperTradingV2PortfolioService(package_repository=package_repo, repository=paper_repo)
-    _profile, legacy_version = portfolio_service.create_runtime_profile(
+    _profile, canonical_version = portfolio_service.create_runtime_profile(
         portfolio_id=portfolio.portfolio_id,
         profile_name="canonical drift profile",
         config_json={"runtime_profile": {"selection": {"top_k": 20}}},
-    )
-    canonical_version = portfolio_service.migrate_runtime_profile_version_to_canonical_pit(
-        portfolio_id=portfolio.portfolio_id,
-        profile_version_id=legacy_version.profile_version_id,
     )
     portfolio_service.activate_runtime_config(
         portfolio_id=portfolio.portfolio_id,

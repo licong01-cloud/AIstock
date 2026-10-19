@@ -7,12 +7,12 @@ initial_migration_plans:
 # Candidate-only canonical PIT upgrade. The loader accepts only this exact
 # overlay shape and validates every inherited v1 resource/data contract.
 semantic:
-  universe_key: aistock_equity_pit_canonical_v2
-  universe_rule_version: shsz_a_252td_st_delist_asof_v2
+  universe_key: aistock_equity_pit_canonical_v3
+  universe_rule_version: shsz_a_252td_st_delist_asof_v3
   pit_authority:
     authority_id: aistock_equity_pit_canonical
     authority_status: ACTIVE_CANONICAL
-    rule_parameters_digest: a1190959631b8d5ca3d265125dc9f152ad97cdd3eeba170d22f04e2b68b97641
+    rule_parameters_digest: e28be5b9f0116a0753efde8333fadc3a3f3b5e130066dc76ab7c77c36e6b39e8
     ipo_warmup_unit: exchange_trading_session
     ipo_warmup_count: 252
     historical_delisted_included: true
