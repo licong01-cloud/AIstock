@@ -6,7 +6,10 @@
     "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
     "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
     "docs/analysis/localsim_replay_close_valuation_20261020.md",
-    "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json"
+    "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json",
+    "backend/services/simulation_execution/localsim/persistence.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_localsim_file_inputs.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1998",
@@ -31,16 +34,33 @@
   ],
   "expected": "每个新完成回放日具有同账户同日的原生15:00收盘估值证据；失败不推进、不重做成交；旧历史缺口保持明确。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json",
+      "backend/services/simulation_execution/localsim/persistence.py",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_file_inputs.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
+      "docs/analysis/localsim_replay_close_valuation_20261020.md"
+    ],
     "added_files": [
       "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
       "docs/analysis/localsim_replay_close_valuation_20261020.md"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json",
+      "backend/services/simulation_execution/localsim/persistence.py",
       "backend/services/simulation_runtime/localsim_replay_runtime.py",
       "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py"
+      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_file_inputs.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
+      "docs/analysis/localsim_replay_close_valuation_20261020.md"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/localsim_replay_runtime.py",
@@ -156,11 +176,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/LOCALSIM/BUG-1998/fresh-native-close-receipt.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_write_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -169,6 +195,7 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_note": "Native persistence currently rejects historical valuation_refresh with zero new fills, and no-rebalance days have no first projection. Extend the existing close-only persistence branch with original-projection proof or a proven no-order completed plan; preserve cash/fill facts and broker_called. No new execution or valuation algorithm.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
