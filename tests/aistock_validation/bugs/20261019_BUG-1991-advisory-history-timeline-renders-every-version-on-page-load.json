@@ -1,5 +1,5 @@
 {
-  "actual": "All listVersions rendered on every page state update; long timeline grows with daily history.",
+  "actual": "All Episode returns rendered on every page state update: 164 rows, 9711px table, 19804px page and 4083 DOM nodes in read-only live probe. The timeline is already bounded to 20; initial timeline attribution corrected. User reports over two minutes of initial Edge lag and confirms Firefox is normal. Clean Edge did not reproduce: 86ms longest task, DOMContentLoaded about 655ms. Persistent lag root cause remains unconfirmed; concurrent host memory pressure observed.",
   "allowed_write_scope": [
     "frontend/src/app/paper-v2/advisory/page.tsx",
     "frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts",
@@ -16,10 +16,11 @@
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
-    "Keep BUG JSON and GitHub Issue synchronized."
+    "Keep BUG JSON and GitHub Issue synchronized.",
+    "Do not equate bounded rendering tests or source merge with resolution of the user-observed Edge lag; retain user retest as pending."
   ],
   "created_at": "2026-10-19T15:02:29.142475Z",
-  "description": "All listVersions rendered on every page state update; long timeline grows with daily history.",
+  "description": "Advisory eagerly renders every Episode return, increasing layout and React work as history grows. Bound the returns table and isolate pagination state without changing any financial metrics, ordering, requests or source records. Do not claim this proves the sole cause of user browser lag.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -29,9 +30,11 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/ADVISORY/ui-lag-20261019/scroll-report.json"
+    "X:/AIstock_temp/advisory/ui-lag-20261019/scroll-report.json",
+    "X:/AIstock_temp/advisory/ui-lag-20261019/edge-load-report.json",
+    "X:/AIstock_temp/advisory/ui-lag-20261019/targeted-green-r2.log"
   ],
-  "expected": "Timeline renders a bounded page and all historical versions remain accessible; task switch resets pagination safely.",
+  "expected": "Episode returns render a bounded page; all records and original ordering remain accessible. Task changes and smaller refreshed results cannot leave stale or blank pages; pagination does not issue API writes or refetch unrelated models.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -97,7 +100,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "Open /paper-v2/advisory with 164 or more list versions and inspect timeline row count.",
+  "reproduce_command": "Open /paper-v2/advisory with 164 Episode returns and inspect the Episode returns table row count and page height.",
   "required_verification": [
     "advisory_mocked_ui",
     "frontend_type_lint",
@@ -123,7 +126,7 @@
   "suspected_modules": [
     "advisory.ui"
   ],
-  "title": "Advisory history timeline renders every version on page load",
+  "title": "Advisory eagerly renders unbounded Episode return history",
   "trigger_condition": {
     "fingerprint": "4d0b81ca345e37cc0cf4bbae",
     "source_event_id": "FE-20261019-4d0b81ca345e"
