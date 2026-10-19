@@ -67,7 +67,7 @@
 | F-333 | inference_inputs.py / CLI / 原生 kernel | backend/tests/advisory_historical_range/test_input_source_plan.py；test_selection_signal_kernel.py | PASS | none |
 | F-334 | input_source_plan.py / 原生 reader | backend/tests/advisory_historical_range/test_input_source_plan.py；真实readiness.json | PASS | none |
 | F-335 | CLI / kernel / composition.py | backend/tests/advisory_historical_range/test_input_source_plan.py；test_strategy_package_live_inference.py | PASS | none |
-| F-336 | 原生只读验证 | artifact: X:/AIstock_temp/ADVISORY/shared-source-plan-20261019/native-r2/progress.json | BLOCKED | 文件/混合真实等价和原生TopK仍缺；源政策不一致，不得改PASS或升级证据 |
+| F-336 | 原生只读验证 | artifact: X:/AIstock_temp/ADVISORY/shared-source-plan-20261019/native-r3/progress.json；native-r2/progress.json | BLOCKED | 文件/混合真实等价和原生TopK仍缺；源政策不一致，不得改PASS或升级证据 |
 | F-337 | 本文接入交付 | artifact: docs/architecture/advisory_shared_input_source_plan_v1_f2_design_20261019.md | PASS | none |
 
 ## Rollout / Rollback / Production Gates
@@ -127,7 +127,7 @@ LocalSIM owner 需接上自己的任务持久化与来源路由：文件日用�
 
 ## 当前验证与 owner 缺口（2026-10-19）
 
-直接相关 54 项测试 PASS，Ruff PASS；changed-only L0/quality 均0 finding；ownership 10/10 mapped、0 ambiguous/unmapped。是同窗口多轮自审与定向回归，不冒称独立外审。涵盖三模式、C<D、整日切换、首DB日全窗口、active更新不重解、内部缺洞不回退、旧单源兼容、数据库checkpoint漂移与原日文件不覆盖；完整生产两端结果尚未证明。
+直接相关 58 项测试 PASS，随后身份摘要修订的2项定向回归 PASS（属于58项内的子集，不合计为60项）；Ruff PASS。提交后对全部11个精确文件重新扫描：ownership 11/11 mapped、0 ambiguous/unmapped；L0 0 blocking、1项P2提示。该提示位于 batch provider 的命令参数字符串 `join`，不是股票×日期×特征的关联运算；实际调度复用同一 workspace/source-plan 执行，日期绑定 workspace 仍按原生身份逐日运行，不承诺跨日消除这部分工作。此前 changed-only 扫描0 finding不替代本次完整精确范围结果。是同窗口多轮自审与定向回归，不冒称独立外审。涵盖三模式、C<D、整日切换、首DB日全窗口、active更新不重解、内部缺洞不回退、旧单源兼容、数据库checkpoint漂移与原日文件不覆盖；完整生产两端结果尚未证明。
 
 活动文件发布只读解析耗时47.70秒（包含现有官方 H5 content pin 的一次读取，无文件复制），binding `589e99827698eba9ffce0745b17c69f4feb1cb48a7629da0a819af5a1bef6f0c`；该 hash 仅说明本次冻结内容，不是模型收益或运行激活。
 
@@ -137,5 +137,18 @@ LocalSIM owner 需接上自己的任务持久化与来源路由：文件日用�
 | 原生运行指针只读查询 | shsz_st_pit_active_v1 | st_pub_next_trade_restore_active_l_v1 | 2018-08-01..2026-10-19 |
 
 真实 LSTM/TCN 原 manifest 未声明另一显式推理 PIT 身份，当前走原生指针。两种含文件模式均明确 `SOURCE_PIT_POLICY_MISMATCH`；没有篡改原政策、补成员或推进到假评分。旧代表 workspace 的首轮 node probe 未传既有公共 safe_artifact_roots 参数，因此在资产路径检查退出，非模型/数据错误；已用原公共 provider 的参数登记该只读 workspace 和原资产根重新验证，无生产白名单或策略包特例。
+
+只读数据库原始推理对照（C=2025-12-31，D/T=2026-01-05；不调用生产回放，不训练）：
+
+| 模型/收据 | 基线/新入口端到端秒 | 基线/新入口峰值RSS KiB | 完整评分/人口/UNKNOWN | 证据边界 |
+|---|---|---|---|---|
+| LSTM `native-r3` | 451.09 / 520.91 | 7759248 / 7712068 | 4905 / 4911 / 6 | 源码提交 `9ce67d9a80ea4c3657f22f00e1beb1f0024fb00b`，两臂COMPLETE、10个源码内容身份全程不变；评分及顺序、成员、UNKNOWN、实际输入摘要逐项相同 |
+| TCN `native-r2` | 502.30 / 464.99 | 7614588 / 7711912 | 4905 / 4911 / 6 | 两臂COMPLETE、同样五项相同；发生在最终文件身份护栏及context摘要修订前，只作早期源码诊断，不伪绑最终HEAD |
+
+LSTM 实际模型窗口从2024-11-05开始，由原生 resolver 决定；没有截短为单日。`native-r2` LSTM 因运行期间源码审阅发生修改，被原生源码闭包校验拒绝；该次失败不计入通过，不覆盖。`native-r3` 单独在固定源码下重做。
+
+磁盘：LSTM 两臂结束后各保留454155/457082字节；新入口运行中 `du -sk` 抽测1629540 KiB（约1.55 GiB，统计原生临时特征文件，不跟随大型模型链接）。这只是观测到的占用，**不是从启动到退出的完整峰值**，后续完整混合验收需补全程测量。没有复制大型模型或数据集。单次共享负载下耗时一升一降，不证明性能提升，也不能据此定性所有日的性能回归；未作冷/热重复分组性能验收。
+
+独立草稿 PR #6356；源码提交 `9ce67d9a8` 的 CI run `39232982569` verdict通过。F2验证仍明确拒绝 F-336，CI绿不等于真实混合来源/原生TopK/停牌资格和LocalSIM接续验收通过。后续文档收据提交不改上述推理源码，也不把旧测量改绑新HEAD。
 
 精确交接：请 Selection/PIT authority owner 确认这两个已批准包的正式推理应消费哪一原生 PIT 政策，并提供现有公开身份合同；数据 owner 只在该政策确定后提供同政策合法文件发布或确认现有匹配资产。不要求本窗口切换指针、改股票池、重训或改包；不得以两套政策名称不同就推定数据缺失。问题是**跨来源政策无法证明一致**。源码验证、真实全评分/TopK/UNKNOWN/停牌等价及 LocalSIM 接续分别保留状态，F-336 暂未满足，不可宣布可合入/运行验收完成。
