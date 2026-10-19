@@ -1752,6 +1752,7 @@ rules:
       - frontend/src/components/**
       - frontend/src/lib/**
       - frontend/src/app/Sidebar.tsx
+      - frontend/src/app/DataAlertsToast.tsx
       - frontend/src/app/layout.tsx
       - frontend/src/app/page.tsx
       - frontend/tsconfig.json
