@@ -28,15 +28,15 @@
   "expected": "New raw keys take a direct bulk COPY/insert path; only existing conflicting keys are compared or precision-enriched, with atomic failure and unchanged existing valid facts.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261019_BUG-1984-tdx-raw-ingestion-repeats-hypertable-conflict-scans-and-precision-update.json",
       "tdx-api-main/web/integrity_test.go",
-      "tdx-api-main/web/raw_rows.go"
+      "tdx-api-main/web/raw_rows.go",
+      "tests/aistock_validation/bugs/20261019_BUG-1984-tdx-raw-ingestion-repeats-hypertable-conflict-scans-and-precision-update.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261019_BUG-1984-tdx-raw-ingestion-repeats-hypertable-conflict-scans-and-precision-update.json",
       "tdx-api-main/web/integrity_test.go",
-      "tdx-api-main/web/raw_rows.go"
+      "tdx-api-main/web/raw_rows.go",
+      "tests/aistock_validation/bugs/20261019_BUG-1984-tdx-raw-ingestion-repeats-hypertable-conflict-scans-and-precision-update.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -95,8 +95,8 @@
   },
   "first_seen_at": "2026-10-19T10:12:02.861830Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "75889488293951f2cecdf83ff5b2fb090f41b8ad",
+  "fixed_at": "2026-10-19T10:31:45Z",
   "github_issue_number": 6357,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6357",
   "last_seen_at": "2026-10-19T10:12:02.861830Z",
@@ -104,6 +104,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6359",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -133,6 +134,7 @@
       "tdx-go-backend"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -144,7 +146,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1984",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e9bb04d151a47878",
+    "recorded_at": "2026-10-19T10:32:31.656307Z",
+    "runtime_contract_digest": "cfa3a63f284f1b7624f94e824efb8ac531120bcace55a6447ed983627c497141",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1145f98e13b50ce114ab0661e9160b579ab275c2",
+    "source_merge_commit": "75889488293951f2cecdf83ff5b2fb090f41b8ad",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6359",
+    "validation_evidence": [
+      "validation-receipt: id=a16ff7327b4ec993 commit=1145f98e13b50ce114ab0661e9160b579ab275c2 kind=nox plan=l0 status=passed command=`nox -s l0 --no-venv -> passed; offline Go web matrix with explicit existing DEV` result=`9 tests passed; actual DEV 240-row replay 3-8s, rollback and units verified. RED/GREEN new-key operations, exact replay, NULL-only precision, mixed atomic conflict rollback, daily/minute schemas passed. Three code review passes and DESIGN-COMPLIANCE-001 four items passed; git diff --check passed.`"
+    ],
+    "validation_evidence_digest": "36907b3f80192a907808d29c12436cb10f1af607e1e5ec9bf66e186f81f2e48e"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -153,6 +176,9 @@
     "fingerprint": "505b5eb0b02017103144c8ff",
     "source_event_id": "FE-20261019-505b5eb0b020"
   },
+  "validation_evidence": [
+    "validation-receipt: id=a16ff7327b4ec993 commit=1145f98e13b50ce114ab0661e9160b579ab275c2 kind=nox plan=l0 status=passed command=`nox -s l0 --no-venv -> passed; offline Go web matrix with explicit existing DEV` result=`9 tests passed; actual DEV 240-row replay 3-8s, rollback and units verified. RED/GREEN new-key operations, exact replay, NULL-only precision, mixed atomic conflict rollback, daily/minute schemas passed. Three code review passes and DESIGN-COMPLIANCE-001 four items passed; git diff --check passed.`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
