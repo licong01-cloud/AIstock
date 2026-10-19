@@ -101,7 +101,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_remote_deploy.py -k stream_failure -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
@@ -109,11 +109,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "RED: three stream-failure cases failed on the prior sender source, including an actual child process which rejected stdin and emitted stderr.",
+      "GREEN: fresh-process related matrix 37 passed, 2 skipped; actual binary sender/receiver verified exact framed request and archive bytes, rejection stderr and original cause, no-stderr sender errors and timeout child cleanup.",
+      "Review 1: receiver permission error was independently identified by read-only WSL uid, parent stat and write-access check; releases parent alone changed from root:root to lc999:lc999, mode755 unchanged, no recursive change or release content mutation.",
+      "Review 2: error cleanup cannot replace the primary failure; receiver diagnostics bounded to the final4000bytes; local source errors and timeout remain failures and children are reaped. Added direct regressions for timeout and missing diagnostic paths.",
+      "Review 3: success protocol and hardlink omission remain unchanged; no new release gate, source-data check, export, fallback, database write, activation or service action. DESIGN-COMPLIANCE-001 four items passed for the scoped error-reporting fix. Existing operation resumed at DEPLOY using completed checkpoints. Runtime application of the new diagnostics remains pending user-owned restart.",
+      "X:/AIstock_temp/BUG-1997-deploy-diagnostic-20261020-r1.json"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
