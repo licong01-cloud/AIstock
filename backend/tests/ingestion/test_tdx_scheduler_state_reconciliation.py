@@ -1994,13 +1994,25 @@ def test_minute_auto_range_replays_partial_day_using_bounded_index_probe(audit_c
 @pytest.mark.parametrize("observed_day", [dt.date(2026, 7, 13), dt.date(2026, 7, 14)])
 def test_minute_auto_range_does_not_skip_same_day_or_accept_future_facts(observed_day):
     scheduler = TDXScheduler.__new__(TDXScheduler)
-    scheduler._fetchall = lambda *_: [{"mx": observed_day}]
+    scheduler._fetchall = lambda sql, *_: (
+        [{"table_name": "market.kline_minute_raw", "date_column": "trade_time", "extra_info": {}}]
+        if "data_stats_config" in sql else [{"mx": observed_day}]
+    )
     scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 13)
     if observed_day.day == 14:
         with pytest.raises(RuntimeError, match="beyond latest trading date"):
             scheduler._compute_auto_range("kline_minute_raw")
     else:
         assert scheduler._compute_auto_range("kline_minute_raw") == (observed_day, observed_day)
+
+
+def test_minute_auto_range_keeps_disabled_configuration_inactive():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queries = []
+    scheduler._fetchall = lambda sql, *_: queries.append(sql) or []
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 13)
+    assert scheduler._compute_auto_range("kline_minute_raw") == (None, None)
+    assert len(queries) == 1 and "data_stats_config" in queries[0]
 
 
 def test_minute_auto_range_never_falls_back_to_full_history():

@@ -158,13 +158,14 @@
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
     "fresh_process_evidence": [
       "RED: six targeted minute export/query and cursor tests failed on the previous source. GREEN: native bpchar scalar/array predicates, bounded replay-start cursor, same-day/future/bootstrap handling and non-minute compatibility passed.",
-      "Fresh-process related matrix: 196 passed, 1 skipped across exporter, scheduler, Go integration and daily recovery tests. Changed-file Ruff and git diff --check passed.",
+      "Fresh-process related matrix: 197 passed, 1 skipped across exporter, scheduler, Go integration and daily recovery tests. Changed-file Ruff and git diff --check passed.",
       "Existing aistock_dev minute_perf_20261019 fixtures only: 18 alternating old/new SQL cases over identical 28024330-row September datasets, including 336 compressed chunks. All actual rows and result SHA256 values matched. Read-only repeatable-read transaction rolled back; no DDL, DML, collector or service control.",
       "DEV median month/4-stock export: compressed 137.262 to 31.161 ms; 7-day chunks 1727.627 to 26.892 ms; 30-day chunks 1560.260 to 27.713 ms. Larger compressed batches and cursor execution are not universally faster; full plan/timing evidence remains in X:/AIstock_temp/BUG-1992-minute-sql-20261020/dev-sql-comparison.json.",
       "Legacy audit success is not adopted as a committed completeness watermark. Both minute range routes reuse a bounded timestamp-index probe and replay the observed date; exact requested windows, persisted repair targets and existing completion/conflict/precision checks remain unchanged. No full-history minute MAX fallback. Runtime application remains pending user restart.",
       "Fresh Python process loaded the persistent task checkout and exercised all three minute query entries plus both cursor paths. Existing DEV SQL executions used repeatable-read readonly sessions. Runtime update still pending user restart.",
       "Fresh Python process loaded the task checkout, exercised three real query entry points and both cursor paths; no runtime deployment or service control.",
-      "196 tests passed in fresh Python process loading the task source. Separately, X:/AIstock_temp/BUG-1992-minute-sql-20261020/dev-sql-comparison.json records 18 read-only existing DEV SQL result-equality cases including compressed chunks; no collector or runtime deployment."
+      "197 tests passed in fresh Python process loading the task source. Separately, X:/AIstock_temp/BUG-1992-minute-sql-20261020/dev-sql-comparison.json records 18 read-only existing DEV SQL result-equality cases including compressed chunks; no collector or runtime deployment. Disabled minute configuration regression reproduced RED and passed GREEN after preserving the original enabled-configuration check.",
+      "Final fresh Python process: 197 tests passed, 1 skipped, including RED to GREEN disabled-configuration compatibility. Existing DEV read-only 18-case SQL equivalence and compressed-data benchmark unchanged by branch relocation. No production DML, collector, dataset export or process control."
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
@@ -197,6 +198,7 @@
     "Review 1: all three actual minute query entries exercise native bpchar predicates with unchanged half-open Shanghai timestamp bounds and data columns. No typmod means overlength code parameters are not silently truncated.",
     "Review 2: exact-window Go path bypasses cursor, latest partially ingested date is replayed, future facts rejected, no unbounded minute fallback, non-minute audit/date behavior preserved. Already committed data is not deleted or re-exported.",
     "Review 3: 18 DEV SQL result-equality cases and 196-pass related regression, Ruff and diff checks. No reduction in completeness/conflict/precision validation. No new gate, approval, schema, dependency or service.",
+    "Review 4: detected a disabled-dataset compatibility regression in the minute auto-range branch, added a failing regression test and moved the branch after the existing enabled configuration check. GREEN: 197 passed, 1 skipped; disabled/missing configuration stays inactive without querying minute facts.",
     "DESIGN-COMPLIANCE-001: complete requested shared SQL repair; genuine errors remain visible; model/pool/units and publication contracts unchanged; no additional approvals or resource gates. Source/PR/CI/runtime states reported independently."
   ],
   "verification_budget": {

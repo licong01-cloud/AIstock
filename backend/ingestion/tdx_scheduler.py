@@ -1706,15 +1706,6 @@ class TDXScheduler:
         to calendar-day progression with
         data_stats_config.extra_info.date_sequence = 'calendar'.
         """
-        if dataset == "kline_minute_raw":
-            latest_date = self._latest_completed_trading_day()
-            if latest_date is None:
-                return None, None
-            start_date = self._minute_replay_start()
-            if start_date > latest_date:
-                raise RuntimeError("TDX source maximum date is beyond latest trading date")
-            return start_date, latest_date
-
         cfg_rows = self._fetchall(
             """
             SELECT table_name, date_column, extra_info
@@ -1744,6 +1735,15 @@ class TDXScheduler:
         }
         if not table_name:
             return None, None
+
+        if dataset == "kline_minute_raw":
+            latest_date = self._latest_completed_trading_day()
+            if latest_date is None:
+                return None, None
+            start_date = self._minute_replay_start()
+            if start_date > latest_date:
+                raise RuntimeError("TDX source maximum date is beyond latest trading date")
+            return start_date, latest_date
 
         current_max: Optional[dt.date] = None
         if use_refresh_audit_cursor:
