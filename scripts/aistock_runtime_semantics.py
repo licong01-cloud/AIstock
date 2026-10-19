@@ -1491,7 +1491,8 @@ def _validate_hmm_coefficient_extension(payload: Any, *, url: str) -> tuple[str,
         require(ts <= te < vs <= ve < start and origin.get("history_start") == (vs - timedelta(days=1125)).isoformat(),
                 "extension window must follow frozen training/semantic calibration")
         completed = datetime.fromisoformat(job.get("completed_at", ""))
-        require(completed.utcoffset() is not None and completed <= datetime.now(timezone.utc), "extension completion time is invalid")
+        require(completed.utcoffset() is not None and completed <= datetime.now(timezone.utc)
+                and end <= completed.astimezone(timezone(timedelta(hours=8))).date(), "extension completion time is invalid")
         identity = plan.get("dataset_identity")
         require(isinstance(identity, dict) and identity == result.get("dataset_identity"), "extension dataset identity mismatch")
         require(all(isinstance(identity.get(k), str) and identity[k].strip() for k in ("generation", "release_id"))
