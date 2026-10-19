@@ -96,8 +96,8 @@
   },
   "first_seen_at": "2026-10-18T18:31:19.973027Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "461441ce7729f38aedff1c2307ba3024759b2ea7",
+  "fixed_at": "2026-10-19T03:46:41Z",
   "github_issue_number": 6329,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6329",
   "last_seen_at": "2026-10-18T18:31:19.973027Z",
@@ -105,6 +105,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6345",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -129,6 +130,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -140,7 +142,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1978",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7ce96afece1fd483",
+    "recorded_at": "2026-10-19T03:47:16.725162Z",
+    "runtime_contract_digest": "4465e83de2ee615eebbe00140d32f4051ba0a973050e5846074b88b1d715ac74",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "69735cdab316fce55e7378dfa1bb39e328390561",
+    "source_merge_commit": "461441ce7729f38aedff1c2307ba3024759b2ea7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6345",
+    "validation_evidence": [
+      "rtk pytest -q backend/tests/hmm_data_source/test_coefficient_extension.py -k temporal -> 9 passed",
+      "python -m py_compile backend/services/hmm_data_source/coefficient_extension.py backend/tests/hmm_data_source/test_coefficient_extension.py -> passed",
+      "python -m nox -s l0 -> passed, zero findings and zero blocking",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "79414721ac4168c7c4d377fae2b2aef225fa57b4f558745d451a8e49446bb5a4"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm"
   ],
@@ -149,6 +175,12 @@
     "fingerprint": "5dd3454fa16277c219132011",
     "source_event_id": "FE-20261018-5dd3454fa162"
   },
+  "validation_evidence": [
+    "rtk pytest -q backend/tests/hmm_data_source/test_coefficient_extension.py -k temporal -> 9 passed",
+    "python -m py_compile backend/services/hmm_data_source/coefficient_extension.py backend/tests/hmm_data_source/test_coefficient_extension.py -> passed",
+    "python -m nox -s l0 -> passed, zero findings and zero blocking",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
