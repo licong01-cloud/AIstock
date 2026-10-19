@@ -9,7 +9,7 @@ from backend.services.simulation_runtime.localsim_replay_recovery import (
 from datetime import date
 from typing import Any, Literal
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from backend.infra.qmt_client import get_qmt_client_singleton

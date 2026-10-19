@@ -50,7 +50,7 @@
 - 多轮修复：严格游标解码；旧日事实变化与集合绑定；逐笔资金 / 库存 / 资产勾稽；仅投影必需列；历史持仓独立日期；个股区间继承；回放表单日期与总览解耦；目录错误独立可见；拒绝身份必须有非空错误；旧无效地址回固定总览；导出币种、成本、估值与覆盖元数据；原导航折叠行为用原组件验证。
 - F1：16 个 LSUI 项目保持稳定，对应新增校验器所需验收别名；`python scripts/aistock_feature_workflow.py validate --design docs/architecture/localsim_trading_workbench_detailed_design_20261019.md --tier F1` PASS，16 items / 16 rows / 0 warnings。新增工作台用例由独立 CI target 直接执行，不以目录归属或类型检查代替执行覆盖。
 
-提交 PR #6375 前置补充审核：验证中心启动接口返回 HTTP 500，改用同一工作树的原生 nox 定向执行。`validation_module_registry_l0` 8 passed；`guardrail_changed_files -- --changed-only` 通过，37 个变更文件全部有明确归属、无歧义、无新增阻断。补齐七个已批准设计资产的精确归属，未扩大模块扫描范围。`missing_dates` 改为必传的完整性合同，服务原本已显式传入；避免在投影构造时省略覆盖缺口，未增加任何行情或收益默认值。修改后工作台财务合同 37 passed。
+PR #6375 补充审核：验证中心启动接口返回 HTTP 500，改用同一工作树的原生 nox 定向执行。`validation_module_registry_l0` 8 passed；`guardrail_changed_files -- --changed-only` 通过，37 个变更文件全部有明确归属、无歧义、无新增阻断。补齐七个已批准设计资产的精确归属，未扩大模块扫描范围。`missing_dates` 改为必传的完整性合同，服务原本已显式传入；避免在投影构造时省略覆盖缺口，未增加任何行情或收益默认值。移除切换流式响应后遗留的未用导入，按 Ruff 格式化新测试；变更 Python 文件 Ruff 全部通过，工作台财务合同复跑 37 passed。PR 元数据补齐设计验收索引与精确写入范围，原生 pr-check 的范围、设计和功能关联检查均 passed，不新增 BUG 或扩充写入权限。
 
 ## 已知事实与运行边界
 
