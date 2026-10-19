@@ -83,6 +83,11 @@ test("overview keeps separate accounts and the original navigation, with honest 
   await expect(page.locator(".sidebar a[href='/simulation/localsim']")).toHaveCount(1);
   expect((await page.locator("aside.sidebar").boundingBox())!.width).toBeCloseTo(260,0);
   await noOpaque(page);await page.screenshot({path:info.outputPath("overview-wide.png"),fullPage:true});
+  await page.setViewportSize({width:698,height:1000});
+  const contentWidth=await page.locator(".app-main > div").first().evaluate(node=>node.getBoundingClientRect().width);
+  expect(contentWidth).toBeCloseTo(390,0);
+  expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(699);
+  await page.screenshot({path:info.outputPath("overview-content-390.png"),fullPage:true});
   await page.setViewportSize({width:390,height:844});
   expect((await page.locator("aside.sidebar").boundingBox())!.width).toBeCloseTo(260,0);
   expect(await page.evaluate(()=>document.documentElement.scrollWidth)).toBeLessThanOrEqual(391);

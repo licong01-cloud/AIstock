@@ -599,16 +599,22 @@ def _run_mocked_frontend_target(session: nox.Session, target: str | tuple[str, .
         os.chdir(old_cwd)
 
 
-@nox.session(venv_backend="none")
-def localsim_control_plane_ui(session: nox.Session) -> None:
-    """Run the LocalSIM readback and status UI contract with mocked APIs."""
+def _run_localsim_frontend_target(session: nox.Session, target: str) -> None:
     task_temp = Path(os.environ.get("RUNNER_TEMP") or ("X:/AIstock_temp/LOCALSIM/workbench-validation" if os.name == "nt" else str(ROOT / "tmp" / "localsim-workbench")))
     task_temp.mkdir(parents=True, exist_ok=True)
-    _run_mocked_frontend_target(session, (
-        "tests/paper-v2/localsim-unified-control-plane.spec.ts",
-        "tests/paper-v2/localsim-trading-workbench.spec.ts",
-        *session.posargs,
-    ), extra_env={"TEMP": str(task_temp), "TMP": str(task_temp), "NODE_PATH": str(ROOT / "frontend" / "node_modules")})
+    _run_mocked_frontend_target(session, (target, *session.posargs), extra_env={"TEMP": str(task_temp), "TMP": str(task_temp), "NODE_PATH": str(ROOT / "frontend" / "node_modules")})
+
+
+@nox.session(venv_backend="none")
+def localsim_control_plane_ui(session: nox.Session) -> None:
+    """Run the native LocalSIM control-plane readback UI contract."""
+    _run_localsim_frontend_target(session, "tests/paper-v2/localsim-unified-control-plane.spec.ts")
+
+
+@nox.session(venv_backend="none")
+def localsim_workbench_ui(session: nox.Session) -> None:
+    """Run the LocalSIM economic workbench UI contract."""
+    _run_localsim_frontend_target(session, "tests/paper-v2/localsim-trading-workbench.spec.ts")
 
 
 @nox.session(venv_backend="none")

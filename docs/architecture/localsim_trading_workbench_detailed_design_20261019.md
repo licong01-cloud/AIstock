@@ -1,10 +1,10 @@
 # LocalSIM 交易工作台详细设计
 
-日期：2026-10-19。分级：F1，LocalSIM 单业务域只读交易工作台。状态：详细设计交付，应用功能尚未实施，真实数据与生产运行尚未验收。
+日期：2026-10-19；实施验收更新：2026-10-20。分级：F1，LocalSIM 单业务域只读交易工作台。状态：源码与技术验收完成，待独立 PR / CI 合入；运行加载待用户重启及后续验证。真实收益与生产回放未在本任务验收。
 
 依据：[概要设计与页面图](../design/localsim_trading_workbench_overview_20261019.md)、[离线交互原型](../design/localsim_trading_workbench_20261019/index.html)，以及用户要求：“所有策略包 ID 等没有任何人类可读取信息的字符串、编码等不得显示”“不得修改左侧导航栏，保持原有导航栏不变”。交易软件布局仅作用于原导航右边的内容区，原型不再绘制自建侧栏或替换全局导航。
 
-## 1. 范围和明确决策
+## 1. 背景、范围和明确决策
 
 背景：当前界面主要展示配置、身份和日志，缺少从策略进入持仓、交易和区间收益的完整路径。用户已授权按现有图继续详细设计，本次重点是信息可读、账户经济事实完整，以及历史查询不误导。
 
@@ -12,7 +12,7 @@
 
 所有用户界面使用业务名称与中文状态。内部身份继续负责账户隔离、关联、幂等、版本核验和数据追溯；不修改身份、不将名称作为经济主键。只共享既有选股计算源码，不共享荐股业务结果或收益适配器。
 
-本轮交付设计和更新后的离线示例，不实施应用代码、数据库变更或服务操作。后续按本设计完成实现和真实验收，不能把原型交互当作对应功能已上线。
+设计已获开发授权，本任务实现真实只读接口和右侧交易工作台。未执行数据库变更或用户服务操作；原型仍只是设计示例，生产激活与收益验收单独报告。
 
 | 事项 | 决策 |
 | --- | --- |
@@ -260,7 +260,7 @@ CSV 为 UTF-8（兼容常用表格软件），金额作为精确文本写出；�
 
 ## 10. 实施方案、文件与责任边界
 
-下列为后续实现的候选位置，实际写入前形成当次明确文件清单；本轮仅修改设计文件、原型和五张图。
+下列为原设计的责任位置；实施采用相邻专属只读服务和专属前端展示模块，实际文件清单见实施验收记录，未改动既有经济写入服务。
 
 | 位置 | 改动 | owner |
 | --- | --- | --- |
@@ -279,26 +279,26 @@ CSV 为 UTF-8（兼容常用表格软件），金额作为精确文本写出；�
 
 ## 11. Design Acceptance Index、验证方案与设计验收矩阵
 
-沿用概设稳定编号；下表为设计到实现的跟踪索引，**“设计覆盖”不等于应用通过**。实施后填写精确代码、定向测试和真实只读 API / UI 证据，不能直接把本文件引用当作实现证据。
+沿用概设 LSUI 稳定编号；为兼容现有 F1 校验器，下表增加一一对应的 F 系列验收别名，原 LSUI 语义不变。下表 PASS 指源码、接口、交互与只读技术验收；不代表用户运行中的后端已加载，也不将真实账本的未知收益判定为已结算。具体命令、提交、回执及真实勾稽见 §13 和实施验收记录。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| LSUI-01 账户总览 | §3、4.1；拟实现总览与批量摘要 | 不同经济日不汇总为今日；同包多账户可分别进入 | design covered | 真实实现待完成 |
-| LSUI-02 持仓与资金 | §4.2、4.3、7；拟实现完整同日集合 | 数量、成本、市值、现金 / 冻结与权威事实逐项对齐 | design covered | 接口与真实对账待完成 |
-| LSUI-03 个股下钻 | §4.3、5、6.2；拟实现查询与抽屉 | 当前及清仓股均可下钻，账户 / 股票 / 日期保持 | design covered | 真实查询待完成 |
-| LSUI-04 成交与委托 | §5、7.3；拟实现完整历史查询 | 跨页无漏重、部分成交保留、关联不能跨账户 | design covered | 分页与详情待完成 |
-| LSUI-05 区间与逐股盈亏 | §6；拟实现只读盈亏勾稽 | 净资产桥接、费用仅计一次、清仓贡献完整、资金流收益率明确 | design covered | 权威逐股证据须实施核实 |
-| LSUI-06 资金与费用 | §5、6、9；拟实现资金查询 | 佣金 / 税费和订单级最低佣金对齐原账本 | design covered | 实际分项待验收 |
-| LSUI-07 全界面无原始 JSON | §2、8、9；原型各标签 | 所有标签、弹窗、折叠、失败态及导出无原始对象 | design covered | 原型已移除；应用待实施 |
-| LSUI-08 回放 / 实时及时间 | §4、7.2、9；拟实现独立时钟 | 运行、执行、估值、读取时钟分别可核对，旧资产不冒充今日 | design covered | 真实时钟待接入 |
-| LSUI-09 并列监控 | §5、8；原型监控布局 | 与分析布局同账户、同集合、同查询，无副作用 | design covered | 真实数据待接入 |
-| LSUI-10 未知、过期与市场约束 | §2.3、4.3、8、9 | 真缺价报缺失；停牌参考证据保持；涨停残余不误判程序异常 | design covered | 真实失败态待回归 |
-| LSUI-11 交易和共享边界 | §1、7.4、10 | 不改经济写入、PIT、冻结源、恢复与共享计算，不消费荐股私有收益 | design covered | 本轮仅设计文件；实施后再审 |
-| LSUI-12 全面禁止机器标识 | §2、3、9；更新后的原型 | 可见文本、无障碍、提示、标题、地址和导出均无机器标识 | design covered | 应用、真实导出和异常分支待实施 |
-| LSUI-13 缺名与重名 | §2.2；拟实现名称投影 | 名称字段含 ID / 路径、缺简称、同包多账户、同名包均不混账 | design covered | 恶意 / 缺名样本待实现测试 |
-| LSUI-14 稳定读取和资源隔离 | §7、8；拟实现版本与游标 | 并发新成交 / 切账户 / 旧响应 / 分页期间不混版本、不混身份 | design covered | 并发与取消待测试 |
-| LSUI-15 完整导出与响应式 | §8、9；原型宽窄屏 | 完整筛选数、精度、未知说明、无隐藏编号；1440 与 390 可操作 | design covered | 真实导出待完成 |
-| LSUI-16 左侧原导航保持不变 | §1、3、8；原型只预览右侧内容区 | 导航组件、菜单数据和公共壳不变；宽窄屏不通过内容 CSS 改导航；现有入口仍可进入工作台 | design covered | 原型已撤自建导航；应用实施后需验证文件范围与实际导航行为 |
+| F-001 | LSUI-01 账户总览；localsim_workbench.py::overview / _aggregate_overview；trading-workbench.tsx::TradingWorkbench | backend/tests/simulation_runtime/test_localsim_workbench.py::test_realtime_aggregate_excludes_historical_and_misaligned_economic_clocks；validation-receipt: 12e125c9 | PASS | none |
+| F-002 | LSUI-02 持仓与资金；localsim_workbench.py::_positions / view；持仓及六张资产卡 | backend/tests/simulation_runtime/test_localsim_workbench.py::test_historical_holdings_are_run_scoped_and_empty_latest_is_real_zero；artifact: real-optimized-r4.json（三账户真实勾稽） | PASS | none |
+| F-003 | LSUI-03 个股下钻；trading-workbench.tsx::stockFilters / fullStock / 个股抽屉 | frontend/tests/paper-v2/localsim-trading-workbench.spec.ts；validation-receipt: 12e125c9（历史日、已清仓、焦点与筛选继承） | PASS | none |
+| F-004 | LSUI-04 成交与委托；localsim_workbench.py::view；trading-workbench.tsx::OrderDialog | backend/tests/simulation_runtime/test_localsim_workbench.py::test_order_association_contains_all_partial_fills_without_cross_order_rows；frontend/tests/paper-v2/localsim-trading-workbench.spec.ts（121 条全部部分成交） | PASS | none |
+| F-005 | LSUI-05 区间与逐股盈亏；localsim_workbench.py::_pnl；区间分析与逐日下钻 | backend/tests/simulation_runtime/test_localsim_workbench.py::test_closed_stock_and_actual_five_yuan_fees_reconcile_without_repricing；财务专属 37 passed；artifact: real-oracle-r3.json | PASS | none |
+| F-006 | LSUI-06 资金与费用；localsim_workbench.py::view / _pnl；资金和费用表 | backend/tests/simulation_runtime/test_localsim_workbench.py（实际 5 元两笔，仅扣一次；缺分项与未知外部流保持未知） | PASS | none |
+| F-007 | LSUI-07 全界面无原始 JSON；显式列白名单；配置、回放、状态及旧页迁移 | frontend/tests/paper-v2/localsim-trading-workbench.spec.ts（全部七标签、弹窗、失败与导出） | PASS | none |
+| F-008 | LSUI-08 回放 / 实时及时间；localsim_workbench.py::_summary / _is_close；独立运行与读取时钟 | backend/tests/simulation_runtime/test_localsim_workbench.py::test_intraday_snapshot_cannot_become_close_to_close_return；artifact: real-oracle-r3.json | PASS | none |
+| F-009 | LSUI-09 并列监控；trading-workbench.tsx::section / monitor，同账户同版本四区 | frontend/tests/paper-v2/localsim-trading-workbench.spec.ts；validation-receipt: 12e125c9（所有标签 / 监控） | PASS | none |
+| F-010 | LSUI-10 未知、过期与市场约束；presentation.ts；readback-status.tsx；localsim_workbench.py::_mark_description | frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts；backend/tests/simulation_runtime/test_localsim_workbench.py（真缺价保留、完整性损坏、暂停估值） | PASS | none |
+| F-011 | LSUI-11 交易和共享边界；仅只读 GET / 展示服务；既有控制 API 沿用 | validation-receipt: 24926900（模拟核心及附加定向回归）；artifact: real-optimized-r4.json；源文件范围审查 | PASS | none |
+| F-012 | LSUI-12 全面禁止机器标识；localsim_workbench_presentation.py；workbench.ts::human；固定可见路由 | frontend/tests/paper-v2/localsim-trading-workbench.spec.ts::noOpaque；backend/tests/simulation_runtime/test_localsim_workbench.py::test_names_never_fall_back_to_machine_strings | PASS | none |
+| F-013 | LSUI-13 缺名与重名；localsim_workbench.py::overview；中文受控兜底 / 创建时间 / 稳定重名顺序 | backend/tests/simulation_runtime/test_localsim_workbench.py（恶意名称、数字业务名、同账户独立事实）；artifact: real-readonly-r2.json（三账户缺名投影） | PASS | none |
+| F-014 | LSUI-14 稳定读取和资源隔离；localsim_workbench.py::_load / _pack / _unpack；前端取消、响应身份与版本核对 | backend/tests/simulation_runtime/test_localsim_workbench.py::test_repeatable_read_cache_and_cursor_pin_old_facts_but_revalidate_account_scope；frontend/tests/paper-v2/localsim-trading-workbench.spec.ts（慢响应与跨账户拒绝） | PASS | none |
+| F-015 | LSUI-15 完整导出与响应式；localsim_workbench.py::export；流式 CSV 响应；专属 CSS 容器查询 | backend/tests/simulation_runtime/test_localsim_workbench.py::test_full_csv_has_more_than_two_pages_and_safe_account_metadata；frontend/tests/paper-v2/localsim-trading-workbench.spec.ts（1440 / 实际内容宽 390 / 极窄外壳不溢出） | PASS | none |
+| F-016 | LSUI-16 左侧原导航保持不变；公共 Sidebar / 菜单 / layout / globals 均无差异；仅内容样式 | frontend/tests/paper-v2/localsim-trading-workbench.spec.ts（原生折叠展开、260 像素宽度及旧入口）；git diff protected-files 无差异 | PASS | none |
 
 最小定向回归样本包括：同策略两账户、不同估值日期、零持仓、可卖量未知、停牌参考价、普通真缺价、交易完成但估值待完成、同刻多笔部分成交、超过两页历史、新记录写入中的翻页、资金流、费内 / 费外成本、清仓股票、缺期初、缺一日、非股票费用、中文重名、名称本身是机器编号、未知错误和过期响应。财务断言直接对权威账本事实，不写只验证新实现自身公式的镜像测试。
 
@@ -318,4 +318,21 @@ CSV 为 UTF-8（兼容常用表格软件），金额作为精确文本写出；�
 
 DESIGN-COMPLIANCE-001 逐项结论：① 本轮完整交付详细设计，不将原型当成完成的交易软件；② 缺名、未知值、过期和不完整历史均显式呈现，不伪造成功；③ 保持已批准布局与交易语义，新无标识规则已同步到概设和原型；④ 不新增生产恢复、切流或合入审批门禁。
 
-源码实现：未执行。真实结果一致性：未验收。后端性能：未测量。断点恢复：未操作。公共接口剩余需求：证券批量名称 / 历史名称可用性，以及 LocalSIM 内部完整集合与逐股归属的实现核实。合入 / 运行态激活：未执行。
+以上为原设计阶段记录；当前实施结论以以下 §13 及实施验收记录为准。
+
+
+## 13. 实施技术验收（2026-10-20）
+
+实现路径：`backend/services/simulation_runtime/localsim_workbench.py`、`localsim_workbench_models.py`、`localsim_workbench_presentation.py`，`backend/routers/simulation_runtime.py` 末尾的只读端点；`frontend/src/app/simulation/localsim/components/trading-workbench.tsx` 及专属样式、`frontend/src/lib/simulation/localsim/workbench.ts` / `control-catalog.ts`。配置、回放和旧路由均已使用同一展示合同；原控制面请求、版本与执行政策不变。完整文件范围与多轮审核见 [实施验收记录](../analysis/localsim_workbench_implementation_acceptance_20261019.md)。
+
+财务证据为权威账本独立勾稽及手算固定样本，未增加估值重算。三账户现有数量、可卖、成本、市值、现金、净资产和归属全部一致；两个历史回放账户只有盘中估值点，不能生成收盘收益，旧账户历史覆盖不完整时收益也保持未知。佣金 / 税费未在原账本单列，分项未知、合计取实际账本；现金可用 / 冻结缺少原记录时也未知。以上是按既定设计保留缺失，不能用 UI 猜值，也不是授权修改账本。证券简称消费已提交持仓 / 成交中的原生名称，并标注“账本记录简称”；不声明已获得历史名称有效性权威，无缺名外部行情逐股请求。
+
+稳定读取使用短事务 REPEATABLE READ / READ ONLY，随后绑定全部读取事实的摘要与私有有界缓存；每次核查原账户账本归属。5 分钟内分页固定旧集合；缓存到期或进程重启后不能用旧游标混入新集合。完整 CSV 逐页校验后才创建流式响应，浏览器完整接收后下载，失败不发布半文件；金额定点文本、中文列名、覆盖 / 币种 / 成本 / 估值说明齐全。现有单机资源阈值每类 20 万行，超限显式失败，没有截断完整或自动换源。
+
+技术回归：财务专属 37 passed；模拟核心 1131 passed / 10 skipped，附加定向回归 63 passed / 1 skipped；最终 24 项真实应用壳上的隔离 UI 用例全部通过（API 为受控测试事实），类型 / lint 与 L0 通过。另实际数据库只读直接调用新服务，核对三个账户，不以 UI 测试事实代替真实收益。UI、类型检查共享 Next 生成目录，完成最终串行类型检查，未把并行时生成文件竞态算作源码通过。
+
+实测样本：总览 3 账户 2.24 秒；账户完整冷读 1.32–3.06 秒，固定集合逐股查询 0.095–0.233 秒，三账户进程峰值工作集约 440 MiB。原限 200 行账本读取为 0.16–0.23 秒，读取规模不同，不能据此声称性能提升。X 盘验证构建缓存约 184 MiB；未复制模型或数据。原公共左栏宽 260 像素不变，右侧内容实际宽 390 时验证两列卡片；整窗 390 时仅保证不向全局横向溢出，既有外壳压缩内容的行为不在本次修改范围。
+
+DESIGN-COMPLIANCE-001：① 十六项源码与技术验收均完成，不把原型或 mocked API 当作生产回放验收；② 缺价、未知、过期、错误及不完整集合显式保留，未伪造成功；③ 未修改交易 / 持仓 / 费用 / 账本 / 共享推理 / PIT / 冻结源 / 原导航语义；④ 未增加设计外审批，只有原控制操作在用户点击后的既有版本与安全条件。
+
+生产门禁：DDL / DML / 数据变更均不适用；无训练、补数、估值重算或回放启动。共享选股没有源码变更，断点恢复没有操作。源码合入、根目录同步、运行态加载与重启后验证分别记录；本任务不控制用户后端。技术验收不作为收益证明。
