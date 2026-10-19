@@ -1,0 +1,256 @@
+{
+  "actual": "DEPLOY exposes OSError22/BrokenPipeError32 without Permission denied evidence.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_immutable_deploy.py",
+    "backend/tests/dataset_release/test_monthly_remote_deploy.py",
+    "tests/aistock_validation/bugs/20261019_BUG-1997-monthly-streaming-deploy-masks-receiver-permission-errors-with-broken-pi.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1997",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-19T18:54:32.232514Z",
+  "description": "DEPLOY exposes OSError22/BrokenPipeError32 without Permission denied evidence.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261019-3daca5c1af34",
+      "timestamp": "2026-10-19T18:54:32.232514Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Receiver stderr and sender cause survive stream failure; cleanup cannot replace primary error; successful and timeout paths retain exact-byte contract.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/tests/dataset_release/test_monthly_remote_deploy.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1997-monthly-streaming-deploy-masks-receiver-permission-errors-with-broken-pi.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/tests/dataset_release/test_monthly_remote_deploy.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1997-monthly-streaming-deploy-masks-receiver-permission-errors-with-broken-pi.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_immutable_deploy.py",
+        "backend/tests/dataset_release/test_monthly_remote_deploy.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_immutable_deploy.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_remote_deploy.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_immutable_deploy.py",
+        "backend/tests/dataset_release/test_monthly_remote_deploy.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/tests/dataset_release/test_monthly_remote_deploy.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_immutable_deploy.py",
+      "backend/tests/dataset_release/test_monthly_remote_deploy.py"
+    ]
+  },
+  "first_seen_at": "2026-10-19T18:54:32.232514Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6384,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6384",
+  "last_seen_at": "2026-10-19T18:54:32.232514Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_remote_deploy.py -k stream_failure -q",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "RED: three stream-failure cases failed on the prior sender source, including an actual child process which rejected stdin and emitted stderr.",
+      "GREEN: fresh-process related matrix 37 passed, 2 skipped; actual binary sender/receiver verified exact framed request and archive bytes, rejection stderr and original cause, no-stderr sender errors and timeout child cleanup.",
+      "Review 1: receiver permission error was independently identified by read-only WSL uid, parent stat and write-access check; releases parent alone changed from root:root to lc999:lc999, mode755 unchanged, no recursive change or release content mutation.",
+      "Review 2: error cleanup cannot replace the primary failure; receiver diagnostics bounded to the final4000bytes; local source errors and timeout remain failures and children are reaped. Added direct regressions for timeout and missing diagnostic paths.",
+      "Review 3: success protocol and hardlink omission remain unchanged; no new release gate, source-data check, export, fallback, database write, activation or service action. DESIGN-COMPLIANCE-001 four items passed for the scoped error-reporting fix. Existing operation resumed at DEPLOY using completed checkpoints. Runtime application of the new diagnostics remains pending user-owned restart.",
+      "X:/AIstock_temp/BUG-1997-deploy-diagnostic-20261020-r1.json"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly streaming deploy masks receiver permission errors with broken-pipe cleanup",
+  "trigger_condition": {
+    "fingerprint": "3daca5c1af3418de95bf2bc6",
+    "source_event_id": "FE-20261019-3daca5c1af34"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
