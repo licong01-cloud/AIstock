@@ -843,7 +843,7 @@ def test_submit_freezes_predecessor_profile_before_active_advances(tmp_path: Pat
     plan = service.store.read_plan(state["operation_id"])
     frozen = Path(plan["predecessor"]["profile_path"])
     assert frozen != service.active_profile
-    assert frozen.is_relative_to(service.store.operation_root(state["operation_id"]))
+    assert frozen.parent == service.store.operation_root(state["operation_id"])
     _active(service.active_profile, cutoff="2026-09-30")
     assert frozen.read_bytes() == original
     assert _sha(frozen) == plan["predecessor_profile_ref"]["sha256"]

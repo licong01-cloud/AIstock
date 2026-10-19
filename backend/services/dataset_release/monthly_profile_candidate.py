@@ -106,7 +106,7 @@ def _predecessor_profile(
         return _canonical_payload(raw, label="predecessor profile")
     # Pre-snapshot operations recorded the mutable active path. Recover only an
     # already existing, byte-identical profile from its regular candidates dir.
-    # New operations point inside their own receipts and never use this fallback.
+    # New operations pin their own input snapshot and never use this fallback.
     if (
         path.is_absolute()
         and path.name == reference.get("id")

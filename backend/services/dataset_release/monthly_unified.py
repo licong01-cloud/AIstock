@@ -615,7 +615,7 @@ class MonthlyOperationStore:
             (root / "checkpoints").mkdir()
             (root / "receipts").mkdir()
             (root / "logs").mkdir()
-            predecessor_profile = root / "receipts" / "predecessor-profile.json"
+            predecessor_profile = root / "predecessor-profile.json"
             with predecessor_profile.open("xb") as handle:
                 handle.write(predecessor_bytes)
                 handle.flush()
