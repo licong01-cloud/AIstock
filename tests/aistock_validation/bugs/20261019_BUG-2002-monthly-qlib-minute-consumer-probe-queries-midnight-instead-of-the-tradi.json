@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-19T21:17:13.549702Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0b07b7f8797d57b496d79efe39435a0e8a4fca17",
+  "fixed_at": "2026-10-19T21:27:07Z",
   "github_issue_number": 6397,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6397",
   "last_seen_at": "2026-10-19T21:17:13.549702Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6398",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -131,6 +132,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -142,7 +144,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2002",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "de9581dccff08953",
+    "recorded_at": "2026-10-19T21:28:18.476365Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "df2985fd4fd6e7a43a0bd561bfc03c05d797c753",
+    "source_merge_commit": "0b07b7f8797d57b496d79efe39435a0e8a4fca17",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6398",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_node_probe.py backend/tests/dataset_release/test_monthly_node_probe_runner.py backend/tests/dataset_release/test_monthly_consumer_validation.py -q -> 34 passed"
+    ],
+    "validation_evidence_digest": "4c886dd26505fee9653f7ee206e7c06f4781986f0d61a78d2f687ad7e481317f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -151,6 +174,9 @@
     "fingerprint": "92994a4942c96bdfb5c1549b",
     "source_event_id": "FE-20261019-92994a4942c9"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_monthly_node_probe.py backend/tests/dataset_release/test_monthly_node_probe_runner.py backend/tests/dataset_release/test_monthly_consumer_validation.py -q -> 34 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
