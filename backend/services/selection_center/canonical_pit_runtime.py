@@ -25,6 +25,7 @@ from backend.services.canonical_equity_pit import (
     PitConsumerBinding,
     canonical_rule_parameters_digest,
     legacy_rule_parameters_digest,
+    require_canonical_new_task_binding,
 )
 from backend.services.trading_core.errors import InvalidStateTransitionError, RuntimeConfigInvalidError
 
@@ -317,7 +318,10 @@ def freeze_canonical_pit_runtime_binding(
             context={"profile_mode": profile_mode},
         )
     try:
-        binding = (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding()
+        binding = require_canonical_new_task_binding(
+            (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding(),
+            consumer="selection", trade_date=trade_date,
+        )
     except Exception as exc:
         raise CanonicalPitRuntimeError("canonical PIT authority pointer cannot be resolved") from exc
     lease = SelectionPitRuntimeLease.from_binding(binding).require_trade_date(trade_date)
