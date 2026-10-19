@@ -192,6 +192,8 @@ rule_version == shsz_a_252td_st_delist_asof_v2
 | F-018 | 版本内容寻址、不可覆盖、前驱可追溯；来源漂移和真实缺口不得伪通过。 |
 | F-019 | 现有 DEV 库完整 CAS 演练后回滚，生产与数据集激活均未执行。 |
 
+| F-020 | Confirmed D/delist_date supports terminal exclusion in v3; prior v2 identity and historical bindings remain unchanged. |
+
 ## 6. Implementation Plan / 实施方案
 
 1. 新增纯代码 canonical authority contract 和归档/reproduction 校验。
@@ -237,7 +239,7 @@ rule_version == shsz_a_252td_st_delist_asof_v2
 | F-017 | `StockUniversePitService.get_eligible_codes`; shared default binding; new saved-profile creation/versioning | `backend/tests/test_stock_universe_pit_service.py::test_canonical_query_accepts_validated_binding`; `backend/tests/test_canonical_pit_release.py::test_new_saved_profile_versions_inherit_global_pointer` | implemented_local_verified | none |
 | F-018 | `publish_release`; `read_release`; `validate_release` | `backend/tests/test_canonical_pit_release.py` | implemented_local_verified | none |
 | F-019 | `rehearse_activation` | `backend/tests/test_canonical_pit_release.py`; `python scripts/manage_canonical_pit_release.py --action rehearse-activation --target dev` -> DEV_ROLLBACK_VALIDATED, generation 1 then restored 0 | implemented_local_verified | none |
-| F-020 | `audit_canonical_terminal_evidence`; version-aware canonical validators | lifecycle-only exit, missing date, earlier announcement and preserved v2 tests; DEV current-cutoff readback | in_progress | DEV/readback pending |
+| F-020 | `audit_canonical_terminal_evidence`; version-aware canonical validators | `backend/tests/test_stock_universe_pit_spans.py`; `backend/tests/test_canonical_equity_pit.py`; `backend/tests/test_canonical_pit_release.py`; DEV receipt `X:/AIstock_dataset_release_control/operator_receipts/BUG-1990-dev-terminal-facts-apply-r3.json`; CAS rehearsal DEV_ROLLBACK_VALIDATED | implemented_local_verified | none |
 
 ## 9. Rollout / Rollback
 
@@ -297,6 +299,16 @@ policy revision, not a new quote dataset or a module-owned policy.
   policy. Fresh source consumers inherit the singleton, not a module default.
 - The monthly producer uses this same shared policy implementation. No quote,
   minute, factor or prior immutable release is rebuilt for this amendment.
+
+DEV verification used the existing database, not a new test database. The
+versioned v3 source has 5,346 symbols and 5,665 spans through 2026-10-19. Its
+independent release digest is
+`d8f9fac9ba42dc92249b944aa1a032e6d5df7fee740e0a6d41242621e1135cc8`.
+CAS rehearsal validated generation 1 and rolled back to the original legacy
+generation 0. The two lifecycle-only securities, 601059.SH and 601198.SH, both
+exit before the first 2026-10-19 session; original v2 production spans and the
+active quote dataset remain unchanged. This verifies implementation, not
+production migration or post-restart business acceptance.
 
 ## 12. DESIGN-COMPLIANCE-001
 
