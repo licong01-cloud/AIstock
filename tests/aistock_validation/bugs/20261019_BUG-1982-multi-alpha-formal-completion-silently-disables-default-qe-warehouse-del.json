@@ -218,7 +218,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/multi-alpha/combine-backtest/runs/macb_idem_e9a53ed2c849244475822f52f36302c0a60c4a50/archive-status",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
     "fresh_process_evidence": [
       "Fresh Python pytest process: default durable runtime RED (archive_pass=0) then GREEN; default/explicit-disable/duplicate outbox contracts passed with in-memory repositories, no DB or process control.",
       "Related matrix: 52 passed, one partial-recovery regression exposed selected-child result handling; corrected and exact nodeid passed. Preserve valid selected child metrics even without assembled scheme rows; do not use stale/unselected attempts."
