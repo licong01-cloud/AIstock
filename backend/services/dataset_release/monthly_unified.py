@@ -603,12 +603,23 @@ class MonthlyOperationStore:
                     raise MonthlyReleaseConflict("target cutoff is already bound to another operation")
                 if ReleaseState(str(existing_state["status"])) not in TERMINAL_STATES:
                     raise MonthlyReleaseConflict("another monthly operation is active for this product")
+            # Active is a mutable pointer. Preserve its exact small profile now;
+            # candidate construction must not depend on a later active identity.
+            _require_plain_existing_chain(predecessor.path, label="predecessor profile")
+            predecessor_bytes = predecessor.path.read_bytes()
+            if hashlib.sha256(predecessor_bytes).hexdigest() != predecessor.file_sha256:
+                raise MonthlyReleaseError("predecessor profile bytes differ before freezing")
             operation_id = f"dmr_{uuid.uuid4().hex}"
             root = self.operation_root(operation_id)
             root.mkdir(parents=False, exist_ok=False)
             (root / "checkpoints").mkdir()
             (root / "receipts").mkdir()
             (root / "logs").mkdir()
+            predecessor_profile = root / "predecessor-profile.json"
+            with predecessor_profile.open("xb") as handle:
+                handle.write(predecessor_bytes)
+                handle.flush()
+                os.fsync(handle.fileno())
             request_payload = {
                 **request.payload(),
                 "operation_id": operation_id,
@@ -627,7 +638,7 @@ class MonthlyOperationStore:
                 "revision": revision,
                 "release_id": f"qe_hmm_full_v2_{request.target_cutoff:%Y%m%d}",
                 "predecessor": {
-                    "profile_path": str(predecessor.path),
+                    "profile_path": str(predecessor_profile),
                     "profile_sha256": predecessor.file_sha256,
                     "generation": predecessor.generation,
                     "release_id": predecessor.release_id,
@@ -636,9 +647,9 @@ class MonthlyOperationStore:
                     "candidate_root": predecessor.candidate_root,
                 },
                 "predecessor_profile_ref": {
-                    "id": predecessor.path.name,
+                    "id": predecessor_profile.name,
                     "sha256": predecessor.file_sha256,
-                    "size": predecessor.path.stat().st_size,
+                    "size": len(predecessor_bytes),
                 },
                 "predecessor_manifest_ref": {
                     "id": "qe_dataset_manifest.json",
