@@ -35,30 +35,30 @@
   "expected": "每个新完成回放日具有同账户同日的原生15:00收盘估值证据；失败不推进、不重做成交；旧历史缺口保持明确。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json",
       "backend/services/simulation_execution/localsim/persistence.py",
       "backend/services/simulation_runtime/localsim_replay_runtime.py",
       "backend/services/simulation_runtime/scheduler.py",
       "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_file_inputs.py",
-      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
       "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
-      "docs/analysis/localsim_replay_close_valuation_20261020.md"
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+      "docs/analysis/localsim_replay_close_valuation_20261020.md",
+      "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json"
     ],
     "added_files": [
       "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
       "docs/analysis/localsim_replay_close_valuation_20261020.md"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json",
       "backend/services/simulation_execution/localsim/persistence.py",
       "backend/services/simulation_runtime/localsim_replay_runtime.py",
       "backend/services/simulation_runtime/scheduler.py",
       "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_file_inputs.py",
-      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
       "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
-      "docs/analysis/localsim_replay_close_valuation_20261020.md"
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+      "docs/analysis/localsim_replay_close_valuation_20261020.md",
+      "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
