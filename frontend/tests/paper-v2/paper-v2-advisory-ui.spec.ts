@@ -1572,7 +1572,10 @@ test("Advisory page confirms enable, paginates reviews, sorts active pool, and h
   await expect(page.getByTestId("advisory-review-page-size").locator("option")).toHaveText(["20", "50", "100"]);
   await expect(page.getByTestId("advisory-review-row")).toHaveCount(20);
   await expect(page.getByText(`第 1 / 2 页，共 ${REVIEW_COUNT} 条`)).toBeVisible();
-  await page.getByRole("button", { name: "下一页" }).click();
+  const reviewSection = page.locator("section").filter({
+    has: page.getByRole("heading", { name: "只追加决策记录", exact: true }),
+  });
+  await reviewSection.getByRole("button", { name: "下一页", exact: true }).click();
   await expect(page.getByTestId("advisory-review-row")).toHaveCount(15);
   await expect(page.getByText(`第 2 / 2 页，共 ${REVIEW_COUNT} 条`)).toBeVisible();
   await page.getByTestId("advisory-review-page-size").selectOption("50");
