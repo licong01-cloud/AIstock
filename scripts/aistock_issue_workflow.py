@@ -3438,6 +3438,8 @@ _validate_monthly_release_ready = _runtime_semantics._validate_monthly_release_r
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/simulation-runtime/localsim/workbench/overview$"),
+     "localsim_workbench_valuation", _runtime_semantics._validate_localsim_workbench),
     (re.compile(r"^/api/v1/advisory/trading-days/defaults$"),
      "advisory_calendar_defaults_only", _validate_advisory_trading_day_defaults),
     (re.compile(r"^/api/v1/advisory/historical-range-batches/[^/]+/operations$"),

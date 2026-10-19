@@ -27,6 +27,45 @@ class _DummyConn:
         return False
 
 
+@pytest.mark.parametrize("path", ["single", "chunked", "counts"])
+def test_minute_queries_keep_stock_predicates_in_native_character_type(monkeypatch, tmp_path, path):
+    """Exercise each actual query entry, without exporting or reading real data."""
+    code, day = "000001.SZ", date(2026, 9, 30)
+    queries = []
+
+    def read(sql, *args, **kwargs):
+        if "FROM market.kline_minute_raw" in sql:
+            queries.append((sql, kwargs["params"]))
+        if "FROM market.adj_factor" in sql:
+            return pd.DataFrame([dict(ts_code=code, trade_date=day, adj_factor=1.0)])
+        if "FROM market.stk_limit" in sql:
+            return pd.DataFrame([dict(ts_code=code, trade_date=day, prev_close=10.0,
+                                      up_limit_price=11.0, down_limit_price=9.0)])
+        return pd.DataFrame()
+
+    monkeypatch.setattr(authoritative, "_read_sql", read)
+    monkeypatch.setattr(authoritative.pd, "read_sql", read)
+    monkeypatch.setattr(authoritative, "get_conn", _DummyConn)
+    monkeypatch.setattr(authoritative, "resolve_stock_universe", lambda _: [code])
+    monkeypatch.setattr(authoritative, "load_calendar", lambda *_: ["2026-09-30 09:31:00"])
+    if path == "single":
+        authoritative._load_minute_raw(code, day, day, connection=object())
+    elif path == "chunked":
+        authoritative.export_stock_minute_csv_chunked(
+            snapshot_id="sql-only", start=day, end=day, csv_root=tmp_path)
+    else:
+        with pytest.raises(RuntimeError, match="no DB minute rows"):
+            authoritative.validate_minute_bin_against_db(
+                qlib_dir=tmp_path, start=day, end=day, compare_values=False)
+    assert len(queries) == 1
+    sql, params = queries[0]
+    predicate = "m.ts_code = %(code)s::bpchar" if path == "single" else "m.ts_code = ANY(%(codes)s::bpchar[])"
+    assert predicate in sql
+    assert "m.ts_code::text" not in sql
+    assert "m.trade_time >=" in sql and "m.trade_time <" in sql
+    assert params.get("code", params.get("codes")) == (code if path == "single" else [code])
+
+
 def _daily_csv_frame(code: str, dates: list[date]) -> pd.DataFrame:
     frame = pd.DataFrame(
         {

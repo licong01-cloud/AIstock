@@ -2041,6 +2041,12 @@ _LOCALSIM_CUTOVER_REQUIRED_RELATIONS = frozenset({
 })
 
 
+def _validate_localsim_workbench(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
+    from backend.services.simulation_runtime.localsim_workbench_metrics import validate_workbench_overview
+
+    return validate_workbench_overview(payload)
+
+
 def _validate_localsim_cutover_readiness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
     """Require the complete LocalSIM cutover authority to report a safe boundary."""
     if not isinstance(payload, dict):
