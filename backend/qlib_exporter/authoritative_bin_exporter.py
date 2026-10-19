@@ -1051,6 +1051,8 @@ def _load_minute_raw(
 ) -> pd.DataFrame:
     start_ts = f"{start.isoformat()} 00:00:00+08"
     end_exclusive = f"{(end + timedelta(days=1)).isoformat()} 00:00:00+08"
+    # bpchar is the native character(n) type of ts_code. Cast the parameter,
+    # not the indexed column; omit a typmod to avoid truncating invalid codes.
     sql = """
         SELECT m.trade_time AT TIME ZONE 'Asia/Shanghai' AS trade_time,
                m.ts_code,
@@ -1062,7 +1064,7 @@ def _load_minute_raw(
                m.amount_li
         FROM market.kline_minute_raw m
         JOIN market.stock_basic s ON s.ts_code = m.ts_code
-        WHERE m.ts_code = %(code)s
+        WHERE m.ts_code = %(code)s::bpchar
           AND m.freq = %(freq)s
           AND m.trade_time >= %(start_ts)s::timestamptz
           AND m.trade_time < %(end_exclusive)s::timestamptz
@@ -1779,7 +1781,7 @@ def export_stock_minute_csv_chunked(
                            m.amount_li
                     FROM market.kline_minute_raw m
                     JOIN market.stock_basic s ON s.ts_code = m.ts_code
-                    WHERE m.ts_code = ANY(%(codes)s)
+                    WHERE m.ts_code = ANY(%(codes)s::bpchar[])
                       AND m.freq = %(freq)s
                       AND m.trade_time >= %(start_ts)s::timestamptz
                       AND m.trade_time < %(end_ts)s::timestamptz
@@ -2258,7 +2260,7 @@ def validate_minute_bin_against_db(
                count(*)::int AS db_rows
         FROM market.kline_minute_raw m
         JOIN market.stock_basic s ON s.ts_code = m.ts_code
-        WHERE m.ts_code = ANY(%(codes)s)
+        WHERE m.ts_code = ANY(%(codes)s::bpchar[])
           AND m.freq = %(freq)s
           AND m.trade_time >= %(start_ts)s::timestamptz
           AND m.trade_time < %(end_exclusive)s::timestamptz

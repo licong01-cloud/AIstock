@@ -1899,8 +1899,8 @@ def _stub_trading_calendar(scheduler):
     scheduler._next_trading_day = lambda _anchor_date, *, inclusive=False: dt.date(2026, 7, 13)
 
 
-def test_auto_range_refresh_audit_cursor_skips_physical_max_scan():
-    """BUG-957: audit cursor configured + audit hit -> no table MAX scan at all."""
+def test_non_minute_auto_range_refresh_audit_cursor_skips_physical_max_scan():
+    """Keep the existing audit opt-in for non-minute datasets unchanged."""
     scheduler = TDXScheduler.__new__(TDXScheduler)
     queries = []
 
@@ -1908,8 +1908,8 @@ def test_auto_range_refresh_audit_cursor_skips_physical_max_scan():
         queries.append(sql)
         if "FROM market.data_stats_config" in sql:
             return [{
-                "table_name": "market.kline_minute_raw",
-                "date_column": "trade_time",
+                "table_name": "market.margin_detail",
+                "date_column": "trade_date",
                 "extra_info": {"cursor_source": "refresh_audit"},
             }]
         if "FROM market.dataset_date_refresh_audit" in sql:
@@ -1919,14 +1919,14 @@ def test_auto_range_refresh_audit_cursor_skips_physical_max_scan():
     scheduler._fetchall = _fetchall
     _stub_trading_calendar(scheduler)
 
-    assert scheduler._compute_auto_range("kline_minute_raw") == (
+    assert scheduler._compute_auto_range("margin_detail") == (
         dt.date(2026, 7, 13),
         dt.date(2026, 7, 13),
     )
-    assert not any("FROM market.kline_minute_raw" in sql for sql in queries)
+    assert not any("FROM market.margin_detail" in sql for sql in queries)
 
 
-def test_auto_range_refresh_audit_empty_falls_back_to_bounded_physical_scan():
+def test_non_minute_auto_range_refresh_audit_empty_falls_back_to_bounded_physical_scan():
     """BUG-957: audit cursor configured but no audit rows -> bounded physical scan."""
     scheduler = TDXScheduler.__new__(TDXScheduler)
     queries = []
@@ -1935,8 +1935,8 @@ def test_auto_range_refresh_audit_empty_falls_back_to_bounded_physical_scan():
         queries.append(sql)
         if "FROM market.data_stats_config" in sql:
             return [{
-                "table_name": "market.kline_minute_raw",
-                "date_column": "trade_time",
+                "table_name": "market.margin_detail",
+                "date_column": "trade_date",
                 "extra_info": {"cursor_source": "refresh_audit"},
             }]
         if "FROM market.dataset_date_refresh_audit" in sql:
@@ -1948,18 +1948,19 @@ def test_auto_range_refresh_audit_empty_falls_back_to_bounded_physical_scan():
     scheduler._fetchall = _fetchall
     _stub_trading_calendar(scheduler)
 
-    assert scheduler._compute_auto_range("kline_minute_raw") == (
+    assert scheduler._compute_auto_range("margin_detail") == (
         dt.date(2026, 7, 13),
         dt.date(2026, 7, 13),
     )
     assert any("INTERVAL '45 days'" in sql for sql in queries)
     assert not any(
-        "FROM market.kline_minute_raw" in sql and "INTERVAL" not in sql for sql in queries
+        "FROM market.margin_detail" in sql and "INTERVAL" not in sql for sql in queries
     )
 
 
-def test_auto_range_bounded_fast_path_skips_unbounded_scan_when_recent():
-    """BUG-957: recent cursor found in the bounded window -> no unbounded scan."""
+@pytest.mark.parametrize("audit_config", [{}, {"cursor_source": "refresh_audit"}])
+def test_minute_auto_range_replays_partial_day_using_bounded_index_probe(audit_config):
+    """Neither an old success audit nor a physical timestamp proves a complete day."""
     scheduler = TDXScheduler.__new__(TDXScheduler)
     queries = []
 
@@ -1969,7 +1970,7 @@ def test_auto_range_bounded_fast_path_skips_unbounded_scan_when_recent():
             return [{
                 "table_name": "market.kline_minute_raw",
                 "date_column": "trade_time",
-                "extra_info": {},
+                "extra_info": audit_config,
             }]
         if "INTERVAL '45 days'" in sql:
             return [{"mx": dt.date(2026, 7, 10)}]
@@ -1977,18 +1978,44 @@ def test_auto_range_bounded_fast_path_skips_unbounded_scan_when_recent():
 
     scheduler._fetchall = _fetchall
     _stub_trading_calendar(scheduler)
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 13)
 
     assert scheduler._compute_auto_range("kline_minute_raw") == (
-        dt.date(2026, 7, 13),
+        dt.date(2026, 7, 10),
         dt.date(2026, 7, 13),
     )
-    assert not any(
-        "FROM market.kline_minute_raw" in sql and "INTERVAL" not in sql for sql in queries
+    assert not any("MAX(trade_time)" in sql or "dataset_date_refresh_audit" in sql for sql in queries)
+    probe = next(sql for sql in queries if "FROM market.kline_minute_raw" in sql)
+    assert "ORDER BY trade_time DESC" in probe and "LIMIT 1" in probe
+    assert "AT TIME ZONE 'Asia/Shanghai'" in probe
+    assert "freq='1m'" in probe
+
+
+@pytest.mark.parametrize("observed_day", [dt.date(2026, 7, 13), dt.date(2026, 7, 14)])
+def test_minute_auto_range_does_not_skip_same_day_or_accept_future_facts(observed_day):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._fetchall = lambda sql, *_: (
+        [{"table_name": "market.kline_minute_raw", "date_column": "trade_time", "extra_info": {}}]
+        if "data_stats_config" in sql else [{"mx": observed_day}]
     )
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 13)
+    if observed_day.day == 14:
+        with pytest.raises(RuntimeError, match="beyond latest trading date"):
+            scheduler._compute_auto_range("kline_minute_raw")
+    else:
+        assert scheduler._compute_auto_range("kline_minute_raw") == (observed_day, observed_day)
 
 
-def test_auto_range_bounded_fast_path_falls_back_to_unbounded_scan():
-    """BUG-957: bounded window empty (stalled/bootstrap) -> exact old unbounded scan."""
+def test_minute_auto_range_keeps_disabled_configuration_inactive():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    queries = []
+    scheduler._fetchall = lambda sql, *_: queries.append(sql) or []
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 13)
+    assert scheduler._compute_auto_range("kline_minute_raw") == (None, None)
+    assert len(queries) == 1 and "data_stats_config" in queries[0]
+
+
+def test_minute_auto_range_never_falls_back_to_full_history():
     scheduler = TDXScheduler.__new__(TDXScheduler)
     queries = []
 
@@ -2008,17 +2035,17 @@ def test_auto_range_bounded_fast_path_falls_back_to_unbounded_scan():
 
     scheduler._fetchall = _fetchall
     _stub_trading_calendar(scheduler)
+    scheduler._latest_completed_trading_day = lambda: dt.date(2026, 7, 13)
 
-    start, end = scheduler._compute_auto_range("kline_minute_raw")
-    assert (start, end) == (dt.date(2026, 7, 13), dt.date(2026, 7, 13))
+    with pytest.raises(RuntimeError, match="no recent cursor"):
+        scheduler._compute_auto_range("kline_minute_raw")
     bounded = [sql for sql in queries if "INTERVAL '45 days'" in sql]
     unbounded = [
         sql for sql in queries
         if "FROM market.kline_minute_raw" in sql and "INTERVAL" not in sql
     ]
     assert len(bounded) == 1
-    assert len(unbounded) == 1
-    assert queries.index(bounded[0]) < queries.index(unbounded[0])
+    assert not unbounded
 
 
 def test_freshness_target_persists_schedule_owner_retry_time_and_t_plus_one_deadline(monkeypatch):
