@@ -749,6 +749,8 @@ def test_qe_read_contract_runner_matches_catalog_and_keeps_live_scenario_delegat
     import yaml
 
     calls, directories = [], []
+    owners = classifier.flow.match_changed_files(['frontend/tests/qe-read-contract.config.ts', 'noxfile.py'])
+    assert {item['primary_module'] for item in owners['matched_rules']} == {'validation.runner'}
     monkeypatch.setattr(noxfile, 'FRONTEND_DIRECT_ENTRYPOINTS', ())
     keys = ('qe_best_loop_contract_ui', 'qe_terminal_poll_contract_ui', 'qe_read_performance_ui')
     for key in keys:

@@ -3,11 +3,11 @@ rules:
   - rule_id: qe_read_contract_runner_config
     priority: 141
     include: [frontend/tests/qe-read-contract.config.ts]
-    primary_module: validation.workflow_automation
+    primary_module: validation.runner
     impact_modules: []
     layer: validation
     risk_level: high
-    ownership_reason: Isolated QE CI frontend runner configuration, not QE business logic.
+    ownership_reason: Isolated frontend execution configuration belongs to the nox/CI validation runner; remains counted as test/helper code, not workflow production code.
   - rule_id: advisory_mocked_ui_runner_config
     priority: 141
     include: [frontend/tests/advisory-mocked.config.ts]

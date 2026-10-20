@@ -34,6 +34,7 @@
     "baseline_note": "Unmodified main best-loop source assertion at line 31 fails before the BUG-2012 business fix; pipeline does not alter or bypass that assertion. The exact consumer HEAD passes it.",
     "backend_or_database_used": false,
     "business_test_source_modified": false,
+    "test_budget_review": "Runner config is owned by validation.runner together with its nox execution entrypoints and still counted as test/helper. Both validation.runner and validation.workflow_automation pass 30% individually. No tests/assertions removed and no denominator inflation.",
     "classification": "passed; unexecuted_test_files=[]; backend_required=false; dev_db_required=false",
     "classification_ref": "X:/AIstock-CI/BUG-2015-classification.json",
     "command": "node node_modules/@playwright/test/cli.js test --config=tests/qe-read-contract.config.ts tests/qe/qe-evolution-best-loop-ui.spec.ts tests/qe/qe-evolution-read-only.spec.ts tests/qe/qe-read-performance.spec.ts",
