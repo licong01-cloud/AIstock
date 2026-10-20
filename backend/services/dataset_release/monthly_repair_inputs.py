@@ -146,8 +146,9 @@ def validate_monthly_repair_inputs(payload: Mapping[str, Any], *, predecessor: L
     if not isinstance(payload["factor_prefixes"], Mapping) or len(payload["factor_prefixes"]) > 3:
         raise ValueError("monthly repair prefix scope is invalid")
     deferred_margin_authority(payload, target_cutoff=target_cutoff)
-    from .monthly_index_corrections import index_correction_rows
-    index_correction_rows(payload, before=predecessor.cutoff)
+    if "index_history_repairs" in payload:
+        from .monthly_index_corrections import index_correction_rows
+        index_correction_rows(payload, before=predecessor.cutoff)
     repair_materials(payload, predecessor=predecessor)
     return json.loads(canonical_json_bytes(payload))
 
