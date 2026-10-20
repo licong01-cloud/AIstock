@@ -284,6 +284,43 @@ class PostgresHistoricalRangeRepository:
         self._validated_upstream_closures: OrderedDict[tuple, tuple] = OrderedDict()
         self._outcome_subject_identities: OrderedDict[tuple[str, str, str], tuple[str, str, str | None]] = OrderedDict()
 
+    def find_existing_source_planning_batch(self, *, request) -> CreatedHistoricalRangePlanningBatch | None:
+        """Read an exact new-mode retry before any active-profile resolution."""
+        with self._conn_factory() as conn:
+            conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT batch.* FROM app.advisory_historical_range_request_key AS request_key
+                    JOIN app.advisory_historical_range_batch AS batch ON batch.batch_id = request_key.batch_id
+                    WHERE request_key.client_idempotency_key = %s
+                    """, (request.client_idempotency_key,))
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                if row["user_request_semantic_hash"] != request.user_request_semantic_hash:
+                    raise HistoricalRangeContractError(REASON_IDEMPOTENCY_CONFLICT,
+                        "same client key has different source-mode/user semantics")
+                ref = HistoricalRangeArtifactRefV1.model_validate(row["requirement_plan_ref"])
+                plan = HistoricalRangeSourceRequirementPlanV1.model_validate(
+                    self._artifact_store.load_planning(ref).payload)
+                self._assert_planning_batch_matches(existing=dict(row), plan=plan,
+                    artifacts=HistoricalRangePlanningArtifactBindingsV1(
+                        requirement_plan_ref=ref, artifact_root_identity_hash=self._artifact_store.root_identity_hash))
+                if (plan.request.user_request_semantic_hash != request.user_request_semantic_hash
+                        or row["artifact_root_identity_hash"] != self._artifact_store.root_identity_hash):
+                    raise HistoricalRangeContractError(REASON_IDEMPOTENCY_CONFLICT,
+                        "stored source planning request/root differs from this consumer")
+                from .task_input_sources import validate_program_source_plan
+
+                for program in plan.frozen_programs:
+                    if program.selection_input_source_plan is None:
+                        raise HistoricalRangeContractError(REASON_IDEMPOTENCY_CONFLICT,
+                            "stored source-mode task is missing its frozen source plan")
+                    validate_program_source_plan(program=program, date_plan=plan.date_plan, request=plan.request)
+                result = self._planning_batch_result(cur=cur, batch_id=str(row["batch_id"]), idempotent=True)
+            conn.rollback()
+        return result
+
     def create_planning_batch(
         self,
         *,

@@ -344,6 +344,11 @@ class HistoricalRangeDayExecutor:
                     claim=claim,
                     candidate_prefetch_per_program=candidate_prefetch_per_program,
                 )
+            elif program.selection_input_source_plan is not None:
+                candidate_ref = self._candidate_producer.revalidate_candidate(
+                    request_payload=request_payload, research_program_id=program.research_program_id,
+                    decision_trade_date=claim.decision_trade_date, request_artifact_ref=claim.request_ref,
+                    candidate_ref=candidate_ref)
             candidate_payload = _load_candidate_payload(store=self._artifact_store, ref=candidate_ref)
             _validate_candidate_for_claim(
                 claim=claim,
@@ -2003,6 +2008,13 @@ def _failure_input_hash(
 
 
 def _classify_failure(exc: Exception) -> tuple[HistoricalRangeDayStatus, tuple[str, ...]]:
+    from .input_source_plan import SourcePlanError
+    from .selection_signal_kernel import SelectionSignalBatchError
+
+    if isinstance(exc, SelectionSignalBatchError):
+        return _classify_failure(exc.cause)
+    if isinstance(exc, SourcePlanError):
+        return HistoricalRangeDayStatus.FAILED, (exc.reason_code,)
     if isinstance(exc, HistoricalRangeDayWaitingInput):
         return HistoricalRangeDayStatus.WAITING_INPUT, exc.reason_codes
     if isinstance(exc, HistoricalRangeSourceInputUnavailable):
