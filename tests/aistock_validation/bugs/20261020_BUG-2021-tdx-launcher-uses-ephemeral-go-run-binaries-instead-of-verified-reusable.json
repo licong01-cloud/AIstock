@@ -27,13 +27,20 @@
   "evidence_uris": [],
   "expected": "Verified fixed executable reused without Go compilation when inputs are unchanged; changed or invalid build fails closed or builds once without replacing a running executable.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_start_tdx_go_backend.py",
+      "docs/operations/tdx_go_runtime_runbook.md",
+      "scripts/start_tdx_go_backend.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2021-tdx-launcher-uses-ephemeral-go-run-binaries-instead-of-verified-reusable.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/start_tdx_go_backend.py",
       "backend/tests/scripts/test_start_tdx_go_backend.py",
-      "docs/operations/tdx_go_runtime_runbook.md"
+      "docs/operations/tdx_go_runtime_runbook.md",
+      "scripts/start_tdx_go_backend.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2021-tdx-launcher-uses-ephemeral-go-run-binaries-instead-of-verified-reusable.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/start_tdx_go_backend.py",
@@ -96,6 +103,21 @@
   "fixed_at": null,
   "github_issue_number": 6455,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6455",
+  "implementation_review": {
+    "database_writes": false,
+    "design_compliance_001": {
+      "no_business_logic_change": "Only launcher, direct tests and operator runbook change; no TDX business or database logic.",
+      "no_extra_approval": "Unchanged inputs reuse automatically and first build is automatic; no new CI or operator approval.",
+      "no_silent_errors": "Invalid receipts, failed builds, changed inputs and locked outputs fail explicitly.",
+      "no_unapproved_simplification": "Complete build/reuse and explicit recovery paths implemented; live restart acceptance remains pending, not claimed."
+    },
+    "firewall_changes": false,
+    "production_process_control": false,
+    "rounds": [
+      "Review 1: fixed executable input/digest reuse, source isolation, explicit production/DEV environment and native build fail-closed behavior.",
+      "Review 2: OS-owned build lock, candidate publication, build failure/source drift/in-use executable retain previous artifact; check/build-only never launch services."
+    ]
+  },
   "last_seen_at": "2026-10-20T08:06:57.431267Z",
   "module": "local_data",
   "non_goals": [
@@ -113,15 +135,21 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
+    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1",
+    "fresh_process_evidence": [
+      "python -B scripts/start_tdx_go_backend.py --database-target production --env-file F:/Dev/AIstock/.env --check -> passed; check_only, no build and no service started"
+    ],
     "health_ref": "http://127.0.0.1:19080/api/health",
     "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "tdx-go-backend"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "tdx-go-backend",
@@ -188,21 +216,6 @@
     "target_cost_percent_of_legacy": "25-35%"
   },
   "verification_run_id": null,
-  "implementation_review": {
-    "rounds": [
-      "Review 1: fixed executable input/digest reuse, source isolation, explicit production/DEV environment and native build fail-closed behavior.",
-      "Review 2: OS-owned build lock, candidate publication, build failure/source drift/in-use executable retain previous artifact; check/build-only never launch services."
-    ],
-    "design_compliance_001": {
-      "no_unapproved_simplification": "Complete build/reuse and explicit recovery paths implemented; live restart acceptance remains pending, not claimed.",
-      "no_silent_errors": "Invalid receipts, failed builds, changed inputs and locked outputs fail explicitly.",
-      "no_business_logic_change": "Only launcher, direct tests and operator runbook change; no TDX business or database logic.",
-      "no_extra_approval": "Unchanged inputs reuse automatically and first build is automatic; no new CI or operator approval."
-    },
-    "production_process_control": false,
-    "database_writes": false,
-    "firewall_changes": false
-  },
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
