@@ -1,5 +1,6 @@
 """Startup safety contracts; never launch an application or inspect live services."""
 from contextlib import nullcontext
+import base64
 import importlib.util
 import json
 from pathlib import Path
@@ -143,8 +144,82 @@ def test_absent_services_launch_once_and_bind_expected_revisions(tmp_path, monke
     monkeypatch.setattr(launcher, "state", lambda *_: "absent")
     monkeypatch.setattr(launcher, "startup_lock", nullcontext)
     monkeypatch.setattr(launcher, "tdx_build", lambda _: "b" * 40)
-    launch, wait = Mock(), Mock(return_value=SHA)
+    events = []
+    launch = Mock(side_effect=lambda service, _: events.append(("launch", service)))
+    wait = Mock(side_effect=lambda service, *_: events.append(("ready", service)) or SHA)
     monkeypatch.setattr(launcher, "launch", launch)
     monkeypatch.setattr(launcher, "wait_ready", wait)
     assert len(launcher.start()["services"]) == launch.call_count == 3
     assert [c.args[1] for c in wait.call_args_list] == ["b" * 40, SHA, None]
+    assert events == [("launch", "frontend"), ("launch", "tdx"), ("ready", "tdx"),
+                      ("launch", "backend"), ("ready", "backend"), ("ready", "frontend")]
+
+
+def test_utf8_is_propagated_to_real_redirected_python_even_with_gbk_parent(monkeypatch):
+    monkeypatch.setenv("PYTHONIOENCODING", "gbk")
+    monkeypatch.setenv("PYTHONUTF8", "0")
+    _, _, env = launcher.commands("backend")
+    result = launcher.subprocess.run(
+        [launcher.sys.executable, "-c", "print(chr(0x2705) + chr(0x4e2d))"],
+        env=env, capture_output=True, encoding="utf-8", check=True,
+    )
+    assert result.stdout.strip() == "\u2705\u4e2d"
+    assert env["PYTHONUTF8"] == "1" and env["PYTHONUNBUFFERED"] == "1"
+
+
+def test_child_supervisor_preserves_unicode_log_and_nonzero_exit(tmp_path, monkeypatch):
+    monkeypatch.setattr(launcher, "RUNTIME", tmp_path)
+    directory = tmp_path / "assigned"
+    directory.mkdir()
+    _, _, env = launcher.commands("backend")
+    monkeypatch.setattr(launcher, "commands", lambda _: (
+        [launcher.sys.executable, "-c", "print(chr(0x2705)); raise SystemExit(7)"], tmp_path, env))
+    assert launcher.child("backend", directory) == 7
+    assert (directory / "backend.log").read_text(encoding="utf-8").strip() == "\u2705"
+    assert json.loads((directory / "backend.exit.json").read_text()) == {"exit_code": 7}
+
+
+@pytest.mark.parametrize("terminal", [True, False])
+def test_terminal_tabs_and_console_share_absolute_utf8_supervisor(tmp_path, monkeypatch, terminal):
+    monkeypatch.setenv("WT_SESSION", "present")
+    monkeypatch.setenv("WT_WINDOW_ID", "7")
+    monkeypatch.setattr(launcher.shutil, "which", lambda _: "wt.exe" if terminal else None)
+    run, popen = Mock(), Mock()
+    monkeypatch.setattr(launcher.subprocess, "run", run)
+    monkeypatch.setattr(launcher.subprocess, "Popen", popen)
+    directory = tmp_path / "space ' \u4e2d"
+    launcher.launch("backend", directory)
+    invoked = run if terminal else popen
+    args = invoked.call_args.args[0]
+    script = base64.b64decode(args[-1]).decode("utf-16-le")
+    assert "'-X' 'utf8'" in script and "'--child' 'backend'" in script
+    assert str(directory).replace("'", "''") in script
+    assert launcher.sys.executable.replace("'", "''") in script
+    assert "-NoProfile" in args and "-NoExit" in args
+    if terminal:
+        assert args[:4] == ["wt.exe", "-w", "7", "new-tab"]
+        assert invoked.call_args.kwargs["check"] is True
+        popen.assert_not_called()
+        run.side_effect = launcher.subprocess.CalledProcessError(1, args)
+        with pytest.raises(launcher.subprocess.CalledProcessError):
+            launcher.launch("backend", directory)
+        popen.assert_not_called()  # A failed tab dispatch never launches a duplicate fallback.
+    else:
+        assert invoked.call_args.kwargs["creationflags"] == launcher.subprocess.CREATE_NEW_CONSOLE
+        run.assert_not_called()
+
+
+def test_readiness_closed_port_polls_are_cheap_but_final_ownership_is_required(tmp_path, monkeypatch):
+    connect = Mock(side_effect=[OSError("closed"), OSError("closed"), nullcontext()])
+    monkeypatch.setattr(launcher.socket, "create_connection", connect)
+    monkeypatch.setattr(launcher.time, "sleep", lambda _: None)
+    inventory = Mock(return_value=snapshot("backend"))
+    monkeypatch.setattr(launcher, "inventory", inventory)
+    monkeypatch.setattr(launcher, "ready", Mock(return_value=SHA))
+    assert launcher.wait_ready("backend", SHA, tmp_path) == SHA
+    assert connect.call_count == 3 and inventory.call_count == 1
+    connect.side_effect = None
+    connect.return_value = nullcontext()
+    inventory.return_value = snapshot("backend", command="foreign.exe")
+    with pytest.raises(RuntimeError, match="unknown process"):
+        launcher.wait_ready("backend", SHA, tmp_path)
