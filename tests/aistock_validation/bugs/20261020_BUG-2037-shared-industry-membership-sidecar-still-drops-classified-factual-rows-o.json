@@ -15,6 +15,11 @@
   ],
   "created_at": "2026-10-20T11:49:52.235231Z",
   "description": "The full-factual dataset audit found summarize_sector_context builds active membership solely from pit_rows and discards valid l2_code_id facts for securities outside buy eligibility. This leaves shared membership policy-dependent even after full fact export. Retain all verified classified frozen stock-date facts in the sidecar, while preserving strict PIT consumer requirements, unknown semantics, quote publication boundaries, and independent buy eligibility. No database writes, active/profile changes, business consumer edits or re-export of prices.",
+  "design_compliance_001": {
+    "delivery_state": "source fix only; historical candidate corrections and runtime acceptance remain pending",
+    "result": "PASS",
+    "scope": "Ordinary BUG; preserve frozen per-date classification facts independently of buy eligibility. No historical backcast, new classification, consumer rule change or synthetic membership. No design subset or placeholder delivered as release-ready."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -26,11 +31,18 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/tests/dataset_release/test_monthly_preparation_shared.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2037-shared-industry-membership-sidecar-still-drops-classified-factual-rows-o.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/monthly_preparation_shared.py"
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/tests/dataset_release/test_monthly_preparation_shared.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2037-shared-industry-membership-sidecar-still-drops-classified-factual-rows-o.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_preparation_shared.py"
@@ -90,18 +102,25 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_evidence": [
+    "Round 1: reproduce buy-PIT-only membership loss for two independent selections; retain both frozen factual identities without changing selection spans.",
+    "Round 2: verify missing factual date closes non-buy span; unknown classification is reported, never inferred or defaulted. Existing duplicate, mapping, quote publication and required PIT checks remain unchanged.",
+    "Round 3: inspect single-pass bounded implementation, native shared producer and validator callers, immutable inputs and release-only scope; 78 related tests, Ruff, L0 and git diff --check pass. No database, candidate, profile or runtime mutations."
+  ],
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_required": true,
     "backend_restart_owner": "user",
+    "backend_restart_required": true,
     "fresh_process_evidence": [
-      "Isolated interpreter imported summarize_sector_context and verified factual_members implementation; database_access=false. Targeted RED 4 failures -> GREEN 4 passed; final related matrix 78 passed."
+      "Isolated interpreter imported summarize_sector_context and verified factual_members implementation; database_access=false. Targeted RED 4 failures -> GREEN 4 passed; final related matrix 78 passed.",
+      "Isolated interpreter loaded summarize_sector_context factual_members implementation; database_access=false"
     ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -111,16 +130,6 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "review_evidence": [
-    "Round 1: reproduce buy-PIT-only membership loss for two independent selections; retain both frozen factual identities without changing selection spans.",
-    "Round 2: verify missing factual date closes non-buy span; unknown classification is reported, never inferred or defaulted. Existing duplicate, mapping, quote publication and required PIT checks remain unchanged.",
-    "Round 3: inspect single-pass bounded implementation, native shared producer and validator callers, immutable inputs and release-only scope; 78 related tests, Ruff, L0 and git diff --check pass. No database, candidate, profile or runtime mutations."
-  ],
-  "design_compliance_001": {
-    "result": "PASS",
-    "scope": "Ordinary BUG; preserve frozen per-date classification facts independently of buy eligibility. No historical backcast, new classification, consumer rule change or synthetic membership. No design subset or placeholder delivered as release-ready.",
-    "delivery_state": "source fix only; historical candidate corrections and runtime acceptance remain pending"
-  },
   "status": "open",
   "suspected_modules": [
     "qlib_data"
