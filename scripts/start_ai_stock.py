@@ -2,12 +2,14 @@
 from __future__ import annotations
 
 import argparse
+import base64
 from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -127,6 +129,9 @@ def ready(service: str, expected: str | None = None) -> str:
 def commands(service: str) -> tuple[list[str], Path, dict]:
     env = os.environ.copy()
     env["PYTHONUNBUFFERED"] = "1"
+    # Popen's decoding does not change the child's encoding for redirected stdout.
+    env["PYTHONUTF8"] = "1"
+    env["PYTHONIOENCODING"] = "utf-8"
     if service == "backend":
         return [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8001"], ROOT, env
     if service == "tdx":
@@ -181,16 +186,31 @@ def startup_lock():
 
 
 def launch(service: str, directory: Path) -> None:
-    # One implementation, independent of Windows Terminal availability.
-    command = [sys.executable, str(Path(__file__).resolve()), "--child", service, "--log-dir", str(directory)]
-    console = os.environ.get("COMSPEC", r"C:\Windows\System32\cmd.exe")
-    subprocess.Popen(f'"{console}" /d /k "{subprocess.list2cmdline(command)}"',
-                     cwd=ROOT, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    # Both hosts run exactly the same UTF-8 supervisor with an absolute Python.
+    command = [sys.executable, "-X", "utf8", str(Path(__file__).resolve()),
+               "--child", service, "--log-dir", str(directory)]
+    script = "& " + " ".join("'" + arg.replace("'", "''") + "'" for arg in command)
+    encoded = base64.b64encode(script.encode("utf-16-le")).decode("ascii")
+    shell = ["powershell.exe", "-NoLogo", "-NoProfile", "-NoExit", "-EncodedCommand", encoded]
+    terminal = shutil.which("wt.exe") if os.environ.get("WT_SESSION") else None
+    if terminal:
+        # 0 means the most recently used window; an explicit window ID pins routing.
+        window = os.environ.get("WT_WINDOW_ID", "0")
+        subprocess.run([terminal, "-w", window, "new-tab", "--title", f"AIstock {service}",
+                        "--suppressApplicationTitle", "--startingDirectory", str(ROOT), *shell],
+                       cwd=ROOT, check=True, timeout=10)
+    else:
+        print(f"{service}: Windows Terminal unavailable; opening a separate PowerShell console", flush=True)
+        subprocess.Popen(shell, cwd=ROOT, creationflags=subprocess.CREATE_NEW_CONSOLE)
 
 
 def child(service: str, directory: Path) -> int:
     if directory.resolve().parent != RUNTIME.resolve() or not directory.is_dir():
         raise RuntimeError("Invalid startup log directory")
+    # Also protect direct --child invocation under a legacy GBK host.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(encoding="utf-8")
     command, cwd, env = commands(service)
     with (directory / f"{service}.log").open("a", encoding="utf-8") as log:
         process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
@@ -212,17 +232,29 @@ def wait_ready(service: str, expected: str | None, directory: Path, timeout: flo
         exit_file = directory / f"{service}.exit.json"
         if exit_file.exists():
             raise RuntimeError(f"{service} exited before ready: {exit_file.read_text(encoding='utf-8')}; logs: {directory}")
-        current = state(service, inventory())
-        if current == "listening":
+        # Avoid starting PowerShell/CIM for every failed readiness poll. A TCP
+        # connection is only a cheap hint, never ownership or readiness evidence.
+        try:
+            with socket.create_connection(("127.0.0.1", PORTS[service]), timeout=0.2):
+                listening = True
+        except OSError:
+            listening = False
+        if listening:
             try:
-                return ready(service, expected)
+                revision = ready(service, expected)
             except (OSError, ValueError, RuntimeError) as exc:
                 if isinstance(exc, RuntimeError) and "old/different source" in str(exc):
                     raise
                 last = str(exc)
+            else:
+                # Re-read the PID/ancestry at acceptance; never trust a socket
+                # opening or an HTTP 200 from an unknown replacement listener.
+                if state(service, inventory()) == "listening":
+                    return revision
+                last = "listener disappeared before ownership verification"
         else:
-            last = current
-        time.sleep(2)
+            last = "not listening"
+        time.sleep(0.5)
     raise RuntimeError(f"{service} readiness timeout: {last}; logs: {directory}. No processes were killed or retried")
 
 
@@ -252,7 +284,13 @@ def start(check: bool = False) -> dict:
         directory.mkdir()
         print(f"Startup logs: {directory}", flush=True)
         result = {"logs": str(directory), "business_acceptance": "not_evaluated", "services": {}}
-        for service in PORTS:
+        expected_revisions = {}
+        # Next.js can prepare independently while TDX builds/warms up. Backend
+        # still waits for TDX, so its existing startup dependency is unchanged.
+        for service in ("frontend", "tdx", "backend"):
+            if service == "backend":
+                revision = wait_ready("tdx", expected_revisions["tdx"], directory)
+                result["services"]["tdx"]["observed_identity"] = revision
             current = settle(service)
             expected = head if service == "backend" else None
             if current == "absent":
@@ -260,11 +298,16 @@ def start(check: bool = False) -> dict:
                     expected = tdx_build(directory)
                 if state(service, inventory()) != "absent":
                     raise RuntimeError(f"{service} appeared during preparation; rerun after inspection")
+                if git_head() != head:
+                    raise RuntimeError("Source HEAD changed during startup; no further services started")
                 launch(service, directory)
-            revision = wait_ready(service, expected, directory)
+            expected_revisions[service] = expected
+            result["services"][service] = {"prior_state": current}
+        for service in ("backend", "frontend"):
+            revision = wait_ready(service, expected_revisions[service], directory)
             if git_head() != head:
                 raise RuntimeError("Source HEAD changed during startup; readiness cannot be attributed to this start")
-            result["services"][service] = {"prior_state": current, "observed_identity": revision}
+            result["services"][service]["observed_identity"] = revision
         (directory / "summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
         return result
 

@@ -8,8 +8,14 @@ changes firewall rules, or invokes a database migration.
 ## Behaviour
 
 - Conda activation and the absolute AIstock Python are checked before dispatch.
-- All three services use the same ordinary Windows console implementation; no
-  Windows Terminal-specific command chain or environment differences remain.
+- When invoked from PowerShell inside Windows Terminal (`WT_SESSION` is set and
+  `wt.exe` is available), services open as named tabs using `wt -w 0 new-tab`.
+  `0` selects the most recently used Terminal window: keep the invoking window
+  active while dispatching. An explicit `WT_WINDOW_ID` overrides that selection.
+  A legacy PowerShell console has no tabs and uses separate PowerShell windows.
+  Both hosts execute the same absolute Python supervisor, without shell profiles.
+- The supervisor and Python service stdout/stderr explicitly use UTF-8, including
+  redirected logs; a GBK parent locale must not crash Unicode startup messages.
 - Ports 19080, 8001 and 3000 are checked with their process ancestry. An unknown
   listener blocks startup. DEV TDX ports 19081/19082 are not managed.
 - An old startup/shutdown process or monthly worker is allowed up to 120 seconds
@@ -18,8 +24,14 @@ changes firewall rules, or invokes a database migration.
   source identity must match the clean checkout. TDX health requires metadata-ready
   and production identity; a newly started TDX must match its verified build receipt,
   not an unrelated repository HEAD. Frontend stays on port 3000, not a fallback port.
+- Frontend preparation overlaps TDX build/readiness; the backend still starts
+  after TDX is ready. Closed-port polling uses a cheap loopback connection, not
+  a new PowerShell/CIM inventory on every poll. Before accepting readiness, the
+  listener's PID/ancestry and service health/identity must still be verified.
 - The fixed TDX executable is built/reused by `scripts/start_tdx_go_backend.py`.
   Its build/reuse checks are separate from service readiness.
+  The first build or changed TDX inputs can take longer; unchanged inputs reuse
+  the fixed EXE. `tdx-build.log` reports `build_action=built` or `reused`.
 - Existing healthy instances are not relaunched. A different backend revision is
   reported as old and is not silently accepted as an updated backend.
 - Failures return nonzero and preserve each service console plus logs under
