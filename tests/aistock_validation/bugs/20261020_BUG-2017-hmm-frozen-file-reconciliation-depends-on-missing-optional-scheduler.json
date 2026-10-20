@@ -28,14 +28,22 @@
   "evidence_uris": [],
   "expected": "Startup catch-up and existing data-completion wakes reconcile enabled frozen-file extensions without APScheduler; completed primary jobs can append legal subwindows zero-fit and zero-reinference. Transient orchestration DB failures retain retryability; business blocks remain fail-closed.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/hmm_training.py",
+      "backend/services/hmm_training_service.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py",
+      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2017-hmm-frozen-file-reconciliation-depends-on-missing-optional-scheduler.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/routers/hmm_training.py",
       "backend/services/hmm_training_service.py",
       "backend/tests/hmm_data_source/test_coefficient_extension.py",
-      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py"
+      "backend/tests/hmm_data_source/test_daily_coefficient_subscription.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2017-hmm-frozen-file-reconciliation-depends-on-missing-optional-scheduler.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/routers/hmm_training.py",
@@ -145,7 +153,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-training/configs/fc0683a9-6ca0-4d55-b053-17c2360c3c40/coefficient-extension?job_id=0b8bb408-298d-4340-8654-96f689ecfb2d",
     "fresh_process_evidence": [
-      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -B -I - (explicit BUG-2017 task-root sys.path) -> PASS: hmm_training/health/HMMTrainingService/coefficient_extension imports resolve inside task worktree. Isolated shared startup regression 5 passed: no APS dependency, zero-fit/zero-reinference completed-primary projection, same-watermark OperationalError and InterfaceError recovery, identity and terminal-failure non-retry. Poisoned production DB/network attempts=0; production DB/asset writes=0; service_control=false. Runtime verification remains pending after source merge and user restart; actual 72-date registration/readback is separately required."
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -B -I - (explicit BUG-2017 task-root sys.path) -> PASS: hmm_training/health/HMMTrainingService/coefficient_extension imports resolve inside task worktree. Isolated shared startup regression 5 passed: no APS dependency, zero-fit/zero-reinference completed-primary projection, same-watermark OperationalError and InterfaceError recovery, identity and terminal-failure non-retry. Poisoned production DB/network attempts=0; production DB/asset writes=0; service_control=false. Runtime verification remains pending after source merge and user restart; actual 72-date registration/readback is separately required.",
+      "AIstock Python 3.12.12 -B -I stdin at f4687db656536c63d8c9fc513e27c18543b585e9 -> passed; explicit BUG-2017 source-root imports hmm_training/hmm_risk/health/HMM service/extension reader; production DB/network poison attempts=0; producer and reader SHA pins unchanged; no production writes/fits/service control"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
@@ -153,6 +162,7 @@
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
