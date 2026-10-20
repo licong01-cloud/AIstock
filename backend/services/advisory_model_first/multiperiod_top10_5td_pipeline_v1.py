@@ -42,6 +42,14 @@ def versions():
     return {name: version(name) for name in ('numpy', 'pandas', 'scikit-learn', 'pyarrow')}
 
 
+def peak_memory_bytes():
+    info = psutil.Process().memory_info()
+    if os.name == 'nt':
+        return info.peak_wset
+    import resource
+    return max(info.rss, resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*1024)
+
+
 def implementation_sha256():
     root = Path(__file__).parents[2]
     names = ['services/advisory_model_first/multiperiod_top10_5td_'+n+'_v1.py' for n in ('inputs', 'study', 'pipeline')]
@@ -82,7 +90,7 @@ class Study:
         self.started, self.peak = time.monotonic(), 0
 
     def budget(self):
-        self.peak = max(self.peak, psutil.Process().memory_info().rss)
+        self.peak = max(self.peak, peak_memory_bytes())
         if self.peak > 2*1024**3 or time.monotonic()-self.started > 1800:
             raise ValueError('explicit 2GiB/30-minute stage resource budget exceeded')
 
@@ -179,7 +187,7 @@ def preregister(output_root, plan):
     return study.root
 
 
-def prepare(root):
+def prepare(root, progress=lambda event: None):
     study = Study(root)
     with _exclusive_file_lock(study.root/'study.lock'):
         study.read('preregistered')
@@ -191,17 +199,19 @@ def prepare(root):
         try:
             calendar = list(dataset.calendar)
             roster, days, sources = original_rosters(study.plan, calendar, AIstockApiClient(study.plan['api_base'], timeout=30))
+            progress(dict(phase='FROZEN_ROSTERS_READY', rows=len(roster), package_days=len(days), physical_fit_count=0))
             first = calendar.index(pd.Timestamp(study.plan['start']).date())-19
             if first < 0:
                 raise ValueError('original D history has no real warmup')
             daily = read_daily(dataset, sorted(set(roster.instrument)), calendar[first], pd.Timestamp(study.plan['end']).date())
             inputs = build_features(roster, daily, calendar)
+            progress(dict(phase='D_INPUTS_READY', rows=len(inputs), outer_finance_decoded=False, physical_fit_count=0))
             train = roster.loc[roster[KEY[0]].le(pd.Timestamp(CONTRACT['train_end']))].reset_index(drop=True)
             finance, finance_receipt = finance_inputs(dataset, train, CONTRACT['train_end'], study.budget)
             receipt = dict(original_candidates=len(roster), package_days=len(days), scores=sources,
                 train_finance=finance_receipt, outer_finance_decoded=False, sealed_finance_decoded=False,
                 database_queries=0, physical_fit_count=0, wall_seconds=time.monotonic()-study.started,
-                peak_rss_bytes=psutil.Process().memory_info().rss, prepare_versions=versions())
+                peak_rss_bytes=peak_memory_bytes(), prepare_versions=versions())
             dataset.assert_unchanged()
             study.publish('prepared', {'inputs.parquet': parquet_bytes(inputs), 'train_finance.parquet': parquet_bytes(finance),
                 'days.parquet': parquet_bytes(days), 'calendar.json': _json_bytes([str(d) for d in calendar]), 'receipt.json': _json_bytes(receipt)})
@@ -283,7 +293,7 @@ def finish(root):
         try:
             finance, receipt = finance_inputs(dataset, inputs, study.plan['end'], study.budget)
             result, panel, daily = evaluate(predictions, finance)
-            result.update(wall_seconds=time.monotonic()-study.started, peak_rss_bytes=psutil.Process().memory_info().rss,
+            result.update(wall_seconds=time.monotonic()-study.started, peak_rss_bytes=peak_memory_bytes(),
                 experiment_id=study.plan['experiment_id'], source_commit=study.plan['source_commit'], physical_fit_count=physical_fit_count)
             study.publish('evaluated', {'evaluation.json': _json_bytes(result), 'panel.parquet': parquet_bytes(panel),
                 'daily.parquet': parquet_bytes(daily), 'finance.parquet': parquet_bytes(finance), 'source_receipt.json': _json_bytes(receipt)})

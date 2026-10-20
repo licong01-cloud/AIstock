@@ -264,3 +264,17 @@ def test_modified_ranks_fail_closed_and_attribution_matches_primary(rows):
     result, _, _ = study.evaluate(p, rows[['package_id', *KEY, *FINANCE]])
     attribution = result['avoided_loss_bps']-result['missed_profit_bps']+result['added_profit_bps']-result['added_loss_bps']
     assert attribution == result['statistics']['mean_bps'] == 0.
+
+
+def test_finance_batches_preserve_package_population_beyond_first_hundred_days(rows):
+    calendar = pd.bdate_range('2025-01-02', periods=107).date.tolist()
+    original = rows.iloc[:2].copy()
+    original['candidate_group_size'] = 2
+    roster = pd.concat([original.assign(decision_as_of_trade_date=pd.Timestamp(day),
+        target_trade_date=pd.Timestamp(calendar[i+1])) for i, day in enumerate(calendar[:101])], ignore_index=True)
+    daily = pd.DataFrame([dict(trade_date=pd.Timestamp(day), instrument=s, adj_factor=1., volume_hand=100.,
+        raw_open_cny=10., raw_high_cny=11., raw_low_cny=9., raw_close_cny=10.) for day in calendar for s in original.instrument])
+    limits = daily[['trade_date', 'instrument']].assign(up_limit=12., down_limit=8.)
+    result = make_finance(roster, daily, limits, [], calendar, calendar[-1])
+    assert len(result) == 202 and result[KEY[0]].nunique() == 101
+    assert result.valuation_status.eq('AVAILABLE').all()

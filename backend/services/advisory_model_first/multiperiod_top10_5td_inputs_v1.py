@@ -151,13 +151,13 @@ def make_finance(roster, daily, limits, suspension, calendar, cutoff):
                 path['suspended'] = [(s, day) in full for s, day in zip(path.instrument, path.trade_date, strict=True)]
                 path['tradability_unknown'] = [(s, day) in partial for s, day in zip(path.instrument, path.trade_date, strict=True)]
                 prices.append(path.loc[:, PRICE_FIELDS])
-            pp, rr = pd.concat(prices, ignore_index=True), pd.concat(refs, ignore_index=True).loc[:, REFERENCE_FIELDS]
+            pp, reference_frame = pd.concat(prices, ignore_index=True), pd.concat(refs, ignore_index=True).loc[:, REFERENCE_FIELDS]
             context = dict(source_evidence='FROZEN_FILE_CURRENT_RELEASE_NON_VINTAGE', label_price_basis='D_REFERENCE_POLICY_RATIO',
                 calendar_sha256=sha([str(d) for d in calendar]), prices_sha256=hashlib.sha256(parquet_bytes(pp)).hexdigest(),
-                references_sha256=hashlib.sha256(parquet_bytes(rr)).hexdigest())
+                references_sha256=hashlib.sha256(parquet_bytes(reference_frame)).hexdigest())
             measured, _ = build_generic_price_5td_valuation_v2(candidates=original.loc[:, ROSTER],
                 decision_dates=[pd.Timestamp(d).date() for d in dates[start:start+100]], calendar=calendar,
-                prices=pp, references=rr, source_context=context)
+                prices=pp, references=reference_frame, source_context=context)
             immature = measured.label_information_end.isna() | measured.label_information_end.gt(pd.Timestamp(cutoff))
             measured.loc[immature, ['valuation_status', 'exit_execution_status']] = 'IMMATURE'
             measured.loc[immature, ['hypothetical_liquidation_net_bps', 'valuation_gross_terminal_ratio', 'observed_gap_bps']] = np.nan
