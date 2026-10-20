@@ -1,0 +1,326 @@
+{
+  "actual": "Production last_error reports missing_count=2 for 601059.SH and 601198.SH; canonical failed/dirty, singleton remains legacy generation 0.",
+  "allowed_write_scope": [
+    "scripts/build_stock_universe_pit_spans.py",
+    "backend/services/canonical_equity_pit.py",
+    "backend/tests/test_stock_universe_pit_spans.py",
+    "backend/tests/test_canonical_equity_pit.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2005-canonical-pit-blocks-authoritative-delisted-securities-on-mandatory-anno.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2005",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T03:04:38.924749Z",
+  "data_validation": {
+    "dataset_profile_write": false,
+    "dev": "Actual rebuild succeeded through 2026-10-19: 5346 symbols, 5665 spans; invalid/overlap/event-action/terminal-reentry counts all zero; subsequent ensure rebuilt=false.",
+    "official_sources": [
+      "https://www.sse.com.cn/disclosure/announcement/listing/stock/c/c_20261012_10834561.shtml",
+      "https://www.sse.com.cn/disclosure/announcement/listing/stock/c/c_20261012_10834560.shtml"
+    ],
+    "production": "Read-only dry-run through 2026-10-19 succeeded: 5346 symbols, 5665 spans; same four zero counts, 238 authoritative terminal dates and 236 optional announcement matches, missing=0. Production DML and pointer activation not performed.",
+    "runtime_action": false
+  },
+  "description": "Production last_error reports missing_count=2 for 601059.SH and 601198.SH; canonical failed/dirty, singleton remains legacy generation 0.",
+  "design_compliance_001": {
+    "business_semantics": "252 trading-session IPO/ST/PIT rules and physical snapshot identities unchanged; real delist_date closes only from its effective session.",
+    "no_extra_gates": "Removed terminal announcement ledger requirement; no new platform, approval or evidence-chain requirement.",
+    "no_silent_errors": "Missing lifecycle dates/status, invalid date order, ST continuity and four span-validation failures remain errors; no fabricated terminal events.",
+    "no_simplified_delivery": "Shared daily/monthly builder and live/activation readiness both fixed; production apply and activation remain separate, explicitly pending."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-d193e4743a82",
+      "timestamp": "2026-10-20T03:04:38.924749Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Authoritative delisted status plus valid delist date is sufficient; announcement ledger is optional and never required for refresh/activation. DEV verify real sources and finite repair scope before any authorized production apply; no business-code or service control.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2005-canonical-pit-blocks-authoritative-delisted-securities-on-mandatory-anno.json",
+      "backend/services/canonical_equity_pit.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "scripts/build_stock_universe_pit_spans.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2005-canonical-pit-blocks-authoritative-delisted-securities-on-mandatory-anno.json",
+      "backend/services/canonical_equity_pit.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "scripts/build_stock_universe_pit_spans.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "scripts/build_stock_universe_pit_spans.py",
+        "backend/services/canonical_equity_pit.py",
+        "backend/tests/test_stock_universe_pit_spans.py",
+        "backend/tests/test_canonical_equity_pit.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "selection_center",
+        "qe.core",
+        "paper_v2",
+        "qlib_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "scripts/build_stock_universe_pit_spans.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        },
+        {
+          "file": "backend/services/canonical_equity_pit.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/test_stock_universe_pit_spans.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        },
+        {
+          "file": "backend/tests/test_canonical_equity_pit.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical"
+      ],
+      "suggested_scope": [
+        "scripts/build_stock_universe_pit_spans.py",
+        "backend/services/canonical_equity_pit.py",
+        "backend/tests/test_stock_universe_pit_spans.py",
+        "backend/tests/test_canonical_equity_pit.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "scripts/build_stock_universe_pit_spans.py",
+      "backend/services/canonical_equity_pit.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "backend/tests/test_canonical_equity_pit.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "scripts/build_stock_universe_pit_spans.py",
+      "backend/services/canonical_equity_pit.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "backend/tests/test_canonical_equity_pit.py"
+    ]
+  },
+  "first_seen_at": "2026-10-20T03:04:38.924749Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fix_description": "Use authoritative stock_basic terminal status and valid effective date without requiring announcement-event chains. Preserve optional causal announcements, unknown/date-conflict errors, ST rules and historical leases. Daily and monthly producers share the fixed builder; resolver readiness no longer requires a terminal announcement receipt.",
+  "fixed_at": null,
+  "github_issue_number": 6407,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6407",
+  "last_seen_at": "2026-10-20T03:04:38.924749Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend",
+    "qlib_data_backend"
+  ],
+  "review_rounds": [
+    "R1: RED six fix-point cases reproduced mandatory announcement gate; patched shared builder and authority readiness. Lifecycle unknown status/date errors remain.",
+    "R2: Reviewed causal history, generator input, paused-date handling and backward receipt compatibility; added authoritative terminal-date boundary test and invalid date-order check, no new approval/evidence gate.",
+    "R3: Existing DEV forced rebuild plus repeat no-op and production read-only dry-run passed; final 132-test related matrix, Ruff, compile and whitespace checks passed. Database authority pointer and active dataset profile were not changed."
+  ],
+  "risk_area": "bug",
+  "root_cause": "The builder and authority readiness validator required a second issuer-bound announcement ledger even when stock_basic already held a correct D status and delist_date. Production 601059.SH and 601198.SH both have delist_date=2026-10-19, independently confirmed by SSE; absence of two event rows incorrectly blocked the rolling refresh.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "Isolated AIstock Python loaded patched shared PIT builder and canonical resolver, performed existing DEV actual rebuild/readback, production read-only dry-run; authoritative terminal dates accepted without creating announcement rows; no production write, pointer/profile activation, provider calls or runtime control",
+      "Isolated AIstock Python loaded persistent shared builder/resolver; DEV actual rebuild/readback through 2026-10-19: 5346 symbols, 5665 spans, four zero errors; repeat no-op; production read-only dry-run passed, no production write or authority/profile activation or process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Canonical PIT blocks authoritative delisted securities on mandatory announcement evidence",
+  "trigger_condition": {
+    "fingerprint": "d193e4743a82a12848908050",
+    "source_event_id": "FE-20261020-d193e4743a82"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy",
+        "qlib_data"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend",
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy",
+          "qlib_data"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend",
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

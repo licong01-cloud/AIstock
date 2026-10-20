@@ -884,7 +884,14 @@ def audit_canonical_stock_lifecycle(stocks: Iterable[StockRow]) -> dict[str, Any
         for stock in rows
         if str(stock.list_status or "").upper() == "D" and stock.delist_date is None
     )
-    unresolved = sorted(set(missing_list_date + unsupported_status + delisted_missing_date))
+    invalid_terminal_date = sorted(
+        stock.ts_code
+        for stock in rows
+        if stock.list_date is not None
+        and stock.delist_date is not None
+        and stock.delist_date < stock.list_date
+    )
+    unresolved = sorted(set(missing_list_date + unsupported_status + delisted_missing_date + invalid_terminal_date))
     ledger = {
         "schema_version": "canonical_pit_exception_ledger_v1",
         "stock_count": len(rows),
@@ -894,6 +901,8 @@ def audit_canonical_stock_lifecycle(stocks: Iterable[StockRow]) -> dict[str, Any
         "unsupported_list_status_codes": unsupported_status,
         "delisted_missing_date_count": len(delisted_missing_date),
         "delisted_missing_date_codes": delisted_missing_date,
+        "invalid_terminal_date_count": len(invalid_terminal_date),
+        "invalid_terminal_date_codes": invalid_terminal_date,
         "unresolved_exception_count": len(unresolved),
         "unresolved_exception_codes": unresolved,
         "status": "ready" if not unresolved else "blocked",
@@ -913,8 +922,14 @@ def audit_canonical_terminal_evidence(
     start_date: dt.date | None = None,
     end_date: dt.date | None = None,
 ) -> dict[str, Any]:
-    """Require terminal evidence only for securities exposed in the dataset window."""
+    """Check usable terminal dates; announcement-event records are optional.
 
+    Authoritative stock_basic status/date facts already drive terminal spans.
+    Do not require a second announcement ledger for the same lifecycle fact.
+    Preserve the receipt keys for older readers, not the old evidence gate.
+    """
+
+    rows = list(stocks)
     terminal_codes = {
         event.ts_code
         for event in announcement_events
@@ -924,7 +939,7 @@ def audit_canonical_terminal_evidence(
     }
     pre_window = sorted(
         stock.ts_code
-        for stock in stocks
+        for stock in rows
         if str(stock.list_status or "").upper() == "D"
         and start_date is not None
         and stock.delist_date is not None
@@ -932,7 +947,7 @@ def audit_canonical_terminal_evidence(
     )
     required = sorted(
         stock.ts_code
-        for stock in stocks
+        for stock in rows
         if str(stock.list_status or "").upper() == "P"
         or (
             str(stock.list_status or "").upper() == "D"
@@ -940,19 +955,28 @@ def audit_canonical_terminal_evidence(
             and (end_date is None or (stock.delist_date is not None and stock.delist_date <= end_date))
         )
     )
-    missing = sorted(set(required).difference(terminal_codes))
+    dated_codes = {
+        stock.ts_code
+        for stock in rows
+        if str(stock.list_status or "").upper() in {"D", "P"}
+        and stock.list_date is not None
+        and stock.delist_date is not None
+        and stock.delist_date >= stock.list_date
+    }
+    missing = sorted(set(required).difference(dated_codes, terminal_codes))
     receipt = {
         "required_terminal_security_count": len(required),
         "pre_window_terminal_security_count": len(pre_window),
         "pre_window_terminal_security_codes": pre_window,
         "announcement_terminal_evidence_count": len(set(required).intersection(terminal_codes)),
+        "stock_basic_terminal_date_count": len(set(required).intersection(dated_codes)),
         "missing_terminal_evidence_count": len(missing),
         "missing_terminal_evidence_codes": missing,
         "status": "ready" if not missing else "blocked",
     }
     if missing:
         raise CanonicalPitEvidenceError(
-            "canonical terminal announcement evidence is incomplete: "
+            "canonical terminal effective date is unavailable: "
             f"missing_count={len(missing)} missing_codes={missing}",
             context=receipt,
         )
