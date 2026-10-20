@@ -621,3 +621,55 @@ def test_core_index_stage_receipt_closes_source_pins_and_pool_counts() -> None:
     broken["coverage"]["csi300"]["first_effective_from"] = "2018-08-02"
     with pytest.raises(SourceAuditIncomplete, match="core-index"):
         _validate_core_index_stage_receipt(broken, **arguments)
+
+
+@pytest.mark.parametrize("outside_population", [False, True])
+def test_full_fact_component_keeps_pit_membership_separate(tmp_path, dataset_profile, outside_population):
+    from contextlib import nullcontext
+    from backend.tests.dataset_release.test_component_manifest_producer import _pit, _source
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.contracts import Component
+    from backend.services.dataset_release.component_manifest_producer import (
+        produce_component_artifact_manifest, snapshot_candidate_artifacts,
+    )
+    from backend.services.dataset_release.component_artifact_manifest import (
+        ComponentArtifactManifestError, load_component_artifact_manifest,
+    )
+
+    root = tmp_path / "candidate"
+    for relative in ("daily_bin/qlib/features/000002.sz/close.day.bin",
+                     "minute_bin/qlib/features/000002.sz/close.1min.bin",
+                     "factor_bundle/daily_pv.h5", "index_context/index_csv/000985.CSI.csv"):
+        target = root / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(b"fixture-fact")
+    pit = _pit()  # Only 000001.SZ is eligible. 000002.SZ must not acquire a PIT span.
+    qfq = SimpleNamespace(values=(("000001.SZ", 1.25), ("000002.SZ", 1.5)),
+                          per_code_series=(("000001.SZ", 1, "c" * 64), ("000002.SZ", 1, "d" * 64)))
+    sources = {component: _source(component) for component in Component}
+    for component, rows in sources.items():
+        if component is not Component.DOMESTIC_INDEX_CONTEXT:
+            rows.append({**rows[0], "identity": "stk_limit_rule_coverage:2026-07-01_2026-07-31",
+                         "dataset": "stk_limit_rule_coverage",
+                         "affected_instruments": ["000003.SZ" if outside_population else "000002.SZ"]})
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    snapshot = snapshot_candidate_artifacts(root)
+    with (pytest.raises(ComponentArtifactManifestError, match="factual population")
+          if outside_population else nullcontext()):
+        reference = produce_component_artifact_manifest(
+            cas, candidate_root=root, profile=dataset_profile, scope="full", cutoff=pit.cutoff,
+            candidate_identity="6" * 64, artifact_root=snapshot.artifact_root,
+            producer_fingerprint="7" * 64, artifact_fingerprint="8" * 64,
+            validation_fingerprint="9" * 64, source_content_root="a" * 64,
+            artifact_ready_content_root="b" * 64, pit_snapshot=pit,
+            source_partitions=sources, qfq_authority=qfq, artifact_snapshot=snapshot,
+        )
+    if outside_population:
+        return
+    manifest = load_component_artifact_manifest(cas, reference)
+    daily = manifest.component(Component.DAILY_BIN)
+    assert daily.pit_instruments == ("000001.SZ",)
+    assert set(daily.pit_span_digest_by_code) == {"000001.SZ"}
+    assert set(daily.artifact_partitions[0].instruments) == {"000001.SZ", "000002.SZ"}
+    assert daily.adj_writer_targets("000002.SZ") == ("qlib/features/000002.sz/close.day.bin",)
