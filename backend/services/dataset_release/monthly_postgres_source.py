@@ -408,8 +408,9 @@ class PostgresMonthlySourceAdapter:
             from .monthly_build_bridge import load_monthly_predecessor_prefix
             prefix = load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile)
             start = target_cutoff.replace(day=1)
-            codes = tuple(sorted({span.ts_code for span in pit.spans
-                                  if span.eligible_start <= target_cutoff and span.eligible_end >= start}))
+            # Any historical PIT member can remain a holding after buy exit.
+            # Construction anchors are boundary facts, not buy eligibility.
+            codes = tuple(sorted({span.ts_code for span in pit.spans}))
             return collect_qfq_construction_anchors(prefix, month_start=start, instruments=codes,
                                                     checkpoint=checkpoint, progress=progress)
 

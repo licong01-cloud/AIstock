@@ -36,21 +36,29 @@
   ],
   "expected": "Known historical securities retain real observed daily/minute quote days after PIT exit; buy eligibility unchanged; no fabricated prelisting/delisted bars; incremental resume and publication preserve quote scope.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2018-monthly-quote-tail-is-clipped-to-pit-buy-eligibility-and-drops-real-held.json",
+      "backend/services/dataset_release/artifact_ready_build_source.py",
+      "backend/services/dataset_release/build_stage.py",
+      "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/services/dataset_release/monthly_quote_population.py"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_quote_population.py",
       "backend/tests/dataset_release/test_monthly_quote_population.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2018-monthly-quote-tail-is-clipped-to-pit-buy-eligibility-and-drops-real-held.json",
+      "backend/services/dataset_release/artifact_ready_build_source.py",
       "backend/services/dataset_release/build_stage.py",
       "backend/services/dataset_release/canonical_stock_transformer.py",
-      "backend/services/dataset_release/artifact_ready_build_source.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/services/dataset_release/monthly_source_progress.py",
-      "backend/services/dataset_release/daily_minute_materializer.py",
-      "backend/tests/dataset_release/test_canonical_stock_transformer.py",
-      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py"
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/services/dataset_release/monthly_quote_population.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/build_stage.py",
@@ -245,19 +253,33 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    "Round 1: RED reproduced daily omission and minute empty patch after buy exit; separated explicit observed quote days from unchanged PIT buy spans.",
+    "Round 2: corrected both the limit-fact readback and SOURCE QFQ boundary population; grouped observed keys per code to avoid a quadratic all-market loop.",
+    "Round 3: 50 targeted tests cover native append, 240 closing bars, immutable prefix, no quote/no extension, exact calendar keys and unresolved source boundary. New cases reuse the existing CI-selected test module.",
+    "DESIGN-COMPLIANCE-001: no false full delivery claim; missing facts still fail, no fabricated prices, no buy-policy/model change and no added approval gate. Physical candidate correction and post-restart readback remain separate pending states."
+  ],
   "risk_area": "bug",
+  "root_cause": "The monthly native Bin tail selected only stocks with intersecting buy-eligible PIT spans, then the shared transformer and effective stk_limit reader clipped quote days to the same buy spans. Real post-exit holding quotes were sealed but not materialized. QFQ boundary collection used the same incorrect population.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Isolated AIstock Python loaded tracked month quote builder and canonical transformer; RED 2 failures became GREEN 50 tests, including native daily and minute writer, preserved prefix, 240 bars and unchanged PIT. No service control or DB writes."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main",
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main",
       "worker-scheduler"
     ]
   },
