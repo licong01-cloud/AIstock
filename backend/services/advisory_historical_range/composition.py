@@ -527,6 +527,8 @@ _R5_MUTATION_ENV_KEYS = (
 )
 
 _R5_CODE_RELEASE_CLOSURE = (
+    "backend/services/advisory_historical_range/planning_service.py",
+    "backend/services/advisory_historical_range/requirement_planner.py",
     "backend/services/advisory_historical_range/request_resolver.py",
     "backend/services/advisory_historical_range/inference_window.py",
     "backend/services/advisory_historical_range/candidate_producer.py",
@@ -538,6 +540,8 @@ _R5_CODE_RELEASE_CLOSURE = (
     "backend/services/advisory_historical_range/batch_inference_provider.py",
     "backend/services/advisory_historical_range/inference_inputs.py",
     "backend/services/advisory_historical_range/input_source_plan.py",
+    "backend/services/advisory_historical_range/task_input_sources.py",
+    "backend/services/advisory_historical_range/source_roles.py",
     "backend/services/advisory_historical_range/inference_features.py",
     "backend/services/advisory_historical_range/inference_session.py",
     "backend/services/advisory_historical_range/factor_input_materialization.py",
