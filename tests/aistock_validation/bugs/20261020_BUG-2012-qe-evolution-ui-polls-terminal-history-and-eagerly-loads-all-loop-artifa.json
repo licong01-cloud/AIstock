@@ -618,8 +618,8 @@
   },
   "first_seen_at": "2026-10-20T04:58:11.471899Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4d9e1cd11835a47f0ad322d8c727f5bddcbb439c",
+  "fixed_at": "2026-10-20T07:32:39Z",
   "github_issue_number": 6427,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6427",
   "last_seen_at": "2026-10-20T04:58:11.471899Z",
@@ -627,6 +627,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6444",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -654,6 +655,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -665,7 +667,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2012",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "38318bc2f5aa132d",
+    "recorded_at": "2026-10-20T07:33:30.113191Z",
+    "runtime_contract_digest": "37a4de21d9acaf631f29dcc3df16cf530b7a3fd35dbc6e36d70361c30901d59a",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "dc2a5aef9ac97a36682d4575ad91c7fd4fda14cf",
+    "source_merge_commit": "4d9e1cd11835a47f0ad322d8c727f5bddcbb439c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6444",
+    "validation_evidence": [
+      "validation-receipt: id=a285e5f424ddd466 commit=dc2a5aef9ac97a36682d4575ad91c7fd4fda14cf kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed: 28 changed files, blocking=0`"
+    ],
+    "validation_evidence_digest": "9b53632d594327ca049ad0e1c184c426e58790be398c7066614e366c65bc8bd9"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qe.auto_evolution"
   ],
@@ -729,6 +752,9 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "validation-receipt: id=a285e5f424ddd466 commit=dc2a5aef9ac97a36682d4575ad91c7fd4fda14cf kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv` result=`passed: 28 changed files, blocking=0`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
