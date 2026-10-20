@@ -105,7 +105,8 @@ def _allowed(relative):
 
 def recover_minute_correction(*, root, journal, record, cas):
     return recover_prev_close(root=root, journal=journal, record=record, cas=cas,
-                              schema=SCHEMA, intent_path=_pending(root), allowed_path=_allowed)
+                              schema=SCHEMA, intent_path=_pending(root), allowed_path=_allowed,
+                              allow_create=True)
 
 
 def _read_values(path):
@@ -176,17 +177,31 @@ def apply_minute_corrections(resume, *, finalized, cas, plan):
             transformed.append((row["trade_time"], result))
         for field in QLIB_STOCK_FIELDS:
             path = provider / f"features/{code}/{field}.1min.bin"
-            signature, raw, values = _read_values(path)
-            patched, changes = values.copy(), 0
+            from .monthly_build_resume import _plain
+            _plain(path)
+            signature, raw, values = _read_values(path) if path.exists() else (None, None, None)
+            requested = [positions[stamp] for stamp, _ in transformed if stamp in positions]
+            if len(requested) != len(transformed) or len(set(requested)) != len(requested):
+                raise MonthlyBuildResumeError("minute correction date is outside frozen calendar or duplicated")
+            left, right = min(requested), max(requested)
+            if values is not None:
+                old_left = int(values[0])
+                old_right = old_left + len(values) - 2
+                if old_right >= len(positions):
+                    raise MonthlyBuildResumeError("minute correction original bounds exceed frozen calendar")
+                left, right = min(left, old_left), max(right, old_right)
+            patched = np.full(right - left + 2, np.nan, dtype="<f4")
+            patched[0] = left
+            if values is not None:
+                patched[old_left - left + 1:old_right - left + 2] = values[1:]
+            changes = 0
             for stamp, result in transformed:
-                index = positions.get(stamp, -1) - int(values[0]) + 1
-                if stamp not in positions or index <= 0 or index >= len(values):
-                    raise MonthlyBuildResumeError(f"minute correction needs a bounded feature rebuild: {code}/{stamp}")
+                index = positions[stamp] - left + 1
                 with np.errstate(over="ignore", invalid="ignore"):
                     value = np.float32(result[field])
                 if not np.isfinite(value):
                     raise MonthlyBuildResumeError("minute correction cannot be represented as float32")
-                previous = values[index]
+                previous = patched[index]
                 if np.isfinite(previous) and previous != value:
                     raise MonthlyBuildResumeError(f"minute correction would overwrite a valid fact: {code}/{stamp}/{field}")
                 if not np.isfinite(previous):
@@ -196,7 +211,8 @@ def apply_minute_corrections(resume, *, finalized, cas, plan):
                 checked += 1
             if changes:
                 relative = path.relative_to(root).as_posix()
-                entry = {"original_signature": signature, "original_sha256": hashlib.sha256(raw).hexdigest(),
+                entry = {"original_signature": signature,
+                         "original_sha256": None if raw is None else hashlib.sha256(raw).hexdigest(),
                          "target_ref": cas.put_bytes(patched.tobytes()).as_dict()}
                 files[relative] = entry
                 amendments.append({"relative_path": relative, **entry, "changed_cells": changes})
@@ -242,5 +258,7 @@ def correction_pins(materialization, *, provider, cas):
         if (len(raw) != ref["size"] or hashlib.sha256(raw).hexdigest() != ref["sha256"]
                 or _signature(path) != signature):
             raise MonthlyBuildResumeError("minute correction bytes changed")
-        result[path] = {"target_sha256": ref["sha256"], "target_size": ref["size"], "target_signature": signature}
+        values = np.frombuffer(raw, dtype="<f4")
+        result[path] = {"target_sha256": ref["sha256"], "target_size": ref["size"], "target_signature": signature,
+                        "start_index": int(values[0]), "end_index": int(values[0]) + len(values) - 2}
     return result

@@ -14,6 +14,8 @@ import numpy as np
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 from backend.services.dataset_release import monthly_minute_repair as minute_repair_subject
+from backend.services.dataset_release import monthly_minute_repair as subject
+from backend.services.dataset_release import monthly_prev_close_repair as transaction
 from backend.services.dataset_release.canonical_stock_transformer import _minute_session_times
 from backend.services.dataset_release.stock_schema import QLIB_STOCK_FIELDS
 
@@ -26,6 +28,94 @@ from backend.services.dataset_release.monthly_worker import ProducerContext
 
 
 DAY, CODE = "2026-07-10", "603900.SH"
+
+@pytest.mark.parametrize("mode", ["prepend", "append", "absent"])
+@pytest.mark.parametrize("crash", [False, True])
+def test_expand_real_minute_facts_keeps_published_bytes_and_recovers(tmp_path, monkeypatch, mode, crash):
+    resume, finalized, plan = prepared(tmp_path)
+    provider = resume.root / "minute_bin/qlib"
+    folder = provider / f"features/{CODE.lower()}"
+    old = tmp_path / "published"
+    old.mkdir()
+    originals = {}
+    if mode == "append":
+        # Earlier real observations are retained; the unrequested intervening
+        # timestamp remains NaN rather than being silently filled.
+        calendar_path = provider / "calendars/1min.txt"
+        calendar_path.write_text("2026-07-09 14:59:00\n2026-07-09 15:00:00\n" + calendar_path.read_text())
+    for field in QLIB_STOCK_FIELDS:
+        path = folder / f"{field}.1min.bin"
+        if mode in {"prepend", "append"}:
+            path.write_bytes(np.array([240, 1] if mode == "prepend" else [0, 7], dtype="<f4").tobytes())
+            os.link(path, old / path.name)
+            originals[path.name] = path.read_bytes()
+            resume.record["files"][path.relative_to(resume.root).as_posix()] = _signature(path)
+        else:
+            path.unlink()
+            resume.record["files"].pop(path.relative_to(resume.root).as_posix())
+    if mode == "absent":
+        folder.rmdir()
+    _atomic(resume.path, resume.record)
+    if crash:
+        original, calls = transaction._replace, []
+
+        def interrupted(path, payload):
+            calls.append(path)
+            if len(calls) == 4:
+                raise OSError("injected create interruption")
+            original(path, payload)
+
+        monkeypatch.setattr(transaction, "_replace", interrupted)
+        with pytest.raises(OSError, match="injected"):
+            subject.apply_minute_corrections(resume, finalized=finalized, cas=resume.cas, plan=plan)
+        monkeypatch.setattr(transaction, "_replace", original)
+        resume.record = subject.recover_minute_correction(root=resume.root, journal=resume.path,
+            record=resume.record, cas=resume.cas)
+        finalized = resume.cas.get_json(resume.record["steps"]["finalize-bins"])
+    result = subject.apply_minute_corrections(resume, finalized=finalized, cas=resume.cas, plan=plan)
+    path = folder / "close.1min.bin"
+    expected = ([0, 7, np.nan, *([5] * 240)] if mode == "append" else
+                [0, *([5] * 240), *([1] if mode == "prepend" else [])])
+    assert np.array_equal(np.fromfile(path, dtype="<f4"), np.array(expected, dtype="<f4"), equal_nan=True)
+    for name, raw in originals.items():
+        assert (old / name).read_bytes() == raw
+    materialization = resume.cas.get_json(resume.cas.get_json(result["finalize_receipt_ref"])["minute_receipt_ref"])
+    pins = subject.correction_pins(materialization, provider=provider, cas=resume.cas)
+    assert len(pins) == 12 and pins[path]["start_index"] == 0
+    assert pins[path]["end_index"] == len(expected) - 2
+    assert materialization["minute_correction"]["filled_cells"] == 240 * 12
+    assert subject.apply_minute_corrections(resume, finalized=result, cas=resume.cas, plan=plan) == result
+    assert json.loads(resume.path.read_bytes())["files"] == resume.record["files"]
+
+
+def test_unknown_calendar_fails_before_any_mutation(tmp_path):
+    resume, finalized, plan = prepared(tmp_path)
+    calendar = resume.root / "minute_bin/qlib/calendars/1min.txt"
+    calendar.write_text("\n".join(calendar.read_text().splitlines()[1:]) + "\n")
+    originals = {p: p.read_bytes() for p in (resume.root / "minute_bin/qlib/features").rglob("*.bin")}
+    with pytest.raises(MonthlyBuildResumeError, match="outside frozen calendar"):
+        subject.apply_minute_corrections(resume, finalized=finalized, cas=resume.cas, plan=plan)
+    assert all(p.read_bytes() == raw for p, raw in originals.items())
+    assert not subject._pending(resume.root).exists()
+
+
+def test_recovery_rejects_unexpected_new_file_instead_of_overwriting(tmp_path, monkeypatch):
+    resume, finalized, plan = prepared(tmp_path)
+    path = resume.root / f"minute_bin/qlib/features/{CODE.lower()}/close.1min.bin"
+    path.unlink()
+    original = transaction._replace
+
+    def interrupt(path, payload):
+        raise OSError("injected before first replacement")
+
+    monkeypatch.setattr(transaction, "_replace", interrupt)
+    with pytest.raises(OSError, match="injected"):
+        subject.apply_minute_corrections(resume, finalized=finalized, cas=resume.cas, plan=plan)
+    path.write_bytes(b"unrelated writer")
+    monkeypatch.setattr(transaction, "_replace", original)
+    with pytest.raises(MonthlyBuildResumeError, match="input changed"):
+        subject.recover_minute_correction(root=resume.root, journal=resume.path, record=resume.record, cas=resume.cas)
+    assert path.read_bytes() == b"unrelated writer"
 
 
 def facts():
