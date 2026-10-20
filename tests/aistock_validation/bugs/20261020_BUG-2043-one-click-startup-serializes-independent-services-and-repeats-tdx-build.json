@@ -28,17 +28,17 @@
   "expected": "Dispatch all absent services without cross-service readiness waits; TDX child only validates and executes its existing EXE; readiness and failures reported separately.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2043-one-click-startup-serializes-independent-services-and-repeats-tdx-build.json",
       "backend/tests/platform_api/test_windows_launcher.py",
       "docs/operations/windows_runtime_startup.md",
-      "scripts/start_ai_stock.py"
+      "scripts/start_ai_stock.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2043-one-click-startup-serializes-independent-services-and-repeats-tdx-build.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2043-one-click-startup-serializes-independent-services-and-repeats-tdx-build.json",
       "backend/tests/platform_api/test_windows_launcher.py",
       "docs/operations/windows_runtime_startup.md",
-      "scripts/start_ai_stock.py"
+      "scripts/start_ai_stock.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2043-one-click-startup-serializes-independent-services-and-repeats-tdx-build.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -102,8 +102,8 @@
   },
   "first_seen_at": "2026-10-20T17:19:26.519222Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f7d88403fb9af5b40ec6fa97e3114d6d6aa70765",
+  "fixed_at": "2026-10-20T17:29:37Z",
   "github_issue_number": 6507,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6507",
   "last_seen_at": "2026-10-20T17:19:26.519222Z",
@@ -111,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6508",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -144,6 +145,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -155,7 +157,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2043",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "6a940791ec25d098",
+    "recorded_at": "2026-10-20T17:30:13.431058Z",
+    "runtime_contract_digest": "33ee594bf6bdad5fe44ba9c2d89df8035c327a632f4f9a4b52b59efb0c8772b9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6a1da261b01de9b455dae8c99ae7fb21c1c1072c",
+    "source_merge_commit": "f7d88403fb9af5b40ec6fa97e3114d6d6aa70765",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6508",
+    "validation_evidence": [
+      "validation-receipt: id=e795d91c24826152 commit=6a1da261b01de9b455dae8c99ae7fb21c1c1072c kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`",
+      "validation-receipt: id=d213a8e33ea3ca9f commit=6a1da261b01de9b455dae8c99ae7fb21c1c1072c kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/platform_api/test_windows_launcher.py::test_absent_services_launch_once_and_bind_expected_revisions backend/tests/platform_api/test_windows_launcher.py::test_check_is_non_mutating -q --no-cov -p no:cacheprovider --basetemp X:/AIstock-CI/BUG-2043-independent-preflight` result=`2 passed`"
+    ],
+    "validation_evidence_digest": "0f3c80754a30662e8788d7f65e687ae3fd733d87a71a26c04000861e317a3cd6"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "platform.config"
   ],
@@ -164,6 +188,10 @@
     "fingerprint": "9c057c1047b3d6456afb2d50",
     "source_event_id": "FE-20261020-9c057c1047b3"
   },
+  "validation_evidence": [
+    "validation-receipt: id=e795d91c24826152 commit=6a1da261b01de9b455dae8c99ae7fb21c1c1072c kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`",
+    "validation-receipt: id=d213a8e33ea3ca9f commit=6a1da261b01de9b455dae8c99ae7fb21c1c1072c kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/platform_api/test_windows_launcher.py::test_absent_services_launch_once_and_bind_expected_revisions backend/tests/platform_api/test_windows_launcher.py::test_check_is_non_mutating -q --no-cov -p no:cacheprovider --basetemp X:/AIstock-CI/BUG-2043-independent-preflight` result=`2 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
