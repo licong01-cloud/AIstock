@@ -45,7 +45,7 @@
 
 第三轮修复：补齐提前采样 worker 的退休绑定拒绝、同账户和逐日经济锁、完整冻结来源和日历校验、逐日新 lease 与规则变化显式迁移门禁；操作工具不能在未加载后端中绕过 API 应用。
 
-验证：小矩阵 62 项通过（新迁移、原生上下文、回放生命周期）；必需 `localsim_successor_core_dev_db` 会话 7 项通过。最终政策摘要补入股票池身份后，追加两个策略/逐日检查和一个真实 DEV 原子接续检查均通过。DEV 使用现有 `aistock_dev:5433`，所有新增测试行外层事务回滚；未建库、未修改市场数据或策略包。现有环境无 ruff，使用 Python AST 检查，CI 承担其余静态及模块合同检查。
+验证：小矩阵 62 项通过（新迁移、原生上下文、回放生命周期）；必需 `localsim_successor_core_dev_db` 会话 7 项通过。最终政策摘要补入股票池身份后，追加两个策略/逐日检查和一个真实 DEV 原子接续检查均通过。DEV 使用现有 `aistock_dev:5433`，所有新增测试行外层事务回滚；未建库、未修改市场数据或策略包。Python AST 通过；AIstock Python 缺少 Ruff 模块，但现有 `C:/Users/lc999/miniconda3/Scripts/ruff.exe` 可用。CI 定位一处 E731 工厂写法，修复后该可执行文件静态检查通过。
 
 只读生产证据位于 `X:/AIstock_temp/LOCALSIM/pit-migration-20261020/`：`before-inventory.json`、`fresh-process-native-profile-r6.json` 及 `targeted-matrix-r1.xml`。TCN 07-13、LSTM 10-19 的新政策候选通过；日常账户 10-20 被权威覆盖边界拒绝。此处仅为源码和只读候选验收，未向生产发布迁移或执行经济回放。
 

@@ -170,7 +170,9 @@ class LocalSimPitMigrationService:
             return self._plan(conn, account_id)[0]
 
     def _plan(self, conn, account_id: str, *, lock=False):
-        factory = lambda: self._shared(conn)
+        def factory():
+            return self._shared(conn)
+
         repo = LocalSimSuccessorRepository(conn_factory=factory)
         resolver = CanonicalPitAuthorityResolver(connection_factory=factory)
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
