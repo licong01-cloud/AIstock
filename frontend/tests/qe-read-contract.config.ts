@@ -12,9 +12,10 @@ const run = mkdtempSync(path.join(temp, "qe-read-contract-"));
 Object.assign(process.env, { TEMP: run, TMP: run, TMPDIR: run });
 const targets = process.argv.filter(arg => arg.endsWith(".spec.ts"));
 const needsFrontend = !targets.length || targets.some(arg => arg.endsWith("qe-evolution-read-only.spec.ts"));
+const isWorker = process.env.TEST_WORKER_INDEX !== undefined;
 const app = path.join(run, "frontend");
 // Source-only and about:blank harness tests need no frontend server at all.
-if (needsFrontend && !process.argv.includes("--list")) {
+if (needsFrontend && !isWorker && !process.argv.includes("--list")) {
   mkdirSync(app);
   cpSync(path.join(frontend, "src"), path.join(app, "src"), { recursive: true });
   mkdirSync(path.join(app, "node_modules"));
@@ -53,7 +54,7 @@ export default defineConfig({
       grep: /QE dashboard stops automatic polling when task list has no active task$/,
       use: { ...devices["Desktop Chrome"] } },
   ],
-  webServer: needsFrontend ? {
+  webServer: needsFrontend && !isWorker ? {
     command: `node ${JSON.stringify(path.join(app, "node_modules/next/dist/bin/next"))} dev --hostname 127.0.0.1 -p 3012`,
     cwd: app, env, url: "http://127.0.0.1:3012/quantevolver/evolution",
     reuseExistingServer: false, timeout: 120_000,

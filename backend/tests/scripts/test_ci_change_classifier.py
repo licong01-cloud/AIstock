@@ -772,7 +772,7 @@ def test_qe_read_contract_runner_matches_catalog_and_keeps_live_scenario_delegat
     assert '--config=tests/qe-read-contract.config.ts "${qe_contract_targets[@]}"' in run
     config = (noxfile.ROOT / 'frontend/tests/qe-read-contract.config.ts').read_text(encoding='utf-8')
     assert 'grep: /QE dashboard stops automatic polling when task list has no active task$/' in config
-    assert 'reuseExistingServer: false' in config and 'needsFrontend ?' in config
+    assert 'reuseExistingServer: false' in config and 'needsFrontend && !isWorker ?' in config
     assert 'qe_read_ui' in config  # Live task-detail readback is explicitly not CI acceptance.
 
 
