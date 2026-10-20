@@ -348,6 +348,8 @@ def test_windows_backend_launcher_has_platform_config_ownership() -> None:
     assert ownership.ownership_status == "mapped"
     assert ownership.primary_module == "platform.config"
     assert "platform.api" in ownership.impact_modules
+    helper = FileOwnershipCatalog().match_path("scripts/start_ai_stock.py")
+    assert helper.primary_module == "platform.api"
 
 
 @pytest.mark.parametrize(

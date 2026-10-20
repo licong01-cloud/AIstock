@@ -13,6 +13,17 @@ SPEC.loader.exec_module(launcher)
 SHA = "a" * 40
 
 
+def test_inventory_encoding_is_explicit_and_missing_output_is_not_free(monkeypatch):
+    run = Mock(return_value=Mock(stdout='{"processes":[],"listeners":[]}'))
+    monkeypatch.setattr(launcher.subprocess, "run", run)
+    assert launcher.inventory() == {"processes": [], "listeners": []}
+    assert run.call_args.kwargs["encoding"] == "utf-8"
+    assert "OutputEncoding" in run.call_args.args[0][-1]
+    run.return_value.stdout = None
+    with pytest.raises(RuntimeError, match="no JSON"):
+        launcher.inventory()
+
+
 def snapshot(service, listening=True, command=None):
     command = command or f'python "{launcher.ROOT}/scripts/start_ai_stock.py" --child {service}'
     return {"processes": [{"ProcessId": 10, "ParentProcessId": 0, "CommandLine": command,

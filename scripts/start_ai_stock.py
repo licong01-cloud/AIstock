@@ -33,13 +33,16 @@ def inventory() -> dict:
     # One bounded snapshot, not a repository scan. Inspection failure is never 'free'.
     script = r"""
     $ErrorActionPreference='Stop'
+    [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new($false)
     $p=@(Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,ExecutablePath)
     $l=@(Get-NetTCPConnection -State Listen |
       Where-Object LocalPort -in @(8001,19080,3000) | Select-Object LocalPort,OwningProcess)
     @{processes=$p;listeners=$l} | ConvertTo-Json -Depth 4 -Compress
     """
     result = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
-                            capture_output=True, text=True, timeout=15, check=True)
+                            capture_output=True, text=True, encoding="utf-8", timeout=15, check=True)
+    if not isinstance(result.stdout, str):
+        raise RuntimeError("Windows process inventory produced no JSON")
     data = json.loads(result.stdout)
     if not isinstance(data.get("processes"), list) or not isinstance(data.get("listeners"), list):
         raise RuntimeError("Invalid Windows process/port inventory")

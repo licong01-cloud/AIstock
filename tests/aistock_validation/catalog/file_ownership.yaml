@@ -1152,12 +1152,20 @@ rules:
     priority: 90
     include:
       - start_all_ai_stock.bat
-      - scripts/start_ai_stock.py
     primary_module: platform.config
     impact_modules: [platform.api]
     layer: runtime_launcher
     risk_level: high
     ownership_reason: The canonical Windows launcher selects the production backend interpreter and must preserve deterministic backend runtime identity.
+  - rule_id: aistock_windows_runtime_orchestration
+    priority: 90
+    include:
+      - scripts/start_ai_stock.py
+    primary_module: platform.api
+    impact_modules: [platform.config]
+    layer: runtime_launcher
+    risk_level: high
+    ownership_reason: API startup, readiness and process ownership are exercised by platform_api_backend, including test_windows_launcher.py.
   - rule_id: hmm_evolution_services
     priority: 90
     include:
