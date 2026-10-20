@@ -113,6 +113,10 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
+    "health_ref": "http://127.0.0.1:19080/api/health",
+    "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1",
     "fresh_process_evidence": [],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
@@ -184,6 +188,21 @@
     "target_cost_percent_of_legacy": "25-35%"
   },
   "verification_run_id": null,
+  "implementation_review": {
+    "rounds": [
+      "Review 1: fixed executable input/digest reuse, source isolation, explicit production/DEV environment and native build fail-closed behavior.",
+      "Review 2: OS-owned build lock, candidate publication, build failure/source drift/in-use executable retain previous artifact; check/build-only never launch services."
+    ],
+    "design_compliance_001": {
+      "no_unapproved_simplification": "Complete build/reuse and explicit recovery paths implemented; live restart acceptance remains pending, not claimed.",
+      "no_silent_errors": "Invalid receipts, failed builds, changed inputs and locked outputs fail explicitly.",
+      "no_business_logic_change": "Only launcher, direct tests and operator runbook change; no TDX business or database logic.",
+      "no_extra_approval": "Unchanged inputs reuse automatically and first build is automatic; no new CI or operator approval."
+    },
+    "production_process_control": false,
+    "database_writes": false,
+    "firewall_changes": false
+  },
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
