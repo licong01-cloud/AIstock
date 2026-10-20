@@ -750,17 +750,19 @@ def test_qe_read_contract_runner_matches_catalog_and_keeps_live_scenario_delegat
 
     calls, directories = [], []
     monkeypatch.setattr(noxfile, 'FRONTEND_DIRECT_ENTRYPOINTS', ())
-    noxfile.qe_read_contract_ui(SimpleNamespace(
-        posargs=[], chdir=directories.append,
-        run=lambda *args, **kwargs: calls.append(args)))
-    assert directories == [noxfile.ROOT / 'frontend']
-    assert len(calls) == 1 and '--config=tests/qe-read-contract.config.ts' in calls[0]
+    keys = ('qe_best_loop_contract_ui', 'qe_terminal_poll_contract_ui', 'qe_read_performance_ui')
+    for key in keys:
+        getattr(noxfile, key)(SimpleNamespace(
+            posargs=[], chdir=directories.append,
+            run=lambda *args, **kwargs: calls.append(args)))
+    assert directories == [noxfile.ROOT / 'frontend'] * 3
+    assert all('--config=tests/qe-read-contract.config.ts' in call for call in calls)
     plans = classifier.flow.validation_catalog_snapshot().plans
-    targets = [plans[key]['frontend_test_path'] for key in (
-        'qe_best_loop_contract_ui', 'qe_terminal_poll_contract_ui', 'qe_read_performance_ui')]
-    assert list(calls[0][4:]) == targets
-    for key in ('qe_best_loop_contract_ui', 'qe_terminal_poll_contract_ui', 'qe_read_performance_ui'):
-        assert plans[key]['nox_session'] == 'qe_read_contract_ui'
+    targets = [plans[key]['frontend_test_path'] for key in keys]
+    assert [call[4] for call in calls] == targets
+    for key in keys:
+        assert plans[key]['nox_session'] == key
+        assert plans[key]['command_key'] == f'nox_{key}'
         assert plans[key]['requires_backend'] is False
         assert plans[key]['writes_database'] is False
     workflow = yaml.safe_load((noxfile.ROOT / '.github/workflows/test.yml').read_text(encoding='utf-8'))

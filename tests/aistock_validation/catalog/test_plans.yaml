@@ -809,8 +809,8 @@ plans:
     title: QE best-loop source-only frontend contract
     module: qe.single_experiment
     level: L2
-    command_key: nox_qe_read_contract_ui
-    nox_session: qe_read_contract_ui
+    command_key: nox_qe_best_loop_contract_ui
+    nox_session: qe_best_loop_contract_ui
     ci_lane: frontend
     frontend_test_path: tests/qe/qe-evolution-best-loop-ui.spec.ts
     change_applicability:
@@ -830,8 +830,8 @@ plans:
     title: QE terminal polling mocked frontend contract; integration remains delegated
     module: qe.single_experiment
     level: L2
-    command_key: nox_qe_read_contract_ui
-    nox_session: qe_read_contract_ui
+    command_key: nox_qe_terminal_poll_contract_ui
+    nox_session: qe_terminal_poll_contract_ui
     ci_lane: frontend
     frontend_test_path: tests/qe/qe-evolution-read-only.spec.ts
     change_applicability:
@@ -852,8 +852,8 @@ plans:
     title: QE read cache and refresh browser-harness contracts; no service
     module: qe.single_experiment
     level: L2
-    command_key: nox_qe_read_contract_ui
-    nox_session: qe_read_contract_ui
+    command_key: nox_qe_read_performance_ui
+    nox_session: qe_read_performance_ui
     ci_lane: frontend
     frontend_test_path: tests/qe/qe-read-performance.spec.ts
     change_applicability:
