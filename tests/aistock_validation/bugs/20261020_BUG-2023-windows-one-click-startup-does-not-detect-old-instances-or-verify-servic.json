@@ -185,6 +185,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
@@ -203,6 +208,17 @@
   "suspected_modules": [
     "platform.config"
   ],
+  "implementation_review": {
+    "round_1": "Reviewed pinned interpreter, Conda failure, PID/port ownership, DEV isolation and one shared console implementation; no service control performed.",
+    "round_2": "Corrected TDX build receipt shape, early helper-process detection, compile error logs and bounded old-worker settling; added non-duplicating startup regressions.",
+    "round_3": "Corrected build timeout to preserve the active builder instead of killing it; verified Windows command quoting with spaces. Final targeted matrix and fresh-process read-only preflight required before PR.",
+    "design_compliance_001": {
+      "no_unapproved_simplification": "passed: all three services share the complete launch/readiness/error path",
+      "no_silent_failure": "passed: nonzero exit, retained console, per-start logs and explicit timeouts",
+      "no_business_drift": "passed: no business source, database, experiment or reload changes",
+      "no_extra_approval_gate": "passed: same one-command operator entry; no new approval platform"
+    }
+  },
   "title": "Windows one-click startup does not detect old instances or verify service readiness",
   "trigger_condition": {
     "fingerprint": "03b255810e21279eb91aa93c",

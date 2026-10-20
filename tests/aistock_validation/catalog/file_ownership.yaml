@@ -1152,6 +1152,7 @@ rules:
     priority: 90
     include:
       - start_all_ai_stock.bat
+      - scripts/start_ai_stock.py
     primary_module: platform.config
     impact_modules: [platform.api]
     layer: runtime_launcher
