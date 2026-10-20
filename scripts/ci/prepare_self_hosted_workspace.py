@@ -300,10 +300,10 @@ def prepare_workspace(args: argparse.Namespace) -> dict[str, Any]:
                 ["git", "fetch", "--no-tags", "--depth=1",
                  f"https://github.com/{args.repo}.git", expected_commit],
                 cwd=dest,
-                timeout=180,
+                timeout=60,
             )
         except subprocess.TimeoutExpired:
-            _fail("pinned commit fetch exceeded 180 seconds", code="pinned_fetch_timeout")
+            _fail("pinned commit fetch exceeded 60 seconds", code="pinned_fetch_timeout")
         if fetched.returncode != 0:
             _fail("pinned commit fetch failed; canonical root was not modified", code="pinned_fetch_failed")
         fetched_commit = _git_stdout(["rev-parse", "FETCH_HEAD^{commit}"], cwd=dest)

@@ -74,7 +74,7 @@ def test_missing_commit_fetch_is_pinned_and_never_writes_source(tmp_path, monkey
     def run(args, *, cwd=None, timeout=120):
         if args[:2] == ["git", "fetch"]:
             fetches.append(args)
-            assert cwd == dest.resolve() and timeout == 180
+            assert cwd == dest.resolve() and timeout == 60
             assert args[-2:] == ["https://github.com/licong01-cloud/AIstock.git", expected]
             if fetch_result == "failure":
                 return subprocess.CompletedProcess(args, 1, "", "unavailable")
