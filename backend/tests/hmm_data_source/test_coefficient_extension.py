@@ -15,6 +15,7 @@ import pytest
 
 from backend.services.hmm_data_source import coefficient_extension as ext
 from backend.services.hmm_training_service import HMMTrainingService
+from scripts.precompute_hmm_coefficients import build_stock_sector_membership_spans
 
 
 def _profile(tmp_path: Path, generation: str = "release-a", end: str = "2024-07-03"):
@@ -132,10 +133,9 @@ def _payload(plan):
         "preset_coeffs": plan["preset_coeffs"],
         "input_file_sha256": {k: v["sha256"] for k, v in plan["frozen_input_bundle"]["files"].items()},
         "daily_coefficients": {d: {"801783.SI": 1.05} for d in dates},
-        "stock_sector_membership_spans": {
-            "000001.SZ": [{"from": dates[0], "to": dates[-1], "sector_code": "801783.SI"}],
-            "000002.SZ": [{"from": dates[0], "to": dates[-1], "sector_code": "801019.SI"}],
-        },
+        "stock_sector_membership_spans": build_stock_sector_membership_spans(
+            {d: {"000001.SZ": "801783.SI", "000002.SZ": "801019.SI"} for d in dates}
+        ),
         "quote_unavailable_sector_codes_by_date": {d: ["801019.SI"] for d in dates},
         "input_data_max_dates_by_date": {d: {"sector_data": d, "index_daily": d, "market_context": d} for d in dates},
     }
@@ -303,8 +303,99 @@ def test_crop_preserves_legal_unavailable_and_does_not_materialize_stock_day_pan
     result = ext.window_payload(_payload(plan), plan, "2024-07-01", "2024-07-02")
     assert list(result["daily_coefficients"]) == ["2024-07-01", "2024-07-02"]
     assert "801019.SI" not in result["daily_coefficients"]["2024-07-02"]
-    assert result["stock_sector_membership_spans"]["000002.SZ"][0]["to"] == "2024-07-02"
+    assert result["stock_sector_membership_spans"]["000002.SZ"][0]["end_date"] == "2024-07-02"
     assert "stock_sector_map_by_date" not in result
+
+
+def test_canonical_producer_membership_turnover_roundtrips_through_window_crop(tmp_path):
+    plan, *_ = _plan(tmp_path)
+    dates = plan["trade_dates"]
+    maps = {
+        dates[0]: {"000001.SZ": "801783.SI", "000002.SZ": "801019.SI"},
+        dates[1]: {"000001.SZ": "801019.SI", "000002.SZ": "801019.SI", "000003.SZ": "801783.SI"},
+        dates[2]: {"000001.SZ": "801783.SI", "000003.SZ": "801783.SI"},
+    }
+    payload = _payload(plan)
+    payload["stock_sector_membership_spans"] = build_stock_sector_membership_spans(maps)
+    payload["quote_unavailable_sector_codes_by_date"][dates[2]] = []
+    result = ext.window_payload(payload, plan, dates[1], dates[2])
+    assert result["stock_sector_membership_spans"] == build_stock_sector_membership_spans(
+        {d: maps[d] for d in dates[1:]}
+    )
+    assert result["quote_unavailable_sector_codes_by_date"] == {dates[1]: ["801019.SI"], dates[2]: []}
+    assert "stock_sector_map_by_date" not in result
+
+
+def test_reviewed_reader_change_has_new_identity_without_retrying_old_terminal_job(tmp_path, monkeypatch):
+    old, config, snapshot, inputs = _plan(tmp_path)
+    sha256 = ext.file_sha256
+    reader = Path(ext.__file__)
+    monkeypatch.setattr(ext, "file_sha256", lambda path: "b" * 64 if path == reader else sha256(path))
+    new = ext.build_plan(
+        config_id=old["config_id"],
+        config=config,
+        snapshot=snapshot,
+        signal_preset=old["signal_preset"],
+        preset_coeffs=old["preset_coeffs"],
+        inputs=inputs,
+    )
+    assert old["extension_key"] != new["extension_key"]
+    assert old["output_path"] != new["output_path"]
+    assert new["extension_reader_sha256"] == "b" * 64
+    for key in (
+        "policy",
+        "model_sha256",
+        "model_inference_origin",
+        "generator_sha256",
+        "dataset_identity",
+        "trade_dates",
+    ):
+        assert old[key] == new[key]
+    payload = ext.window_payload(_payload(new), new, new["test_start"], new["backtest_end"])
+    assert payload["extension_reader_sha256"] == new["extension_reader_sha256"]
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        "legacy_names",
+        "missing_start",
+        "missing_end",
+        "missing_sector",
+        "non_string",
+        "invalid_date",
+        "reversed",
+        "overlap",
+        "unordered",
+    ],
+)
+def test_canonical_membership_schema_and_interval_errors_still_fail_closed(tmp_path, damage):
+    plan, *_ = _plan(tmp_path)
+    payload = _payload(plan)
+    spans = payload["stock_sector_membership_spans"]["000001.SZ"]
+    span = spans[0]
+    dates = plan["trade_dates"]
+    if damage == "legacy_names":
+        span["from"], span["to"] = span.pop("start_date"), span.pop("end_date")
+    elif damage == "missing_start":
+        span.pop("start_date")
+    elif damage == "missing_end":
+        span.pop("end_date")
+    elif damage == "missing_sector":
+        span.pop("sector_code")
+    elif damage == "non_string":
+        span["start_date"] = None
+    elif damage == "invalid_date":
+        span["start_date"] = "2024-07-99"
+    elif damage == "reversed":
+        span["start_date"], span["end_date"] = dates[-1], dates[0]
+    elif damage == "overlap":
+        spans.append(dict(span, start_date=dates[1]))
+    else:
+        span["start_date"] = dates[1]
+        spans.append(dict(span, start_date=dates[0], end_date=dates[0]))
+    with pytest.raises(ext.CoefficientExtensionError, match="PIT membership span"):
+        ext.window_payload(payload, plan, plan["test_start"], plan["backtest_end"])
 
 
 @pytest.mark.parametrize(
@@ -389,7 +480,9 @@ def test_executor_uses_file_only_worker_and_registers_all_exact_windows(tmp_path
     assert len(calls) == 2  # Recovered RUNNING jobs may repeat inference, never fit.
 
 
-@pytest.mark.parametrize("field", ["output_path", "frozen_input_bundle", "config_json", "windows"])
+@pytest.mark.parametrize(
+    "field", ["output_path", "frozen_input_bundle", "config_json", "windows", "extension_reader_sha256"]
+)
 def test_persisted_plan_cannot_change_inputs_paths_or_parameters_under_same_key(tmp_path, monkeypatch, field):
     plan, config, snapshot, inputs = _plan(tmp_path)
     service = HMMTrainingService()
@@ -404,6 +497,8 @@ def test_persisted_plan_cannot_change_inputs_paths_or_parameters_under_same_key(
         tampered[field]["dataset_root"] = "/old-release"
     elif field == "config_json":
         tampered[field]["seed"] = 99
+    elif field == "extension_reader_sha256":
+        tampered[field] = "0" * 64
     else:
         tampered[field] = [["2024-07-02", "2024-07-03"]]
     with pytest.raises(RuntimeError, match="binding_changed"):
