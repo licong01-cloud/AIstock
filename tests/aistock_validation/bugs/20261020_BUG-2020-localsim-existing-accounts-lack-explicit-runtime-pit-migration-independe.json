@@ -39,7 +39,6 @@
   "expected": "Explicit immutable effective runtime PIT policy/release independent of source profile and model assets; preserve completed economics and original failed cursors/status; atomic same-account continuation with idempotent durable lineage.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2020-localsim-existing-accounts-lack-explicit-runtime-pit-migration-independe.json",
       "backend/routers/simulation_runtime.py",
       "backend/services/simulation_runtime/localsim_dependencies.py",
       "backend/services/simulation_runtime/localsim_native_context.py",
@@ -48,7 +47,8 @@
       "backend/services/simulation_runtime/localsim_replay_runtime.py",
       "backend/services/simulation_runtime/scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
-      "docs/analysis/localsim_runtime_pit_migration_20261020.md"
+      "docs/analysis/localsim_runtime_pit_migration_20261020.md",
+      "tests/aistock_validation/bugs/20261020_BUG-2020-localsim-existing-accounts-lack-explicit-runtime-pit-migration-independe.json"
     ],
     "added_files": [
       "backend/services/simulation_runtime/localsim_pit_migration.py",
@@ -57,7 +57,6 @@
       "backend/services/simulation_runtime/localsim_pit_operator.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2020-localsim-existing-accounts-lack-explicit-runtime-pit-migration-independe.json",
       "backend/routers/simulation_runtime.py",
       "backend/services/simulation_runtime/localsim_dependencies.py",
       "backend/services/simulation_runtime/localsim_native_context.py",
@@ -66,7 +65,8 @@
       "backend/services/simulation_runtime/localsim_replay_runtime.py",
       "backend/services/simulation_runtime/scheduler.py",
       "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
-      "docs/analysis/localsim_runtime_pit_migration_20261020.md"
+      "docs/analysis/localsim_runtime_pit_migration_20261020.md",
+      "tests/aistock_validation/bugs/20261020_BUG-2020-localsim-existing-accounts-lack-explicit-runtime-pit-migration-independe.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -213,8 +213,8 @@
   },
   "first_seen_at": "2026-10-20T07:45:14.139094Z",
   "fix_branch": "bug/BUG-2020-localsim-existing-accounts-lack-explicit-runtime-20261020",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5e295c2a42fdd4d3aff39fa5a4359b2758ddb533",
+  "fixed_at": "2026-10-20T08:43:43Z",
   "github_issue_number": 6450,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6450",
   "last_seen_at": "2026-10-20T07:45:14.139094Z",
@@ -222,6 +222,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6463",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -245,6 +246,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -256,7 +258,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2020",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5eba6e693b879789",
+    "recorded_at": "2026-10-20T08:45:00.503917Z",
+    "runtime_contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2ae892b3a692f064c1cccecc4e7abca52821071a",
+    "source_merge_commit": "5e295c2a42fdd4d3aff39fa5a4359b2758ddb533",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6463",
+    "validation_evidence": [
+      "gh run view 39395041945 -> passed: final source HEAD 2ae892b3a692f064c1cccecc4e7abca52821071a CI success; source merge 5e295c2a42fdd4d3aff39fa5a4359b2758ddb533; runtime user-owned pending restart"
+    ],
+    "validation_evidence_digest": "74a3168ebf56162eb54ab6706d01c6d9f329d4e27db555340403b0f80c8d97ee"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -265,6 +288,9 @@
     "fingerprint": "df63f30707067f8cef877e98",
     "source_event_id": "FE-20261020-df63f3070706"
   },
+  "validation_evidence": [
+    "gh run view 39395041945 -> passed: final source HEAD 2ae892b3a692f064c1cccecc4e7abca52821071a CI success; source merge 5e295c2a42fdd4d3aff39fa5a4359b2758ddb533; runtime user-owned pending restart"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
