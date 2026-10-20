@@ -8,7 +8,7 @@ from decimal import Decimal
 from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
 from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError
@@ -109,6 +109,14 @@ class LocalSimReplayCreateRequestV1(_LocalSimAccountInputsV1):
     start_trade_date: date
     end_trade_date: date
     historical_source_id: str
+    selection_input_source_mode: Literal["FILE_ONLY", "DATABASE_ONLY", "FILE_THEN_DATABASE"] | None = None
+
+    @model_serializer(mode="wrap")
+    def _legacy_json_compatible(self, handler):
+        result = handler(self)
+        if self.selection_input_source_mode is None:
+            result.pop("selection_input_source_mode", None)
+        return result
 
     @model_validator(mode="after")
     def _replay_window_is_valid(self) -> "LocalSimReplayCreateRequestV1":
@@ -458,8 +466,32 @@ class LocalSimProductControlPlaneService:
         self, request: LocalSimReplayCreateRequestV1, *, created_by: str
     ) -> LocalSimControlResponseV1:
         self.readiness.require_ready()
+        if request.selection_input_source_mode is not None:
+            from .localsim_input_source_plan import request_identity
+            with self.repository.source_plan_creation(request_identity(request)):
+                return self._create_planned_replay(request, created_by=created_by)
+        return self._create_replay(request, created_by=created_by)
+
+    def _create_planned_replay(self, request, *, created_by):
+        from .localsim_input_source_plan import frozen_source_plan, request_identity
+        previous = self.repository.find_replay_by_source_request(request_identity(request))
+        if previous is not None:
+            release = self.repository.get_release(previous.release_id)
+            frozen_source_plan(release, job=previous)
+            return LocalSimControlResponseV1(account=self.repository.get_account(previous.simulation_account_id),
+                ledger_scope=self.repository.get_ledger_scope(previous.simulation_account_id), release=release,
+                binding=self.repository.get_binding(previous.binding_id), replay=previous)
+        return self._create_replay(request, created_by=created_by)
+
+    def _create_replay(self, request, *, created_by):
+        from .localsim_input_source_plan import (
+            PLAN_KEY, REQUEST_KEY, SOURCE_PLAN_ID, freeze_replay_plan, freeze_source_calendar, request_identity,
+        )
+        planned = request.selection_input_source_mode is not None
+        if planned and request.historical_source_id != SOURCE_PLAN_ID:
+            raise RuntimeConfigInvalidError("explicit input mode requires the LocalSIM source-plan source ID")
         source = self.historical_source_authority.resolve(
-            historical_source_id=request.historical_source_id,
+            historical_source_id=LOCALSIM_HISTORICAL_SOURCE_ID if planned else request.historical_source_id,
             start_trade_date=request.start_trade_date,
             end_trade_date=request.end_trade_date,
         )
@@ -479,6 +511,19 @@ class LocalSimProductControlPlaneService:
         if source.file_binding is not None:
             kwargs["release_metadata"][FILE_BINDING_KEY] = source.file_binding
         account, scope, release, binding = self.control.build_account_bundle(**kwargs)
+        if planned:
+            from dataclasses import replace
+            key = request_identity(request)
+            plan = freeze_replay_plan(mode=request.selection_input_source_mode, run_id="lsinput_" + key[:32],
+                manifest=self.authority.package_repository.get(request.package_id).current_manifest(),
+                runtime_config=release.release_config_json["metadata"]["selection_runtime_config"],
+                calendar=freeze_source_calendar(self.historical_source_authority.calendar, request.end_trade_date),
+                trading_days=source.trading_days)
+            kwargs["release_metadata"].update({PLAN_KEY: plan, REQUEST_KEY: {"request_hash": key}})
+            account, scope, release, binding = self.control.build_account_bundle(**kwargs)
+            from .localsim_input_source_plan import frozen_source_plan
+            frozen_source_plan(release)
+            source = replace(source, historical_source_id=SOURCE_PLAN_ID, historical_source_sha256=plan["plan_hash"])
         runner = LocalSimHistoricalDayRunner(
             historical_source_id=source.historical_source_id,
             historical_source_sha256=source.historical_source_sha256,

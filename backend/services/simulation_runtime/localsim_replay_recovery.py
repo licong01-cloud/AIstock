@@ -311,6 +311,38 @@ class LocalSimReplayRecoveryService:
         return self.evaluate(self.repository.get_replay_recovery_snapshot(replay_job_id))
 
     def evaluate(self, snapshot: dict[str, Any]) -> LocalSimReplayRecoveryCheckV1:
+        from .localsim_input_source_plan import (
+            SOURCE_PLAN_ID, current_source_day, current_source_plan, frozen_source_plan, localsim_plan_inputs,
+        )
+        if snapshot["job"]["historical_source_id"] == SOURCE_PLAN_ID and current_source_plan() is not None:
+            from .models import StrategyRuntimeRelease
+            from .successor_models import LocalSimReplayJobV1
+            try:
+                job = LocalSimReplayJobV1.model_validate(snapshot["job"])
+                plan = frozen_source_plan(StrategyRuntimeRelease.model_validate(snapshot["release"]), job=job)
+                if plan != current_source_plan() or current_source_day() != job.next_trade_date:
+                    raise ValueError("LocalSIM recovery source scope differs from its frozen job/day")
+            except ValueError:
+                return self._check(snapshot, reasons=["LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT"], native={})
+        if snapshot["job"]["historical_source_id"] == SOURCE_PLAN_ID and current_source_plan() is None:
+            from copy import copy
+            from .models import StrategyRuntimeRelease
+            from .successor_models import LocalSimReplayJobV1
+            from .localsim_file_inputs import current_file_dataset, historical_suspension_provider
+            from backend.services.simulation_data.frozen_file_adapters import FileMinuteMarketDataProvider
+            try:
+                job = LocalSimReplayJobV1.model_validate(snapshot["job"])
+                release = StrategyRuntimeRelease.model_validate(snapshot["release"])
+                plan = frozen_source_plan(release, job=job)
+                with localsim_plan_inputs(plan, trade_date=job.next_trade_date) as route:
+                    bound = copy(self)
+                    if route["source"] == "DATASET_FILES":
+                        dataset = current_file_dataset(required=True)
+                        bound.market_provider = FileMinuteMarketDataProvider(dataset)
+                        bound.suspension_provider = historical_suspension_provider(dataset)
+                    return bound.evaluate(snapshot)
+            except ValueError:
+                return self._check(snapshot, reasons=["LOCALSIM_REPLAY_RECOVERY_SOURCE_IDENTITY_CONFLICT"], native={})
         from .localsim_file_inputs import (
             FILE_BINDING_KEY, FILE_SOURCE_ID, current_file_dataset, historical_suspension_provider,
             localsim_file_inputs,
@@ -345,11 +377,18 @@ class LocalSimReplayRecoveryService:
                 self._invalid("LOCALSIM_REPLAY_RECOVERY_ACCOUNT_RUN_IN_FLIGHT")
             file_dataset = current_file_dataset()
             source_kwargs = {"file_binding": file_dataset.binding} if file_dataset else {}
-            source = self.source_authority.resolve(
-                historical_source_id=job["historical_source_id"], start_trade_date=date.fromisoformat(job["start_trade_date"]),
-                end_trade_date=date.fromisoformat(job["end_trade_date"]), require_latest_completed=False,
-                **source_kwargs,
-            )
+            if job["historical_source_id"] == SOURCE_PLAN_ID:
+                from .localsim_file_inputs import resolve_replay_source
+                from .models import StrategyRuntimeRelease
+                from .successor_models import LocalSimReplayJobV1
+                source = resolve_replay_source(self.source_authority, job=LocalSimReplayJobV1.model_validate(job),
+                    release=StrategyRuntimeRelease.model_validate(snapshot["release"]))
+            else:
+                source = self.source_authority.resolve(
+                    historical_source_id=job["historical_source_id"], start_trade_date=date.fromisoformat(job["start_trade_date"]),
+                    end_trade_date=date.fromisoformat(job["end_trade_date"]), require_latest_completed=False,
+                    **source_kwargs,
+                )
             next_day = date.fromisoformat(job["next_trade_date"])
             index = source.trading_days.index(next_day)
             completed = source.trading_days[index - 1].isoformat() if index else None
