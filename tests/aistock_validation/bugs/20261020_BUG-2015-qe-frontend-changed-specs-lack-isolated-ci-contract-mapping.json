@@ -13,6 +13,27 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2015",
+  "consumer_verification": {
+    "source_head": "3302d6cb6a4bdac6762b8482f65a9fca7c05b62e",
+    "workflow_commit": "a7ec3db8ac68668d4eda2400f1dc1dfed41e2b46",
+    "composed_head": "14eb78fc790d40bd7ba0c331610b16d3bd111c17",
+    "workspace": "X:/AIstock-CI/BUG-2015-qe-validation",
+    "command": "node node_modules/@playwright/test/cli.js test --config=tests/qe-read-contract.config.ts tests/qe/qe-evolution-best-loop-ui.spec.ts tests/qe/qe-evolution-read-only.spec.ts tests/qe/qe-read-performance.spec.ts",
+    "result": "10 passed (1.5m): 4 best-loop source, 5 performance/source/browser harness, 1 mocked terminal polling",
+    "results_ref": "X:/AIstock-CI/qe-read-contract-UNnOCf/results.json",
+    "classification_ref": "X:/AIstock-CI/BUG-2015-classification.json",
+    "classification": "passed; unexecuted_test_files=[]; backend_required=false; dev_db_required=false",
+    "excluded_integration": "QE evolution terminal task detail is read-only, accurate, and observable remains qe_read_ui real-backend acceptance; NOT executed or claimed passed",
+    "business_test_source_modified": false,
+    "dependencies_installed": false,
+    "backend_or_database_used": false,
+    "design_compliance_review": [
+      "No simplified delivery: precise CI contracts executed; real integration explicitly excluded, not claimed passed.",
+      "No silent errors: unknown spec still blocks, X-only TEMP fails closed, occupied frontend is not reused.",
+      "No business drift: QE source and assertions unchanged; no experiments, service control or database actions.",
+      "No new approvals or gates: existing coverage and prebuilt dependency requirements retained."
+    ]
+  },
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
