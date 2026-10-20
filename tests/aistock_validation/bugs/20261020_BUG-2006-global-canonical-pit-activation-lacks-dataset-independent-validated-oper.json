@@ -1,6 +1,11 @@
 {
   "actual": "Production canonical PIT rebuilt ready and clean through 2026-10-19 under explicit user authorization; official singleton pointer still legacy generation 0. Existing operator script only seals a full dataset W6/W8/W9 bundle and cannot activate the independently versioned global PIT. Add a target-explicit existing-schema-only operator using real PIT readback hashes, matching DEV activation receipt and the existing atomic activation API; never fabricate W8 attestations, change datasets, historical leases or service processes.",
   "allowed_write_scope": [
+    "noxfile.py",
+    "scripts/ci_change_classifier.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "scripts/activate_canonical_pit_default.py",
+    "backend/tests/scripts/test_activate_canonical_pit_default.py",
     "tests/aistock_validation/bugs/20261020_BUG-2006-global-canonical-pit-activation-lacks-dataset-independent-validated-oper.json"
   ],
   "assigned_agent": null,
@@ -22,7 +27,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "Activate the existing approved canonical v2 singleton through actual DEV rollback rehearsal and production CAS, independently of a price release. BUG-1990/PR6373 broader independent version registry and optional v3 policy remain separate; do not borrow unmerged code or change approved policy.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
