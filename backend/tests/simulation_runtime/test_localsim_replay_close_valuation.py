@@ -11,6 +11,7 @@ import pytest
 from backend.services.simulation_runtime.localsim_replay_runtime import LocalSimHistoricalReplayDayExecutor
 from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus
 from backend.tests.simulation_runtime import test_lifecycle_scheduler as native
+from backend.tests.paper_trading_v2.test_repository_position_authority import database_position_reader
 from backend.services.trading_core.errors import DataUnavailableError
 
 
@@ -28,7 +29,8 @@ class ClosingHistoricalProvider(native.FakeLocalSimMarketDataProvider):
         return result
 
 
-def historical_day(monkeypatch, *, no_orders=False, include_close=True, retain_positions=False):
+def historical_day(monkeypatch, *, no_orders=False, include_close=True, retain_positions=False,
+                   holding_quantity_offset=0):
     release, binding, _, repo = native._release_and_bindings(qmt_only=False)
     binding = binding.model_copy(update={
         "broker_account_id": binding.strategy_id,
@@ -42,7 +44,8 @@ def historical_day(monkeypatch, *, no_orders=False, include_close=True, retain_p
     provider.include_close = include_close
     held = {candidate.symbol: native.PositionLot(
         portfolio_id="paper_historical_close", symbol=candidate.symbol,
-        quantity=candidate.target_quantity, available_quantity=candidate.target_quantity,
+        quantity=candidate.target_quantity + holding_quantity_offset,
+        available_quantity=candidate.target_quantity + holding_quantity_offset,
         avg_cost=9.0, trade_date=native.TRADE_DATE - timedelta(days=1),
     ) for candidate in native._candidate_rows()[:1]} if retain_positions else {}
     context = native._local_sim_context_with_real_broker(
@@ -126,6 +129,56 @@ def test_missing_closing_bar_keeps_original_execution_then_recovers_without_dupl
     assert current_run(day).run_id == run.run_id
     assert current_run(day).run_payload_json["local_sim_economic_generation"] == generation + 1
     assert day.paper.snapshots[run.run_id].snapshot_time.time() == time(15)
+    assert economic_facts(day, run.run_id) == before
+    assert len(day.scheduler.selection_service.calls) == 1
+
+
+@pytest.mark.parametrize("drift", [None, "cash", "quantity", "available_quantity", "avg_cost", "trade_date"])
+def test_fresh_broker_closes_restored_overnight_positions_without_repeating_economics(monkeypatch, drift):
+    day = historical_day(monkeypatch, include_close=False, retain_positions=True, holding_quantity_offset=100)
+    with pytest.raises(DataUnavailableError, match="closing (marks|minute)"):
+        day.executor(day.job, native.TRADE_DATE)
+    run = current_run(day)
+    before = economic_facts(day, run.run_id)
+    payload = run.run_payload_json["local_sim_projection_outbox_v1"]["projection_payload"]
+    rows = [{**lot.model_dump(), "trade_date": native.TRADE_DATE,
+             "metadata": {"position_trade_date": lot.trade_date.isoformat()}}
+            for lot in day.paper.positions[run.run_id]]
+    restored = database_position_reader(rows).load_latest_positions(day.context.portfolio_id, native.TRADE_DATE)
+    assert any(lot.trade_date < native.TRADE_DATE for lot in restored.values())
+    cash = payload["account_snapshot"]["cash"]
+    if drift == "cash":
+        cash += 0.01
+    elif drift is not None:
+        symbol = next(iter(restored))
+        lot = restored[symbol]
+        value = native.TRADE_DATE if drift == "trade_date" else getattr(lot, drift) + (
+            -1 if drift == "available_quantity" else 1)
+        restored[symbol] = lot.model_copy(update={drift: value})
+    day.provider.include_close = True
+    day.context = native._local_sim_context_with_real_broker(
+        portfolio_id=day.context.portfolio_id, release=day.release, paper_repository=day.paper,
+        positions=restored, cash=cash, market_data_provider=day.provider,
+    )
+    day.scheduler.context_provider = native.StaticSimulationRunContextProvider(
+        by_binding_id={day.binding.binding_id: day.context})
+    if drift is not None:
+        generation = current_run(day).run_payload_json["local_sim_economic_generation"]
+        snapshot = day.paper.snapshots[run.run_id].model_copy(deep=True)
+        with pytest.raises(DataUnavailableError) as exc:
+            day.executor(day.job, native.TRADE_DATE)
+        assert exc.value.context["reason_code"] == "LOCALSIM_DUPLICATE_ECONOMIC_STATE_CONFLICT"
+        assert current_run(day).run_payload_json["local_sim_economic_generation"] == generation
+        assert day.paper.snapshots[run.run_id] == snapshot
+        assert day.paper.list_fills_for_run(run.run_id) == before["fills"]
+        assert day.paper.cash_entries[run.run_id] == before["cash"]
+        return
+    day.executor(day.job, native.TRADE_DATE)
+    assert day.paper.snapshots[run.run_id].snapshot_time.time() == time(15)
+    assert economic_facts(day, run.run_id) == before
+    generation = current_run(day).run_payload_json["local_sim_economic_generation"]
+    day.executor(day.job, native.TRADE_DATE)
+    assert current_run(day).run_payload_json["local_sim_economic_generation"] == generation
     assert economic_facts(day, run.run_id) == before
     assert len(day.scheduler.selection_service.calls) == 1
 

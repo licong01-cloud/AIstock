@@ -9,7 +9,9 @@
     "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json",
     "backend/services/simulation_execution/localsim/persistence.py",
     "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-    "backend/tests/simulation_runtime/test_localsim_file_inputs.py"
+    "backend/tests/simulation_runtime/test_localsim_file_inputs.py",
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/tests/paper_trading_v2/test_repository_position_authority.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1998",
@@ -30,18 +32,16 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/LOCALSIM/BUG-1994/post-restart-20261020/post-restart-api-receipt.json"
+    "X:/AIstock_temp/LOCALSIM/BUG-1994/post-restart-20261020/post-restart-api-receipt.json",
+    "X:/AIstock_temp/LOCALSIM/post-restart-20261020-r2/tcn-account-truth-diff.json",
+    "X:/AIstock_temp/LOCALSIM/post-restart-20261020-r2/fresh-restored-tcn-truth-receipt.json"
   ],
   "expected": "每个新完成回放日具有同账户同日的原生15:00收盘估值证据；失败不推进、不重做成交；旧历史缺口保持明确。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "backend/services/simulation_execution/localsim/persistence.py",
-      "backend/services/simulation_runtime/localsim_replay_runtime.py",
-      "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-      "backend/tests/simulation_runtime/test_localsim_file_inputs.py",
+      "backend/services/paper_trading_v2/repository.py",
+      "backend/tests/paper_trading_v2/test_repository_position_authority.py",
       "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
-      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
       "docs/analysis/localsim_replay_close_valuation_20261020.md",
       "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json"
     ],
@@ -50,13 +50,9 @@
       "docs/analysis/localsim_replay_close_valuation_20261020.md"
     ],
     "changed_files": [
-      "backend/services/simulation_execution/localsim/persistence.py",
-      "backend/services/simulation_runtime/localsim_replay_runtime.py",
-      "backend/services/simulation_runtime/scheduler.py",
-      "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
-      "backend/tests/simulation_runtime/test_localsim_file_inputs.py",
+      "backend/services/paper_trading_v2/repository.py",
+      "backend/tests/paper_trading_v2/test_repository_position_authority.py",
       "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
-      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
       "docs/analysis/localsim_replay_close_valuation_20261020.md",
       "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json"
     ],
@@ -179,7 +175,8 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
     "fresh_process_evidence": [
-      "X:/AIstock_temp/LOCALSIM/BUG-1998/fresh-native-close-receipt.json"
+      "X:/AIstock_temp/LOCALSIM/BUG-1998/fresh-native-close-receipt.json",
+      "X:/AIstock_temp/LOCALSIM/post-restart-20261020-r2/fresh-restored-tcn-truth-receipt.json"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_write_scope",
@@ -197,7 +194,7 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
-  "scope_expansion_note": "Native persistence currently rejects historical valuation_refresh with zero new fills, and no-rebalance days have no first projection. Extend the existing close-only persistence branch with original-projection proof or a proven no-order completed plan; preserve cash/fill facts and broker_called. No new execution or valuation algorithm.",
+  "scope_expansion_note": "Original close-only persistence scope retained. Post-restart original TCN 2026-07-10 acceptance proved 18 otherwise identical projected positions were restored with snapshot trade_date instead of metadata.position_trade_date; cash, quantity and cost match. Extend scope to the existing Paper v2 repository read path and its position-authority tests to restore the already persisted lot date, preserve legacy rows without metadata, reject corrupt dates, and verify fresh-context close without duplicate execution. Do not weaken duplicate economic truth validation, change ledger semantics, or mutate production records.",
   "severity": "P1",
   "source_merge_receipt": {
     "bug_id": "BUG-1998",
