@@ -1,0 +1,260 @@
+{
+  "actual": "Only 2026-05-20..2026-08-31 is registered; QE legal portfolio-end subwindow is missing.",
+  "allowed_write_scope": [
+    "backend/services/hmm_training_service.py",
+    "backend/tests/hmm_data_source/test_coefficient_extension.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2007-hmm-frozen-extension-omits-explicit-legal-qe-portfolio-subwindow-after-m.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2007",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T03:59:25.790134Z",
+  "description": "Only 2026-05-20..2026-08-31 is registered; QE legal portfolio-end subwindow is missing. Review identified that a planner-only reader edit changes the immutable extension identity and conflicts with an already registered primary. Expand scope to HMM orchestration: derive the separate legal portfolio window from the verified completed primary with existing crop/publication/registration functions, retaining reader identity, model/data identity and the original QE request.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-52efe5004241",
+      "timestamp": "2026-10-20T03:59:25.790115Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Plans explicitly include the legal portfolio subwindow and existing primary/valid historical windows; exact Composer consumption passes for the separately selected legal window and continues to reject the original overlapping window.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_training_service.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2007-hmm-frozen-extension-omits-explicit-legal-qe-portfolio-subwindow-after-m.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_training_service.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2007-hmm-frozen-extension-omits-explicit-legal-qe-portfolio-subwindow-after-m.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_training_service.py",
+        "backend/tests/hmm_data_source/test_coefficient_extension.py"
+      ],
+      "impacted_modules": [
+        "hmm",
+        "qe.core",
+        "selection_center",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_training_service.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "backend/tests/hmm_data_source/test_coefficient_extension.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_training_service.py",
+        "backend/tests/hmm_data_source/test_coefficient_extension.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_training_service.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_training_service.py",
+      "backend/tests/hmm_data_source/test_coefficient_extension.py"
+    ]
+  },
+  "first_seen_at": "2026-10-20T03:59:25.790134Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6414,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6414",
+  "last_seen_at": "2026-10-20T03:59:25.790134Z",
+  "module": "hmm",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "hmm_data_source_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-training/configs/fc0683a9-6ca0-4d55-b053-17c2360c3c40/coefficient-extension?job_id=0b8bb408-298d-4340-8654-96f689ecfb2d",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -B -I - read-only real-asset preview -> PASS on Python 3.12.12; explicit task-root sys.path/module assertions loaded backend.routers.hmm_training, backend.routers.health, hmm_training_service and coefficient_extension. Actual v18 completed primary readback, crop 2026-05-20..2026-08-28 (72 trade dates), SHA256=7aced80ed253e05b7851270da2469e7d139c15d29d2aaac84916b3ada8ff2127, 623309 bytes; publication and registry writes replaced with in-memory captures, not executed. Reader SHA256=038e63911abf56a94c0ac8e295a49d0aaedb5454b3eb37afb09a28f2939831be and source primary SHA256=2e79e8919380aaa2db7f7db2be8383ee5f65db9f9383a8d49a6a2a66b276ca0d unchanged. Poisoned database/network/inference attempts=0 after bounded read-only API fetch; fits=0; runtime_verified=false.",
+      "AIstock Python 3.12.12 -B -I stdin at HEAD 16c3cb4fc0318ee58ebc700c179cc4eb21053ea4 -> PASS; task-root imports hmm_training/health/HMM service; real v18 primary readback; 72-day legal crop preview; DB/network/inference poison attempts=0; production writes=0; runtime_verified=false",
+      "AIstock Python 3.12.12 -B -I stdin at HEAD 16c3cb4fc0318ee58ebc700c179cc4eb21053ea4 -> PASS; explicit task-root imports hmm_training/health/HMM service; actual v18 primary and 72-day legal crop readback; DB/network/inference poison attempts=0; no production writes; no formal fits; runtime_verified=false"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "hmm"
+  ],
+  "title": "HMM frozen extension omits explicit legal QE portfolio subwindow after model origin",
+  "trigger_condition": {
+    "fingerprint": "52efe50042411e745f2bb2b4",
+    "source_event_id": "FE-20261020-52efe5004241"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm",
+        "hmm_data_source"
+      ],
+      "plans": [
+        "hmm_data_source_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm",
+          "hmm_data_source"
+        ],
+        "plans": [
+          "hmm_data_source_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
