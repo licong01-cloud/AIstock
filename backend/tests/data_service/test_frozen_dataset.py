@@ -2,6 +2,7 @@
 from datetime import date
 import hashlib
 import json
+import shutil
 
 import numpy as np
 import pandas as pd
@@ -79,6 +80,112 @@ def make_dataset(root):
         "generation": "test-1", "controller_paths": {"candidate_root": str(root)},
         "components": {"dataset_manifest_file_sha256": hashlib.sha256(manifest.read_bytes()).hexdigest()}}))
     return profile
+
+
+def make_monthly_dataset(root):
+    """Tiny real files in the monthly v4 producer's path-indexed layout."""
+    profile_path = make_dataset(root)
+    base = root / "components"
+    day, minute, factors = (base / name for name in (
+        "daily_bin_candidate", "minute_bin_candidate", "factor_h5_static_candidate_v2"))
+    for source, target in ((root / "day", day), (root / "minute", minute), (root / "factors", factors)):
+        shutil.copytree(source, target)
+    factor_meta = json.loads((factors / "meta.json").read_bytes())
+    factor_meta["universe_key"] = "TEST_PIT"
+    (factors / "meta.json").write_text(json.dumps(factor_meta))
+    (minute / "calendars/1min.txt").write_bytes((minute / "calendars/minute.txt").read_bytes())
+    (minute / "instruments").mkdir()
+    (minute / "instruments/all.txt").write_text(
+        f"{SYMBOL}\t{DAYS[0]}\t{DAYS[-1]}\n{HALT}\t{DAYS[0]}\t{DAYS[-1]}\n")
+    pool = root / "stock_pools/stock_universe.txt"
+    pool.parent.mkdir()
+    pool.write_text(f"{SYMBOL}\t{DAYS[0]}\t{DAYS[-1]}\n")
+    (day / "instruments/stock_universe.txt").write_bytes(pool.read_bytes())
+    bounds = {"start": str(DAYS[0]), "end": str(DAYS[-1])}
+    for provider in (day, minute):
+        (provider / "meta_export.json").write_text(json.dumps({**bounds, "universe_key": "TEST_PIT",
+            "rule_version": "test-v1", "source_freeze": True, "full_history_content_hash": True}))
+    suspend = base / "suspend_d_daily_candidate_v2"
+    suspend.mkdir()
+    shutil.copyfile(root / "suspend.parquet", suspend / "suspend_d.parquet")
+    (suspend / "meta.json").write_text(json.dumps(bounds))
+    sector = base / "sector_context_candidate_v1"
+    sector.mkdir()
+    shutil.copyfile(root / "sector.parquet", sector / "sector_membership_spans.parquet")
+    shutil.copyfile(root / "sector.json", sector / "sector_code_map.json")
+
+    def pin(path):
+        return {"path": path.relative_to(root).as_posix(),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
+
+    manifest = {"release_id": "test-release", "cutoff_trade_date": str(DAYS[-1]), "components": {
+        path.relative_to(root).as_posix().replace("/", "__"): pin(path)
+        for directory in (base, pool.parent) for path in directory.rglob("*") if path.is_file()},
+        "st_pit_manifest": {"universe_key": "TEST_PIT", "rule_version": "test-v1",
+            "cutoff_trade_date": str(DAYS[-1]), "selection_universe": pin(pool)}}
+    # A leftover internal writer view must never override the formal v4 roles.
+    manifest["components"]["day_selection_universe"] = pin(root / "day/instruments/stock_universe.txt")
+    manifest_path = root / "qe_dataset_manifest.json"
+    manifest_path.write_text(json.dumps(manifest))
+    profile = {"schema_version": "aistock_active_dataset_profile_v4", "release_id": "test-release",
+        "generation": "test-monthly", "cutoff": str(DAYS[-1]), "controller_paths": {"candidate_root": str(root)},
+        "components": {"dataset_manifest_file_sha256": pin(manifest_path)["sha256"],
+            "day_pins": {"universe_key": "TEST_PIT", "rule_version": "test-v1",
+                "calendar_sha256": pin(day / "calendars/day.txt")["sha256"],
+                "meta_export_sha256": pin(day / "meta_export.json")["sha256"]},
+            "minute_pins": {"universe_key": "TEST_PIT", "rule_version": "test-v1",
+                "calendar_sha256": pin(minute / "calendars/1min.txt")["sha256"],
+                "meta_export_sha256": pin(minute / "meta_export.json")["sha256"],
+                "instruments_sha256": pin(minute / "instruments/all.txt")["sha256"]},
+            "factor_meta_sha256": pin(factors / "meta.json")["sha256"],
+            "suspend_pins": {"parquet_sha256": pin(suspend / "suspend_d.parquet")["sha256"],
+                "metadata_sha256": pin(suspend / "meta.json")["sha256"]},
+            "sector_context_pins": {"component_root": sector.relative_to(root).as_posix(),
+                "membership_file": "sector_membership_spans.parquet", "code_map_file": "sector_code_map.json",
+                "membership_start": str(DAYS[0]), "membership_end": str(DAYS[-1]),
+                "membership_sha256": pin(sector / "sector_membership_spans.parquet")["sha256"],
+                "code_map_sha256": pin(sector / "sector_code_map.json")["sha256"]}}}
+    profile_path.write_text(json.dumps(profile))
+    return profile_path
+
+
+@pytest.mark.parametrize("consumer", ["ADVISORY", "LOCALSIM"])
+def test_monthly_v4_uses_formal_pit_pool_and_keeps_broader_physical_facts(tmp_path, consumer):
+    binding = freeze_dataset_binding(make_monthly_dataset(tmp_path))
+    dataset = FrozenDataset(binding, consumer_scope=consumer, run_id="monthly-read")
+    try:
+        assert dataset.members(DAYS[0]) == [SYMBOL]
+        assert HALT in dataset.h5("daily_pv", [SYMBOL, HALT], DAYS[0], DAYS[0], ["close"]).index.get_level_values("instrument")
+        assert binding["files"]["day_selection_universe"]["path"] == "components/daily_bin_candidate/instruments/stock_universe.txt"
+        assert dataset.raw_minute_rows(SYMBOL, DAYS[0])
+    finally:
+        dataset.close()
+
+
+@pytest.mark.parametrize("drift", ["missing_formal_pool", "pool_identity", "profile_policy", "profile_pin", "cutoff", "fact_bytes"])
+def test_monthly_v4_rejects_missing_or_mixed_pins_instead_of_using_legacy_alias(tmp_path, drift):
+    profile_path = make_monthly_dataset(tmp_path)
+    profile = json.loads(profile_path.read_bytes())
+    path = tmp_path / "qe_dataset_manifest.json"
+    manifest = json.loads(path.read_bytes())
+    if drift == "missing_formal_pool":
+        manifest["components"].pop("components__daily_bin_candidate__instruments__stock_universe.txt")
+    elif drift == "pool_identity":
+        manifest["st_pit_manifest"]["selection_universe"]["sha256"] = "a" * 64
+    elif drift == "profile_policy":
+        profile["components"]["minute_pins"]["rule_version"] = "different"
+    elif drift == "profile_pin":
+        profile["components"]["suspend_pins"]["parquet_sha256"] = "a" * 64
+    elif drift == "cutoff":
+        manifest["cutoff_trade_date"] = str(DAYS[1])
+    else:
+        with (tmp_path / "components/factor_h5_static_candidate_v2/daily_pv.h5").open("ab") as handle:
+            handle.write(b"unpublished change")
+    path.write_text(json.dumps(manifest))
+    profile["components"]["dataset_manifest_file_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    profile_path.write_text(json.dumps(profile))
+    with pytest.raises(FrozenDatasetError):
+        freeze_dataset_binding(profile_path)
 
 
 def test_frozen_files_are_bounded_by_members_day_and_identity(tmp_path):
