@@ -1,6 +1,7 @@
 {
   "actual": "BUG-2012 Issue #6427 is blocked before PR: three QE frontend specs have no executable CI mapping. Register precise plans and isolated mocked/source-contract runner, retaining real-backend integration separately and fail-closed changed-test coverage.",
   "allowed_write_scope": [
+    "backend/services/validation/plan_catalog.py",
     ".github/workflows/test.yml",
     "noxfile.py",
     "tests/aistock_validation/catalog/test_plans.yaml",
@@ -37,6 +38,7 @@
       "frontend/tests/qe-read-contract.config.ts"
     ],
     "changed_files": [
+      "backend/services/validation/plan_catalog.py",
       ".github/workflows/test.yml",
       "noxfile.py",
       "tests/aistock_validation/catalog/test_plans.yaml",
