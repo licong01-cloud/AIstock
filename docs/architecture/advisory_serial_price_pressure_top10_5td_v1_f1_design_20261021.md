@@ -1,9 +1,9 @@
 # Advisory 分钟序列压力 Top20→Top10 F1 详细设计 v1.0
 
 日期：2026-10-21。假设 `SERIAL_PRICE_PRESSURE_TOP10_5TD_1`。
-本次交付是**查重、训练端文件可产性和详细设计**，不是模型源码、拟合、收益结果或启用。
-状态 `DESIGN_REVIEW_PASS / TRAIN_CLOSE_INPUT_AUDITED / NOT_IMPLEMENTED / NOT_STARTED`。
-目标合同 `ALPHA_RANKING`；拟登记 `LEARNABILITY_AUDIT / NAVIGATION_ONLY`。
+设计#6500已合入；当前正在按本设计交付**三研究叶、定向合同验证及一次研究**，未完成研究不冒称收益结果或启用。
+状态 `SOURCE_CONTRACT_VERIFIED / INPUT_PREPARE_AND_RESEARCH_NOT_STARTED`。
+目标合同 `ALPHA_RANKING`；登记口径 `LEARNABILITY_AUDIT / NAVIGATION_ONLY`。
 现行方向与进度以[蓝图§16.0](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)为准。
 
 ## Background / 单一业务问题及查重
@@ -38,8 +38,8 @@ S仍为−0.7866138324与−0.8221764675。没有再次读行情或收益，不�
 原包直接使用；没有包ID/模型类型/股票池白名单。包与股票池字段只是来源身份，不作为收益特征。
 首轮使用既有两包不等于已证明新包/多池经济泛化。
 
-当前写入范围仅本文及蓝图；可产性脚本、计划和收据在X任务目录，非生产运行依赖。
-下一源码阶段精确范围预定为：
+写入范围仅下列六文件；可产性脚本、计划和收据在X任务目录，非生产运行依赖。
+当前源码阶段精确范围为：
 
 - `backend/services/advisory_model_first/serial_price_pressure_top10_5td_inputs_v1.py`
 - `backend/services/advisory_model_first/serial_price_pressure_top10_5td_study_v1.py`
@@ -156,8 +156,8 @@ training尺度MDE代理在fit前报告，真实paired MDE随一次结果报告�
 ## Implementation Plan / 已完成及下一源码任务
 
 本次已完成：原生因子来源查重、旧43量构造对照、训练端全窗口close可产性、F1和蓝图一致性修订。
-下一步按上面六文件精确范围实现：原绑定批读/共享两臂输入→编码/两头/JSON parity→冻结预测/原finance评价→
-同窗口多轮源码审核修复/定向测试→一次正式prepare及WSL两fit/评价→真实结果回写蓝图/PR交付。
+源码已实现原绑定批读/共享两臂输入、train-only编码/两头/JSON parity、冻结预测/原finance评价和原子阶段/重试；
+本窗口三轮自审修复后七个定向合同节点已通过，后续一次正式prepare及WSL两fit/评价，再把真实结果回写蓝图/PR交付。
 不以设计验证冒称源码完成，不等待后端重启、LocalSIM适配、UI或QE上游试验。
 
 已完成的训练端审计仅close：219D/438包D/8,760原行、8,212 unique stock-D/975股；
@@ -188,25 +188,25 @@ minute输入审计收据SHA256=`8c9a778e616a99ff2e9df0034507820d133672490a4115cb
 
 ## Design Acceptance Matrix
 
-本表仅设计验收，源码/模型尚未交付不是被掩盖的功能成功。
+本表保留稳定验收索引；当前设计验收已通过，源码与真实研究证据将在完成后逐项替换，不冒称模型经济成功。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-361 | Background / 单一业务问题及查重 | artifact: X:/AIstock_temp/ADVISORY/minute-innovation-top10-20261021/factor-input-audit.json；artifact: X:/AIstock_temp/ADVISORY/minute-innovation-top10-20261021/minute-input-audit.json | DESIGN_REVIEW_PASS | none |
-| F-362 | Contracts §1～2 | artifact: docs/architecture/advisory_serial_price_pressure_top10_5td_v1_f1_design_20261021.md | DESIGN_REVIEW_PASS | none |
-| F-363 | Contracts §2及训练端实际审计 | artifact: X:/AIstock_temp/ADVISORY/minute-innovation-top10-20261021/minute-input-audit.json | DESIGN_REVIEW_PASS | none |
-| F-364 | Contracts §3 / Model §4 | artifact: docs/architecture/advisory_serial_price_pressure_top10_5td_v1_f1_design_20261021.md | DESIGN_REVIEW_PASS | none |
-| F-365 | Model §4 / Verification Plan | artifact: docs/architecture/advisory_serial_price_pressure_top10_5td_v1_f1_design_20261021.md | DESIGN_REVIEW_PASS | none |
-| F-366 | Model §5 | artifact: docs/architecture/advisory_serial_price_pressure_top10_5td_v1_f1_design_20261021.md | DESIGN_REVIEW_PASS | none |
-| F-367 | Scope / Implementation Plan / Production Gates | artifact: docs/architecture/advisory_serial_price_pressure_top10_5td_v1_f1_design_20261021.md | DESIGN_REVIEW_PASS | none |
+| F-362 | serial_price_pressure_top10_5td_inputs_v1.py / pipeline.prepare | backend/tests/advisory_model_first/test_serial_price_pressure_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
+| F-363 | inputs.serial_stat / minute_features / read_minute_inputs | backend/tests/advisory_model_first/test_serial_price_pressure_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
+| F-364 | study.train_models / fit_encoding / encode；pipeline.fit | backend/tests/advisory_model_first/test_serial_price_pressure_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
+| F-365 | study.predict / choose_top10 | backend/tests/advisory_model_first/test_serial_price_pressure_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
+| F-366 | study.evaluate / paired_interval；pipeline.finish | backend/tests/advisory_model_first/test_serial_price_pressure_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
+| F-367 | pipeline.Study / prepare / fit / finish；Scope | artifact: X:/AIstock_temp/ADVISORY/serial-price-pressure-top10-20261021/ownership.json | SOURCE_CONTRACT_PASS | none |
 
 ## Risks / Rollout / Rollback / Production Gates
 
 分钟序列可能只反映bid/ask bounce、stale quotes或短暂噪声，并不持续至T开盘后五日；新信息不等于新Alpha。
 219训练D/同开发窗限制统计功效，多研究族试验偏差和非vintage限制继续披露，不因一次正点值去生产。
 price-only可产性不证明完整OHLCV、标签或WSL环境已就绪；真实错误交相应owner，不用异常fallback改源。
-下一代码是离线研究叶；原日频业务、旧产物/策略包/股票池不变，无需运行加载本研究来继续荐股。
-本次文档不需后端重启/DDL/依赖安装，未修改运行态。#6453共享任务输入加载仍待用户方便重启，不阻断本研究。
+当前代码是离线研究叶；原日频业务、旧产物/策略包/股票池不变，无需运行加载本研究来继续荐股。
+本次离线研究不需后端重启/DDL/依赖安装，未修改运行态。#6453共享任务输入加载仍待用户方便重启，不阻断本研究。
 回退仅不消费新研究角色，不覆盖原结果/父名单。LocalSIM不消费本模型结果/收益/缓存/断点。
 
 ## Review / 多轮自审与DESIGN-COMPLIANCE-001
@@ -220,6 +220,15 @@ price-only可产性不证明完整OHLCV、标签或WSL环境已就绪；真实�
 block不跨未知洞、市场分区按D已知值固定。监督拟合WSL、所有临时文件X，下一实现不阻塞日频原包。
 以上是本窗口多视角自审，不声称独立外部审核。
 
-四项符合性：①本次仅设计/可产性，不冒称源码或盈利模型完成；②平坦、真缺失、坏数、身份漂移分别表达；
+设计阶段#6500的四项符合性：①仅设计/可产性，不冒称源码或盈利模型完成；②平坦、真缺失、坏数、身份漂移分别表达；
 ③不改原包/原名单/费用/政策，新角色和Alpha合同显式独立；④没有包使用或用户重启前置门禁，
 观察度与经济条件仅用于这个预登记研究，不限制原业务运行。
+
+源码阶段三轮本窗口自审（不是独立外部审核）：第一轮修复日期比较接口及原生不可变阶段异常测试类型；
+第二轮在Parquet读取前同时约束D和标签成熟日，保留所有原输入但不解码越界训练Y，冻结原D/T/H与原float32；
+第三轮加入首fit前编码/列序/MDE/监督键登记、WSL峰值内存与registry中断恢复，保持双端点共同日轴和真实缺洞。
+最终小矩阵六项通过、一项市场上下文合成fixture不一致；只改fixture后失败节点通过，七节点均GREEN、零warning。
+两L0无阻断、Ruff无问题、ownership六文件全部归Advisory。合成Ridge使用纯合同double，不在Windows做监督拟合，
+不把单元测试当实际Ridge、原生全窗输入或经济验收。剩余真实prepare、WSL两fit与一次经济评价分别报告。
+源码四项符合性：①完整实现批准研究合同，尚未发生研究不报成功；②缺数/平坦/越界/漂移明确；
+③不改原包/费用/政策/名单且无其它owner写入；④无新增包审批、UI或重启阻断。
