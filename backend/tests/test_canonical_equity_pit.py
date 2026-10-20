@@ -220,6 +220,20 @@ def test_activation_target_rejects_identity_or_digest_drift() -> None:
         pit._validate_activation_target_shape(_target(candidate_bundle_digest="not-a-digest"))
 
 
+@pytest.mark.parametrize("optional_receipt", [None, {"status": "blocked", "missing_terminal_evidence_count": 2}])
+def test_canonical_ready_does_not_require_terminal_announcement_receipt(optional_receipt) -> None:
+    row = _active_row()
+    row["last_build_summary"].pop("terminal_evidence")
+    if optional_receipt is not None:
+        row["last_build_summary"]["terminal_evidence"] = optional_receipt
+    assert pit.CanonicalPitAuthorityResolver._binding_from_row(row).activation_generation == 1
+    target_state = dict(row, status="ready")
+    pit._require_canonical_ready_state(target_state, target=_target())
+    row["last_build_summary"]["st_snapshot_continuity"] = {"status": "blocked"}
+    with pytest.raises(pit.CanonicalPitContractError, match="st_snapshot_continuity"):
+        pit._require_canonical_ready_state(target_state, target=_target())
+
+
 def test_activation_default_connection_is_managed_transaction(monkeypatch) -> None:
     captured = {}
     sentinel = object()

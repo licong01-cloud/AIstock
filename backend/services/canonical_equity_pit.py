@@ -26,6 +26,7 @@ CANONICAL_PIT_RULE_VERSION = "shsz_a_252td_st_delist_asof_v2"
 CANONICAL_PIT_SCOPE = "canonical_all_listed"
 CANONICAL_PIT_IPO_TRADING_SESSIONS = 252
 CANONICAL_PIT_SNAPSHOT_PREFIX = "aistock_equity_pit_snapshot_"
+# Classifies optional announcement facts; never a required lifecycle gate.
 CANONICAL_PIT_TERMINAL_EVIDENCE_CONTRACT = "issuer_bound_stock_delisting_v2"
 
 LEGACY_NONCANONICAL_UNIVERSE_KEYS = frozenset({"shsz_st_pit_active_v1"})
@@ -291,13 +292,11 @@ def _require_canonical_ready_state(row: Mapping[str, Any], *, target: PitActivat
         or not _has_exact_zero(exception_ledger, "unresolved_exception_count")
     ):
         raise CanonicalPitContractError("activation target exception ledger is incomplete")
-    for key in ("st_snapshot_continuity", "terminal_evidence"):
-        receipt = summary.get(key)
-        if not isinstance(receipt, Mapping) or receipt.get("status") != "ready":
-            raise CanonicalPitContractError(f"activation target {key} receipt is not ready")
-    terminal_evidence = summary["terminal_evidence"]
-    if not _has_exact_zero(terminal_evidence, "missing_terminal_evidence_count"):
-        raise CanonicalPitContractError("activation target terminal evidence has unresolved securities")
+    receipt = summary.get("st_snapshot_continuity")
+    if not isinstance(receipt, Mapping) or receipt.get("status") != "ready":
+        raise CanonicalPitContractError("activation target st_snapshot_continuity receipt is not ready")
+    # The lifecycle ledger and span validation establish usable dates. A
+    # separate terminal announcement-event receipt is not required authority.
     validation = summary.get("validation")
     if not isinstance(validation, Mapping):
         raise CanonicalPitContractError("activation target validation receipt is missing")

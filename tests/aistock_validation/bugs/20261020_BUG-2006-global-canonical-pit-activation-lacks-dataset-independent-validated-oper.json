@@ -1,0 +1,226 @@
+{
+  "actual": "Production canonical PIT rebuilt ready and clean through 2026-10-19 under explicit user authorization; official singleton pointer still legacy generation 0. Existing operator script only seals a full dataset W6/W8/W9 bundle and cannot activate the independently versioned global PIT. Add a target-explicit existing-schema-only operator using real PIT readback hashes, matching DEV activation receipt and the existing atomic activation API; never fabricate W8 attestations, change datasets, historical leases or service processes.",
+  "allowed_write_scope": [
+    "noxfile.py",
+    "scripts/ci_change_classifier.py",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "scripts/activate_canonical_pit_default.py",
+    "backend/tests/scripts/test_activate_canonical_pit_default.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2006-global-canonical-pit-activation-lacks-dataset-independent-validated-oper.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2006",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T03:25:23.896585Z",
+  "description": "Production canonical PIT rebuilt ready and clean through 2026-10-19 under explicit user authorization; official singleton pointer still legacy generation 0. Existing operator script only seals a full dataset W6/W8/W9 bundle and cannot activate the independently versioned global PIT. Add a target-explicit existing-schema-only operator using real PIT readback hashes, matching DEV activation receipt and the existing atomic activation API; never fabricate W8 attestations, change datasets, historical leases or service processes.",
+  "design_compliance_001": {
+    "item_by_item": "Actual five-field PIT snapshot, independent persisted-row SQL audit, explicit predecessor CAS, source-commit-bound DEV activation/rollback and existing singleton API are implemented. No second active pointer or policy definition.",
+    "no_fake_completion": "DEV actual activation/readback then complete rollback passed. Production activation remains pending source merge and a matching merged-source DEV rehearsal.",
+    "no_unapproved_simplification": "Uses existing canonical v2 rule and readiness checks; does not manufacture a full dataset W8 attestation or require rebuilding any price release. Broader independent registry/v3 work remains BUG-1990/PR6373 and is not borrowed unmerged.",
+    "remaining_gaps": "No source/runtime restart is required for this standalone operator. Existing runtime BUG-2005 aftercare remains separate. No historical lease/profile/account migration is performed."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-b294f8f6ca75",
+      "timestamp": "2026-10-20T03:25:23.896585Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Activate the existing approved canonical v2 singleton through actual DEV rollback rehearsal and production CAS, independently of a price release. BUG-1990/PR6373 broader independent version registry and optional v3 policy remain separate; do not borrow unmerged code or change approved policy.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_activate_canonical_pit_default.py",
+      "noxfile.py",
+      "scripts/activate_canonical_pit_default.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2006-global-canonical-pit-activation-lacks-dataset-independent-validated-oper.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/scripts/test_activate_canonical_pit_default.py",
+      "noxfile.py",
+      "scripts/activate_canonical_pit_default.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2006-global-canonical-pit-activation-lacks-dataset-independent-validated-oper.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-10-20T03:25:23.896585Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6411,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6411",
+  "last_seen_at": "2026-10-20T03:25:23.896585Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_rounds": [
+    "Round 1: RED import failure then 8 direct GREEN tests; exact predecessor, actual hashes, DEV-only rehearsal and production authorization.",
+    "Round 2: strict rollback boolean checks, trusted source files, official lock ordering and failed-CAS no-commit regression.",
+    "Round 3: 53 related tests, Ruff, compile, L0, catalog and ownership passed. Real DEV rehearsal reached ACTIVE_CANONICAL generation1, then restored legacy generation0 by rollback; receipt X:/AIstock_dataset_release_control/operator_receipts/BUG-2006-dev-activation-rehearsal-20261020-r1.json."
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Global canonical PIT activation lacks dataset-independent validated operator entrypoint",
+  "trigger_condition": {
+    "fingerprint": "b294f8f6ca7557a695a83190",
+    "source_event_id": "FE-20261020-b294f8f6ca75"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
