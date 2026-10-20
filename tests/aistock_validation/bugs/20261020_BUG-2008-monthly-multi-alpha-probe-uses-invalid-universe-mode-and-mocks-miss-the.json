@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2008",
-  "closed_at": null,
+  "closed_at": "2026-10-20T04:24:59.014342Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -35,15 +35,15 @@
   "expected": "Use the existing public index_union mode, validate all five probe selections with official UniverseSelection, preserve all completed exports/checkpoints and unchanged QE business contracts.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2008-monthly-multi-alpha-probe-uses-invalid-universe-mode-and-mocks-miss-the.json",
       "backend/services/dataset_release/monthly_qe_consumer_probe.py",
-      "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py"
+      "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2008-monthly-multi-alpha-probe-uses-invalid-universe-mode-and-mocks-miss-the.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2008-monthly-multi-alpha-probe-uses-invalid-universe-mode-and-mocks-miss-the.json",
       "backend/services/dataset_release/monthly_qe_consumer_probe.py",
-      "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py"
+      "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2008-monthly-multi-alpha-probe-uses-invalid-universe-mode-and-mocks-miss-the.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -102,9 +102,9 @@
   },
   "first_seen_at": "2026-10-20T04:11:52.523632Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "6f4c7fbba97eadafe4cf9ae7efc72a92843a4918",
   "fix_description": "Use index_union in the shared monthly multi-alpha probe. Validate all five emitted selections through official UniverseSelection in the existing parameterized test so mocks cannot accept a nonexistent public mode.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-20T04:18:12Z",
   "github_issue_number": 6415,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6415",
   "last_seen_at": "2026-10-20T04:11:52.523632Z",
@@ -112,6 +112,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6417",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -139,9 +140,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_dataset_release_control/operator_receipts/BUG-2008-postrestart-20261020-r1.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2008",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "6f4c7fbba97eadafe4cf9ae7efc72a92843a4918",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-20T04:24:45.402114Z",
+      "mode": "read_only",
+      "observed_identity": "6f4c7fbba97eadafe4cf9ae7efc72a92843a4918",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c3142ce6aae767a62112205539a54d001696f8f1bd7b7af0683af8cbfd9036d4",
+      "receipt_sha256": "8aeb74a21ac369761128ddc70760d39d1a0e2c56c2cb7aa3c1416b3b4f385fe0",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "8a609e74afa8fd0964ab61a647f7d69a462edd0152c27fcf0bee3ba0eb7ce2c1",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -151,7 +175,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2008",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "36f7640a4b046d96",
+    "recorded_at": "2026-10-20T04:18:55.740681Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "43a7108d4fec3bc87380ccc67f87813f3b11aebc",
+    "source_merge_commit": "6f4c7fbba97eadafe4cf9ae7efc72a92843a4918",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6417",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_qe_consumer_probe.py backend/tests/dataset_release/test_monthly_node_probe_runner.py -q -> 25 passed",
+      "python -m nox -s l0 --no-venv -> passed"
+    ],
+    "validation_evidence_digest": "a4abca521486d2895e15c49b7c54799ea9d4f415634ca5bc397b5e9ce54c9d74"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -160,6 +206,11 @@
     "fingerprint": "2e4d3e7340831c4c89a26699",
     "source_event_id": "FE-20261020-2e4d3e734083"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_monthly_qe_consumer_probe.py backend/tests/dataset_release/test_monthly_node_probe_runner.py -q -> 25 passed",
+    "python -m nox -s l0 --no-venv -> passed",
+    "Post-restart official worker identity and business smoke passed; runtime identity contains merge 6f4c7fbba97eadafe4cf9ae7efc72a92843a4918; no process control."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
