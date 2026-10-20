@@ -39,6 +39,12 @@ def _runner_outage_input():
             "nightly-l3": "skipped", "paper-v2-live": "skipped"}
 
 
+def _write_failed_status(path, *, include_url=False):
+    payload = _nightly_input("9001", include_url=include_url)
+    payload["statuses"].pop("codeIntelligence")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
 
 CI_LOG = """
 Backend tests (paper_v2_backend)\tUNKNOWN STEP\t2026-05-25T01:43:38.5513821Z nox > Running session paper_v2_backend
@@ -355,21 +361,7 @@ def test_cli_llm_rollout_preserves_deterministic_issue_payload(
 def test_cli_compact_stdout_keeps_details_in_artifact(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     status_path = tmp_path / "nightly-status.json"
     output_path = tmp_path / "summary.json"
-    status_path.write_text(
-        json.dumps(
-            {
-                "statuses": {
-                    "runnerPreflight": "success",
-                    "drSnapshot": "success",
-                    "drValidate": "success",
-                    "nightlyL3": "failure",
-                    "paperV2Live": "skipped",
-                },
-                "run_id": "9001",
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_failed_status(status_path)
 
     assert summary.main([
         "--nightly-status-json",
@@ -687,22 +679,7 @@ def test_cli_persists_tmp_failure_candidate_history(
     output_path = tmp_path / "tmp" / "validation" / "nightly_failure_issue" / "summary.json"
     history_dir = tmp_path / "tests" / "aistock_validation" / "history" / "issue_candidates"
     monkeypatch.setattr(summary, "_default_candidate_history_dir", lambda: history_dir)
-    status_path.write_text(
-        json.dumps(
-            {
-                "statuses": {
-                    "runnerPreflight": "success",
-                    "drSnapshot": "success",
-                    "drValidate": "success",
-                    "nightlyL3": "failure",
-                    "paperV2Live": "skipped",
-                },
-                "run_id": "9001",
-                "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9001",
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_failed_status(status_path, include_url=True)
 
     assert summary.main(
         [
