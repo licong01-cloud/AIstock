@@ -20,6 +20,18 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "consumer_verification": {
+    "final_workflow_commit": "775406eee4d271fa9788785b84446dba59d52ff7",
+    "final_composed_head": "ba55ebf13e8eb481af95f0200c35bf86e3b59938",
+    "final_results": [
+      "python -m nox -s qe_best_loop_contract_ui -> 4 passed in 545ms, no frontend server",
+      "node node_modules/@playwright/test/cli.js test --config=tests/qe-read-contract.config.ts tests/qe/qe-evolution-read-only.spec.ts tests/qe/qe-read-performance.spec.ts -> 6 passed in 1.4m"
+    ],
+    "final_results_refs": [
+      "X:/AIstock-CI/qe-read-contract-qbXnAI/results.json",
+      "X:/AIstock-CI/qe-read-contract-ioNpZZ/results.json"
+    ],
+    "full_consumer_diff_classification": "27 changed files passed; unexecuted_test_files=[]; unmapped_code_files=[]; dev_db_required=false",
+    "baseline_note": "Unmodified main best-loop source assertion at line 31 fails before the BUG-2012 business fix; pipeline does not alter or bypass that assertion. The exact consumer HEAD passes it.",
     "backend_or_database_used": false,
     "business_test_source_modified": false,
     "classification": "passed; unexecuted_test_files=[]; backend_required=false; dev_db_required=false",
