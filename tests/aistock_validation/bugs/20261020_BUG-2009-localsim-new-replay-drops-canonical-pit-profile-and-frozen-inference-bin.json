@@ -225,8 +225,8 @@
   },
   "first_seen_at": "2026-10-20T04:16:01.848860Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "60be18f58d776915b7af70f2c0d41caecc762232",
+  "fixed_at": "2026-10-20T04:55:42Z",
   "github_issue_number": 6416,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6416",
   "last_seen_at": "2026-10-20T04:16:01.848860Z",
@@ -294,6 +294,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6421",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -348,6 +349,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -359,7 +361,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2009",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "db9d4fdd96064cac",
+    "recorded_at": "2026-10-20T04:56:24.754309Z",
+    "runtime_contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "32aad26f24fd40111e5a1f3a99d4a60c0a568598",
+    "source_merge_commit": "60be18f58d776915b7af70f2c0d41caecc762232",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6421",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_runtime_profile.py backend/services/simulation_runtime/localsim_product_control.py backend/services/simulation_runtime/localsim_native_context.py backend/services/simulation_runtime/localsim_control.py backend/services/simulation_runtime/localsim_selection_inference.py backend/tests/simulation_runtime/test_localsim_runtime_profile.py backend/tests/simulation_runtime/test_localsim_product_control_plane.py backend/tests/simulation_runtime/test_localsim_native_context.py backend/tests/simulation_runtime/test_localsim_selection_inference.py tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json -> passed; final HEAD CI and native read-only acceptance passed"
+    ],
+    "validation_evidence_digest": "1a0c01c6fb852a3be517bcbd2de9ef3eb0543811fd6fc09025d87ccb2e02fde5"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -368,6 +391,9 @@
     "fingerprint": "230f293310941aa960b8a513",
     "source_event_id": "FE-20261020-230f29331094"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_runtime_profile.py backend/services/simulation_runtime/localsim_product_control.py backend/services/simulation_runtime/localsim_native_context.py backend/services/simulation_runtime/localsim_control.py backend/services/simulation_runtime/localsim_selection_inference.py backend/tests/simulation_runtime/test_localsim_runtime_profile.py backend/tests/simulation_runtime/test_localsim_product_control_plane.py backend/tests/simulation_runtime/test_localsim_native_context.py backend/tests/simulation_runtime/test_localsim_selection_inference.py tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json -> passed; final HEAD CI and native read-only acceptance passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
