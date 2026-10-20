@@ -1,6 +1,8 @@
 {
   "actual": "000985.CSI 2026-06-04 exists in production but not in September index_daily.h5.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/build_stage.py",
+    "backend/services/dataset_release/monthly_mature_build_runner.py",
     "backend/services/dataset_release/monthly_legacy_index.py",
     "backend/services/dataset_release/monthly_repair_inputs.py",
     "backend/tests/dataset_release/test_monthly_legacy_index.py",
@@ -31,16 +33,29 @@
   ],
   "expected": "Existing source corrections are captured by exact key into sealed SOURCE and materialized consistently into the unified release, without runtime DB fallback or full history re-export.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2019-monthly-inherited-index-context-omits-exact-historical-corrections-alrea.json",
+      "backend/services/dataset_release/build_stage.py",
+      "backend/services/dataset_release/monthly_legacy_index.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_repair_inputs.py",
+      "backend/tests/dataset_release/test_monthly_legacy_index.py",
+      "backend/services/dataset_release/monthly_index_corrections.py"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_index_corrections.py",
       "backend/tests/dataset_release/test_monthly_index_corrections.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2019-monthly-inherited-index-context-omits-exact-historical-corrections-alrea.json",
+      "backend/services/dataset_release/build_stage.py",
       "backend/services/dataset_release/monthly_legacy_index.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_repair_inputs.py",
-      "backend/tests/dataset_release/test_monthly_legacy_index.py"
+      "backend/tests/dataset_release/test_monthly_legacy_index.py",
+      "backend/services/dataset_release/monthly_index_corrections.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_legacy_index.py",
@@ -160,14 +175,28 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    "Round 1: RED reproduced omission from inherited H5 and lack of an exact Bin correction path.",
+    "Round 2: bind exact database facts through existing monthly repair inputs; preserve share/thousand-CNY raw and share/CNY Bin units; reject conflicting finite facts and never interpolate unknown dates.",
+    "Round 3: actual native preparation, append, finalize and existing month validator close with exact historical correction; provider fallback and production writes are absent.",
+    "DESIGN-COMPLIANCE-001: source implementation is distinct from physical deployment; no false READY, business-contract change or extra approval mechanism; pending correction of the immutable published candidate is explicit."
+  ],
   "risk_area": "bug",
+  "root_cause": "Monthly inherited index materialization only appended the new month, so an exact historical row repaired in market.index_daily after the predecessor freeze was never transferred. BUILD must consume explicitly frozen exact corrections through the existing repair-input binding, not query live DB or rescan all history.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Isolated AIstock Python loaded tracked exact index correction code; actual native prepare/append/finalize/month validator passed with historical raw H5 plus share/CNY Bin values, preserved other values, no provider fallback, DB write or runtime action."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",

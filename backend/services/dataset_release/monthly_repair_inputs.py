@@ -136,7 +136,7 @@ def repair_materials(payload: Mapping[str, Any], *, predecessor: LegacyMonthlyPr
 
 
 def validate_monthly_repair_inputs(payload: Mapping[str, Any], *, predecessor: LegacyMonthlyPrefix, target_cutoff: date) -> dict[str, Any]:
-    if not isinstance(payload, Mapping) or set(payload) != {
+    if not isinstance(payload, Mapping) or set(payload) - {"index_history_repairs"} != {
         "schema_version", "target_cutoff", "predecessor_manifest_sha256", "factor_prefixes",
         "daily_basic_null_repairs", "deferred_source_dates",
     } or payload.get("schema_version") != SCHEMA:
@@ -146,6 +146,8 @@ def validate_monthly_repair_inputs(payload: Mapping[str, Any], *, predecessor: L
     if not isinstance(payload["factor_prefixes"], Mapping) or len(payload["factor_prefixes"]) > 3:
         raise ValueError("monthly repair prefix scope is invalid")
     deferred_margin_authority(payload, target_cutoff=target_cutoff)
+    from .monthly_index_corrections import index_correction_rows
+    index_correction_rows(payload, before=predecessor.cutoff)
     repair_materials(payload, predecessor=predecessor)
     return json.loads(canonical_json_bytes(payload))
 

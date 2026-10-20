@@ -2064,6 +2064,13 @@ def _prepare_legacy_bin_patch(
         bounds = (str(item["start"])[:10], str(item["end"])[:10])
         old = catalog.get(code)
         catalog[code] = (min(old[0], bounds[0]), max(old[1], bounds[1])) if old else bounds
+    if dataset == "daily_bin":
+        from .monthly_index_corrections import index_correction_rows
+        for row in index_correction_rows(invocation.build_inputs.get("monthly_repair_inputs"), before=prefix.cutoff):
+            code, day = row["ts_code"], row["trade_date"].isoformat()
+            if code not in catalog:
+                raise CandidateBuildStageError("historical index correction has no monthly provider entry")
+            catalog[code] = (min(catalog[code][0], day), catalog[code][1])
     population_path = input_root / "all.txt"
     with population_path.open("x", encoding="utf-8", newline="\n") as writer:
         writer.writelines(f"{code}\t{start}\t{end}\n" for code, (start, end) in sorted(catalog.items()))
@@ -3932,13 +3939,15 @@ def _patch_index_component(
     if isinstance(invocation.build_inputs.get("monthly_legacy_predecessor"), Mapping):
         from .monthly_build_bridge import load_monthly_predecessor_prefix
         from .monthly_legacy_index import append_legacy_index_context
+        from .monthly_index_corrections import index_correction_rows
         if ComponentAction(str(_action_entry(invocation, Component.DOMESTIC_INDEX_CONTEXT)["action"])) is not ComponentAction.INCREMENTAL:
             raise CandidateBuildStageError("legacy index month append cannot apply a historical repair")
         prefix = load_monthly_predecessor_prefix(context_plan=invocation.build_inputs["monthly_legacy_predecessor"], profile=invocation.profile)
         receipt = append_legacy_index_context(prefix, source=source,
             output_root=invocation.staging_root / "index_context", cutoff=cutoff,
             source_bundle_sha256=invocation.build_inputs["source_bundle_sha256"],
-            definitions=invocation.profile.indices, checkpoint=checkpoint)
+            definitions=invocation.profile.indices, checkpoint=checkpoint,
+            historical_corrections=index_correction_rows(invocation.build_inputs.get("monthly_repair_inputs"), before=prefix.cutoff))
         return receipt, {"schema_version": "aistock_monthly_native_index_adoption_v1",
                          "component": Component.DOMESTIC_INDEX_CONTEXT.value,
                          "action": ComponentAction.INCREMENTAL.value,
