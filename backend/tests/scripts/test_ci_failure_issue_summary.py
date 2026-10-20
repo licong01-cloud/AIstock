@@ -45,6 +45,11 @@ def _write_failed_status(path, *, include_url=False):
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
+def _nightly_cli(status_path, output_path, *extra):
+    return summary.main(["--nightly-status-json", str(status_path), "--output", str(output_path),
+                         "--stdout-format", "compact", *extra])
+
+
 
 CI_LOG = """
 Backend tests (paper_v2_backend)\tUNKNOWN STEP\t2026-05-25T01:43:38.5513821Z nox > Running session paper_v2_backend
@@ -363,14 +368,7 @@ def test_cli_compact_stdout_keeps_details_in_artifact(tmp_path: Path, capsys: py
     output_path = tmp_path / "summary.json"
     _write_failed_status(status_path)
 
-    assert summary.main([
-        "--nightly-status-json",
-        str(status_path),
-        "--output",
-        str(output_path),
-        "--stdout-format",
-        "compact",
-    ]) == 0
+    assert _nightly_cli(status_path, output_path) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     artifact_payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -422,18 +420,7 @@ def test_nightly_cli_discovers_bound_artifacts_without_same_run_query(
         lambda **_kwargs: pytest.fail("same-run GitHub Actions read must not occur"),
     )
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--run-id",
-            "9001",
-            "--output",
-            str(output_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert _nightly_cli(status_path, output_path, "--run-id", "9001") == 0
 
     capsys.readouterr()
     payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -652,19 +639,8 @@ def test_nightly_cli_writes_issue_payload_manifest_for_heterogeneous_groups(
         encoding="utf-8",
     )
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--output",
-            str(output_path),
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--no-candidate-history",
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert _nightly_cli(status_path, output_path, "--github-issue-payload-output",
+                        str(issue_payload_path), "--no-candidate-history") == 0
 
     issue_document = json.loads(issue_payload_path.read_text(encoding="utf-8"))
     assert issue_document["schema_version"] == "aistock_ci_failure_github_issue_payload_manifest_v1"
@@ -681,16 +657,7 @@ def test_cli_persists_tmp_failure_candidate_history(
     monkeypatch.setattr(summary, "_default_candidate_history_dir", lambda: history_dir)
     _write_failed_status(status_path, include_url=True)
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--output",
-            str(output_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert _nightly_cli(status_path, output_path) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     history_path = Path(stdout_payload["artifacts"]["candidate_history"])
@@ -1257,20 +1224,8 @@ def test_nightly_status_cli_keeps_generic_stage_local_until_run_completes(
         encoding="utf-8",
     )
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--run-id",
-            "28973219723",
-            "--output",
-            str(summary_path),
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert _nightly_cli(status_path, summary_path, "--run-id", "28973219723",
+                        "--github-issue-payload-output", str(issue_payload_path)) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     payload = json.loads(summary_path.read_text(encoding="utf-8"))
