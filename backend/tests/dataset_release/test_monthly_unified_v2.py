@@ -950,6 +950,42 @@ def test_resume_reuses_completed_stage_checkpoints(tmp_path: Path) -> None:
     assert pipeline.calls.count("LOCAL_VALIDATE") == 2
 
 
+@pytest.mark.parametrize("retained_valid", [True, "raises", "rejects"])
+def test_resume_keeps_sealed_derivation_when_default_producer_changes(tmp_path, retained_valid):
+    pipeline = Pipeline(fail_once_at="CONSUMER_VALIDATE")
+    version = {"DERIVE": "old"}
+    pipeline.stage_identity = lambda stage: hashlib.sha256(
+        f"{stage}:{version.get(stage, 'stable')}".encode()
+    ).hexdigest()
+    verified = []
+
+    def validate(stage, receipt):
+        verified.append(stage)
+        if stage == "DERIVE":
+            if retained_valid == "raises":
+                raise MonthlyReleaseError("retained DERIVE artifact bytes differ")
+            if retained_valid == "rejects":
+                return False
+        return True
+
+    pipeline.checkpoint_is_valid = validate
+    service = _service(tmp_path, pipeline)
+    operation_id = service.submit(_request())["operation_id"]
+    assert service.run(operation_id)["status"] == "FAILED"
+    checkpoint = service.store.operation_root(operation_id) / "checkpoints/derive.json"
+    before = checkpoint.read_bytes()
+    version["DERIVE"] = "new"
+    service.resume(operation_id)
+    if retained_valid is True:
+        assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
+    else:
+        with pytest.raises(MonthlyReleaseError, match="retained DERIVE"):
+            service.run(operation_id)
+    assert "DERIVE" in verified
+    assert pipeline.calls.count("DERIVE") == 1
+    assert checkpoint.read_bytes() == before
+
+
 def test_cancel_is_observed_at_stage_boundary(tmp_path: Path) -> None:
     service = _service(tmp_path, Pipeline())
     operation_id = service.submit(_request())["operation_id"]

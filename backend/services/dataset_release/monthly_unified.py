@@ -2140,8 +2140,23 @@ class MonthlyReleaseService:
                 if source_supplements and (existing is None or any(existing["canonical_sha256"] != s["source_receipt_canonical_sha256"] for s in source_supplements)):
                     raise MonthlyReleaseConflict("source supplement cannot replace or rebuild sealed SOURCE")
                 checkpoint_validator = getattr(self.pipeline, "checkpoint_is_valid", None)
+                if existing is None and stage == "DERIVE" and callable(checkpoint_validator):
+                    # A completed derivation owns frozen model/config/producer
+                    # inputs and immutable outputs. A newer default authority is
+                    # for new derivations, not a reason to rewrite this release.
+                    # Keep request, plan, prior receipts and artifact validation;
+                    # retain the original producer identity in its sealed receipt.
+                    existing = self.store.read_checkpoint(
+                        operation_id,
+                        stage,
+                        request_digest=request_digest,
+                        plan_digest=plan_digest,
+                        input_set_digest=current_input_set_digest,
+                    )
                 if existing is not None and callable(checkpoint_validator):
                     if not checkpoint_validator(stage, existing):
+                        if stage == "DERIVE":
+                            raise MonthlyReleaseConflict("retained DERIVE artifacts differ; sealed outputs preserved")
                         existing = None
                 if existing is not None:
                     prior[stage] = existing

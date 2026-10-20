@@ -17,6 +17,12 @@
   ],
   "created_at": "2026-10-20T02:35:53.147572Z",
   "description": "Resume re-executes DERIVE and collides with coefficients_preset_A_2024-07-01_2026-09-29.json after producer-only rebind; five completed stages cannot be reused.",
+  "design_compliance_001": {
+    "complete_requested_fix": "PASS: checkpoint retention and invalid-artifact handling both covered by RED-to-GREEN regressions.",
+    "no_business_semantic_change": "PASS: HMM/QE inputs, model, coefficients, windows, stock pools and immutable release files unchanged.",
+    "no_silent_failure_or_fallback": "PASS: corrupt retained artifacts raise an explicit conflict; no regenerated or substituted coefficient files.",
+    "no_unapproved_gate_or_scope": "PASS: reuse existing checkpoint/artifact checks only; no new framework, production mutation, runtime control or approval gate."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -25,17 +31,28 @@
       "timestamp": "2026-10-20T02:35:53.147572Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "dmr_63a313d97fd046a38d5a876265565014/checkpoints/derive.json",
+    "dmr_63a313d97fd046a38d5a876265565014/receipts/derive-6a809d34b748f4589ea9ea00d0612af462eb2ad07ed7bb64120df3a0c9daebd1.json"
+  ],
   "expected": "Resume verifies and reuses the same operations sealed DERIVE inputs and outputs independent of newer default producer versions; any retained artifact corruption fails explicitly without regeneration. New operations still use current strict authority.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2003-monthly-resume-rederives-sealed-hmm-assets-after-reviewed-producer-rebin.json",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/services/dataset_release/monthly_worker.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py",
       "backend/tests/dataset_release/test_monthly_worker.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2003-monthly-resume-rederives-sealed-hmm-assets-after-reviewed-producer-rebin.json",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_monthly_worker.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py",
@@ -123,6 +140,7 @@
   "first_seen_at": "2026-10-20T02:35:53.147572Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "For the same request, plan and prior-stage input set, reuse the original DERIVE checkpoint and producer identity only after the registered validator verifies all frozen inputs and outputs. Missing or changed DERIVE artifacts fail explicitly without regeneration. New derivations retain current strict authority checks. No candidate, profile, source data, HMM coefficient values or stage status is edited.",
   "fixed_at": null,
   "github_issue_number": 6400,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6400",
@@ -140,14 +158,28 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    "Identity review: retained request, plan, prior receipts and original producer provenance; new-operation authority remains strict.",
+    "Corruption review: added rejecting-validator regression and explicit retained-DERIVE conflict; missing/changed frozen input and output cases fail without regeneration.",
+    "Real-candidate read-only fresh-process review: 12 frozen inputs and 2 sealed outputs verified; full runtime preflight passed without claiming the operation or writing candidate/profile/database. Current and frozen producers yield identical 548 dates and 71053 coefficient values; metadata path/authority changes alone caused the collision."
+  ],
   "risk_area": "bug",
+  "root_cause": "DERIVE checkpoint lookup required the current default producer digest even though the completed operation had frozen its producer/model/config inputs. A reviewed producer-only authority rebind therefore invalidated a sealed derivation and attempted to overwrite immutable coefficient output. DERIVE artifact validation also returned false on corruption, which could request regeneration instead of preserving and rejecting the sealed output.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "2026-10-20 isolated AIstock Python process imported patched monthly_unified/monthly_worker from the BUG-2003 worktree, verified original operation DERIVE checkpoint request/plan/input-set binding plus 12 input and 2 output byte hashes, and passed build_monthly_worker_runtime(...).preflight_receipt(); operation_claimed=false, database_opened=false, candidate_write=false, profile_write=false, training_started=false, runtime_action=false.",
+      "Isolated AIstock Python imports patched worker/service, verifies original operation DERIVE 12 input and 2 output byte hashes and request/plan/input bindings, full runtime preflight PASS; no operation claim, DB access, candidate/profile write or runtime action"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
