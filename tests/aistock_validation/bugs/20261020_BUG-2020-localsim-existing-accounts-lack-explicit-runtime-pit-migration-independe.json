@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2020",
-  "closed_at": null,
+  "closed_at": "2026-10-20T17:37:10.224673Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -245,10 +245,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2020/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2020",
+      "business_smoke_semantic": {
+        "contract_id": "localsim_workbench_valuation",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8750828f58ebf1924e3a889431502e9db46217c2a021f595186943e99ed7230",
+      "contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+      "expected_identity": "5e295c2a42fdd4d3aff39fa5a4359b2758ddb533",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-20T17:37:05.278991Z",
+      "mode": "read_only",
+      "observed_identity": "adb13c9d3f4dc5de271b3b6ee3468d94a663d541",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "ae5fdd64eb204a96b650e22078b71270d6eb8e75b975aa83c69a6c03dd9b088f",
+      "receipt_sha256": "a4005e0ee241577e98f9d648d7ea919d2dbbaf2f29e390528eaff266f7626219",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b781c141a229ee3a3305f84a738c0d7822a4f25a32b501a3072f284c6b486ca1",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -279,7 +301,7 @@
     ],
     "validation_evidence_digest": "74a3168ebf56162eb54ab6706d01c6d9f329d4e27db555340403b0f80c8d97ee"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -289,7 +311,8 @@
     "source_event_id": "FE-20261020-df63f3070706"
   },
   "validation_evidence": [
-    "gh run view 39395041945 -> passed: final source HEAD 2ae892b3a692f064c1cccecc4e7abca52821071a CI success; source merge 5e295c2a42fdd4d3aff39fa5a4359b2758ddb533; runtime user-owned pending restart"
+    "gh run view 39395041945 -> passed: final source HEAD 2ae892b3a692f064c1cccecc4e7abca52821071a CI success; source merge 5e295c2a42fdd4d3aff39fa5a4359b2758ddb533; runtime user-owned pending restart",
+    "Native PIT migration for all three authorized existing LocalSIM accounts passed; APPLIED followed by ALREADY_APPLIED for each plan; immutable model assets and all seven economic-prefix table hashes unchanged. Production receipt X:/AIstock_temp/LOCALSIM/pit-unification-post-restart-20261021-r1/account-migration-receipt.json. Existing replay lineages continue on controlled successors; completion of later trading days remains separate."
   ],
   "verification_budget": {
     "budget": "standard",
