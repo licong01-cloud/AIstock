@@ -253,7 +253,8 @@ def test_auto_range_with_audit_cursor_requires_reconcile_when_audit_missing(monk
 
 
 
-def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch):
+@pytest.mark.parametrize("updated_column", ["trade_time", "received_at", ""])
+def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch, updated_column):
     executed: list[tuple[str, tuple]] = []
 
     class _Cursor:
@@ -283,13 +284,14 @@ def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch):
                         "kline_minute_raw",
                         "market.kline_minute_raw",
                         "trade_time",
-                        "trade_time",
+                        updated_column,
                         {"desc": "minute raw"},
                     )
                 ]
             elif "COUNT(*)" in sql and "market" in sql and "kline_minute_raw" in sql:
                 self.description = [("count",), ("min",), ("max",)]
-                self._row = (123, dt.date(2026, 4, 2), dt.date(2026, 7, 1))
+                self._row = (123, dt.date(2026, 4, 2), dt.date(2026, 7, 1),
+                             dt.datetime(2026, 7, 1, 15, 0, tzinfo=dt.timezone.utc) if updated_column else None)
             elif "MAX(" in sql and "market" in sql and "kline_minute_raw" in sql:
                 self.description = [("max",)]
                 self._row = (dt.datetime(2026, 7, 1, 15, 0, tzinfo=dt.timezone.utc),)
@@ -329,9 +331,14 @@ def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch):
     assert count_params == ("3 months",)
     minute_scans = [sql for sql, _params in executed if "FROM \"market\".\"kline_minute_raw\"" in sql]
     assert minute_scans
+    assert len(minute_scans) == 1
+    assert (f'MAX("{updated_column}") AS last_updated_at' if updated_column
+            else 'NULL::timestamptz AS last_updated_at') in count_sql
     assert all("WHERE \"trade_time\" >= CURRENT_DATE - (%s::text)::interval" in sql for sql in minute_scans)
     insert_sql, insert_params = next((sql, params) for sql, params in executed if "INSERT INTO market.data_stats" in sql)
     assert insert_params[0] == "kline_minute_raw"
+    assert insert_params[7] == (dt.datetime(2026, 7, 1, 15, 0, tzinfo=dt.timezone.utc)
+                                if updated_column else None)
     assert '"stats_scope": "recent_window"' in insert_params[-1]
     assert '"window_months": 3' in insert_params[-1]
     assert '"full_history_count": false' in insert_params[-1]

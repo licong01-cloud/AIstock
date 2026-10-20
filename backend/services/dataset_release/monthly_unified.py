@@ -2339,7 +2339,14 @@ class MonthlyReleaseService:
             local_scope.get("release_closure_ref"), field="release_closure_ref"
         )
         source_as_of = str(source_scope.get("source_as_of") or "")
-        if not source_as_of or plan.get("source_as_of") != source_as_of:
+        try:
+            observed_as_of = datetime.fromisoformat(source_as_of)
+            planned_as_of = datetime.fromisoformat(str(plan.get("source_as_of") or ""))
+        except ValueError as exc:
+            raise MonthlyReleaseNotReady("source_as_of is invalid") from exc
+        if observed_as_of.tzinfo is None or planned_as_of.tzinfo is None:
+            raise MonthlyReleaseNotReady("source_as_of must include a timezone")
+        if observed_as_of.astimezone(UTC) != planned_as_of.astimezone(UTC):
             raise MonthlyReleaseNotReady("source_as_of differs from the frozen release plan")
         profile_path = Path(str(plan["profile_candidate"]))
         if not profile_path.is_absolute():
