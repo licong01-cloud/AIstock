@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError
 from backend.data_service.frozen_dataset import FrozenDataset, freeze_dataset_binding
 from backend.services.simulation_data.frozen_file_adapters import FileTradingCalendar
 
@@ -21,6 +21,7 @@ from .localsim_product_authority import LocalSimProductAuthority
 from .localsim_replay import LocalSimHistoricalDayRunner, LocalSimReplayCoordinator
 from .localsim_runtime_profile import (
     LocalSimRuntimeProfileConfigRequestV1,
+    LocalSimRuntimeProfileConfigV1,
     LocalSimRuntimeProfileV1,
     LocalSimRuntimeProfileVersionV1,
 )
@@ -468,6 +469,12 @@ class LocalSimProductControlPlaneService:
             execution_policy_version_id=request.execution_policy_version_id,
         )
         kwargs = self._account_bundle_kwargs(request=request, resolved=resolved, created_by=created_by)
+        profile = LocalSimRuntimeProfileConfigV1.model_validate(resolved.runtime_profile_version.config_json)
+        if profile.canonical_pit_authority_profile is None:
+            raise RuntimeConfigInvalidError(
+                "new LocalSIM replay requires an explicitly versioned canonical PIT profile",
+                context={"reason_code": "LOCALSIM_REPLAY_CANONICAL_PIT_PROFILE_REQUIRED"},
+            )
         kwargs["effective_to"] = request.end_trade_date
         if source.file_binding is not None:
             kwargs["release_metadata"][FILE_BINDING_KEY] = source.file_binding

@@ -13,6 +13,7 @@
     "tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json"
   ],
   "assigned_agent": null,
+  "backend_restart_required": true,
   "bug_id": "BUG-2009",
   "closed_at": null,
   "closure_requirements": [
@@ -22,6 +23,12 @@
   ],
   "created_at": "2026-10-20T04:16:01.848860Z",
   "description": "Historical inference rejects the missing identity; LocalSIM selection projection currently carries neither canonical profile nor lease.",
+  "design_compliance_review": {
+    "business_semantics_preserved": "Pre-fix legacy request/materialized hashes retained by regression; shared scoring/filtering/TopK, fee, order, position and ledger algorithms unchanged.",
+    "complete_implementation": "Explicit native profile, immutable new-admission lease, native release readback, all C/D/T clocks and public retrospective inference boundary covered; original replay is not migrated.",
+    "fail_closed": "Missing/conflicting identities, mixed legacy ST policy and uncovered range fail before inference or native entity commit; no price fill or database fallback added.",
+    "no_unapproved_gates": "Only existing canonical authority/profile/lease contracts are enforced; no new approval, restart or production activation flow."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -33,19 +40,32 @@
   "evidence_uris": [],
   "expected": "Explicit new canonical replay admission freezes policy authority generation and source identity, retains per-day C/D/T PIT semantics and fails closed on invalid identity/coverage/drift; existing legacy releases remain unchanged.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
-      "backend/services/simulation_runtime/localsim_runtime_profile.py",
-      "backend/services/simulation_runtime/localsim_product_control.py",
-      "backend/services/simulation_runtime/localsim_native_context.py",
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json",
       "backend/services/simulation_runtime/localsim_control.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/services/simulation_runtime/localsim_runtime_profile.py",
       "backend/services/simulation_runtime/localsim_selection_inference.py",
-      "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
-      "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
       "backend/tests/simulation_runtime/test_localsim_native_context.py",
+      "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
+      "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
       "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json",
+      "backend/services/simulation_runtime/localsim_control.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/services/simulation_runtime/localsim_runtime_profile.py",
+      "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/tests/simulation_runtime/test_localsim_native_context.py",
+      "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
+      "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/localsim_runtime_profile.py",
@@ -220,14 +240,41 @@
     "l0",
     "simulation_core_l2"
   ],
+  "review_rounds": [
+    {
+      "evidence": "Captured pre-fix hashes; explicit canonical profile survives materialization; legacy risk key plus canonical profile rejected.",
+      "result": "passed",
+      "round": 1,
+      "scope": "policy identity and immutable legacy serialization"
+    },
+    {
+      "evidence": "133 passed / 1 skipped; missing lease, conflicting inference declaration, C/D/T coverage and no-partial-commit checks passed.",
+      "result": "passed",
+      "round": 2,
+      "scope": "admission atomicity, native propagation and retrospective boundary"
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/related-matrix-r1.log",
+      "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/admission-readonly-receipt.json",
+      "Fresh AIstock python process -m pytest (related-matrix-r1.log) -> 133 passed, 1 skipped; new in-memory admission-readonly-receipt.json freezes current active canonical identity without production writes",
+      "AIstock fresh Python process (9 LocalSIM/PIT contract files) -> 133 passed, 1 skipped; admission-readonly-receipt.json records isolated current canonical binding and exact changed-source SHA256",
+      "Fresh AIstock Python process -m pytest (9 native LocalSIM and PIT test files, related-matrix-r1.log) -> 133 passed, 1 skipped; exact source hashes and current canonical lease in admission-readonly-receipt.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

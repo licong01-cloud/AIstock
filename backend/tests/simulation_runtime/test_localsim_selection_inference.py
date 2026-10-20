@@ -129,6 +129,7 @@ def test_day_scopes_materialize_distinct_small_workspaces(tmp_path):
 
 @pytest.mark.parametrize("with_runtime_lease", [False, True])
 def test_training_binding_is_preserved_and_only_native_runtime_lease_binds_inference(tmp_path, with_runtime_lease):
+    from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_POINTER_PROFILE_SCHEMA
     store = LocalPackageAssetStore(tmp_path / "formal-test-store")
     manifest = _frozen_manifest(store)
     binding = StrategyPackageCanonicalPitBindingV2(
@@ -150,7 +151,10 @@ def test_training_binding_is_preserved_and_only_native_runtime_lease_binds_infer
         source = resolver.load_source_for_strategy_package(manifest=manifest, package_id=manifest.package_id)
         workspace = resolver.prepare_workspace(package_id=manifest.package_id, manifest_sha256=manifest.manifest_sha256,
                                                source=source, path_converter=win_to_wsl_path,
-                                               runtime_config={"canonical_pit_authority": lease} if with_runtime_lease else {})
+                                               runtime_config={"canonical_pit_authority": lease, "canonical_pit_authority_profile": {
+                                                   "schema_version": CANONICAL_PIT_POINTER_PROFILE_SCHEMA,
+                                                   "authority_id": CANONICAL_PIT_AUTHORITY_ID,
+                                               }} if with_runtime_lease else {})
     finally:
         LOCALSIM_INFERENCE_SCOPE.reset(token)
     actual = json.loads(workspace.manifest_path.read_text(encoding="utf-8"))
@@ -161,6 +165,72 @@ def test_training_binding_is_preserved_and_only_native_runtime_lease_binds_infer
         assert actual["pit_identity"]["universe_key"] == CANONICAL_PIT_UNIVERSE_KEY
     else:
         assert "pit_identity" not in actual  # No invented frozen inference population.
+
+
+def _prepare_canonical_workspace(tmp_path, *, clocks=None, alter=None):
+    from backend.tests.simulation_runtime.test_localsim_native_context import _bundle, _canonical_profile, _canonical_resolver
+
+    _repo, _native_manifest, _profile, _account, _scope, release, _binding = _bundle(
+        _canonical_profile(), pit_authority_resolver=_canonical_resolver(),
+    )
+    config = dict(release.release_config_json["metadata"]["selection_runtime_config"])
+    if alter is not None:
+        alter(config)
+    store = LocalPackageAssetStore(tmp_path / "formal-test-store")
+    manifest = _frozen_manifest(store)
+    scope = LocalSimInferenceScope("canonical-replay-day", tmp_path / "own-run", clocks or SelectionSignalDayV1(DAY, DAY, DAY), {})
+    resolver = LocalSimReferencedAssetResolver(asset_store=store, cache_root=scope.root / "assets")
+    token = LOCALSIM_INFERENCE_SCOPE.set(scope)
+    try:
+        source = resolver.load_source_for_strategy_package(manifest=manifest, package_id=manifest.package_id)
+        workspace = resolver.prepare_workspace(
+            package_id=manifest.package_id, manifest_sha256=manifest.manifest_sha256,
+            source=source, path_converter=win_to_wsl_path, runtime_config=config,
+        )
+        return json.loads(workspace.manifest_path.read_text(encoding="utf-8"))
+    finally:
+        LOCALSIM_INFERENCE_SCOPE.reset(token)
+
+
+@pytest.mark.parametrize("day,cutoff", [(date(2026, 1, 5), date(2025, 12, 31)), (date(2026, 7, 13), date(2026, 7, 10))])
+def test_frozen_release_reaches_real_retrospective_pit_boundary(tmp_path, day, cutoff):
+    from backend.services.canonical_pit_inference_boundary import InferencePitMode, resolve_inference_pit_identity
+
+    payload = _prepare_canonical_workspace(tmp_path, clocks=SelectionSignalDayV1(day, cutoff, day))
+    identity = resolve_inference_pit_identity(
+        payload["pit_identity"], manifest=payload, version_tag="localsim", allow_active_canonical_pointer=False,
+    )
+    assert identity.mode is InferencePitMode.ROLLING_RUNTIME
+    assert identity.binding.activation_generation == 1
+    assert identity.binding.universe_key == CANONICAL_PIT_UNIVERSE_KEY
+    assert identity.universe_codes == ()  # Bind each historical day's population natively, never today's member list.
+
+
+def test_canonical_workspace_rejects_missing_lease_before_node_start(tmp_path):
+    from backend.services.selection_center.canonical_pit_runtime import CanonicalPitRuntimeError
+
+    with pytest.raises(CanonicalPitRuntimeError, match="lease is required"):
+        _prepare_canonical_workspace(tmp_path, alter=lambda config: config.pop("canonical_pit_authority"))
+
+
+@pytest.mark.parametrize("clocks", [
+    SelectionSignalDayV1(DAY, date(2018, 7, 31), DAY),
+    SelectionSignalDayV1(date(2026, 10, 19), date(2026, 10, 16), date(2026, 10, 20)),
+])
+def test_canonical_workspace_checks_all_historical_clocks(tmp_path, clocks):
+    from backend.services.selection_center.canonical_pit_runtime import CanonicalPitRuntimeError
+
+    with pytest.raises(CanonicalPitRuntimeError, match="cover"):
+        _prepare_canonical_workspace(tmp_path, clocks=clocks)
+
+
+def test_conflicting_explicit_inference_identity_is_not_silently_overwritten(tmp_path):
+    def alter(config):
+        config["selection_artifact_config"]["pit_identity"] = {
+            "mode": "canonical_v2_rolling_runtime", **config["canonical_pit_authority"], "activation_generation": 2,
+        }
+    with pytest.raises(ValueError, match="differs from its frozen PIT lease"):
+        _prepare_canonical_workspace(tmp_path, alter=alter)
 
 
 def _mock_owned_node(monkeypatch, scope, *, foreign=False, failure=False):

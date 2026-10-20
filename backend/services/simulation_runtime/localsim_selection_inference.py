@@ -20,9 +20,13 @@ from uuid import uuid4
 
 from backend.infra.wsl_qlib_runner import win_to_wsl_path
 from backend.services.canonical_equity_pit import PitAuthorityStatus
-from backend.services.canonical_pit_inference_boundary import InferencePitMode, manifest_inference_pit_identity
+from backend.services.canonical_pit_inference_boundary import (
+    InferencePitMode, manifest_inference_pit_identity, resolve_inference_pit_identity,
+)
 from backend.services.advisory_historical_range.selection_signal_kernel import SelectionSignalDayV1
-from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_RUNTIME_LEASE_KEY, SelectionPitRuntimeLease
+from backend.services.selection_center.canonical_pit_runtime import (
+    SelectionPitRuntimeLease, has_canonical_pit_runtime_profile, require_canonical_pit_runtime_binding,
+)
 from backend.services.strategy_package.live_inference import (
     AUTHORITATIVE_SELECTION_SOURCE_TYPE,
     LiveInferenceResult,
@@ -186,10 +190,20 @@ class LocalSimReferencedAssetResolver(QEExperimentRuntimeAssetResolver):
         if not isinstance(artifact_config, dict):
             raise ValueError("native LocalSIM selection artifact config must be an object")
         pit_identity = artifact_config.get("pit_identity", context["pit_identity"])
-        lease_value = config.get(CANONICAL_PIT_RUNTIME_LEASE_KEY)
-        lease = SelectionPitRuntimeLease.from_mapping(lease_value) if lease_value else None
-        if pit_identity is None and lease is not None and lease.authority_status is PitAuthorityStatus.ACTIVE_CANONICAL:
-            pit_identity = {"mode": InferencePitMode.ROLLING_RUNTIME.value, **lease.as_dict()}
+        lease = None
+        if has_canonical_pit_runtime_profile(config):
+            clocks = own_scope().clocks
+            lease = require_canonical_pit_runtime_binding(config, trade_date=clocks.decision_date)
+            lease.require_trade_date(clocks.data_cutoff)
+            lease.require_trade_date(clocks.target_trade_date)
+            if lease.authority_status is PitAuthorityStatus.ACTIVE_CANONICAL:
+                if pit_identity is not None:
+                    declared = resolve_inference_pit_identity(
+                        pit_identity, version_tag="localsim", allow_active_canonical_pointer=False,
+                    )
+                    if declared.mode is not InferencePitMode.ROLLING_RUNTIME or SelectionPitRuntimeLease.from_binding(declared.binding) != lease:
+                        raise ValueError("LocalSIM inference declaration differs from its frozen PIT lease")
+                pit_identity = {"mode": InferencePitMode.ROLLING_RUNTIME.value, **lease.as_dict()}
         order = self._build_factor_order(source=source, conf_path=self._resolve_conf_path(source))
         factor_files = self._resolve_factor_files(root / "factors", order.dynamic_factors)
         weight = self._blob(model)
