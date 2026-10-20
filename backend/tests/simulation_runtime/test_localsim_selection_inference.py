@@ -233,7 +233,7 @@ def test_conflicting_explicit_inference_identity_is_not_silently_overwritten(tmp
         _prepare_canonical_workspace(tmp_path, alter=alter)
 
 
-def _mock_owned_node(monkeypatch, scope, *, foreign=False, failure=False):
+def _mock_owned_node(monkeypatch, scope, *, foreign=False, failure=False, transform=None):
     commands = []
 
     def run(arguments, **_kwargs):
@@ -242,11 +242,14 @@ def _mock_owned_node(monkeypatch, scope, *, foreign=False, failure=False):
         commands.append(arguments[-1])
         root = next((scope.root / "node").iterdir())
         output = root / "batch_dates" / DAY.isoformat() / "scores.json"
-        _atomic_json(output, {"ok": True, "scores": [{"symbol": "000001.SZ", "score": 1.0}], "universe_count": 2,
+        payload = {"ok": True, "scores": [{"symbol": "000001.SZ", "score": 1.0}], "universe_count": 2,
                               "input_context": {"universe_input_hash": "c" * 64}, "source_read_receipts": [],
                               "metadata": {"consumer_scope": "ADVISORY" if foreign else "LOCALSIM", "run_id": scope.run_id,
                                            "clocks": scope.clocks.to_dict(), "binding": "b" * 64,
-                                           "universe_members": ["000001.SZ", "600000.SH"]}})
+                                           "universe_members": ["000001.SZ", "600000.SH"]}}
+        if transform is not None:
+            transform(payload)
+        _atomic_json(output, payload)
         item = {"output_path": win_to_wsl_path(str(output)), "sha256": hashlib.sha256(output.read_bytes()).hexdigest()}
         _atomic_json(root / "batch.json", {"consumer_scope": "LOCALSIM", "run_id": scope.run_id, "binding": "b" * 64,
                                           "status": "FAILED" if failure else "COMPLETE", "ok": not failure, "results": [item],
@@ -322,6 +325,96 @@ def test_shared_cli_receives_owned_scope_day_and_readonly_boundary(tmp_path, mon
     assert "--historical-read-only" in commands[0] and "default_transaction_read_only=on" in commands[0]
     assert scope.source_universes[0]["members"] == ["000001.SZ", "600000.SH"]
     assert scope.completed_prefix[0]["stage"] == "shared_raw_inference"
+
+
+def _canonical_node_payload(payload, scope, lease):
+    from backend.services.canonical_pit_inference_boundary import resolve_inference_pit_identity
+    from backend.services.simulation_runtime.models import canonical_json_sha256
+
+    # Actual CLI contract: PIT identity belongs to the engine input receipt,
+    # and is deliberately absent from its skinny metadata projection.
+    identity = resolve_inference_pit_identity(
+        {"mode": "canonical_v2_rolling_runtime", **lease}, version_tag="localsim",
+        allow_active_canonical_pointer=False,
+    ).as_dict()
+    context = payload["input_context"]
+    context.update(pit_mode=identity["mode"], pit_identity=identity)
+    payload["source_read_receipts"] = [{
+        "source_role": "pit_universe", "dataset_id": "market.stock_universe_pit:" + identity["universe_key"],
+        "partition_ref": scope.clocks.data_cutoff.isoformat(),
+        "query_template_id": "StockUniversePitService.get_eligible_codes", "query_template_version": "canonical_pit_v2",
+        "parameter_hash": canonical_json_sha256({"trade_date": scope.clocks.data_cutoff.isoformat(), "ensure": False,
+                                                 "pit_identity": identity}),
+        "row_count": payload["universe_count"], "content_hash": context["universe_input_hash"],
+        "first_observed_at": "2026-10-20T04:27:48+00:00", "admissibility": "RETROSPECTIVE_DB_CONTENT_HASH",
+    }]
+
+
+def test_canonical_provider_consumes_authoritative_input_receipt_not_metadata(tmp_path, monkeypatch):
+    from backend.services.selection_center.canonical_pit_runtime import SelectionPitRuntimeLease
+    from backend.tests.simulation_runtime.test_localsim_native_context import _canonical_resolver
+
+    scope, workspace, provider = _provider(tmp_path, monkeypatch)
+    lease = SelectionPitRuntimeLease.from_binding(_canonical_resolver().binding).as_dict()
+    _atomic_json(workspace.manifest_path, {"canonical_pit_runtime_lease": lease})
+    _mock_owned_node(monkeypatch, scope, transform=lambda payload: _canonical_node_payload(payload, scope, lease))
+    token = LOCALSIM_INFERENCE_SCOPE.set(scope)
+    try:
+        result = provider.run(workspace=workspace, trade_date=DAY, cutoff_date=scope.clocks.data_cutoff)
+    finally:
+        LOCALSIM_INFERENCE_SCOPE.reset(token)
+    assert "pit_identity" not in result.metadata
+    assert result.input_context["pit_identity"]["activation_generation"] == lease["activation_generation"]
+    assert result.source_read_receipts[0]["row_count"] == result.universe_count
+    assert scope.completed_prefix[0]["stage"] == "shared_raw_inference"
+
+
+@pytest.mark.parametrize("corruption", [
+    "missing_identity", "generation", "pit_mode", "missing_receipt", "duplicate_receipt",
+    "receipt_dataset", "receipt_day", "receipt_parameters", "receipt_population", "receipt_count",
+])
+def test_canonical_provider_rejects_detached_or_conflicting_pit_receipt(tmp_path, monkeypatch, corruption):
+    from copy import deepcopy
+    from backend.services.selection_center.canonical_pit_runtime import SelectionPitRuntimeLease
+    from backend.tests.simulation_runtime.test_localsim_native_context import _canonical_resolver
+
+    scope, workspace, provider = _provider(tmp_path, monkeypatch)
+    lease = SelectionPitRuntimeLease.from_binding(_canonical_resolver().binding).as_dict()
+    _atomic_json(workspace.manifest_path, {"canonical_pit_runtime_lease": lease})
+
+    def transform(payload):
+        _canonical_node_payload(payload, scope, lease)
+        # A matching non-authoritative metadata field must never rescue a
+        # missing or wrong authoritative receipt.
+        payload["metadata"]["pit_identity"] = deepcopy(payload["input_context"]["pit_identity"])
+        if corruption == "missing_identity":
+            payload["input_context"].pop("pit_identity")
+        elif corruption == "generation":
+            payload["input_context"]["pit_identity"]["activation_generation"] += 1
+        elif corruption == "pit_mode":
+            payload["input_context"]["pit_mode"] = "legacy_reproduction_only"
+        elif corruption == "missing_receipt":
+            payload["source_read_receipts"] = []
+        elif corruption == "duplicate_receipt":
+            payload["source_read_receipts"] *= 2
+        else:
+            field, wrong = {
+                "receipt_dataset": ("dataset_id", "market.stock_universe_pit:legacy"),
+                "receipt_day": ("partition_ref", DAY.isoformat()),
+                "receipt_parameters": ("parameter_hash", "0" * 64),
+                "receipt_population": ("content_hash", "0" * 64),
+                "receipt_count": ("row_count", 3),
+            }[corruption]
+            payload["source_read_receipts"][0][field] = wrong
+
+    _mock_owned_node(monkeypatch, scope, transform=transform)
+    token = LOCALSIM_INFERENCE_SCOPE.set(scope)
+    try:
+        with pytest.raises(ValueError):
+            provider.run(workspace=workspace, trade_date=DAY, cutoff_date=scope.clocks.data_cutoff)
+        assert scope.source_universes == [] and scope.completed_prefix == []
+    finally:
+        LOCALSIM_INFERENCE_SCOPE.reset(token)
 
 
 @pytest.mark.parametrize("foreign,failure", [(True, False), (False, True)])

@@ -1,5 +1,5 @@
 {
-  "actual": "Historical inference rejects the missing identity; LocalSIM selection projection currently carries neither canonical profile nor lease.",
+  "actual": "New replay admission lost the canonical profile/lease. A real shared TCN run also exposed LocalSIM reading nonexistent metadata.pit_identity instead of authoritative input_context.pit_identity; 4900 native scores were correctly rejected before publication.",
   "allowed_write_scope": [
     "backend/services/simulation_runtime/localsim_runtime_profile.py",
     "backend/services/simulation_runtime/localsim_product_control.py",
@@ -25,7 +25,7 @@
   "description": "Historical inference rejects the missing identity; LocalSIM selection projection currently carries neither canonical profile nor lease.",
   "design_compliance_review": {
     "business_semantics_preserved": "Pre-fix legacy request/materialized hashes retained by regression; shared scoring/filtering/TopK, fee, order, position and ledger algorithms unchanged.",
-    "complete_implementation": "Explicit native profile, immutable new-admission lease, native release readback, all C/D/T clocks and public retrospective inference boundary covered; original replay is not migrated.",
+    "complete_implementation": "Explicit native profile, immutable new-admission lease, native release readback, all C/D/T clocks and public retrospective boundary are covered; the consumer validates authoritative native input_context plus population read receipt without changing the shared CLI.",
     "fail_closed": "Missing/conflicting identities, mixed legacy ST policy and uncovered range fail before inference or native entity commit; no price fill or database fallback added.",
     "no_unapproved_gates": "Only existing canonical authority/profile/lease contracts are enforced; no new approval, restart or production activation flow."
   },
@@ -228,6 +228,14 @@
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6416",
   "last_seen_at": "2026-10-20T04:16:01.848860Z",
   "module": "simulation_runtime",
+  "native_probe": {
+    "database_write": false,
+    "fresh_run": "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/tcn-native-r2/progress.json",
+    "fresh_status": "RUNNING; not yet claimed accepted",
+    "initial_run": "tcn-native-r1 failed at consumer identity lookup after native scoring, retained unchanged",
+    "production_replay_started": false,
+    "read_only": true
+  },
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
@@ -252,6 +260,12 @@
       "result": "passed",
       "round": 2,
       "scope": "admission atomicity, native propagation and retrospective boundary"
+    },
+    {
+      "evidence": "Real 4900-score output reproduced a consumer-side metadata lookup fault. Added 11 receipt-specific positive/negative tests and fixed consumer validation against the unchanged native input_context plus PIT source receipt; 55 consumer/shared-signal tests pass.",
+      "result": "passed",
+      "round": 3,
+      "scope": "actual shared CLI receipt contract and detached PIT identity rejection"
     }
   ],
   "risk_area": "bug",
@@ -259,11 +273,10 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
     "fresh_process_evidence": [
-      "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/related-matrix-r1.log",
-      "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/admission-readonly-receipt.json",
-      "Fresh AIstock python process -m pytest (related-matrix-r1.log) -> 133 passed, 1 skipped; new in-memory admission-readonly-receipt.json freezes current active canonical identity without production writes",
-      "AIstock fresh Python process (9 LocalSIM/PIT contract files) -> 133 passed, 1 skipped; admission-readonly-receipt.json records isolated current canonical binding and exact changed-source SHA256",
-      "Fresh AIstock Python process -m pytest (9 native LocalSIM and PIT test files, related-matrix-r1.log) -> 133 passed, 1 skipped; exact source hashes and current canonical lease in admission-readonly-receipt.json"
+      "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/related-matrix-r1.log: 133 passed, 1 skipped",
+      "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/receipt-related-r2.log: 55 passed after actual CLI receipt fix",
+      "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/native-receipt-consumer-r2.json: unchanged actual 4900-score native output validates against its original PIT lease",
+      "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/legacy-native-identity-readback.json: both actual old release hashes and projections remain unchanged"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",

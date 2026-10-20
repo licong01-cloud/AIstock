@@ -42,6 +42,7 @@ from backend.services.strategy_package.live_inference import (
     _write_inside_runtime_source,
 )
 from backend.services.trading_core.errors import DataUnavailableError
+from .models import canonical_json_sha256
 from scripts.strategy_package_live_inference import _atomic_json
 
 
@@ -237,6 +238,34 @@ class LocalSimReferencedAssetResolver(QEExperimentRuntimeAssetResolver):
         )
 
 
+def _require_native_pit_receipt(payload, lease_payload, clocks):
+    """Bind the shared engine's authoritative input receipt to this daily lease."""
+    lease = SelectionPitRuntimeLease.from_mapping(lease_payload)
+    context = payload.get("input_context", {})
+    identity = resolve_inference_pit_identity(
+        context.get("pit_identity"), version_tag="localsim", allow_active_canonical_pointer=False,
+    )
+    if (identity.mode is not InferencePitMode.ROLLING_RUNTIME
+            or context.get("pit_mode") != identity.receipt_mode
+            or SelectionPitRuntimeLease.from_binding(identity.binding) != lease):
+        raise ValueError("LocalSIM node population differs from the native daily PIT lease")
+    # The CLI keeps engine input_context/source_read_receipts intact and
+    # projects skinny metadata. Never infer identity from absent metadata or
+    # manufacture it from the expected lease.
+    receipts = [row for row in payload.get("source_read_receipts", []) if row.get("source_role") == "pit_universe"]
+    expected = {
+        "dataset_id": f"market.stock_universe_pit:{lease.universe_key}",
+        "partition_ref": clocks.data_cutoff.isoformat(),
+        "parameter_hash": canonical_json_sha256({
+            "trade_date": clocks.data_cutoff.isoformat(), "ensure": False, "pit_identity": identity.as_dict(),
+        }),
+        "row_count": payload["universe_count"],
+        "content_hash": context.get("universe_input_hash"),
+    }
+    if len(receipts) != 1 or any(receipts[0].get(key) != value for key, value in expected.items()):
+        raise ValueError("LocalSIM PIT source receipt differs from its daily input identity")
+
+
 class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
     """One explicit day per native workspace; no Advisory container or cache."""
 
@@ -337,10 +366,7 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
             raise ValueError("LocalSIM node consumer/run/clock binding mismatch")
         native_manifest = json.loads(workspace.manifest_path.read_text(encoding="utf-8"))
         if native_manifest.get("canonical_pit_runtime_lease") is not None:
-            expected_pit = native_manifest["canonical_pit_runtime_lease"]
-            actual_pit = metadata.get("pit_identity", {})
-            if any(actual_pit.get(key) != value for key, value in expected_pit.items() if key != "schema_version"):
-                raise ValueError("LocalSIM node population differs from the native daily PIT lease")
+            _require_native_pit_receipt(payload, native_manifest["canonical_pit_runtime_lease"], clocks)
         metadata.update(inference_backend="wsl", inference_wall_seconds=time.perf_counter() - started,
                         inference_batch_index=str(output), wsl_distro=self.distro, wsl_conda_env=self.conda_env)
         scope.source_universes.append({"members": metadata.get("universe_members"), "count": payload["universe_count"],
