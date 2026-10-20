@@ -20,6 +20,7 @@ from backend.services.dataset_release.monthly_qe_consumer_probe import (
     monthly_qe_consumer_probes,
 )
 from backend.services.hmm_risk.qe_assistance_transport import BINDING_PARAM
+from backend.services.quantevolver.qe_active_dataset_profile import UniverseSelection
 
 
 MANIFEST = "a" * 64
@@ -109,7 +110,7 @@ def _fixture(tmp_path: Path, consumer_id: str, *, asset_manifest: str = MANIFEST
     [
         ("qe_single", "stock_universe", []),
         ("qe_custom", "single_index", ["csi300"]),
-        ("qe_multi_alpha", "union", ["csi500", "csi1000"]),
+        ("qe_multi_alpha", "index_union", ["csi500", "csi1000"]),
         ("qe_p10", "stock_universe", []),
         ("qe_p11", "stock_universe", []),
     ],
@@ -125,6 +126,8 @@ def test_qe_probe_uses_real_resolver_contract(
     hmm_reads: list[str] = []
 
     def resolver(**kwargs: Any) -> Any:
+        selection = UniverseSelection.from_value(kwargs["universe_selection"])
+        assert selection.mode == mode
         observed.update(kwargs)
         is_p11 = consumer_id == "qe_p11"
         policy = (
