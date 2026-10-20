@@ -26,6 +26,7 @@ from backend.services.simulation_runtime.localsim_cutover_readiness import Local
 from backend.services.simulation_runtime.localsim_dependencies import (
     build_localsim_product_service,
     build_localsim_profile_service,
+    build_localsim_pit_migration_service,
     build_localsim_query_service,
     build_localsim_economic_query_service,
 )
@@ -49,6 +50,9 @@ from backend.services.simulation_runtime.localsim_product_control import (
 )
 from backend.services.simulation_runtime.localsim_query import LocalSimListResponseV1, LocalSimQueryService
 from backend.services.simulation_runtime.localsim_runtime_profile_service import LocalSimRuntimeProfileService
+from backend.services.simulation_runtime.localsim_pit_migration import (
+    LocalSimPitMigrationRequest, LocalSimPitMigrationService,
+)
 from backend.services.simulation_runtime.ops import SimulationRuntimeOpsService
 from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus, SimulationAccountStatus
 from backend.services.simulation_runtime.tca_read_api import ExecutionTcaReadService
@@ -103,6 +107,33 @@ def get_localsim_product_service() -> LocalSimProductControlPlaneService:
 
 def get_localsim_profile_service() -> LocalSimRuntimeProfileService:
     return build_localsim_profile_service()
+
+
+def get_localsim_pit_migration_service() -> LocalSimPitMigrationService:
+    return build_localsim_pit_migration_service()
+
+
+@router.get("/localsim/accounts/{account_id}/pit-migration")
+def plan_localsim_pit_migration(
+    account_id: str,
+    service: LocalSimPitMigrationService = Depends(get_localsim_pit_migration_service),
+):
+    try:
+        return service.plan(account_id)
+    except Exception as exc:
+        _raise_http(exc)
+
+
+@router.post("/localsim/accounts/{account_id}/pit-migration")
+def apply_localsim_pit_migration(
+    account_id: str,
+    request: LocalSimPitMigrationRequest,
+    service: LocalSimPitMigrationService = Depends(get_localsim_pit_migration_service),
+):
+    try:
+        return service.apply(account_id, request)
+    except Exception as exc:
+        _raise_http(exc)
 
 
 def get_localsim_query_service() -> LocalSimQueryService:

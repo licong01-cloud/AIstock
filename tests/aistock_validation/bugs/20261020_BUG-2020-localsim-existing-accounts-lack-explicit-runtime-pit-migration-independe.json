@@ -8,8 +8,10 @@
     "backend/services/simulation_runtime/localsim_pit_migration.py",
     "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
     "docs/analysis/localsim_runtime_pit_migration_20261020.md",
-    "scripts/migrate_localsim_pit.py",
-    "tests/aistock_validation/bugs/20261020_BUG-2020-localsim-existing-accounts-lack-explicit-runtime-pit-migration-independe.json"
+    "backend/services/simulation_runtime/localsim_pit_operator.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2020-localsim-existing-accounts-lack-explicit-runtime-pit-migration-independe.json",
+    "backend/services/simulation_runtime/localsim_native_context.py",
+    "backend/services/simulation_runtime/scheduler.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2020",
@@ -30,23 +32,43 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/LOCALSIM/post-restart-20261020-r4/final-postrestart-receipt.json"
+    "X:/AIstock_temp/LOCALSIM/post-restart-20261020-r4/final-postrestart-receipt.json",
+    "X:/AIstock_temp/LOCALSIM/pit-migration-20261020/before-inventory.json",
+    "X:/AIstock_temp/LOCALSIM/pit-migration-20261020/targeted-matrix-r1.xml"
   ],
-  "expected": "Explicit new runtime profile/release and daily authority lease; original asset and economic identities retained; safe atomic continuation with idempotent migration and durable lineage.",
+  "expected": "Explicit immutable effective runtime PIT policy/release independent of source profile and model assets; preserve completed economics and original failed cursors/status; atomic same-account continuation with idempotent durable lineage.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2020-localsim-existing-accounts-lack-explicit-runtime-pit-migration-independe.json",
+      "backend/routers/simulation_runtime.py",
+      "backend/services/simulation_runtime/localsim_dependencies.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/localsim_pit_migration.py",
+      "backend/services/simulation_runtime/localsim_pit_operator.py",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
+      "docs/analysis/localsim_runtime_pit_migration_20261020.md"
+    ],
     "added_files": [
       "backend/services/simulation_runtime/localsim_pit_migration.py",
       "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
       "docs/analysis/localsim_runtime_pit_migration_20261020.md",
-      "scripts/migrate_localsim_pit.py"
+      "backend/services/simulation_runtime/localsim_pit_operator.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2020-localsim-existing-accounts-lack-explicit-runtime-pit-migration-independe.json",
       "backend/routers/simulation_runtime.py",
       "backend/services/simulation_runtime/localsim_dependencies.py",
-      "backend/services/simulation_runtime/successor_repository.py",
-      "backend/services/simulation_runtime/localsim_replay_runtime.py"
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/localsim_pit_migration.py",
+      "backend/services/simulation_runtime/localsim_pit_operator.py",
+      "backend/services/simulation_runtime/localsim_replay_runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
+      "docs/analysis/localsim_runtime_pit_migration_20261020.md"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/routers/simulation_runtime.py",
@@ -171,7 +193,9 @@
       "backend/services/simulation_runtime/localsim_pit_migration.py",
       "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
       "docs/analysis/localsim_runtime_pit_migration_20261020.md",
-      "scripts/migrate_localsim_pit.py"
+      "backend/services/simulation_runtime/localsim_pit_operator.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/scheduler.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -182,11 +206,13 @@
       "backend/services/simulation_runtime/localsim_pit_migration.py",
       "backend/tests/simulation_runtime/test_localsim_pit_migration.py",
       "docs/analysis/localsim_runtime_pit_migration_20261020.md",
-      "scripts/migrate_localsim_pit.py"
+      "backend/services/simulation_runtime/localsim_pit_operator.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/scheduler.py"
     ]
   },
   "first_seen_at": "2026-10-20T07:45:14.139094Z",
-  "fix_branch": null,
+  "fix_branch": "bug/BUG-2020-localsim-existing-accounts-lack-explicit-runtime-20261020",
   "fix_commit": null,
   "fixed_at": null,
   "github_issue_number": 6450,
@@ -209,11 +235,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/LOCALSIM/pit-migration-20261020/targeted-matrix-r1.xml: 62 passed in a fresh Python process",
+      "X:/AIstock_temp/LOCALSIM/pit-migration-20261020/fresh-process-native-profile-r6.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

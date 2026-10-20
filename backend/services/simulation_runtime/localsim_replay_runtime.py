@@ -19,7 +19,7 @@ from .localsim_product_control import LocalSimHistoricalSourceAuthorityProtocol
 from .localsim_replay import (
     LocalSimHistoricalDayRunner, LocalSimReplayCoordinator, local_sim_calendar_snapshot_sha256,
 )
-from .models import SimulationBrokerBackend, SimulationDailyRunStatus
+from .models import SimulationBindingApprovalState, SimulationBrokerBackend, SimulationDailyRunStatus
 from .successor_models import (
     LocalSimReplayJobV1,
     LocalSimReplayStatus,
@@ -329,6 +329,9 @@ class LocalSimReplayLifecycleOwner:
 
     def _advance(self, *, job: LocalSimReplayJobV1, as_of_time: datetime) -> LocalSimReplayJobV1:
         current = self.repository.get_replay_job(job.replay_job_id)
+        if self.repository.get_binding(current.binding_id).approval_state is SimulationBindingApprovalState.RETIRED:
+            raise InvalidStateTransitionError("LocalSIM replay binding has been retired by an explicit successor",
+                context={"reason_code": "LOCALSIM_REPLAY_BINDING_RETIRED"})
         source = resolve_replay_source(self.historical_source_authority, job=current,
                                        release=self.repository.get_release(current.release_id))
         if (
@@ -461,6 +464,25 @@ class LocalSimReplayLifecycleOwner:
     ):
         account = self.repository.get_account(job.simulation_account_id)
         historical_release = self.repository.get_release(job.release_id)
+        # An explicitly migrated effective PIT policy is separate from the
+        # immutable source profile/model provenance. Carry it into each native
+        # catch-up/live release instead of resolving the old policy again.
+        from .localsim_pit_migration import MIGRATION_KEY, POLICY_KEY, build_pit_successor
+
+        historical_metadata = historical_release.release_config_json.get("metadata") or {}
+        if POLICY_KEY in historical_metadata:
+            base_binding = self.repository.get_binding(job.binding_id)
+            release, binding = build_pit_successor(
+                base=historical_release, binding=base_binding, start=effective_from, end=effective_to,
+                resolver=self.control.pit_authority_resolver,
+                package_lifecycle_reader=getattr(self.control, "package_lifecycle_reader", None),
+                evidence={"schema_version": "localsim_runtime_pit_continuation_v1",
+                          "source_release_id": historical_release.release_id,
+                          "origin_plan_sha256": (historical_metadata.get(MIGRATION_KEY, {}).get("plan_sha256")
+                              or historical_metadata.get(MIGRATION_KEY, {}).get("origin_plan_sha256"))},
+                predecessor_id=job.replay_job_id if effective_to is not None else None,
+            )
+            return account, base_binding, release, binding
         resolved = self.product_authority.resolve_product(
             package_id=account.package_id,
             runtime_profile_version_id=historical_release.runtime_profile_version_id,
