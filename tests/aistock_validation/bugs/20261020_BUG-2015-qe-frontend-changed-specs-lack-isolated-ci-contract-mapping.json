@@ -13,28 +13,16 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2015",
-  "closed_at": null,
+  "closed_at": "2026-10-20T07:07:19Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "consumer_verification": {
-    "final_workflow_commit": "775406eee4d271fa9788785b84446dba59d52ff7",
-    "final_composed_head": "ba55ebf13e8eb481af95f0200c35bf86e3b59938",
-    "final_results": [
-      "python -m nox -s qe_best_loop_contract_ui -> 4 passed in 545ms, no frontend server",
-      "node node_modules/@playwright/test/cli.js test --config=tests/qe-read-contract.config.ts tests/qe/qe-evolution-read-only.spec.ts tests/qe/qe-read-performance.spec.ts -> 6 passed in 1.4m"
-    ],
-    "final_results_refs": [
-      "X:/AIstock-CI/qe-read-contract-qbXnAI/results.json",
-      "X:/AIstock-CI/qe-read-contract-ioNpZZ/results.json"
-    ],
-    "full_consumer_diff_classification": "27 changed files passed; unexecuted_test_files=[]; unmapped_code_files=[]; dev_db_required=false",
-    "baseline_note": "Unmodified main best-loop source assertion at line 31 fails before the BUG-2012 business fix; pipeline does not alter or bypass that assertion. The exact consumer HEAD passes it.",
     "backend_or_database_used": false,
+    "baseline_note": "Unmodified main best-loop source assertion at line 31 fails before the BUG-2012 business fix; pipeline does not alter or bypass that assertion. The exact consumer HEAD passes it.",
     "business_test_source_modified": false,
-    "test_budget_review": "Runner config is owned by validation.runner together with its nox execution entrypoints and still counted as test/helper. Both validation.runner and validation.workflow_automation pass 30% individually. No tests/assertions removed and no denominator inflation.",
     "classification": "passed; unexecuted_test_files=[]; backend_required=false; dev_db_required=false",
     "classification_ref": "X:/AIstock-CI/BUG-2015-classification.json",
     "command": "node node_modules/@playwright/test/cli.js test --config=tests/qe-read-contract.config.ts tests/qe/qe-evolution-best-loop-ui.spec.ts tests/qe/qe-evolution-read-only.spec.ts tests/qe/qe-read-performance.spec.ts",
@@ -47,9 +35,21 @@
       "No new approvals or gates: existing coverage and prebuilt dependency requirements retained."
     ],
     "excluded_integration": "QE evolution terminal task detail is read-only, accurate, and observable remains qe_read_ui real-backend acceptance; NOT executed or claimed passed",
+    "final_composed_head": "ba55ebf13e8eb481af95f0200c35bf86e3b59938",
+    "final_results": [
+      "python -m nox -s qe_best_loop_contract_ui -> 4 passed in 545ms, no frontend server",
+      "node node_modules/@playwright/test/cli.js test --config=tests/qe-read-contract.config.ts tests/qe/qe-evolution-read-only.spec.ts tests/qe/qe-read-performance.spec.ts -> 6 passed in 1.4m"
+    ],
+    "final_results_refs": [
+      "X:/AIstock-CI/qe-read-contract-qbXnAI/results.json",
+      "X:/AIstock-CI/qe-read-contract-ioNpZZ/results.json"
+    ],
+    "final_workflow_commit": "775406eee4d271fa9788785b84446dba59d52ff7",
+    "full_consumer_diff_classification": "27 changed files passed; unexecuted_test_files=[]; unmapped_code_files=[]; dev_db_required=false",
     "result": "10 passed (1.5m): 4 best-loop source, 5 performance/source/browser harness, 1 mocked terminal polling",
     "results_ref": "X:/AIstock-CI/qe-read-contract-UNnOCf/results.json",
     "source_head": "3302d6cb6a4bdac6762b8482f65a9fca7c05b62e",
+    "test_budget_review": "Runner config is owned by validation.runner together with its nox execution entrypoints and still counted as test/helper. Both validation.runner and validation.workflow_automation pass 30% individually. No tests/assertions removed and no denominator inflation.",
     "workflow_commit": "a7ec3db8ac68668d4eda2400f1dc1dfed41e2b46",
     "workspace": "X:/AIstock-CI/BUG-2015-qe-validation"
   },
@@ -226,8 +226,8 @@
   },
   "first_seen_at": "2026-10-20T06:28:00.272725Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "6109e94fc73a10986d46e8ae1c878365e75edef9",
+  "fixed_at": "2026-10-20T07:07:19Z",
   "github_issue_number": 6437,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6437",
   "last_seen_at": "2026-10-20T06:28:00.272725Z",
@@ -235,6 +235,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6438",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -255,6 +256,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -264,7 +266,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2015",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "80da3a2c95c97639",
+    "recorded_at": "2026-10-20T07:08:09.686411Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4f89d7593b56b055c8197b7bae90f9f57c233468",
+    "source_merge_commit": "6109e94fc73a10986d46e8ae1c878365e75edef9",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6438",
+    "validation_evidence": [
+      "validation-receipt: id=cbc9a26d5703d3b5 commit=4f89d7593b56b055c8197b7bae90f9f57c233468 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_change_classifier.py -k qe_read_contract -q --no-cov` result=`5 passed`",
+      "validation-receipt: id=10ad7672d4b2a8c0 commit=4f89d7593b56b055c8197b7bae90f9f57c233468 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+      "validation-receipt: id=0b091ce28d3754cf commit=4f89d7593b56b055c8197b7bae90f9f57c233468 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=e1deda7d961188f7 commit=4f89d7593b56b055c8197b7bae90f9f57c233468 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+      "validation-receipt: id=7ca302727fa930ee commit=4f89d7593b56b055c8197b7bae90f9f57c233468 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=84f60b7ad06168f7 commit=4f89d7593b56b055c8197b7bae90f9f57c233468 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2015 --module validation` result=`passed`"
+    ],
+    "validation_evidence_digest": "6903f0eddc3c25603bf8671eeb5b20c5018ea33ef50dd2bff07277fb4bcfed58"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation.workflow_automation"
   ],
@@ -307,6 +335,14 @@
     ],
     "visual_acceptance_required": true
   },
+  "validation_evidence": [
+    "validation-receipt: id=cbc9a26d5703d3b5 commit=4f89d7593b56b055c8197b7bae90f9f57c233468 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_change_classifier.py -k qe_read_contract -q --no-cov` result=`5 passed`",
+    "validation-receipt: id=10ad7672d4b2a8c0 commit=4f89d7593b56b055c8197b7bae90f9f57c233468 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+    "validation-receipt: id=0b091ce28d3754cf commit=4f89d7593b56b055c8197b7bae90f9f57c233468 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=e1deda7d961188f7 commit=4f89d7593b56b055c8197b7bae90f9f57c233468 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+    "validation-receipt: id=7ca302727fa930ee commit=4f89d7593b56b055c8197b7bae90f9f57c233468 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=84f60b7ad06168f7 commit=4f89d7593b56b055c8197b7bae90f9f57c233468 kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2015 --module validation` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
