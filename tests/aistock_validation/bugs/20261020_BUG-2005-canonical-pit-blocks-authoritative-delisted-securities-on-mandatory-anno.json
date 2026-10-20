@@ -23,7 +23,7 @@
       "https://www.sse.com.cn/disclosure/announcement/listing/stock/c/c_20261012_10834561.shtml",
       "https://www.sse.com.cn/disclosure/announcement/listing/stock/c/c_20261012_10834560.shtml"
     ],
-    "production": "Read-only dry-run through 2026-10-19 succeeded: 5346 symbols, 5665 spans; same four zero counts, 238 authoritative terminal dates and 236 optional announcement matches, missing=0. Production DML and pointer activation not performed.",
+    "production": "User explicitly authorized canonical rebuild and validated default activation. Actual production REBUILT_AND_VERIFIED through 2026-10-19: 5346 symbols, 5665 spans, ready/clean, four span failures zero. Receipt X:/AIstock_dataset_release_control/operator_receipts/BUG-2005-production-20261020-apply-r1.json digest c3ab4a9faaca5a8fcb96ef29c8a8039b9be6178e889266897f945b59410a4e65. BUG-2006 subsequently activated the singleton via merged official CAS; generation1 ACTIVE_CANONICAL readback passed. Existing backend post-restart acceptance remains separately pending.",
     "runtime_action": false
   },
   "description": "Production last_error reports missing_count=2 for 601059.SH and 601198.SH; canonical failed/dirty, singleton remains legacy generation 0.",
@@ -31,7 +31,7 @@
     "business_semantics": "252 trading-session IPO/ST/PIT rules and physical snapshot identities unchanged; real delist_date closes only from its effective session.",
     "no_extra_gates": "Removed terminal announcement ledger requirement; no new platform, approval or evidence-chain requirement.",
     "no_silent_errors": "Missing lifecycle dates/status, invalid date order, ST continuity and four span-validation failures remain errors; no fabricated terminal events.",
-    "no_simplified_delivery": "Shared daily/monthly builder and live/activation readiness both fixed; production apply and activation remain separate, explicitly pending."
+    "no_simplified_delivery": "Shared daily/monthly builder and live/activation readiness fixed. Authorized production rebuild and BUG-2006 singleton activation both completed with independent receipts; resident-backend restart/identity verification remains pending and this BUG is not marked verified."
   },
   "events": [
     {
