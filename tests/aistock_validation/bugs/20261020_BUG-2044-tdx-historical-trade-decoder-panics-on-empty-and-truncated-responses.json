@@ -98,7 +98,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
+    "health_ref": "http://127.0.0.1:19080/api/health",
+    "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1&start_date=2026-09-01&end_date=2026-09-30",
+    "fresh_process_evidence": [
+      "Fresh go run X:/AIstock_dataset_candidates/data_repair_staging/data-closure-20261021/tdx_history_probe.go loaded the tracked decoder; six bounded history requests across two hosts returned Count=0 without panic; database_write=false; no HTTP service or production binary change"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -169,6 +175,17 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
+  "review_rounds": [
+    {"round": 1, "kind": "self_review", "focus": "count-only empty response and every truncated prefix", "result": "RED reproduced original [6:2] panic; checked bounds and fields return errors without partial success"},
+    {"round": 2, "kind": "self_review", "focus": "signed price delta scaling and cumulative overflow", "result": "reused GetPriceChecked and guarded int64 multiplication/addition; valid two-record units and CST time unchanged"},
+    {"round": 3, "kind": "self_review", "focus": "side effects and live empty response semantics", "result": "fresh go probe read two external hosts for three historical keys; all six returned Count=0 without panic; no database, HTTP service or production binary mutation"}
+  ],
+  "design_compliance_review": {
+    "requested_behavior": "empty/truncated responses are safe and valid responses preserve prior semantics",
+    "scope_and_non_goals": "only historical decoder/test/BUG record; no HMM/QE or ingestion policy change",
+    "verification": "RED-to-GREEN, protocol package pass, root compile pass, six live read-only empty-page responses",
+    "remaining_boundary": "production TDX has not been restarted or verified against this fix; no claim that empty history pages repair minute facts"
+  },
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
