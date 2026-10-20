@@ -3,6 +3,8 @@
   "allowed_write_scope": [
     "noxfile.py",
     "backend/tests/test_noxfile_validation_env.py",
+    "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py",
+    "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
     "tests/aistock_validation/bugs/20261020_BUG-2031-hmm-nightly-full-regression-still-exceeds-1800-seconds-after-previous-fi.json"
   ],
   "assigned_agent": null,

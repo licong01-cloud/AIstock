@@ -4055,7 +4055,15 @@ def hmm_risk_backend(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-        env=_env({"COVERAGE_FILE": str(coverage_data), **HMM_TEST_NUMERIC_ENV}),
+        env=_env({
+            "COVERAGE_FILE": str(coverage_data), **HMM_TEST_NUMERIC_ENV,
+            "AISTOCK_TEST_PLAN": "hmm_risk_backend",
+            # A later plan must not overwrite the node active at HMM timeout.
+            "AISTOCK_TEST_DIAGNOSTICS_RECEIPT": (
+                str(Path(os.environ["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"]).with_name("hmm-risk-test-failures.jsonl"))
+                if os.environ.get("AISTOCK_TEST_DIAGNOSTICS_RECEIPT") else ""
+            ),
+        }),
         external=True,
     )
 
