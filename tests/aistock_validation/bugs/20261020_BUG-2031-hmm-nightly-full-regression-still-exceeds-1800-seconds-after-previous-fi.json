@@ -28,12 +28,22 @@
   "evidence_uris": [],
   "expected": "Complete bounded offline regression under existing budget with meaningful diagnostics",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2031-hmm-nightly-full-regression-still-exceeds-1800-seconds-after-previous-fi.json"
+    ],
     "added_files": [],
     "changed_files": [
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
+      "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py",
+      "backend/tests/test_noxfile_validation_env.py",
       "noxfile.py",
-      "backend/tests/test_noxfile_validation_env.py"
+      "tests/aistock_validation/bugs/20261020_BUG-2031-hmm-nightly-full-regression-still-exceeds-1800-seconds-after-previous-fi.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "noxfile.py",
@@ -122,10 +132,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
