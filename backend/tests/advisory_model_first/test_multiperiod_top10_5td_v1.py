@@ -15,6 +15,7 @@ from backend.services.advisory_model_first.multiperiod_top10_5td_inputs_v1 impor
 )
 from backend.services.advisory_model_first import multiperiod_top10_5td_pipeline_v1 as pipeline
 from backend.services.advisory_model_first import multiperiod_top10_5td_study_v1 as study
+from backend.services.advisory_model_first import multiperiod_top10_5td_inputs_v1 as inputs_module
 from backend.services.strategy_package.runtime_variant import canonical_json_sha256 as sha
 
 
@@ -266,7 +267,8 @@ def test_modified_ranks_fail_closed_and_attribution_matches_primary(rows):
     assert attribution == result['statistics']['mean_bps'] == 0.
 
 
-def test_finance_batches_preserve_package_population_beyond_first_hundred_days(rows):
+@pytest.mark.parametrize('cutoff_index,known_count', [(106, 202), (100, 192)])
+def test_finance_batches_preserve_package_population_beyond_first_hundred_days(rows, cutoff_index, known_count):
     calendar = pd.bdate_range('2025-01-02', periods=107).date.tolist()
     original = rows.iloc[:2].copy()
     original['candidate_group_size'] = 2
@@ -275,6 +277,30 @@ def test_finance_batches_preserve_package_population_beyond_first_hundred_days(r
     daily = pd.DataFrame([dict(trade_date=pd.Timestamp(day), instrument=s, adj_factor=1., volume_hand=100.,
         raw_open_cny=10., raw_high_cny=11., raw_low_cny=9., raw_close_cny=10.) for day in calendar for s in original.instrument])
     limits = daily[['trade_date', 'instrument']].assign(up_limit=12., down_limit=8.)
-    result = make_finance(roster, daily, limits, [], calendar, calendar[-1])
+    result = make_finance(roster, daily, limits, [], calendar, calendar[cutoff_index])
     assert len(result) == 202 and result[KEY[0]].nunique() == 101
-    assert result.valuation_status.eq('AVAILABLE').all()
+    assert result.valuation_status.eq('AVAILABLE').sum() == known_count
+    assert result.valuation_status.eq('IMMATURE').sum() == 202-known_count
+
+
+def test_finance_reuses_cached_daily_and_projects_cutoff_before_future_values(rows, monkeypatch):
+    roster = rows.iloc[:2].copy()
+    roster['candidate_group_size'] = 2
+    calendar = pd.bdate_range('2025-01-02', periods=8).date.tolist()
+    daily = pd.DataFrame([dict(trade_date=pd.Timestamp(day), instrument=s, adj_factor=1., volume_hand=100.,
+        raw_open_cny=10., raw_high_cny=11., raw_low_cny=9., raw_close_cny=10.) for day in calendar for s in roster.instrument])
+    limits = daily[['trade_date', 'instrument']].assign(up_limit=12., down_limit=8.)
+    daily['raw_close_cny'] = daily.raw_close_cny.astype(object)
+    daily.loc[daily.trade_date.gt(pd.Timestamp(calendar[5])), 'raw_close_cny'] = 'FUTURE_UNREADABLE'
+    class Dataset:
+        read_receipts = []
+        def suspension_rows(self, *args):
+            return []
+    dataset = Dataset()
+    dataset.calendar = calendar
+    def forbidden_read(*args):
+        raise AssertionError('second H5 scan forbidden with existing cached daily data')
+    monkeypatch.setattr(inputs_module, 'read_daily', forbidden_read)
+    monkeypatch.setattr(inputs_module, 'read_limits', lambda *args: (limits, []))
+    result, _ = inputs_module.finance_inputs(dataset, roster, calendar[5], daily=daily)
+    assert len(result) == 2 and result.valuation_status.eq('AVAILABLE').all()

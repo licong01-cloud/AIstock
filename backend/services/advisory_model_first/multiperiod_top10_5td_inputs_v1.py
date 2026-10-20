@@ -148,8 +148,8 @@ def make_finance(roster, daily, limits, suspension, calendar, cutoff):
                 for field in ('open', 'high', 'low', 'close'):
                     path[field] = path['raw_'+field+'_cny']
                 # Missing quotes stay unknown; a verified full-day suspension is explicit.
-                path['suspended'] = [(s, day) in full for s, day in zip(path.instrument, path.trade_date, strict=True)]
-                path['tradability_unknown'] = [(s, day) in partial for s, day in zip(path.instrument, path.trade_date, strict=True)]
+                path['suspended'] = pd.Series([(s, day) in full for s, day in zip(path.instrument, path.trade_date, strict=True)], index=path.index, dtype=bool)
+                path['tradability_unknown'] = pd.Series([(s, day) in partial for s, day in zip(path.instrument, path.trade_date, strict=True)], index=path.index, dtype=bool)
                 prices.append(path.loc[:, PRICE_FIELDS])
             pp, reference_frame = pd.concat(prices, ignore_index=True), pd.concat(refs, ignore_index=True).loc[:, REFERENCE_FIELDS]
             context = dict(source_evidence='FROZEN_FILE_CURRENT_RELEASE_NON_VINTAGE', label_price_basis='D_REFERENCE_POLICY_RATIO',
@@ -175,11 +175,12 @@ def file_dataset(plan):
         root_override=node_path(binding['profile']['controller_paths']['candidate_root']))
 
 
-def finance_inputs(dataset, roster, cutoff, budget=lambda: None):
+def finance_inputs(dataset, roster, cutoff, budget=lambda: None, *, daily=None):
     start = roster[KEY[0]].min().date()
     cutoff = pd.Timestamp(cutoff).date()
     symbols = sorted(set(roster.instrument))
-    daily = read_daily(dataset, symbols, start, cutoff)
+    daily = (read_daily(dataset, symbols, start, cutoff) if daily is None else
+             daily.loc[daily.trade_date.between(pd.Timestamp(start), pd.Timestamp(cutoff))].copy())
     positions = {pd.Timestamp(d): i for i, d in enumerate(dataset.calendar)}
     pairs = set()
     for d, s in roster[[KEY[0], 'instrument']].itertuples(index=False, name=None):

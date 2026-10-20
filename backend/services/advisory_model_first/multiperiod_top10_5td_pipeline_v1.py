@@ -204,10 +204,11 @@ def prepare(root, progress=lambda event: None):
             if first < 0:
                 raise ValueError('original D history has no real warmup')
             daily = read_daily(dataset, sorted(set(roster.instrument)), calendar[first], pd.Timestamp(study.plan['end']).date())
+            train = roster.loc[roster[KEY[0]].le(pd.Timestamp(CONTRACT['train_end']))].reset_index(drop=True)
+            finance, finance_receipt = finance_inputs(dataset, train, CONTRACT['train_end'], study.budget, daily=daily)
+            progress(dict(phase='TRAIN_LABELS_READY', rows=len(finance), outer_finance_decoded=False, physical_fit_count=0))
             inputs = build_features(roster, daily, calendar)
             progress(dict(phase='D_INPUTS_READY', rows=len(inputs), outer_finance_decoded=False, physical_fit_count=0))
-            train = roster.loc[roster[KEY[0]].le(pd.Timestamp(CONTRACT['train_end']))].reset_index(drop=True)
-            finance, finance_receipt = finance_inputs(dataset, train, CONTRACT['train_end'], study.budget)
             receipt = dict(original_candidates=len(roster), package_days=len(days), scores=sources,
                 train_finance=finance_receipt, outer_finance_decoded=False, sealed_finance_decoded=False,
                 database_queries=0, physical_fit_count=0, wall_seconds=time.monotonic()-study.started,
