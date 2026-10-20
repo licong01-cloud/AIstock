@@ -3697,7 +3697,9 @@ class TDXScheduler:
                        WHERE volume_ratio IS NOT NULL
                          AND volume_ratio::text NOT IN ('NaN', 'Infinity', '-Infinity')
                    )::bigint AS required_volume_ratio_count"""
-        rows = self._fetchall(
+        # Raw observations already aggregate each date for cross-provider
+        # completeness. Reuse their counts/maxima rather than scan the range twice.
+        rows = [] if dataset in _GO_INCREMENTAL_DATASETS else self._fetchall(
             f"""
             SELECT {date_col}::date AS trade_date,
                    COUNT(*)::bigint AS row_count,
@@ -3738,15 +3740,18 @@ class TDXScheduler:
         with _get_conn(self._db_cfg) as conn:
             for row in target_dates:
                 trade_date = row.get("cal_date")
-                row_count = int(counts.get(trade_date, 0))
-                data_max_at = max_at.get(trade_date)
+                completeness = None
+                if dataset in _GO_INCREMENTAL_DATASETS:
+                    row_count, data_max_at, completeness = self._raw_date_observation(dataset, trade_date)
+                else:
+                    row_count = int(counts.get(trade_date, 0))
+                    data_max_at = max_at.get(trade_date)
                 if not isinstance(data_max_at, dt.datetime):
                     data_max_at = None
                 row_metadata = dict(base_metadata)
                 quality_status = "ok"
                 failure_category = None
                 if dataset in _GO_INCREMENTAL_DATASETS and row_count > 0:
-                    completeness = self._raw_date_completeness(dataset, trade_date)
                     row_metadata["raw_date_completeness"] = completeness
                     if completeness["expected_symbols"] <= 0 or completeness["incomplete_symbols"]:
                         quality_status = "low_coverage"
@@ -3829,6 +3834,12 @@ class TDXScheduler:
 
     def _raw_date_completeness(self, dataset: str, trade_date: dt.date) -> Dict[str, int]:
         """Bounded cross-provider key/bar evidence; never a full-history scan."""
+        return self._raw_date_observation(dataset, trade_date)[2]
+
+    def _raw_date_observation(
+        self, dataset: str, trade_date: dt.date,
+    ) -> Tuple[int, Optional[dt.datetime], Dict[str, int]]:
+        """Observe raw totals and the existing 1m completeness contract once."""
         # Keep hypertable scans independently time-prunable. Joining them
         # together can produce a nested-loop scan over thousands of chunks.
         daily_rows = self._fetchall(
@@ -3837,7 +3848,7 @@ class TDXScheduler:
         )
         day_start = dt.datetime.combine(trade_date, dt.time.min, tzinfo=_CN_TZ)
         minute_rows = self._fetchall(
-            """SELECT ts_code,COUNT(*) AS bars,
+            """SELECT ts_code,freq,COUNT(*) AS bars,MAX(trade_time) AS data_max_at,
                 BOOL_OR(volume_hand > 0 OR volume_shares > 0) AS traded,
                 COUNT(*) FILTER (WHERE NOT (
                     ((trade_time AT TIME ZONE 'Asia/Shanghai')::time BETWEEN TIME '09:31' AND TIME '11:30') OR
@@ -3845,11 +3856,11 @@ class TDXScheduler:
                     OR open_li <= 0 OR low_li <= 0 OR high_li <= 0 OR close_li <= 0
                     OR volume_hand < 0 OR amount_li < 0) AS bad_bars
               FROM market.kline_minute_raw
-             WHERE trade_time >= %s AND trade_time < %s AND freq='1m' GROUP BY ts_code""",
+             WHERE trade_time >= %s AND trade_time < %s GROUP BY ts_code,freq""",
             (day_start, day_start + dt.timedelta(days=1)),
         )
         daily = {str(row["ts_code"]).strip(): row for row in daily_rows}
-        minute = {str(row["ts_code"]).strip(): row for row in minute_rows}
+        minute = {str(row["ts_code"]).strip(): row for row in minute_rows if row["freq"] == "1m"}
         if dataset == "kline_daily_raw":
             population = {str(row["ts_code"]).strip() for row in self._fetchall(
                 "SELECT ts_code FROM market.stock_basic WHERE list_date<=%s "
@@ -3857,12 +3868,16 @@ class TDXScheduler:
             )}
             expected = {code for code, row in minute.items() if row["traded"] and code in population}
             incomplete = len(expected.difference(daily))
+            row_count, data_max_at = len(daily_rows), None
         else:
             expected = {code for code, row in daily.items()
                         if (row["volume_hand"] or 0) > 0 or (row["volume_shares"] or 0) > 0}
             incomplete = sum(code not in minute or minute[code]["bars"] != 240
                              or minute[code]["bad_bars"] > 0 for code in expected)
-        return {"expected_symbols": len(expected), "incomplete_symbols": incomplete}
+            row_count = sum(int(row["bars"]) for row in minute_rows)
+            data_max_at = max((row["data_max_at"] for row in minute_rows
+                               if row["data_max_at"] is not None), default=None)
+        return row_count, data_max_at, {"expected_symbols": len(expected), "incomplete_symbols": incomplete}
 
     def _retry_range_for_health_failure(
         self,

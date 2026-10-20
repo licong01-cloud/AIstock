@@ -145,7 +145,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "fresh_process_evidence": [
+      "Fresh AIstock-CI Python imported and compiled ingestion router and TDX scheduler from the BUG-2011 worktree, without starting a service or writing the database.",
+      "RED: 11 targeted cases exposed old duplicate reads. GREEN: final related matrix 173 passed, 1 skipped; Ruff and l0 passed with blocking=0.",
+      "Existing DEV read-only REPEATABLE READ comparison: 2026-10-15 raw minute/daily counts, max time and completeness equal previous source; bounded raw queries reduce from 3 to 2 (minute) and 4 to 3 (daily).",
+      "Existing compressed DEV minute_1d16 fixture: 28024330 rows; combined stats match old count/min/max plus MAX timestamp exactly, with fact queries reduced from 2 to 1. Cache-sensitive timings are not an end-to-end speedup claim.",
+      "Runtime remains pending user restart. Post-restart local-data overview proves target-owned readability; direct tests and DEV SQL prove aggregate and completeness semantics. No production DDL/DML, backend restart, experiments, or B-share backfill."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
