@@ -15,6 +15,12 @@
   ],
   "created_at": "2026-10-20T04:11:52.523632Z",
   "description": "qe_multi_alpha fails before node probe; no missing price or industry data established.",
+  "design_compliance_001": {
+    "business_semantics": "PASS: QE model/strategy/pool/window/threshold code and all candidate bytes are unchanged; uses existing index_union contract.",
+    "complete_requested_fix": "PASS: corrected the data-owned probe and exercised the real public parser and five real candidate resolver paths, not only mocked success.",
+    "no_added_gates": "PASS: no extra release gate, framework, source audit, approval or full export; retained all existing completed operation checkpoints.",
+    "no_silent_errors": "PASS: unknown universe modes still raise qe_universe_mode_invalid; cross-manifest and metadata-only blacklist failures remain covered."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,12 +34,18 @@
   ],
   "expected": "Use the existing public index_union mode, validate all five probe selections with official UniverseSelection, preserve all completed exports/checkpoints and unchanged QE business contracts.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2008-monthly-multi-alpha-probe-uses-invalid-universe-mode-and-mocks-miss-the.json",
       "backend/services/dataset_release/monthly_qe_consumer_probe.py",
       "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2008-monthly-multi-alpha-probe-uses-invalid-universe-mode-and-mocks-miss-the.json",
+      "backend/services/dataset_release/monthly_qe_consumer_probe.py",
+      "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_qe_consumer_probe.py",
@@ -91,6 +103,7 @@
   "first_seen_at": "2026-10-20T04:11:52.523632Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_description": "Use index_union in the shared monthly multi-alpha probe. Validate all five emitted selections through official UniverseSelection in the existing parameterized test so mocks cannot accept a nonexistent public mode.",
   "fixed_at": null,
   "github_issue_number": 6415,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6415",
@@ -108,14 +121,27 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    "R1: real official parser reproduced RED only for multi-alpha (one failed, four passed); changed exactly the invalid data-owned mode and obtained GREEN.",
+    "R2: reviewed side-effect boundaries, PIT union semantics, manifest and blacklist fail-closed tests; related probe/node runner matrix 25 passed, Ruff/compile/whitespace passed.",
+    "R3: isolated worktree process read the real September profile and unchanged candidate; all five official QE resolver paths and actual Composer HMM reader passed, P11 excluded four intervals; no database, candidate/profile write, training or runtime control."
+  ],
   "risk_area": "bug",
+  "root_cause": "The monthly producer used union, not the existing QE index_union enum. Its test copied the wrong value into a permissive mock resolver and never parsed the real UniverseSelection contract. This is a monthly validation-program defect, not missing market or industry facts.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "2026-10-20 isolated AIstock Python loaded patched monthly_qe_consumer_probe and official QE/Composer consumers against the real 20260930-monthly-v2-unified profile, manifest 1f6acfb4ede18d4b7d2d2a5c65d86a1efe49fc2e6037da5abdcc333c0f80b566. QE single/custom/multi-alpha/P10/P11 all PASS; P11 blacklist_excluded_count=4; database_access=false, candidate_write=false, profile_write=false, training_started=false, runtime_action=false. Durable operation remains FAILED until the user-owned worker restart and formal resume, not READY."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
