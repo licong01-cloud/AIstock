@@ -8,7 +8,7 @@
   "assigned_agent": null,
   "backend_restart_required": true,
   "bug_id": "BUG-2013",
-  "closed_at": null,
+  "closed_at": "2026-10-20T06:33:14.149034Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -150,10 +150,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2013/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2013",
+      "business_smoke_semantic": {
+        "contract_id": "localsim_workbench_valuation",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+      "expected_identity": "e1151344d066f25433db0afcd3d23fbc6c224c36",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-20T06:30:50.082854Z",
+      "mode": "read_only",
+      "observed_identity": "1ecfe93ea90c8c3aa58ab5f1564a4e98cca6aa8c",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "789f0fd41c1ca6847a879731366c58f15231a2a7563cd575e96d6036e8c1bd6f",
+      "receipt_sha256": "910e388750db0c2b33f8f78892ef002c6375390e47f9579dcf142b65c192ee7f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "20e0b898ca6d641609db9992337b48b187a362cef42d2542086b154c00a1fa56",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -184,7 +206,7 @@
     ],
     "validation_evidence_digest": "b9e56d02bb36ea8df7926347db323bab1a96b27f6b320cf5ac90ed46ca6e311e"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -194,7 +216,8 @@
     "source_event_id": "FE-20261020-a152ae894adf"
   },
   "validation_evidence": [
-    "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_selection_inference.py backend/tests/simulation_runtime/test_localsim_selection_inference.py tests/aistock_validation/bugs/20261020_BUG-2013-localsim-canonical-pit-consumer-rejects-native-frozen-file-receipt-forma.json -> passed; 78 consumer and file tests and final HEAD CI passed"
+    "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_selection_inference.py backend/tests/simulation_runtime/test_localsim_selection_inference.py tests/aistock_validation/bugs/20261020_BUG-2013-localsim-canonical-pit-consumer-rejects-native-frozen-file-receipt-forma.json -> passed; 78 consumer and file tests and final HEAD CI passed",
+    "post-restart-verify passed against loaded origin/main descendant 1ecfe93ea90c8c3aa58ab5f1564a4e98cca6aa8c; health, identity and workbench smoke passed; prior 78 native file-consumer tests retained; no claim of production FILE_THEN_DATABASE replay activation"
   ],
   "verification_budget": {
     "budget": "standard",
