@@ -238,7 +238,7 @@ class LocalSimReferencedAssetResolver(QEExperimentRuntimeAssetResolver):
         )
 
 
-def _require_native_pit_receipt(payload, lease_payload, clocks):
+def _require_native_pit_receipt(payload, lease_payload, clocks, *, file_binding_hash=None):
     """Bind the shared engine's authoritative input receipt to this daily lease."""
     lease = SelectionPitRuntimeLease.from_mapping(lease_payload)
     context = payload.get("input_context", {})
@@ -249,12 +249,16 @@ def _require_native_pit_receipt(payload, lease_payload, clocks):
             or context.get("pit_mode") != identity.receipt_mode
             or SelectionPitRuntimeLease.from_binding(identity.binding) != lease):
         raise ValueError("LocalSIM node population differs from the native daily PIT lease")
+    if context.get("frozen_file_binding_hash") != file_binding_hash:
+        raise ValueError("LocalSIM PIT receipt differs from its explicit daily input source")
     # The CLI keeps engine input_context/source_read_receipts intact and
     # projects skinny metadata. Never infer identity from absent metadata or
     # manufacture it from the expected lease.
     receipts = [row for row in payload.get("source_read_receipts", []) if row.get("source_role") == "pit_universe"]
     expected = {
         "dataset_id": f"market.stock_universe_pit:{lease.universe_key}",
+        "query_template_id": "StockUniversePitService.get_eligible_codes",
+        "query_template_version": "canonical_pit_v2",
         "partition_ref": clocks.data_cutoff.isoformat(),
         "parameter_hash": canonical_json_sha256({
             "trade_date": clocks.data_cutoff.isoformat(), "ensure": False, "pit_identity": identity.as_dict(),
@@ -262,6 +266,18 @@ def _require_native_pit_receipt(payload, lease_payload, clocks):
         "row_count": payload["universe_count"],
         "content_hash": context.get("universe_input_hash"),
     }
+    if file_binding_hash is not None:
+        # Native file receipts wrap the same PIT parameters with the frozen
+        # dataset identity. Select this format only from our own input scope,
+        # never from a node's self-declared source or the current active data.
+        expected.update(
+            dataset_id="dataset_files.day_selection_universe",
+            query_template_id="FrozenDataset.day_selection_universe",
+            query_template_version="frozen_market_dataset_files_v1",
+            parameter_hash=canonical_json_sha256({
+                "native_parameters": expected["parameter_hash"], "file_binding_hash": file_binding_hash,
+            }),
+        )
     if len(receipts) != 1 or any(receipts[0].get(key) != value for key, value in expected.items()):
         raise ValueError("LocalSIM PIT source receipt differs from its daily input identity")
 
@@ -366,7 +382,8 @@ class LocalSimSharedInferenceProvider(WslStrategyPackageInferenceProvider):
             raise ValueError("LocalSIM node consumer/run/clock binding mismatch")
         native_manifest = json.loads(workspace.manifest_path.read_text(encoding="utf-8"))
         if native_manifest.get("canonical_pit_runtime_lease") is not None:
-            _require_native_pit_receipt(payload, native_manifest["canonical_pit_runtime_lease"], clocks)
+            _require_native_pit_receipt(payload, native_manifest["canonical_pit_runtime_lease"], clocks,
+                                        file_binding_hash=dataset.identity if dataset is not None else None)
         metadata.update(inference_backend="wsl", inference_wall_seconds=time.perf_counter() - started,
                         inference_batch_index=str(output), wsl_distro=self.distro, wsl_conda_env=self.conda_env)
         scope.source_universes.append({"members": metadata.get("universe_members"), "count": payload["universe_count"],

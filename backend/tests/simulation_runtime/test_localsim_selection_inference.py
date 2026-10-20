@@ -327,7 +327,7 @@ def test_shared_cli_receives_owned_scope_day_and_readonly_boundary(tmp_path, mon
     assert scope.completed_prefix[0]["stage"] == "shared_raw_inference"
 
 
-def _canonical_node_payload(payload, scope, lease):
+def _canonical_node_payload(payload, scope, lease, file_binding_hash=None):
     from backend.services.canonical_pit_inference_boundary import resolve_inference_pit_identity
     from backend.services.simulation_runtime.models import canonical_json_sha256
 
@@ -348,16 +348,36 @@ def _canonical_node_payload(payload, scope, lease):
         "row_count": payload["universe_count"], "content_hash": context["universe_input_hash"],
         "first_observed_at": "2026-10-20T04:27:48+00:00", "admissibility": "RETROSPECTIVE_DB_CONTENT_HASH",
     }]
+    if file_binding_hash is not None:
+        context["frozen_file_binding_hash"] = file_binding_hash
+        receipt = payload["source_read_receipts"][0]
+        receipt.update(dataset_id="dataset_files.day_selection_universe",
+                       query_template_id="FrozenDataset.day_selection_universe",
+                       query_template_version="frozen_market_dataset_files_v1",
+                       parameter_hash=canonical_json_sha256({"native_parameters": receipt["parameter_hash"],
+                                                            "file_binding_hash": file_binding_hash}),
+                       admissibility="RETROSPECTIVE_FILE_CONTENT_HASH")
 
 
-def test_canonical_provider_consumes_authoritative_input_receipt_not_metadata(tmp_path, monkeypatch):
+def _mock_canonical_file_input(tmp_path, monkeypatch, frozen_files):
+    if not frozen_files:
+        return None
+    identity = "f" * 64
+    dataset = SimpleNamespace(identity=identity, binding={"binding_hash": identity}, root=tmp_path / "frozen-input")
+    monkeypatch.setattr("backend.services.simulation_runtime.localsim_file_inputs.current_file_dataset", lambda: dataset)
+    return identity
+
+
+@pytest.mark.parametrize("frozen_files", [False, True])
+def test_canonical_provider_consumes_authoritative_input_receipt_not_metadata(tmp_path, monkeypatch, frozen_files):
     from backend.services.selection_center.canonical_pit_runtime import SelectionPitRuntimeLease
     from backend.tests.simulation_runtime.test_localsim_native_context import _canonical_resolver
 
     scope, workspace, provider = _provider(tmp_path, monkeypatch)
     lease = SelectionPitRuntimeLease.from_binding(_canonical_resolver().binding).as_dict()
     _atomic_json(workspace.manifest_path, {"canonical_pit_runtime_lease": lease})
-    _mock_owned_node(monkeypatch, scope, transform=lambda payload: _canonical_node_payload(payload, scope, lease))
+    file_hash = _mock_canonical_file_input(tmp_path, monkeypatch, frozen_files)
+    commands = _mock_owned_node(monkeypatch, scope, transform=lambda payload: _canonical_node_payload(payload, scope, lease, file_hash))
     token = LOCALSIM_INFERENCE_SCOPE.set(scope)
     try:
         result = provider.run(workspace=workspace, trade_date=DAY, cutoff_date=scope.clocks.data_cutoff)
@@ -367,13 +387,16 @@ def test_canonical_provider_consumes_authoritative_input_receipt_not_metadata(tm
     assert result.input_context["pit_identity"]["activation_generation"] == lease["activation_generation"]
     assert result.source_read_receipts[0]["row_count"] == result.universe_count
     assert scope.completed_prefix[0]["stage"] == "shared_raw_inference"
+    assert ("--dataset-binding" in commands[0]) == frozen_files
 
 
+@pytest.mark.parametrize("frozen_files", [False, True])
 @pytest.mark.parametrize("corruption", [
     "missing_identity", "generation", "pit_mode", "missing_receipt", "duplicate_receipt",
     "receipt_dataset", "receipt_day", "receipt_parameters", "receipt_population", "receipt_count",
+    "source_format", "unexpected_file_identity",
 ])
-def test_canonical_provider_rejects_detached_or_conflicting_pit_receipt(tmp_path, monkeypatch, corruption):
+def test_canonical_provider_rejects_detached_or_conflicting_pit_receipt(tmp_path, monkeypatch, corruption, frozen_files):
     from copy import deepcopy
     from backend.services.selection_center.canonical_pit_runtime import SelectionPitRuntimeLease
     from backend.tests.simulation_runtime.test_localsim_native_context import _canonical_resolver
@@ -381,9 +404,10 @@ def test_canonical_provider_rejects_detached_or_conflicting_pit_receipt(tmp_path
     scope, workspace, provider = _provider(tmp_path, monkeypatch)
     lease = SelectionPitRuntimeLease.from_binding(_canonical_resolver().binding).as_dict()
     _atomic_json(workspace.manifest_path, {"canonical_pit_runtime_lease": lease})
+    file_hash = _mock_canonical_file_input(tmp_path, monkeypatch, frozen_files)
 
     def transform(payload):
-        _canonical_node_payload(payload, scope, lease)
+        _canonical_node_payload(payload, scope, lease, file_hash)
         # A matching non-authoritative metadata field must never rescue a
         # missing or wrong authoritative receipt.
         payload["metadata"]["pit_identity"] = deepcopy(payload["input_context"]["pit_identity"])
@@ -397,6 +421,11 @@ def test_canonical_provider_rejects_detached_or_conflicting_pit_receipt(tmp_path
             payload["source_read_receipts"] = []
         elif corruption == "duplicate_receipt":
             payload["source_read_receipts"] *= 2
+        elif corruption == "source_format":
+            payload["source_read_receipts"][0]["dataset_id"] = (
+                "market.stock_universe_pit:" + lease["universe_key"] if frozen_files else "dataset_files.day_selection_universe")
+        elif corruption == "unexpected_file_identity":
+            payload["input_context"]["frozen_file_binding_hash"] = "0" * 64
         else:
             field, wrong = {
                 "receipt_dataset": ("dataset_id", "market.stock_universe_pit:legacy"),
