@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2006",
-  "closed_at": null,
+  "closed_at": "2026-10-20T03:40:13Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -20,7 +20,7 @@
   "description": "Production canonical PIT rebuilt ready and clean through 2026-10-19 under explicit user authorization; official singleton pointer still legacy generation 0. Existing operator script only seals a full dataset W6/W8/W9 bundle and cannot activate the independently versioned global PIT. Add a target-explicit existing-schema-only operator using real PIT readback hashes, matching DEV activation receipt and the existing atomic activation API; never fabricate W8 attestations, change datasets, historical leases or service processes.",
   "design_compliance_001": {
     "item_by_item": "Actual five-field PIT snapshot, independent persisted-row SQL audit, explicit predecessor CAS, source-commit-bound DEV activation/rollback and existing singleton API are implemented. No second active pointer or policy definition.",
-    "no_fake_completion": "DEV actual activation/readback then complete rollback passed. Production activation remains pending source merge and a matching merged-source DEV rehearsal.",
+    "no_fake_completion": "Merged-source DEV actual activation/readback and complete rollback passed. Authorized production CAS committed generation0 to generation1, with independent fresh-process readback. Native Selection business acceptance remains separate: no post-activation native lease has yet been observed and no historical lease was rewritten.",
     "no_unapproved_simplification": "Uses existing canonical v2 rule and readiness checks; does not manufacture a full dataset W8 attestation or require rebuilding any price release. Broader independent registry/v3 work remains BUG-1990/PR6373 and is not borrowed unmerged.",
     "remaining_gaps": "No source/runtime restart is required for this standalone operator. Existing runtime BUG-2005 aftercare remains separate. No historical lease/profile/account migration is performed."
   },
@@ -33,6 +33,34 @@
     }
   ],
   "evidence_uris": [],
+  "production_activation_readback": {
+    "source_merge_commit": "b06b8e6fec815a60097808047cd3acc58e21591f",
+    "dev_validation": "PASS_actual_activation_then_rollback",
+    "dev_receipt": "X:/AIstock_dataset_release_control/operator_receipts/BUG-2006-dev-activation-rehearsal-20261020-r2.json",
+    "dev_receipt_digest": "bd63a8dea56ed4277d3cc46290994d6bafc32ba8f3cf3c518941920f4566b8c9",
+    "production_authorization": "user-20261020-canonical-pit-rebuild-and-global-activate",
+    "production_apply": "COMMITTED_AND_FRESH_PROCESS_VERIFIED",
+    "apply_receipt": "X:/AIstock_dataset_release_control/operator_receipts/BUG-2006-production-activation-20261020-r1.json",
+    "apply_receipt_digest": "f518e71f593405e3d8e9fbbceea3e93fef562f09dc2df0b966abca1da5c64c4a",
+    "fresh_readback_receipt": "X:/AIstock_dataset_release_control/operator_receipts/BUG-2006-production-fresh-readback-20261020-r1.json",
+    "fresh_readback_digest": "d74fdb460ea561f46ec06af2ee37d831d9f327c938652005f9c094c60c95869d",
+    "global_consumer_readback": "X:/AIstock_dataset_release_control/operator_receipts/BUG-2006-global-consumer-readback-20261020-r1.json",
+    "authority_status": "ACTIVE_CANONICAL",
+    "generation": 1,
+    "universe_key": "aistock_equity_pit_canonical_v2",
+    "rule_version": "shsz_a_252td_st_delist_asof_v2",
+    "coverage": ["2018-08-01", "2026-10-19"],
+    "symbols": 5346,
+    "spans": 5665,
+    "invalid_overlap_wrong_rule_counts": [0, 0, 0],
+    "native_selection_acceptance": "NATIVE_SELECTION_LEASE_NOT_OBSERVED_owner_new_run_required",
+    "active_profile_sha256_unchanged": "807ce03afc9838e5d1c6e71e3a46c34b41f4b77032bf42abee0dbb2e30aa0e23",
+    "historical_lease_write": false,
+    "dataset_write": false,
+    "active_profile_write": false,
+    "runtime_action": false,
+    "production_ddl": false
+  },
   "expected": "Activate the existing approved canonical v2 singleton through actual DEV rollback rehearsal and production CAS, independently of a price release. BUG-1990/PR6373 broader independent version registry and optional v3 policy remain separate; do not borrow unmerged code or change approved policy.",
   "file_scope_contract": {
     "actual_changed_files": [
@@ -61,14 +89,21 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/tests/scripts/test_activate_canonical_pit_default.py",
+      "noxfile.py",
+      "scripts/activate_canonical_pit_default.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2006-global-canonical-pit-activation-lacks-dataset-independent-validated-oper.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
   "first_seen_at": "2026-10-20T03:25:23.896585Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b06b8e6fec815a60097808047cd3acc58e21591f",
+  "fixed_at": "2026-10-20T03:40:13Z",
   "github_issue_number": 6411,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6411",
   "last_seen_at": "2026-10-20T03:25:23.896585Z",
@@ -76,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6412",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -98,6 +134,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -107,7 +144,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2006",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8bca1a4e5616c6a6",
+    "recorded_at": "2026-10-20T03:40:59.301216Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "10a693b2ae3e35a1e3d737e8b83a437be3154bca",
+    "source_merge_commit": "b06b8e6fec815a60097808047cd3acc58e21591f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6412",
+    "validation_evidence": [
+      "validation-receipt: id=e9a1848e5a05675e commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_activate_canonical_pit_default.py backend/tests/test_canonical_equity_pit.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/scripts/test_prepare_canonical_pit_monthly.py -q --no-cov` result=`53 passed`",
+      "validation-receipt: id=9cf8a1d709e6909b commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=79dfb0f1fc538bf1 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+      "validation-receipt: id=9d2fd6fb9427fa58 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed`",
+      "validation-receipt: id=32f85c1632f635e3 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=2524150f4fd26351 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=ruff plan=direct status=passed command=`ruff check and py_compile and git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "b23cf0c4b193506cfa0a0f6a04c9aa85633dc49d6ecdf8dda1a0023a2bf6cd1d"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -116,6 +179,14 @@
     "fingerprint": "b294f8f6ca7557a695a83190",
     "source_event_id": "FE-20261020-b294f8f6ca75"
   },
+  "validation_evidence": [
+    "validation-receipt: id=e9a1848e5a05675e commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_activate_canonical_pit_default.py backend/tests/test_canonical_equity_pit.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/scripts/test_prepare_canonical_pit_monthly.py -q --no-cov` result=`53 passed`",
+    "validation-receipt: id=9cf8a1d709e6909b commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=79dfb0f1fc538bf1 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+    "validation-receipt: id=9d2fd6fb9427fa58 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed`",
+    "validation-receipt: id=32f85c1632f635e3 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=2524150f4fd26351 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=ruff plan=direct status=passed command=`ruff check and py_compile and git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
