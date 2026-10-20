@@ -51,10 +51,10 @@ class MonthlyObservedSourceAuthority(MonthlySourceAuthority):
         if query.query_id == "adj_factor_construction":
             if self._month_start is None:
                 raise SourceProviderContractError("construction facts require a monthly source request")
-            codes = sorted({span.ts_code for span in pit_snapshot.spans})
+            codes = list(self._stock_source_codes(pit_snapshot))
             if selected_stock_codes:
                 if not set(selected_stock_codes) <= set(codes):
-                    raise SourceProviderContractError("construction source sample escapes PIT")
+                    raise SourceProviderContractError("construction source sample escapes fact population")
                 codes = sorted(selected_stock_codes)
             anchors = []
             source_anchors = self._construction_anchors(pit_snapshot) if callable(self._construction_anchors) else self._construction_anchors

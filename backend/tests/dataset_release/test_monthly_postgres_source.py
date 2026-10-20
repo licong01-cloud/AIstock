@@ -335,6 +335,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
             "refresh_audit_readiness_policy": source.REFRESH_READINESS_POLICY,
             "business_validation_scope": "target_calendar_month_only_v1",
             "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
+            "factual_population_policy": "all_shsz_source_facts_independent_of_pit_v1",
             "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
             "historical_classification_policy": "immutable_version_qualified_effective_history_v1",
             "source_quality_policy": "operation_exact_finite_parity_warnings_v1",

@@ -234,6 +234,7 @@ class CanonicalStockTransformSpec:
     instrument_filter: tuple[str, ...] | None = None
     initial_adj_factors: Mapping[str, float] | None = None
     quote_days: tuple[tuple[str, date], ...] = ()
+    fact_stock_codes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.pit_snapshot.cutoff != self.cutoff:
@@ -251,7 +252,12 @@ class CanonicalStockTransformSpec:
             or days[-1] > self.cutoff
         ):
             raise CanonicalStockTransformError("frozen trading days must be sorted, unique and scope-bounded")
-        codes = {span.ts_code for span in self.pit_snapshot.spans}
+        pit_codes = {span.ts_code for span in self.pit_snapshot.spans}
+        codes = set(self.fact_stock_codes) if self.fact_stock_codes else pit_codes
+        if (self.fact_stock_codes != tuple(sorted(set(self.fact_stock_codes)))
+                or not pit_codes.issubset(codes)
+                or any(re.fullmatch(r"\d{6}\.(SH|SZ)", code) is None for code in codes)):
+            raise CanonicalStockTransformError("frozen factual stock population is invalid")
         if codes.intersection(_INDEX_CODES):
             raise CanonicalStockTransformError("domestic index codes cannot enter the stock PIT contract")
         if set(self.qfq_denominators.by_code) != codes:
@@ -286,6 +292,7 @@ class CanonicalStockTransformSpec:
                     code: float(value) for code, value in sorted((self.initial_adj_factors or {}).items())
                 },
                 "quote_days": self.quote_days,
+                **({"fact_stock_codes": self.fact_stock_codes} if self.fact_stock_codes else {}),
                 "qlib_stock_schema_digest": qlib_stock_schema_digest(),
             },
         )
@@ -321,12 +328,17 @@ def build_qfq_denominator_authority(
     *,
     pit_snapshot: FrozenPitSnapshot,
     cutoff: date,
+    fact_stock_codes: tuple[str, ...] = (),
 ) -> QfqDenominatorAuthority:
     """Compute exact per-stock QFQ bases in one O(instruments) streaming pass."""
 
     if pit_snapshot.cutoff != cutoff:
         raise CanonicalStockTransformError("QFQ cutoff differs from PIT cutoff")
-    expected_codes = {span.ts_code for span in pit_snapshot.spans}
+    expected_codes = set(fact_stock_codes) if fact_stock_codes else {span.ts_code for span in pit_snapshot.spans}
+    if (fact_stock_codes != tuple(sorted(set(fact_stock_codes)))
+            or not {span.ts_code for span in pit_snapshot.spans}.issubset(expected_codes)
+            or any(re.fullmatch(r"\d{6}\.(SH|SZ)", code) is None for code in expected_codes)):
+        raise CanonicalStockTransformError("QFQ factual stock population is invalid")
     maxima: dict[str, float] = {}
     per_code_digests: dict[str, Any] = {}
     per_code_counts: dict[str, int] = {}
@@ -684,7 +696,7 @@ def suspended_zero_turnover_placeholder(
 class _TransformContext:
     def __init__(self, spec: CanonicalStockTransformSpec) -> None:
         self.spec = spec
-        all_codes = frozenset(span.ts_code for span in spec.pit_snapshot.spans)
+        all_codes = frozenset(spec.fact_stock_codes or (span.ts_code for span in spec.pit_snapshot.spans))
         self.codes = frozenset(spec.instrument_filter) if spec.instrument_filter is not None else all_codes
         self._trading_days = spec.trading_days
         self._trading_day_set = frozenset(spec.trading_days)
@@ -703,13 +715,13 @@ class _TransformContext:
         if code not in self.codes or observed not in self._trading_day_set:
             return False
         return (code, observed) in self._quote_days or any(
-            start <= observed <= end for start, end in self._spans[code]
+            start <= observed <= end for start, end in self._spans.get(code, ())
         )
 
     def expected_code_days(self) -> Iterator[tuple[str, date]]:
-        for code in sorted(self._spans):
+        for code in sorted(self.codes):
             days = set(self._quote_days_by_code.get(code, ()))
-            for start, end in self._spans[code]:
+            for start, end in self._spans.get(code, ()):
                 left = bisect_left(self._trading_days, start)
                 right = bisect_right(self._trading_days, end)
                 days.update(self._trading_days[left:right])

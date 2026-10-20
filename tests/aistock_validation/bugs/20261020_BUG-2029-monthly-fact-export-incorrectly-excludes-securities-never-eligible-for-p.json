@@ -1,6 +1,15 @@
 {
   "actual": "SOURCE query codes, QFQ authority, quote transform and factor build restrict facts to PIT securities.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/component_artifact_manifest.py",
+    "backend/services/dataset_release/component_manifest_producer.py",
+    "backend/tests/dataset_release/test_component_manifest_producer.py",
+    "backend/services/dataset_release/artifact_ready_source.py",
+    "backend/services/dataset_release/artifact_ready_build_source.py",
+    "backend/services/dataset_release/factor_materializer.py",
+    "backend/tests/dataset_release/test_artifact_ready_source.py",
+    "backend/tests/dataset_release/test_factor_partition_producer.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "backend/services/dataset_release/source_authority.py",
     "backend/services/dataset_release/monthly_source_progress.py",
     "backend/services/dataset_release/monthly_postgres_source.py",
@@ -230,11 +239,15 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "AIstock Python fresh process: never-PIT quote, SOURCE population, canonical daily/minute transforms and factor materialization regressions passed. Related matrix 232 passed, 1 skipped; three read-count assertions corrected and passed. No database writes or service control."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
