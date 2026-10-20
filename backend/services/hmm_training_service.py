@@ -1930,6 +1930,16 @@ class HMMTrainingService:
                     if str(job["status"]).upper() == "COMPLETED":
                         self._ensure_coefficient_portfolio_window(plan, job, inputs["qe_default_window"])
                     results.append(job)
+            except (psycopg2.OperationalError, psycopg2.InterfaceError) as exc:
+                logger.exception("HMM automatic coefficient extension orchestration failed: config=%s", config_id)
+                results.append(
+                    {
+                        "config_id": config_id,
+                        "status": "BLOCKED",
+                        "reason_code": "hmm_coefficient_extension_orchestration_failed",
+                        "error": str(exc),
+                    }
+                )
             except Exception as exc:
                 logger.exception("HMM automatic coefficient extension blocked: config=%s", config_id)
                 results.append(
