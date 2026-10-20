@@ -1,0 +1,275 @@
+{
+  "actual": "All consumers PASS, operation FAILED at RELEASE_CLOSURE with source_as_of differs from the frozen release plan.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/tests/dataset_release/test_monthly_unified_v2.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2014-monthly-ready-closure-compares-source-as-of-timezone-strings-instead-of.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2014",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T05:17:57.057049Z",
+  "description": "All consumers PASS, operation FAILED at RELEASE_CLOSURE with source_as_of differs from the frozen release plan.",
+  "design_compliance_001": [
+    "1 PASS: exact runtime failure fixed and exercised against real frozen receipts; durable operation is still FAILED pending user restart and official resume, not falsely reported READY.",
+    "2 PASS: malformed, timezone-less and truly different instants still fail explicitly; no fallback or fabricated successful receipt.",
+    "3 PASS: snapshot identity, exact instant, dataset manifest, consumer requirements and CAS semantics unchanged.",
+    "4 PASS: no new gate, approval, framework or historical data scan; completed stages are retained and reused."
+  ],
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-4371d26ab0d3",
+      "timestamp": "2026-10-20T05:17:57.057049Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Equivalent timezone-aware instants close READY, genuinely different or invalid timestamps remain rejected; completed exports and consumer checkpoints reused.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2014-monthly-ready-closure-compares-source-as-of-timezone-strings-instead-of.json",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2014-monthly-ready-closure-compares-source-as-of-timezone-strings-instead-of.json",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_unified.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_unified_v2.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+    ]
+  },
+  "first_seen_at": "2026-10-20T05:17:57.057049Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fix_description": "Parse both SOURCE and plan timestamps, require their existing timezone contract and compare exact UTC instants. Preserve the original receipt timestamp and all existing closure identities. No export, receipt, plan, active profile or database rewrite.",
+  "fixed_at": null,
+  "github_issue_number": 6434,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6434",
+  "last_seen_at": "2026-10-20T05:17:57.057049Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_unified_v2.py::test_ready_source_as_of_compares_aware_instants backend/tests/dataset_release/test_monthly_unified_v2.py::test_timezone_closure_resume_reuses_every_completed_stage -q",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_rounds": [
+    "Round 1: reproduced the actual string-comparison failure, not a fixture setup failure; corrected test receipt loading to use the store public read_checkpoint return contract.",
+    "Round 2: verified equivalent offsets and Z notation pass; a one-microsecond drift, unequal instants with equal wall times, naive, invalid and missing timestamps remain rejected.",
+    "Round 3: verified interrupted final closure resumes from all six durable checkpoints without invoking any stage twice; real six-stage/eleven-consumer receipts close READY in memory in a fresh process, without state or profile writes."
+  ],
+  "risk_area": "bug",
+  "root_cause": "SOURCE finalization normalizes plan.source_as_of to UTC while retaining the original aware receipt timestamp. READY closure compared ISO strings, so 2026-10-10T00:40:27.465665+00:00 was rejected against the identical instant 2026-10-10T08:40:27.465665+08:00.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "2026-10-20 isolated AIstock Python loaded the tracked patched MonthlyReleaseService._close_ready and the actual operation's six completed stage receipts. It returned READY_TO_ACTIVATE in memory with eleven consumers and zero unresolved gaps, preserving active SHA256 807ce03afc9838e5d1c6e71e3a46c34b41f4b77032bf42abee0dbb2e30aa0e23. Persisted operation remains FAILED; database_write=false, operation_write=false, profile_write=false, reexport=false, runtime_action=false.",
+      "Isolated AIstock Python loaded tracked MonthlyReleaseService._close_ready against real dmr_63a313d97fd046a38d5a876265565014 receipts; six stages and eleven consumers close READY in memory; persisted state FAILED, active unchanged, no DB/runtime/export writes",
+      "Isolated AIstock Python loaded tracked MonthlyReleaseService._close_ready against real six-stage eleven-consumer receipts, returned READY in memory, no persistent state or profile writes"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly READY closure compares source_as_of timezone strings instead of instants",
+  "trigger_condition": {
+    "fingerprint": "4371d26ab0d3344bb5b5a486",
+    "source_event_id": "FE-20261020-4371d26ab0d3"
+  },
+  "validation_evidence": [
+    "RED: exact regression failed at monthly_unified.py source_as_of string comparison for equivalent +00:00/+08:00 instants.",
+    "GREEN: eight targeted timestamp/resume cases passed; final related file matrix 88 passed, 1 skipped.",
+    "Ruff, compileall, git diff --check and nox l0 passed.",
+    "Fresh-process real operation dmr_63a313d97fd046a38d5a876265565014: six stages, eleven consumers, unresolved_count=0; in-memory READY_TO_ACTIVATE for manifest 1f6acfb4ede18d4b7d2d2a5c65d86a1efe49fc2e6037da5abdcc333c0f80b566; persisted status remains FAILED; active SHA256 unchanged at 807ce03afc9838e5d1c6e71e3a46c34b41f4b77032bf42abee0dbb2e30aa0e23."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
