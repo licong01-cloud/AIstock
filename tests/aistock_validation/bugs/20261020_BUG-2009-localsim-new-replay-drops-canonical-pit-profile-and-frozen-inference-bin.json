@@ -37,11 +37,13 @@
       "timestamp": "2026-10-20T04:16:01.848844Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\final-native-readonly-receipt.json",
+    "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\legacy-native-identity-readback-r2.json"
+  ],
   "expected": "Explicit new canonical replay admission freezes policy authority generation and source identity, retains per-day C/D/T PIT semantics and fails closed on invalid identity/coverage/drift; existing legacy releases remain unchanged.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json",
       "backend/services/simulation_runtime/localsim_control.py",
       "backend/services/simulation_runtime/localsim_native_context.py",
       "backend/services/simulation_runtime/localsim_product_control.py",
@@ -50,11 +52,11 @@
       "backend/tests/simulation_runtime/test_localsim_native_context.py",
       "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
       "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
-      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json",
       "backend/services/simulation_runtime/localsim_control.py",
       "backend/services/simulation_runtime/localsim_native_context.py",
       "backend/services/simulation_runtime/localsim_product_control.py",
@@ -63,7 +65,8 @@
       "backend/tests/simulation_runtime/test_localsim_native_context.py",
       "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
       "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
-      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -229,12 +232,64 @@
   "last_seen_at": "2026-10-20T04:16:01.848860Z",
   "module": "simulation_runtime",
   "native_probe": {
+    "checks": {
+      "clocks": true,
+      "full_ordered_scores": true,
+      "full_population": true,
+      "native_commit_before_checkpoint_recovery": true,
+      "native_input_context": true,
+      "one_native_evidence": true,
+      "one_owned_inference_run": true,
+      "population_count": true,
+      "unknown": true
+    },
+    "clocks": {
+      "data_cutoff": "2026-07-10",
+      "decision_date": "2026-07-13",
+      "target_trade_date": "2026-07-13"
+    },
+    "data_source": "DB_HISTORICAL, same as original native TCN source; no fallback introduced",
     "database_write": false,
-    "fresh_run": "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/tcn-native-r2/progress.json",
-    "fresh_status": "RUNNING; not yet claimed accepted",
-    "initial_run": "tcn-native-r1 failed at consumer identity lookup after native scoring, retained unchanged",
+    "limits": "r1 reached native raw scoring but failed at the old consumer receipt validator; only raw scores/population/context are compared across runs; final selection and recovery are validated in r2",
+    "native_daily_strategy": "score_weighted_topk_v2, original top_k=25 unchanged",
+    "peak_owned_disk_bytes": 1689790123,
+    "peak_rss_bytes": 9026420736,
     "production_replay_started": false,
-    "read_only": true
+    "raw_output_hashes": {
+      "r1": "68334f18ff4c9480494bb6098be757dc93709ccbd277bf905902fd91983f1c80",
+      "r2": "767545a47a11c223f77f6cc1ba021864a2a967c93ffdd3c025ded1d815a1e87a"
+    },
+    "read_only": true,
+    "receipt": "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\final-native-readonly-receipt.json",
+    "recovery_seconds": 1.4213725998997688,
+    "score_count": 4900,
+    "selected_count": 25,
+    "source_hashes": {
+      "backend\\data_service\\frozen_dataset.py": "e0790ee4dd4851f50a598a597e973e5848c5bbd3f3ff7a5d0c2ae404e098c7ec",
+      "backend\\inference_engine.py": "466251d5b6e126c062ec818bcbdc5ed68b362211246e73c1e248aadc11c3f03d",
+      "backend\\services\\advisory_historical_range\\alpha158_batch.py": "5c067ddc67c42b058fc324469fe375937eb402998f833a3ad2500067c6064c67",
+      "backend\\services\\advisory_historical_range\\factor_input_materialization.py": "c8987d8920980644fffd50beaa400d96f696b5f09bd798abc39faced62143f9c",
+      "backend\\services\\advisory_historical_range\\inference_features.py": "992ab86878a54af3c8691f0acc41c82373b9bfa2cfa77b95fdbf64cdd1371599",
+      "backend\\services\\advisory_historical_range\\inference_inputs.py": "93d946a38fa15255f3e791b3d1d46aebe93047e17eaf98ff20089bfadb41c17d",
+      "backend\\services\\advisory_historical_range\\inference_session.py": "16aec703c1763c822b79a338a9e1776e039fcf2d8dcf5e94a10b2a6283682ebf",
+      "backend\\services\\advisory_historical_range\\selection_signal_kernel.py": "ae925c5888728b15886ac6847f6e2a63da91af9a749beac1698d54507f11a539",
+      "backend\\services\\simulation_data\\frozen_file_adapters.py": "583d0b470ddf474a941fff82442a170d79f7555673c9ca2506365bb2e8ed384a",
+      "backend\\services\\simulation_runtime\\localsim_file_inputs.py": "388c00258691dafaad74ac6ef7ec7a8f92fc1b335590752159c913e7b3821765",
+      "backend\\services\\simulation_runtime\\localsim_selection_inference.py": "5d7bff67207bfc7c76cd306a789066ef91de7a86f9703c70e8b74e7c2932bb6e",
+      "backend\\services\\simulation_runtime\\localsim_selection_probe.py": "49240b69a6c500e69dfb6940d63d41632f59315a22dcfbf2c81c00d8e05a2d8f",
+      "backend\\services\\simulation_runtime\\localsim_selection_signal.py": "29d639c764c40dca2c7deea586f6436c0e28d752505f3b1b304f6e97e9d71049",
+      "backend\\services\\simulation_signal\\strategy_package_selection.py": "4b5cc5edda79432b973481a99e731dad514f78df52d8aa637c198ad1a3b1cbec",
+      "backend\\services\\strategy_package\\live_inference.py": "911e03043c527350a0503e45765a6f55c587d2fdc82f3e927f45041578fd54fb",
+      "backend\\services\\strategy_package\\multi_alpha_live.py": "8487a633c869554395126d05b29af66b2ea0ae9119c79a579b28844887c38949",
+      "backend\\services\\strategy_package\\runtime.py": "2ee0e5ac4425e07b2400a4c4263ba0ef925b1635f3dd0fb7e178106bc71b045c",
+      "backend\\services\\strategy_package\\selection_artifact.py": "da02400a7ca092a7b6e36e096245f52f6787187a7b557f5ba400e5cf1fb53d71",
+      "backend\\services\\strategy_package\\selection_computation.py": "811e4336363bf5db65d3259af2481d931b0d24bea8070b7180c29498b1ecd8f4",
+      "scripts\\strategy_package_live_inference.py": "a3d518e7dd7d0bba492b0c658a00adb00800ee8f89f413335f8f7ec626c001fe"
+    },
+    "status": "PASSED",
+    "universe_count": 4900,
+    "unknown_count": 0,
+    "wall_seconds": 376.64770879969
   },
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
@@ -266,6 +321,12 @@
       "result": "passed",
       "round": 3,
       "scope": "actual shared CLI receipt contract and detached PIT identity rejection"
+    },
+    {
+      "evidence": "Two independent actual computations match all 4900 ordered scores, original population, UNKNOWN and full native input context. Fresh corrected consumer produces native Top25, recovers injected post-commit failure, exact retry reuses only its own one evidence/one node output. Old actual TCN/LSTM release hash/projection readback passed; no production replay or DB mutation.",
+      "result": "passed",
+      "round": 4,
+      "scope": "real native TCN selection, raw-score equivalence, recovery and production boundaries"
     }
   ],
   "risk_area": "bug",
@@ -273,10 +334,11 @@
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
     "fresh_process_evidence": [
-      "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/related-matrix-r1.log: 133 passed, 1 skipped",
-      "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/receipt-related-r2.log: 55 passed after actual CLI receipt fix",
-      "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/native-receipt-consumer-r2.json: unchanged actual 4900-score native output validates against its original PIT lease",
-      "X:/AIstock_temp/LOCALSIM/canonical-pit-binding-20261020/legacy-native-identity-readback.json: both actual old release hashes and projections remain unchanged"
+      "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\related-matrix-r1.log: 133 passed, 1 skipped",
+      "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\receipt-related-r2.log: 55 passed after actual CLI receipt fix",
+      "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\final-native-readonly-receipt.json: PASSED; actual shared engine, native Top25 and owned commit/retry recovery",
+      "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\admission-readonly-receipt-r2.json: new canonical admission only in memory, immutable native lease and changed-source SHA256",
+      "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\legacy-native-identity-readback-r2.json: old actual TCN/LSTM hashes and frozen projections unchanged under final source"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
