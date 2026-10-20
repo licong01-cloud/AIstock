@@ -307,20 +307,13 @@ def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
     } <= set(runtime_catalog["non_runtime_source_paths"])
 
 
-def test_windows_backend_launcher_uses_the_aistock_interpreter_in_both_branches() -> None:
+def test_windows_backend_launcher_uses_the_aistock_interpreter_in_one_shared_path() -> None:
     text = WINDOWS_LAUNCHER_PATH.read_text(encoding="utf-8")
-    backend_commands = [line.strip() for line in text.splitlines() if "backend.main:app" in line]
-
-    assert backend_commands == [
-        (
-            '; new-tab --title "AIstock Backend" cmd /k "chcp 65001>nul & cd /d %AIROOT% && '
-            "call %AISTOCK_CONDA_BAT% activate AIstock && %AISTOCK_BACKEND_PYTHON% -m uvicorn "
-            'backend.main:app --host 0.0.0.0 --port 8001" ^'
-        ),
-        'start "AIstock Backend" cmd /k "chcp 65001>nul & cd /d %AIROOT% && '
-        "call %AISTOCK_CONDA_BAT% activate AIstock && %AISTOCK_BACKEND_PYTHON% -m uvicorn "
-        'backend.main:app --host 0.0.0.0 --port 8001"',
-    ]
+    helper = (ROOT / "scripts/start_ai_stock.py").read_text(encoding="utf-8")
+    assert '"%AISTOCK_BACKEND_PYTHON%" "%AIROOT%scripts\\start_ai_stock.py" %*' in text
+    assert '[sys.executable, "-m", "uvicorn", "backend.main:app"' in helper
+    assert '"--reload"' not in helper
+    assert "where wt" not in text
     assert "call conda activate AIstock & uvicorn backend.main:app" not in text
     assert " & uvicorn backend.main:app" not in text
 
@@ -344,8 +337,9 @@ def test_windows_backend_launcher_fails_before_startup_when_runtime_paths_are_mi
         "  exit /b 1\n"
         ")"
     ) in text
-    assert text.index('if not exist "%AISTOCK_CONDA_BAT%"') < text.index("where wt")
-    assert text.index('if not exist "%AISTOCK_BACKEND_PYTHON%"') < text.index("where wt")
+    assert text.index('if not exist "%AISTOCK_CONDA_BAT%"') < text.index("scripts\\start_ai_stock.py")
+    assert text.index('if not exist "%AISTOCK_BACKEND_PYTHON%"') < text.index("scripts\\start_ai_stock.py")
+    assert 'call "%AISTOCK_CONDA_BAT%" activate AIstock\nif errorlevel 1 (' in text
 
 
 def test_windows_backend_launcher_has_platform_config_ownership() -> None:
@@ -354,6 +348,8 @@ def test_windows_backend_launcher_has_platform_config_ownership() -> None:
     assert ownership.ownership_status == "mapped"
     assert ownership.primary_module == "platform.config"
     assert "platform.api" in ownership.impact_modules
+    helper = FileOwnershipCatalog().match_path("scripts/start_ai_stock.py")
+    assert helper.primary_module == "platform.api"
 
 
 @pytest.mark.parametrize(

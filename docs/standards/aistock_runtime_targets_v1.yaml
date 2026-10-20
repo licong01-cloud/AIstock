@@ -83,6 +83,7 @@ targets:
       - scripts/qrun_limit_minute.py
       - aistock_models/**/*.py
       - start_all_ai_stock.bat
+      - scripts/start_ai_stock.py
       - requirements*.txt
       - pyproject.toml
     production_port: 8001
