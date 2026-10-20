@@ -844,11 +844,15 @@ def test_frontend_sessions_invoke_direct_entrypoints_without_npm_bin_shims(
     calls: list[tuple[str, ...]] = []
 
     class DummySession:
+        posargs = []
+
         def run(self, *args: str, **_kwargs: object) -> None:
             calls.append(tuple(args))
 
     noxfile.frontend_type_lint(DummySession())  # type: ignore[arg-type]
     noxfile._run_mocked_frontend_target(DummySession(), "tests/watchlist")  # type: ignore[arg-type]
+    monkeypatch.setattr(noxfile, "_is_port_open", lambda *_args: False)
+    noxfile.validation_center_ui(DummySession())  # type: ignore[arg-type]
 
     assert calls[0] == (
         "node",
@@ -865,6 +869,11 @@ def test_frontend_sessions_invoke_direct_entrypoints_without_npm_bin_shims(
         "tests/watchlist",
     )
     assert all(command[0] != "npm" for command in calls)
+    assert calls[-2] == calls[0]
+    assert calls[-1][:4] == (
+        "node", "node_modules/@playwright/test/cli.js", "test",
+        "tests/validation-center/validation-center.spec.ts",
+    )
 
 
 def test_mcp_gateway_phase5_invokes_prebuilt_frontend_entrypoints_directly(

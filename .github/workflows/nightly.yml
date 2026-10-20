@@ -522,6 +522,23 @@ jobs:
             Write-Host "gate=validation_history_captured root=tests/aistock_validation/history file_count=$count manifest=omitted_on_success"
           }
 
+      - name: Stage compact active discovery evidence
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
+        run: |
+          $out = "tmp/validation/nightly_l3/discovery"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $sources = @{
+            candidate = "tmp/validation/nightly_bug_candidate_queue/queue/manifest.json"
+            discovery = "tmp/validation/nightly_bug_candidate_queue/discovery/manifest.json"
+          }
+          foreach ($name in $sources.Keys) {
+            if (Test-Path -LiteralPath $sources[$name] -PathType Leaf) {
+              Copy-Item -LiteralPath $sources[$name] -Destination "$out/$name.json"
+            }
+          }
+          @{ run_id = $env:GITHUB_RUN_ID; head_commit = $env:GITHUB_SHA } |
+            ConvertTo-Json | Set-Content -LiteralPath "$out/provenance.json" -Encoding UTF8
+
       - name: Upload Nightly L3 session results
         id: upload_nightly_l3
         if: always() && steps.background_window.outputs.background_admitted == 'true'
@@ -1296,9 +1313,9 @@ jobs:
           if [ -f "${LLM_USAGE_MD}" ]; then
             cat "${LLM_USAGE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
           fi
-          ACTIVE_DISCOVERY_MANIFEST="tmp/validation/code-intelligence/${RUN_ID}/bug-candidates/manifest.json"
-          DISCOVERY_PLAN_MANIFEST="tmp/validation/code-intelligence/${RUN_ID}/discovery-plans/manifest.json"
-          python scripts/nightly_active_discovery_summary.py --candidate-manifest "${ACTIVE_DISCOVERY_MANIFEST}" --discovery-manifest "${DISCOVERY_PLAN_MANIFEST}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+          ACTIVE_DISCOVERY_MANIFEST="tmp/validation/nightly_l3/discovery/candidate.json"
+          DISCOVERY_PLAN_MANIFEST="tmp/validation/nightly_l3/discovery/discovery.json"
+          python scripts/nightly_active_discovery_summary.py --candidate-manifest "${ACTIVE_DISCOVERY_MANIFEST}" --discovery-manifest "${DISCOVERY_PLAN_MANIFEST}" --provenance tmp/validation/nightly_l3/discovery/provenance.json --expected-run-id "${RUN_ID}" --expected-head "${GITHUB_SHA}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
       - name: Build Nightly failure issue context
