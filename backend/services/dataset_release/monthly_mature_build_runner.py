@@ -412,6 +412,12 @@ class MatureMonthlyPhysicalBuildRunner:
             source_receipt_sha256=compiled.source_bundle_sha256,
             qfq_basis_changes=bases, checkpoint=context.checkpoint, progress=context.progress,
         )
+        if dataset == "daily_bin":
+            from .monthly_index_corrections import correct_index_bins, index_correction_rows
+            rows = index_correction_rows(context.plan.get("monthly_repair_inputs"), before=prefix.cutoff)
+            if rows:
+                receipt = {**receipt, "receipt": correct_index_bins(
+                    root / "daily_bin/qlib", rows, native=receipt["receipt"])}
         unchanged_inputs()
         context.progress({"phase": "BUILD_NATIVE_QLIB_APPEND_DONE", "dataset": dataset, "instrument_count": len(instruments)})
         return {**receipt, "preparation_ref": dict(operation["preparation_ref"])}
