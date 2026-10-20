@@ -15,6 +15,12 @@
   ],
   "created_at": "2026-10-20T18:55:05.849657Z",
   "description": "Local /api/trade-history returns TDX response decode failed slice bounds out of range [6:2] for 2024 target days.",
+  "design_compliance_review": {
+    "remaining_boundary": "production TDX has not been restarted or verified against this fix; no claim that empty history pages repair minute facts",
+    "requested_behavior": "empty/truncated responses are safe and valid responses preserve prior semantics",
+    "scope_and_non_goals": "only historical decoder/test/BUG record; no HMM/QE or ingestion policy change",
+    "verification": "RED-to-GREEN, protocol package pass, root compile pass, six live read-only empty-page responses"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -26,12 +32,18 @@
   "evidence_uris": [],
   "expected": "Empty or truncated history responses return correct empty/error results without panic; valid complete history records retain exact semantics.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tdx-api-main/protocol/model_history_trade.go",
+      "tdx-api-main/protocol/model_history_trade_test.go",
+      "tests/aistock_validation/bugs/20261020_BUG-2044-tdx-historical-trade-decoder-panics-on-empty-and-truncated-responses.json"
+    ],
     "added_files": [],
     "changed_files": [
       "tdx-api-main/protocol/model_history_trade.go",
-      "tdx-api-main/protocol/model_history_trade_test.go"
+      "tdx-api-main/protocol/model_history_trade_test.go",
+      "tests/aistock_validation/bugs/20261020_BUG-2044-tdx-historical-trade-decoder-panics-on-empty-and-truncated-responses.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "tdx-api-main/protocol/model_history_trade.go",
@@ -95,20 +107,44 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_rounds": [
+    {
+      "focus": "count-only empty response and every truncated prefix",
+      "kind": "self_review",
+      "result": "RED reproduced original [6:2] panic; checked bounds and fields return errors without partial success",
+      "round": 1
+    },
+    {
+      "focus": "signed price delta scaling and cumulative overflow",
+      "kind": "self_review",
+      "result": "reused GetPriceChecked and guarded int64 multiplication/addition; valid two-record units and CST time unchanged",
+      "round": 2
+    },
+    {
+      "focus": "side effects and live empty response semantics",
+      "kind": "self_review",
+      "result": "fresh go probe read two external hosts for three historical keys; all six returned Count=0 without panic; no database, HTTP service or production binary mutation",
+      "round": 3
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
-    "health_ref": "http://127.0.0.1:19080/api/health",
-    "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1&start_date=2026-09-01&end_date=2026-09-30",
     "fresh_process_evidence": [
       "Fresh go run X:/AIstock_dataset_candidates/data_repair_staging/data-closure-20261021/tdx_history_probe.go loaded the tracked decoder; six bounded history requests across two hosts returned Count=0 without panic; database_write=false; no HTTP service or production binary change"
     ],
-    "inference_basis": "planned_scope",
+    "health_ref": "http://127.0.0.1:19080/api/health",
+    "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "tdx-go-backend"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "tdx-go-backend",
@@ -175,17 +211,6 @@
     "target_cost_percent_of_legacy": "30-45%"
   },
   "verification_run_id": null,
-  "review_rounds": [
-    {"round": 1, "kind": "self_review", "focus": "count-only empty response and every truncated prefix", "result": "RED reproduced original [6:2] panic; checked bounds and fields return errors without partial success"},
-    {"round": 2, "kind": "self_review", "focus": "signed price delta scaling and cumulative overflow", "result": "reused GetPriceChecked and guarded int64 multiplication/addition; valid two-record units and CST time unchanged"},
-    {"round": 3, "kind": "self_review", "focus": "side effects and live empty response semantics", "result": "fresh go probe read two external hosts for three historical keys; all six returned Count=0 without panic; no database, HTTP service or production binary mutation"}
-  ],
-  "design_compliance_review": {
-    "requested_behavior": "empty/truncated responses are safe and valid responses preserve prior semantics",
-    "scope_and_non_goals": "only historical decoder/test/BUG record; no HMM/QE or ingestion policy change",
-    "verification": "RED-to-GREEN, protocol package pass, root compile pass, six live read-only empty-page responses",
-    "remaining_boundary": "production TDX has not been restarted or verified against this fix; no claim that empty history pages repair minute facts"
-  },
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
     "cleanup_fast_candidate": false,
