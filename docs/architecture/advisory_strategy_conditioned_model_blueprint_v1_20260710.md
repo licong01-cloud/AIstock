@@ -1,11 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.17
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.18
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-20
 
-> 2026-10-20执行断点：公共三模式来源计划已由#6356合入，当前canonical PIT已激活且v18一致性通过，不再列数据基础阻断。本轮接通实际Advisory历史任务的创建、原子持久化、逐日执行及恢复；124项定向回归、原生LSTM/TCN文件末日/DB首日候选与基线一致，fresh retry重验通过；[任务接入F2](advisory_task_input_source_plan_f2_design_20261020.md)记录验证边界。运行加载仍需用户重启，LocalSIM自身接入另验收。只路由共享选股输入，不把私有名单/收益行情也宣称零SQL；不重跑已完成20D，不代LocalSIM接入。模型主线下一候选为[Top10集合联合风险假设](advisory_joint_risk_top10_research_hypothesis_20261020.md)，已做训练内输入抽样，0新fit/启用，须先全窗口可产性检查和聚焦F1，不能把风险预测当盈利买价模型。累计仍160研究fit＋1旧index、0经济确认；公告继续暂缓。
+> 2026-10-20执行断点：公共三模式#6356及实际Advisory任务接入#6453已合入，canonical PIT/v18一致性通过，不再列数据基础阻断；124定向项、两原生包跨界/恢复通过，详[任务F2](advisory_task_input_source_plan_f2_design_20261020.md)。运行加载仍待用户重启；数据同步高峰不查库/重启，不阻断文件研究，LocalSIM自身接入另验收。只路由选股输入，私有收益不冒称零SQL。最新[联合风险F1](advisory_joint_risk_top10_5td_v1_f1_design_20261020.md)全窗口输入与172次统计更新已完成，固定原Top10风险预测误差相对边际增加42.0601%，技能失败，按预声明停止、未读经济Y/未做收益评价。累计160研究fit＋1旧index，另列本次172统计估计，0经济确认/激活。下一问题须论证真正新信息，不换窗救结果、不把风险预测当盈利买价模型；公告仍暂缓。
 
-> 当前进展：两新包20D回放/结算、行业相对开盘六fit、R1预测—动作诊断、成熟cohort状态研究均已完成；新增Top50→Top10同日中心化排序也完成两fit及一次评价。后者对原包/absolute分别−9.197813/−5.612370bps、同时区间跨0，虽RankIC改善但81/81D干预未带来净增量，停止此精确候选。累计160真实研究fit＋1旧index，另列此前0fit/2统计估计器，仍0经济确认/启用。公告按用户暂缓待执行；不改旧阈值、重跑旧阴性或为凑时长派生模型。日频原包/规则继续，必要正确性维护为唯一辅线；权威队列§16.0。原Top50/25、h5六会话、固定5TD及各TopK分报，无新包门禁、无其它模块/DB/服务操作。
+> 当前进展：两新包20D回放/结算、行业相对开盘六fit、R1诊断、cohort状态研究和同日中心化排序均已完成；中心化RankIC改善仍无净收益增量。新增Top20→Top10联合风险也完成一次真实研究：81成熟D/原172包D保留，技能负向，不继续经济选优或启用。累计160真实研究fit＋1旧index；此前cohort的2闭式估计器及本次172次LW统计更新分计，不伪称新增172独立trial。公告暂缓，原包/规则日频继续，必要正确性维护为唯一辅线；权威队列§16.0。原Top50/25、h5六会话、固定5TD及各TopK分报，不增包门禁，不修改其它owner/DB/服务。
 
 > 2026-10-19用户调整：#6330、公告标题设计#6341已合入并清理；[公告标题方向](advisory_announcement_title_value_v1_f1_design_20261019.md)改为`DEFERRED_BY_USER / 待执行`，不作为主线前置、不继续补采或等待。随后完成[独立Top50→Top10同日中心化排序](advisory_group_centered_rank_5td_v1_f1_design_20261019.md)：只读已有两包文件，固定五会话、两Ridge对照，检验去除日期共同项是否改善原Top10；不预测买价或决定弃权。旧M1/M5/P0-I已做过排名，此次是不同人口/政策下的明确学习合同测试，不冒称全新信息或独立OOS。该精确候选已停止，源码/真实研究/经济确认分态，结果见§6.3.12/§16.0。
 
@@ -276,6 +276,7 @@ PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c
 
 | 阶段 | 冻结输入与产物 | 样本/模型 | 资源 | 冻结 test 或真实运行结果 | 当前结论 |
 |---|---|---|---|---|---|
+| Top20→Top10联合下行风险（2026-10-20） | [F1](advisory_joint_risk_top10_5td_v1_f1_design_20261020.md)；run `advjointrisk_94150d2efdf56fdf070d97c7`；原父prepared与v18 Bin显式冻结 | 准备610包D/12200Top20；评价86D/172包D/3440原行，81D风险标签、最后5D未成熟 | 172次LW闭式统计更新/0监督训练/0SQL；32.435秒、peak RSS361.24MB、Bin4.31MB | 联合MSE7.912383415e9、边际5.569742433e9bps⁴（+42.0601%）；技能增量95%区间全负；经济Y未读 | `EXACT_RISK_ESTIMATOR_NOT_SUPPORTED/NAVIGATION_ONLY`；原float32纯导出修复不改数值/名单，0重估；不是收益负、全局不可学或父包无Alpha的证明，0确认/启用 |
 | 跨包冻结排名共识5TD（2026-10-12完成，2026-10-14读回） | SOURCE #5908；run `advgp5consensus_c3989aba8da8d9c840f443c9`；既存evaluated/evaluation.json与两STARTED/两COMPLETE日志 | 两包86D/8600原Top50，81成熟D/810原五槽；AVAILABLE8078/IMMATURE500/UNKNOWN22均保留 | 2真实fit、累计152研究fit+1旧index；本次文档0新fit/SQL，不重新结算或固化旧负证据 | base/rule/matched/candidate净均值128.389817/121.630581/43.249895/43.249895bps；对base−85.139922、同时95%区间[−213.797862,20.032745]；对matched0/0干预；candidate242TAKE/567SKIP/1不可入场，胜率51.6529% | `NEGATIVE_OR_UNRESOLVED_EXACT_CANDIDATE/NAVIGATION_ONLY`，0确认/启用；组均值非NAV，较高TAKE胜率不能抵偿错失机会；只停精确候选，不否定全局价格学习或所有QE包 |
 | H-VALUE-ANCHOR-1 D-only价值锚 | plan `advvalue_a4bc66a30cfa7d9d5078850c`；源码HEAD `1c8545ab870f5e12b9e128e09b1b13a4bdf0ae2f`、研究PR #5347；结果 `F:/Dev/AIstock_model_artifacts/advisory_value_anchor_v1_20261003/advvalue_a4bc66a30cfa7d9d5078850c/evaluated/evaluation.json` | 386D/7720原候选，7699新场景标签可用/21 UNKNOWN；12D未知10保留；新共同train4250/validation1622，label-end purge296；1配置2头、1candidate；81D/1620 test候选、100共同估值日 | 既存输入预登记/新标签准备15.163秒，零DB重查；两头fit及源核验0.880秒，fit＋评价12.169秒；拟合前后7项QE状态均0；无DB写/sealed/服务控制 | baseline/constant/model名义收益`21.3220%/25.4597%/17.4642%`，MDD`-10.3314%/-10.7283%/-8.0746%`；model减constant日增量`-6.9022bps`、95%`[-24.5301,9.9157]`；减baseline`-3.4196bps`、95%`[-18.9390,12.2020]`；模型81真实TAKE＋3 UNKNOWN控制episode，常数89＋3；相对常数实际进入不同58日；三臂端点/持有mark问题0 | `STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION / EXPLORATORY_SCREEN / NAVIGATION_ONLY`；同独立VALUE_REVIEW_5_V1复评场景，非生产政策改变/沪深300超额/独立OOS/实盘成交。停止精确candidate，不事后转选常数控制，零confirmation/binding/启用 |
 | H-TIMING-1 同核买入价值探索 | plan `advtiming_cd2ddd9832129255c14f9a80`；recipe input `advtiminginput_9a929b2d2dafd1c4cf18f42f`；源码HEAD `001910b7ef7a64afb1deacc12233389b97abe4f5`、PR #5336已合入`5ec8c8e2d1deee16a5587afd604d61481162669e`；结果 `F:/Dev/AIstock_model_artifacts/advisory_entry_timing_v1_20261003/advtiming_cd2ddd9832129255c14f9a80/evaluated/evaluation.json` | 386D/7720原候选；7710个14D完整值、10 UNKNOWN保留；新共同train4153/validation1556；2配置4头、1candidate；81D/1620 test候选、100共同估值日 | 只读输入607.703秒/486 SELECT；一次4头fit6.719秒；预登记/fit/评价28.781秒；拟合前后QE活动状态均0；无DB写/sealed/服务操作 | baseline/core13/timing15名义收益`19.1729%/1.6174%/3.0673%`；MDD`-10.2278%/-9.5256%/-7.3655%`；15减13日增量`+1.0789bps`、描述性95%`[-10.5944,13.2180]`；15减baseline`-15.0261bps`、95%`[-32.6430,-0.3110]`；candidate19真实TAKE＋7 UNKNOWN控制episode，控制37＋3，相对控制进入不同30日 | `STOP_CURRENT_CANDIDATE_NOT_GLOBAL_DIRECTION / EXPLORATORY_SCREEN / NAVIGATION_ONLY`；当前来源NON_VINTAGE、原生成员限制不变；不是沪深300超额、独立OOS或真实成交。停止该candidate，零confirmation/binding/启用，不关闭价格方向 |
@@ -926,13 +927,35 @@ CLOCK=D_CLOSE_UNCONDITIONAL_MARK_FUNCTION：分布权重只看D，不读g/m/scor
 
 用户随后明确暂缓本方向：`DEFERRED_BY_USER`。基础标题需求保留，未完成不阻止其它现成输入研究；不再派生公告抓取、业务校验或待数轮询任务。恢复须另按本文已有合同，不把无标题当零事件。
 
-#### 6.3.12 当前独立排序研究：同日中心化Top50→Top10
+#### 6.3.12 已完成独立排序研究：同日中心化Top50→Top10（精确停止）
 
 [F1详细设计](advisory_group_centered_rank_5td_v1_f1_design_20261019.md)冻结`GROUP_CENTERED_RANK_5TD_1 / ALPHA_RANKING`：原两包305D/30500行、相同九D字段和唯一可测训练stockD，绝对Ridge对同日中心化X/y Ridge，唯一变化为去除日期截距；原包Top10为主要对照。不重用旧负模型、改阈值、换包或搜索TopK。目标是候选内相对排序，不是安全买卖区间或现金择时，也不保证整体市场下跌时盈利。
 
 所有原50行/身份保留，未知D输入固定原槽，已知股票只在其余槽排序；T不可执行沿原标签现金且不递补，真未知组为null，未来状态不参与排序。固定十槽五会话净估值、双配对统计/真实支持/同口径RankIC/组尾损/换入换出归因分别报告，不称NAV或独立OOS。仅现成文件、Advisory离线源码及既有WSL环境；无公告依赖、SQL、其它模块或生产激活。设计通过与真实结果分开记录。
 
 本次真实run `advgroupcentered_9db90cc22308ce507a0e79ff`：19426唯一训练stockD/214D，旧源market_up_ratio全缺在任何fit前显式停用，两臂共八字段＋八mask；0补数/0SQL。两WSL fit/约2.893秒，评价86D/8600原行，81成熟D/1620个十槽；baseline/absolute/centered均值95.336410/91.750967/86.138597bps。双增量−9.197813/−5.612370、同时95%区间[-74.355792,45.528060]/[-46.915177,27.239985]；干预2564/1830唯一stockD、均81/81D。RankIC由absolute0.012779提高到0.029375仍未改善Top10收益。LSTM正向、TCN负向分报，不回选LSTM；精确候选停止，累计160fit＋1旧index，0确认/启用。首个0fit准备中断保留，模型结果后未改参数或标准。
+
+#### 6.3.13 已完成Top20→Top10集合联合风险（技能负向，精确停止）
+
+[单一F1](advisory_joint_risk_top10_5td_v1_f1_design_20261020.md)冻结LW、120日历史、>=60共同观测、
+最多两只原Top10替换，边际对照保留相同均值/方差，仅非对角协方差不同。
+目标为五日close/close负收益聚合二阶矩，不是T开盘成交、资金权重、亏损概率或买价区间。
+使用原有冻结Bin close/factor、有界一次批读/内容身份，原股/原分数/原rank/UNKNOWN保留；
+不改共享算法/策略包、不因H5暖机差异fallback或补采，不读DB/active配置。
+
+真实run `advjointrisk_94150d2efdf56fdf070d97c7`、producer `cc5858555e7ca8c94a03327563cd47fbfa14cc77`，
+先冻结全部172包D/3440行预测，再生成风险标签；81成熟D/162包D，最后5D/10包D未成熟保留。
+边际/联合MSE分别5.569742433e9/7.912383415e9bps⁴，联合误差增42.0601%；
+边际−联合−2.342640982e9，原轴block5/2000次95%区间[-3.802567664e9,-4.609871546e8]。
+`EXACT_RISK_ESTIMATOR_NOT_SUPPORTED`按预声明停止，不解码经济Y、不做名单收益/尾损比较，
+不调窗/收缩器、关闭整个方向或归因QE父包不足。
+172次闭式统计更新另报，不把库API的fit隐藏成无计算或冒称172独立模型trial；0监督训练/确认/启用。
+Windows有界文件统计32.435秒/RSS约345MiB/产物8.56MB，不是父包推理或日回放SLA。
+
+最终真实投影检查修复float32→float64导出类型提升，原数值/排序/角色名单均未变；
+0新增估计，原study及producer保持，不把旧研究改绑最终源码HEAD。
+下一单一问题先论证相对已消费日频/父轨迹真正新增的信息；可以只读核对D收盘前分钟路径的
+可产性与查重，再冻结一个F1，不预设模型有效、不接分钟执行、不开展参数搜救或公告补采。
 
 ### 6.4 训练资源边界
 
@@ -2262,8 +2285,9 @@ qe_active_dataset_universe = source merged in PR #4361; profile activation / can
 
 | 当前顺序 | 具体任务 | 当前状态 / 完成条件 |
 |---|---|---|
-| 当前P0 / 源码已实现、运行待加载 | 实际Advisory任务接入共享三模式 | #6356公共API/CLI及R15通过；本轮完成创建/持久化/produce_dates/单日/未提交恢复，124项回归及原生两包跨界、完整评分/排序/Top50与同输入基线一致，fresh retry通过，见任务接入F2。生产任务写入未执行；保留旧请求/旧产物和经济前缀。源码合入、运行加载、LocalSIM接续分别报告，不再重复两包20D或固化旧阴性证据 |
-| 当前P1 / 唯一模型候选准备 | Top20→Top10集合联合风险 | JOINT_RISK_TOP10_5TD_1 / RISK_MANAGED_ADVISORY；训练内40行/39股输入抽样完成，0fit/0SQL/未读评价Y，不等于全窗口通过。两股H5历史短于同版Bin交数据owner；下一F1显式冻结Bin与原生复权，不异常fallback，不阻断已有足够输入的研究。随后全窗口可产性及一个估计器/窗/缺失/干预合同；原Top10及边际风险matched对照，联合信息为唯一新变量。不能以降风险抵偿收益失败，不形成资金仓位或自动激活；公告暂缓，旧M23/margin/共识不重复 |
+| 已合入 / 待用户重启，不阻断研究 | 实际Advisory任务接入共享三模式 | #6356公共API/CLI及#6453任务接入已合入；124项回归及原生两包跨界/完整评分/排序/Top50/恢复通过，见任务F2。生产任务写入未执行；旧请求/产物/经济前缀保留。当前同步高峰不重启/查库/激活，待用户通知再读回；LocalSIM由其owner验收，不重复20D |
+| 当前P1 / 下一单一问题设计，不立即fit | 真正新增信息的可产性与学习对象 | 先查重D收盘前分钟路径相对既有日频/父轨迹是否真正新增，只读现存文件并设计一个固定预算F1；不是承诺分钟信号有效、分钟执行或连续搜索。已停止联合风险不换窗/估计器救结果；不再为旧阴性补证，公告仍暂缓，原包直接使用不新增门禁 |
+| 已完成 / 联合风险精确候选停止 | JOINT_RISK_TOP10_5TD_1 | §6.3.13/F1：610包D全窗口输入通过，唯一run172统计更新/3440原评价行、81成熟D技能比较；联合误差+42.0601%、技能增量区间全负，未读经济Y/未做收益评价。0监督训练/SQL/确认/启用；原生float32导出已修，0重估，不把本候选停止等同全局或QE父包失败 |
 | 已完成A | 已结束价格候选及共识事实校正 | §1.3/6.3.5～6.3.9保留原窗口/政策/UNKNOWN/负结果；不重fit、换pair/seed/800或为旧失败确认/补证 |
 | 已完成B | 通用选股优化、短窗口真实对照及重启读回 | #6038已合入/运行版本含该源码；有界缓存/原生模型/processor/序列/原成员合同通过。动态因子未测得加速、RSS增加、真实跨日特征hit0透明；公共多日装配及LocalSIM由所属owner继续，不等它们完成才运行荐股 |
 | 已完成 / 原P1 | 两新包连续20交易日完整回放/结算 | D=2026-01-05..01-30，两包各20D/失败0，候选50/25；原Program、binding、policy及所有日期保留，不重启回放 |

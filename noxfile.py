@@ -164,12 +164,22 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
     selected = _nightly_shared_pytest_args(str(getattr(session, "name", "")), args)
     if selected is None:
         return  # All explicit targets passed in the same coverage-enforcing producer.
+    plan = str(getattr(session, "name", "not_recorded"))
+    extra_env = {"AISTOCK_TEST_PLAN": plan}
+    if plan == "advisory_modeling_backend":
+        # Small offline model fixtures do not benefit from host-wide BLAS pools.
+        # Bound only test subprocesses, never the user's services or experiments.
+        extra_env.update(HMM_TEST_NUMERIC_ENV)
+        if os.environ.get("AISTOCK_TEST_DIAGNOSTICS_RECEIPT"):
+            extra_env["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"] = str(
+                Path(os.environ["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"]).with_name("advisory-modeling-test-failures.jsonl")
+            )
     session.run(
         "python",
         "-m",
         "pytest",
         *selected,
-        env=_env({"AISTOCK_TEST_PLAN": str(getattr(session, "name", "not_recorded"))}),
+        env=_env(extra_env),
         external=True,
     )
 
@@ -4053,7 +4063,15 @@ def hmm_risk_backend(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-        env=_env({"COVERAGE_FILE": str(coverage_data), **HMM_TEST_NUMERIC_ENV}),
+        env=_env({
+            "COVERAGE_FILE": str(coverage_data), **HMM_TEST_NUMERIC_ENV,
+            "AISTOCK_TEST_PLAN": "hmm_risk_backend",
+            # A later plan must not overwrite the node active at HMM timeout.
+            "AISTOCK_TEST_DIAGNOSTICS_RECEIPT": (
+                str(Path(os.environ["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"]).with_name("hmm-risk-test-failures.jsonl"))
+                if os.environ.get("AISTOCK_TEST_DIAGNOSTICS_RECEIPT") else ""
+            ),
+        }),
         external=True,
     )
 
