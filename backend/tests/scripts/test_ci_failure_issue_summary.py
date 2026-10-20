@@ -553,20 +553,22 @@ def test_nightly_missing_session_receipt_does_not_hide_other_failed_stages() -> 
     assert "missing_session_receipt" not in issue_payload["body"]
 
 
-@pytest.mark.parametrize("stage,expected", [
-    ("workspace", "workspace_preparation_failed"),
-    ("environment", "environment_preparation_failed"),
-    ("plan", "plan_preparation_failed"),
-    ("sessions", "artifact_transport"),
-    ("mismatch", "invalid_execution_diagnostic"),
+@pytest.mark.parametrize("stage,outcome,expected", [
+    ("workspace", "failure", "workspace_preparation_failed"),
+    ("environment", "failure", "environment_preparation_failed"),
+    ("plan", "failure", "plan_preparation_failed"),
+    ("sessions", "failure", "artifact_transport"),
+    ("sessions", "cancelled", "sessions_interrupted"),
+    ("sessions", "skipped", "sessions_not_started"),
+    ("mismatch", "failure", "invalid_execution_diagnostic"),
 ])
-def test_nightly_setup_and_transport_failures_never_invent_test_sessions(stage, expected):
+def test_nightly_setup_and_transport_failures_never_invent_test_sessions(stage, outcome, expected):
     execution = {"run_id": "9001", "head_commit": "a" * 40,
                  "workspace": "success", "environment": "success", "plan": "success", "sessions": "skipped"}
     if stage == "mismatch":
         execution["head_commit"] = "b" * 40
     else:
-        execution[stage] = "failure"
+        execution[stage] = outcome
     payload = summary.summarize_nightly_status({
         "statuses": {"nightlyL3": "failure", "drSnapshot": "failure"},
         "run_id": "9001", "commit": "a" * 40, "nightly_l3_execution": execution,

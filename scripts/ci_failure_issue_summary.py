@@ -1533,6 +1533,8 @@ def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
             kind = "invalid_execution_diagnostic"
         elif stage:
             kind = f"{stage}_preparation_failed"
+        elif execution.get("sessions") == "cancelled":
+            kind = "sessions_interrupted"
         elif execution.get("sessions") in {"failure", "success"}:
             kind = "artifact_transport"
         else:
