@@ -50,6 +50,27 @@ def test_native_topk_policy_and_two_consumer_independent_results(tmp_path):
     assert len(small.computation.aggregate_results) == 1 and small.semantic_identity != other.semantic_identity
 
 
+def test_planned_inputs_enter_native_kernel_identity_without_altering_selection(tmp_path):
+    from backend.services.advisory_historical_range.input_source_plan import digest
+    kernel, request, prepared, reads = _native_case(tmp_path)
+    request = replace(request, source_identity="a" * 64)
+    baseline = kernel.run(request=request, prepare_day=lambda **_: prepared)[0]
+    body = {"route": {**request.date_plan[0].to_dict(), "plan_hash": request.source_identity},
+            "actual_inputs": [{"content_hash": "b" * 64}]}
+    context = prepared.raw.artifact.metadata["artifact_input_context"]
+    context["source_plan_receipt"] = {**body, "source_receipt_hash": digest(body)}
+    planned = kernel.run(request=request, prepare_day=lambda **_: prepared)[0]
+    assert planned.semantic_identity != baseline.semantic_identity
+    assert planned.raw_scores == baseline.raw_scores
+    assert planned.computation.aggregate_results == baseline.computation.aggregate_results
+    assert planned.unscored_members == baseline.unscored_members
+    assert reads and all(day == request.date_plan[0].decision_date for _, day in reads)
+    context["source_plan_receipt"]["route"]["data_cutoff"] = "2026-01-01"
+    with pytest.raises(SelectionSignalBatchError) as caught:
+        kernel.run(request=request, prepare_day=lambda **_: prepared)
+    assert "source receipt" in str(caught.value.cause)
+
+
 def test_partial_batch_preserves_native_error_and_original_date(tmp_path):
     producer, _, _, program = _fixture(tmp_path)
     first_day = SelectionSignalDayV1(TRADE_DATE, TRADE_DATE, TRADE_DATE)

@@ -83,6 +83,12 @@ class InferenceInputSession:
 
     def read(self, *, dataset: str, members: list[str], start: date, end: date,
              loader: Callable[[list[str], date, date], pd.DataFrame]) -> pd.DataFrame:
+        route = getattr(self, "source_plan_route", None)
+        if route is not None and (end > date.fromisoformat(route["data_cutoff"])
+                                  or start < date.fromisoformat(route["history_start"])):
+            from .input_source_plan import SourcePlanError
+            raise SourcePlanError("SOURCE_MODEL_READ_OUTSIDE_C_WINDOW", component=dataset,
+                                  start=str(start), end=str(end))
         if self.file_dataset is not None:
             self.file_dataset.assert_unchanged()
         if start > end or len(members) != len(set(members)):

@@ -63,6 +63,39 @@ def test_date_specific_frozen_members_are_not_reused_for_other_prefetched_days(t
     assert [clocks[0].data_cutoff for clocks in calls] == list(days)
 
 
+def test_source_plan_adapter_preserves_native_cutoffs_and_returns_content_receipt(tmp_path, monkeypatch):
+    from backend.services.advisory_historical_range import input_source_plan as sources
+    from backend.tests.advisory_historical_range.test_input_source_plan import POLICY, _payload
+    provider, workspace, days, calls = _fixture(tmp_path, monkeypatch)
+    plan = sources.build_source_plan(mode="DATABASE_ONLY", consumer_scope="ADVISORY", run_id="own",
+        trading_calendar=["2026-06-01", "2026-06-02", "2026-06-03"], native_policy=POLICY,
+        days=[{"decision_date": str(d), "data_cutoff": "2026-06-01" if i == 0 else "2026-06-02",
+               "target_trade_date": str(d), "history_start": "2026-06-01"} for i, d in enumerate(days)])
+    original = provider._execute
+    def execute(workspace, clocks, scope):
+        assert scope.source_plan == plan
+        root, index = original(workspace, clocks, scope)
+        path = root / "batch_dates" / str(clocks[0].decision_date) / "scores.json"
+        payload = json.loads(path.read_bytes())
+        route = sources.resolve_day_source(plan, clocks[0])
+        content = _payload(route)
+        content["metadata"].update(payload["metadata"])
+        content["input_context"]["source_plan_receipt"] = sources.input_receipt(route, content)
+        _atomic_json(path, content)
+        index["results"][0]["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return root, index
+    monkeypatch.setattr(provider, "_execute", execute)
+    with provider.batch_dates(trade_dates=days, run_id="own", source_revision=plan["plan_hash"], source_plan=plan):
+        result = provider.run(workspace=workspace, trade_date=days[0], cutoff_date=date(2026, 6, 1), historical_read_only=True)
+        assert result.input_context["source_plan_receipt"]["route"]["plan_hash"] == plan["plan_hash"]
+        assert [v.data_cutoff for v in calls[0]] == [date(2026, 6, 1), date(2026, 6, 2)]
+        with pytest.raises(ValueError, match="cutoff"):
+            provider.run(workspace=workspace, trade_date=days[0], cutoff_date=days[0], historical_read_only=True)
+    with pytest.raises(ValueError, match="revision"):
+        with provider.batch_dates(trade_dates=days, run_id="own", source_revision="wrong", source_plan=plan):
+            pytest.fail("mismatched source must not run")
+
+
 def test_new_identity_and_factor_code_change_do_not_reuse_wrong_native_score(tmp_path, monkeypatch):
     _, workspace, _, _ = _fixture(tmp_path, monkeypatch)
     root = workspace.workspace_path
