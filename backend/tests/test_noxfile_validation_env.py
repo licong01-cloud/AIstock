@@ -21,6 +21,20 @@ def _reset_nox_env_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(noxfile, "_VALIDATION_ENV_LOADED", False)
 
 
+def test_hmm_nightly_diagnostics_keep_plan_identity_and_survive_later_sessions(monkeypatch):
+    monkeypatch.setenv("AISTOCK_TEST_DIAGNOSTICS_RECEIPT", "X:/run/test-failures.jsonl")
+    monkeypatch.setattr(noxfile, "_env", lambda extra: extra)
+    calls = []
+    class Session:
+        def run(self, *args, **kwargs):
+            calls.append((args, kwargs))
+    noxfile.hmm_risk_backend(Session())
+    env = calls[-1][1]["env"]
+    assert env["AISTOCK_TEST_PLAN"] == "hmm_risk_backend"
+    assert env["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"].replace("\\", "/") == "X:/run/hmm-risk-test-failures.jsonl"
+    assert all(env[key] == "1" for key in noxfile.HMM_TEST_NUMERIC_ENV)
+
+
 @pytest.mark.parametrize("plan", ["advisory_modeling_backend", "unrelated_plan"])
 def test_advisory_fixture_numeric_pools_are_subprocess_local_and_diagnostics_are_plan_owned(monkeypatch, plan):
     monkeypatch.setenv("OMP_NUM_THREADS", "16")
