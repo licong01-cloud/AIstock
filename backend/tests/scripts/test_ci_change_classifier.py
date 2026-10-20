@@ -769,7 +769,8 @@ def test_qe_read_contract_runner_matches_catalog_and_keeps_live_scenario_delegat
     run = next(step['run'] for job in workflow['jobs'].values()
                for step in job.get('steps', []) if step.get('id') == 'frontend_validation')
     assert all(f'"$target" == "{target}"' in run for target in targets)
-    assert '--config=tests/qe-read-contract.config.ts "${qe_contract_targets[@]}"' in run
+    assert '--config=tests/qe-read-contract.config.ts "$target"' in run
+    assert '--pass-with-no-tests' not in run
     config = (noxfile.ROOT / 'frontend/tests/qe-read-contract.config.ts').read_text(encoding='utf-8')
     assert 'grep: /QE dashboard stops automatic polling when task list has no active task$/' in config
     assert 'reuseExistingServer: false' in config and 'needsFrontend && !isWorker ?' in config
