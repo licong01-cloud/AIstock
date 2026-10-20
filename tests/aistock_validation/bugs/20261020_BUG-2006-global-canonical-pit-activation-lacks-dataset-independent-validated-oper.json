@@ -10,6 +10,17 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2006",
+  "design_compliance_001": {
+    "item_by_item": "Actual five-field PIT snapshot, independent persisted-row SQL audit, explicit predecessor CAS, source-commit-bound DEV activation/rollback and existing singleton API are implemented. No second active pointer or policy definition.",
+    "no_unapproved_simplification": "Uses existing canonical v2 rule and readiness checks; does not manufacture a full dataset W8 attestation or require rebuilding any price release. Broader independent registry/v3 work remains BUG-1990/PR6373 and is not borrowed unmerged.",
+    "no_fake_completion": "DEV actual activation/readback then complete rollback passed. Production activation remains pending source merge and a matching merged-source DEV rehearsal.",
+    "remaining_gaps": "No source/runtime restart is required for this standalone operator. Existing runtime BUG-2005 aftercare remains separate. No historical lease/profile/account migration is performed."
+  },
+  "review_rounds": [
+    "Round 1: RED import failure then 8 direct GREEN tests; exact predecessor, actual hashes, DEV-only rehearsal and production authorization.",
+    "Round 2: strict rollback boolean checks, trusted source files, official lock ordering and failed-CAS no-commit regression.",
+    "Round 3: 53 related tests, Ruff, compile, L0, catalog and ownership passed. Real DEV rehearsal reached ACTIVE_CANONICAL generation1, then restored legacy generation0 by rollback; receipt X:/AIstock_dataset_release_control/operator_receipts/BUG-2006-dev-activation-rehearsal-20261020-r1.json."
+  ],
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
