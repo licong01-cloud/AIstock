@@ -1498,8 +1498,11 @@ def _validate_hmm_coefficient_extension(payload: Any, *, url: str) -> tuple[str,
         require(all(isinstance(identity.get(k), str) and identity[k].strip() for k in ("generation", "release_id"))
                 and all(sha(identity.get(k)) for k in ("dataset_manifest_sha256", "dataset_manifest_file_sha256", "active_profile_sha256")),
                 "extension dataset pins are incomplete")
+        reader_sha = plan.get("extension_reader_sha256")
+        require(sha(reader_sha), "extension reader identity must be a lowercase SHA-256")
         key = dict(policy=policy, preset=preset, preset_coeffs=plan.get("preset_coeffs"), model_inference_origin=origin,
-                   input_identity=identity, start=plan["test_start"], end=plan["backtest_end"], generator_sha256=plan["generator_sha256"])
+                   input_identity=identity, start=plan["test_start"], end=plan["backtest_end"], generator_sha256=plan["generator_sha256"],
+                   extension_reader_sha256=reader_sha)
         require(isinstance(key["preset_coeffs"], dict) and bool(key["preset_coeffs"]), "extension preset coefficients are missing")
         encoded = (json.dumps(key, ensure_ascii=False, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n").encode("utf-8")
         require(sha(plan.get("extension_key")) and hashlib.sha256(encoded).hexdigest() == plan["extension_key"] == result.get("extension_key"),
@@ -1514,7 +1517,8 @@ def _validate_hmm_coefficient_extension(payload: Any, *, url: str) -> tuple[str,
             require(window.get("strict_no_leakage") is True and window.get("role") == "automatic_frozen_model_extension",
                     "extension window lacks strict frozen-model provenance")
             expected = dict(config_id=config_id, snapshot_id=policy["snapshot_id"], preset=preset, model_sha256=policy["model_sha256"],
-                            extension_key=plan["extension_key"], generator_sha256=plan["generator_sha256"], dataset_generation=identity["generation"],
+                            extension_key=plan["extension_key"], generator_sha256=plan["generator_sha256"], extension_reader_sha256=reader_sha,
+                            dataset_generation=identity["generation"],
                             release_id=identity["release_id"], dataset_manifest_identity=identity["dataset_manifest_sha256"],
                             dataset_manifest_file_sha256=identity["dataset_manifest_file_sha256"], active_profile_sha256=identity["active_profile_sha256"])
             require(all(window.get(k) == v for k, v in expected.items()), "extension window identity mismatch")
