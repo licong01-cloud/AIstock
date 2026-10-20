@@ -27,13 +27,20 @@
   "evidence_uris": [],
   "expected": "Artifact instruments and QFQ retain full factual securities; PIT instruments/digests remain the actual selection membership. Source changes must belong to frozen facts, not necessarily PIT.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/component_artifact_manifest.py",
+      "backend/services/dataset_release/component_manifest_producer.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2033-component-fact-identities-incorrectly-require-every-stored-security-to-b.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/component_manifest_producer.py",
       "backend/services/dataset_release/component_artifact_manifest.py",
-      "backend/tests/dataset_release/test_source_authority.py"
+      "backend/services/dataset_release/component_manifest_producer.py",
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2033-component-fact-identities-incorrectly-require-every-stored-security-to-b.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/component_manifest_producer.py",
@@ -105,8 +112,8 @@
   },
   "first_seen_at": "2026-10-20T09:27:49.441915Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2337888d68f989eacceb94a787e25629533d3d3f",
+  "fixed_at": "2026-10-20T10:10:25Z",
   "github_issue_number": 6474,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6474",
   "last_seen_at": "2026-10-20T09:27:49.441915Z",
@@ -114,6 +121,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6480",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -133,6 +141,7 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -144,7 +153,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2033",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "4fb55ed45b0d11d4",
+    "recorded_at": "2026-10-20T10:11:23.898328Z",
+    "runtime_contract_digest": "154bf8c81a9b44d225b306ca6f5d44a2b6a028bb420b884cddcd7ebfb469388b",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "209f4181609554cddaa4b0d9deffefdcd6d5ed5d",
+    "source_merge_commit": "2337888d68f989eacceb94a787e25629533d3d3f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6480",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_component_manifest_producer.py backend/tests/dataset_release/test_component_artifact_manifest.py -q -> 48 passed, 1 skipped",
+      "python -m nox -s l0 -- backend/services/dataset_release/component_manifest_producer.py backend/services/dataset_release/component_artifact_manifest.py backend/tests/dataset_release/test_source_authority.py -> passed"
+    ],
+    "validation_evidence_digest": "f2ba5b353224c6787480f210033235ad6e92f4a2809c6a2da8dcd325a2e87be6"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -153,6 +184,10 @@
     "fingerprint": "90a5d8e507a171f7de32bbef",
     "source_event_id": "FE-20261020-90a5d8e507a1"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_source_authority.py backend/tests/dataset_release/test_component_manifest_producer.py backend/tests/dataset_release/test_component_artifact_manifest.py -q -> 48 passed, 1 skipped",
+    "python -m nox -s l0 -- backend/services/dataset_release/component_manifest_producer.py backend/services/dataset_release/component_artifact_manifest.py backend/tests/dataset_release/test_source_authority.py -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
