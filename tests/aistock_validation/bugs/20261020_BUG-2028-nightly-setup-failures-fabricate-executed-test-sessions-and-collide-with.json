@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2028",
-  "closed_at": null,
+  "closed_at": "2026-10-20T10:16:22Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -108,8 +108,8 @@
   },
   "first_seen_at": "2026-10-20T08:59:47.392407Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4f28adb5ee17e7300ff67015523a8395289a5089",
+  "fixed_at": "2026-10-20T10:16:22Z",
   "github_issue_number": 6466,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6466",
   "last_seen_at": "2026-10-20T08:59:47.392407Z",
@@ -117,6 +117,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6473",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -134,6 +135,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -143,7 +145,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2028",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9f0ce51f573b3235",
+    "recorded_at": "2026-10-20T10:17:14.606600Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d7278e81001ee4074963f2cf641af3b80249b21b",
+    "source_merge_commit": "4f28adb5ee17e7300ff67015523a8395289a5089",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6473",
+    "validation_evidence": [
+      "validation-receipt: id=80e807133d9694aa commit=d7278e81001ee4074963f2cf641af3b80249b21b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py::test_nightly_setup_and_transport_failures_never_invent_test_sessions backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -q` result=`8 passed`",
+      "validation-receipt: id=013f5767c92da170 commit=d7278e81001ee4074963f2cf641af3b80249b21b kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`",
+      "validation-receipt: id=e316b76d13e2e0d7 commit=d7278e81001ee4074963f2cf641af3b80249b21b kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 8 tests zero findings`"
+    ],
+    "validation_evidence_digest": "365f117d26d1cb73f8cb95f08918e015d5b7c3e7eb02eaa89fbdc8f075f4b80f"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "validation"
   ],
@@ -152,6 +177,11 @@
     "fingerprint": "ad05fb7871879ea7da8e34f3",
     "source_event_id": "FE-20261020-ad05fb787187"
   },
+  "validation_evidence": [
+    "validation-receipt: id=80e807133d9694aa commit=d7278e81001ee4074963f2cf641af3b80249b21b kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py::test_nightly_setup_and_transport_failures_never_invent_test_sessions backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator -q` result=`8 passed`",
+    "validation-receipt: id=013f5767c92da170 commit=d7278e81001ee4074963f2cf641af3b80249b21b kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed blocking=0`",
+    "validation-receipt: id=e316b76d13e2e0d7 commit=d7278e81001ee4074963f2cf641af3b80249b21b kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 8 tests zero findings`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
