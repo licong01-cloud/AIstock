@@ -40,7 +40,27 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-20T04:58:11.471899Z",
+  "deferred_nightly_verification": {
+    "modules": [
+      "qe.auto_evolution",
+      "qe_read",
+      "qe_archive"
+    ],
+    "plans": [
+      "qe_read_l3",
+      "qe_experiment_registry_ui",
+      "qe_archive_backend"
+    ],
+    "required": true,
+    "scope": "Deduplicated full UI journeys, performance profiling and archive business regression; no user service control."
+  },
   "description": "202 tasks reload with one active; nine-loop detail 6940444 bytes versus summary 32906 bytes.",
+  "design_compliance_review": {
+    "no_business_logic_change": "Full payload endpoints and archive/promote actions retained; absolute Sharpe distinct from active IR; compact projection retains legacy holdings derivation.",
+    "no_silent_errors": "Read errors shown with last successful snapshot; missing task IDs explicit; no zero-fill for absent metrics.",
+    "no_simplified_delivery": "Active-only refresh, pagination, per-loop reads, log isolation and lazy basic Plotly delivered; no experimental/business code changed.",
+    "no_unapproved_gates": "No new experiment, approval, dependency or data gate."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -51,40 +71,36 @@
     {
       "action": "implementation_review",
       "actor": "codex",
-      "timestamp": "2026-10-20T05:33:52Z",
-      "note": "Read-only UI performance scope only. Exact Next.js bracket paths use fnmatch literal bracket escaping in allowed_write_scope; changed_files retain actual paths, no broadened directory ownership. Review 1 corrected chart constants; review 2 preserved compact absolute/active metric authority, terminal readback and bounded selected-loop state. DDL/DML, dependency install, runtime process control=noop."
+      "note": "Read-only UI performance scope only. Exact Next.js bracket paths use fnmatch literal bracket escaping in allowed_write_scope; changed_files retain actual paths, no broadened directory ownership. Review 1 corrected chart constants; review 2 preserved compact absolute/active metric authority, terminal readback and bounded selected-loop state. DDL/DML, dependency install, runtime process control=noop.",
+      "timestamp": "2026-10-20T05:33:52Z"
     },
     {
       "action": "final_compatibility_review",
       "actor": "codex",
-      "timestamp": "2026-10-20T05:42:32Z",
-      "note": "Round 3 retained full candidate-promotion snapshots for collapsed loops, strict failed refresh backoff and new-task first-page visibility. System log reads bounded to 1 MiB with explicit truncation. Historical tasks remain manual-read only. No service/experiment control or production writes; whole-page runtime performance remains delegated, not claimed measured."
+      "note": "Round 3 retained full candidate-promotion snapshots for collapsed loops, strict failed refresh backoff and new-task first-page visibility. System log reads bounded to 1 MiB with explicit truncation. Historical tasks remain manual-read only. No service/experiment control or production writes; whole-page runtime performance remains delegated, not claimed measured.",
+      "timestamp": "2026-10-20T05:42:32Z"
     }
   ],
   "evidence_uris": [],
   "expected": "Only executing tasks refresh while visible; terminal history has no timer reads; retain all metrics on demand.",
   "file_scope_contract": {
-    "added_files": [
-      "frontend/src/app/quantevolver/components/read-cache.ts",
-      "frontend/src/app/quantevolver/components/use-active-refresh.ts",
-      "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
-      "frontend/tests/qe/qe-read-performance.spec.ts",
-      "backend/tests/quantevolver/test_qe_ui_active_reads.py"
-    ],
-    "changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2012-qe-evolution-ui-polls-terminal-history-and-eagerly-loads-all-loop-artifa.json",
+    "actual_changed_files": [
       "backend/routers/multi_alpha.py",
       "backend/routers/quantevolver_evolution.py",
       "backend/services/multi_alpha/combine_ui_adapter.py",
       "backend/services/quantevolver/payload_summary.py",
       "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/quantevolver/test_qe_ui_active_reads.py",
       "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
       "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
       "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
       "frontend/src/app/quantevolver/components/charts/IcSeriesChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
       "frontend/src/app/quantevolver/components/charts/LossCurveChart.tsx",
       "frontend/src/app/quantevolver/components/charts/MetricsTrajectoryChart.tsx",
       "frontend/src/app/quantevolver/components/charts/ReturnCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/read-cache.ts",
+      "frontend/src/app/quantevolver/components/use-active-refresh.ts",
       "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
       "frontend/src/app/quantevolver/evolution/components/LogsPanel.tsx",
       "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx",
@@ -94,13 +110,46 @@
       "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx",
       "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
       "frontend/tests/qe/qe-evolution-read-only.spec.ts",
-      "backend/tests/quantevolver/test_qe_ui_active_reads.py",
-      "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
+      "frontend/tests/qe/qe-read-performance.spec.ts",
+      "tests/aistock_validation/bugs/20261020_BUG-2012-qe-evolution-ui-polls-terminal-history-and-eagerly-loads-all-loop-artifa.json"
+    ],
+    "added_files": [
       "frontend/src/app/quantevolver/components/read-cache.ts",
       "frontend/src/app/quantevolver/components/use-active-refresh.ts",
-      "frontend/tests/qe/qe-read-performance.spec.ts"
+      "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
+      "frontend/tests/qe/qe-read-performance.spec.ts",
+      "backend/tests/quantevolver/test_qe_ui_active_reads.py"
     ],
-    "changed_files_source": "actual_task_diff",
+    "changed_files": [
+      "backend/routers/multi_alpha.py",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/multi_alpha/combine_ui_adapter.py",
+      "backend/services/quantevolver/payload_summary.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/tests/quantevolver/test_qe_ui_active_reads.py",
+      "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
+      "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
+      "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/IcSeriesChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
+      "frontend/src/app/quantevolver/components/charts/LossCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/MetricsTrajectoryChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/ReturnCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/read-cache.ts",
+      "frontend/src/app/quantevolver/components/use-active-refresh.ts",
+      "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LogsPanel.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LoopMetricsComparison.tsx",
+      "frontend/src/app/quantevolver/evolution/page.tsx",
+      "frontend/src/app/quantevolver/multi-alpha/combine-backtest/[taskKey]/page.tsx",
+      "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx",
+      "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
+      "frontend/tests/qe/qe-evolution-read-only.spec.ts",
+      "frontend/tests/qe/qe-read-performance.spec.ts",
+      "tests/aistock_validation/bugs/20261020_BUG-2012-qe-evolution-ui-polls-terminal-history-and-eagerly-loads-all-loop-artifa.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "frontend/src/app/quantevolver/evolution/page.tsx",
@@ -582,23 +631,28 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/status?task_ids=__bug2012_missing_probe__",
     "fresh_process_evidence": [
       "Fresh Python pytest process: 9 targeted tests PASS, including both FastAPI route contracts with in-memory repositories; no DB/server startup or writes.",
-      "Browser-only React harness: 60s minimum, no overlap, hidden-page pause, terminal stop and exponential backoff PASS; no user service or experiment process touched."
+      "Browser-only React harness: 60s minimum, no overlap, hidden-page pause, terminal stop and exponential backoff PASS; no user service or experiment process touched.",
+      "Fresh isolated pytest process: test_qe_ui_active_reads.py 10 passed, including TestClient status route ordering and bounded log read. Browser harness of actual refresh hook passed terminal/hidden/no-overlap/backoff contracts. No production service or experiment control."
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/quantevolver/evolution/tasks/status?task_ids=__bug2012_missing_probe__"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -778,25 +832,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "design_compliance_review": {
-    "no_simplified_delivery": "Active-only refresh, pagination, per-loop reads, log isolation and lazy basic Plotly delivered; no experimental/business code changed.",
-    "no_silent_errors": "Read errors shown with last successful snapshot; missing task IDs explicit; no zero-fill for absent metrics.",
-    "no_business_logic_change": "Full payload endpoints and archive/promote actions retained; absolute Sharpe distinct from active IR; compact projection retains legacy holdings derivation.",
-    "no_unapproved_gates": "No new experiment, approval, dependency or data gate."
-  },
-  "deferred_nightly_verification": {
-    "required": true,
-    "modules": [
-      "qe.auto_evolution",
-      "qe_read",
-      "qe_archive"
-    ],
-    "plans": [
-      "qe_read_l3",
-      "qe_experiment_registry_ui",
-      "qe_archive_backend"
-    ],
-    "scope": "Deduplicated full UI journeys, performance profiling and archive business regression; no user service control."
   }
 }
