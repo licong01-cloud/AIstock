@@ -1978,7 +1978,20 @@ def _prepare_legacy_bin_patch(
     month_start = pit.cutoff.replace(day=1)
     if prefix.cutoff >= month_start:
         raise CandidateBuildStageError("legacy month tail cutoff does not advance")
-    codes = tuple(sorted({span.ts_code for span in pit.spans if span.eligible_start <= pit.cutoff and span.eligible_end >= month_start}))
+    from .monthly_quote_population import observed_quote_days
+
+    known_codes = frozenset(span.ts_code for span in pit.spans)
+    quote_days = observed_quote_days(
+        _merged_rows(source, component, "kline_daily_raw", staging=invocation.staging_root,
+                     key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
+                     checkpoint=checkpoint, date_ranges=((month_start, pit.cutoff),),
+                     instruments=tuple(sorted(known_codes))),
+        known_codes=known_codes,
+        trading_days=tuple(day for day in source.trading_days() if month_start <= day <= pit.cutoff),
+    )
+    codes = tuple(sorted({span.ts_code for span in pit.spans
+                          if span.eligible_start <= pit.cutoff and span.eligible_end >= month_start}
+                         | {code for code, _ in quote_days}))
     anchors = read_legacy_qfq_anchors(prefix, dataset=dataset, instruments=codes, checkpoint=checkpoint)
     seeds: dict[str, float] = {}
     bases: dict[str, tuple[float, float]] = {}
@@ -2033,7 +2046,7 @@ def _prepare_legacy_bin_patch(
         toolchain=toolchain, baseline_candidate_root=prefix.root, baseline_sealed={},
         date_ranges=((month_start, pit.cutoff),), stock_codes=codes,
         index_codes=benchmark_codes, output_root=csv_root,
-        seed_from_baseline=False, initial_adj_factors=seeds, checkpoint=checkpoint,
+        seed_from_baseline=False, initial_adj_factors=seeds, quote_days=quote_days, checkpoint=checkpoint,
     )
     frequency = "day" if dataset == "daily_bin" else "1min"
     key = "day_meta_export" if dataset == "daily_bin" else "minute_meta_export"
@@ -2659,6 +2672,7 @@ def _prepare_bin_patch_phase(
     seed_from_baseline: bool,
     checkpoint: Callable[[], None],
     initial_adj_factors: Mapping[str, float] | None = None,
+    quote_days: tuple[tuple[str, date], ...] = (),
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
     ranges = tuple(date_ranges)
     selected_days = tuple(
@@ -2688,6 +2702,7 @@ def _prepare_bin_patch_phase(
         qfq_denominators=source.qfq_authority,
         instrument_filter=(codes or None),
         initial_adj_factors=seeds,
+        quote_days=quote_days,
     )
     metrics = CanonicalStockTransformMetrics(dataset)
     merge_metrics: dict[str, ExternalOrderedRowsMetrics] = {}
@@ -2734,6 +2749,7 @@ def _prepare_bin_patch_phase(
                 date_ranges=ranges,
                 instruments=codes,
                 metrics=source_metrics("stk_limit"),
+                quote_days=quote_days,
             ),
             suspend_rows=_merged_rows(
                 source,
@@ -2798,6 +2814,7 @@ def _prepare_bin_patch_phase(
                 date_ranges=ranges,
                 instruments=codes,
                 metrics=source_metrics("stk_limit"),
+                quote_days=quote_days,
             ),
             suspend_rows=_merged_rows(
                 source,
@@ -4106,6 +4123,7 @@ def _merged_rows(
     date_ranges: Sequence[tuple[date, date]] = (),
     instruments: Sequence[str] = (),
     metrics: ExternalOrderedRowsMetrics | None = None,
+    quote_days: tuple[tuple[str, date], ...] = (),
 ) -> Iterable[Mapping[str, Any]]:
     spool = staging / ".merge_spool" / component.value / dataset
     spool.mkdir(parents=True, exist_ok=False)
@@ -4116,6 +4134,7 @@ def _merged_rows(
             dataset,
             date_ranges=date_ranges,
             instruments=instruments,
+            **({"quote_days": quote_days} if quote_days else {}),
         )
         if date_ranges or instruments
         else source.ordered_partitions(component, dataset)

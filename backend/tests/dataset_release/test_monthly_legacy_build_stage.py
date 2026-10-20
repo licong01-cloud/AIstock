@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 import hashlib
@@ -13,6 +14,9 @@ import pytest
 import backend.services.dataset_release.build_stage as stages
 from backend.services.dataset_release.canonical import canonical_json_bytes
 from backend.services.dataset_release.canonical_stock_transformer import build_qfq_denominator_authority
+from backend.services.dataset_release.canonical_stock_transformer import CanonicalStockTransformError, CanonicalStockTransformSpec, _TransformContext
+from backend.services.dataset_release.artifact_ready_build_source import _filter_stk_limit_rows_to_pit
+from backend.services.dataset_release.monthly_quote_population import observed_quote_days
 from backend.services.dataset_release.cas_store import CASStore
 from backend.services.dataset_release.control_store import ControlStore
 from backend.services.dataset_release.contracts import Component, ComponentAction
@@ -119,6 +123,29 @@ def test_real_month_prepare_generates_native_operation_without_old_csv_lineage(t
     assert len(rows) == 1 and float(rows[0]["close"]) == 6.0
     assert all(start.year == 2026 and start.month == 9 for name, ranges, _ in calls if name != "adj_factor" for start, _ in ranges)
     assert not (invocation.staging_root / "daily_bin").exists()
+
+
+@pytest.mark.parametrize("dataset", ["daily_bin", "minute_bin"])
+def test_month_quote_tail_survives_exit_from_buy_eligibility(tmp_path, dataset):
+    invocation, source, pit, toolchain, _, data, _ = _setup(tmp_path, dataset=dataset)
+    # Real September quotes must remain readable for an August holding. This
+    # does NOT extend its PIT buy interval into September.
+    pit = replace(pit, spans=(replace(pit.spans[0], eligible_end=date(2026, 8, 31)),))
+    source.qfq_authority = build_qfq_denominator_authority(
+        data["adj_factor"], pit_snapshot=pit, cutoff=pit.cutoff,
+    )
+    prepared = stages._prepare_bin_patch(
+        invocation, source=source, pit=pit, dataset=dataset,
+        toolchain=toolchain, checkpoint=lambda: None,
+    )
+    payload = invocation.cas.get_json(prepared["qlib_dump_operations"][0]["preparation_ref"])
+    refs = [item for item in payload["csv_refs"] if Path(item["id"]).stem == "000001.SZ"]
+    assert len(refs) == 1
+    with (invocation.staging_root / refs[0]["id"]).open(encoding="utf-8", newline="") as stream:
+        rows = list(csv.DictReader(stream))
+    assert len(rows) == (240 if dataset == "minute_bin" else 1)
+    assert all(float(row["close"]) == 6.0 for row in rows)
+    assert pit.spans[0].eligible_end == date(2026, 8, 31)
 
 
 def test_month_prepare_appends_all_declared_index_csv_not_only_csi300(tmp_path):
@@ -455,3 +482,37 @@ def test_prev_close_correction_requires_closed_exact_provider_sources(tmp_path, 
         assert group["facts"] == actual["facts"] and len(group["sources"]) == 2  # One fact, not double accumulation.
         with pytest.raises(ValueError, match="nested"):
             correction.capture_approved_corrections({"repairs": [{"repairs": []}]}, repair_root=root, cutoff=date(2026, 9, 30))
+
+
+def test_quote_population_is_exact_observed_trading_days_not_catalog_extension():
+    day = date(2026, 9, 1)
+    fact = dict(ts_code="000001.SZ", trade_date=day, open_li=10, high_li=10,
+                low_li=10, close_li=10, volume_hand=1, amount_li=1)
+    rows = [fact, fact, {**fact, "trade_date": date(2026, 9, 2), "volume_hand": 0, "amount_li": 0},
+            {**fact, "ts_code": "000002.SZ"}, {**fact, "trade_date": date(2026, 10, 1)}]
+    assert observed_quote_days(rows, known_codes=frozenset({"000001.SZ"}),
+                               trading_days=(day, date(2026, 9, 2))) == (("000001.SZ", day),)
+
+
+def test_quote_keys_keep_limit_fact_without_changing_buy_spans(tmp_path):
+    _, source, pit, _, _, _, _ = _setup(tmp_path)
+    day = date(2026, 9, 1)
+    pit = replace(pit, spans=(replace(pit.spans[0], eligible_end=date(2026, 8, 31)),))
+    fact = dict(ts_code="000001.SZ", trade_date=day, pre_close=6, up_limit=6.6, down_limit=5.4)
+    assert list(_filter_stk_limit_rows_to_pit([fact], pit)) == []
+    assert list(_filter_stk_limit_rows_to_pit([fact], pit, quote_days=(("000001.SZ", day),))) == [fact]
+    spec = CanonicalStockTransformSpec(pit.cutoff, pit, (day,), source.qfq_authority,
+                                      quote_days=(("000001.SZ", day),))
+    assert list(_TransformContext(spec).expected_code_days()) == [("000001.SZ", day)]
+    assert pit.spans[0].eligible_end < day
+    for keys in [(("000002.SZ", day),), (("000001.SZ", date(2026, 10, 1)),),
+                 (("000001.SZ", day), ("000001.SZ", day))]:
+        with pytest.raises(CanonicalStockTransformError, match="quote days"):
+            replace(spec, quote_days=keys)
+
+
+def test_stock_without_observed_quote_is_not_extended_after_buy_exit(tmp_path):
+    _, source, pit, _, _, _, _ = _setup(tmp_path)
+    pit = replace(pit, spans=(replace(pit.spans[0], eligible_end=date(2026, 8, 31)),))
+    spec = CanonicalStockTransformSpec(pit.cutoff, pit, (pit.cutoff,), source.qfq_authority)
+    assert list(_TransformContext(spec).expected_code_days()) == []

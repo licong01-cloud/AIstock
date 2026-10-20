@@ -233,6 +233,7 @@ class CanonicalStockTransformSpec:
     qfq_denominators: QfqDenominatorAuthority
     instrument_filter: tuple[str, ...] | None = None
     initial_adj_factors: Mapping[str, float] | None = None
+    quote_days: tuple[tuple[str, date], ...] = ()
 
     def __post_init__(self) -> None:
         if self.pit_snapshot.cutoff != self.cutoff:
@@ -259,6 +260,12 @@ class CanonicalStockTransformSpec:
             selected = tuple(sorted(set(self.instrument_filter)))
             if selected != self.instrument_filter or not selected or not set(selected).issubset(codes):
                 raise CanonicalStockTransformError("transform instrument filter is invalid")
+        if (tuple(sorted(set(self.quote_days))) != self.quote_days or any(
+            code not in codes or day not in days
+            or (self.instrument_filter is not None and code not in self.instrument_filter)
+            for code, day in self.quote_days
+        )):
+            raise CanonicalStockTransformError("observed quote days differ from frozen population/calendar")
         seeds = dict(self.initial_adj_factors or {})
         if not set(seeds).issubset(codes) or any(
             not math.isfinite(float(value)) or float(value) <= 0 for value in seeds.values()
@@ -278,6 +285,7 @@ class CanonicalStockTransformSpec:
                 "initial_adj_factors": {
                     code: float(value) for code, value in sorted((self.initial_adj_factors or {}).items())
                 },
+                "quote_days": self.quote_days,
                 "qlib_stock_schema_digest": qlib_stock_schema_digest(),
             },
         )
@@ -680,6 +688,10 @@ class _TransformContext:
         self.codes = frozenset(spec.instrument_filter) if spec.instrument_filter is not None else all_codes
         self._trading_days = spec.trading_days
         self._trading_day_set = frozenset(spec.trading_days)
+        self._quote_days = frozenset(spec.quote_days)
+        self._quote_days_by_code: dict[str, set[date]] = {}
+        for code, day in spec.quote_days:
+            self._quote_days_by_code.setdefault(code, set()).add(day)
         spans: dict[str, list[tuple[date, date]]] = {}
         for span in spec.pit_snapshot.spans:
             if span.ts_code not in self.codes:
@@ -690,15 +702,19 @@ class _TransformContext:
     def is_expected_day(self, code: str, observed: date) -> bool:
         if code not in self.codes or observed not in self._trading_day_set:
             return False
-        return any(start <= observed <= end for start, end in self._spans[code])
+        return (code, observed) in self._quote_days or any(
+            start <= observed <= end for start, end in self._spans[code]
+        )
 
     def expected_code_days(self) -> Iterator[tuple[str, date]]:
         for code in sorted(self._spans):
+            days = set(self._quote_days_by_code.get(code, ()))
             for start, end in self._spans[code]:
                 left = bisect_left(self._trading_days, start)
                 right = bisect_right(self._trading_days, end)
-                for observed in self._trading_days[left:right]:
-                    yield code, observed
+                days.update(self._trading_days[left:right])
+            for observed in sorted(days):
+                yield code, observed
 
 
 class _Cursor:
