@@ -16,22 +16,16 @@
   ],
   "created_at": "2026-10-20T19:27:01.097378Z",
   "description": "Four verified days remain unresolved in current shared projection.",
-  "root_cause": "Three exact full-day disclosure entries were absent; a fourth day was absent and its provider S/09:30-09:30 opening marker could not be reconciled with the verified full-day disclosure. The marker alone remains unresolved.",
   "design_compliance_review": {
-    "standard": "DESIGN-COMPLIANCE-001",
-    "scope": "Existing shared suspension projection and exact-key authority, no new framework or consumer rule",
     "all_planned_files_only": true,
-    "raw_provider_events_unchanged": true,
-    "old_frozen_sources_do_not_borrow_current_authority": true,
     "no_price_or_publication_time_fabrication": true,
+    "old_frozen_sources_do_not_borrow_current_authority": true,
     "production_dml_or_ddl": false,
-    "result": "passed_for_source_delivery_runtime_pending_user_restart"
+    "raw_provider_events_unchanged": true,
+    "result": "passed_for_source_delivery_runtime_pending_user_restart",
+    "scope": "Existing shared suspension projection and exact-key authority, no new framework or consumer rule",
+    "standard": "DESIGN-COMPLIANCE-001"
   },
-  "review_rounds": [
-    {"round":1,"kind":"self_review","focus":"Exact-key authority and counterexamples","result":"RED reproduced four unresolved days; positive intraday intervals, duplicate S events and R opening markers remain unresolved."},
-    {"round":2,"kind":"self_review","focus":"Malformed field types and historical SOURCE isolation","result":"Used tuple membership so an unexpected list timing cannot raise TypeError; tested malformed value and empty frozen authority."},
-    {"round":3,"kind":"self_review","focus":"Actual source bytes and database interpretation","result":"Four source PDFs matched exact SHA/size; production readback and DEV transactional trial passed; rollback verified; no committed database write."}
-  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -45,13 +39,20 @@
   ],
   "expected": "Daily and monthly shared projection consumes four verified facts; only exact full-day authority may resolve the opening sentinel; genuine intraday contradiction remains unresolved.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/data_service/suspension_day_authority.py",
+      "backend/data_service/suspension_day_authority_v1.json",
+      "backend/tests/services/test_suspend_d_coverage.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2045-verified-full-day-suspension-facts-cannot-resolve-provider-opening-senti.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/data_service/suspension_day_authority.py",
       "backend/data_service/suspension_day_authority_v1.json",
-      "backend/tests/services/test_suspend_d_coverage.py"
+      "backend/tests/services/test_suspend_d_coverage.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2045-verified-full-day-suspension-facts-cannot-resolve-provider-opening-senti.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/data_service/suspension_day_authority.py",
@@ -123,8 +124,8 @@
   },
   "first_seen_at": "2026-10-20T19:27:01.097378Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "4b9396d469d20cb64ccc3f3665e4c892229d79b5",
+  "fixed_at": "2026-10-20T19:41:20Z",
   "github_issue_number": 6515,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6515",
   "last_seen_at": "2026-10-20T19:27:01.097378Z",
@@ -132,6 +133,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6516",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -141,17 +143,41 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_rounds": [
+    {
+      "focus": "Exact-key authority and counterexamples",
+      "kind": "self_review",
+      "result": "RED reproduced four unresolved days; positive intraday intervals, duplicate S events and R opening markers remain unresolved.",
+      "round": 1
+    },
+    {
+      "focus": "Malformed field types and historical SOURCE isolation",
+      "kind": "self_review",
+      "result": "Used tuple membership so an unexpected list timing cannot raise TypeError; tested malformed value and empty frozen authority.",
+      "round": 2
+    },
+    {
+      "focus": "Actual source bytes and database interpretation",
+      "kind": "self_review",
+      "result": "Four source PDFs matched exact SHA/size; production readback and DEV transactional trial passed; rollback verified; no committed database write.",
+      "round": 3
+    }
+  ],
   "risk_area": "bug",
+  "root_cause": "Three exact full-day disclosure entries were absent; a fourth day was absent and its provider S/09:30-09:30 opening marker could not be reconciled with the verified full-day disclosure. The marker alone remains unresolved.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "Fresh Python process ran X:/AIstock_dataset_candidates/data_repair_staging/data-closure-20261021/verify_suspension_fix.py; four exact official PDF hashes/sizes matched; production readback and existing DEV rollback trial passed; receipt SHA256 6bc53880604dde7205c6f6c3fff0b8fa187cefd15eca81e38ffd452440db074b; no committed database write, candidate/profile write or service control"
+    ],
     "health_ref": "http://127.0.0.1:8001/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "fresh_process_evidence": ["Fresh Python process ran X:/AIstock_dataset_candidates/data_repair_staging/data-closure-20261021/verify_suspension_fix.py; four exact official PDF hashes/sizes matched; production readback and existing DEV rollback trial passed; receipt SHA256 6bc53880604dde7205c6f6c3fff0b8fa187cefd15eca81e38ffd452440db074b; no committed database write, candidate/profile write or service control"],
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -163,7 +189,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2045",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "edd79c9ad1713fa1",
+    "recorded_at": "2026-10-20T19:41:57.302649Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7b231fe14f5654d55780bf26a3433011f6223df4",
+    "source_merge_commit": "4b9396d469d20cb64ccc3f3665e4c892229d79b5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6516",
+    "validation_evidence": [
+      "validation-receipt: id=10d125209ea3d439 commit=7b231fe14f5654d55780bf26a3433011f6223df4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=07612a4ebd97858c commit=7b231fe14f5654d55780bf26a3433011f6223df4 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/services/test_suspend_d_coverage.py -q` result=`passed`"
+    ],
+    "validation_evidence_digest": "62133128e66a9027560b36f38af907add9fe4d42858351fb9f3f257fbf59b258"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -172,6 +220,10 @@
     "fingerprint": "74e30b986f94d581552aeadf",
     "source_event_id": "FE-20261020-74e30b986f94"
   },
+  "validation_evidence": [
+    "validation-receipt: id=10d125209ea3d439 commit=7b231fe14f5654d55780bf26a3433011f6223df4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=07612a4ebd97858c commit=7b231fe14f5654d55780bf26a3433011f6223df4 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/services/test_suspend_d_coverage.py -q` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
