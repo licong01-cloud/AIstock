@@ -97,6 +97,8 @@ def test_active_discovery_summary_cli_outputs_compact_markdown(tmp_path: Path, c
     assert exit_code == 0
     assert "## Active Discovery" in output
     assert "- candidates: `1`" in output
+    assert "- active_discovery: `warning`" in output
+    assert "- executed_plans: `unknown`" in output
 
 
 @pytest.mark.parametrize("case", ["bound", "missing", "wrong_run", "wrong_head"])

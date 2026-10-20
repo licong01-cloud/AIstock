@@ -58,14 +58,14 @@ def build_summary(candidate_manifest: Path | None, discovery_manifest: Path | No
     rotation = candidate.get("rotation") if isinstance(candidate.get("rotation"), dict) else {}
     if not rotation and isinstance(discovery.get("rotation"), dict):
         rotation = discovery["rotation"]
-    gate = candidate.get("workflow_gate") or ("warning" if not candidate else "ready")
+    gate = "warning" if not candidate or not discovery else candidate.get("workflow_gate") or "ready"
     no_candidate_reason = summary.get("no_candidate_reason") or discovery_summary.get("no_candidate_reason") or "n/a"
     result = {
         "workflow_gate": gate,
         "rotation_focus": rotation.get("focus_key") or "n/a",
-        "executed_plans": discovery_summary.get("executed_count", 0),
-        "anomalies": discovery_summary.get("anomaly_count", 0),
-        "candidates": summary.get("candidate_count", 0),
+        "executed_plans": discovery_summary.get("executed_count"),
+        "anomalies": discovery_summary.get("anomaly_count"),
+        "candidates": summary.get("candidate_count"),
         "high_value_candidates": _first_int(summary, effectiveness, value_metrics, key="high_value_candidate_count")
         or _first_int(summary, effectiveness, value_metrics, key="high_value_candidates"),
         "issue_payload_drafts": summary.get("issue_payload_ready_count", 0),
