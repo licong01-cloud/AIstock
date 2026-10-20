@@ -1,6 +1,8 @@
 # Advisory / LocalSIM 共享输入来源计划 F2 详细设计
 
-日期：2026-10-19；接续更新：2026-10-20。分类 F2/T3；用户批准实现三种来源模式，源码限 Advisory ownership。继承 `advisory_shared_selection_signal_kernel_detailed_design_20261014.md`、`localsim_shared_frozen_file_inputs_20261017.md` 及 `selection_provider_clocks_v1`，不复制其算法。当前：已修正政策身份与物理快照身份的混淆，并将冻结发布原生身份接入文件推理；66项定向回归、LSTM/TCN真实文件推理对照及原生文件恢复通过。新增对既存原生评分的真实 `SelectionSignalKernel.run` 文件过滤/Top50对照通过；没有重跑推理或冒充LocalSIM生产验收。数据库 canonical 活动指针本次只读仍为待迁移旧政策，跨来源连续日及数据库原生全链路未验证，整体 F2 尚未通过，不宣称两端可立即运行接续或可合入。
+日期：2026-10-19；接续更新：2026-10-20。分类 F2/T3；用户批准实现三种来源模式，源码限 Advisory ownership。继承 `advisory_shared_selection_signal_kernel_detailed_design_20261014.md`、`localsim_shared_frozen_file_inputs_20261017.md` 及 `selection_provider_clocks_v1`，不复制其算法。
+
+当前进度（R15，覆盖下文较早时点）：数据 owner 已完成全局 canonical PIT 激活，本窗口 fresh-process 独立读回 `ACTIVE_CANONICAL`、generation=1、统一 key/rule，并确认 5,346只股票、5,665个区间、无效/重叠/规则混用均为0。原外部指针阻断已解除，现有 v18 文件不需重建。同步最新主线后的66项定向回归、静态及ownership检查通过；原生 LSTM/TCN 数据库基线、文件→数据库跨界推理、真实选股内核及精确恢复全部通过，F-336已闭合。源码交付进入PR最终检查；源码合入、运行加载和LocalSIM私有接入以各自交付/验收结果为准，不因共享接口通过而自动宣称两端生产激活。本窗口未重启或运行生产回放。
 
 ## Background / 背景
 
@@ -66,9 +68,9 @@
 | F-331 | input_source_plan.py；batch_inference_provider.py | backend/tests/advisory_historical_range/test_input_source_plan.py；test_batch_inference_provider.py | PASS | none |
 | F-332 | input_source_plan.py | backend/tests/advisory_historical_range/test_input_source_plan.py | PASS | none |
 | F-333 | inference_inputs.py / CLI / 原生 kernel | backend/tests/advisory_historical_range/test_input_source_plan.py；test_selection_signal_kernel.py | PASS | none |
-| F-334 | input_source_plan.py / 原生 reader | backend/tests/advisory_historical_range/test_input_source_plan.py；真实readiness.json | PASS | none |
+| F-334 | input_source_plan.py / 原生 reader | backend/tests/advisory_historical_range/test_input_source_plan.py；artifact: X:/AIstock_temp/ADVISORY/shared-source-plan-20261019/native-r15/source.json | PASS | none |
 | F-335 | CLI / kernel / composition.py | backend/tests/advisory_historical_range/test_input_source_plan.py；test_strategy_package_live_inference.py | PASS | none |
-| F-336 | 原生只读验证 | artifact: X:/AIstock_temp/ADVISORY/shared-source-plan-20261019/native-r4/progress.json；native-r4/lstm-resume.json；native-r14/file-kernel.json；native-r14/runtime-readback.json | BLOCKED | 文件推理/恢复及既存原生评分的文件过滤/Top50对照通过；canonical DB活动指针仍旧政策待迁移，真实跨界连续日及数据库原生全链路未验证，不得升级证据 |
+| F-336 | 原生只读验证 | artifact: X:/AIstock_temp/ADVISORY/shared-source-plan-20261019/native-r15/progress.json；native-r15/kernel/receipt.json；native-r15/retry.json | PASS | none |
 | F-337 | 本文接入交付 | artifact: docs/architecture/advisory_shared_input_source_plan_v1_f2_design_20261019.md | PASS | none |
 
 ## Rollout / Rollback / Production Gates
@@ -87,7 +89,7 @@
 
 第三轮时钟/兼容自审修复：停牌覆盖按 D、分钟按 T；纯文件模式不借 live DB pointer 补 PIT；保留旧单源请求；exact retry 检测 DB 输入漂移而不覆盖已完成日。所有修改仍限精确 Advisory 文件，不宣称独立外审。
 
-DESIGN-COMPLIANCE-001 四项：①未简化交付，F-336明确BLOCKED，整体不得报完成；②已核对显式失败/无回退/原日不覆盖/UNKNOWN保留，定向测试通过；③唯一原生评分、过滤与时钟不变，新增 opt-in 来源合同及实际范围已同步本文；④控制只实现用户要求的政策/内容/日期一致性，无包白名单、再审批、训练准入或私增策略门禁。source merge、runtime loading、LocalSIM 验收均未完成，不能互相替代。
+DESIGN-COMPLIANCE-001 四项（R15最终复核）：①按登记范围完整交付公共接口、CLI、荐股opt-in适配、直接回归和真实LSTM/TCN跨界/内核/恢复证据，F-331–337均PASS；不把未包含的业务API默认迁移或LocalSIM私有适配宣称已实现。②显式失败/无异常回退/旧产物不覆盖/UNKNOWN保留，漂移及失败恢复回归通过；原生exact retry确认原评分及commit字节不变。③唯一原生评分、过滤、递补、TopK及C/D/T不变；新增来源合同、同日session生命周期修复和文档示例修订已同步设计。④仅实现用户要求的政策/内容/日期一致性，无包白名单、再审批、训练准入或私增策略门禁。source merge、runtime loading、LocalSIM接续分别报告，不能互相替代；多轮审核是同窗口自审，不冒称独立外审。
 
 ## 公共接入示例 / LocalSIM handoff
 
@@ -95,6 +97,7 @@ DESIGN-COMPLIANCE-001 四项：①未简化交付，F-336明确BLOCKED，整体�
 
 ```python
 from contextlib import ExitStack
+from backend.inference_engine import InferenceEngine
 from backend.services.advisory_historical_range.input_source_plan import (
     build_source_plan, load_source_plan, resolve_day_source, create_input_session,
 )
@@ -115,9 +118,11 @@ with ExitStack() as stack:
         max_bytes=input_budget, root_override=verified_same_release_node_locator,
     )
     stack.callback(inputs.close)
-    engine = InferenceEngine(input_session=inputs, ...)  # 原模型/因子/processor
+    engine = InferenceEngine(input_session=inputs, temp_root=consumer_temp_root)
     # 原 run_inference(... persist_signals=False, universe_ensure=False ...)；
-    # receipt.input_context.source_plan_receipt 带真实输入摘要。
+    # 沿用原模型/因子/processor、只读参数和截止日，不在此重建请求。
+    # 成功后 engine.last_inference_receipt["input_context"]["source_plan_receipt"]
+    # 带真实输入摘要；旧的返回值合同不变。
 ```
 
 CLI：原 `--historical-plan <本次子块>` 增加 `--source-plan-file <全任务冻结计划>`、`--run-id <本消费者run>`、`--input-revision <plan_hash>`；仍需 `--historical-read-only`、X 盘 `--temp-root`。`--dataset-root` 只改同发布的节点 locator，不改变内容身份；不得同时传旧 `--dataset-binding`。节点 COMPLETE 仅表示请求子块完成，不代表完整账户/任务完成。
@@ -135,9 +140,9 @@ LocalSIM owner 需接上自己的任务持久化与来源路由：文件日用�
 | 来源 | universe_key | rule_version | 覆盖 |
 |---|---|---|---|
 | 活动文件发布 | aistock_equity_pit_canonical_v2 | shsz_a_252td_st_delist_asof_v2 | 2018-08-01..2026-08-31；分钟自2024-01-02，行业成员自2024-07-01 |
-| 原生运行指针只读查询 | shsz_st_pit_active_v1 | st_pub_next_trade_restore_active_l_v1 | 2018-08-01..2026-10-19 |
+| 首轮原生运行指针（历史，非当前） | shsz_st_pit_active_v1 | st_pub_next_trade_restore_active_l_v1 | 2018-08-01..2026-10-19 |
 
-真实 LSTM/TCN 原 manifest 未声明另一显式推理 PIT 身份，当前走原生指针。两种含文件模式均明确 `SOURCE_PIT_POLICY_MISMATCH`；没有篡改原政策、补成员或推进到假评分。旧代表 workspace 的首轮 node probe 未传既有公共 safe_artifact_roots 参数，因此在资产路径检查退出，非模型/数据错误；已用原公共 provider 的参数登记该只读 workspace 和原资产根重新验证，无生产白名单或策略包特例。
+首轮真实 LSTM/TCN 原 manifest 未声明另一显式推理 PIT 身份，当时走原生指针。两种含文件模式均明确 `SOURCE_PIT_POLICY_MISMATCH`；没有篡改原政策、补成员或推进到假评分。旧代表 workspace 的首轮 node probe 未传既有公共 safe_artifact_roots 参数，因此在资产路径检查退出，非模型/数据错误；已用原公共 provider 的参数登记该只读 workspace 和原资产根重新验证，无生产白名单或策略包特例。
 
 只读数据库原始推理对照（C=2025-12-31，D/T=2026-01-05；不调用生产回放，不训练）：
 
@@ -160,7 +165,7 @@ LSTM 实际模型窗口从2024-11-05开始，由原生 resolver 决定；没有�
 
 56项直接相关测试通过（source-plan、CLI、kernel、batch adapter），涵盖新增文件身份继承、不访问 live pointer、错误日期/成员/hash、DB身份冻结和coverage漂移。不是跨模块全量验收。R4真实文件验证使用同日、同政策、同成员的原单源入口与新计划入口，对照原LSTM/TCN，不再用legacy人口作为canonical基线。
 
-只读运行状态：`DEPLOYED_LEGACY_PENDING_MIGRATION`，generation=0。新主线明确要求数据owner完成授权canonical迁移后才能启用新在线任务。不能制造generation/envelope或由本窗口写库/激活；此项与文件推理可独立验证。LocalSIM owner仍需把自身任务创建/session/provider/分钟读入接到公共计划，源码合入、后端用户重启、LocalSIM接续分别验收。
+R11–R14期间只读运行状态：`DEPLOYED_LEGACY_PENDING_MIGRATION`，generation=0。当时新主线要求数据owner完成授权canonical迁移；R15该外部阻断已解除。不能制造generation/envelope或由本窗口写库/激活；此项与文件推理可独立验证。LocalSIM owner仍需把自身任务创建/session/provider/分钟读入接到公共计划，源码合入、后端用户重启、LocalSIM接续分别验收。
 
 R13最终验证：另8项文件输入/推理只读测试通过，本轮直接矩阵合计64项；Ruff、diff-check通过。精确11文件ownership全部mapped；L0无阻断，1项既有P2字符串join提示已审阅。源码提交 `6a149833dbc0a7ea597ed51b2b9f32e1f8b94ee2` 已推送PR #6356，其HEAD的CI verdict SUCCESS；PR仍DRAFT，F2校验仍拒绝未完成的F-336，未合入或清理工作树。
 
@@ -175,7 +180,7 @@ R13最终验证：另8项文件输入/推理只读测试通过，本轮直接矩
 
 LSTM原生CLI `--resume` 在全新进程28.34秒完成，resource_loads=0；原scores.json与commit.json字节hash不变。收据 `native-r4/lstm-resume.json`。该收据只证明文件来源原生恢复；数据库重读摘要/漂移仍由定向测试验证，真实DB续段未放行。
 
-剩余顺序：①数据owner交付真实canonical活动binding/coverage，不要求重建已有v18文件；②本窗口用新任务冻结同政策计划，验证文件最后日→数据库首日的完整历史窗口、原生TopK/资格及失败恢复；③LocalSIM owner接自身调度/分钟/provider/断点，复用公共计划而非另建选源算法。两端运行及用户重启状态独立报告，不能把本次文件推理通过替代这些步骤。
+接续顺序：①数据owner交付真实canonical活动binding/coverage（R15已完成，本窗口独立读回），不要求重建已有v18文件；②本窗口用新任务冻结同政策计划，验证文件最后日→数据库首日的完整历史窗口、原生TopK/资格及失败恢复；③LocalSIM owner接自身调度/分钟/provider/断点，复用公共计划而非另建选源算法。两端运行及用户重启状态独立报告，不能把文件推理通过替代这些步骤。
 
 ## R14 接续审阅范围（2026-10-20）
 
@@ -190,3 +195,33 @@ LSTM原生CLI `--resume` 在全新进程28.34秒完成，resource_loads=0；原s
 DESIGN-COMPLIANCE-001接续结论：①F-336保留BLOCKED，不把部分真实验证宣布为全量完成；②旧指针、不一致输入及漂移仍明确失败，不填值/回退/伪造状态；③原生模型、评分、过滤、递补、TopK和C/D/T不变，生命周期修复已同步设计；④没有新增策略准入、审批或人工门禁，仅遵守主线既有canonical身份合同。PR仍为草稿，源码合入、运行加载与LocalSIM接续均未验收。
 
 R14最终静态结果：11个精确文件ownership全部映射；Ruff与diff-check通过，L0无阻断，既有P2命令字符串join提示不涉及数据合并且未改变。F2校验仍因F-336未完成而明确FAIL，不把扫描/单测通过等同于F2通过。结束前再次以只读事务读回：DB权威generation=0、物理key=`shsz_st_pit_active_v1`、旧rule不变，声明覆盖2018-08-01至2026-10-19；这不是“行情数据缺失”结论，更不要求重建数据，只说明活动政策未切到canonical。现有草稿PR保存当前进展，等待owner完成既有激活边界后继续真实混合验证。
+
+## R15 canonical 跨界接续验收（2026-10-20）
+
+owner PR #6412 已合入并激活后，本窗口独立只读确认 `aistock_equity_pit_canonical_v2` / `shsz_a_252td_st_delist_asof_v2`、generation=1。同步主线 `e8fb5debe`，合并点 `100b0f430`；本轮推理期间全部12项执行源码内容hash不变，无模型权重、processor或原生算法变更。此前legacy状态及R1–R14测量仅保留为历史记录，不代表当前阻断，也不冒绑本轮收据。
+
+官方冻结发布注册23.29秒，文件binding与R4完全相同，复用原不可变文件基线，不重新推理或覆盖旧产物。计划 `6a6672873e164db369d0cd384ea43e6be6ea9e799e389b48342f6e53791793f4` 的边界由发布覆盖及交易日历解析：D/T=2026-08-31、C=08-28读文件；D/T=2026-09-01、C=08-31读数据库。两个真实包的manifest另与只读注册记录核对通过；包与模型名称仅是验收样本，不进入生产路由条件。
+
+| 模型/日期 | 实际来源 | 完整评分/人口/UNKNOWN | 原生历史起点 | 与同源单源基线 |
+|---|---|---|---|---|
+| LSTM / 08-31 | 文件 | 4917 / 4917 / 0 | 2025-07-02 | 完整评分、顺序、成员、UNKNOWN、实际输入摘要一致 |
+| TCN / 08-31 | 文件 | 4917 / 4917 / 0 | 2025-07-02 | 同上，全部一致 |
+| LSTM / 09-01 | 数据库 | 4911 / 4911 / 0 | 2025-07-03 | 同上，全部一致 |
+| TCN / 09-01 | 数据库 | 4911 / 4911 / 0 | 2025-07-03 | 同上，全部一致 |
+
+本轮数据库基线是同政策新进程原单源CLI；计划臂是在同一CLI进程中连续执行两日×两模型。首DB日完整原生窗口全部走既有DB reader，未拼接文件尾部，未缩短历史。文件与数据库是不同日期、不同人口，未要求两日数值相等；比较对象始终是同日期/同政策/同来源的基线。
+
+| 原生执行臂 | 请求数 | 端到端秒 | 真实进程峰值RSS KiB | 10秒采样磁盘最大KiB | 完成后产物字节 |
+|---|---:|---:|---:|---:|---:|
+| 新数据库单源基线 | 2 | 602.81 | 9928312 | 1645016 | 846049 |
+| 文件→数据库计划 | 4 | 1071.47 | 9277744 | 1974232 | 1690882 |
+
+两臂请求量不同且共享机器负载不同，以上是功能验收资源记录，不是冷/热缓存控制实验，不据此声明提速或性能回归。RSS来自原生`/usr/bin/time -v`，磁盘只是全程10秒采样的最大值，不是无遗漏瞬时峰值。模型/发布均原地只读复用，无大型资产复制，Windows及WSL临时路径全部X盘对应目录。
+
+`native-r15/kernel/receipt.json`：hash核对原生评分后，两模型×两日×两臂均实际进入原生artifact准备及`SelectionSignalKernel.run`，无持久化repository。完整原始顺序、Top50、UNKNOWN、成员及排除项全部一致；分别用原生参考价loader核对50只入选股，两臂真实价格及观测日一致、均不晚于C。停牌资格读取D，risk调用时钟C。政策显式为Top50、停牌过滤开启、HMM/risk关闭、行业黑名单空；不更改已有任务，不声称覆盖HMM开启场景。18.01秒是复用已验证评分的选股/参考价合同核对耗时，不是模型推理耗时。
+
+`native-r15/retry.json`：新进程以同一run、计划、代码和模型执行原生`--resume`，文件段重新核对冻结身份，数据库段重读完整原生窗口并逐项比对实际输入与评分。结果COMPLETE/PASS，977.34秒，峰值RSS9134428KiB；4份原scores与4份commit字节hash全部不变，未覆盖旧产物。DB恢复的实际重读成本是缺少不可变DB revision时的明确限制，不能据一次测量推导通用每日速度。
+
+R15第三轮交付复核还修正了接入示例中的Python调用语法，示例AST解析通过；没有改变数值源码。源码合入、后端运行加载、LocalSIM私有接入和生产接续仍是独立状态。本交付是可显式调用的新模式，不迁移旧任务，不包含业务API默认切换、LocalSIM账户或分钟行情适配，不提供模型收益证明。
+
+交付前再次同步主线`0f66abdcd`（仅继承owner月度probe及HMM训练资产登记修订），12项本次执行源码hash仍与真实验收一致。66项直接回归再次全部通过（12.53秒），F2校验7项/7行全部PASS、0警告；DESIGN-COMPLIANCE-001四项及精确11文件范围复核通过。后续PR新HEAD须完成自己的CI，历史绿灯不替代最终检查。
