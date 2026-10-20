@@ -181,7 +181,6 @@
   "github_issue_number": 6457,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6457",
   "implementation_review": {
-    "round_4": "Live read-only preflight exposed GBK/UTF-8 CIM output decoding; fixed both producer and reader to explicit UTF-8, added regression and reran successfully. Classified the new API lifecycle helper under platform.api so its existing direct CI plan actually executes it; no classifier exception added.",
     "design_compliance_001": {
       "no_business_drift": "passed: no business source, database, experiment or reload changes",
       "no_extra_approval_gate": "passed: same one-command operator entry; no new approval platform",
@@ -190,7 +189,8 @@
     },
     "round_1": "Reviewed pinned interpreter, Conda failure, PID/port ownership, DEV isolation and one shared console implementation; no service control performed.",
     "round_2": "Corrected TDX build receipt shape, early helper-process detection, compile error logs and bounded old-worker settling; added non-duplicating startup regressions.",
-    "round_3": "Corrected build timeout to preserve the active builder instead of killing it; verified Windows command quoting with spaces. Final targeted matrix and fresh-process read-only preflight required before PR."
+    "round_3": "Corrected build timeout to preserve the active builder instead of killing it; verified Windows command quoting with spaces. Final targeted matrix and fresh-process read-only preflight required before PR.",
+    "round_4": "Live read-only preflight exposed GBK/UTF-8 CIM output decoding; fixed both producer and reader to explicit UTF-8, added regression and reran successfully. Classified the new API lifecycle helper under platform.api so its existing direct CI plan actually executes it; no classifier exception added."
   },
   "last_seen_at": "2026-10-20T08:13:20.262212Z",
   "module": "platform.config",
@@ -214,7 +214,8 @@
     "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
     "database_readback_ref": "not_required",
     "fresh_process_evidence": [
-      "python -B fresh-process import scripts/start_ai_stock.py and canonical ROOT start(check=True) -> passed; no build, no logs or locks created, no services started"
+      "python -B fresh-process import scripts/start_ai_stock.py and canonical ROOT start(check=True) -> passed; no build, no logs or locks created, no services started",
+      "python -B fresh-process import scripts/start_ai_stock.py; ROOT=canonical F:/Dev/AIstock; start(check=True) -> passed; tdx/backend/frontend listening; no build, locks, logs or service startup"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
