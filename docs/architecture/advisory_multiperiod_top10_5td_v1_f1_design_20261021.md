@@ -2,7 +2,7 @@
 
 版本：v1.0；日期：2026-10-21；业务归属：Advisory / model_first。
 依据：荐股蓝图 v5.21 §6.3.4、§6.10、§16.0 的 B0–B3，不是旧 serial candidate 重试。
-状态：详细设计待交付；源码、研究结果、经济确认、角色激活分别验收。
+状态：设计PR #6512已合入c54f17053f9d1d4a475fd61f07db511f5ed452de；源码直接合同验证通过，真实研究待执行。经济确认、角色激活未发生。
 
 ## Background / Goal / Feature Card
 
@@ -57,7 +57,7 @@ Windows 临时和研究产物全 X，WSL 经验证映射目录；数据/模型�
 3. 输入使用现有六个个股日频量：ret_1/5/10、atr14_close、close_location_in_day、volume_ratio_5_to_20，
    加各包 D 内原始 Top50 的 parent_score Z 与 rank/50。父分数 Z 方差为0时明确 UNKNOWN。
    同股相同 D 的日频量计算一次。OHLC 沿发布的 factor 恢复原单位，再按 D factor 构造历史复权口径；
-   不用未来 factor，成交量保持原 RAW_SHARES。复用 `build_generic_daily_price_input_v1`，
+   不用未来 factor；文件成交量为 RAW_SHARES/factor，乘本行factor恢复 RAW_SHARES 后计算量比。复用 `build_generic_daily_price_input_v1`，
    基准/宽度字段无本轮来源时明确 UNKNOWN 且不进入模型，不临时补数或用别名冒充指数。
 4. 模型输入不含 T 开盘、未来涨跌停、收益、label_status、未来缺失状态、instrument ID 或包 ID。
    每折用自身训练数据中位数/IQR及逐列 missing bit；全训练未知列固定停用，不因外层出现值启用。
@@ -138,7 +138,8 @@ matched/归因是诊断，不额外要求每信息块独立跨越10bps；不能�
 
 复用 publish_stage/read_stage + 只追加 trial_registry.jsonl；登记 objective_contract、decision_use、
 父lineage、数据/代码/政策hash、六配置/三fold/最多19fit、窗口和生成/评价次数，不建设新registry平台。
-阶段 preregistered→prepared→selected→predicted→evaluated 原子发布并绑定父hash。
+逻辑阶段 preregistered→prepared→selected→predicted→evaluated 原子发布并绑定父hash。
+物理上selected/predicted各使用自己的子目录及现有trained publisher，不修改共享publisher允许的阶段集合。
 每次 fit 先独占claim再记 STARTED/COMPLETED；中断留 STARTED，不静默重fit清零计数。
 完成阶段重试只校验原文件并返回；漂移拒绝，既存失败和旧产物不覆盖。
 源码实现身份包括本轮三叶及复用的输入、五日标签/计量和选择/统计函数；fit环境版本与源码commit登记。
@@ -171,15 +172,15 @@ B3将内层选择与外层预测、收益计量分阶段冻结，完成一次外
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-401 | Input / 时钟、原始人口与标签 | artifact: X:/AIstock_temp/ADVISORY/multiperiod-top10-5td-20261021/b0_inventory.json | DESIGN_REVIEW_PASS | none |
-| F-402 | Input / 时钟、原始人口与标签 | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py（实施时新增） | DESIGN_REVIEW_PASS | none |
-| F-403 | Models / 一次有限比较与确定性选择 | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py（实施时新增） | DESIGN_REVIEW_PASS | none |
-| F-404 | Models / 一次有限比较与确定性选择 | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py（实施时新增） | DESIGN_REVIEW_PASS | none |
-| F-405 | Outer / 一次外层、统计功效和结论 | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py（实施时新增） | DESIGN_REVIEW_PASS | none |
-| F-406 | Operations / 幂等、资源和身份 | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py（实施时新增） | DESIGN_REVIEW_PASS | none |
-| F-407 | Test Plan / 合入条件与自审 | artifact: X:/AIstock_temp/ADVISORY/multiperiod-top10-5td-20261021/task_plan.md | DESIGN_REVIEW_PASS | none |
+| F-401 | multiperiod_top10_5td_inputs_v1.original_rosters / file_dataset；pipeline.Study | artifact: X:/AIstock_temp/ADVISORY/multiperiod-top10-5td-20261021/b0_inventory.json | SOURCE_CONTRACT_PASS | none |
+| F-402 | inputs.read_daily / build_features / make_finance；study.training_population | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
+| F-403 | study.select_configuration / fit_model；pipeline.Study.fit_event / verify_fits | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
+| F-404 | study.predict / cohort | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
+| F-405 | study.evaluate / paired_interval / classify；pipeline.finish | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
+| F-406 | pipeline.Study.read / publish / register；stage_location | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
+| F-407 | pipeline.prepare / select / predict_outer / finish；Test Plan | artifact: X:/AIstock_temp/ADVISORY/multiperiod-top10-5td-20261021/ownership.json | SOURCE_CONTRACT_PASS | none |
 
-设计阶段验收只证明规格完整，源码和研究尚未执行，不代表功能通过。源码阶段逐项替换为实际引用与结果。
+上述矩阵证明离线源码合同与直接测试，尚不代表真实数据研究、独立确认或实盘角色通过。真实结果见后续Research Result。
 
 ## Risks / Production Gates / Rollout
 
@@ -205,3 +206,10 @@ Research Result：尚未开始prepare、fit或outer收益读取；后续只追�
 2. 时钟/统计审：明确实际H purge、两包同步按D抽样、最后未成熟日期保留、全部扩展窗口仅探索；不消费08-31 sealed收益。
 3. 交付/资源审：补齐独立设计PR、四个精确源码/测试文件、claim中断不得默默重fit、所有生产动作noop及设计/源码/经济状态分离。
    三轮均为本窗口自审；F1结构检查和diff检查通过后交付设计，不冒称实现完成。
+
+### 源码三轮自审记录
+
+1. 纯构造与原生接口：修复既有特征列merge冲突、计量构造器必填source hash；正常/停牌/真缺价/未成熟红转绿。
+2. 时间与统计：先投影D再解析H，未来特征/标签poison不影响训练；外层归因统一主端点共同D人口，分段不混入额外单包日。
+3. 身份与恢复：19次真实claim及完成身份逐项核验，不使用预填fit数作研究证据；派生rank唯一性、预算、中断、stage漂移明确失败。
+   24项直接测试（含两模型族的小型测试拟合，非研究trial）及Ruff通过；四文件ownership全部Advisory，无跨模块写入。
