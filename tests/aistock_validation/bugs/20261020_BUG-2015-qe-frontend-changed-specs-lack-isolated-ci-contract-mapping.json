@@ -13,33 +13,33 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2015",
-  "consumer_verification": {
-    "source_head": "3302d6cb6a4bdac6762b8482f65a9fca7c05b62e",
-    "workflow_commit": "a7ec3db8ac68668d4eda2400f1dc1dfed41e2b46",
-    "composed_head": "14eb78fc790d40bd7ba0c331610b16d3bd111c17",
-    "workspace": "X:/AIstock-CI/BUG-2015-qe-validation",
-    "command": "node node_modules/@playwright/test/cli.js test --config=tests/qe-read-contract.config.ts tests/qe/qe-evolution-best-loop-ui.spec.ts tests/qe/qe-evolution-read-only.spec.ts tests/qe/qe-read-performance.spec.ts",
-    "result": "10 passed (1.5m): 4 best-loop source, 5 performance/source/browser harness, 1 mocked terminal polling",
-    "results_ref": "X:/AIstock-CI/qe-read-contract-UNnOCf/results.json",
-    "classification_ref": "X:/AIstock-CI/BUG-2015-classification.json",
-    "classification": "passed; unexecuted_test_files=[]; backend_required=false; dev_db_required=false",
-    "excluded_integration": "QE evolution terminal task detail is read-only, accurate, and observable remains qe_read_ui real-backend acceptance; NOT executed or claimed passed",
-    "business_test_source_modified": false,
-    "dependencies_installed": false,
-    "backend_or_database_used": false,
-    "design_compliance_review": [
-      "No simplified delivery: precise CI contracts executed; real integration explicitly excluded, not claimed passed.",
-      "No silent errors: unknown spec still blocks, X-only TEMP fails closed, occupied frontend is not reused.",
-      "No business drift: QE source and assertions unchanged; no experiments, service control or database actions.",
-      "No new approvals or gates: existing coverage and prebuilt dependency requirements retained."
-    ]
-  },
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
+  "consumer_verification": {
+    "backend_or_database_used": false,
+    "business_test_source_modified": false,
+    "classification": "passed; unexecuted_test_files=[]; backend_required=false; dev_db_required=false",
+    "classification_ref": "X:/AIstock-CI/BUG-2015-classification.json",
+    "command": "node node_modules/@playwright/test/cli.js test --config=tests/qe-read-contract.config.ts tests/qe/qe-evolution-best-loop-ui.spec.ts tests/qe/qe-evolution-read-only.spec.ts tests/qe/qe-read-performance.spec.ts",
+    "composed_head": "14eb78fc790d40bd7ba0c331610b16d3bd111c17",
+    "dependencies_installed": false,
+    "design_compliance_review": [
+      "No simplified delivery: precise CI contracts executed; real integration explicitly excluded, not claimed passed.",
+      "No silent errors: unknown spec still blocks, X-only TEMP fails closed, occupied frontend is not reused.",
+      "No business drift: QE source and assertions unchanged; no experiments, service control or database actions.",
+      "No new approvals or gates: existing coverage and prebuilt dependency requirements retained."
+    ],
+    "excluded_integration": "QE evolution terminal task detail is read-only, accurate, and observable remains qe_read_ui real-backend acceptance; NOT executed or claimed passed",
+    "result": "10 passed (1.5m): 4 best-loop source, 5 performance/source/browser harness, 1 mocked terminal polling",
+    "results_ref": "X:/AIstock-CI/qe-read-contract-UNnOCf/results.json",
+    "source_head": "3302d6cb6a4bdac6762b8482f65a9fca7c05b62e",
+    "workflow_commit": "a7ec3db8ac68668d4eda2400f1dc1dfed41e2b46",
+    "workspace": "X:/AIstock-CI/BUG-2015-qe-validation"
+  },
   "created_at": "2026-10-20T06:28:00.272725Z",
   "description": "BUG-2012 Issue #6427 is blocked before PR: three QE frontend specs have no executable CI mapping. Register precise plans and isolated mocked/source-contract runner, retaining real-backend integration separately and fail-closed changed-test coverage.",
   "events": [
@@ -55,19 +55,32 @@
   ],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/test.yml",
+      "backend/services/validation/plan_catalog.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "frontend/tests/qe-read-contract.config.ts",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2015-qe-frontend-changed-specs-lack-isolated-ci-contract-mapping.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml"
+    ],
     "added_files": [
       "frontend/tests/qe-read-contract.config.ts"
     ],
     "changed_files": [
-      "backend/services/validation/plan_catalog.py",
       ".github/workflows/test.yml",
+      "backend/services/validation/plan_catalog.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "frontend/tests/qe-read-contract.config.ts",
       "noxfile.py",
-      "tests/aistock_validation/catalog/test_plans.yaml",
-      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/bugs/20261020_BUG-2015-qe-frontend-changed-specs-lack-isolated-ci-contract-mapping.json",
       "tests/aistock_validation/catalog/file_ownership.yaml",
-      "backend/tests/scripts/test_ci_change_classifier.py"
+      "tests/aistock_validation/catalog/module_registry.yaml",
+      "tests/aistock_validation/catalog/test_plans.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         ".github/workflows/test.yml",
@@ -225,10 +238,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
