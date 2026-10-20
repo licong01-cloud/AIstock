@@ -288,8 +288,8 @@ def produce_component_artifact_manifest(
         }
     stock_codes = tuple(sorted({span.ts_code for span in pit_snapshot.spans}))
     qfq_codes = tuple(code for code, _value in qfq_authority.values)
-    if stock_codes != qfq_codes:
-        raise ComponentManifestProductionError("component QFQ/PIT code sets differ")
+    if not set(stock_codes).issubset(qfq_codes):
+        raise ComponentManifestProductionError("component factual codes omit frozen PIT securities")
     pit_digests = _pit_span_digests(pit_snapshot)
     components: dict[str, Any] = {}
     for component in Component:
@@ -303,7 +303,7 @@ def produce_component_artifact_manifest(
         instruments = (
             tuple(item.daily_code for item in DOMESTIC_INDEX_DEFINITIONS)
             if component is Component.DOMESTIC_INDEX_CONTEXT
-            else stock_codes
+            else qfq_codes
         )
         source = [dict(item) for item in source_partitions.get(component, ())]
         if not source:
@@ -336,7 +336,7 @@ def produce_component_artifact_manifest(
                 "adj_row_count_by_code": {code: rows for code, rows, _digest in qfq_authority.per_code_series},
                 "monthly_ordered_adj_by_code": {},
                 "writer_targets_by_code": {
-                    code: list(instrument_targets[code]) for code in stock_codes if code in instrument_targets
+                    code: list(instrument_targets[code]) for code in qfq_codes if code in instrument_targets
                 },
                 "shared_writer_targets": list(shared),
                 "writer_target_policy": "artifact_file_instrument_index_v1",
