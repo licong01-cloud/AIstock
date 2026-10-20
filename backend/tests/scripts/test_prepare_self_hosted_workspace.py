@@ -36,6 +36,70 @@ def test_clear_directory_removes_readonly_git_object_tree(tmp_path: Path) -> Non
     assert list(destination.iterdir()) == []
 
 
+@pytest.mark.parametrize("fetch_result", ["success", "failure", "timeout", "mismatch"])
+def test_missing_commit_fetch_is_pinned_and_never_writes_source(tmp_path, monkeypatch, fetch_result):
+    source, remote = tmp_path / "source", tmp_path / "remote"
+    source.mkdir()
+    _git(source, "init")
+    _git(source, "config", "user.email", "ci@example.invalid")
+    _git(source, "config", "user.name", "CI")
+    _git(source, "remote", "add", "origin", "https://github.com/licong01-cloud/AIstock.git")
+    (source / "seed").write_text("seed", encoding="utf-8")
+    _git(source, "add", "seed")
+    _git(source, "commit", "-m", "seed")
+    source_head = _git(source, "rev-parse", "HEAD")
+    _git(tmp_path, "clone", str(source), str(remote))
+    _git(remote, "config", "user.email", "ci@example.invalid")
+    _git(remote, "config", "user.name", "CI")
+    (remote / "new").write_text("scheduled", encoding="utf-8")
+    _git(remote, "add", "new")
+    _git(remote, "commit", "-m", "scheduled")
+    expected = _git(remote, "rev-parse", "HEAD")
+    dest = tmp_path / "runner" / "_work" / "checkout"
+    monkeypatch.setenv("RUNNER_WORKSPACE", str(dest.parent))
+    original_run = prepare._run
+    fetches = []
+
+    def run(args, *, cwd=None, timeout=120):
+        if args[:2] == ["git", "fetch"]:
+            fetches.append(args)
+            assert cwd == dest.resolve() and timeout == 180
+            assert args[-2:] == ["https://github.com/licong01-cloud/AIstock.git", expected]
+            if fetch_result == "failure":
+                return subprocess.CompletedProcess(args, 1, "", "unavailable")
+            if fetch_result == "timeout":
+                raise subprocess.TimeoutExpired(args, timeout)
+            args = [*args[:-2], str(remote), source_head if fetch_result == "mismatch" else expected]
+        return original_run(args, cwd=cwd, timeout=timeout)
+
+    monkeypatch.setattr(prepare, "_run", run)
+    argv = ["--source", str(source), "--dest", str(dest), "--expected-commit", expected]
+    if fetch_result == "success":
+        assert prepare.main(argv) == 0
+        assert _git(dest, "rev-parse", "HEAD") == expected
+        assert _git(dest, "status", "--short") == ""
+    else:
+        with pytest.raises(SystemExit) as exc:
+            prepare.main(argv)
+        assert exc.value.code == 1
+    assert len(fetches) == 1
+    assert _git(source, "rev-parse", "HEAD") == source_head
+    assert _git(source, "status", "--short") == ""
+    assert subprocess.run(["git", "cat-file", "-e", expected], cwd=source, capture_output=True).returncode != 0
+
+
+@pytest.mark.parametrize("commit", ["HEAD", "--all", "a" * 39, "a" * 41])
+def test_prepare_rejects_non_pinned_commit_before_clearing_destination(tmp_path, commit):
+    source, dest = tmp_path / "source", tmp_path / "destination"
+    (source / ".git").mkdir(parents=True)
+    dest.mkdir()
+    marker = dest / "keep"
+    marker.write_text("untouched", encoding="utf-8")
+    with pytest.raises(SystemExit):
+        prepare.main(["--source", str(source), "--dest", str(dest), "--expected-commit", commit])
+    assert marker.read_text(encoding="utf-8") == "untouched"
+
+
 def test_prepare_workspace_clones_local_source_without_root_worktree_writes(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "source"
     dest = tmp_path / "runner" / "_work" / "AIstock" / "AIstock"
