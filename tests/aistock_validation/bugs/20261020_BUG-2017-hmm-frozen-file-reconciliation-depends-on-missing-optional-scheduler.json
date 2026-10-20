@@ -130,8 +130,8 @@
   },
   "first_seen_at": "2026-10-20T06:43:05.805029Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2301d4d3a4add0d179896219998ceab162cc040f",
+  "fixed_at": "2026-10-20T07:31:23Z",
   "github_issue_number": 6440,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6440",
   "last_seen_at": "2026-10-20T06:43:05.805029Z",
@@ -139,6 +139,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6442",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -161,6 +162,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -172,7 +174,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2017",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "29a7d361bbdb14e2",
+    "recorded_at": "2026-10-20T07:32:07.572853Z",
+    "runtime_contract_digest": "51f68baf253110d5a517f2835924549cd9f9e70a2f80336f16205bf2f24d5e3c",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "032b8b6816456b91b1c032b9af45fd679ddff6e0",
+    "source_merge_commit": "2301d4d3a4add0d179896219998ceab162cc040f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6442",
+    "validation_evidence": [
+      "validation-receipt: id=b1895fb1e89dbd96 commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/hmm_data_source/test_coefficient_extension.py::test_shared_startup_crops_completed_file_job_without_legacy_scheduler backend/tests/hmm_data_source/test_daily_coefficient_subscription.py::test_shared_completion_binding_survives_missing_legacy_apscheduler backend/tests/hmm_data_source/test_daily_coefficient_subscription.py::test_completion_adapter_retries_only_orchestration_failure -q` result=`passed (17 passed at 032b8b6816456b91b1c032b9af45fd679ddff6e0 after BUG-2016 main sync)`",
+      "validation-receipt: id=773fededb8ffda7e commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/routers/hmm_training.py backend/services/hmm_training_service.py backend/tests/hmm_data_source/test_coefficient_extension.py backend/tests/hmm_data_source/test_daily_coefficient_subscription.py` result=`passed (0 blocking at final HEAD after BUG-2016 main sync)`",
+      "validation-receipt: id=ca2e8e98c5579011 commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed (reuse 8 passed at e33692bac29bdefe46e9a09f2c9bcc05f47e02dd; registry/catalog sources unchanged by subsequent main sync; not rerun)`",
+      "validation-receipt: id=9ebbac570cbec7cb commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=ruff plan=direct status=passed command=`ruff check, python -m py_compile four changed Python files and git diff --check` result=`passed (fresh-process task-root imports also passed; production database/network poison attempts=0)`"
+    ],
+    "validation_evidence_digest": "92423aa5d90e4ad013dcb733be53b9b19b30a50f1adf960cd50060d8e7d9f804"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "hmm"
   ],
@@ -181,6 +207,12 @@
     "fingerprint": "e5c13acdf03595cbbec8cbfb",
     "source_event_id": "FE-20261020-e5c13acdf035"
   },
+  "validation_evidence": [
+    "validation-receipt: id=b1895fb1e89dbd96 commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=pytest plan=direct status=passed command=`rtk pytest backend/tests/hmm_data_source/test_coefficient_extension.py::test_shared_startup_crops_completed_file_job_without_legacy_scheduler backend/tests/hmm_data_source/test_daily_coefficient_subscription.py::test_shared_completion_binding_survives_missing_legacy_apscheduler backend/tests/hmm_data_source/test_daily_coefficient_subscription.py::test_completion_adapter_retries_only_orchestration_failure -q` result=`passed (17 passed at 032b8b6816456b91b1c032b9af45fd679ddff6e0 after BUG-2016 main sync)`",
+    "validation-receipt: id=773fededb8ffda7e commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/routers/hmm_training.py backend/services/hmm_training_service.py backend/tests/hmm_data_source/test_coefficient_extension.py backend/tests/hmm_data_source/test_daily_coefficient_subscription.py` result=`passed (0 blocking at final HEAD after BUG-2016 main sync)`",
+    "validation-receipt: id=ca2e8e98c5579011 commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed (reuse 8 passed at e33692bac29bdefe46e9a09f2c9bcc05f47e02dd; registry/catalog sources unchanged by subsequent main sync; not rerun)`",
+    "validation-receipt: id=9ebbac570cbec7cb commit=032b8b6816456b91b1c032b9af45fd679ddff6e0 kind=ruff plan=direct status=passed command=`ruff check, python -m py_compile four changed Python files and git diff --check` result=`passed (fresh-process task-root imports also passed; production database/network poison attempts=0)`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
