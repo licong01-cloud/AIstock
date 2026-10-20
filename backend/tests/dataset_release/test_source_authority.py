@@ -15,9 +15,26 @@ from backend.services.dataset_release.source_authority import (
     SourceRequiredDatasetEmpty,
     SourceAuditIncomplete,
     SourceQuerySpec,
+    SourceProviderContractError,
     _validate_core_index_membership_authority,
     imported_source_session_factory,
 )
+
+
+def test_monthly_source_fact_codes_do_not_change_pit_selection(dataset_profile):
+    from backend.services.dataset_release.monthly_source_progress import MonthlyObservedSourceAuthority
+    pit = SimpleNamespace(spans=(SimpleNamespace(ts_code="000001.SZ"),))
+    source = MonthlyObservedSourceAuthority(
+        dataset_profile, None, progress=lambda _: None, month_start=date(2026, 9, 1),
+        fact_stock_codes=("000001.SZ", "000002.SZ"),
+    )
+    requests = list(source._partition_requests(PRODUCTION_QUERY_SPECS["daily_basic"],
+                    date(2026, 9, 30), pit_snapshot=pit))
+    assert requests and all(params["codes"] == ["000001.SZ", "000002.SZ"] for _, params in requests)
+    assert tuple(span.ts_code for span in pit.spans) == ("000001.SZ",)
+    with pytest.raises(SourceProviderContractError, match="population"):
+        list(source._partition_requests(PRODUCTION_QUERY_SPECS["daily_basic"], date(2026, 9, 30),
+                                        pit_snapshot=pit, selected_stock_codes=("000003.SZ",)))
 
 
 @pytest.mark.parametrize("query_id", ["kline_daily_raw", "kline_minute_raw", "daily_basic"])

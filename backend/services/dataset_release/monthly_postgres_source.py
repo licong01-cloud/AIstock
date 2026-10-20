@@ -357,6 +357,7 @@ class PostgresMonthlySourceAdapter:
                 "source_audit_contract": AUDIT_SCHEMA,
                 "business_validation_scope": "target_calendar_month_only_v1",
                 "payload_scope": "target_month_and_exact_qfq_construction_facts_v1",
+                "factual_population_policy": "all_shsz_source_facts_independent_of_pit_v1",
                 "sector_mapping_policy": "immutable_predecessor_shared_ids_v1",
                 "historical_classification_policy": "immutable_version_qualified_effective_history_v1",
                 "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
@@ -391,6 +392,18 @@ class PostgresMonthlySourceAdapter:
         deferred_margin_sha = deferred_margin_authority(repair_inputs, target_cutoff=target_cutoff)
         if self.profile.profile == CANONICAL_PROFILE_ID:
             self._require_pit_coverage(connection, target_cutoff)
+        fact_stock_codes = ()
+        if self.profile.profile == CANONICAL_PROFILE_ID:
+            # Same exported read-only snapshot as every data-bearing query.
+            # Listing/ST/PIT eligibility never removes a security's facts.
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT ts_code FROM market.stock_basic "
+                               "WHERE ts_code ~ '^[0-9]{6}\\.(SH|SZ)$' AND list_date <= %s "
+                               "UNION SELECT ts_code FROM market.kline_daily_raw "
+                               "WHERE trade_date BETWEEN %s AND %s AND adjust_type='none' "
+                               "AND ts_code ~ '^[0-9]{6}\\.(SH|SZ)$' ORDER BY ts_code",
+                               (target_cutoff, target_cutoff.replace(day=1), target_cutoff))
+                fact_stock_codes = tuple(str(row[0]).strip() for row in cursor.fetchall())
 
         # The native month path inherits the controller-bound immutable release,
         # not a historical SOURCE inventory. Comparing old raw partition keys
@@ -410,7 +423,7 @@ class PostgresMonthlySourceAdapter:
             start = target_cutoff.replace(day=1)
             # Any historical PIT member can remain a holding after buy exit.
             # Construction anchors are boundary facts, not buy eligibility.
-            codes = tuple(sorted({span.ts_code for span in pit.spans}))
+            codes = tuple(sorted(set(fact_stock_codes).union(span.ts_code for span in pit.spans)))
             return collect_qfq_construction_anchors(prefix, month_start=start, instruments=codes,
                                                     checkpoint=checkpoint, progress=progress)
 
@@ -441,6 +454,7 @@ class PostgresMonthlySourceAdapter:
             month_start=target_cutoff.replace(day=1), construction_anchors=construction_anchors,
             deferred_margin_cutoff=target_cutoff if deferred_margin_sha is not None else None,
             monthly_sector_mapping=sector_mapping,
+            fact_stock_codes=fact_stock_codes,
         )
         try:
             _preflight_refresh_readiness(

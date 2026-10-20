@@ -345,6 +345,7 @@ class FactorPartitionProducerSpec:
     overlay_summary: Mapping[str, Any] | None = None
     allow_partial_ranges: bool = False
     instrument_filter: tuple[str, ...] = ()
+    fact_stock_codes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if not self.partitions:
@@ -362,9 +363,15 @@ class FactorPartitionProducerSpec:
         if (
             self.qfq_denominator_authority.cutoff != self.pit_snapshot.cutoff
             or self.qfq_denominator_authority.pit_spans_sha256 != self.pit_snapshot.spans_sha256
-            or set(self.qfq_denominator_authority.by_code) != {span.ts_code for span in self.pit_snapshot.spans}
+            or set(self.qfq_denominator_authority.by_code) != set(
+                self.fact_stock_codes or (span.ts_code for span in self.pit_snapshot.spans)
+            )
         ):
             raise FactorMaterializationError("factor QFQ authority differs from PIT/cutoff")
+        if (self.fact_stock_codes != tuple(sorted(set(self.fact_stock_codes)))
+                or any(_STOCK_CODE.fullmatch(code) is None for code in self.fact_stock_codes)
+                or (self.fact_stock_codes and not {span.ts_code for span in self.pit_snapshot.spans}.issubset(self.fact_stock_codes))):
+            raise FactorMaterializationError("factor factual stock population is invalid")
         if self.static_ordered_columns != STATIC_ORDERED_COLUMNS:
             raise FactorMaterializationError("factor producer requires 121-column static authority")
         if type(self.row_group_rows) is not int or not 0 < self.row_group_rows <= 100_000:
@@ -418,6 +425,7 @@ class FactorPartitionProducerSpec:
                 "overlay_summary": dict(self.overlay_summary or {}),
                 "allow_partial_ranges": self.allow_partial_ranges,
                 "instrument_filter": list(self.instrument_filter),
+                **({"fact_stock_codes": list(self.fact_stock_codes)} if self.fact_stock_codes else {}),
             },
         )
 
@@ -625,6 +633,16 @@ class FactorPartitionProductionReceipt:
     source_root: Path
     chunks: tuple[SealedFactorChunk, ...]
     receipt: Mapping[str, Any]
+
+
+def _filter_producer_population(frame, spec, partition):
+    if not spec.fact_stock_codes:
+        return filter_frame_to_pit_spans(frame, spec.pit_snapshot)
+    facts = filter_source_fact_history(frame, codes=spec.fact_stock_codes,
+                                      start=partition.start, end=partition.end)
+    return facts, {"population_policy": "observed_facts_independent_of_pit_v1",
+                   "source_rows": len(frame), "retained_rows": len(facts),
+                   "pit_selection_unchanged": True}
 
 
 class FactorPartitionProducer:
@@ -855,7 +873,7 @@ class FactorPartitionProducer:
             base_factors=base_factors,
             previous_adj_tail=previous_state.adj_factor_tail,
         )
-        daily, daily_pit = filter_frame_to_pit_spans(daily, spec.pit_snapshot)
+        daily, daily_pit = _filter_producer_population(daily, spec, partition)
         if daily.empty:
             raise FactorMaterializationError(f"PIT removed every daily row: {partition.partition_key}")
         if len(daily) > spec.max_source_partition_rows:
@@ -906,11 +924,11 @@ class FactorPartitionProducer:
             frame = _normalize_aux_frame(raw_frame, dataset=dataset)
             source_history = (
                 filter_source_fact_history(
-                    frame, codes=(span.ts_code for span in spec.pit_snapshot.spans),
+                    frame, codes=spec.fact_stock_codes or (span.ts_code for span in spec.pit_snapshot.spans),
                     start=partition.start, end=partition.end,
                 ) if dataset == "daily_basic" else None
             )
-            frame, pit_receipts[dataset] = filter_frame_to_pit_spans(frame, spec.pit_snapshot)
+            frame, pit_receipts[dataset] = _filter_producer_population(frame, spec, partition)
             frame = frame.sort_index() if not frame.empty else frame
             artifact_frame = (
                 _moneyflow_source_identity_frame(frame, raw_frame)

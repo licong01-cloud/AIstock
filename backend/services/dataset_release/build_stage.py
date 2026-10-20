@@ -1847,7 +1847,7 @@ def _patch_legacy_factor_component(
         repaired_prefixes, null_repairs = repair_materials(repair_inputs, predecessor=prefix)
     if prefix.cutoff != start - date.resolution:
         raise CandidateBuildStageError("legacy factor predecessor is not the preceding month")
-    codes = tuple(sorted({span.ts_code for span in pit.spans if span.eligible_start <= pit.cutoff and span.eligible_end >= start}))
+    codes = tuple(source.qfq_authority.by_code)
     # A September IPO cannot have an August rolling seed. Use the physical
     # provider catalog to avoid searching the unindexed historical H5 for it.
     catalog = prefix.root / Path(prefix.manifest["components"]["day_meta_export"]["path"]).parent / "instruments/all.txt"
@@ -1901,7 +1901,7 @@ def _patch_legacy_factor_component(
             static_ordered_columns=invocation.profile.static_ordered_columns,
             row_group_rows=rows_per_chunk, max_source_partition_rows=max(250_000, invocation.profile.resource_policy.validation_read_chunk_rows),
             qfq_source_summary=source.qfq_source_summary, overlay_summary=source.factor_overlay_summary,
-            allow_partial_ranges=True, instrument_filter=codes,
+            allow_partial_ranges=True, instrument_filter=codes, fact_stock_codes=codes,
         ), reader=_FactorReader(source, instrument_filter=codes), initial_state=state, checkpoint=checkpoint,
     )
     target = invocation.staging_root / "factor_bundle"
@@ -1980,7 +1980,7 @@ def _prepare_legacy_bin_patch(
         raise CandidateBuildStageError("legacy month tail cutoff does not advance")
     from .monthly_quote_population import observed_quote_days
 
-    known_codes = frozenset(span.ts_code for span in pit.spans)
+    known_codes = frozenset(source.qfq_authority.by_code)
     quote_days = observed_quote_days(
         _merged_rows(source, component, "kline_daily_raw", staging=invocation.staging_root,
                      key=lambda row: (str(row["ts_code"]), _as_date(row["trade_date"])),
@@ -2708,6 +2708,7 @@ def _prepare_bin_patch_phase(
         trading_days=selected_days,
         qfq_denominators=source.qfq_authority,
         instrument_filter=(codes or None),
+        fact_stock_codes=tuple(source.qfq_authority.by_code),
         initial_adj_factors=seeds,
         quote_days=quote_days,
     )
@@ -3333,8 +3334,10 @@ def _rewrite_private_qlib_authorities(
             raise CandidateBuildStageError(f"canonical rows do not cover frozen PIT span: {span.ts_code}")
         expected_codes.add(span.ts_code)
         lines.append(f"{span.ts_code}\t{start.isoformat()}\t{end.isoformat()}")
-    if not lines or set(ranges) != expected_codes:
+    if not lines or not expected_codes.issubset(ranges):
         raise CandidateBuildStageError("canonical stock authority differs from frozen PIT instruments")
+    lines = [f"{code}\t{start.isoformat()}\t{end.isoformat()}"
+             for code, (start, end) in sorted(ranges.items())]
     all_path = qlib_root / "instruments" / "all.txt"
     _atomic_private_bytes(all_path, ("\n".join(lines) + "\n").encode("utf-8"))
     index_path = qlib_root / "instruments" / "index.txt"

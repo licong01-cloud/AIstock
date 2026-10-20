@@ -516,3 +516,45 @@ def test_stock_without_observed_quote_is_not_extended_after_buy_exit(tmp_path):
     pit = replace(pit, spans=(replace(pit.spans[0], eligible_end=date(2026, 8, 31)),))
     spec = CanonicalStockTransformSpec(pit.cutoff, pit, (pit.cutoff,), source.qfq_authority)
     assert list(_TransformContext(spec).expected_code_days()) == []
+
+
+def test_real_quote_for_never_eligible_security_does_not_create_buy_membership():
+    from backend.tests.dataset_release.test_canonical_stock_transformer import CODE, DAY1, DAY2, _adj, _pit
+    other = "000002.SZ"
+    pit = _pit()
+    codes = (other, CODE)
+    authority = build_qfq_denominator_authority(
+        [{"ts_code": other, "trade_date": DAY1, "adj_factor": 1.0}, *_adj()],
+        pit_snapshot=pit, cutoff=DAY2, fact_stock_codes=codes,
+    )
+    spec = CanonicalStockTransformSpec(DAY2, pit, (DAY1, DAY2), authority,
+                                      fact_stock_codes=codes, quote_days=((other, DAY1),))
+    context = _TransformContext(spec)
+    assert context.is_expected_day(other, DAY1)
+    assert not context.is_expected_day(other, DAY2)
+    assert list(context.expected_code_days()) == [(other, DAY1), (CODE, DAY1), (CODE, DAY2)]
+    assert {span.ts_code for span in pit.spans} == {CODE}
+    with pytest.raises(CanonicalStockTransformError):
+        CanonicalStockTransformSpec(DAY2, pit, (DAY1, DAY2), authority)
+
+
+def test_monthly_fact_materialization_keeps_never_pit_security(tmp_path):
+    import pandas as pd
+    from backend.tests.dataset_release.test_factor_partition_producer import FixtureReader, PARTITIONS, STOCKS, _spec
+    from backend.services.dataset_release.factor_materializer import FactorPartitionProducer
+    from backend.services.dataset_release.streaming_artifacts import iter_parquet_frames
+    reader = FixtureReader()
+    root = tmp_path / "facts"
+    root.mkdir()
+    base = _spec(root)
+    pit = replace(base.pit_snapshot, spans=(base.pit_snapshot.spans[0],))
+    adj = pd.concat([reader.frames[("adj_factor", part.partition_key)] for part in PARTITIONS]).sort_values(["ts_code", "trade_date"])
+    authority = build_qfq_denominator_authority(adj.to_dict("records"), pit_snapshot=pit,
+                                               cutoff=pit.cutoff, fact_stock_codes=STOCKS)
+    spec = replace(base, pit_snapshot=pit, qfq_denominator_authority=authority, fact_stock_codes=STOCKS)
+    produced = FactorPartitionProducer().produce(spec, reader=reader)
+    for dataset in ("daily_pv", "daily_basic", "moneyflow", "sector_data", "static_factors"):
+        chunks = [chunk for chunk in produced.chunks if chunk.dataset == dataset]
+        actual = pd.concat(list(iter_parquet_frames([produced.source_root / chunk.relative_path for chunk in chunks], max_rows=1000)))
+        assert set(actual.index.get_level_values("instrument")) == set(STOCKS)
+    assert {span.ts_code for span in pit.spans} == {STOCKS[0]}

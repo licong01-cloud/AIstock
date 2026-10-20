@@ -169,7 +169,9 @@ def test_month_qfq_uses_real_cutoff_max_and_boundary_without_old_daily_prices(tm
             {"ts_code": "000001.SZ", "trade_date": "2026-09-01", "adj_factor": 3.0},
             {"ts_code": "000002.SZ", "trade_date": "2025-06-01", "adj_factor": 5.0},
         ],
-        "kline_daily_raw": [{"ts_code": "000001.SZ", "trade_date": "2026-09-01"}],
+        "kline_daily_raw": [{"ts_code": "000001.SZ", "trade_date": "2026-09-01",
+            "open_li": 10000, "high_li": 10000, "low_li": 10000, "close_li": 10000,
+            "vol": 100, "amount": 1000}],
         "trading_calendar": [{"cal_date": "2026-08-31", "is_trading": True}, {"cal_date": "2026-09-01", "is_trading": True}],
     }
     if defect == "different_max":
