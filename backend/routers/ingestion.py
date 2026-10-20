@@ -153,6 +153,32 @@ def _merge_data_stats_extra_info(existing: Any, overlay: Dict[str, Any]) -> Dict
     return info
 
 
+def _data_gap_presence_query(
+    data_kind: str, table_name: str, date_column: str, start: dt.date, end: dt.date,
+) -> tuple[str, tuple]:
+    """Day presence only, not symbol/bar completeness; leave the time key bare."""
+    table = _qualified_table_name(table_name)
+    column = _quote_identifier(date_column)
+    params = (start, end)
+    predicate = f"{column}::date = cal_date"
+    if data_kind == KLINE_MINUTE_RAW_KIND:
+        if date_column != "trade_time":
+            raise ValueError("minute gap query requires trade_time")
+        # Fixed bounds permit chunk pruning before the correlated EXISTS probe.
+        # Explicit exchange timezone makes results independent of pool timezone.
+        predicate = f"""{column} >= (cal_date::timestamp AT TIME ZONE 'Asia/Shanghai')
+            AND {column} < ((cal_date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')
+            AND {column} >= (%s::date::timestamp AT TIME ZONE 'Asia/Shanghai')
+            AND {column} < (%s::date::timestamp AT TIME ZONE 'Asia/Shanghai')"""
+        params += (start, end + dt.timedelta(days=1))
+    return f"""
+        SELECT cal_date AS d FROM market.trading_calendar
+         WHERE is_trading = TRUE AND cal_date >= %s AND cal_date <= %s
+           AND EXISTS (SELECT 1 FROM {table} WHERE {predicate})
+         ORDER BY cal_date
+    """, params
+
+
 # Per-statement budget for stats queries inside the refresh loop (BUG-960).
 # The default checkout timeout is sized for API requests; full-table/windowed
 # COUNT/MAX scans on heavy hypertables legitimately need more headroom. The
@@ -235,8 +261,11 @@ def _refresh_one_data_stats(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 last_updated_at = cur.fetchone()[0]
 
             cur.execute(
-                "SELECT pg_total_relation_size(%s::regclass), pg_indexes_size(%s::regclass)",
-                (str(cfg.get("table_name") or "").strip(), str(cfg.get("table_name") or "").strip()),
+                """SELECT COALESCE(h.total_bytes, pg_total_relation_size(t.rel)),
+                          COALESCE(h.index_bytes, pg_indexes_size(t.rel))
+                     FROM (VALUES (%s::regclass)) AS t(rel)
+                     LEFT JOIN LATERAL hypertable_detailed_size(t.rel) AS h ON TRUE""",
+                (str(cfg.get("table_name") or "").strip(),),
             )
             table_bytes, index_bytes = cur.fetchone()
 
@@ -2670,22 +2699,8 @@ def get_data_gaps(
         with conn.cursor() as cur:
             cur.execute("SET statement_timeout = '300s'")
             
-            # Efficiently find which trading days have data
-            # 注意：date_column 在分钟/日线表中通常是 timestamp/timestamptz，需要按日期比较。
-            # 因此前端看到的 data_kind=kline_minute_raw 等，需要使用 {date_column}::date = cal_date，
-            # 否则严格相等比较会导致始终匹配不到任何行，从而错误地认为所有交易日都缺失。
-            sql = f"""
-                SELECT cal_date AS d
-                  FROM market.trading_calendar
-                 WHERE is_trading = TRUE
-                   AND cal_date >= %s AND cal_date <= %s
-                   AND EXISTS (
-                       SELECT 1 FROM {table_name}
-                        WHERE {date_column}::date = cal_date
-                   )
-                 ORDER BY cal_date
-            """
-            cur.execute(sql, (start, end))
+            sql, params = _data_gap_presence_query(data_kind, table_name, date_column, start, end)
+            cur.execute(sql, params)
             data_rows = [dict(zip([c[0] for c in cur.description], r)) for r in cur.fetchall()]
     
     data_days = {r["d"] for r in data_rows}
