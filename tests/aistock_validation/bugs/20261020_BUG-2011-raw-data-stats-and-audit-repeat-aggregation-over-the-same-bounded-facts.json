@@ -28,14 +28,22 @@
   "evidence_uris": [],
   "expected": "Single bounded minute stats aggregate and one per-day raw observation reused for audit counts and completeness without lowering validation.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/routers/ingestion.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2011-raw-data-stats-and-audit-repeat-aggregation-over-the-same-bounded-facts.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/routers/ingestion.py",
       "backend/ingestion/tdx_scheduler.py",
+      "backend/routers/ingestion.py",
+      "backend/tests/ingestion/test_daily_sync_recovery.py",
       "backend/tests/test_ingestion_data_stats_readiness_api.py",
-      "backend/tests/ingestion/test_daily_sync_recovery.py"
+      "tests/aistock_validation/bugs/20261020_BUG-2011-raw-data-stats-and-audit-repeat-aggregation-over-the-same-bounded-facts.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/routers/ingestion.py",
@@ -147,20 +155,25 @@
     "backend_restart_owner": "user",
     "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "fresh_process_evidence": [
       "Fresh AIstock-CI Python imported and compiled ingestion router and TDX scheduler from the BUG-2011 worktree, without starting a service or writing the database.",
       "RED: 11 targeted cases exposed old duplicate reads. GREEN: final related matrix 173 passed, 1 skipped; Ruff and l0 passed with blocking=0.",
       "Existing DEV read-only REPEATABLE READ comparison: 2026-10-15 raw minute/daily counts, max time and completeness equal previous source; bounded raw queries reduce from 3 to 2 (minute) and 4 to 3 (daily).",
       "Existing compressed DEV minute_1d16 fixture: 28024330 rows; combined stats match old count/min/max plus MAX timestamp exactly, with fact queries reduced from 2 to 1. Cache-sensitive timings are not an end-to-end speedup claim.",
-      "Runtime remains pending user restart. Post-restart local-data overview proves target-owned readability; direct tests and DEV SQL prove aggregate and completeness semantics. No production DDL/DML, backend restart, experiments, or B-share backfill."
+      "Runtime remains pending user restart. Post-restart local-data overview proves target-owned readability; direct tests and DEV SQL prove aggregate and completeness semantics. No production DDL/DML, backend restart, experiments, or B-share backfill.",
+      "Fresh AIstock-CI Python imported and compiled both persistent task modules; 173 related tests passed, 1 skipped; no service control or production writes."
     ],
-    "inference_basis": "planned_scope",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
