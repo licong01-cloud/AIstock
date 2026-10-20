@@ -3566,24 +3566,22 @@ def validation_center_ui(session: nox.Session) -> None:
         frontend_port,
         external=True,
     )
+    _ensure_frontend_node_modules(session)
     old_cwd = Path.cwd()
     os.chdir(ROOT / "frontend")
     try:
         session.run(
-            "npm",
-            "exec",
-            "tsc",
-            "--",
+            "node",
+            "node_modules/typescript/bin/tsc",
             "--noEmit",
             "--incremental",
             "false",
             external=True,
         )
         session.run(
-            "npm",
-            "run",
-            "test:e2e",
-            "--",
+            "node",
+            "node_modules/@playwright/test/cli.js",
+            "test",
             "tests/validation-center/validation-center.spec.ts",
             env=_env(
                 {
