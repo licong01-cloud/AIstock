@@ -96,7 +96,7 @@ def refresh_migrated_daily_pit(metadata, *, trade_date, resolver=None):
 
 def build_pit_successor(*, base, binding, start: date, end: date | None,
                         resolver, evidence: dict[str, Any], predecessor_id: str | None = None,
-                        package_lifecycle_reader=None, explicit_migration=False):
+                        package_lifecycle_reader=None, explicit_migration=False, metadata_transform=None):
     """Keep the complete asset/execution identity; version only effective PIT.
 
     The original full runtime profile remains provenance for fees, HMM and
@@ -104,6 +104,10 @@ def build_pit_successor(*, base, binding, start: date, end: date | None,
     release and contributes to its identity and native inference cache key.
     """
     source_metadata = base.release_config_json.get("metadata") or {}
+    from .localsim_input_source_plan import PLAN_KEY
+    if PLAN_KEY in source_metadata and metadata_transform is None:
+        _fail("PIT migration requires an explicit new source plan; the frozen plan cannot be rebound",
+              "LOCALSIM_PIT_FROZEN_SOURCE_PLAN_REBIND_REQUIRED")
     config, identity, policy = freeze_pit_policy(
         StrategyPackageSelectionService.release_selection_runtime_config(base), start=start, end=end, resolver=resolver,
         expected_policy=None if explicit_migration else source_metadata.get(POLICY_KEY))
@@ -126,6 +130,8 @@ def build_pit_successor(*, base, binding, start: date, end: date | None,
         metadata.pop(FILE_BINDING_KEY, None)
     if predecessor_id is not None:
         metadata["localsim_replay_predecessor_id"] = predecessor_id
+    if metadata_transform is not None:
+        metadata = metadata_transform(metadata)
     service = StrategyRuntimeReleaseService(repository=InMemorySimulationRuntimeRepository(),
                                            package_lifecycle_reader=package_lifecycle_reader)
     fields = ("package_id", "manifest_sha256", "runtime_profile_id", "runtime_profile_version_id",
