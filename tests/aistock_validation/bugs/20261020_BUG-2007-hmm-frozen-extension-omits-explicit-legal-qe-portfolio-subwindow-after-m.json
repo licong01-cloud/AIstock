@@ -1,7 +1,7 @@
 {
   "actual": "Only 2026-05-20..2026-08-31 is registered; QE legal portfolio-end subwindow is missing.",
   "allowed_write_scope": [
-    "backend/services/hmm_data_source/coefficient_extension.py",
+    "backend/services/hmm_training_service.py",
     "backend/tests/hmm_data_source/test_coefficient_extension.py",
     "tests/aistock_validation/bugs/20261020_BUG-2007-hmm-frozen-extension-omits-explicit-legal-qe-portfolio-subwindow-after-m.json"
   ],
@@ -14,7 +14,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-20T03:59:25.790134Z",
-  "description": "Only 2026-05-20..2026-08-31 is registered; QE legal portfolio-end subwindow is missing.",
+  "description": "Only 2026-05-20..2026-08-31 is registered; QE legal portfolio-end subwindow is missing. Review identified that a planner-only reader edit changes the immutable extension identity and conflicts with an already registered primary. Expand scope to HMM orchestration: derive the separate legal portfolio window from the verified completed primary with existing crop/publication/registration functions, retaining reader identity, model/data identity and the original QE request.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,13 +28,13 @@
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
-      "backend/services/hmm_data_source/coefficient_extension.py",
+      "backend/services/hmm_training_service.py",
       "backend/tests/hmm_data_source/test_coefficient_extension.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "actual_git_diff",
     "ownership": {
       "changed_files": [
-        "backend/services/hmm_data_source/coefficient_extension.py",
+        "backend/services/hmm_training_service.py",
         "backend/tests/hmm_data_source/test_coefficient_extension.py"
       ],
       "impacted_modules": [
@@ -45,7 +45,7 @@
       ],
       "matched_rules": [
         {
-          "file": "backend/services/hmm_data_source/coefficient_extension.py",
+          "file": "backend/services/hmm_training_service.py",
           "impact_modules": [
             "qe.core",
             "selection_center",
@@ -71,18 +71,18 @@
         "high"
       ],
       "suggested_scope": [
-        "backend/services/hmm_data_source/coefficient_extension.py",
+        "backend/services/hmm_training_service.py",
         "backend/tests/hmm_data_source/test_coefficient_extension.py"
       ],
       "unmatched_files": []
     },
     "planned_files": [
-      "backend/services/hmm_data_source/coefficient_extension.py",
+      "backend/services/hmm_training_service.py",
       "backend/tests/hmm_data_source/test_coefficient_extension.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/services/hmm_data_source/coefficient_extension.py",
+      "backend/services/hmm_training_service.py",
       "backend/tests/hmm_data_source/test_coefficient_extension.py"
     ]
   },
@@ -109,11 +109,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-training/configs/fc0683a9-6ca0-4d55-b053-17c2360c3c40/coefficient-extension?job_id=0b8bb408-298d-4340-8654-96f689ecfb2d",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -B -I - read-only real-asset preview -> PASS on Python 3.12.12; explicit task-root sys.path/module assertions loaded backend.routers.hmm_training, backend.routers.health, hmm_training_service and coefficient_extension. Actual v18 completed primary readback, crop 2026-05-20..2026-08-28 (72 trade dates), SHA256=7aced80ed253e05b7851270da2469e7d139c15d29d2aaac84916b3ada8ff2127, 623309 bytes; publication and registry writes replaced with in-memory captures, not executed. Reader SHA256=038e63911abf56a94c0ac8e295a49d0aaedb5454b3eb37afb09a28f2939831be and source primary SHA256=2e79e8919380aaa2db7f7db2be8383ee5f65db9f9383a8d49a6a2a66b276ca0d unchanged. Poisoned database/network/inference attempts=0 after bounded read-only API fetch; fits=0; runtime_verified=false."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": ["backend-main"],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

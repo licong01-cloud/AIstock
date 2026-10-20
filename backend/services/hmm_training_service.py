@@ -1926,7 +1926,10 @@ class HMMTrainingService:
                     job = self._enqueue_coefficient_extension(plan)
                     if str(job["status"]).upper() in {"PENDING", "RUNNING"}:
                         self.run_daily_coefficients_job(str(job["job_id"]))
-                    results.append(self.get_daily_coefficient_job(str(job["job_id"])) or job)
+                    job = self.get_daily_coefficient_job(str(job["job_id"])) or job
+                    if str(job["status"]).upper() == "COMPLETED":
+                        self._ensure_coefficient_portfolio_window(plan, job, inputs["qe_default_window"])
+                    results.append(job)
             except Exception as exc:
                 logger.exception("HMM automatic coefficient extension blocked: config=%s", config_id)
                 results.append(
@@ -1938,6 +1941,137 @@ class HMMTrainingService:
                     }
                 )
         return results
+
+    def _ensure_coefficient_portfolio_window(
+        self, plan: Dict[str, Any], job: Dict[str, Any], requested: Dict[str, str]
+    ) -> Dict[str, Any] | None:
+        """Append a separately selectable legal window, without refitting or reinference.
+
+        Preserve the completed job, reader identity and immutable primary. QE's
+        original overlapping request remains invalid; it is never rewritten.
+        """
+        from .hmm_data_source.coefficient_extension import (
+            CoefficientExtensionError,
+            canonical_bytes,
+            fingerprint,
+            publish_window,
+            window_payload,
+        )
+        from .quantevolver.qe_active_dataset_profile import _require_plain_existing_chain
+
+        lo, hi = max(plan["test_start"], requested["test_start"]), requested["backtest_end"]
+        if not (lo <= hi <= plan["backtest_end"] and lo in plan["trade_dates"] and hi in plan["trade_dates"]):
+            return None  # Do not silently shorten the portfolio end to fit a release.
+
+        def require(condition: bool, message: str) -> None:
+            if not condition:
+                raise CoefficientExtensionError("hmm_coefficient_extension_registration_conflict", message)
+
+        saved_plan, result = job.get("plan_json"), job.get("result_json")
+        require(
+            job.get("status") == "COMPLETED"
+            and not job.get("error_message")
+            and not job.get("error_context")
+            and isinstance(saved_plan, dict),
+            "completed error-free plan is required",
+        )
+        require(
+            all(saved_plan.get(k) == v for k, v in plan.items() if k not in {"config_json", "windows"}),
+            "completed primary differs from the current frozen plan",
+        )
+        require(
+            isinstance(result, dict)
+            and result.get("status") == "REGISTERED"
+            and result.get("training_performed") is False
+            and result.get("extension_key") == plan["extension_key"],
+            "registered zero-fit result is required",
+        )
+        primary = [
+            w
+            for w in result.get("windows", [])
+            if isinstance(w, dict)
+            and (w.get("test_start"), w.get("backtest_end")) == (plan["test_start"], plan["backtest_end"])
+        ]
+        require(len(primary) == 1, "one immutable primary registration is required")
+        primary = primary[0]
+        config = self._normalise_config_json(self._get_config(plan["config_id"])["config_json"])
+        registered = config.get("coefficient_windows") or []
+        identity_fields = (
+            "snapshot_id",
+            "preset",
+            "test_start",
+            "backtest_end",
+            "dataset_manifest_identity",
+            "active_profile_sha256",
+        )
+        require(
+            [w for w in registered if isinstance(w, dict) and all(w.get(k) == primary.get(k) for k in identity_fields)]
+            == [primary],
+            "completed primary is unregistered or ambiguous",
+        )
+        identity = plan["dataset_identity"]
+        binding = dict(
+            role="automatic_frozen_model_extension",
+            strict_no_leakage=True,
+            preset=plan["signal_preset"],
+            config_id=plan["config_id"],
+            snapshot_id=plan["snapshot_id"],
+            model_sha256=plan["model_sha256"],
+            model_inference_origin=plan["model_inference_origin"],
+            extension_key=plan["extension_key"],
+            generator_sha256=plan["generator_sha256"],
+            extension_reader_sha256=plan["extension_reader_sha256"],
+            dataset_generation=identity["generation"],
+            release_id=identity["release_id"],
+            dataset_manifest_identity=identity["dataset_manifest_sha256"],
+            dataset_manifest_file_sha256=identity["dataset_manifest_file_sha256"],
+            active_profile_sha256=identity["active_profile_sha256"],
+        )
+        require(
+            primary.get("strict_no_leakage") is True and all(primary.get(k) == v for k, v in binding.items()),
+            "primary registration provenance changed",
+        )
+
+        def read_asset(window: Dict[str, Any]) -> bytes:
+            name = window.get("coefficient_filename")
+            require(isinstance(name, str) and bool(name) and Path(name).name == name, "invalid coefficient basename")
+            path = Path(plan["model_path"]).parent / name
+            _require_plain_existing_chain(path, field="HMM registered coefficient")
+            content = path.read_bytes()
+            require(
+                hashlib.sha256(content).hexdigest() == window.get("coefficient_sha256")
+                and len(content) == window.get("coefficient_bytes"),
+                "registered coefficient bytes/hash changed",
+            )
+            return content
+
+        payload = json.loads(read_asset(primary))
+        require(
+            fingerprint(window_payload(payload, plan, plan["test_start"], plan["backtest_end"]))
+            == primary["coefficient_sha256"],
+            "completed primary payload/provenance changed",
+        )
+        content = canonical_bytes(window_payload(payload, plan, lo, hi))
+        sha = hashlib.sha256(content).hexdigest()
+        expected = dict(
+            primary,
+            test_start=lo,
+            backtest_end=hi,
+            coefficient_filename=f"coefficients_{plan['signal_preset']}_{lo}_{hi}__auto_{plan['extension_key'][:16]}__{sha[:16]}.json",
+            coefficient_sha256=sha,
+            coefficient_bytes=len(content),
+        )
+        existing = [
+            w for w in registered if isinstance(w, dict) and all(w.get(k) == expected[k] for k in identity_fields)
+        ]
+        if existing:
+            require(existing == [expected], "portfolio window registration is conflicting or ambiguous")
+            require(read_asset(existing[0]) == content, "portfolio window content changed")
+            return expected  # No repeated generation, publication or registry update.
+        window = publish_window(payload, plan, lo, hi)
+        require(window == expected, "portfolio window provenance differs from its immutable primary")
+        self._register_coefficient_extension_windows(plan, [window])
+        return window
 
     def _assert_coefficient_extension_current(self, plan: Dict[str, Any]) -> None:
         from .hmm_data_source.coefficient_extension import build_plan, config_fingerprint, resolve_active_input
