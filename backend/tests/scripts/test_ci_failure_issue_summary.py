@@ -574,6 +574,49 @@ def test_nightly_missing_session_receipt_does_not_hide_other_failed_stages() -> 
     assert "missing_session_receipt" not in issue_payload["body"]
 
 
+@pytest.mark.parametrize("stage,expected", [
+    ("workspace", "workspace_preparation_failed"),
+    ("environment", "environment_preparation_failed"),
+    ("plan", "plan_preparation_failed"),
+    ("sessions", "artifact_transport"),
+    ("mismatch", "invalid_execution_diagnostic"),
+])
+def test_nightly_setup_and_transport_failures_never_invent_test_sessions(stage, expected):
+    execution = {"run_id": "9001", "head_commit": "a" * 40,
+                 "workspace": "success", "environment": "success", "plan": "success", "sessions": "skipped"}
+    if stage == "mismatch":
+        execution["head_commit"] = "b" * 40
+    else:
+        execution[stage] = "failure"
+    payload = summary.summarize_nightly_status({
+        "statuses": {"nightlyL3": "failure", "drSnapshot": "failure"},
+        "run_id": "9001", "commit": "a" * 40, "nightly_l3_execution": execution,
+    })
+    assert payload["nightly_failed_sessions"] == []
+    group = payload["nightly_failure_groups"][0]
+    assert group["sessions"] == [] and group["failure_kinds"] == [expected]
+    issue = summary.build_github_issue_payloads(payload)[0]
+    real = summary.build_github_issue_payloads(_failed_nightly_sessions("9000", "validation_workflow_automation"))[0]
+    assert issue["dedupe"]["nightly_marker"] != real["dedupe"]["nightly_marker"]
+    assert not issue["dedupe"].get("legacy_nightly_marker")
+    assert "validation_workflow_automation" not in issue["title"]
+
+
+def test_nightly_workflow_exports_setup_outcomes_without_fabricating_results():
+    import yaml
+    workflow = yaml.safe_load((Path(__file__).resolve().parents[3] / ".github/workflows/nightly.yml").read_text(encoding="utf-8"))
+    l3 = workflow["jobs"]["nightly-l3"]
+    steps = {step.get("id"): step for step in l3["steps"] if step.get("id")}
+    for name in ("prepare_workspace", "verify_environment", "build_plan", "execute_sessions"):
+        assert name in steps
+        assert any(f"steps.{name}.outcome" in value for value in l3["outputs"].values())
+    summary_steps = workflow["jobs"]["full-summary"]["steps"]
+    assert not any("Materialize exhausted" in step.get("name", "") for step in summary_steps)
+    build = next(step for step in summary_steps if step.get("name") == "Build Nightly failure issue context")
+    assert '"nightly_l3_execution"' in build["run"]
+    assert "needs.nightly-l3.outputs.workspace_result" in build["env"]["L3_WORKSPACE_RESULT"]
+
+
 def test_nightly_heterogeneous_failure_groups_are_bounded_with_overflow() -> None:
     sessions = [
         "factor_research_backend",
