@@ -64,6 +64,7 @@ BASE_DATASET_MANIFEST_SCHEMA = "aistock_monthly_base_dataset_manifest_v1"
 CORE_INDEX_COVERAGE_SCHEMA = "aistock_monthly_six_pool_coverage_v1"
 SECTOR_CONTEXT_RECEIPT_SCHEMA = "aistock_sector_context_receipt_v1"
 SUSPEND_SCHEMA = "qe_direct_suspend_d_v1"
+SUSPEND_FACT_POPULATION = "all_frozen_shsz_suspension_facts_v1"
 MEMBERSHIP_DENOMINATOR = "pit_stock_universe_intersection_policy_window_calendar_v1"
 _STOCK = re.compile(r"^[0-9]{6}[.](?:SH|SZ)$")
 _POOL_IDS = ("stock_universe", *P0_POOL_IDS)
@@ -304,9 +305,9 @@ def _build_suspend(
     month_start = cutoff.replace(day=1)
     effective_calendar = tuple(day for day in calendar if month_start <= day <= cutoff) if prefix is not None else tuple(calendar)
     calendar_set = set(effective_calendar)
-    pit_by_symbol: dict[str, list[tuple[date, date]]] = {}
-    for symbol, start, end in pit_rows:
-        pit_by_symbol.setdefault(symbol, []).append((start, end))
+    # ``pit_rows`` is retained for call compatibility only. A stock leaving
+    # the buy universe must not hide a real suspension from held-position
+    # valuation/exit consumers. The sealed SOURCE defines factual population.
     normalized: list[dict[str, Any]] = []
     keys: set[tuple[str, date]] = set()
     authority = load_authority(suspension_authority)
@@ -318,8 +319,6 @@ def _build_suspend(
     resolutions = project_suspension_days(raw_events, authority=authority, required_dates=effective_calendar)
     for resolution in resolutions:
         symbol, day = resolution["ts_code"], day_value(resolution["trade_date"])
-        if not any(start <= day <= end for start, end in pit_by_symbol.get(symbol, ())):
-            continue
         if resolution["state"] == "UNRESOLVED":
             raise MonthlySharedComponentsError(f"unresolved suspension day: {symbol}/{day}")
         if resolution["state"] == "RESUMED":
@@ -375,6 +374,7 @@ def _build_suspend(
             "end": cutoff.isoformat(),
             "universe_key": profile.universe_key,
             "source_table": "market.suspend_d",
+            "fact_population_contract": SUSPEND_FACT_POPULATION,
             "suspend_type": "S",
             "row_count": len(frame),
             "stock_count": int(frame["ts_code"].nunique()) if not frame.empty else 0,
