@@ -168,6 +168,8 @@ def shared_preparation_identity(
             {
                 "semantic_profile": profile.semantic_profile_digest,
                 "sector_membership_start": sector_membership_start.isoformat(),
+                **({"fact_population_contract": "all_frozen_shsz_suspension_facts_v1"}
+                   if component == "suspend" else {}),
             },
         ),
         validation_policy_sha256=digest_named_fields(

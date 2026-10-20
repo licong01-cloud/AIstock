@@ -96,15 +96,16 @@ def test_native_builder_reads_full_market_inventory_above_small_control_cap(tmp_
                 "component_artifact_manifest_ref": reference.as_dict(), "verified_output_files": files})
 
 
+@pytest.mark.parametrize("outside_selection", [False, True])
 @pytest.mark.parametrize("symbol,day,verified", [
     ("603616.SH", date(2026, 1, 22), True),
     ("000001.SZ", date(2026, 9, 1), False),
 ])
-def test_suspend_export_resolves_only_disclosure_backed_mixed_events(tmp_path, symbol, day, verified):
+def test_suspend_export_resolves_only_disclosure_backed_mixed_events(tmp_path, symbol, day, verified, outside_selection):
     import json
     from backend.services.dataset_release.monthly_shared_components import MonthlySharedComponentsError
     kwargs = dict(root=tmp_path, rows=[dict(ts_code=symbol, trade_date=day, suspend_type=kind,
-                  suspend_timing=None) for kind in ("S", "R")], pit_rows=[(symbol, day, day)],
+                  suspend_timing=None) for kind in ("S", "R")], pit_rows=[] if outside_selection else [(symbol, day, day)],
                   calendar=(day,), profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
     if not verified:
         with pytest.raises(MonthlySharedComponentsError, match="unresolved suspension"):
@@ -119,6 +120,17 @@ def test_suspend_export_resolves_only_disclosure_backed_mixed_events(tmp_path, s
     assert len(evidence["raw_provider_events"]) == 2
     assert evidence["day_resolutions"][0]["basis"] == "OFFICIAL_DISCLOSURE"
     assert evidence["historical_publication_time_proven"] is False
+
+
+@pytest.mark.parametrize("kind,expected", [("S", 1), ("R", 0)])
+def test_suspension_facts_are_not_selection_eligibility(tmp_path, kind, expected):
+    day, symbol = date(2026, 9, 30), "000698.SZ"
+    parquet, metadata, keys, count = _build_suspend(
+        root=tmp_path, rows=[dict(ts_code=symbol, trade_date=day, suspend_type=kind, suspend_timing=None)],
+        pit_rows=[], calendar=(day,), profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day)
+    assert len(pd.read_parquet(parquet)) == len(keys) == expected
+    assert count == 1
+    assert json.loads(metadata.read_bytes())["fact_population_contract"] == "all_frozen_shsz_suspension_facts_v1"
 
 
 @pytest.mark.parametrize("timing", ["9:34-9:44", "13:13-13:23,13:23-13:33"])
