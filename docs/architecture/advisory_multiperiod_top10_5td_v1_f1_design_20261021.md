@@ -1,8 +1,8 @@
 # 多时期固定5交易日 Top10 有限模型比较（F1）
 
-版本：v1.0；日期：2026-10-21；业务归属：Advisory / model_first。
+版本：v1.1；日期：2026-10-21；业务归属：Advisory / model_first。
 依据：荐股蓝图 v5.21 §6.3.4、§6.10、§16.0 的 B0–B3，不是旧 serial candidate 重试。
-状态：设计PR #6512已合入c54f17053f9d1d4a475fd61f07db511f5ed452de；源码直接合同验证通过，真实研究待执行。经济确认、角色激活未发生。
+状态：设计PR #6512已合入c54f17053f9d1d4a475fd61f07db511f5ed452de；源码直接合同及真实19次fit、唯一outer评价已完成。结果为NOT_WORTH_CONTINUING_THIS_CANDIDATE；经济确认、角色激活未发生。源码PR/CI与本研究结果分别交付。
 
 ## Background / Goal / Feature Card
 
@@ -172,15 +172,15 @@ B3将内层选择与外层预测、收益计量分阶段冻结，完成一次外
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-401 | multiperiod_top10_5td_inputs_v1.original_rosters / file_dataset；pipeline.Study | artifact: X:/AIstock_temp/ADVISORY/multiperiod-top10-5td-20261021/b0_inventory.json | SOURCE_CONTRACT_PASS | none |
-| F-402 | inputs.read_daily / build_features / make_finance；study.training_population | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
-| F-403 | study.select_configuration / fit_model；pipeline.Study.fit_event / verify_fits | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
-| F-404 | study.predict / cohort | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
-| F-405 | study.evaluate / paired_interval / classify；pipeline.finish | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
-| F-406 | pipeline.Study.read / publish / register；stage_location | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
-| F-407 | pipeline.prepare / select / predict_outer / finish；Test Plan | artifact: X:/AIstock_temp/ADVISORY/multiperiod-top10-5td-20261021/ownership.json | SOURCE_CONTRACT_PASS | none |
+| F-401 | multiperiod_top10_5td_inputs_v1.original_rosters / file_dataset；pipeline.Study | artifact: X:/AIstock_temp/ADVISORY/multiperiod-top10-5td-20261021/b0_inventory.json；Research Result原人口 | REAL_DATA_AND_SOURCE_PASS | none |
+| F-402 | inputs.read_daily / build_features / make_finance；study.training_population | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py；prepared/receipt.json | REAL_DATA_AND_SOURCE_PASS | none |
+| F-403 | study.select_configuration / fit_model；pipeline.Study.fit_event / verify_fits | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py；selected/trained/selection.json及19对fit claims | REAL_DATA_AND_SOURCE_PASS | none |
+| F-404 | study.predict / cohort | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py；predicted/trained/predictions.parquet | REAL_DATA_AND_SOURCE_PASS | none |
+| F-405 | study.evaluate / paired_interval / classify；pipeline.finish | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py；evaluated/evaluation.json | REAL_DATA_AND_SOURCE_PASS | none |
+| F-406 | pipeline.Study.read / publish / register；stage_location | backend/tests/advisory_model_first/test_multiperiod_top10_5td_v1.py；current_study_diagnostics.json的五阶段hash | REAL_DATA_AND_SOURCE_PASS | none |
+| F-407 | pipeline.prepare / select / predict_outer / finish；Research Result | artifact: X:/AIstock_temp/ADVISORY/multiperiod-top10-5td-20261021/ownership.json；junit-final-27.xml | RESEARCH_COMPLETE_NOT_ECONOMICALLY_CONFIRMED | none |
 
-上述矩阵证明离线源码合同与直接测试，尚不代表真实数据研究、独立确认或实盘角色通过。真实结果见后续Research Result。
+上述矩阵证明本F1离线源码合同与真实研究执行完整，不代表模型经济通过、独立确认或实盘角色通过。真实结果及停止原因见Research Result。
 
 ## Risks / Production Gates / Rollout
 
@@ -198,7 +198,65 @@ DDL/数据库写入/数据激活/依赖安装/进程控制均 noop；无生产�
 DESIGN-COMPLIANCE-001逐项：不把设计/测试冒充真实收益；错误明确；不改变原生选股和已批合同；
 不新增包准入或生产审批。本研究三分类是证据解释，不是对QE包另设门禁。
 
-Research Result：尚未开始prepare、fit或outer收益读取；后续只追加本轮实际结果，不改事前假设和选择规则。
+## Research Result / 2026-10-21真实结果
+
+唯一完成run：`advmultitop10_6c632adf532818cfcd059113`，producer `a366173cf047841d01b06567ba699a6d74eb1812`。
+产物根：`X:/AIstock_temp/ADVISORY/multiperiod-top10-5td-20261021/study/advmultitop10_6c632adf532818cfcd059113`。
+plan hash `d5753325ae465d6b2417abbc396ef8e4bbe268f4a741bc0dcff6b85205b7bc28`；
+evaluated stage hash `59ad842deaf8d550f85810363bcfc7df6bd16cc9cf368a14e53d8b1b1d25f58e`；
+evaluation.json文件SHA `3560dd994d4988e41df6fdb052e8cd1b51b5540b6882544409a60454ac9dfe16`。
+完整结果在`evaluated/evaluation.json`，预声明相关性/逐fold及资源诊断在`current_study_diagnostics.json`；诊断0新fit，仅消费本run已冻结产物，不为旧失败补证。
+
+### 人口、选择与执行
+
+- 两包2024-07-04..2026-08-28共524D、1,048包D、52,400原Top50候选全部保留；训练段305D/30,500行。
+- 六配置×三时间fold的18次实际fit完成；100个所有配置/两包共同完整验证D中，ridge_1/10/100及hgb_3/7/15的配对增量依次为13.184567/13.692513/15.506378/14.146620/1.360245/9.874504bps。
+- 仅按inner选定`ridge_100.0`，最终训练一次后冻结outer预测，权重SHA `2088c883c968109dca3576636404c59b5021ee0cee528fd504aac1b3bc7977cf`。本轮19实际fit，累计181研究fit＋1旧index；6配置不是19独立假设，旧2cohort闭式估计器/172统计更新仍单列。
+- outer 219D/438包D/21,900候选保留；末5D/500候选IMMATURE，另36 UNKNOWN、32 CASH_ENTRY_NOT_EXECUTABLE、21,332 AVAILABLE。214成熟D中205为两臂两包共同完整D，配对覆盖95.7944%；不删除其余9成熟缺口D或末5D。
+- 先冻结prediction再计量outer；sealed收益未读，0 SQL、0 QE任务、0生产/数据/其它模块/服务操作。原始完整评分来源与冻结Top50投影分别记录；不声称恢复原生历史资格/全股票池receipt。
+
+### 唯一外层经济评价
+
+| 同一205共同完整D的指标 | 模型Top10 | 原Top10 |
+| --- | ---: | ---: |
+| 固定5TD成本后cohort均值bps | 69.431135 | 93.583451 |
+| 正收益cohort比例 | 59.0244% | 62.4390% |
+| 最差10% cohort均值bps | −650.728077 | −641.499093 |
+
+主配对增量 **−24.152316bps**，95% circular-block区间 **[−62.900971,13.408544]bps**；SE19.705438、MDE80=55.207168bps，
+原219D轴保留，205配对D、20个保守十日块、正自相关估计有效75.25D。MDE仍大于预声明10bps经济目标，不能伪称有排除小收益的统计功效。
+但本候选点估计为负，按事前规则即`NOT_WORTH_CONTINUING_THIS_CANDIDATE`，不是统计证明整个模型族有害。
+214成熟D均有干预、跨四季度，非旧候选的恒等/稀疏干预形态；尾部相对恶化9.228984bps，未触及100bps风险线。
+
+相同主端点人口下：避亏100.604038、漏盈141.656281、新增盈利130.673134、新增亏损113.773207bps，
+`避亏−漏盈＋新增盈利−新增亏损=−24.152316bps`，闭合主增量。成熟期candidate未知质量低于原Top10约0.09346个百分点，不能用缺失增加解释总体负值。
+
+| 预声明时间块 | 共同完整D | candidate−原Top10 bps |
+| --- | ---: | ---: |
+| 2025Q4 | 56 | −32.435754 |
+| 2026Q1 | 56 | +0.902673 |
+| 2026Q2 | 55 | +9.184670 |
+| 2026Q3（至08-28） | 38 | −97.119187 |
+
+包内配对诊断TCN211D/−6.578207bps、LSTM206D/−40.735428bps；其人口不同，不能把各自非配对均值相减或择好包宣称通过。
+两包outer日内RankIC模型/原父排序分别为TCN0.011858/0.019679、LSTM−0.008726/0.008387；
+模型与原父排序平均相关TCN0.483033、LSTM0.338501。最终模型没有保持父排序的全部信息，且新排序预测力未优于父排序。
+inner所选Ridge三fold增量为−6.018278/+15.701102/+28.906174bps，已见时间不稳定；扩大到多时段没有形成可确认的稳健改进。
+这些是开发诊断，不关闭全局可学习性，也不证明QE包无Alpha；主共同D的原Top10均值为正，2026Q2两臂均负，仍不能冒充实盘NAV/超额收益。
+
+### 性能、故障修复及后继状态
+
+成功run各阶段耗时prepare150.777秒、18fit选择7.116秒、最终fit/预测0.745秒、outer计量30.094秒，合计188.733秒；
+这是阶段计算时间，不是开发/CI总墙钟。峰值prepare724.21MiB、其它阶段不超过433MiB，研究根产物约11.49MB；WSL仅2CPU线程/无GPU。
+prepare一次H5日线扫描同时供训练标签与D特征使用，原始大型数据/评分不复制；outer计量是独立冻结预测后的有界读取，不重复逐日工作区。
+
+两次旧prepare失败发生在任何fit或outer收益计量前：`025fb6...`的批次变量遮蔽，`e204de...`的空horizon布尔dtype。
+均已精确修复、增加101D跨批和末尾未成熟/缓存回归；旧plan/失败记录保留，新run绑定零fit retry lineage，不改人口/模型/成本/阈值。
+日期精度曾为排查假设，已由实际ns键与完整batch对齐排除，非根因。
+
+本F1的B0～B3执行完成；**不启动B4独立确认或B5角色集成，不在同一frontier改选HGB/参数/好时期重评**。
+下一新研究须依据已见跨期不稳/原父排序信息损失，提出实质不同且训练内可证伪的增量假设，再单独冻结预算；不能直接宣称扩大样本或更强模型已解决收益问题。
+公告继续暂缓，原包日频/规则建议不变。本离线代码没有服务加载入口变化，无需为此研究重启；工程合入与经济未通过分报。
 
 ### 设计三轮自审记录
 
@@ -212,4 +270,10 @@ Research Result：尚未开始prepare、fit或outer收益读取；后续只追�
 1. 纯构造与原生接口：修复既有特征列merge冲突、计量构造器必填source hash；正常/停牌/真缺价/未成熟红转绿。
 2. 时间与统计：先投影D再解析H，未来特征/标签poison不影响训练；外层归因统一主端点共同D人口，分段不混入额外单包日。
 3. 身份与恢复：19次真实claim及完成身份逐项核验，不使用预填fit数作研究证据；派生rank唯一性、预算、中断、stage漂移明确失败。
-   24项直接测试（含两模型族的小型测试拟合，非研究trial）及Ruff通过；四文件ownership全部Advisory，无跨模块写入。
+   最终27项直接测试（含两模型族的小型测试拟合，非研究trial）及Ruff通过；四文件ownership全部Advisory，无跨模块写入。
+
+### 真实执行后的复审
+
+1. 数据/时钟复审：训练30,500行与outer21,900行完整，524D/全部原slot未删；成熟H投影、空horizon及未来poison回归通过。sealed只读取日历/文件元数据，不解码其收益；outer自身D日价作为合法特征不混称“从未读取outer价格”。
+2. 统计/经济复审：18个CV claim＋1最终claim逐项完成；归因与205共同D主端点闭合，功效不足不掩盖预声明负点停止，未重新选择或激活。相关性仅诊断，不作为结果后新门。
+3. 性能/交付复审：L0四项P2复杂度告警为有界100D×50候选×5会话及固定六配置三fold，一对一merge；实测各阶段低于预算，0 blocking。DESIGN-COMPLIANCE-001四项逐条通过：无简化/mock冒充、无吞错/补价、无经济标准更改、无包准入/新审批。独立确认/生产启用明确未发生，不属于本F1缺交付。
