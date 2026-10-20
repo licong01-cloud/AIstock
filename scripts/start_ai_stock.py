@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 from contextlib import contextmanager
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -134,10 +135,8 @@ def commands(service: str) -> tuple[list[str], Path, dict]:
     env["PYTHONIOENCODING"] = "utf-8"
     if service == "backend":
         return [sys.executable, "-m", "uvicorn", "backend.main:app", "--host", "0.0.0.0", "--port", "8001"], ROOT, env
-    if service == "tdx":
-        env["TDX_HTTP_PORT"] = "19080"
-        return [sys.executable, str(ROOT / "scripts/start_tdx_go_backend.py"), "--database-target", "production",
-                "--env-file", str(ROOT / ".env")], ROOT, env
+    if service != "frontend":
+        raise ValueError(f"No generic command for service: {service}")
     node = shutil.which("node.exe")
     if not node or not (ROOT / "frontend/node_modules/next/dist/bin/next").is_file():
         raise RuntimeError("Existing Node/Next.js dependencies missing; this launcher never installs dependencies")
@@ -146,23 +145,31 @@ def commands(service: str) -> tuple[list[str], Path, dict]:
     return [node, str(ROOT / "frontend/scripts/next-dev-isolated.mjs"), "--port", "3000"], ROOT / "frontend", env
 
 
-def tdx_build(directory: Path) -> str:
-    command, cwd, env = commands("tdx")
-    log = directory / "tdx-build.log"
-    with log.open("w", encoding="utf-8") as output:
-        process = subprocess.Popen([*command, "--build-only"], cwd=cwd, env=env,
-                                   stdout=output, stderr=subprocess.STDOUT)
-        try:
-            code = process.wait(timeout=180)
-        except subprocess.TimeoutExpired as exc:
-            raise RuntimeError(f"TDX build still running; not killed or retried. Details: {log}") from exc
-    if code:
-        raise RuntimeError(f"TDX build failed ({code}); details: {log}")
-    receipt = json.loads(log.read_text(encoding="utf-8").strip().splitlines()[-1])
-    revision = receipt.get("source_revision", "")
-    if not re.fullmatch(r"[0-9a-f]{40}", revision):
-        raise RuntimeError("TDX build did not return a verified source revision")
-    return revision
+def load_tdx_launcher():
+    spec = importlib.util.spec_from_file_location("tdx_launcher", ROOT / "scripts/start_tdx_go_backend.py")
+    if spec is None or spec.loader is None:
+        raise RuntimeError("TDX launcher module is unavailable")
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    return helper
+
+
+def cached_tdx_command(directory: Path) -> tuple[list[str], Path, dict]:
+    """Validate and execute the fixed EXE; startup never invokes the Go compiler."""
+    helper = load_tdx_launcher()
+    command, env = helper.prepare_launch(ROOT / ".env", "production")
+    receipt = helper.cached_build(Path(command[0]), helper.build_fingerprint(env))
+    if receipt is None:
+        build = [sys.executable, str(ROOT / "scripts/start_tdx_go_backend.py"),
+                 "--database-target", "production", "--env-file", str(ROOT / ".env"), "--build-only"]
+        raise RuntimeError("TDX fixed EXE is missing or stale; no compilation attempted. Build explicitly: "
+                           + subprocess.list2cmdline(build))
+    receipt = {**receipt, "build_action": "reused"}
+    pending = directory / "tdx-executable.next.json"
+    pending.write_text(json.dumps(receipt), encoding="utf-8")
+    os.replace(pending, directory / "tdx-executable.json")
+    print(f"TDX verified fixed EXE reused: {command[0]}", flush=True)
+    return command, ROOT / "tdx-api-main/web", env
 
 
 @contextmanager
@@ -211,7 +218,9 @@ def child(service: str, directory: Path) -> int:
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
             stream.reconfigure(encoding="utf-8")
-    command, cwd, env = commands(service)
+    if service == "tdx":
+        os.environ["TDX_HTTP_PORT"] = "19080"
+    command, cwd, env = cached_tdx_command(directory) if service == "tdx" else commands(service)
     with (directory / f"{service}.log").open("a", encoding="utf-8") as log:
         process = subprocess.Popen(command, cwd=cwd, env=env, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, text=True, encoding="utf-8", errors="replace", bufsize=1)
@@ -226,12 +235,24 @@ def child(service: str, directory: Path) -> int:
     return code
 
 
-def wait_ready(service: str, expected: str | None, directory: Path, timeout: float = 120) -> str:
+def wait_ready(service: str, expected: str | Path | None, directory: Path, timeout: float = 120) -> str:
     deadline, last = time.monotonic() + timeout, "not listening"
     while time.monotonic() < deadline:
         exit_file = directory / f"{service}.exit.json"
         if exit_file.exists():
             raise RuntimeError(f"{service} exited before ready: {exit_file.read_text(encoding='utf-8')}; logs: {directory}")
+        revision_hint = expected
+        if isinstance(expected, Path):
+            if not expected.exists():
+                time.sleep(0.5)
+                continue
+            receipt = json.loads(expected.read_text(encoding="utf-8"))
+            if not isinstance(receipt, dict):
+                raise RuntimeError("TDX cached executable receipt is invalid")
+            revision_hint = receipt.get("source_revision", "")
+            if (receipt.get("schema_version") != "aistock_tdx_build_v1"
+                    or not re.fullmatch(r"[0-9a-f]{40}", str(revision_hint))):
+                raise RuntimeError("TDX cached executable receipt is invalid")
         # Avoid starting PowerShell/CIM for every failed readiness poll. A TCP
         # connection is only a cheap hint, never ownership or readiness evidence.
         try:
@@ -241,7 +262,7 @@ def wait_ready(service: str, expected: str | None, directory: Path, timeout: flo
             listening = False
         if listening:
             try:
-                revision = ready(service, expected)
+                revision = ready(service, revision_hint)
             except (OSError, ValueError, RuntimeError) as exc:
                 if isinstance(exc, RuntimeError) and "old/different source" in str(exc):
                     raise
@@ -273,42 +294,54 @@ def start(check: bool = False) -> dict:
     head = git_head()
     if not (ROOT / ".env").is_file():
         raise RuntimeError("Missing .env; no services started")
-    for service in PORTS:
+    for service in ("backend", "frontend"):
         commands(service)
-    snapshot = inventory()
-    states = {service: state(service, snapshot) for service in PORTS}
     if check:
+        snapshot = inventory()
+        states = {service: state(service, snapshot) for service in PORTS}
         return {"check_only": True, "head": head, "states": states, "services_started": False}
     with startup_lock():
         directory = RUNTIME / (time.strftime("%Y%m%d-%H%M%S-") + uuid4().hex[:8])
         directory.mkdir()
         print(f"Startup logs: {directory}", flush=True)
         result = {"logs": str(directory), "business_acceptance": "not_evaluated", "services": {}}
-        expected_revisions = {}
-        # Next.js can prepare independently while TDX builds/warms up. Backend
-        # still waits for TDX, so its existing startup dependency is unchanged.
-        for service in ("frontend", "tdx", "backend"):
-            if service == "backend":
-                revision = wait_ready("tdx", expected_revisions["tdx"], directory)
-                result["services"]["tdx"]["observed_identity"] = revision
-            current = settle(service)
-            expected = head if service == "backend" else None
-            if current == "absent":
-                if service == "tdx":
-                    expected = tdx_build(directory)
-                if state(service, inventory()) != "absent":
-                    raise RuntimeError(f"{service} appeared during preparation; rerun after inspection")
-                if git_head() != head:
-                    raise RuntimeError("Source HEAD changed during startup; no further services started")
-                launch(service, directory)
-            expected_revisions[service] = expected
-            result["services"][service] = {"prior_state": current}
-        for service in ("backend", "frontend"):
-            revision = wait_ready(service, expected_revisions[service], directory)
+        # One shared fresh snapshot under the lock, not two PowerShell scans
+        # between each tab. Dispatch every independent service before readiness.
+        snapshot = inventory()
+        states = {service: state(service, snapshot) for service in PORTS}
+        expected_revisions, errors = {}, []
+        # Old processes may need to settle; never delay the other absent services.
+        order = sorted(PORTS, key=lambda service: states[service] not in ("absent", "listening"))
+        for service in order:
             if git_head() != head:
-                raise RuntimeError("Source HEAD changed during startup; readiness cannot be attributed to this start")
-            result["services"][service]["observed_identity"] = revision
+                raise RuntimeError("Source HEAD changed during startup; no further services started")
+            result["services"][service] = {"prior_state": states[service]}
+            try:
+                current = states[service]
+                if current not in ("absent", "listening"):
+                    current = settle(service)
+                expected = head if service == "backend" else None
+                if current == "absent":
+                    launch(service, directory)
+                    if service == "tdx":
+                        expected = directory / "tdx-executable.json"
+                expected_revisions[service] = expected
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+                errors.append(f"{service}: {exc}")
+                result["services"][service]["error"] = str(exc)
+        for service, expected in expected_revisions.items():
+            try:
+                revision = wait_ready(service, expected, directory)
+                result["services"][service]["observed_identity"] = revision
+            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+                errors.append(f"{service}: {exc}")
+                result["services"][service]["error"] = str(exc)
+        if git_head() != head:
+            errors.append("Source HEAD changed during startup; readiness cannot be attributed to this start")
+        result["errors"] = errors
         (directory / "summary.json").write_text(json.dumps(result, indent=2), encoding="utf-8")
+        if errors:
+            raise RuntimeError("; ".join(errors) + f"; summary: {directory / 'summary.json'}")
         return result
 
 
