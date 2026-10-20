@@ -638,6 +638,31 @@ def frontend_type_lint(session: nox.Session) -> None:
         os.chdir(old_cwd)
 
 
+def _run_qe_read_contract_target(session: nox.Session, target: str) -> None:
+    """Run QE source/browser/mocked contracts, never the live qe_read_ui scenario."""
+    if any(not (ROOT / "frontend/node_modules" / path).is_file() for path in FRONTEND_DIRECT_ENTRYPOINTS):
+        session.error("QE read contracts require prebuilt dependencies; installation is not authorized")
+    session.chdir(ROOT / "frontend")
+    session.run("node", "node_modules/@playwright/test/cli.js", "test",
+                "--config=tests/qe-read-contract.config.ts",
+                target, *session.posargs, external=True)
+
+
+@nox.session(venv_backend="none")
+def qe_best_loop_contract_ui(session: nox.Session) -> None:
+    _run_qe_read_contract_target(session, "tests/qe/qe-evolution-best-loop-ui.spec.ts")
+
+
+@nox.session(venv_backend="none")
+def qe_terminal_poll_contract_ui(session: nox.Session) -> None:
+    _run_qe_read_contract_target(session, "tests/qe/qe-evolution-read-only.spec.ts")
+
+
+@nox.session(venv_backend="none")
+def qe_read_performance_ui(session: nox.Session) -> None:
+    _run_qe_read_contract_target(session, "tests/qe/qe-read-performance.spec.ts")
+
+
 @nox.session(venv_backend="none")
 def qe_experiment_registry_ui(session: nox.Session) -> None:
     """Run the mocked QE experiment registry and progress UI contract."""

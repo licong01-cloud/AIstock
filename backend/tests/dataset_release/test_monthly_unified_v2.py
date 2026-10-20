@@ -315,6 +315,70 @@ def _request(*, key: str = "monthly-202609") -> MonthlyReleaseRequest:
     )
 
 
+@pytest.mark.parametrize(
+    "planned,observed,ready",
+    [
+        ("2026-10-10T00:40:27.465665+00:00", "2026-10-10T08:40:27.465665+08:00", True),
+        ("2026-10-10T00:40:27.465665Z", "2026-10-10T00:40:27.465665+00:00", True),
+        ("2026-10-10T00:40:27.465665+00:00", "2026-10-10T08:40:27.465666+08:00", False),
+        ("2026-10-10T00:40:27+00:00", "2026-10-10T00:40:27+08:00", False),
+        ("2026-10-10T00:40:27", "2026-10-10T00:40:27", False),
+        ("invalid", "invalid", False),
+        ("", "", False),
+    ],
+)
+def test_ready_source_as_of_compares_aware_instants(tmp_path, planned, observed, ready):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    assert service.run(operation)["status"] == "READY_TO_ACTIVATE"
+    plan = service.store.read_plan(operation)
+    plan["source_as_of"] = planned
+    receipts = {stage: service.store.read_checkpoint(operation, stage) for stage in STAGES}
+    receipts["SOURCE"]["scope"]["source_as_of"] = observed
+    active_before = service.active_profile.read_bytes()
+    if ready:
+        result = service._close_ready(
+            operation, request=service.store.read_request(operation), plan=plan, receipts=receipts
+        )
+        assert result["status"] == "READY_TO_ACTIVATE"
+        assert result["source_as_of"] == observed
+    else:
+        with pytest.raises(monthly_subject.MonthlyReleaseNotReady, match="source_as_of"):
+            service._close_ready(
+                operation, request=service.store.read_request(operation), plan=plan, receipts=receipts
+            )
+    assert service.active_profile.read_bytes() == active_before
+
+
+def test_timezone_closure_resume_reuses_every_completed_stage(tmp_path, monkeypatch):
+    class OffsetSource(Pipeline):
+        def run_stage(self, **kwargs):
+            receipt = dict(super().run_stage(**kwargs))
+            if kwargs["stage"] == "SOURCE":
+                receipt["scope"]["source_as_of"] = "2026-10-01T08:00:00+08:00"
+                receipt["canonical_sha256"] = monthly_subject._digest(
+                    {key: value for key, value in receipt.items() if key != "canonical_sha256"}
+                )
+            return receipt
+
+    pipeline = OffsetSource()
+    service = _service(tmp_path, pipeline)
+    operation = service.submit(_request())["operation_id"]
+    close_ready = service._close_ready
+
+    def interrupted_closure(*args, **kwargs):
+        raise RuntimeError("closure interrupted after all stages")
+
+    monkeypatch.setattr(service, "_close_ready", interrupted_closure)
+    assert service.run(operation)["status"] == "FAILED"
+    checkpoints = {stage: service.store.read_checkpoint(operation, stage) for stage in STAGES}
+    monkeypatch.setattr(service, "_close_ready", close_ready)
+    service.resume(operation)
+    assert service.run(operation)["status"] == "READY_TO_ACTIVATE"
+    assert pipeline.calls == list(STAGES)
+    assert {stage: service.store.read_checkpoint(operation, stage) for stage in STAGES} == checkpoints
+
+
 @pytest.mark.parametrize("supplement_name", ["monthly_industry_history", "monthly_prev_close_repairs", "monthly_suspension_authority"])
 @pytest.mark.parametrize("drift", [None, "base_plan", "binding", "source_receipt"])
 def test_history_supplement_keeps_sealed_source_across_producer_upgrade(tmp_path, drift, supplement_name):

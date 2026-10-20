@@ -1146,16 +1146,18 @@ def _extension_probe():
     plan = dict(config_id="config-1", snapshot_id="snapshot-1", signal_preset="balanced", model_sha256="a" * 64,
                 source_mode="qe_frozen_file", generation_mode="frozen_window_extension_v1", policy=dict(policy),
                 test_start="2026-06-01", backtest_end="2026-08-31", windows=[["2026-06-01", "2026-08-31"]],
-                generator_sha256="f" * 64, model_inference_origin=origin, dataset_identity=identity, preset_coeffs={"bull": 1.1})
-    key = dict(policy=policy, preset="balanced", preset_coeffs=plan["preset_coeffs"], model_inference_origin=origin,
-               input_identity=identity, start=plan["test_start"], end=plan["backtest_end"], generator_sha256="f" * 64)
-    plan["extension_key"] = hashlib.sha256((json.dumps(key, sort_keys=True, separators=(",", ":")) + "\n").encode()).hexdigest()
+                generator_sha256="f" * 64, extension_reader_sha256="0" * 64,
+                model_inference_origin=origin, dataset_identity=identity, preset_coeffs={"bull": 1.1})
+    # Golden canonical writer key, including the frozen reader digest. Do not
+    # derive it from the validator: a matching omission would hide this bug.
+    plan["extension_key"] = "83e6e761ff52860f7e066fc080414c16665d8a4188ae9631b771886e95d32ffd"
     filename = f"coefficients_balanced_2026-06-01_2026-08-31__auto_{plan['extension_key'][:16]}__{'9' * 16}.json"
     window = dict(role="automatic_frozen_model_extension", preset="balanced", test_start="2026-06-01", backtest_end="2026-08-31",
                   strict_no_leakage=True, snapshot_id="snapshot-1", config_id="config-1", model_sha256="a" * 64,
                   dataset_generation="generation-1", release_id="release-1", dataset_manifest_identity="c" * 64,
                   dataset_manifest_file_sha256="d" * 64, active_profile_sha256="e" * 64, coefficient_filename=filename,
-                  coefficient_sha256="9" * 64, coefficient_bytes=123, extension_key=plan["extension_key"], generator_sha256="f" * 64)
+                  coefficient_sha256="9" * 64, coefficient_bytes=123, extension_key=plan["extension_key"],
+                  generator_sha256="f" * 64, extension_reader_sha256="0" * 64)
     result = dict(status="REGISTERED", training_performed=False, output_path="F:/models/" + filename, artifact_sha256="9" * 64,
                   windows=[window], dataset_identity=dict(identity), extension_key=plan["extension_key"], model_sha256="a" * 64, generator_sha256="f" * 64)
     job = dict(job_id="job-1", config_id="config-1", snapshot_id="snapshot-1", signal_preset="balanced",
@@ -1177,10 +1179,12 @@ def _extension_probe():
         ("completed_at", "2026-08-30T00:00:00+08:00"), ("completed_at", "2099-01-01T00:00:00+08:00"))),
     *(("jobs.0.plan_json." + k, v) for k, v in (("model_inference_origin", None), ("model_inference_origin.validation_end", "2026-06-01"),
         ("model_inference_origin.origin_authority", "mutable_config"), ("model_sha256", "8" * 64), ("source_mode", "database_daily"),
-        ("extension_key", "8" * 64), ("windows", []), ("dataset_identity.active_profile_sha256", "bad"))),
+        ("extension_key", "8" * 64), ("windows", []), ("dataset_identity.active_profile_sha256", "bad"),
+        ("extension_reader_sha256", None), ("extension_reader_sha256", "bad"), ("extension_reader_sha256", "8" * 64))),
     *(("jobs.0.result_json." + k, v) for k, v in (("training_performed", True), ("status", "FAILED"), ("windows", []),
         ("windows.0.strict_no_leakage", False), ("windows.0.test_start", "2024-07-01"), ("windows.0.snapshot_id", "other"),
-        ("windows.0.coefficient_bytes", True), ("windows.0.coefficient_filename", "other.json"), ("output_path", "F:/other.json"))),
+        ("windows.0.coefficient_bytes", True), ("windows.0.coefficient_filename", "other.json"), ("output_path", "F:/other.json"),
+        ("windows.0.extension_reader_sha256", None), ("windows.0.extension_reader_sha256", "8" * 64))),
 ])
 def test_coefficient_extension_semantic_contract(field, value):
     payload, query = _extension_probe(), ""

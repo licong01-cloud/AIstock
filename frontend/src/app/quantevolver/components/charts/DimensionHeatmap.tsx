@@ -2,45 +2,10 @@
 
 import React, { useMemo } from "react";
 
-type PlotlyComponent = React.ComponentType<any>;
-
-function PlotlyChart(props: any) {
-  const [Plot, setPlot] = React.useState<PlotlyComponent | null>(null);
-
-  React.useEffect(() => {
-    let cancelled = false;
-    import("react-plotly.js")
-      .then((module) => {
-        if (!cancelled) setPlot(() => module.default as PlotlyComponent);
-      })
-      .catch((error) => console.error("Failed to load Plotly chart", error));
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  if (!Plot) {
-    const placeholderHeight = props?.style?.height ?? props?.layout?.height ?? 260;
-    return (
-      <div style={{ height: placeholderHeight, display: "flex", alignItems: "center", justifyContent: "center", color: "#94a3b8", fontSize: 12 }}>
-        Loading chart...
-      </div>
-    );
-  }
-
-  return <Plot {...props} />;
-}
-
-
-interface DimensionStats {
-  [dimension: string]: {
-    attempts: number;
-    successes: number;
-  };
-}
+import PlotlyChart from "./LazyPlot";
 
 interface DimensionHeatmapProps {
-  dimension_stats: DimensionStats;
+  dimension_stats: Record<string, { attempts: number; successes: number }>;
 }
 
 const LAYOUT = {
@@ -53,7 +18,6 @@ const LAYOUT = {
   legend: { orientation: "h" as const, y: 1.12 },
   font: { size: 11 },
 };
-
 const CONFIG = { responsive: true, displayModeBar: false };
 const plotStyle = { width: "100%", height: "260px", minHeight: "260px" };
 
