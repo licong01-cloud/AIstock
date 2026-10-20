@@ -294,9 +294,9 @@ def start(check: bool = False) -> dict:
     head = git_head()
     if not (ROOT / ".env").is_file():
         raise RuntimeError("Missing .env; no services started")
-    for service in ("backend", "frontend"):
-        commands(service)
     if check:
+        for service in ("backend", "frontend"):
+            commands(service)
         snapshot = inventory()
         states = {service: state(service, snapshot) for service in PORTS}
         return {"check_only": True, "head": head, "states": states, "services_started": False}

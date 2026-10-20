@@ -28,7 +28,9 @@ changes firewall rules, or invokes a database migration.
   readiness wait. Backend startup does not wait for TDX; each service initializes
   independently. A shared process/port snapshot precedes dispatch instead of
   repeated inventories between tabs. Services with old processes still settling
-  are handled after the other services have been dispatched.
+  are handled after the other services have been dispatched. Service-specific
+  prerequisites (such as frontend dependencies) are checked in that service's
+  child; a missing prerequisite must not suppress the other services' dispatch.
 - Closed-port polling uses a cheap loopback connection, not
   a new PowerShell/CIM inventory on every poll. Before accepting readiness, the
   listener's PID/ancestry and service health/identity must still be verified.

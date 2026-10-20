@@ -168,7 +168,7 @@ def test_failed_tdx_dispatch_does_not_block_other_services(tmp_path, monkeypatch
     launcher.RUNTIME.mkdir()
     (tmp_path / ".env").touch()
     monkeypatch.setattr(launcher, "git_head", lambda: SHA)
-    monkeypatch.setattr(launcher, "commands", lambda _: None)
+    monkeypatch.setattr(launcher, "commands", Mock(side_effect=AssertionError("service preparation belongs to its child")))
     monkeypatch.setattr(launcher, "inventory", Mock(return_value={}))
     monkeypatch.setattr(launcher, "state", lambda *_: "absent")
     monkeypatch.setattr(launcher, "startup_lock", nullcontext)
