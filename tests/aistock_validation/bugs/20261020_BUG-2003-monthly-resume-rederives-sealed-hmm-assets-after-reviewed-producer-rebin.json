@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2003",
-  "closed_at": null,
+  "closed_at": "2026-10-20T03:53:41.050508Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -38,19 +38,19 @@
   "expected": "Resume verifies and reuses the same operations sealed DERIVE inputs and outputs independent of newer default producer versions; any retained artifact corruption fails explicitly without regeneration. New operations still use current strict authority.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2003-monthly-resume-rederives-sealed-hmm-assets-after-reviewed-producer-rebin.json",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/services/dataset_release/monthly_worker.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py",
-      "backend/tests/dataset_release/test_monthly_worker.py"
+      "backend/tests/dataset_release/test_monthly_worker.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2003-monthly-resume-rederives-sealed-hmm-assets-after-reviewed-producer-rebin.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2003-monthly-resume-rederives-sealed-hmm-assets-after-reviewed-producer-rebin.json",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/services/dataset_release/monthly_worker.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py",
-      "backend/tests/dataset_release/test_monthly_worker.py"
+      "backend/tests/dataset_release/test_monthly_worker.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2003-monthly-resume-rederives-sealed-hmm-assets-after-reviewed-producer-rebin.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -139,9 +139,9 @@
   },
   "first_seen_at": "2026-10-20T02:35:53.147572Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "280d24fa8ab39bc374446f91b21e18e35aa8fe6c",
   "fix_summary": "For the same request, plan and prior-stage input set, reuse the original DERIVE checkpoint and producer identity only after the registered validator verifies all frozen inputs and outputs. Missing or changed DERIVE artifacts fail explicitly without regeneration. New derivations retain current strict authority checks. No candidate, profile, source data, HMM coefficient values or stage status is edited.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-20T02:55:06Z",
   "github_issue_number": 6400,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6400",
   "last_seen_at": "2026-10-20T02:35:53.147572Z",
@@ -149,6 +149,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6402",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -177,9 +178,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_dataset_release_control/operator_receipts/BUG-2003-postrestart-20261020-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2003",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "280d24fa8ab39bc374446f91b21e18e35aa8fe6c",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-20T03:53:10.579378Z",
+      "mode": "read_only",
+      "observed_identity": "b1da91e5623cfd362ce185b2ae879f850d8febbd",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "533985eb9266a60f756dcb2f6eba1cee63acdf044399eb39e9ebb9dd19c13f75",
+      "receipt_sha256": "1a3c32b1eb5999790dd42bc01d46b8f398678baee4a218372c62e2e33704890e",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7533083551fc02734666115602caa439c4f42fc896e03997f44dd8bd1ac74e3e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -189,7 +213,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2003",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "55e12a2f6e0221d8",
+    "recorded_at": "2026-10-20T02:55:57.677671Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0a9673e8350194a64d6f009345d8b0c5170b3dc3",
+    "source_merge_commit": "280d24fa8ab39bc374446f91b21e18e35aa8fe6c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6402",
+    "validation_evidence": [
+      "rtk pytest backend/tests/dataset_release/test_monthly_unified_v2.py backend/tests/dataset_release/test_monthly_worker.py -q -> 110 passed, 1 skipped",
+      "python -m nox -s l0 --no-venv -> passed",
+      "GitHub AIstock CI run 39360818054 at 0a9673e8350194a64d6f009345d8b0c5170b3dc3 -> passed"
+    ],
+    "validation_evidence_digest": "14018fb9e3a1f1343f9e676cd0befd51d5f23297b5e64b9647baf2af91e2d485"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -198,6 +245,12 @@
     "fingerprint": "cb010f87c196a2f872c25f85",
     "source_event_id": "FE-20261020-cb010f87c196"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/dataset_release/test_monthly_unified_v2.py backend/tests/dataset_release/test_monthly_worker.py -q -> 110 passed, 1 skipped",
+    "python -m nox -s l0 --no-venv -> passed",
+    "GitHub AIstock CI run 39360818054 at 0a9673e8350194a64d6f009345d8b0c5170b3dc3 -> passed",
+    "python -m pytest backend/tests/dataset_release/test_monthly_unified_v2.py backend/tests/dataset_release/test_monthly_worker.py -q -> 110 passed, 1 skipped"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
