@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2041",
-  "closed_at": null,
+  "closed_at": "2026-10-20T17:35:21.512170Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -149,10 +149,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
     "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2041/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2041",
+      "business_smoke_semantic": {
+        "contract_id": "localsim_workbench_valuation",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8750828f58ebf1924e3a889431502e9db46217c2a021f595186943e99ed7230",
+      "contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+      "expected_identity": "69da3aec1a6934363fd498102ecba60e7b365d68",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-20T17:33:59.383241Z",
+      "mode": "read_only",
+      "observed_identity": "adb13c9d3f4dc5de271b3b6ee3468d94a663d541",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "751a478ccd834b8d03ea00d48384d78d92630e0bdc959e6021331b223cde44b2",
+      "receipt_sha256": "097a2041e7dc3be4ca5c8b7c2001ef27e2cf8fa402355b96d13566d71eaddd1f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7d1274dda1b206321970afc49947eeda55d9763e71f6045427eed832001ef69f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -190,7 +212,7 @@
     ],
     "validation_evidence_digest": "fd46494ef04f2ff0e929edc1b4c9277d10042eebcae6d760b996497d9f78d15b"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory"
   ],
@@ -207,7 +229,8 @@
     "validation-receipt: id=a121ae540bc44e68 commit=26c501aa4e8287bc20cf96ccf085f12dc5f7e6da kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s validation_catalog_integrity validation_module_registry_l0 guardrail_changed_files --force-venv-backend none -- --changed-only` result=`passed all 3 sessions`",
     "validation-receipt: id=6bb3262ee22b4959 commit=26c501aa4e8287bc20cf96ccf085f12dc5f7e6da kind=ruff plan=direct status=passed command=`ruff check backend/data_service/frozen_dataset.py backend/services/advisory_historical_range/input_source_plan.py backend/tests/data_service/test_frozen_dataset.py backend/tests/advisory_historical_range/test_input_source_plan.py` result=`passed`",
     "validation-receipt: id=3af2728c878976fe commit=26c501aa4e8287bc20cf96ccf085f12dc5f7e6da kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
-    "Runtime identity adb13c9d3f4dc5de271b3b6ee3468d94a663d541 contains merged fix; target-owned read-only semantic smoke passed. Shared file compatibility is loaded; global candidate activation remains separately blocked by predecessor CAS and is not claimed complete."
+    "Runtime identity adb13c9d3f4dc5de271b3b6ee3468d94a663d541 contains merged fix; target-owned read-only semantic smoke passed. Shared file compatibility is loaded; global candidate activation remains separately blocked by predecessor CAS and is not claimed complete.",
+    "Target-owned read-only post-restart identity and business smoke passed; file consumer compatibility is loaded. Monthly activation is separately blocked by predecessor CAS, not by this source compatibility BUG."
   ],
   "verification_budget": {
     "budget": "standard",
