@@ -883,6 +883,7 @@ class RegisteredMonthlyPipeline(MonthlyPipeline):
         # The operation store already verified the durable receipt's digest and
         # request/plan/producer binding. Resume is not another whole-release
         # content audit: LOCAL_VALIDATE and DEPLOY own that verification.
+        retained_stage = stage in {"BUILD", "DERIVE", "LOCAL_VALIDATE"}
         if stage == "BUILD":
             anchor = receipt.get("scope", {}).get("dataset_manifest_ref")
             if not isinstance(anchor, Mapping) or anchor not in receipt.get("output_refs", []):
@@ -897,14 +898,14 @@ class RegisteredMonthlyPipeline(MonthlyPipeline):
                 relative = Path(str(ref["id"]))
                 matches = [(root, root / relative) for root in self.artifact_roots if (root / relative).is_file()]
                 if len(matches) != 1:
-                    if stage in {"BUILD", "LOCAL_VALIDATE"}:
+                    if retained_stage:
                         raise MonthlyProducerError("retained stage artifact is missing or ambiguous; exports preserved")
                     return False
                 root, path = matches[0]
                 try:
                     _require_plain_path_under(root, path, label="checkpoint")
                 except MonthlyProducerError:
-                    if stage in {"BUILD", "LOCAL_VALIDATE"}:
+                    if retained_stage:
                         raise MonthlyProducerError("retained stage artifact path differs; exports preserved") from None
                     return False
                 if (
@@ -912,7 +913,7 @@ class RegisteredMonthlyPipeline(MonthlyPipeline):
                     or path.stat().st_size != ref["size"]
                     or _file_sha256(path) != ref["sha256"]
                 ):
-                    if stage in {"BUILD", "LOCAL_VALIDATE"}:
+                    if retained_stage:
                         raise MonthlyProducerError("retained stage artifact bytes differ; exports preserved")
                     return False
         return True

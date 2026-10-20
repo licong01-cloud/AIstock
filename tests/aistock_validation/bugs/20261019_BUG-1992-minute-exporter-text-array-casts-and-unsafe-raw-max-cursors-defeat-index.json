@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1992",
-  "closed_at": null,
+  "closed_at": "2026-10-19T19:02:30.296166Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -132,8 +132,8 @@
   },
   "first_seen_at": "2026-10-19T17:40:19.057092Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "2db54e36fb3997b6061c8f08acff5cbc19110238",
+  "fixed_at": "2026-10-19T18:22:15Z",
   "github_issue_number": 6376,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6376",
   "last_seen_at": "2026-10-19T17:40:19.057092Z",
@@ -141,6 +141,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6378",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -172,9 +173,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1992/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1992",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "2db54e36fb3997b6061c8f08acff5cbc19110238",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-19T19:00:58.119652Z",
+      "mode": "read_only",
+      "observed_identity": "2db54e36fb3997b6061c8f08acff5cbc19110238",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a4f77fae7350f9d46e570cbb7a2c979bac05aefcc5db9e78907ba17b5aded93f",
+      "receipt_sha256": "98764df09e3cde1f1e15203608c15018b612690b08ca9fc7ed129df43f743747",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c689014882d639cb6687b3df1fc0f576974bec923111a09dca9520516761f64a",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -184,7 +208,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1992",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5294df96b5c0896b",
+    "recorded_at": "2026-10-19T18:22:51.770604Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0afbdd3d6f82aec85703d3a79130bf673a199e65",
+    "source_merge_commit": "2db54e36fb3997b6061c8f08acff5cbc19110238",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6378",
+    "validation_evidence": [
+      "validation-receipt: id=7f8f331df109c500 commit=0afbdd3d6f82aec85703d3a79130bf673a199e65 kind=pytest plan=direct status=passed command=`pytest backend/tests/test_qlib_export_stock_universe_filters.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_go_integrity.py backend/tests/ingestion/test_daily_sync_recovery.py -q` result=`passed: 197 passed, 1 skipped`",
+      "validation-receipt: id=77561d817f785efd commit=0afbdd3d6f82aec85703d3a79130bf673a199e65 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv -- backend/ingestion/tdx_scheduler.py backend/qlib_exporter/authoritative_bin_exporter.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_qlib_export_stock_universe_filters.py tests/aistock_validation/bugs/20261019_BUG-1992-minute-exporter-text-array-casts-and-unsafe-raw-max-cursors-defeat-index.json` result=`passed: 0 blocking findings`"
+    ],
+    "validation_evidence_digest": "fbc69a136b50235b5f52d54e754b24bd96a492b396359404ab468d9685e23c8b"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -199,7 +245,10 @@
     "Review 2: exact-window Go path bypasses cursor, latest partially ingested date is replayed, future facts rejected, no unbounded minute fallback, non-minute audit/date behavior preserved. Already committed data is not deleted or re-exported.",
     "Review 3: 18 DEV SQL result-equality cases and 196-pass related regression, Ruff and diff checks. No reduction in completeness/conflict/precision validation. No new gate, approval, schema, dependency or service.",
     "Review 4: detected a disabled-dataset compatibility regression in the minute auto-range branch, added a failing regression test and moved the branch after the existing enabled configuration check. GREEN: 197 passed, 1 skipped; disabled/missing configuration stays inactive without querying minute facts.",
-    "DESIGN-COMPLIANCE-001: complete requested shared SQL repair; genuine errors remain visible; model/pool/units and publication contracts unchanged; no additional approvals or resource gates. Source/PR/CI/runtime states reported independently."
+    "DESIGN-COMPLIANCE-001: complete requested shared SQL repair; genuine errors remain visible; model/pool/units and publication contracts unchanged; no additional approvals or resource gates. Source/PR/CI/runtime states reported independently.",
+    "validation-receipt: id=7f8f331df109c500 commit=0afbdd3d6f82aec85703d3a79130bf673a199e65 kind=pytest plan=direct status=passed command=`pytest backend/tests/test_qlib_export_stock_universe_filters.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_go_integrity.py backend/tests/ingestion/test_daily_sync_recovery.py -q` result=`passed: 197 passed, 1 skipped`",
+    "validation-receipt: id=77561d817f785efd commit=0afbdd3d6f82aec85703d3a79130bf673a199e65 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-venv -- backend/ingestion/tdx_scheduler.py backend/qlib_exporter/authoritative_bin_exporter.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_qlib_export_stock_universe_filters.py tests/aistock_validation/bugs/20261019_BUG-1992-minute-exporter-text-array-casts-and-unsafe-raw-max-cursors-defeat-index.json` result=`passed: 0 blocking findings`",
+    "Read-only post-restart-verify matched backend-main identity 2db54e36fb3997b6061c8f08acff5cbc19110238 and passed health/business smoke. No process control or database writes."
   ],
   "verification_budget": {
     "budget": "standard",

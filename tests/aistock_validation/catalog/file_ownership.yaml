@@ -1241,6 +1241,8 @@ rules:
       - backend/tests/scripts/test_export_qe_qlib_candidate.py
       - backend/tests/test_deps_dataset_release.py
       - backend/tests/test_canonical_equity_pit.py
+      - scripts/activate_canonical_pit_default.py
+      - backend/tests/scripts/test_activate_canonical_pit_default.py
       - backend/tests/test_dataset_refresh_audit.py
       - scripts/dataset_release_*.py
       - scripts/monthly_unified_dataset_release.py
@@ -1752,6 +1754,7 @@ rules:
       - frontend/src/components/**
       - frontend/src/lib/**
       - frontend/src/app/Sidebar.tsx
+      - frontend/src/app/DataAlertsToast.tsx
       - frontend/src/app/layout.tsx
       - frontend/src/app/page.tsx
       - frontend/tsconfig.json
