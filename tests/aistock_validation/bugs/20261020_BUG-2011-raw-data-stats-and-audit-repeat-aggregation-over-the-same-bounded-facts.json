@@ -132,8 +132,8 @@
   },
   "first_seen_at": "2026-10-20T04:54:33.860636Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "07ba31e28e37a770e96677445ef12b6184476102",
+  "fixed_at": "2026-10-20T05:11:55Z",
   "github_issue_number": 6425,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6425",
   "last_seen_at": "2026-10-20T04:54:33.860636Z",
@@ -141,6 +141,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6429",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -172,6 +173,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -183,7 +185,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2011",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b05613b4779a712e",
+    "recorded_at": "2026-10-20T05:12:39.139475Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "626c1ca92a6f8c0ea630d1dacab326b333b58f11",
+    "source_merge_commit": "07ba31e28e37a770e96677445ef12b6184476102",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6429",
+    "validation_evidence": [
+      "python -m pytest backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/ingestion/test_daily_sync_recovery.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 173 passed, 1 skipped",
+      "python -m nox -s l0 -- backend/routers/ingestion.py backend/ingestion/tdx_scheduler.py backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/ingestion/test_daily_sync_recovery.py tests/aistock_validation/bugs/20261020_BUG-2011-raw-data-stats-and-audit-repeat-aggregation-over-the-same-bounded-facts.json -> passed, blocking=0",
+      "GitHub CI run 39372812546 at 626c1ca92a6f8c0ea630d1dacab326b333b58f11 -> passed"
+    ],
+    "validation_evidence_digest": "52d908df3ef4de1f796434be4c8f77de9e77de9fa1461c409d061b571c83dafa"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -192,6 +217,11 @@
     "fingerprint": "1479d8e5a9fc258b52c2d48d",
     "source_event_id": "FE-20261020-1479d8e5a9fc"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/ingestion/test_daily_sync_recovery.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -> 173 passed, 1 skipped",
+    "python -m nox -s l0 -- backend/routers/ingestion.py backend/ingestion/tdx_scheduler.py backend/tests/test_ingestion_data_stats_readiness_api.py backend/tests/ingestion/test_daily_sync_recovery.py tests/aistock_validation/bugs/20261020_BUG-2011-raw-data-stats-and-audit-repeat-aggregation-over-the-same-bounded-facts.json -> passed, blocking=0",
+    "GitHub CI run 39372812546 at 626c1ca92a6f8c0ea630d1dacab326b333b58f11 -> passed"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
