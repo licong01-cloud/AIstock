@@ -1,8 +1,8 @@
-# Advisory 分钟序列压力 Top20→Top10 F1 详细设计 v1.0
+# Advisory 分钟序列压力 Top20→Top10 F1 详细设计 v1.1
 
 日期：2026-10-21。假设 `SERIAL_PRICE_PRESSURE_TOP10_5TD_1`。
-设计#6500已合入；当前正在按本设计交付**三研究叶、定向合同验证及一次研究**，未完成研究不冒称收益结果或启用。
-状态 `SOURCE_CONTRACT_VERIFIED / INPUT_PREPARE_AND_RESEARCH_NOT_STARTED`。
+设计#6500已合入；三研究叶、定向合同验证及一次真实研究已完成，**精确候选不支持继续确认**。
+状态 `SOURCE_CONTRACT_VERIFIED / STUDY_COMPLETE / STOP_THIS_CANDIDATE / NOT_ACTIVATED`。
 目标合同 `ALPHA_RANKING`；登记口径 `LEARNABILITY_AUDIT / NAVIGATION_ONLY`。
 现行方向与进度以[蓝图§16.0](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)为准。
 
@@ -157,7 +157,7 @@ training尺度MDE代理在fit前报告，真实paired MDE随一次结果报告�
 
 本次已完成：原生因子来源查重、旧43量构造对照、训练端全窗口close可产性、F1和蓝图一致性修订。
 源码已实现原绑定批读/共享两臂输入、train-only编码/两头/JSON parity、冻结预测/原finance评价和原子阶段/重试；
-本窗口三轮自审修复后七个定向合同节点已通过，后续一次正式prepare及WSL两fit/评价，再把真实结果回写蓝图/PR交付。
+本窗口多轮自审修复后七个定向合同节点已通过；一次正式prepare、WSL两fit及一次评价已完成，结果如下。
 不以设计验证冒称源码完成，不等待后端重启、LocalSIM适配、UI或QE上游试验。
 
 已完成的训练端审计仅close：219D/438包D/8,760原行、8,212 unique stock-D/975股；
@@ -167,6 +167,49 @@ training尺度MDE代理在fit前报告，真实paired MDE随一次结果报告�
 factor输入审计收据SHA256=`6df43b103bc5479cca3bee3ec5f174defcdb864f08f64beda651e7e170b33c28`；
 minute输入审计收据SHA256=`8c9a778e616a99ff2e9df0034507820d133672490a4115cb5aa26914c4a03e3f`。
 收据位于X任务目录，是本机执行证据而非跨机器自动可用的发布资产；下一prepare必须重新验证其实际输入身份。
+
+### 一次真实研究结果（2026-10-21）
+
+run `advserialprice_955cde62113c19f21cffb7bf`，plan
+`955cde62113c19f21cffb7bfe791221c748514fcc1868679e94b12bbb49ac146`，producer
+`3a7a47575b5ae3cdaf81d7c70580a81a2ef0c798`。四stage位于
+`X:/AIstock_temp/ADVISORY/serial-price-pressure-top10-20261021/study/advserialprice_955cde62113c19f21cffb7bf`。
+evaluated stage SHA `938512e972795b75bf568e7e8ba93a8442cc50c3321f69809b2018bf5a1f5eb5`；manifest文件SHA
+`ba2b9470b5c3c6823c1c5acd38f27ba9af48be0f2cddc3eb465c1eb23bd5166e`。不把研究producer改绑后续交付HEAD。
+
+prepare 12,200行/610包D/11,524 unique stock-D，消费55,523,880 Bin bytes，86.701秒、峰值301,858,816bytes；
+五OHLCV流按股复用、两臂共享，同一源float32分数/原rank/group_size50/原名单全部保留。
+输入内容片段SHA `4aa852cf214213e376177a60741d663ee3cf43729ba16ea9219556b50a137a48`，不是全Bin内容SHA。
+market_up_ratio原train全未知，两臂按事前规则停用，原输入UNKNOWN仍保留；名义52/54原始字段、实际51/53活跃字段。
+训练原8,760行全部保留，成熟可监督8,504行/7,970 stock-D/214D；训练尺度MDE代理110.522bps，非paired功效。
+WSL既存sklearn1.7.2，两个fit共0.632秒、峰值283,824,128bytes，matched/candidate迭代56/59，JSON/native误差均0。
+累计真实研究fit162＋1旧index；旧172次LW和闭式估计器分计，不增加其它独立trial。
+
+预测冻结后才首次读评价finance：3,440行/86D/172包D保留，3,236 AVAILABLE、200 IMMATURE、3 CASH、1 UNKNOWN；
+81个时间成熟D中一日因真实UNKNOWN不满足三角色/全包共同完整，两个端点共用80D，72合法原轴连续block。
+共同80D原Top10/matched/candidate五日十固定槽净均值92.141403/95.044141/95.440922bps。
+原基线单独81D均值95.336410bps不能直接与80D两模型均值作配对差；这是名义cohort而非NAV或真实成交收益。
+
+| 双净端点 | 配对均值bps/5TD | 97.5%双侧区间 | paired MDE80 bps |
+|---|---:|---|---:|
+| candidate−native | 3.299519 | [−20.297140,32.597476] | 37.629695 |
+| candidate−matched | 0.396782 | [−0.239998,1.422838] | 1.171265 |
+
+相对原Top10干预86D/每包86D；相对matched仅8D（TCN3、LSTM5），未达到20D/每包10D。
+candidate/matched日级平均RankIC0.009503/0.011107，平均组内中心化MSE328900.816/328951.898；
+预测MSE微降不能替代双净端点及干预不通过。全部原评价D中正/负市场64/22，共同完整分别58/22；不择局部区间。
+原Top10/matched/candidate已知槽胜率51.2963%/51.6368%/51.5750%，槽已知分母1620/1619/1619，
+UNKNOWN/未成熟槽100/101/101完整报告；平均盈利/亏损幅度与尾部分布在一次evaluation.json中，不按胜率判经济成功。
+
+结论 `STOP_THIS_CANDIDATE / NAVIGATION_ONLY`，不确认、不激活、不改阈值/seed/窗、不回选matched。
+仅停止这个序列压力候选；不证明所有分钟信息不可学、全局模型无效或QE策略包无Alpha。
+此次0SQL/父包训练/数据修改/服务控制/sealed holdout，自然前向和独立经济确认均0。
+
+交付末轮发现并修复两个非经济元数据问题：原producer评价峰值在预算采样前写入0，具体峰值字段无效（不代表0内存）；
+发布前内存预算检查仍执行，后续源码改为序列化前采样。原fit journal是完整JSON对象串联而非真正单行JSONL；
+存在性防重训保护有效，读回确认两START/两FINISH，后续源码改为单行序列化。
+旧四stage/journal/结果均不覆盖、不重fit/重评价；源码修复不把已停止研究重开。
+实际名单/模型JSON/四stage只读校验通过，见`X:/AIstock_temp/ADVISORY/serial-price-pressure-top10-20261021/native-delivery-audit.json`。
 
 ## Verification Plan / Design Acceptance Index
 
@@ -188,16 +231,16 @@ minute输入审计收据SHA256=`8c9a778e616a99ff2e9df0034507820d133672490a4115cb
 
 ## Design Acceptance Matrix
 
-本表保留稳定验收索引；当前设计验收已通过，源码与真实研究证据将在完成后逐项替换，不冒称模型经济成功。
+本表保留稳定验收索引；源码合同及一次真实研究交付通过不等于模型经济成功。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-361 | Background / 单一业务问题及查重 | artifact: X:/AIstock_temp/ADVISORY/minute-innovation-top10-20261021/factor-input-audit.json；artifact: X:/AIstock_temp/ADVISORY/minute-innovation-top10-20261021/minute-input-audit.json | DESIGN_REVIEW_PASS | none |
-| F-362 | serial_price_pressure_top10_5td_inputs_v1.py / pipeline.prepare | backend/tests/advisory_model_first/test_serial_price_pressure_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
+| F-362 | serial_price_pressure_top10_5td_inputs_v1.py / pipeline.prepare | artifact: X:/AIstock_temp/ADVISORY/serial-price-pressure-top10-20261021/native-delivery-audit.json | SOURCE_AND_ARTIFACT_PASS | none |
 | F-363 | inputs.serial_stat / minute_features / read_minute_inputs | backend/tests/advisory_model_first/test_serial_price_pressure_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
-| F-364 | study.train_models / fit_encoding / encode；pipeline.fit | backend/tests/advisory_model_first/test_serial_price_pressure_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
-| F-365 | study.predict / choose_top10 | backend/tests/advisory_model_first/test_serial_price_pressure_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
-| F-366 | study.evaluate / paired_interval；pipeline.finish | backend/tests/advisory_model_first/test_serial_price_pressure_top10_5td_v1.py | SOURCE_CONTRACT_PASS | none |
+| F-364 | study.train_models / fit_encoding / encode；pipeline.fit | artifact: X:/AIstock_temp/ADVISORY/serial-price-pressure-top10-20261021/native-delivery-audit.json | SOURCE_AND_ARTIFACT_PASS | none |
+| F-365 | study.predict / choose_top10 | artifact: X:/AIstock_temp/ADVISORY/serial-price-pressure-top10-20261021/native-delivery-audit.json | SOURCE_AND_ARTIFACT_PASS | none |
+| F-366 | study.evaluate / paired_interval；pipeline.finish | 一次真实研究结果；backend/tests/advisory_model_first/test_serial_price_pressure_top10_5td_v1.py | MEASUREMENT_CONTRACT_PASS_CANDIDATE_NEGATIVE | none |
 | F-367 | pipeline.Study / prepare / fit / finish；Scope | artifact: X:/AIstock_temp/ADVISORY/serial-price-pressure-top10-20261021/ownership.json | SOURCE_CONTRACT_PASS | none |
 
 ## Risks / Rollout / Rollback / Production Gates
@@ -229,6 +272,9 @@ block不跨未知洞、市场分区按D已知值固定。监督拟合WSL、所�
 第三轮加入首fit前编码/列序/MDE/监督键登记、WSL峰值内存与registry中断恢复，保持双端点共同日轴和真实缺洞。
 最终小矩阵六项通过、一项市场上下文合成fixture不一致；只改fixture后失败节点通过，七节点均GREEN、零warning。
 两L0无阻断、Ruff无问题、ownership六文件全部归Advisory。合成Ridge使用纯合同double，不在Windows做监督拟合，
-不把单元测试当实际Ridge、原生全窗输入或经济验收。剩余真实prepare、WSL两fit与一次经济评价分别报告。
-源码四项符合性：①完整实现批准研究合同，尚未发生研究不报成功；②缺数/平坦/越界/漂移明确；
+不把单元测试当实际Ridge、原生全窗输入或经济验收；上述真实prepare、WSL两fit与一次经济评价已分别报告。
+源码四项符合性：①完整实现批准研究合同，真实阴性不冒称模型经济成功；②缺数/平坦/越界/漂移明确；
 ③不改原包/费用/政策/名单且无其它owner写入；④无新增包审批、UI或重启阻断。
+研究后交付末轮只修元数据序列化/采样顺序，补直接节点验证；原生四stage读回和跨Windows/WSL的JSON名单一致，
+没有基于负结果重选假设/模型/输入/动作或修改原指标。两L0的5项P2复杂度提醒以12,200行界限、显式唯一join键、
+20候选/86D分组和逐股流复用解释，无P0/P1阻断；不开展额外平台或历史证据固化任务。

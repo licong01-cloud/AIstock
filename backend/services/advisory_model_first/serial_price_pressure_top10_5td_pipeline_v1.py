@@ -185,6 +185,10 @@ def hashlib_sha(content):
     return hashlib.sha256(content).hexdigest()
 
 
+def journal_line(value):
+    return json.dumps(value, sort_keys=True, separators=(',', ':'), allow_nan=False).encode()+b'\n'
+
+
 def fit(root):
     if os.name == 'nt':
         raise ValueError('supervised fitting requires the existing WSL environment')
@@ -202,11 +206,11 @@ def fit(root):
         if journal.exists():
             raise ValueError('partial physical fit journal exists; no implicit refit')
         with journal.open('xb') as stream:
-            stream.write(_json_bytes(dict(event='STUDY_STARTED', plan_sha256=study.digest))+b'\n')
+            stream.write(journal_line(dict(event='STUDY_STARTED', plan_sha256=study.digest)))
         def event(arm, kind):
             study.budget()
             with journal.open('ab') as stream:
-                stream.write(_json_bytes(dict(arm=arm, event=kind))+b'\n')
+                stream.write(journal_line(dict(arm=arm, event=kind)))
         training = pd.read_parquet(study.root/'prepared/training.parquet')
         spec = load(study.root/'prepared/training_spec.json')
         fitted = train_models(training, train_start=study.plan['train_start'], train_end=study.plan['train_end'],
@@ -217,6 +221,7 @@ def fit(root):
         inputs = pd.read_parquet(study.root/'prepared/inputs.parquet')
         evaluation = inputs.loc[inputs.decision_as_of_trade_date.between(study.plan['evaluation_start'], study.plan['evaluation_end'])].reset_index(drop=True)
         predictions = predict(evaluation, fitted)
+        study.budget()
         fitted.update(fit_versions=versions(), source_commit=study.plan['source_commit'],
             wall_seconds=time.monotonic()-study.started, peak_rss_bytes=study.peak, evaluation_finance_decoded=False)
         study.publish('trained', prep, {'model.json': _json_bytes(fitted), 'predictions.parquet': parquet_bytes(predictions)}, generated=1)
@@ -247,6 +252,7 @@ def finish(root):
         days = pd.read_parquet(study.root/'prepared/days.parquet')
         days = days.loc[days.decision_date.between(study.plan['evaluation_start'], study.plan['evaluation_end'])]
         result = evaluate(inputs, finance, days, pd.read_parquet(study.root/'trained/predictions.parquet'), evaluation_end=study.plan['evaluation_end'])
+        study.budget()
         result.update(physical_fit_count=load(study.root/'trained/model.json')['physical_fit_count'], candidate_count=1,
             inherited_evidence=study.plan['inherited_evidence'], source_commit=study.plan['source_commit'],
             wall_seconds=time.monotonic()-study.started, peak_rss_bytes=study.peak, sql_count=0)

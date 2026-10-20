@@ -199,7 +199,12 @@ def test_batch_file_identity_future_isolation_and_immutable_stage(tmp_path, monk
     root = tmp_path/'study'
     plan = dict(policy_sha256=source.POLICY_SHA256, implementation_sha256=pipeline.implementation_sha256())
     publish_stage(study_root=root, stage='preregistered', plan_sha256=sha(plan), parent_sha256=None, artifacts={'plan.json': _json_bytes(plan)})
-    assert pipeline.Study(root).read('preregistered', None)
+    resource = pipeline.Study(root)
+    assert resource.read('preregistered', None)
+    resource.budget()
+    assert resource.peak > 0
+    line = pipeline.journal_line(dict(event='FIT_STARTED', arm='matched'))
+    assert len(line.splitlines()) == 1 and json.loads(line)['event'] == 'FIT_STARTED'
     with pytest.raises(AdvisoryModelFirstError, match='conflicts'):
         publish_stage(study_root=root, stage='preregistered', plan_sha256=sha(plan), parent_sha256=None, artifacts={'plan.json': b'{"changed":true}'})
     monkeypatch.setattr(pipeline, 'implementation_sha256', lambda: 'drift')
