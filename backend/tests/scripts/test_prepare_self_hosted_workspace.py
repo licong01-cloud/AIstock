@@ -24,6 +24,25 @@ def _git(repo: Path, *args: str) -> str:
     return proc.stdout.strip()
 
 
+def _seed(source: Path) -> str:
+    source.mkdir(parents=True, exist_ok=True)
+    _git(source, "init")
+    _git(source, "config", "user.email", "ci@example.invalid")
+    _git(source, "config", "user.name", "CI")
+    _git(source, "remote", "add", "origin", "https://github.com/licong01-cloud/AIstock.git")
+    (source / "README.md").write_text("local source\n", encoding="utf-8")
+    _git(source, "add", "README.md")
+    _git(source, "commit", "-m", "seed")
+    return _git(source, "rev-parse", "HEAD")
+
+
+def _prepare(source, dest, commit, **options):
+    argv = ["--source", str(source), "--dest", str(dest), "--expected-commit", commit]
+    for key, value in options.items():
+        argv.extend(["--" + key.replace("_", "-"), str(value)])
+    return prepare.main(argv)
+
+
 def test_clear_directory_removes_readonly_git_object_tree(tmp_path: Path) -> None:
     destination = tmp_path / "runner" / "_work" / "AIstock" / "AIstock"
     readonly_object = destination / ".git" / "objects" / "21" / ("9" * 40)
@@ -39,15 +58,7 @@ def test_clear_directory_removes_readonly_git_object_tree(tmp_path: Path) -> Non
 @pytest.mark.parametrize("fetch_result", ["success", "failure", "timeout", "mismatch"])
 def test_missing_commit_fetch_is_pinned_and_never_writes_source(tmp_path, monkeypatch, fetch_result):
     source, remote = tmp_path / "source", tmp_path / "remote"
-    source.mkdir()
-    _git(source, "init")
-    _git(source, "config", "user.email", "ci@example.invalid")
-    _git(source, "config", "user.name", "CI")
-    _git(source, "remote", "add", "origin", "https://github.com/licong01-cloud/AIstock.git")
-    (source / "seed").write_text("seed", encoding="utf-8")
-    _git(source, "add", "seed")
-    _git(source, "commit", "-m", "seed")
-    source_head = _git(source, "rev-parse", "HEAD")
+    source_head = _seed(source)
     _git(tmp_path, "clone", str(source), str(remote))
     _git(remote, "config", "user.email", "ci@example.invalid")
     _git(remote, "config", "user.name", "CI")
@@ -106,32 +117,11 @@ def test_prepare_workspace_clones_local_source_without_root_worktree_writes(tmp_
     summary_path = tmp_path / "runner" / "_temp" / "self_hosted_workspace" / "test.json"
     dest.mkdir(parents=True)
     (dest / "stale.txt").write_text("old checkout\n", encoding="utf-8")
-    source.mkdir(parents=True)
-    _git(source, "init")
-    _git(source, "config", "user.email", "ci@example.invalid")
-    _git(source, "config", "user.name", "CI")
-    _git(source, "remote", "add", "origin", "https://github.com/licong01-cloud/AIstock.git")
-    (source / "README.md").write_text("local source\n", encoding="utf-8")
-    _git(source, "add", "README.md")
-    _git(source, "commit", "-m", "seed")
-    commit = _git(source, "rev-parse", "HEAD")
+    commit = _seed(source)
 
     monkeypatch.setenv("RUNNER_WORKSPACE", str(dest.parent))
     monkeypatch.chdir(dest)
-    result = prepare.main(
-        [
-            "--source",
-            str(source),
-            "--dest",
-            str(dest),
-            "--expected-commit",
-            commit,
-            "--repo",
-            "licong01-cloud/AIstock",
-            "--summary-json",
-            str(summary_path),
-        ]
-    )
+    result = _prepare(source, dest, commit, repo="licong01-cloud/AIstock", summary_json=summary_path)
 
     assert result == 0
     assert not (dest / "stale.txt").exists()
@@ -157,35 +147,11 @@ def test_prepare_workspace_exports_canonical_package_asset_store_root(tmp_path: 
     blob.parent.mkdir(parents=True)
     blob.write_bytes(b"factor-code")
 
-    source.mkdir(parents=True, exist_ok=True)
-    _git(source, "init")
-    _git(source, "config", "user.email", "ci@example.invalid")
-    _git(source, "config", "user.name", "CI")
-    _git(source, "remote", "add", "origin", "https://github.com/licong01-cloud/AIstock.git")
-    (source / "README.md").write_text("local source\n", encoding="utf-8")
-    _git(source, "add", "README.md")
-    _git(source, "commit", "-m", "seed")
-    commit = _git(source, "rev-parse", "HEAD")
+    commit = _seed(source)
 
     monkeypatch.setenv("RUNNER_WORKSPACE", str(dest.parent))
-    result = prepare.main(
-        [
-            "--source",
-            str(source),
-            "--dest",
-            str(dest),
-            "--expected-commit",
-            commit,
-            "--repo",
-            "licong01-cloud/AIstock",
-            "--summary-json",
-            str(summary_path),
-            "--package-asset-store-root",
-            str(asset_root),
-            "--github-env-file",
-            str(github_env),
-        ]
-    )
+    result = _prepare(source, dest, commit, summary_json=summary_path,
+                      package_asset_store_root=asset_root, github_env_file=github_env)
 
     assert result == 0
     assert f"AISTOCK_PACKAGE_ASSET_STORE_ROOT={asset_root.resolve()}" in github_env.read_text(encoding="utf-8")
@@ -200,38 +166,14 @@ def test_prepare_workspace_exports_canonical_package_asset_store_root(tmp_path: 
 def test_prepare_workspace_loud_fails_when_package_asset_store_missing(tmp_path: Path, monkeypatch) -> None:
     source = tmp_path / "source"
     dest = tmp_path / "runner" / "_work" / "AIstock" / "AIstock"
-    source.mkdir(parents=True)
-    _git(source, "init")
-    _git(source, "config", "user.email", "ci@example.invalid")
-    _git(source, "config", "user.name", "CI")
-    _git(source, "remote", "add", "origin", "https://github.com/licong01-cloud/AIstock.git")
-    (source / "README.md").write_text("local source\n", encoding="utf-8")
-    _git(source, "add", "README.md")
-    _git(source, "commit", "-m", "seed")
-    commit = _git(source, "rev-parse", "HEAD")
+    commit = _seed(source)
 
     monkeypatch.setenv("RUNNER_WORKSPACE", str(dest.parent))
     missing_root = source / "rdagent_assets" / "package_assets"
 
-    try:
-        prepare.main(
-            [
-                "--source",
-                str(source),
-                "--dest",
-                str(dest),
-                "--expected-commit",
-                commit,
-                "--repo",
-                "licong01-cloud/AIstock",
-                "--package-asset-store-root",
-                str(missing_root),
-            ]
-        )
-    except SystemExit as exc:
-        assert exc.code == 1
-    else:
-        raise AssertionError("missing package asset store must fail loud")
+    with pytest.raises(SystemExit) as exc:
+        _prepare(source, dest, commit, package_asset_store_root=missing_root)
+    assert exc.value.code == 1
 
 
 def test_prepare_workspace_links_lockfile_matched_prebuilt_frontend_dependencies(
