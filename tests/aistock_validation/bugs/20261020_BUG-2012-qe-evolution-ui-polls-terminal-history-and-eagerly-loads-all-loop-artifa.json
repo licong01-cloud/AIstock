@@ -1,0 +1,760 @@
+{
+  "actual": "202 tasks reload with one active; nine-loop detail 6940444 bytes versus summary 32906 bytes.",
+  "allowed_write_scope": [
+    "frontend/src/app/quantevolver/evolution/page.tsx",
+    "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+    "frontend/src/app/quantevolver/evolution/components/LogsPanel.tsx",
+    "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx",
+    "frontend/src/app/quantevolver/evolution/components/LoopMetricsComparison.tsx",
+    "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
+    "frontend/src/app/quantevolver/components/charts/ReturnCurveChart.tsx",
+    "frontend/src/app/quantevolver/components/charts/IcSeriesChart.tsx",
+    "frontend/src/app/quantevolver/components/charts/LossCurveChart.tsx",
+    "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
+    "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
+    "frontend/src/app/quantevolver/components/charts/MetricsTrajectoryChart.tsx",
+    "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx",
+    "frontend/src/app/quantevolver/multi-alpha/combine-backtest/[taskKey]/page.tsx",
+    "backend/routers/quantevolver_evolution.py",
+    "backend/services/quantevolver/qe_evolution_service.py",
+    "backend/services/quantevolver/payload_summary.py",
+    "backend/routers/multi_alpha.py",
+    "backend/services/multi_alpha/combine_ui_adapter.py",
+    "backend/services/qe_archive/source_assembler.py",
+    "frontend/tests/qe/qe-evolution-read-only.spec.ts",
+    "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
+    "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+    "frontend/src/app/quantevolver/components/read-cache.ts",
+    "frontend/src/app/quantevolver/components/use-active-refresh.ts",
+    "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
+    "frontend/tests/qe/qe-read-performance.spec.ts",
+    "backend/tests/quantevolver/test_qe_ui_active_reads.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2012-qe-evolution-ui-polls-terminal-history-and-eagerly-loads-all-loop-artifa.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2012",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T04:58:11.471899Z",
+  "description": "202 tasks reload with one active; nine-loop detail 6940444 bytes versus summary 32906 bytes.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-fbd84cc36da4",
+      "timestamp": "2026-10-20T04:58:11.471878Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Only executing tasks refresh while visible; terminal history has no timer reads; retain all metrics on demand.",
+  "file_scope_contract": {
+    "added_files": [
+      "frontend/src/app/quantevolver/components/read-cache.ts",
+      "frontend/src/app/quantevolver/components/use-active-refresh.ts",
+      "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
+      "frontend/tests/qe/qe-read-performance.spec.ts",
+      "backend/tests/quantevolver/test_qe_ui_active_reads.py"
+    ],
+    "changed_files": [
+      "frontend/src/app/quantevolver/evolution/page.tsx",
+      "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LogsPanel.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LoopMetricsComparison.tsx",
+      "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
+      "frontend/src/app/quantevolver/components/charts/ReturnCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/IcSeriesChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/LossCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
+      "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/MetricsTrajectoryChart.tsx",
+      "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx",
+      "frontend/src/app/quantevolver/multi-alpha/combine-backtest/[taskKey]/page.tsx",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/payload_summary.py",
+      "backend/routers/multi_alpha.py",
+      "backend/services/multi_alpha/combine_ui_adapter.py",
+      "backend/services/qe_archive/source_assembler.py",
+      "frontend/tests/qe/qe-evolution-read-only.spec.ts",
+      "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
+      "backend/tests/quantevolver/test_qe_payload_summary_services.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "frontend/src/app/quantevolver/evolution/page.tsx",
+        "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+        "frontend/src/app/quantevolver/evolution/components/LogsPanel.tsx",
+        "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx",
+        "frontend/src/app/quantevolver/evolution/components/LoopMetricsComparison.tsx",
+        "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
+        "frontend/src/app/quantevolver/components/charts/ReturnCurveChart.tsx",
+        "frontend/src/app/quantevolver/components/charts/IcSeriesChart.tsx",
+        "frontend/src/app/quantevolver/components/charts/LossCurveChart.tsx",
+        "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
+        "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
+        "frontend/src/app/quantevolver/components/charts/MetricsTrajectoryChart.tsx",
+        "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx",
+        "frontend/src/app/quantevolver/multi-alpha/combine-backtest/[taskKey]/page.tsx",
+        "backend/routers/quantevolver_evolution.py",
+        "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/services/quantevolver/payload_summary.py",
+        "backend/routers/multi_alpha.py",
+        "backend/services/multi_alpha/combine_ui_adapter.py",
+        "backend/services/qe_archive/source_assembler.py",
+        "frontend/tests/qe/qe-evolution-read-only.spec.ts",
+        "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
+        "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+        "frontend/src/app/quantevolver/components/read-cache.ts",
+        "frontend/src/app/quantevolver/components/use-active-refresh.ts",
+        "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
+        "frontend/tests/qe/qe-read-performance.spec.ts",
+        "backend/tests/quantevolver/test_qe_ui_active_reads.py"
+      ],
+      "impacted_modules": [
+        "qe.single_experiment",
+        "qe.archive",
+        "qe.enhanced_metrics",
+        "validation.center",
+        "qe.core",
+        "qe.custom_evolution",
+        "qe.auto_evolution",
+        "qe.data_completeness",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "frontend/src/app/quantevolver/evolution/page.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/evolution/components/LogsPanel.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/evolution/components/LoopMetricsComparison.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/components/charts/ReturnCurveChart.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/components/charts/IcSeriesChart.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/components/charts/LossCurveChart.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/components/charts/MetricsTrajectoryChart.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/multi-alpha/combine-backtest/[taskKey]/page.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "backend/routers/quantevolver_evolution.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/qe_evolution_service.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/services/quantevolver/payload_summary.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "backend/routers/multi_alpha.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/services/multi_alpha/combine_ui_adapter.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/services/qe_archive/source_assembler.py",
+          "impact_modules": [
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.archive",
+          "risk_level": "high",
+          "rule_id": "qe_archive_services"
+        },
+        {
+          "file": "frontend/tests/qe/qe-evolution-read-only.spec.ts",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+          "impact_modules": [
+            "qe.single_experiment",
+            "qe.custom_evolution",
+            "qe.auto_evolution",
+            "qe.enhanced_metrics",
+            "qe.data_completeness"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_services"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/components/read-cache.ts",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/components/use-active-refresh.ts",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "frontend/tests/qe/qe-read-performance.spec.ts",
+          "impact_modules": [
+            "qe.archive",
+            "qe.enhanced_metrics",
+            "validation.center"
+          ],
+          "primary_module": "qe.single_experiment",
+          "risk_level": "high",
+          "rule_id": "qe_frontend"
+        },
+        {
+          "file": "backend/tests/quantevolver/test_qe_ui_active_reads.py",
+          "impact_modules": [
+            "qe.auto_evolution",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.core",
+          "risk_level": "high",
+          "rule_id": "qe_remaining_tests"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "frontend/src/app/quantevolver/evolution/page.tsx",
+        "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+        "frontend/src/app/quantevolver/evolution/components/LogsPanel.tsx",
+        "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx",
+        "frontend/src/app/quantevolver/evolution/components/LoopMetricsComparison.tsx",
+        "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
+        "frontend/src/app/quantevolver/components/charts/ReturnCurveChart.tsx",
+        "frontend/src/app/quantevolver/components/charts/IcSeriesChart.tsx",
+        "frontend/src/app/quantevolver/components/charts/LossCurveChart.tsx",
+        "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
+        "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
+        "frontend/src/app/quantevolver/components/charts/MetricsTrajectoryChart.tsx",
+        "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx",
+        "frontend/src/app/quantevolver/multi-alpha/combine-backtest/[taskKey]/page.tsx",
+        "backend/routers/quantevolver_evolution.py",
+        "backend/services/quantevolver/qe_evolution_service.py",
+        "backend/services/quantevolver/payload_summary.py",
+        "backend/routers/multi_alpha.py",
+        "backend/services/multi_alpha/combine_ui_adapter.py",
+        "backend/services/qe_archive/source_assembler.py",
+        "frontend/tests/qe/qe-evolution-read-only.spec.ts",
+        "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
+        "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+        "frontend/src/app/quantevolver/components/read-cache.ts",
+        "frontend/src/app/quantevolver/components/use-active-refresh.ts",
+        "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
+        "frontend/tests/qe/qe-read-performance.spec.ts",
+        "backend/tests/quantevolver/test_qe_ui_active_reads.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "frontend/src/app/quantevolver/evolution/page.tsx",
+      "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LogsPanel.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LoopMetricsComparison.tsx",
+      "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
+      "frontend/src/app/quantevolver/components/charts/ReturnCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/IcSeriesChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/LossCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
+      "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/MetricsTrajectoryChart.tsx",
+      "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx",
+      "frontend/src/app/quantevolver/multi-alpha/combine-backtest/[taskKey]/page.tsx",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/payload_summary.py",
+      "backend/routers/multi_alpha.py",
+      "backend/services/multi_alpha/combine_ui_adapter.py",
+      "backend/services/qe_archive/source_assembler.py",
+      "frontend/tests/qe/qe-evolution-read-only.spec.ts",
+      "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
+      "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+      "frontend/src/app/quantevolver/components/read-cache.ts",
+      "frontend/src/app/quantevolver/components/use-active-refresh.ts",
+      "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
+      "frontend/tests/qe/qe-read-performance.spec.ts",
+      "backend/tests/quantevolver/test_qe_ui_active_reads.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "frontend/src/app/quantevolver/evolution/page.tsx",
+      "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LogsPanel.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LoopMetricsComparison.tsx",
+      "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
+      "frontend/src/app/quantevolver/components/charts/ReturnCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/IcSeriesChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/LossCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
+      "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/MetricsTrajectoryChart.tsx",
+      "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx",
+      "frontend/src/app/quantevolver/multi-alpha/combine-backtest/[taskKey]/page.tsx",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/payload_summary.py",
+      "backend/routers/multi_alpha.py",
+      "backend/services/multi_alpha/combine_ui_adapter.py",
+      "backend/services/qe_archive/source_assembler.py",
+      "frontend/tests/qe/qe-evolution-read-only.spec.ts",
+      "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
+      "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+      "frontend/src/app/quantevolver/components/read-cache.ts",
+      "frontend/src/app/quantevolver/components/use-active-refresh.ts",
+      "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
+      "frontend/tests/qe/qe-read-performance.spec.ts",
+      "backend/tests/quantevolver/test_qe_ui_active_reads.py"
+    ]
+  },
+  "first_seen_at": "2026-10-20T04:58:11.471899Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6427,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6427",
+  "last_seen_at": "2026-10-20T04:58:11.471899Z",
+  "module": "qe.auto_evolution",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qe_read_backend",
+    "qe_archive_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "planned_scope",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qe.auto_evolution"
+  ],
+  "title": "QE evolution UI polls terminal history and eagerly loads all loop artifacts causing interaction stalls",
+  "trigger_condition": {
+    "fingerprint": "fbd84cc36da4b2929ecf4edb",
+    "source_event_id": "FE-20261020-fbd84cc36da4"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:qe.auto_evolution",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/quantevolver/evolution/page.tsx",
+      "frontend/src/app/quantevolver/evolution/[taskId]/page.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LogsPanel.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LoopDetailPanel.tsx",
+      "frontend/src/app/quantevolver/evolution/components/LoopMetricsComparison.tsx",
+      "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
+      "frontend/src/app/quantevolver/components/charts/ReturnCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/IcSeriesChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/LossCurveChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
+      "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
+      "frontend/src/app/quantevolver/components/charts/MetricsTrajectoryChart.tsx",
+      "frontend/src/app/quantevolver/multi-alpha/combine-backtest/page.tsx",
+      "frontend/src/app/quantevolver/multi-alpha/combine-backtest/[taskKey]/page.tsx",
+      "backend/routers/quantevolver_evolution.py",
+      "backend/services/quantevolver/qe_evolution_service.py",
+      "backend/services/quantevolver/payload_summary.py",
+      "backend/routers/multi_alpha.py",
+      "backend/services/multi_alpha/combine_ui_adapter.py",
+      "backend/services/qe_archive/source_assembler.py",
+      "frontend/tests/qe/qe-evolution-read-only.spec.ts",
+      "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
+      "backend/tests/quantevolver/test_qe_payload_summary_services.py",
+      "frontend/src/app/quantevolver/components/read-cache.ts",
+      "frontend/src/app/quantevolver/components/use-active-refresh.ts",
+      "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
+      "frontend/tests/qe/qe-read-performance.spec.ts",
+      "backend/tests/quantevolver/test_qe_ui_active_reads.py"
+    ],
+    "ui_issue": true,
+    "ui_route": "/charts",
+    "ui_routes": [
+      "/charts"
+    ],
+    "visual_acceptance_required": true
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe.auto_evolution",
+        "qe_read",
+        "qe_archive"
+      ],
+      "plans": [
+        "qe_read_backend",
+        "qe_archive_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe.auto_evolution",
+          "qe_read",
+          "qe_archive"
+        ],
+        "plans": [
+          "qe_read_backend",
+          "qe_archive_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
