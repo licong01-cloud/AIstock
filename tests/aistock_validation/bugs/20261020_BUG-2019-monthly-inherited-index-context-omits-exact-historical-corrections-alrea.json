@@ -34,26 +34,26 @@
   "expected": "Existing source corrections are captured by exact key into sealed SOURCE and materialized consistently into the unified release, without runtime DB fallback or full history re-export.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2019-monthly-inherited-index-context-omits-exact-historical-corrections-alrea.json",
       "backend/services/dataset_release/build_stage.py",
+      "backend/services/dataset_release/monthly_index_corrections.py",
       "backend/services/dataset_release/monthly_legacy_index.py",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_repair_inputs.py",
       "backend/tests/dataset_release/test_monthly_legacy_index.py",
-      "backend/services/dataset_release/monthly_index_corrections.py"
+      "tests/aistock_validation/bugs/20261020_BUG-2019-monthly-inherited-index-context-omits-exact-historical-corrections-alrea.json"
     ],
     "added_files": [
       "backend/services/dataset_release/monthly_index_corrections.py",
       "backend/tests/dataset_release/test_monthly_index_corrections.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2019-monthly-inherited-index-context-omits-exact-historical-corrections-alrea.json",
       "backend/services/dataset_release/build_stage.py",
+      "backend/services/dataset_release/monthly_index_corrections.py",
       "backend/services/dataset_release/monthly_legacy_index.py",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_repair_inputs.py",
       "backend/tests/dataset_release/test_monthly_legacy_index.py",
-      "backend/services/dataset_release/monthly_index_corrections.py"
+      "tests/aistock_validation/bugs/20261020_BUG-2019-monthly-inherited-index-context-omits-exact-historical-corrections-alrea.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -157,8 +157,8 @@
   },
   "first_seen_at": "2026-10-20T07:26:42.355049Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "fa28e5136447e66e5120d81d362fdb8d4b84b303",
+  "fixed_at": "2026-10-20T08:15:39Z",
   "github_issue_number": 6447,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6447",
   "last_seen_at": "2026-10-20T07:26:42.355049Z",
@@ -166,6 +166,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6451",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -195,6 +196,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -206,7 +208,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2019",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2ff08e647a7f0a58",
+    "recorded_at": "2026-10-20T08:16:15.468815Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8ab6431cfad277f76bf9ab8f0cc3b2b7269d6568",
+    "source_merge_commit": "fa28e5136447e66e5120d81d362fdb8d4b84b303",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6451",
+    "validation_evidence": [
+      "python -m nox -s l0 --no-venv --no-install -> passed (blocking=0)",
+      "python -m pytest backend/tests/dataset_release/test_monthly_legacy_index.py backend/tests/dataset_release/test_monthly_repair_inputs.py -q -> 18 passed",
+      "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py::test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal -q -> 5 passed"
+    ],
+    "validation_evidence_digest": "1b62bb193a5321e209d18e3452672dcb1262d2b705948727d79a02e59156dc98"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -215,6 +240,11 @@
     "fingerprint": "9817aee14a8afe2d5a103da4",
     "source_event_id": "FE-20261020-9817aee14a8a"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 --no-venv --no-install -> passed (blocking=0)",
+    "python -m pytest backend/tests/dataset_release/test_monthly_legacy_index.py backend/tests/dataset_release/test_monthly_repair_inputs.py -q -> 18 passed",
+    "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py::test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal -q -> 5 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
