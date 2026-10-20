@@ -429,13 +429,19 @@ def get_model_path(snapshot_id: str):
 @router.post("/configs/{config_id}/coefficient-extension")
 def configure_coefficient_extension(config_id: str, req: CoefficientExtensionRequest):
     try:
-        return service.configure_coefficient_extension(
+        result = service.configure_coefficient_extension(
             config_id,
             snapshot_id=req.snapshot_id,
             signal_presets=req.signal_presets,
             coefficient_start=req.coefficient_start.isoformat(),
             enabled=req.enabled,
         )
+        if req.enabled:
+            if _completion_scheduler is None or not _completion_scheduler.request_completion_check(
+                _HMM_COMPLETION_CALLBACK_ID
+            ):
+                logger.error("HMM_COMPLETION_DISPATCH_NOT_REGISTERED config=%s", config_id)
+        return result
     except Exception as exc:
         raise _http_error(exc) from exc
 
@@ -579,22 +585,31 @@ async def coefficient_readiness_tick(
                             for key in ("config_id", "job_id", "status", "reason_code", "error_message")
                         },
                     )
-        except Exception:
+        except Exception as exc:
             logger.exception("HMM readiness reconciliation failed: %s", reconcile.__name__)
             combined.append(
-                {"source_mode": source_mode, "status": "BLOCKED", "reason_code": "hmm_coefficient_readiness_failed"}
+                {
+                    "source_mode": source_mode,
+                    "status": "BLOCKED",
+                    "reason_code": getattr(exc, "reason_code", "hmm_coefficient_readiness_failed"),
+                }
             )
     return combined
 
 
 async def _coefficient_completion_callback() -> bool:
-    results = await coefficient_readiness_tick(source_modes=("database_daily",))
+    results = await coefficient_readiness_tick(source_modes=("qe_frozen_file", "database_daily"))
     # Both the outer hook and the per-subscription handler type orchestration
     # errors as BLOCKED. Neither may consume the unchanged completion watermark.
     # Typed data/identity blocks and durable FAILED jobs retain their HMM policy.
     return not any(
         result.get("status") == "BLOCKED"
-        and result.get("reason_code") in {"hmm_coefficient_readiness_failed", "hmm_daily_subscription_failed"}
+        and result.get("reason_code")
+        in {
+            "hmm_coefficient_readiness_failed",
+            "hmm_daily_subscription_failed",
+            "hmm_coefficient_extension_orchestration_failed",
+        }
         for result in results
     )
 

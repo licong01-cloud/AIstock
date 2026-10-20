@@ -59,6 +59,13 @@ class AdvisoryBatchInferenceProvider(WslStrategyPackageInferenceProvider):
             if (source_plan["plan_hash"] != source_revision
                     or not set(map(str, trade_dates)).issubset(row["decision_date"] for row in source_plan["days"])):
                 raise ValueError("batch source plan differs from native run/revision/date block")
+            current = self._scope.get()
+            if current is not None:
+                if (current.source_plan != source_plan or current.run_id != run_id
+                        or current.source_revision != source_revision or not set(trade_dates).issubset(current.days)):
+                    raise ValueError("nested source scope differs from this consumer's active plan")
+                yield
+                return
         token = self._scope.set(_BatchScope(trade_dates, run_id, source_revision, source_plan=source_plan))
         try:
             yield
@@ -111,6 +118,7 @@ class AdvisoryBatchInferenceProvider(WslStrategyPackageInferenceProvider):
                 "failed_stage": index.get("failed_stage"), "failed_clocks": index.get("failed_clocks"),
                 "batch_status": index.get("status"), "trade_date": trade_date.isoformat(),
                 "own_batch_index": str(root / "batch.json"),
+                **({"source_gap_receipt": index["source_gap_receipt"]} if "source_gap_receipt" in index else {}),
             })
         path = (root / "batch_dates" / trade_date.isoformat() / "scores.json").resolve()
         if (not path.is_relative_to(root) or item.get("output_path") != win_to_wsl_path(str(path))
@@ -131,6 +139,11 @@ class AdvisoryBatchInferenceProvider(WslStrategyPackageInferenceProvider):
             if payload["input_context"].get("source_plan_receipt") != source_plans.input_receipt(route, payload):
                 raise ValueError("own batch daily source plan/content receipt mismatch")
         metadata = deepcopy(metadata)
+        if scope.source_plan is not None:
+            # The native artifact's v2 context is intentionally normalized by
+            # its owner. Preserve the original receipt in provider metadata;
+            # do not extend/overwrite that other module's closed v2 hash.
+            metadata["selection_native_input_context"] = deepcopy(payload["input_context"])
         metadata.update(inference_backend="wsl", wsl_distro=self.distro, wsl_conda_env=self.conda_env,
                         inference_batch_status=index["status"], inference_batch_index=str(root / "batch.json"),
                         inference_batch_shape="DATE_BOUND_FROZEN_PIT" if date_bound else "NATIVE_DATE_BLOCK")
@@ -139,20 +152,34 @@ class AdvisoryBatchInferenceProvider(WslStrategyPackageInferenceProvider):
 
     def _execute(self, workspace: Path, clocks: tuple[SelectionSignalDayV1, ...], scope: _BatchScope) -> tuple[Path, dict[str, Any]]:
         from scripts.strategy_package_live_inference import _atomic_json
-        root = (self.temporary_root / "ADVISORY" / hashlib.sha256(scope.run_id.encode()).hexdigest() / uuid.uuid4().hex).resolve()
+        execution_key = (hashlib.sha256(json.dumps([scope.source_plan["plan_hash"], str(workspace.resolve()), _workspace_identity(workspace),
+                         [day.to_dict() for day in clocks]], sort_keys=True).encode()).hexdigest()
+                         if scope.source_plan is not None else uuid.uuid4().hex)
+        root = (self.temporary_root / "ADVISORY" / hashlib.sha256(scope.run_id.encode()).hexdigest() / execution_key).resolve()
         if not root.is_relative_to(self.temporary_root):
             raise ValueError("batch node output escaped its owned X root")
-        root.mkdir(parents=True)
+        root.mkdir(parents=True, exist_ok=scope.source_plan is not None)
         plan_path, output = root / "plan.json", root / "batch.json"
-        _atomic_json(plan_path, [day.to_dict() for day in clocks])
+        requested_days = [day.to_dict() for day in clocks]
+        if plan_path.exists():
+            if json.loads(plan_path.read_bytes()) != requested_days:
+                raise ValueError("saved native dates differ from frozen task source plan")
+        else:
+            _atomic_json(plan_path, requested_days)
         arguments = ["scripts/strategy_package_live_inference.py", "--runtime-workspace", win_to_wsl_path(str(workspace)),
                      "--historical-plan", win_to_wsl_path(str(plan_path)), "--historical-read-only",
                      "--consumer-scope", "ADVISORY", "--run-id", scope.run_id, "--input-revision", scope.source_revision,
                      "--temp-root", win_to_wsl_path(str(root)), "--output-path", win_to_wsl_path(str(output))]
         if scope.source_plan is not None:
             source_path = root / "source-plan.json"
-            _atomic_json(source_path, scope.source_plan)
+            if source_path.exists():
+                if json.loads(source_path.read_bytes()) != scope.source_plan:
+                    raise ValueError("saved native source plan drifted; original inputs are not overwritten")
+            else:
+                _atomic_json(source_path, scope.source_plan)
             arguments.extend(["--source-plan-file", win_to_wsl_path(str(source_path))])
+            if output.exists() or (root / "batch_dates").exists():
+                arguments.append("--resume")  # Native runner validates real DB inputs and complete own commits.
             if scope.source_plan["file_source"] is not None:
                 source_root = scope.source_plan["file_source"]["binding"]["profile"]["controller_paths"]["candidate_root"]
                 arguments.extend(["--dataset-root", win_to_wsl_path(source_root)])

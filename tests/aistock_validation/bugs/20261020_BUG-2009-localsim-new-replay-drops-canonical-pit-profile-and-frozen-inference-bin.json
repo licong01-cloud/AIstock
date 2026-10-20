@@ -15,7 +15,7 @@
   "assigned_agent": null,
   "backend_restart_required": true,
   "bug_id": "BUG-2009",
-  "closed_at": null,
+  "closed_at": "2026-10-20T06:32:02.965702Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -225,8 +225,8 @@
   },
   "first_seen_at": "2026-10-20T04:16:01.848860Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "60be18f58d776915b7af70f2c0d41caecc762232",
+  "fixed_at": "2026-10-20T04:55:42Z",
   "github_issue_number": 6416,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6416",
   "last_seen_at": "2026-10-20T04:16:01.848860Z",
@@ -294,6 +294,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6421",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -347,9 +348,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2009/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2009",
+      "business_smoke_semantic": {
+        "contract_id": "localsim_workbench_valuation",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+      "expected_identity": "60be18f58d776915b7af70f2c0d41caecc762232",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-20T06:29:57.547471Z",
+      "mode": "read_only",
+      "observed_identity": "1ecfe93ea90c8c3aa58ab5f1564a4e98cca6aa8c",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "751166b54aba4ea8563d21b0e62a82827f0338283bcdaed38e490882d3bcc5ad",
+      "receipt_sha256": "6a7c452fde257d86e23c8046e620f6f093b16b18d46fda03e188833ef37227c7",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "7f1fe138c51988c0aeadb1083346640d487229fd4e3b47d86180d1c8fd8b3c97",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -359,7 +383,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2009",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "db9d4fdd96064cac",
+    "recorded_at": "2026-10-20T04:56:24.754309Z",
+    "runtime_contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "32aad26f24fd40111e5a1f3a99d4a60c0a568598",
+    "source_merge_commit": "60be18f58d776915b7af70f2c0d41caecc762232",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6421",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_runtime_profile.py backend/services/simulation_runtime/localsim_product_control.py backend/services/simulation_runtime/localsim_native_context.py backend/services/simulation_runtime/localsim_control.py backend/services/simulation_runtime/localsim_selection_inference.py backend/tests/simulation_runtime/test_localsim_runtime_profile.py backend/tests/simulation_runtime/test_localsim_product_control_plane.py backend/tests/simulation_runtime/test_localsim_native_context.py backend/tests/simulation_runtime/test_localsim_selection_inference.py tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json -> passed; final HEAD CI and native read-only acceptance passed"
+    ],
+    "validation_evidence_digest": "1a0c01c6fb852a3be517bcbd2de9ef3eb0543811fd6fc09025d87ccb2e02fde5"
+  },
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -368,6 +413,10 @@
     "fingerprint": "230f293310941aa960b8a513",
     "source_event_id": "FE-20261020-230f29331094"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_runtime_profile.py backend/services/simulation_runtime/localsim_product_control.py backend/services/simulation_runtime/localsim_native_context.py backend/services/simulation_runtime/localsim_control.py backend/services/simulation_runtime/localsim_selection_inference.py backend/tests/simulation_runtime/test_localsim_runtime_profile.py backend/tests/simulation_runtime/test_localsim_product_control_plane.py backend/tests/simulation_runtime/test_localsim_native_context.py backend/tests/simulation_runtime/test_localsim_selection_inference.py tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json -> passed; final HEAD CI and native read-only acceptance passed",
+    "post-restart-verify passed against loaded origin/main descendant 1ecfe93ea90c8c3aa58ab5f1564a4e98cca6aa8c; identity, health and workbench smoke passed; prior 4900-score native acceptance retained; production replay acceptance remains separate"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
