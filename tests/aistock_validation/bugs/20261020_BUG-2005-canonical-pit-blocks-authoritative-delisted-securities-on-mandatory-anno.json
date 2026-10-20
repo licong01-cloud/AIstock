@@ -45,19 +45,19 @@
   "expected": "Authoritative delisted status plus valid delist date is sufficient; announcement ledger is optional and never required for refresh/activation. DEV verify real sources and finite repair scope before any authorized production apply; no business-code or service control.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2005-canonical-pit-blocks-authoritative-delisted-securities-on-mandatory-anno.json",
       "backend/services/canonical_equity_pit.py",
       "backend/tests/test_canonical_equity_pit.py",
       "backend/tests/test_stock_universe_pit_spans.py",
-      "scripts/build_stock_universe_pit_spans.py"
+      "scripts/build_stock_universe_pit_spans.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2005-canonical-pit-blocks-authoritative-delisted-securities-on-mandatory-anno.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2005-canonical-pit-blocks-authoritative-delisted-securities-on-mandatory-anno.json",
       "backend/services/canonical_equity_pit.py",
       "backend/tests/test_canonical_equity_pit.py",
       "backend/tests/test_stock_universe_pit_spans.py",
-      "scripts/build_stock_universe_pit_spans.py"
+      "scripts/build_stock_universe_pit_spans.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2005-canonical-pit-blocks-authoritative-delisted-securities-on-mandatory-anno.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -149,9 +149,9 @@
   },
   "first_seen_at": "2026-10-20T03:04:38.924749Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "b1da91e5623cfd362ce185b2ae879f850d8febbd",
   "fix_description": "Use authoritative stock_basic terminal status and valid effective date without requiring announcement-event chains. Preserve optional causal announcements, unknown/date-conflict errors, ST rules and historical leases. Daily and monthly producers share the fixed builder; resolver readiness no longer requires a terminal announcement receipt.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-20T03:17:34Z",
   "github_issue_number": 6407,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6407",
   "last_seen_at": "2026-10-20T03:04:38.924749Z",
@@ -159,6 +159,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6409",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -191,6 +192,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -202,7 +204,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2005",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ffa24522dfcd9676",
+    "recorded_at": "2026-10-20T03:18:13.126361Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f65bb0b0141056523bbc5954c5cc1f983d13776d",
+    "source_merge_commit": "b1da91e5623cfd362ce185b2ae879f850d8febbd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6409",
+    "validation_evidence": [
+      "validation-receipt: id=f56942f59d78d1b2 commit=f65bb0b0141056523bbc5954c5cc1f983d13776d kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=36729157bf4b0a24 commit=f65bb0b0141056523bbc5954c5cc1f983d13776d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_stock_universe_pit_spans.py backend/tests/test_canonical_equity_pit.py backend/tests/test_stock_universe_pit_service.py backend/tests/dataset_release/test_canonical_pit_w6_contracts.py -q` result=`132 passed`"
+    ],
+    "validation_evidence_digest": "21c8928b0c0829681c5005f8995f04efd392b54a1c7a9d6237665b5218cd1df9"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -211,6 +235,10 @@
     "fingerprint": "d193e4743a82a12848908050",
     "source_event_id": "FE-20261020-d193e4743a82"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f56942f59d78d1b2 commit=f65bb0b0141056523bbc5954c5cc1f983d13776d kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=36729157bf4b0a24 commit=f65bb0b0141056523bbc5954c5cc1f983d13776d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_stock_universe_pit_spans.py backend/tests/test_canonical_equity_pit.py backend/tests/test_stock_universe_pit_service.py backend/tests/dataset_release/test_canonical_pit_w6_contracts.py -q` result=`132 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
