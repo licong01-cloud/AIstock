@@ -102,8 +102,8 @@
   },
   "first_seen_at": "2026-10-20T04:59:45.570356Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e1151344d066f25433db0afcd3d23fbc6c224c36",
+  "fixed_at": "2026-10-20T05:08:52Z",
   "github_issue_number": 6428,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6428",
   "last_seen_at": "2026-10-20T04:59:45.570356Z",
@@ -111,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6430",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -150,6 +151,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -161,7 +163,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2013",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bb996e3a97419722",
+    "recorded_at": "2026-10-20T05:09:34.937693Z",
+    "runtime_contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "cb6d999e01d6791bfe29b7559f45f755621ea170",
+    "source_merge_commit": "e1151344d066f25433db0afcd3d23fbc6c224c36",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6430",
+    "validation_evidence": [
+      "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_selection_inference.py backend/tests/simulation_runtime/test_localsim_selection_inference.py tests/aistock_validation/bugs/20261020_BUG-2013-localsim-canonical-pit-consumer-rejects-native-frozen-file-receipt-forma.json -> passed; 78 consumer and file tests and final HEAD CI passed"
+    ],
+    "validation_evidence_digest": "b9e56d02bb36ea8df7926347db323bab1a96b27f6b320cf5ac90ed46ca6e311e"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -170,6 +193,9 @@
     "fingerprint": "a152ae894adf9a685199a9d0",
     "source_event_id": "FE-20261020-a152ae894adf"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- backend/services/simulation_runtime/localsim_selection_inference.py backend/tests/simulation_runtime/test_localsim_selection_inference.py tests/aistock_validation/bugs/20261020_BUG-2013-localsim-canonical-pit-consumer-rejects-native-frozen-file-receipt-forma.json -> passed; 78 consumer and file tests and final HEAD CI passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
