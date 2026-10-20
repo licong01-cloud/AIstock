@@ -33,15 +33,15 @@
   "expected": "Equivalent timezone-aware instants close READY, genuinely different or invalid timestamps remain rejected; completed exports and consumer checkpoints reused.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2014-monthly-ready-closure-compares-source-as-of-timezone-strings-instead-of.json",
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2014-monthly-ready-closure-compares-source-as-of-timezone-strings-instead-of.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2014-monthly-ready-closure-compares-source-as-of-timezone-strings-instead-of.json",
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2014-monthly-ready-closure-compares-source-as-of-timezone-strings-instead-of.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -100,9 +100,9 @@
   },
   "first_seen_at": "2026-10-20T05:17:57.057049Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "1ecfe93ea90c8c3aa58ab5f1564a4e98cca6aa8c",
   "fix_description": "Parse both SOURCE and plan timestamps, require their existing timezone contract and compare exact UTC instants. Preserve the original receipt timestamp and all existing closure identities. No export, receipt, plan, active profile or database rewrite.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-20T05:35:51Z",
   "github_issue_number": 6434,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6434",
   "last_seen_at": "2026-10-20T05:17:57.057049Z",
@@ -110,6 +110,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6435",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -140,6 +141,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -151,7 +153,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2014",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ee05aca44f1660e6",
+    "recorded_at": "2026-10-20T05:36:30.912516Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e4efadbb34b9323f603f4edeacb02ff2de75033d",
+    "source_merge_commit": "1ecfe93ea90c8c3aa58ab5f1564a4e98cca6aa8c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6435",
+    "validation_evidence": [
+      "python -m nox -s l0 --no-venv -> passed; pytest 88 passed, 1 skipped; actual read-only closure PASS; PR CI green"
+    ],
+    "validation_evidence_digest": "3f8a48e102b7edeb87b8c5d7ce2d9c65ad49f4a240a63b8d32422f5a6fa4295e"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -164,7 +187,8 @@
     "RED: exact regression failed at monthly_unified.py source_as_of string comparison for equivalent +00:00/+08:00 instants.",
     "GREEN: eight targeted timestamp/resume cases passed; final related file matrix 88 passed, 1 skipped.",
     "Ruff, compileall, git diff --check and nox l0 passed.",
-    "Fresh-process real operation dmr_63a313d97fd046a38d5a876265565014: six stages, eleven consumers, unresolved_count=0; in-memory READY_TO_ACTIVATE for manifest 1f6acfb4ede18d4b7d2d2a5c65d86a1efe49fc2e6037da5abdcc333c0f80b566; persisted status remains FAILED; active SHA256 unchanged at 807ce03afc9838e5d1c6e71e3a46c34b41f4b77032bf42abee0dbb2e30aa0e23."
+    "Fresh-process real operation dmr_63a313d97fd046a38d5a876265565014: six stages, eleven consumers, unresolved_count=0; in-memory READY_TO_ACTIVATE for manifest 1f6acfb4ede18d4b7d2d2a5c65d86a1efe49fc2e6037da5abdcc333c0f80b566; persisted status remains FAILED; active SHA256 unchanged at 807ce03afc9838e5d1c6e71e3a46c34b41f4b77032bf42abee0dbb2e30aa0e23.",
+    "python -m nox -s l0 --no-venv -> passed; pytest 88 passed, 1 skipped; actual read-only closure PASS; PR CI green"
   ],
   "verification_budget": {
     "budget": "standard",
