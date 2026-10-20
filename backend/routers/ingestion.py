@@ -196,6 +196,7 @@ def _refresh_one_data_stats(cfg: Dict[str, Any]) -> Dict[str, Any]:
             table_name = _qualified_table_name(cfg.get("table_name"))
             date_column = str(cfg.get("date_column") or "").strip()
             updated_column = str(cfg.get("updated_column") or "").strip()
+            last_updated_at = None
 
             if data_kind == KLINE_MINUTE_RAW_KIND:
                 if date_column != "trade_time":
@@ -203,17 +204,21 @@ def _refresh_one_data_stats(cfg: Dict[str, Any]) -> Dict[str, Any]:
                         "reason_code=data_stats_minute_window_invalid_config "
                         f"data_kind={data_kind} date_column={date_column!r}"
                     )
+                updated_projection = (
+                    f"MAX({_quote_identifier(updated_column)})" if updated_column else "NULL::timestamptz"
+                )
                 cur.execute(
                     f"""
                     SELECT COUNT(*),
                            MIN({_quote_identifier(date_column)})::date,
-                           MAX({_quote_identifier(date_column)})::date
+                           MAX({_quote_identifier(date_column)})::date,
+                           {updated_projection} AS last_updated_at
                       FROM {table_name}
                      WHERE {_quote_identifier(date_column)} >= CURRENT_DATE - (%s::text)::interval
                     """,
                     (f"{KLINE_MINUTE_RAW_STATS_WINDOW_MONTHS} months",),
                 )
-                row_count, min_date, max_date = cur.fetchone()
+                row_count, min_date, max_date, last_updated_at = cur.fetchone()
                 extra_info = _merge_data_stats_extra_info(
                     cfg.get("extra_info"),
                     {
@@ -245,19 +250,8 @@ def _refresh_one_data_stats(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 extra_info = _merge_data_stats_extra_info(cfg.get("extra_info"), {})
                 stats_scope = "full_table"
 
-            last_updated_at = None
-            if updated_column:
-                if data_kind == KLINE_MINUTE_RAW_KIND:
-                    cur.execute(
-                        f"""
-                        SELECT MAX({_quote_identifier(updated_column)})
-                          FROM {table_name}
-                         WHERE {_quote_identifier(date_column)} >= CURRENT_DATE - (%s::text)::interval
-                        """,
-                        (f"{KLINE_MINUTE_RAW_STATS_WINDOW_MONTHS} months",),
-                    )
-                else:
-                    cur.execute(f"SELECT MAX({_quote_identifier(updated_column)}) FROM {table_name}")
+            if updated_column and data_kind != KLINE_MINUTE_RAW_KIND:
+                cur.execute(f"SELECT MAX({_quote_identifier(updated_column)}) FROM {table_name}")
                 last_updated_at = cur.fetchone()[0]
 
             cur.execute(
