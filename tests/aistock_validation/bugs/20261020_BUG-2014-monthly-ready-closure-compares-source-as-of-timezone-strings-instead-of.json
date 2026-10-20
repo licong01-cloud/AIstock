@@ -15,6 +15,12 @@
   ],
   "created_at": "2026-10-20T05:17:57.057049Z",
   "description": "All consumers PASS, operation FAILED at RELEASE_CLOSURE with source_as_of differs from the frozen release plan.",
+  "design_compliance_001": [
+    "1 PASS: exact runtime failure fixed and exercised against real frozen receipts; durable operation is still FAILED pending user restart and official resume, not falsely reported READY.",
+    "2 PASS: malformed, timezone-less and truly different instants still fail explicitly; no fallback or fabricated successful receipt.",
+    "3 PASS: snapshot identity, exact instant, dataset manifest, consumer requirements and CAS semantics unchanged.",
+    "4 PASS: no new gate, approval, framework or historical data scan; completed stages are retained and reused."
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -26,12 +32,18 @@
   "evidence_uris": [],
   "expected": "Equivalent timezone-aware instants close READY, genuinely different or invalid timestamps remain rejected; completed exports and consumer checkpoints reused.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2014-monthly-ready-closure-compares-source-as-of-timezone-strings-instead-of.json",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2014-monthly-ready-closure-compares-source-as-of-timezone-strings-instead-of.json",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py",
@@ -89,6 +101,7 @@
   "first_seen_at": "2026-10-20T05:17:57.057049Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_description": "Parse both SOURCE and plan timestamps, require their existing timezone contract and compare exact UTC instants. Preserve the original receipt timestamp and all existing closure identities. No export, receipt, plan, active profile or database rewrite.",
   "fixed_at": null,
   "github_issue_number": 6434,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6434",
@@ -101,19 +114,34 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_unified_v2.py::test_ready_source_as_of_compares_aware_instants backend/tests/dataset_release/test_monthly_unified_v2.py::test_timezone_closure_resume_reuses_every_completed_stage -q",
   "required_verification": [
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    "Round 1: reproduced the actual string-comparison failure, not a fixture setup failure; corrected test receipt loading to use the store public read_checkpoint return contract.",
+    "Round 2: verified equivalent offsets and Z notation pass; a one-microsecond drift, unequal instants with equal wall times, naive, invalid and missing timestamps remain rejected.",
+    "Round 3: verified interrupted final closure resumes from all six durable checkpoints without invoking any stage twice; real six-stage/eleven-consumer receipts close READY in memory in a fresh process, without state or profile writes."
+  ],
   "risk_area": "bug",
+  "root_cause": "SOURCE finalization normalizes plan.source_as_of to UTC while retaining the original aware receipt timestamp. READY closure compared ISO strings, so 2026-10-10T00:40:27.465665+00:00 was rejected against the identical instant 2026-10-10T08:40:27.465665+08:00.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "2026-10-20 isolated AIstock Python loaded the tracked patched MonthlyReleaseService._close_ready and the actual operation's six completed stage receipts. It returned READY_TO_ACTIVATE in memory with eleven consumers and zero unresolved gaps, preserving active SHA256 807ce03afc9838e5d1c6e71e3a46c34b41f4b77032bf42abee0dbb2e30aa0e23. Persisted operation remains FAILED; database_write=false, operation_write=false, profile_write=false, reexport=false, runtime_action=false.",
+      "Isolated AIstock Python loaded tracked MonthlyReleaseService._close_ready against real dmr_63a313d97fd046a38d5a876265565014 receipts; six stages and eleven consumers close READY in memory; persisted state FAILED, active unchanged, no DB/runtime/export writes",
+      "Isolated AIstock Python loaded tracked MonthlyReleaseService._close_ready against real six-stage eleven-consumer receipts, returned READY in memory, no persistent state or profile writes"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -132,6 +160,12 @@
     "fingerprint": "4371d26ab0d3344bb5b5a486",
     "source_event_id": "FE-20261020-4371d26ab0d3"
   },
+  "validation_evidence": [
+    "RED: exact regression failed at monthly_unified.py source_as_of string comparison for equivalent +00:00/+08:00 instants.",
+    "GREEN: eight targeted timestamp/resume cases passed; final related file matrix 88 passed, 1 skipped.",
+    "Ruff, compileall, git diff --check and nox l0 passed.",
+    "Fresh-process real operation dmr_63a313d97fd046a38d5a876265565014: six stages, eleven consumers, unresolved_count=0; in-memory READY_TO_ACTIVATE for manifest 1f6acfb4ede18d4b7d2d2a5c65d86a1efe49fc2e6037da5abdcc333c0f80b566; persisted status remains FAILED; active SHA256 unchanged at 807ce03afc9838e5d1c6e71e3a46c34b41f4b77032bf42abee0dbb2e30aa0e23."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
