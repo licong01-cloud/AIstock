@@ -1335,6 +1335,8 @@ rules:
     include:
       - scripts/backfill_raw_volume_precision.py
       - backend/tests/scripts/test_backfill_raw_volume_precision.py
+      - scripts/repair_historical_daily_fact_absence.py
+      - backend/tests/scripts/test_repair_historical_daily_fact_absence.py
     primary_module: local_data
     impact_modules: [qlib_data]
     layer: data_pipeline
