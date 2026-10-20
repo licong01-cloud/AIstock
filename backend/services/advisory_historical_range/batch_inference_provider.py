@@ -27,6 +27,7 @@ from backend.services.trading_core.errors import DataUnavailableError
 from backend.services.canonical_pit_inference_boundary import manifest_inference_pit_identity
 
 from .selection_signal_kernel import SelectionSignalDayV1
+from . import input_source_plan as source_plans
 
 
 @dataclass
@@ -35,6 +36,7 @@ class _BatchScope:
     run_id: str
     source_revision: str
     executions: dict[str, tuple[Path, dict[str, Any]]] = field(default_factory=dict)
+    source_plan: dict[str, Any] | None = None
 
 
 class AdvisoryBatchInferenceProvider(WslStrategyPackageInferenceProvider):
@@ -46,12 +48,18 @@ class AdvisoryBatchInferenceProvider(WslStrategyPackageInferenceProvider):
         self._scope: ContextVar[_BatchScope | None] = ContextVar(f"advisory_batch_{id(self)}", default=None)
 
     @contextmanager
-    def batch_dates(self, *, trade_dates: tuple[date, ...], run_id: str, source_revision: str):
+    def batch_dates(self, *, trade_dates: tuple[date, ...], run_id: str, source_revision: str,
+                    source_plan: dict[str, Any] | None = None):
         if not trade_dates or any(left >= right for left, right in zip(trade_dates, trade_dates[1:])):
             raise ValueError("batch provider requires the exact increasing native date plan")
         if not run_id or not source_revision:
             raise ValueError("batch scope requires its own native run/source revision")
-        token = self._scope.set(_BatchScope(trade_dates, run_id, source_revision))
+        if source_plan is not None:
+            source_plan = source_plans.validate_source_plan(source_plan, consumer_scope="ADVISORY", run_id=run_id)
+            if (source_plan["plan_hash"] != source_revision
+                    or not set(map(str, trade_dates)).issubset(row["decision_date"] for row in source_plan["days"])):
+                raise ValueError("batch source plan differs from native run/revision/date block")
+        token = self._scope.set(_BatchScope(trade_dates, run_id, source_revision, source_plan=source_plan))
         try:
             yield
         finally:
@@ -69,8 +77,15 @@ class AdvisoryBatchInferenceProvider(WslStrategyPackageInferenceProvider):
         # The existing historical native preparation maps C=D. Other clocks
         # remain explicit standalone requests; never silently change them.
         cutoff = cutoff_date or trade_date
-        if len(scope.days) > 1 and cutoff != trade_date:
+        if scope.source_plan is None and len(scope.days) > 1 and cutoff != trade_date:
             raise ValueError("native multi-day preparation requires its declared C=D mapping")
+        declared = None
+        if scope.source_plan is not None:
+            declared = {date.fromisoformat(row["decision_date"]): SelectionSignalDayV1(*(
+                date.fromisoformat(row[k]) for k in ("decision_date", "data_cutoff", "target_trade_date")))
+                for row in scope.source_plan["days"]}
+            if declared[trade_date].data_cutoff != cutoff:
+                raise ValueError("native cutoff differs from frozen source plan")
         manifest = json.loads((workspace.workspace_path / "manifest.json").read_text(encoding="utf-8"))
         pit = manifest_inference_pit_identity(manifest)
         date_bound = bool(pit and pit.get("universe_codes"))
@@ -80,10 +95,13 @@ class AdvisoryBatchInferenceProvider(WslStrategyPackageInferenceProvider):
         # their owner supplies one explicit PIT identity per plan item.
         days = (trade_date,) if date_bound else scope.days
         identity = _workspace_identity(workspace.workspace_path)
+        if scope.source_plan is not None:
+            identity += ":" + scope.source_plan["plan_hash"]
         if date_bound or len(scope.days) == 1:
             identity += ":" + trade_date.isoformat() + ":" + cutoff.isoformat()
         if identity not in scope.executions:
-            clocks = tuple(SelectionSignalDayV1(day, day if len(days) > 1 else cutoff, day) for day in days)
+            clocks = tuple(declared[day] if declared is not None else
+                           SelectionSignalDayV1(day, day if len(days) > 1 else cutoff, day) for day in days)
             scope.executions[identity] = self._execute(workspace.workspace_path, clocks, scope)
         root, index = scope.executions[identity]
         item = next((row for row in index.get("results", []) if row.get("trade_date") == trade_date.isoformat()), None)
@@ -100,7 +118,7 @@ class AdvisoryBatchInferenceProvider(WslStrategyPackageInferenceProvider):
             raise ValueError("own batch daily output path/hash mismatch")
         payload = json.loads(path.read_text(encoding="utf-8"))
         metadata = payload.get("metadata", {})
-        expected_clock = SelectionSignalDayV1(trade_date, cutoff, trade_date).to_dict()
+        expected_clock = (declared[trade_date] if declared is not None else SelectionSignalDayV1(trade_date, cutoff, trade_date)).to_dict()
         if (payload.get("ok") is not True or not isinstance(payload.get("scores"), list)
                 or metadata.get("consumer_scope") != "ADVISORY" or metadata.get("run_id") != scope.run_id
                 or metadata.get("clocks") != expected_clock or metadata.get("binding") != index.get("binding")
@@ -108,6 +126,10 @@ class AdvisoryBatchInferenceProvider(WslStrategyPackageInferenceProvider):
                 or isinstance(payload.get("universe_count"), bool) or not isinstance(payload.get("universe_count"), int)
                 or payload["universe_count"] <= 0):
             raise ValueError("own batch daily result consumer/run/clock/source identity mismatch")
+        if scope.source_plan is not None:
+            route = source_plans.resolve_day_source(scope.source_plan, declared[trade_date])
+            if payload["input_context"].get("source_plan_receipt") != source_plans.input_receipt(route, payload):
+                raise ValueError("own batch daily source plan/content receipt mismatch")
         metadata = deepcopy(metadata)
         metadata.update(inference_backend="wsl", wsl_distro=self.distro, wsl_conda_env=self.conda_env,
                         inference_batch_status=index["status"], inference_batch_index=str(root / "batch.json"),
@@ -127,6 +149,13 @@ class AdvisoryBatchInferenceProvider(WslStrategyPackageInferenceProvider):
                      "--historical-plan", win_to_wsl_path(str(plan_path)), "--historical-read-only",
                      "--consumer-scope", "ADVISORY", "--run-id", scope.run_id, "--input-revision", scope.source_revision,
                      "--temp-root", win_to_wsl_path(str(root)), "--output-path", win_to_wsl_path(str(output))]
+        if scope.source_plan is not None:
+            source_path = root / "source-plan.json"
+            _atomic_json(source_path, scope.source_plan)
+            arguments.extend(["--source-plan-file", win_to_wsl_path(str(source_path))])
+            if scope.source_plan["file_source"] is not None:
+                source_root = scope.source_plan["file_source"]["binding"]["profile"]["controller_paths"]["candidate_root"]
+                arguments.extend(["--dataset-root", win_to_wsl_path(source_root)])
         command = (f"source {self.conda_sh} && conda activate {self.conda_env} && cd {self._quote(win_to_wsl_path(str(self.repo_root)))} && "
                    + self._build_env_exports(historical_read_only=True) + " python " + " ".join(self._quote(arg) for arg in arguments))
         completed = subprocess.run(["wsl", "-d", self.distro, "bash", "-lc", command], capture_output=True,
