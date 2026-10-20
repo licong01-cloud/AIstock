@@ -1,6 +1,8 @@
 {
   "actual": "SOURCE query codes, QFQ authority, quote transform and factor build restrict facts to PIT securities.",
   "allowed_write_scope": [
+    "backend/tests/dataset_release/test_monthly_construction_facts.py",
+    "backend/tests/dataset_release/test_monthly_sector_mapping.py",
     "backend/services/dataset_release/component_artifact_manifest.py",
     "backend/services/dataset_release/component_manifest_producer.py",
     "backend/tests/dataset_release/test_component_manifest_producer.py",

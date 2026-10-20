@@ -189,8 +189,25 @@ def test_monthly_adapter_binds_map_before_freeze(predecessor, monkeypatch):
         artifact_root=predecessor.root, source_catalog=SimpleNamespace(root=predecessor.root),
     )
     context = SimpleNamespace(plan={"predecessor": {"cutoff": "2026-08-31"}, "target_cutoff": "2026-09-30"}, operation_id="dmr_test")
+    # The source catalog is read in the same snapshot, before the adapter
+    # constructs its authority. This contract probe stops before data export.
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def execute(self, sql, params):
+            assert "market.stock_basic" in sql
+            assert params[0] == date(2026, 9, 30)
+
+        def fetchall(self):
+            return [("000001.SZ",)]
+
     with pytest.raises(RuntimeError, match="stop before database payload"):
-        adapter.read(None, MonthlySnapshotIdentity("1-AA-1", "2026-10-06T00:00:00+00:00", "repair"), context)
+        adapter.read(SimpleNamespace(cursor=Cursor),
+            MonthlySnapshotIdentity("1-AA-1", "2026-10-06T00:00:00+00:00", "repair"), context)
     assert seen == [binding]
 
 
