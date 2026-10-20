@@ -84,8 +84,8 @@
     {
       "action": "ci_contract_review",
       "actor": "codex",
-      "timestamp": "2026-10-20T07:23:49Z",
-      "note": "PR 6444 CI: 710 backend tests passed and one stale source-location assertion failed after SQL extraction; frontend checks passed including terminal-page observation. Add exact existing QE read-path test to scope; retain payload/compaction contract and assert shared projection instead of obsolete inline SQL text. No pipeline or assertion bypass."
+      "note": "PR 6444 CI: 710 backend tests passed and one stale source-location assertion failed after SQL extraction; frontend checks passed including terminal-page observation. Add exact existing QE read-path test to scope; retain payload/compaction contract and assert shared projection instead of obsolete inline SQL text. No pipeline or assertion bypass.",
+      "timestamp": "2026-10-20T07:23:49Z"
     }
   ],
   "evidence_uris": [],
@@ -98,6 +98,7 @@
       "backend/services/quantevolver/payload_summary.py",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/tests/quantevolver/test_qe_ui_active_reads.py",
+      "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
       "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
       "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
       "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
@@ -134,6 +135,7 @@
       "backend/services/quantevolver/payload_summary.py",
       "backend/services/quantevolver/qe_evolution_service.py",
       "backend/tests/quantevolver/test_qe_ui_active_reads.py",
+      "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
       "frontend/src/app/quantevolver/components/EvolutionTrajectory.tsx",
       "frontend/src/app/quantevolver/components/charts/DimensionHeatmap.tsx",
       "frontend/src/app/quantevolver/components/charts/ICDecayTrendChart.tsx",
@@ -154,10 +156,9 @@
       "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
       "frontend/tests/qe/qe-evolution-read-only.spec.ts",
       "frontend/tests/qe/qe-read-performance.spec.ts",
-      "tests/aistock_validation/bugs/20261020_BUG-2012-qe-evolution-ui-polls-terminal-history-and-eagerly-loads-all-loop-artifa.json",
-      "backend/tests/unified_engine/test_qe_evolution_read_paths.py"
+      "tests/aistock_validation/bugs/20261020_BUG-2012-qe-evolution-ui-polls-terminal-history-and-eagerly-loads-all-loop-artifa.json"
     ],
-    "changed_files_source": "actual_task_diff",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "frontend/src/app/quantevolver/evolution/page.tsx",
