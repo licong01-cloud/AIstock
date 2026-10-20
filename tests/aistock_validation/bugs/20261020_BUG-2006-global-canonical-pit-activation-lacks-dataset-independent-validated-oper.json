@@ -10,17 +10,6 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2006",
-  "design_compliance_001": {
-    "item_by_item": "Actual five-field PIT snapshot, independent persisted-row SQL audit, explicit predecessor CAS, source-commit-bound DEV activation/rollback and existing singleton API are implemented. No second active pointer or policy definition.",
-    "no_unapproved_simplification": "Uses existing canonical v2 rule and readiness checks; does not manufacture a full dataset W8 attestation or require rebuilding any price release. Broader independent registry/v3 work remains BUG-1990/PR6373 and is not borrowed unmerged.",
-    "no_fake_completion": "DEV actual activation/readback then complete rollback passed. Production activation remains pending source merge and a matching merged-source DEV rehearsal.",
-    "remaining_gaps": "No source/runtime restart is required for this standalone operator. Existing runtime BUG-2005 aftercare remains separate. No historical lease/profile/account migration is performed."
-  },
-  "review_rounds": [
-    "Round 1: RED import failure then 8 direct GREEN tests; exact predecessor, actual hashes, DEV-only rehearsal and production authorization.",
-    "Round 2: strict rollback boolean checks, trusted source files, official lock ordering and failed-CAS no-commit regression.",
-    "Round 3: 53 related tests, Ruff, compile, L0, catalog and ownership passed. Real DEV rehearsal reached ACTIVE_CANONICAL generation1, then restored legacy generation0 by rollback; receipt X:/AIstock_dataset_release_control/operator_receipts/BUG-2006-dev-activation-rehearsal-20261020-r1.json."
-  ],
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
@@ -29,6 +18,12 @@
   ],
   "created_at": "2026-10-20T03:25:23.896585Z",
   "description": "Production canonical PIT rebuilt ready and clean through 2026-10-19 under explicit user authorization; official singleton pointer still legacy generation 0. Existing operator script only seals a full dataset W6/W8/W9 bundle and cannot activate the independently versioned global PIT. Add a target-explicit existing-schema-only operator using real PIT readback hashes, matching DEV activation receipt and the existing atomic activation API; never fabricate W8 attestations, change datasets, historical leases or service processes.",
+  "design_compliance_001": {
+    "item_by_item": "Actual five-field PIT snapshot, independent persisted-row SQL audit, explicit predecessor CAS, source-commit-bound DEV activation/rollback and existing singleton API are implemented. No second active pointer or policy definition.",
+    "no_fake_completion": "DEV actual activation/readback then complete rollback passed. Production activation remains pending source merge and a matching merged-source DEV rehearsal.",
+    "no_unapproved_simplification": "Uses existing canonical v2 rule and readiness checks; does not manufacture a full dataset W8 attestation or require rebuilding any price release. Broader independent registry/v3 work remains BUG-1990/PR6373 and is not borrowed unmerged.",
+    "remaining_gaps": "No source/runtime restart is required for this standalone operator. Existing runtime BUG-2005 aftercare remains separate. No historical lease/profile/account migration is performed."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -40,9 +35,24 @@
   "evidence_uris": [],
   "expected": "Activate the existing approved canonical v2 singleton through actual DEV rollback rehearsal and production CAS, independently of a price release. BUG-1990/PR6373 broader independent version registry and optional v3 policy remain separate; do not borrow unmerged code or change approved policy.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/scripts/test_activate_canonical_pit_default.py",
+      "noxfile.py",
+      "scripts/activate_canonical_pit_default.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2006-global-canonical-pit-activation-lacks-dataset-independent-validated-oper.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/tests/scripts/test_activate_canonical_pit_default.py",
+      "noxfile.py",
+      "scripts/activate_canonical_pit_default.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2006-global-canonical-pit-activation-lacks-dataset-independent-validated-oper.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -75,14 +85,21 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    "Round 1: RED import failure then 8 direct GREEN tests; exact predecessor, actual hashes, DEV-only rehearsal and production authorization.",
+    "Round 2: strict rollback boolean checks, trusted source files, official lock ordering and failed-CAS no-commit regression.",
+    "Round 3: 53 related tests, Ruff, compile, L0, catalog and ownership passed. Real DEV rehearsal reached ACTIVE_CANONICAL generation1, then restored legacy generation0 by rollback; receipt X:/AIstock_dataset_release_control/operator_receipts/BUG-2006-dev-activation-rehearsal-20261020-r1.json."
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
