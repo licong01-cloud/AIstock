@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -36,9 +37,19 @@ def _first_int(*sources: dict[str, Any], key: str) -> int:
     return 0
 
 
-def build_summary(candidate_manifest: Path | None, discovery_manifest: Path | None) -> dict[str, Any]:
+def build_summary(candidate_manifest: Path | None, discovery_manifest: Path | None, *,
+                  provenance: Path | None = None, expected_run_id: str | None = None,
+                  expected_head: str | None = None) -> dict[str, Any]:
     candidate = read_json(candidate_manifest)
     discovery = read_json(discovery_manifest)
+    identity = read_json(provenance)
+    invalid_identity = bool(expected_run_id or expected_head) and (
+        not expected_run_id or not re.fullmatch(r"[0-9a-f]{40}", expected_head or "")
+        or str(identity.get("run_id")) != expected_run_id
+        or identity.get("head_commit") != expected_head
+    )
+    if invalid_identity:
+        candidate, discovery = {}, {}
     summary = _mapping(candidate.get("summary"))
     effectiveness = _mapping(candidate.get("discovery_effectiveness"))
     discovery_summary = _mapping(discovery.get("summary"))
@@ -49,7 +60,7 @@ def build_summary(candidate_manifest: Path | None, discovery_manifest: Path | No
         rotation = discovery["rotation"]
     gate = candidate.get("workflow_gate") or ("warning" if not candidate else "ready")
     no_candidate_reason = summary.get("no_candidate_reason") or discovery_summary.get("no_candidate_reason") or "n/a"
-    return {
+    result = {
         "workflow_gate": gate,
         "rotation_focus": rotation.get("focus_key") or "n/a",
         "executed_plans": discovery_summary.get("executed_count", 0),
@@ -69,10 +80,24 @@ def build_summary(candidate_manifest: Path | None, discovery_manifest: Path | No
         "closed": _first_int(summary, effectiveness, feedback, key="closed_count"),
         "no_candidate_reason": no_candidate_reason,
         "artifact": candidate_manifest.as_posix() if candidate_manifest and candidate else "missing",
+        "source_run_id": identity.get("run_id"),
+        "source_head": identity.get("head_commit"),
+        "generated_at": candidate.get("generated_at") or discovery.get("generated_at"),
     }
+    if not candidate:
+        for key in ("candidates", "high_value_candidates", "issue_payload_drafts", "deduped", "accepted", "rejected", "closed"):
+            result[key] = None
+    if not discovery:
+        result.update(executed_plans=None, anomalies=None)
+    if invalid_identity:
+        result["no_candidate_reason"] = "missing_or_mismatched_run_head_provenance"
+    elif not candidate and not discovery:
+        result["no_candidate_reason"] = "discovery_artifacts_unavailable"
+    return result
 
 
 def render_markdown(summary: dict[str, Any]) -> str:
+    summary = {key: "unknown" if value is None else value for key, value in summary.items()}
     return "\n".join(
         [
             "",
@@ -91,6 +116,7 @@ def render_markdown(summary: dict[str, Any]) -> str:
             f"- feedback: `available={str(bool(summary.get('feedback_available'))).lower()}, accepted={summary.get('accepted')}, rejected={summary.get('rejected')}, closed={summary.get('closed')}`",
             f"- no_candidate_reason: `{summary.get('no_candidate_reason')}`",
             f"- artifact: `{summary.get('artifact')}`",
+            f"- source: `run={summary.get('source_run_id')}, head={summary.get('source_head')}, generated_at={summary.get('generated_at')}`",
         ]
     ) + "\n"
 
@@ -99,10 +125,16 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Render compact Nightly active discovery summary Markdown.")
     parser.add_argument("--candidate-manifest")
     parser.add_argument("--discovery-manifest")
+    parser.add_argument("--provenance")
+    parser.add_argument("--expected-run-id")
+    parser.add_argument("--expected-head")
     args = parser.parse_args(argv)
     candidate = Path(args.candidate_manifest) if args.candidate_manifest else None
     discovery = Path(args.discovery_manifest) if args.discovery_manifest else None
-    print(render_markdown(build_summary(candidate, discovery)), end="")
+    payload = build_summary(candidate, discovery,
+        provenance=Path(args.provenance) if args.provenance else None,
+        expected_run_id=args.expected_run_id, expected_head=args.expected_head)
+    print(render_markdown(payload), end="")
     return 0
 
 
