@@ -164,12 +164,22 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
     selected = _nightly_shared_pytest_args(str(getattr(session, "name", "")), args)
     if selected is None:
         return  # All explicit targets passed in the same coverage-enforcing producer.
+    plan = str(getattr(session, "name", "not_recorded"))
+    extra_env = {"AISTOCK_TEST_PLAN": plan}
+    if plan == "advisory_modeling_backend":
+        # Small offline model fixtures do not benefit from host-wide BLAS pools.
+        # Bound only test subprocesses, never the user's services or experiments.
+        extra_env.update(HMM_TEST_NUMERIC_ENV)
+        if os.environ.get("AISTOCK_TEST_DIAGNOSTICS_RECEIPT"):
+            extra_env["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"] = str(
+                Path(os.environ["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"]).with_name("advisory-modeling-test-failures.jsonl")
+            )
     session.run(
         "python",
         "-m",
         "pytest",
         *selected,
-        env=_env({"AISTOCK_TEST_PLAN": str(getattr(session, "name", "not_recorded"))}),
+        env=_env(extra_env),
         external=True,
     )
 
@@ -3566,24 +3576,22 @@ def validation_center_ui(session: nox.Session) -> None:
         frontend_port,
         external=True,
     )
+    _ensure_frontend_node_modules(session)
     old_cwd = Path.cwd()
     os.chdir(ROOT / "frontend")
     try:
         session.run(
-            "npm",
-            "exec",
-            "tsc",
-            "--",
+            "node",
+            "node_modules/typescript/bin/tsc",
             "--noEmit",
             "--incremental",
             "false",
             external=True,
         )
         session.run(
-            "npm",
-            "run",
-            "test:e2e",
-            "--",
+            "node",
+            "node_modules/@playwright/test/cli.js",
+            "test",
             "tests/validation-center/validation-center.spec.ts",
             env=_env(
                 {
