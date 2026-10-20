@@ -6,6 +6,7 @@
     "tests/aistock_validation/bugs/20261020_BUG-2013-localsim-canonical-pit-consumer-rejects-native-frozen-file-receipt-forma.json"
   ],
   "assigned_agent": null,
+  "backend_restart_required": true,
   "bug_id": "BUG-2013",
   "closed_at": null,
   "closure_requirements": [
@@ -15,6 +16,12 @@
   ],
   "created_at": "2026-10-20T04:59:45.570356Z",
   "description": "Follow-up to BUG-2009: native InferenceEngine wraps the PIT receipt dataset_id and parameter_hash for frozen dataset inputs. LocalSIM daily canonical lease validation currently accepts only database receipt format. Honor the explicit LocalSIM-owned frozen binding without changing shared code, policy, scoring, accounts or replay state.",
+  "design_compliance_review": {
+    "business_semantics_preserved": "No scoring, filtering, TopK, PIT policy, orders, positions, fees, account, ledger or replay state changes; actual 4900-score native DB output still passes.",
+    "complete_implementation": "Accept both unchanged native receipt formats using explicitly owned file binding; canonical lease, C-day population, query schema and wrapped parameter hash remain mandatory. Source-plan adoption is separate.",
+    "fail_closed": "File mode selected only from current LocalSIM frozen input scope; unexpected or mismatched binding, DB/file receipt substitution, missing or conflicting lease and C-day receipt mismatches reject before native publication.",
+    "no_unapproved_gates": "Use existing engine receipt and frozen dataset binding contracts; no active-profile lookup, implicit DB fallback, data repair, account replay activation or backend restart."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -23,7 +30,11 @@
       "timestamp": "2026-10-20T04:59:45.570336Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\file-receipt-consumer-acceptance-r1.json",
+    "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\file-receipt-red-r1.log",
+    "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\file-receipt-related-r1.log"
+  ],
   "expected": "Both native database and frozen-file PIT receipts validate against the same immutable daily lease, C-day population and explicitly configured source identity. Missing, mismatched or substituted file bindings fail closed; no DB fallback.",
   "file_scope_contract": {
     "added_files": [],
@@ -98,19 +109,40 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/simulation_runtime/test_localsim_selection_inference.py::test_canonical_provider_consumes_authoritative_input_receipt_not_metadata -q",
   "required_verification": [
     "l0",
     "simulation_core_l2"
   ],
+  "review_rounds": [
+    {
+      "evidence": "Native engine file receipt rewrites dataset/query identity and wraps native parameter hash; positive file test reproduced previous rejection (file-receipt-red-r1.log). Expected format now comes from our own explicit frozen input scope.",
+      "result": "passed",
+      "round": 1,
+      "scope": "actual native wire contract and source selection"
+    },
+    {
+      "evidence": "26 source/identity fix-point cases and 78 related consumer/file tests passed; final native DB raw output hash and all 4900 scores unchanged. Actual file model inference is not claimed.",
+      "result": "passed",
+      "round": 2,
+      "scope": "two-source validation, fail-closed checks and unchanged DB receipt acceptance"
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
+    "fresh_process_evidence": [
+      "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\file-receipt-related-r1.log: 78 passed in fresh AIstock Python 3.12",
+      "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\file-receipt-consumer-acceptance-r1.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
