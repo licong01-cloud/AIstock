@@ -16,7 +16,23 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-20T03:04:38.924749Z",
+  "data_validation": {
+    "dataset_profile_write": false,
+    "dev": "Actual rebuild succeeded through 2026-10-19: 5346 symbols, 5665 spans; invalid/overlap/event-action/terminal-reentry counts all zero; subsequent ensure rebuilt=false.",
+    "official_sources": [
+      "https://www.sse.com.cn/disclosure/announcement/listing/stock/c/c_20261012_10834561.shtml",
+      "https://www.sse.com.cn/disclosure/announcement/listing/stock/c/c_20261012_10834560.shtml"
+    ],
+    "production": "Read-only dry-run through 2026-10-19 succeeded: 5346 symbols, 5665 spans; same four zero counts, 238 authoritative terminal dates and 236 optional announcement matches, missing=0. Production DML and pointer activation not performed.",
+    "runtime_action": false
+  },
   "description": "Production last_error reports missing_count=2 for 601059.SH and 601198.SH; canonical failed/dirty, singleton remains legacy generation 0.",
+  "design_compliance_001": {
+    "business_semantics": "252 trading-session IPO/ST/PIT rules and physical snapshot identities unchanged; real delist_date closes only from its effective session.",
+    "no_extra_gates": "Removed terminal announcement ledger requirement; no new platform, approval or evidence-chain requirement.",
+    "no_silent_errors": "Missing lifecycle dates/status, invalid date order, ST continuity and four span-validation failures remain errors; no fabricated terminal events.",
+    "no_simplified_delivery": "Shared daily/monthly builder and live/activation readiness both fixed; production apply and activation remain separate, explicitly pending."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,14 +44,22 @@
   "evidence_uris": [],
   "expected": "Authoritative delisted status plus valid delist date is sufficient; announcement ledger is optional and never required for refresh/activation. DEV verify real sources and finite repair scope before any authorized production apply; no business-code or service control.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2005-canonical-pit-blocks-authoritative-delisted-securities-on-mandatory-anno.json",
+      "backend/services/canonical_equity_pit.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "scripts/build_stock_universe_pit_spans.py"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/build_stock_universe_pit_spans.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2005-canonical-pit-blocks-authoritative-delisted-securities-on-mandatory-anno.json",
       "backend/services/canonical_equity_pit.py",
+      "backend/tests/test_canonical_equity_pit.py",
       "backend/tests/test_stock_universe_pit_spans.py",
-      "backend/tests/test_canonical_equity_pit.py"
+      "scripts/build_stock_universe_pit_spans.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/build_stock_universe_pit_spans.py",
@@ -126,6 +150,7 @@
   "first_seen_at": "2026-10-20T03:04:38.924749Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_description": "Use authoritative stock_basic terminal status and valid effective date without requiring announcement-event chains. Preserve optional causal announcements, unknown/date-conflict errors, ST rules and historical leases. Daily and monthly producers share the fixed builder; resolver readiness no longer requires a terminal announcement receipt.",
   "fixed_at": null,
   "github_issue_number": 6407,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6407",
@@ -144,14 +169,30 @@
     "data_sync_autonomy_backend",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    "R1: RED six fix-point cases reproduced mandatory announcement gate; patched shared builder and authority readiness. Lifecycle unknown status/date errors remain.",
+    "R2: Reviewed causal history, generator input, paused-date handling and backward receipt compatibility; added authoritative terminal-date boundary test and invalid date-order check, no new approval/evidence gate.",
+    "R3: Existing DEV forced rebuild plus repeat no-op and production read-only dry-run passed; final 132-test related matrix, Ruff, compile and whitespace checks passed. Database authority pointer and active dataset profile were not changed."
+  ],
   "risk_area": "bug",
+  "root_cause": "The builder and authority readiness validator required a second issuer-bound announcement ledger even when stock_basic already held a correct D status and delist_date. Production 601059.SH and 601198.SH both have delist_date=2026-10-19, independently confirmed by SSE; absence of two event rows incorrectly blocked the rolling refresh.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "Isolated AIstock Python loaded patched shared PIT builder and canonical resolver, performed existing DEV actual rebuild/readback, production read-only dry-run; authoritative terminal dates accepted without creating announcement rows; no production write, pointer/profile activation, provider calls or runtime control",
+      "Isolated AIstock Python loaded persistent shared builder/resolver; DEV actual rebuild/readback through 2026-10-19: 5346 symbols, 5665 spans, four zero errors; repeat no-op; production read-only dry-run passed, no production write or authority/profile activation or process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
