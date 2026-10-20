@@ -290,7 +290,9 @@ def validate_qlib_month(
                 end = start + before[2] // 4 - 2
                 first = max(start, bisect_left(calendar, month_start))
                 last = max(rows)
-                if start > min(rows) or end != last or end >= len(calendar) or item.get("start_index") != start or item.get("end_index") != end:
+                expected_start = output_pin.get("start_index", item.get("start_index"))
+                expected_end = output_pin.get("end_index", item.get("end_index"))
+                if start > min(rows) or end != last or end >= len(calendar) or expected_start != start or expected_end != end:
                     raise MonthlyLegacyValidationError("native month feature bounds differ")
                 stream.seek(4 + (first - start) * 4)
                 observed = np.frombuffer(stream.read((last - first + 1) * 4), dtype="<f4")
