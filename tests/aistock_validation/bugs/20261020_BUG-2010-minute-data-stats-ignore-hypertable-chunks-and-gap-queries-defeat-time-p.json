@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Time-bounded gap probes and accurate compressed hypertable physical size; preserve non-minute behavior and explicit failures.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2010-minute-data-stats-ignore-hypertable-chunks-and-gap-queries-defeat-time-p.json",
       "backend/routers/ingestion.py",
       "backend/tests/test_ingestion_data_stats_readiness_api.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261020_BUG-2010-minute-data-stats-ignore-hypertable-chunks-and-gap-queries-defeat-time-p.json",
+      "backend/routers/ingestion.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/routers/ingestion.py",
@@ -111,11 +117,26 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "RED: three direct regressions failed on previous source. GREEN: 13 direct ingestion readiness tests passed in fresh AIstock-CI Python; Ruff and diff-check passed.",
+      "Existing DEV readonly queries: compressed September minute_1d16 full physical size 680288256 bytes, index bytes 191471616; ordinary stock_basic fallback returns 1507328/278528 bytes. No DDL or DML in SQL comparison.",
+      "Existing DEV presence queries on September 1 and 2 returned identical dates in UTC and Asia/Shanghai. Timestamp remains uncast, fixed bounds prune unrelated chunks; daily non-minute semantics unchanged.",
+      "No runtime deployment or backend process control. Post-restart local-data overview validates target-owned runtime readability; precise size/presence semantics are additionally bound to direct tests and DEV SQL, not inferred from health or HTTP status.",
+      "Fresh Python process loaded task ingestion module; direct 13-case regression matrix passed. Existing compressed DEV September presence SQL returns identical dates in UTC and Asia/Shanghai; chunk-inclusive and ordinary-table size queries passed. No production activation or service control."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
