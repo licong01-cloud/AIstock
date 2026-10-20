@@ -1,0 +1,479 @@
+{
+  "actual": "New replay admission lost the canonical profile/lease. A real shared TCN run also exposed LocalSIM reading nonexistent metadata.pit_identity instead of authoritative input_context.pit_identity; 4900 native scores were correctly rejected before publication.",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/localsim_runtime_profile.py",
+    "backend/services/simulation_runtime/localsim_product_control.py",
+    "backend/services/simulation_runtime/localsim_native_context.py",
+    "backend/services/simulation_runtime/localsim_control.py",
+    "backend/services/simulation_runtime/localsim_selection_inference.py",
+    "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
+    "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
+    "backend/tests/simulation_runtime/test_localsim_native_context.py",
+    "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json"
+  ],
+  "assigned_agent": null,
+  "backend_restart_required": true,
+  "bug_id": "BUG-2009",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T04:16:01.848860Z",
+  "description": "Historical inference rejects the missing identity; LocalSIM selection projection currently carries neither canonical profile nor lease.",
+  "design_compliance_review": {
+    "business_semantics_preserved": "Pre-fix legacy request/materialized hashes retained by regression; shared scoring/filtering/TopK, fee, order, position and ledger algorithms unchanged.",
+    "complete_implementation": "Explicit native profile, immutable new-admission lease, native release readback, all C/D/T clocks and public retrospective boundary are covered; the consumer validates authoritative native input_context plus population read receipt without changing the shared CLI.",
+    "fail_closed": "Missing/conflicting identities, mixed legacy ST policy and uncovered range fail before inference or native entity commit; no price fill or database fallback added.",
+    "no_unapproved_gates": "Only existing canonical authority/profile/lease contracts are enforced; no new approval, restart or production activation flow."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-230f29331094",
+      "timestamp": "2026-10-20T04:16:01.848844Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\final-native-readonly-receipt.json",
+    "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\legacy-native-identity-readback-r2.json"
+  ],
+  "expected": "Explicit new canonical replay admission freezes policy authority generation and source identity, retains per-day C/D/T PIT semantics and fails closed on invalid identity/coverage/drift; existing legacy releases remain unchanged.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/localsim_control.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/services/simulation_runtime/localsim_runtime_profile.py",
+      "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/tests/simulation_runtime/test_localsim_native_context.py",
+      "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
+      "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/simulation_runtime/localsim_control.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/services/simulation_runtime/localsim_runtime_profile.py",
+      "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/tests/simulation_runtime/test_localsim_native_context.py",
+      "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
+      "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2009-localsim-new-replay-drops-canonical-pit-profile-and-frozen-inference-bin.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/localsim_runtime_profile.py",
+        "backend/services/simulation_runtime/localsim_product_control.py",
+        "backend/services/simulation_runtime/localsim_native_context.py",
+        "backend/services/simulation_runtime/localsim_control.py",
+        "backend/services/simulation_runtime/localsim_selection_inference.py",
+        "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
+        "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
+        "backend/tests/simulation_runtime/test_localsim_native_context.py",
+        "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "simulation.localsim_successor_core",
+        "platform.db",
+        "strategy_package"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/localsim_runtime_profile.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/localsim_product_control.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/localsim_native_context.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/localsim_control.py",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/localsim_selection_inference.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_native_context.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/localsim_runtime_profile.py",
+        "backend/services/simulation_runtime/localsim_product_control.py",
+        "backend/services/simulation_runtime/localsim_native_context.py",
+        "backend/services/simulation_runtime/localsim_control.py",
+        "backend/services/simulation_runtime/localsim_selection_inference.py",
+        "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
+        "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
+        "backend/tests/simulation_runtime/test_localsim_native_context.py",
+        "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_runtime/localsim_runtime_profile.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/localsim_control.py",
+      "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
+      "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
+      "backend/tests/simulation_runtime/test_localsim_native_context.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/localsim_runtime_profile.py",
+      "backend/services/simulation_runtime/localsim_product_control.py",
+      "backend/services/simulation_runtime/localsim_native_context.py",
+      "backend/services/simulation_runtime/localsim_control.py",
+      "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/tests/simulation_runtime/test_localsim_runtime_profile.py",
+      "backend/tests/simulation_runtime/test_localsim_product_control_plane.py",
+      "backend/tests/simulation_runtime/test_localsim_native_context.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+    ]
+  },
+  "first_seen_at": "2026-10-20T04:16:01.848860Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6416,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6416",
+  "last_seen_at": "2026-10-20T04:16:01.848860Z",
+  "module": "simulation_runtime",
+  "native_probe": {
+    "checks": {
+      "clocks": true,
+      "full_ordered_scores": true,
+      "full_population": true,
+      "native_commit_before_checkpoint_recovery": true,
+      "native_input_context": true,
+      "one_native_evidence": true,
+      "one_owned_inference_run": true,
+      "population_count": true,
+      "unknown": true
+    },
+    "clocks": {
+      "data_cutoff": "2026-07-10",
+      "decision_date": "2026-07-13",
+      "target_trade_date": "2026-07-13"
+    },
+    "data_source": "DB_HISTORICAL, same as original native TCN source; no fallback introduced",
+    "database_write": false,
+    "limits": "r1 reached native raw scoring but failed at the old consumer receipt validator; only raw scores/population/context are compared across runs; final selection and recovery are validated in r2",
+    "native_daily_strategy": "score_weighted_topk_v2, original top_k=25 unchanged",
+    "peak_owned_disk_bytes": 1689790123,
+    "peak_rss_bytes": 9026420736,
+    "production_replay_started": false,
+    "raw_output_hashes": {
+      "r1": "68334f18ff4c9480494bb6098be757dc93709ccbd277bf905902fd91983f1c80",
+      "r2": "767545a47a11c223f77f6cc1ba021864a2a967c93ffdd3c025ded1d815a1e87a"
+    },
+    "read_only": true,
+    "receipt": "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\final-native-readonly-receipt.json",
+    "recovery_seconds": 1.4213725998997688,
+    "score_count": 4900,
+    "selected_count": 25,
+    "source_hashes": {
+      "backend\\data_service\\frozen_dataset.py": "e0790ee4dd4851f50a598a597e973e5848c5bbd3f3ff7a5d0c2ae404e098c7ec",
+      "backend\\inference_engine.py": "466251d5b6e126c062ec818bcbdc5ed68b362211246e73c1e248aadc11c3f03d",
+      "backend\\services\\advisory_historical_range\\alpha158_batch.py": "5c067ddc67c42b058fc324469fe375937eb402998f833a3ad2500067c6064c67",
+      "backend\\services\\advisory_historical_range\\factor_input_materialization.py": "c8987d8920980644fffd50beaa400d96f696b5f09bd798abc39faced62143f9c",
+      "backend\\services\\advisory_historical_range\\inference_features.py": "992ab86878a54af3c8691f0acc41c82373b9bfa2cfa77b95fdbf64cdd1371599",
+      "backend\\services\\advisory_historical_range\\inference_inputs.py": "93d946a38fa15255f3e791b3d1d46aebe93047e17eaf98ff20089bfadb41c17d",
+      "backend\\services\\advisory_historical_range\\inference_session.py": "16aec703c1763c822b79a338a9e1776e039fcf2d8dcf5e94a10b2a6283682ebf",
+      "backend\\services\\advisory_historical_range\\selection_signal_kernel.py": "ae925c5888728b15886ac6847f6e2a63da91af9a749beac1698d54507f11a539",
+      "backend\\services\\simulation_data\\frozen_file_adapters.py": "583d0b470ddf474a941fff82442a170d79f7555673c9ca2506365bb2e8ed384a",
+      "backend\\services\\simulation_runtime\\localsim_file_inputs.py": "388c00258691dafaad74ac6ef7ec7a8f92fc1b335590752159c913e7b3821765",
+      "backend\\services\\simulation_runtime\\localsim_selection_inference.py": "5d7bff67207bfc7c76cd306a789066ef91de7a86f9703c70e8b74e7c2932bb6e",
+      "backend\\services\\simulation_runtime\\localsim_selection_probe.py": "49240b69a6c500e69dfb6940d63d41632f59315a22dcfbf2c81c00d8e05a2d8f",
+      "backend\\services\\simulation_runtime\\localsim_selection_signal.py": "29d639c764c40dca2c7deea586f6436c0e28d752505f3b1b304f6e97e9d71049",
+      "backend\\services\\simulation_signal\\strategy_package_selection.py": "4b5cc5edda79432b973481a99e731dad514f78df52d8aa637c198ad1a3b1cbec",
+      "backend\\services\\strategy_package\\live_inference.py": "911e03043c527350a0503e45765a6f55c587d2fdc82f3e927f45041578fd54fb",
+      "backend\\services\\strategy_package\\multi_alpha_live.py": "8487a633c869554395126d05b29af66b2ea0ae9119c79a579b28844887c38949",
+      "backend\\services\\strategy_package\\runtime.py": "2ee0e5ac4425e07b2400a4c4263ba0ef925b1635f3dd0fb7e178106bc71b045c",
+      "backend\\services\\strategy_package\\selection_artifact.py": "da02400a7ca092a7b6e36e096245f52f6787187a7b557f5ba400e5cf1fb53d71",
+      "backend\\services\\strategy_package\\selection_computation.py": "811e4336363bf5db65d3259af2481d931b0d24bea8070b7180c29498b1ecd8f4",
+      "scripts\\strategy_package_live_inference.py": "a3d518e7dd7d0bba492b0c658a00adb00800ee8f89f413335f8f7ec626c001fe"
+    },
+    "status": "PASSED",
+    "universe_count": 4900,
+    "unknown_count": 0,
+    "wall_seconds": 376.64770879969
+  },
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/simulation_runtime/test_localsim_native_context.py backend/tests/simulation_runtime/test_localsim_product_control_plane.py -q",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2"
+  ],
+  "review_rounds": [
+    {
+      "evidence": "Captured pre-fix hashes; explicit canonical profile survives materialization; legacy risk key plus canonical profile rejected.",
+      "result": "passed",
+      "round": 1,
+      "scope": "policy identity and immutable legacy serialization"
+    },
+    {
+      "evidence": "133 passed / 1 skipped; missing lease, conflicting inference declaration, C/D/T coverage and no-partial-commit checks passed.",
+      "result": "passed",
+      "round": 2,
+      "scope": "admission atomicity, native propagation and retrospective boundary"
+    },
+    {
+      "evidence": "Real 4900-score output reproduced a consumer-side metadata lookup fault. Added 11 receipt-specific positive/negative tests and fixed consumer validation against the unchanged native input_context plus PIT source receipt; 55 consumer/shared-signal tests pass.",
+      "result": "passed",
+      "round": 3,
+      "scope": "actual shared CLI receipt contract and detached PIT identity rejection"
+    },
+    {
+      "evidence": "Two independent actual computations match all 4900 ordered scores, original population, UNKNOWN and full native input context. Fresh corrected consumer produces native Top25, recovers injected post-commit failure, exact retry reuses only its own one evidence/one node output. Old actual TCN/LSTM release hash/projection readback passed; no production replay or DB mutation.",
+      "result": "passed",
+      "round": 4,
+      "scope": "real native TCN selection, raw-score equivalence, recovery and production boundaries"
+    }
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
+    "fresh_process_evidence": [
+      "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\related-matrix-r1.log: 133 passed, 1 skipped",
+      "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\receipt-related-r2.log: 55 passed after actual CLI receipt fix",
+      "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\final-native-readonly-receipt.json: PASSED; actual shared engine, native Top25 and owned commit/retry recovery",
+      "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\admission-readonly-receipt-r2.json: new canonical admission only in memory, immutable native lease and changed-source SHA256",
+      "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\legacy-native-identity-readback-r2.json: old actual TCN/LSTM hashes and frozen projections unchanged under final source"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM new replay drops canonical PIT profile and frozen inference binding",
+  "trigger_condition": {
+    "fingerprint": "230f293310941aa960b8a513",
+    "source_event_id": "FE-20261020-230f29331094"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -537,6 +537,7 @@ _R5_CODE_RELEASE_CLOSURE = (
     "backend/services/advisory_historical_range/selection_signal_kernel.py",
     "backend/services/advisory_historical_range/batch_inference_provider.py",
     "backend/services/advisory_historical_range/inference_inputs.py",
+    "backend/services/advisory_historical_range/input_source_plan.py",
     "backend/services/advisory_historical_range/inference_features.py",
     "backend/services/advisory_historical_range/inference_session.py",
     "backend/services/advisory_historical_range/factor_input_materialization.py",
