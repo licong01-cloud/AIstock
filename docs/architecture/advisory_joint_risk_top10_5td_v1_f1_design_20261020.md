@@ -1,7 +1,7 @@
 # Advisory 联合下行风险 Top20→Top10 固定五日 F1 设计
 
 日期：2026-10-20。F1 / 单一 Advisory 研究叶；假设 `JOINT_RISK_TOP10_5TD_1`。
-状态：`SOURCE_AND_DIRECT_TESTS_COMPLETE / REAL_STUDY_PENDING`。
+状态：`SOURCE_AND_RESEARCH_COMPLETE / EXACT_RISK_ESTIMATOR_NOT_SUPPORTED / NOT_ACTIVATED`。
 本文件细化已批准的[研究假设](advisory_joint_risk_top10_research_hypothesis_20261020.md)，不改变生产选股或模型激活状态。
 
 ## Background / 为什么研究此问题
@@ -17,7 +17,7 @@
 仅新增 `backend/services/advisory_model_first/joint_risk_top10_5td_inputs_v1.py`、
 `joint_risk_top10_5td_study_v1.py`、`joint_risk_top10_5td_pipeline_v1.py`及该叶直接测试
 `backend/tests/advisory_model_first/test_joint_risk_top10_5td_v1.py`；
-文档限本文、上述研究假设和蓝图§16.0/对应研究方法段。
+文档限本文、上述研究假设和蓝图当前摘要/§1.3本次结果/§16.0/对应研究方法段。
 不修改共享评分/过滤/TopK、Selection、StrategyPackage、QE、HMM、数据发布或LocalSIM源码。
 输出是原候选中的独立研究名单，不是资金权重、现金、执行器或交易指令。
 
@@ -146,7 +146,7 @@ Windows临时文件全X，源大资产只读；本研究叶无运行中服务路
 | F-350 | 同叶 predict/audit_skill；pipeline_v1.py run_study | backend/tests/advisory_model_first/test_joint_risk_top10_5td_v1.py::test_original_axis_skill_support_and_future_target_cutoff | SOURCE_COMPLETE | none |
 | F-351 | 同叶 evaluate_economics | backend/tests/advisory_model_first/test_joint_risk_top10_5td_v1.py::test_native_finance_cost_cash_unknown_maturity_and_roster | SOURCE_COMPLETE | none |
 | F-352 | joint_risk_top10_5td_pipeline_v1.py run_study | backend/tests/advisory_model_first/test_joint_risk_top10_5td_v1.py::test_atomic_pipeline_no_economic_decode_retry_partial_and_drift | SOURCE_COMPLETE | none |
-| F-353 | 本文Scope/Production Gates；蓝图§16.0 | artifact: docs/architecture/advisory_joint_risk_top10_5td_v1_f1_design_20261020.md | PENDING_REAL_RESEARCH | not ready for merge until one native file study is reported |
+| F-353 | 本文真实结果/四项符合性；蓝图§16.0 | artifact: docs/architecture/advisory_joint_risk_top10_5td_v1_f1_design_20261020.md | SOURCE_AND_RESEARCH_COMPLETE | none |
 
 ## 设计审修与输入检查（任何估计/评价Y之前）
 
@@ -160,8 +160,58 @@ Windows临时文件全X，源大资产只读；本研究叶无运行中服务路
 120日共同五日观测训练最少79（中位120），评价输入最少88（中位114），全部>=60。
 读取5,621,632字节、6.08秒、RSS185,843,712字节；收据
 `X:/AIstock_temp/ADVISORY/joint-risk-top10-20261020/input-feasibility-v2.json`。
-这仅证明可产性，未拟合、未解码评价收益列、未证明未来风险/收益或完成实现。
+这是拟合前可产性检查的历史断点；不是模型技能或经济结果。
 
 源码三轮同窗口审修（非独立外审）：修正原子publish返回Path的使用、原候选全局顺序、
 实际观测末日与决策上界分离、来源字节身份及预发布资源预算。7项最终直接小矩阵通过（8.84秒），
-Ruff通过；真实研究尚未执行。矩阵中的SOURCE_COMPLETE不代表研究成立、运行角色激活或可合入。
+Ruff通过；以下随后执行真实研究。矩阵中的SOURCE_COMPLETE不代表研究成立或运行角色激活。
+
+## Research Result / 本次真实结果
+
+唯一run `advjointrisk_94150d2efdf56fdf070d97c7`，producer
+`cc5858555e7ca8c94a03327563cd47fbfa14cc77`；plan
+`94150d2efdf56fdf070d97c725dffcc0b224302ed3ac504749544a4a18c12679`，预测stage
+`a791a4c5638ea633652513e0db60b5294fc45fcf145cb141ebbbc048a155b6f3`。
+原610包D/12200Top20作为准备人口保留，实际只对86评价D/172包D估计，输出3440原行。
+实际172次LW闭式统计估计、1候选、0监督收益模型/QE训练；它们不是172个独立trial，
+沿此前cohort“监督fit/统计估计”分计，累计既有研究fit仍160，另列本次172统计更新。
+本次Windows独立进程执行有界CPU统计计算，非监督模型训练或服务内任务；监督训练仍按蓝图在WSL。
+
+172组历史均足够（共同观测最少88），未发生NO_ADVICE；原排名/分数数值/名单成员均保留。
+81成熟D/162包D风险标签可观测，最后5D/10包D原样IMMATURE，无真缺数引起的评价洞。
+固定原Top10上MSE：边际 **5,569,742,432.97bps⁴**，联合 **7,912,383,415.26bps⁴**，
+联合误差增加 **42.0601%**；边际−联合均值 **−2,342,640,982.30bps⁴**，
+原轴5D block95%区间 **[−3,802,567,664.41,−460,987,154.59]bps⁴**，
+MDE80 **2,370,529,128.98bps⁴**。这是开发窗条件技能比较，不是收益、Nav或独立确认。
+
+结论`EXACT_RISK_ESTIMATOR_NOT_SUPPORTED / NAVIGATION_ONLY`。
+**技能失败，所以经济Y未解码、名单收益/尾损增量未运行、无确认或激活。**
+不能把这写成“收益已经验证为负”、所有联合风险不可学或QE父包Alpha不足。
+不换窗/收缩器/阈值救候选，不再为此候选补证或延伸同族；下一问题须说明真正新增信息。
+
+研究计算32.435秒、peak RSS361,238,528字节、实际Bin消费4,309,544字节、产物8,560,271字节，
+2线程/0SQL/0大型复制；复用已存父名单，不包含重新推理父包或全回放，不能作为选股每日SLA。
+产物位于`X:/AIstock_temp/ADVISORY/joint-risk-top10-20261020/research/advjointrisk_94150d2efdf56fdf070d97c7`。
+
+ALGO-COMPLEXITY-001复核：S=1253股、文件W=429会话、G=172组、p=20、n<=120。
+输入O(SW)，每股两字段一次读取；估计O(Gnp²)，枚举O(G×2126×p²)，
+2126×20掩码约340KB，固定而非全市场n²配对。关联只在原3440评价行唯一KEY上1:1，
+无笛卡尔join。上述实测32.435秒/约345MiB均在预算内。
+本地原生双静态L0为0blocking；量化循环触发的单条P2复杂度提示已按本段逐项复核，
+不把非阻断提示隐藏成0findings，也不为降低计数改业务算法。
+
+## 最后源码审修与DESIGN-COMPLIANCE-001
+
+原生逐列检查发现原`parent_score`的float32被记录字典重建成float64，数值无变但类型未保留，
+正向分支的严格身份比较也会因此失败。先增加float32用例得到RED，再以`attach_decisions`
+只追加角色列、不重建原列修复；3个受影响节点通过（6.73秒），未再次运行全部间接测试。
+用原3440行/172包D的既存真实预测直接验证新投影：原字段值、类型、排序及三臂入选完全一致，
+0新增估计、0经济Y读取、原预测文件SHA保持
+`aa9f657fe912965c3f9799495132ada3a9a6b0804899f5c4b1cd41b6a184d00c`。
+只读投影收据`X:/AIstock_temp/ADVISORY/joint-risk-top10-20261020/native-export-acceptance.json`。
+研究producer与最终导出修复源码分态：未把旧study改绑新HEAD、未覆盖产物、未重跑阴性。
+
+四项逐条：①交付包含原生合同、直接回归及一次真实文件研究，按预声明停止，实际阴性结论单列；
+②未知/身份/漂移/partial明确失败或NO_ADVICE，不伪成功；③只修原类型保留，不改模型、人口、
+费用、目标或结果后的标准；④未增策略包准入/人工审批、数据补采、等待实盘或重启门禁。
+F1验证、owner与必需CI在最终HEAD核对；源码合入不等于角色可用，当前可部署模型仍0。

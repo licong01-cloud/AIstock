@@ -55,6 +55,18 @@ def select_sets(moment):
     return indices[int(np.argmin(scores))].tolist()
 
 
+def attach_decisions(roster, decisions):
+    """Append role columns without reconstructing/upcasting native source values."""
+    index = pd.MultiIndex.from_frame(roster[KEY])
+    if decisions.duplicated(KEY).any() or set(decisions[KEY].itertuples(index=False,name=None))!=set(index):
+        raise ValueError('risk decision projection changed original keys')
+    aligned = decisions.set_index(KEY).loc[index]
+    result = roster.loc[:,ROSTER].reset_index(drop=True).copy()
+    for column in ('baseline_selected','marginal_selected','joint_selected','status','risk_policy_sha256'):
+        result[column] = aligned[column].to_numpy()
+    return result
+
+
 def predict(roster, panel, *, before_update=lambda: None):
     panel = panel if isinstance(panel,RiskPricePanel) else RiskPricePanel(panel)
     rows, forecasts, updates = [],[],0
@@ -85,7 +97,7 @@ def predict(roster, panel, *, before_update=lambda: None):
             rows.append(dict(**row,**{a+'_selected':i in selected[a] for a in ARMS},
                              status=receipt['status'],risk_policy_sha256=POLICY_SHA256))
         forecasts.append(forecast)
-    predictions = pd.DataFrame(rows).set_index(KEY).loc[pd.MultiIndex.from_frame(roster[KEY])].reset_index()
+    predictions = attach_decisions(roster,pd.DataFrame(rows))
     return predictions,forecasts,updates
 
 

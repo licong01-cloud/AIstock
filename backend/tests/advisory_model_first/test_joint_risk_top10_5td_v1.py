@@ -72,6 +72,7 @@ def test_missing_history_is_not_filled_or_removed():
 def test_native_roster_prediction_identity_and_unknown_slots():
     frame,calendar,symbols = panel()
     rr,dd = roster(calendar,symbols)
+    rr['parent_score'] = rr.parent_score.astype(np.float32)
     sources = [dict(package_id='p',manifest_sha256='a'*64,run_id='r')]
     original = validate_roster(rr,dd,calendar,sources,calendar[130],calendar[130])
     pred,forecasts,count = predict(original,frame)
