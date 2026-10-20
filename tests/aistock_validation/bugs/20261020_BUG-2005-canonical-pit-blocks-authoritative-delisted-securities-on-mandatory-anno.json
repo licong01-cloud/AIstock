@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2005",
-  "closed_at": null,
+  "closed_at": "2026-10-20T03:53:41.052507Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -191,10 +191,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_dataset_release_control/operator_receipts/BUG-2005-postrestart-20261020-r1.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2005",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "b1da91e5623cfd362ce185b2ae879f850d8febbd",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-20T03:51:27.226944Z",
+      "mode": "read_only",
+      "observed_identity": "b1da91e5623cfd362ce185b2ae879f850d8febbd",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2cfcc64d2164ba21b5b555bf9f95a86641fb00dda9c5bf232f926b0e063bee8b",
+      "receipt_sha256": "59a78f8b21e16828c73e5c4c6026cf963f1e512d10a0656d11f2c4d00fae2db8",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ff4b7ab3e5638f2b9887154e02e62cd2d6b779116186947021e1c4b36fb6cb61",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -226,7 +248,7 @@
     ],
     "validation_evidence_digest": "21c8928b0c0829681c5005f8995f04efd392b54a1c7a9d6237665b5218cd1df9"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -237,7 +259,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=f56942f59d78d1b2 commit=f65bb0b0141056523bbc5954c5cc1f983d13776d kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
-    "validation-receipt: id=36729157bf4b0a24 commit=f65bb0b0141056523bbc5954c5cc1f983d13776d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_stock_universe_pit_spans.py backend/tests/test_canonical_equity_pit.py backend/tests/test_stock_universe_pit_service.py backend/tests/dataset_release/test_canonical_pit_w6_contracts.py -q` result=`132 passed`"
+    "validation-receipt: id=36729157bf4b0a24 commit=f65bb0b0141056523bbc5954c5cc1f983d13776d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_stock_universe_pit_spans.py backend/tests/test_canonical_equity_pit.py backend/tests/test_stock_universe_pit_service.py backend/tests/dataset_release/test_canonical_pit_w6_contracts.py -q` result=`132 passed`",
+    "python -m pytest backend/tests/test_stock_universe_pit_spans.py backend/tests/test_canonical_equity_pit.py backend/tests/test_stock_universe_pit_service.py backend/tests/dataset_release/test_canonical_pit_w6_contracts.py -q -> 132 passed"
   ],
   "verification_budget": {
     "budget": "standard",
