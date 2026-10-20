@@ -107,10 +107,13 @@ def project_suspension_days(rows: Iterable[Mapping[str, Any]], *, authority: Map
         entry = official.get((symbol, day))
         state, basis = "UNRESOLVED", "PROVIDER_EVENTS"
         valid = all(row["suspend_type"] in {"S", "R"} for row in raw)
-        # A disclosure settles an ambiguous day, not a malformed/duplicated
-        # provider response or an independent intraday event contradiction.
+        # A disclosure settles an ambiguous day or the provider's zero-length
+        # opening S marker, never a positive intraday span or duplicate event.
+        # The marker alone does NOT prove suspension (ordinary path below).
         disclosure_compatible = valid and len({row["suspend_type"] for row in raw}) == len(raw) and all(
-            row["suspend_timing"] is None or row["suspend_timing"] == "" for row in raw
+            row["suspend_timing"] is None or row["suspend_timing"] == ""
+            or (row["suspend_type"] == "S" and row["suspend_timing"] in ("09:30-09:30", "9:30-9:30"))
+            for row in raw
         )
         if entry is not None and disclosure_compatible:
             state, basis = entry["state"], "OFFICIAL_DISCLOSURE"

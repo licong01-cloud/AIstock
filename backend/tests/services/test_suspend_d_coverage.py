@@ -61,6 +61,49 @@ def test_official_resolution_does_not_hide_duplicate_or_intraday_conflicts():
         assert project_suspension_days(rows)[0]["state"] == "UNRESOLVED"
 
 
+@pytest.mark.parametrize("symbol, day, events", [
+    ("002731.SZ", "2026-07-06", [("S", None), ("R", None)]),
+    ("603056.SH", "2026-01-12", [("S", None), ("R", None)]),
+    ("603897.SH", "2025-11-04", [("S", None), ("R", None)]),
+    ("688005.SH", "2026-01-16", [("S", "09:30-09:30")]),
+])
+def test_verified_full_day_facts_resolve_exact_keys_only(symbol, day, events):
+    from backend.data_service.suspension_day_authority import load_authority, project_suspension_days
+
+    rows = [dict(ts_code=symbol, trade_date=day, suspend_type=kind,
+                 suspend_timing=timing) for kind, timing in events]
+    original = [dict(row) for row in rows]
+    resolved = project_suspension_days(rows)[0]
+    assert resolved["state"] == "FULL_DAY_SUSPENDED"
+    assert resolved["basis"] == "OFFICIAL_DISCLOSURE"
+    assert resolved["raw_event_count"] == len(rows)
+    assert resolved["historical_publication_time_proven"] is False
+    assert rows == original
+
+    # A later checkout cannot lend an exception to an older frozen SOURCE.
+    empty = load_authority()
+    empty["entries"] = []
+    assert project_suspension_days(rows, authority=empty)[0]["state"] == "UNRESOLVED"
+
+
+@pytest.mark.parametrize("events", [
+    [("S", "9:30-9:30")],
+    [("S", "09:30-10:00")],
+    [("S", "09:31-09:31")],
+    [("S", [])],
+    [("R", "09:30-09:30")],
+    [("S", "09:30-09:30"), ("S", "09:30-09:30")],
+    [("S", "09:30-09:30"), ("R", "10:00-11:00")],
+])
+def test_official_opening_sentinel_is_narrow_and_never_hides_conflicts(events):
+    from backend.data_service.suspension_day_authority import project_suspension_days
+
+    rows = [dict(ts_code="688005.SH", trade_date="2026-01-16", suspend_type=kind,
+                 suspend_timing=timing) for kind, timing in events]
+    expected = "FULL_DAY_SUSPENDED" if events == [("S", "9:30-9:30")] else "UNRESOLVED"
+    assert project_suspension_days(rows)[0]["state"] == expected
+
+
 def test_verifier_rejects_changed_disclosure_bytes_before_writing(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from scripts import verify_suspension_day_authority as verifier
