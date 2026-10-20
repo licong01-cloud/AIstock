@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1998",
-  "closed_at": null,
+  "closed_at": "2026-10-20T03:41:17.413829Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -29,6 +29,12 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261019-f15037a69253",
       "timestamp": "2026-10-19T18:56:52.698840Z"
+    },
+    {
+      "action": "archive_previous_source_merge_receipt",
+      "actor": "codex",
+      "note": "Authorized post-restart follow-up PR6403 supersedes PR6392 for the current fix. Preserve the previous immutable receipt in history; let the native finalizer generate the new receipt. No verified runtime state or post-restart evidence is carried over.",
+      "timestamp": "2026-10-20T02:57:52.377313+00:00"
     }
   ],
   "evidence_uris": [
@@ -151,7 +157,7 @@
   },
   "first_seen_at": "2026-10-19T18:56:52.698859Z",
   "fix_branch": null,
-  "fix_commit": "67a0177ae02b1158d9faab7d96bc1c4bc3d4bd2b",
+  "fix_commit": "69d08095d115bd3024f27b9d2d6e1e3ab0306765",
   "fixed_at": "2026-10-19T19:26:41Z",
   "github_issue_number": 6385,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6385",
@@ -160,7 +166,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
-  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6392",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6403",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -182,10 +188,32 @@
     "inference_basis": "actual_write_scope",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/LOCALSIM/post-restart-20261020-r3/post-restart-1998.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1998",
+      "business_smoke_semantic": {
+        "contract_id": "localsim_workbench_valuation",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+      "expected_identity": "69d08095d115bd3024f27b9d2d6e1e3ab0306765",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-20T03:35:49.159484Z",
+      "mode": "read_only",
+      "observed_identity": "b1da91e5623cfd362ce185b2ae879f850d8febbd",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3eb0c5418331d3f602111d9cf93987f8266b012daf6553b548b0b3e954caf816",
+      "receipt_sha256": "68f445f3b687191a5a5cb04ed49bd4171f95f03b05764d759b432f7e8a723aca",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d43c507bbe0fd7fc180fc9ea4123c041716d72db179017a30a1ad80e9d6af7a7",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -203,21 +231,45 @@
       "production_ddl_gate": "noop",
       "production_frontend_dependency_gate": "noop"
     },
-    "receipt_id": "ee4cde1bfbd04687",
-    "recorded_at": "2026-10-19T19:28:34.123874Z",
+    "receipt_id": "ea0c4eb13538592c",
+    "recorded_at": "2026-10-20T02:59:08.389721Z",
     "runtime_contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
     "runtime_identity_match": "pending",
     "runtime_verification": "pending_user_restart",
     "schema_version": "aistock_source_merge_receipt_v1",
-    "source_head_oid": "cf8a422b4087f94f2713f1fc55796b38f1203940",
-    "source_merge_commit": "67a0177ae02b1158d9faab7d96bc1c4bc3d4bd2b",
-    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6392",
+    "source_head_oid": "6d109ef3d574b6b63b812c14f4a373db5e0a6f65",
+    "source_merge_commit": "69d08095d115bd3024f27b9d2d6e1e3ab0306765",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6403",
     "validation_evidence": [
-      "pytest backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py and related matrix -> 52 passed"
+      "pytest backend/tests/paper_trading_v2/test_repository_position_authority.py backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py backend/tests/simulation_runtime/test_localsim_file_inputs.py -q -> 63 passed",
+      "python -m nox -s l0 -> passed"
     ],
-    "validation_evidence_digest": "d24089d9fd4aca747e4905c9d0b28ffad74e02f242ef20c9fd23eaa28836449e"
+    "validation_evidence_digest": "0d7b288bc9607e1774caef7f6a3b90a6062871be647fba272d08939abc18ba2d"
   },
-  "status": "fixed_source_pending_user_restart",
+  "source_merge_receipt_history": [
+    {
+      "bug_id": "BUG-1998",
+      "production_gates": {
+        "production_backend_dependency_gate": "noop",
+        "production_ddl_gate": "noop",
+        "production_frontend_dependency_gate": "noop"
+      },
+      "receipt_id": "ee4cde1bfbd04687",
+      "recorded_at": "2026-10-19T19:28:34.123874Z",
+      "runtime_contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+      "runtime_identity_match": "pending",
+      "runtime_verification": "pending_user_restart",
+      "schema_version": "aistock_source_merge_receipt_v1",
+      "source_head_oid": "cf8a422b4087f94f2713f1fc55796b38f1203940",
+      "source_merge_commit": "67a0177ae02b1158d9faab7d96bc1c4bc3d4bd2b",
+      "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6392",
+      "validation_evidence": [
+        "pytest backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py and related matrix -> 52 passed"
+      ],
+      "validation_evidence_digest": "d24089d9fd4aca747e4905c9d0b28ffad74e02f242ef20c9fd23eaa28836449e"
+    }
+  ],
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -227,7 +279,10 @@
     "source_event_id": "FE-20261019-f15037a69253"
   },
   "validation_evidence": [
-    "pytest backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py and related matrix -> 52 passed"
+    "pytest backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py and related matrix -> 52 passed",
+    "pytest backend/tests/paper_trading_v2/test_repository_position_authority.py backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py backend/tests/simulation_runtime/test_localsim_file_inputs.py -q -> 63 passed",
+    "python -m nox -s l0 -> passed",
+    "Read-only verify-original-tcn-close.py -> PASSED 21 checks; original July10 close 15:00 projected; original 14 orders/42 fills/42 cash entries unchanged; cursor advanced to July13; native UI 4 checks passed. July13 PIT block remains separate."
   ],
   "verification_budget": {
     "budget": "standard",
