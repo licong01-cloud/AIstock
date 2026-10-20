@@ -61,7 +61,7 @@ def test_backend_identity_and_tdx_cached_revision_are_checked(monkeypatch):
         launcher.ready("tdx", SHA)
 
 
-def test_check_is_non_mutating_and_build_receipt_is_not_restamped(tmp_path, monkeypatch):
+def test_check_is_non_mutating(tmp_path, monkeypatch):
     monkeypatch.setattr(launcher, "ROOT", tmp_path)
     (tmp_path / ".env").touch()
     monkeypatch.setattr(launcher, "git_head", lambda: SHA)
@@ -70,23 +70,6 @@ def test_check_is_non_mutating_and_build_receipt_is_not_restamped(tmp_path, monk
     lock = Mock(side_effect=AssertionError("check must not acquire/write lock"))
     monkeypatch.setattr(launcher, "startup_lock", lock)
     assert launcher.start(True)["services_started"] is False
-    process = Mock()
-    process.wait.return_value = 0
-    def build(*args, **kwargs):
-        kwargs["stdout"].write(json.dumps({"source_revision": "b" * 40}))
-        kwargs["stdout"].flush()
-        return process
-    run = Mock(side_effect=build)
-    monkeypatch.setattr(launcher.subprocess, "Popen", run)
-    assert launcher.tdx_build(tmp_path) == "b" * 40
-    assert "--build-only" in run.call_args.args[0]
-    process.wait.return_value = 2
-    with pytest.raises(RuntimeError, match="TDX build failed"):
-        launcher.tdx_build(tmp_path)
-    process.wait.side_effect = launcher.subprocess.TimeoutExpired("build", 180)
-    with pytest.raises(RuntimeError, match="not killed or retried"):
-        launcher.tdx_build(tmp_path)
-    process.kill.assert_not_called()
 
 
 def test_existing_services_are_not_relaunched_and_failures_surface(tmp_path, monkeypatch):
@@ -143,16 +126,81 @@ def test_absent_services_launch_once_and_bind_expected_revisions(tmp_path, monke
     monkeypatch.setattr(launcher, "inventory", lambda: {})
     monkeypatch.setattr(launcher, "state", lambda *_: "absent")
     monkeypatch.setattr(launcher, "startup_lock", nullcontext)
-    monkeypatch.setattr(launcher, "tdx_build", lambda _: "b" * 40)
     events = []
     launch = Mock(side_effect=lambda service, _: events.append(("launch", service)))
     wait = Mock(side_effect=lambda service, *_: events.append(("ready", service)) or SHA)
     monkeypatch.setattr(launcher, "launch", launch)
     monkeypatch.setattr(launcher, "wait_ready", wait)
     assert len(launcher.start()["services"]) == launch.call_count == 3
-    assert [c.args[1] for c in wait.call_args_list] == ["b" * 40, SHA, None]
-    assert events == [("launch", "frontend"), ("launch", "tdx"), ("ready", "tdx"),
-                      ("launch", "backend"), ("ready", "backend"), ("ready", "frontend")]
+    assert isinstance(wait.call_args_list[0].args[1], Path)
+    assert [c.args[1] for c in wait.call_args_list[1:]] == [SHA, None]
+    assert events == [("launch", "tdx"), ("launch", "backend"), ("launch", "frontend"),
+                      ("ready", "tdx"), ("ready", "backend"), ("ready", "frontend")]
+
+
+def test_cached_tdx_is_executed_without_build_or_receipt_relabel(tmp_path, monkeypatch):
+    helper = launcher.load_tdx_launcher()
+    binary = tmp_path / "tdx-backend.exe"
+    binary.write_bytes(b"test executable; never executed")
+    receipt = {"schema_version": "aistock_tdx_build_v1", "source_revision": "b" * 40,
+               "input_sha256": "inputs", "binary_sha256": helper.binary_digest(binary)}
+    binary.with_suffix(".json").write_text(json.dumps(receipt), encoding="utf-8")
+    monkeypatch.setattr(launcher, "load_tdx_launcher", lambda: helper)
+    monkeypatch.setattr(helper, "prepare_launch", lambda *_: ([str(binary)], {}))
+    monkeypatch.setattr(helper, "build_fingerprint", lambda _: "inputs")
+    monkeypatch.setattr(helper, "ensure_binary", Mock(side_effect=AssertionError("no build")))
+    monkeypatch.setattr(launcher.subprocess, "run", Mock(side_effect=AssertionError("no Go or service")))
+    command, _, _ = launcher.cached_tdx_command(tmp_path)
+    assert command == [str(binary)]
+    saved = json.loads((tmp_path / "tdx-executable.json").read_text())
+    assert saved == {**receipt, "build_action": "reused"}
+    monkeypatch.setattr(helper, "build_fingerprint", lambda _: "changed")
+    with pytest.raises(RuntimeError, match="missing or stale.*Build explicitly"):
+        launcher.cached_tdx_command(tmp_path)
+    binary.write_bytes(b"damaged executable")
+    with pytest.raises(RuntimeError, match="incomplete or invalid"):
+        launcher.cached_tdx_command(tmp_path)
+
+
+def test_failed_tdx_dispatch_does_not_block_other_services(tmp_path, monkeypatch):
+    monkeypatch.setattr(launcher, "ROOT", tmp_path)
+    monkeypatch.setattr(launcher, "RUNTIME", tmp_path / "runtime")
+    launcher.RUNTIME.mkdir()
+    (tmp_path / ".env").touch()
+    monkeypatch.setattr(launcher, "git_head", lambda: SHA)
+    monkeypatch.setattr(launcher, "commands", Mock(side_effect=AssertionError("service preparation belongs to its child")))
+    monkeypatch.setattr(launcher, "inventory", Mock(return_value={}))
+    monkeypatch.setattr(launcher, "state", lambda *_: "absent")
+    monkeypatch.setattr(launcher, "startup_lock", nullcontext)
+    calls = []
+    def launch(service, directory):
+        calls.append(service)
+        if service == "tdx":
+            raise OSError("tab dispatch failed")
+    monkeypatch.setattr(launcher, "launch", launch)
+    monkeypatch.setattr(launcher, "wait_ready", lambda *_: SHA)
+    with pytest.raises(RuntimeError, match="tab dispatch failed"):
+        launcher.start()
+    assert calls == ["tdx", "backend", "frontend"]
+    assert launcher.inventory.call_count == 1
+    saved = json.loads(next(launcher.RUNTIME.glob("*/summary.json")).read_text())
+    assert len(saved["errors"]) == 1 and "error" in saved["services"]["tdx"]
+    assert saved["services"]["backend"]["observed_identity"] == SHA
+
+
+@pytest.mark.parametrize("invalid", ['{"source_revision":"invalid"}', '[]'])
+def test_tdx_readiness_requires_its_cached_build_revision(tmp_path, monkeypatch, invalid):
+    receipt = tmp_path / "tdx-executable.json"
+    receipt.write_text(json.dumps({"schema_version": "aistock_tdx_build_v1", "source_revision": "b" * 40}))
+    monkeypatch.setattr(launcher.socket, "create_connection", lambda *a, **k: nullcontext())
+    monkeypatch.setattr(launcher, "inventory", lambda: snapshot("tdx"))
+    ready = Mock(return_value="b" * 40)
+    monkeypatch.setattr(launcher, "ready", ready)
+    assert launcher.wait_ready("tdx", receipt, tmp_path) == "b" * 40
+    ready.assert_called_once_with("tdx", "b" * 40)
+    receipt.write_text(invalid)
+    with pytest.raises(RuntimeError, match="receipt is invalid"):
+        launcher.wait_ready("tdx", receipt, tmp_path)
 
 
 def test_utf8_is_propagated_to_real_redirected_python_even_with_gbk_parent(monkeypatch):
