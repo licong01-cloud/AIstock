@@ -37,12 +37,18 @@
   ],
   "expected": "Both native database and frozen-file PIT receipts validate against the same immutable daily lease, C-day population and explicitly configured source identity. Missing, mismatched or substituted file bindings fail closed; no DB fallback.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/localsim_selection_inference.py",
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2013-localsim-canonical-pit-consumer-rejects-native-frozen-file-receipt-forma.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/simulation_runtime/localsim_selection_inference.py",
-      "backend/tests/simulation_runtime/test_localsim_selection_inference.py"
+      "backend/tests/simulation_runtime/test_localsim_selection_inference.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2013-localsim-canonical-pit-consumer-rejects-native-frozen-file-receipt-forma.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_runtime/localsim_selection_inference.py",
@@ -137,11 +143,14 @@
       "X:\\AIstock_temp\\LOCALSIM\\canonical-pit-binding-20261020\\file-receipt-consumer-acceptance-r1.json"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
