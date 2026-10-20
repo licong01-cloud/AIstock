@@ -29,7 +29,8 @@
     "frontend/src/app/quantevolver/components/charts/LazyPlot.tsx",
     "frontend/tests/qe/qe-read-performance.spec.ts",
     "backend/tests/quantevolver/test_qe_ui_active_reads.py",
-    "tests/aistock_validation/bugs/20261020_BUG-2012-qe-evolution-ui-polls-terminal-history-and-eagerly-loads-all-loop-artifa.json"
+    "tests/aistock_validation/bugs/20261020_BUG-2012-qe-evolution-ui-polls-terminal-history-and-eagerly-loads-all-loop-artifa.json",
+    "backend/tests/unified_engine/test_qe_evolution_read_paths.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2012",
@@ -79,6 +80,12 @@
       "actor": "codex",
       "note": "Round 3 retained full candidate-promotion snapshots for collapsed loops, strict failed refresh backoff and new-task first-page visibility. System log reads bounded to 1 MiB with explicit truncation. Historical tasks remain manual-read only. No service/experiment control or production writes; whole-page runtime performance remains delegated, not claimed measured.",
       "timestamp": "2026-10-20T05:42:32Z"
+    },
+    {
+      "action": "ci_contract_review",
+      "actor": "codex",
+      "timestamp": "2026-10-20T07:23:49Z",
+      "note": "PR 6444 CI: 710 backend tests passed and one stale source-location assertion failed after SQL extraction; frontend checks passed including terminal-page observation. Add exact existing QE read-path test to scope; retain payload/compaction contract and assert shared projection instead of obsolete inline SQL text. No pipeline or assertion bypass."
     }
   ],
   "evidence_uris": [],
@@ -147,9 +154,10 @@
       "frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts",
       "frontend/tests/qe/qe-evolution-read-only.spec.ts",
       "frontend/tests/qe/qe-read-performance.spec.ts",
-      "tests/aistock_validation/bugs/20261020_BUG-2012-qe-evolution-ui-polls-terminal-history-and-eagerly-loads-all-loop-artifa.json"
+      "tests/aistock_validation/bugs/20261020_BUG-2012-qe-evolution-ui-polls-terminal-history-and-eagerly-loads-all-loop-artifa.json",
+      "backend/tests/unified_engine/test_qe_evolution_read_paths.py"
     ],
-    "changed_files_source": "git_finish",
+    "changed_files_source": "actual_task_diff",
     "ownership": {
       "changed_files": [
         "frontend/src/app/quantevolver/evolution/page.tsx",
