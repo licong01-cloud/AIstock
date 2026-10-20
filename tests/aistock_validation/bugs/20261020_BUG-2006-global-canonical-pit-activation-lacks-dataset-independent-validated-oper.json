@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2006",
-  "closed_at": null,
+  "closed_at": "2026-10-20T03:40:13Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -61,14 +61,21 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/tests/scripts/test_activate_canonical_pit_default.py",
+      "noxfile.py",
+      "scripts/activate_canonical_pit_default.py",
+      "scripts/ci_change_classifier.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2006-global-canonical-pit-activation-lacks-dataset-independent-validated-oper.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
   "first_seen_at": "2026-10-20T03:25:23.896585Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b06b8e6fec815a60097808047cd3acc58e21591f",
+  "fixed_at": "2026-10-20T03:40:13Z",
   "github_issue_number": 6411,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6411",
   "last_seen_at": "2026-10-20T03:25:23.896585Z",
@@ -76,6 +83,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6412",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -98,6 +106,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -107,7 +116,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2006",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "8bca1a4e5616c6a6",
+    "recorded_at": "2026-10-20T03:40:59.301216Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "10a693b2ae3e35a1e3d737e8b83a437be3154bca",
+    "source_merge_commit": "b06b8e6fec815a60097808047cd3acc58e21591f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6412",
+    "validation_evidence": [
+      "validation-receipt: id=e9a1848e5a05675e commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_activate_canonical_pit_default.py backend/tests/test_canonical_equity_pit.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/scripts/test_prepare_canonical_pit_monthly.py -q --no-cov` result=`53 passed`",
+      "validation-receipt: id=9cf8a1d709e6909b commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=79dfb0f1fc538bf1 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+      "validation-receipt: id=9d2fd6fb9427fa58 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed`",
+      "validation-receipt: id=32f85c1632f635e3 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=2524150f4fd26351 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=ruff plan=direct status=passed command=`ruff check and py_compile and git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "b23cf0c4b193506cfa0a0f6a04c9aa85633dc49d6ecdf8dda1a0023a2bf6cd1d"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -116,6 +151,14 @@
     "fingerprint": "b294f8f6ca7557a695a83190",
     "source_event_id": "FE-20261020-b294f8f6ca75"
   },
+  "validation_evidence": [
+    "validation-receipt: id=e9a1848e5a05675e commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_activate_canonical_pit_default.py backend/tests/test_canonical_equity_pit.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/scripts/test_prepare_canonical_pit_monthly.py -q --no-cov` result=`53 passed`",
+    "validation-receipt: id=9cf8a1d709e6909b commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=79dfb0f1fc538bf1 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`passed`",
+    "validation-receipt: id=9d2fd6fb9427fa58 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files` result=`passed`",
+    "validation-receipt: id=32f85c1632f635e3 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=2524150f4fd26351 commit=10a693b2ae3e35a1e3d737e8b83a437be3154bca kind=ruff plan=direct status=passed command=`ruff check and py_compile and git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
