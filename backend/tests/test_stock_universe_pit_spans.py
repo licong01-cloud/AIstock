@@ -620,6 +620,25 @@ def test_global_canonical_pit_policy_explicitly_excludes_b_shares() -> None:
     assert is_b_share_ts_code("200706.SZ")
 
 
+def test_live_roll_preserves_prior_membership_and_rejects_historical_revision() -> None:
+    old_end = dt.date(2026, 10, 20)
+    old = [("000001.SZ", dt.date(2020, 1, 2), old_end)]
+    span = pit_builder.SpanRow(
+        "test", "000001.SZ", dt.date(2020, 1, 2), dt.date(2026, 10, 21),
+        "ipo", "generation_end", dt.date(1991, 4, 3), dt.date(1992, 4, 3),
+    )
+    assert pit_builder._membership_prefix_matches(old, [span], old_end)
+    assert not pit_builder._membership_prefix_matches([], [span], old_end)
+    assert not pit_builder._membership_prefix_matches(old, [], old_end)
+
+
+def test_live_source_boundary_is_previous_trade_day_not_a_synthetic_snapshot() -> None:
+    calendar = TradingCalendar([dt.date(2026, 10, 16), dt.date(2026, 10, 19), dt.date(2026, 10, 20)])
+    assert pit_builder._live_source_boundary(calendar, dt.date(2026, 10, 19), "2026-10-16") == dt.date(2026, 10, 16)
+    with pytest.raises(ValueError, match="previous trading"):
+        pit_builder._live_source_boundary(calendar, dt.date(2026, 10, 19), "2026-10-19")
+
+
 def test_a_share_ts_code_filter_fragment() -> None:
     fragment = a_share_ts_code_filter("s.ts_code")
     for exclude in _B_SHARE_EXCLUDES:

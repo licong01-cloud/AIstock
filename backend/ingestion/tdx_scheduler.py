@@ -325,6 +325,8 @@ class TDXScheduler:
         self._tracker = _FutureTracker()
         self._delayed_retry_keys: set[str] = set()
         self._completion_callbacks: dict[str, _CompletionCallback] = {}
+        self._canonical_pit_roll_future: Future | None = None
+        self._canonical_pit_roll_next_check = 0.0
         DEFAULT_TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     def register_completion_callback(
@@ -985,6 +987,7 @@ class TDXScheduler:
     # schedule management
     def refresh_schedules(self) -> None:
         """Reload enabled schedules from database and update in-memory jobs."""
+        self._dispatch_canonical_pit_roll()
         try:
             self._reconcile_lost_go_jobs()
         except Exception:  # noqa: BLE001 - never infer absence from a transport failure.
@@ -1033,6 +1036,32 @@ class TDXScheduler:
         except Exception as exc:  # noqa: BLE001
             _logger.warning("data sync target reconciliation failed: %s", exc)
         self._dispatch_completion_callbacks()
+
+    def _dispatch_canonical_pit_roll(self) -> None:
+        """Reuse the maintenance executor; never block collection or business loops."""
+        if getattr(self, "_schedule_thread", None) is None:
+            return
+        now = time.monotonic()
+        with self._lock:
+            pending = getattr(self, "_canonical_pit_roll_future", None)
+            if pending is not None and not pending.done():
+                return
+            if now < getattr(self, "_canonical_pit_roll_next_check", 0.0):
+                return
+            self._canonical_pit_roll_next_check = now + 60.0
+            self._canonical_pit_roll_future = self._executor.submit(self._run_canonical_pit_roll)
+
+    @staticmethod
+    def _run_canonical_pit_roll() -> dict[str, Any]:
+        from backend.services.stock_universe_pit_service import StockUniversePitService
+        try:
+            result = StockUniversePitService(existing_schema_only=True).advance_canonical_trade_day()
+            if result.get("rebuilt"):
+                _logger.info("canonical PIT daily roll: %s", _json_dump(result))
+            return result
+        except Exception as exc:  # noqa: BLE001 - retry maintenance, never re-fetch source facts.
+            _logger.warning("canonical PIT daily roll waiting: %s", exc)
+            return {"status": "waiting", "error": str(exc)}
 
     def _reconcile_lost_go_jobs(self) -> int:
         """Release only expired jobs whose accepted native task is explicitly gone.

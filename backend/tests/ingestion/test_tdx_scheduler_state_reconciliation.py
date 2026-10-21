@@ -23,6 +23,23 @@ from backend.ingestion.tdx_scheduler import TDXScheduler
 from backend.services.audit_backed_data_health import AuditDatasetCheckResult
 
 
+def test_pit_day_roll_uses_existing_executor_and_never_duplicates_inflight_work():
+    from concurrent.futures import Future
+    from threading import RLock
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._schedule_thread = object()
+    scheduler._lock = RLock()
+    future = Future()
+    calls = []
+    scheduler._executor = SimpleNamespace(submit=lambda fn: calls.append(fn) or future)
+    scheduler._dispatch_canonical_pit_roll()
+    scheduler._dispatch_canonical_pit_roll()
+    assert len(calls) == 1
+    future.set_result({"status": "ready"})
+    scheduler._dispatch_canonical_pit_roll()
+    assert len(calls) == 1  # cheap sweep is throttled even after completion
+
+
 ROOT = Path(__file__).resolve().parents[3]
 BUG_1106_MIGRATION = (
     ROOT / "backend" / "migrations" / "ingestion_jobs_scheduler_scan_indexes_20260816.sql"

@@ -1,6 +1,9 @@
 {
   "actual": "resolve_live_binding返回ACTIVE_CANONICAL但coverage_end=2026-10-20；10-21仍失败；10-20 16:55 stock_basic后置维护曾因ST尾部快照缺失将活动state置为failed。",
   "allowed_write_scope": [
+    "backend/services/canonical_equity_pit.py",
+    "backend/services/selection_center/canonical_pit_runtime.py",
+    "backend/tests/selection_center/test_canonical_pit_runtime.py",
     "backend/services/stock_universe_pit_service.py",
     "backend/services/tushare_sync_engine.py",
     "backend/ingestion/tdx_scheduler.py",
@@ -216,17 +219,38 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "fresh_process_evidence": [
+      "Fresh pytest process: 349 passed, 1 skipped; one scheduler fixture compatibility failure corrected and its nodeid rerun passed. No services launched.",
+      "Existing DEV: D-1 facts project 2026-10-19 to 2026-10-20; dry-run 4.865s, actual atomic apply 2.745s, prior state/spans visible until commit, 4915 tail spans, zero validation errors, duplicate call no writes."
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
     ]
+  },
+  "root_cause": "PIT maintenance ran only after EOD source synchronization, required a same-day ST snapshot and published building/failed state before validation; session drift check also rejected verified append-only coverage extension.",
+  "review_readback": [
+    "R1: RED 5 then GREEN 5; historical membership prefix preserved and same-day synthetic snapshot rejected.",
+    "R2: static stock_basic has no dated refresh audit; reuse its existing lifecycle validation, require completed D-1 stock_st/stock_st_events (zero events allowed) only; weekend calendar boundary verified.",
+    "R3: atomic DEV commit verified from independent connection; no fake ST snapshot, historical price scan, policy change, account mutation or production DML.",
+    "R4: existing leases remain unchanged; only exact policy/generation plus producer-proven unchanged prefix is compatible, unverified drift still fails closed. Maintenance uses existing executor, one inflight task and monotonic retry throttle."
+  ],
+  "design_compliance_001": {
+    "approved_scope": "global shared PIT maintenance; no LocalSIM/QE/HMM business rules changed",
+    "behavior_complete": "automatic trading-day sweep, causal source cutoff, atomic publication, idempotency and compatible existing leases",
+    "semantic_preservation": "same 252 trading-session IPO/ST/delist policy and digest; no fabricated facts or implicit date extension of saved leases",
+    "acceptance": "targeted regression and actual existing DEV transaction readback passed; production and post-restart acceptance remain separate"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
