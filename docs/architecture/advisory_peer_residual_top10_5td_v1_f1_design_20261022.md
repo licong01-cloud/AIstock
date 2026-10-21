@@ -1,7 +1,7 @@
 # Advisory 候选同群残差偏离 Top10 / 固定5TD F1
 
 日期：2026-10-22。假设 `PEER_RESIDUAL_REVERSAL_TOP10_5TD_1`。
-状态：DESIGN_MERGED / SOURCE_LOCAL_PASS / RESEARCH_NOT_STARTED。设计PR #6545已合入704dd7e519197c5aef451aefac7c615f384f4a6b，当前源码与实际研究分别报告。
+状态：SOURCE_AND_INNER_RESEARCH_COMPLETE / INNER_NOT_SUPPORTED / NOT_ACTIVATED。设计PR #6545已合入704dd7e519197c5aef451aefac7c615f384f4a6b；本轮唯一真实六fit完成，未进入outer。源码PR/CI与研究结果分别报告。
 目标合同 ALPHA_RANKING；EXPLORATORY_SCREEN / NAVIGATION_ONLY；不是实盘激活合同。
 接续[蓝图§16.0](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)；E1排名历史停止结论不改判。
 
@@ -87,7 +87,7 @@ z5确实是组件的非线性变换，不能宣传为独立外部信息；简单
 预测窗分别04-01..05-30、06-01..07-31、08-01..09-30，按原日历取交易日。
 每折matched/candidate各一次fit共6；禁止选最佳折、包、窗、符号或超参。
 beta/alpha/sigma是past-only输入统计，不计作监督预测fit，但实际估计数和候选数必须另报。
-当前历史195实际fit+1旧index，不清零；本候选最多8监督fit，另报输入统计更新。
+立项时历史195实际fit+1旧index，不清零；本候选最多8监督fit，另报输入统计更新；实际完成后计数见Research Result。
 
 inner推进条件：两平均净增量(candidate-native、candidate-matched)>0，分别至少2/3折为正；
 三折均有共同D、共同成熟D覆盖>=80%；两比较各>=20个干预D、>=20%成熟D并跨至少两折。
@@ -158,8 +158,8 @@ prepare受原批读2百万日股单元预算约束，超限明确失败、不截
 
 ## Design Acceptance Matrix
 
-下表验收源码与直接合同；完整原生输入及真实研究尚未执行，经济确认/启用未发生。
-源码通过不能替代真实运行，后续必须另报研究实际分支及资源收据。
+下表验收源码与直接合同；完整原生开发输入及一次inner研究已执行，结果见后文，经济确认/启用未发生。
+源码通过不能替代收益证明；本合同预声明的停止分支不等于整个研究方向无效。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -185,4 +185,55 @@ prepare受原批读2百万日股单元预算约束，超限明确失败、不截
 3. 原人口/经济：匹配两臂共同支持、未知固定槽、训练成熟及未来标签投影、原生cohort复用、方向规则和claim身份通过。首轮测试错误传全部身份列造成merge重复，修成正式FINANCE列合同；阶段hash错的测试改为捕获原生typed错误，不改业务异常。
 
 最终12项直接测试PASS，Ruff PASS；ownership三文件均Advisory，无模糊/未映射；两L0无blocking，3个P2为有界文件/候选遍历，不扩全仓回归。
-这些为同窗口三轮自审，不声称独立外审。无QE/其它owner源码、数据库或服务修改；源码无需重启，真实研究尚未开始。
+这些为同窗口三轮自审，不声称独立外审。无QE/其它owner源码、数据库或服务修改；源码无需重启，真实研究随后按下述唯一身份完成。
+
+## Research Result / 唯一实际运行
+
+clean producer `1ddc513fce40c7024f61d073fc0d1ad639494000`，implementation
+`ae3a77f8b9138ae23515e6e325f6cae381da2f71b0312fa1e8bec0d093400e73`；
+run `advpeertop10_d942248ff0d2933cbfc36994`，plan SHA
+`ebd2901d4a4854b9de268a788f4273ca5ee513144c854b132e15b80f7452c306`。
+结果根 `X:/AIstock_temp/ADVISORY/next-mechanism-20261022/study/advpeertop10_d942248ff0d2933cbfc36994`；
+evaluated stage `101259180f38f86c9523fcca1b163e482d5d8d156f54b3d98941a1c48fe392c4`。
+
+原305D/30,500行完整保留，30,422行可计算、78行UNKNOWN_SIGNAL_ENDPOINT_OR_PEERS，不删除候选。
+对应30,422次past-only输入统计估计与6次预测器fit分开计数；累计201实际研究fit＋1旧index，不称201独立假设。
+三折监督人口分别17,360/21,315/25,601，两臂逐折训练键一致；最终及outer均未执行。
+原评价126D/12,600候选、111成熟D、100三臂共同完整D；共同成熟覆盖90.0901%。
+原生比较干预111D、matched比较110D，不能用干预多证明增量成立。
+
+| 五会话cohort同人口指标 | candidate | 原生Top10 | matched |
+|---|---|---|---|
+| 均值bps | 113.630766 | 105.045200 | 89.843010 |
+| cohort胜率 | 67% | 67% | 67% |
+| 最差10%均值bps | -462.677620 | -450.831988 | -488.267608 |
+
+candidate−原生均值+8.585565bps，描述性95%区间[-31.060992,41.459156]，MDE80 51.537514；
+candidate−matched均值+23.787756bps，描述性95%区间[8.710133,39.027358]。
+这些是多轮消费开发窗的重叠五日名义cohort，非日收益/NAV/实盘成交/独立OOS或跨研究显著性。
+
+| fold | candidate−原生bps | candidate−matchedbps | z5条件系数 |
+|---|---|---|---|
+| 1 | +2.212008 | +12.474963 | -41.686698 |
+| 2 | -21.638280 | +14.545408 | -32.108089 |
+| 3 | +42.834816 | +40.175027 | -32.133760 |
+
+收益导航均值/折覆盖/干预条件通过，但事前指定至少两折正z5系数未满足，因此按原合同
+`INNER_NOT_SUPPORTED`，没有解码outer收益，不能事后删方向条件或改符号继续原run。
+**这不是“所有收益增量为负”**；对matched的正点增量值得作为导航观察，但对原生增量仍未确认。
+负条件系数不是因果延续性证明（模型同时包含相关组件）；把z5乘-1再拟合只会对应系数反号，
+不构成新预测模型或新经济信息，不能据此绕过停止分支。
+
+本次也暴露研究设计上的取舍：机制符号约束不应在未来产品确认中冒充盈利必要条件；
+未来若评估该表示的产品用途，必须另定独立合同和未消费评价，保留本次停止记录，不能回改E2或立即同族再跑。
+此处不是已经批准新确认，也不把正matched结果升级为可交付模型；本长任务不自动开启第二候选。
+
+首次输入prepare297.735248秒；至完整结果305.881499秒，后续拟合/评价约8.146251秒。
+OS峰值389226496字节（约371.20MiB），输入消费6475968字节，发布最终结果前产物5792003字节；
+一次批读覆盖305D，不是每天需5分钟；无大型资产复制。结束前后公开QE三入口运行数均0，
+0直接SQL/市场DB访问/数据库写入/QE训练/服务控制；状态查询使用公开只读API。
+未读sealed、未经济确认/模型激活，不要求用户重启。
+
+fresh-process原run完整重试退出0，仍为6个started/6个finished，无final/outer目录；
+evaluated manifest文件SHA保持`7f6c447d5807e9a9ba9fa2fcffa65a66833bea2f5d690a09198dd931df40ec13`。
+只验证既存输入片段及阶段身份、恢复原结果，没有新增fit或解码新的评价收益。
