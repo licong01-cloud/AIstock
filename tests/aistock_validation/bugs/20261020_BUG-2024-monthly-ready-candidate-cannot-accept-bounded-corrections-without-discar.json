@@ -35,14 +35,30 @@
   ],
   "expected": "Existing monthly backend can prepare one corrected immutable successor with exact bounded repair inputs and retained completed exports; old candidate and active remain unchanged; normal local/node/consumer validation produces new readiness.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_executor.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_ready_correction.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2024-monthly-ready-candidate-cannot-accept-bounded-corrections-without-discar.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/monthly_unified.py",
-      "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/routers/monthly_dataset_releases.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      "backend/services/dataset_release/monthly_build_executor.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_ready_correction.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2024-monthly-ready-candidate-cannot-accept-bounded-corrections-without-discar.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py",
@@ -155,11 +171,15 @@
       "Native writer test builds actual BIN bytes, seeds the completed export into a copy-on-write successor and fails if prepare/daily/minute/finalize export runs again. Source seal preservation, interrupted copy/metadata commit, bounded minute extension and CAS/rollback are covered.",
       "Three review passes: checkpoint retirement crash recovery; exact completed-minute lineage and atomic seed journal; current activation predecessor separated from immutable physical build predecessor. No database, active-profile or process writes."
     ],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
