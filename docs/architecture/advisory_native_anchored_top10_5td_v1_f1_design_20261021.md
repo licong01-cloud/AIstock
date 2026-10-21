@@ -1,6 +1,7 @@
 # 原生锚定的固定5交易日Top10组合研究（F1）
 
-版本v1.0；2026-10-21；归属Advisory/model_first；阶段DESIGN_READY，未实现/运行。
+版本v1.1；2026-10-21；归属Advisory/model_first。设计PR #6527已合入cb29720f01c68bb202c930cb324bf83d09f9e540；
+源码及一次真实inner/outer已完成，结果NOT_WORTH_CONTINUING_THIS_CANDIDATE。源码PR/CI/合入单独交付，0确认/激活。
 依据：蓝图§6.12、§16.0及[训练期OOF诊断](../analysis/advisory_top10_oof_complementarity_20261021.md)。
 
 ## Background / Goal / Feature Card
@@ -89,12 +90,12 @@ X盘新run，原小Parquet就地消费；CPU≤2线程，无GPU/训练；RSS≤2
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-421 | Inputs / Ranking | artifact: 父阶段身份及OOF诊断 | DESIGN_READY | approved_by_user: 设计先交付，源码后实施 |
-| F-422 | Ranking | artifact: 固定代数政策及测试方案 | DESIGN_READY | approved_by_user: 设计先交付，源码后实施 |
-| F-423 | Clocks / Label | artifact: 继承成熟截止及outer屏障 | DESIGN_READY | approved_by_user: 设计先交付，源码后实施 |
-| F-424 | Evaluation | artifact: 一次候选及分支终态 | DESIGN_READY | approved_by_user: 设计先交付，源码后实施 |
-| F-425 | Operations | artifact: 现有publisher/read_stage复用合同 | DESIGN_READY | approved_by_user: 设计先交付，源码后实施 |
-| F-426 | Operations / Boundary | artifact: X/CPU/无服务操作边界 | DESIGN_READY | approved_by_user: 设计先交付，源码后实施 |
+| F-421 | native_anchored_top10_5td_v1.Study / same_population | artifact: anchored-study/fresh_process_verification.json；原始身份与评分完全不变 | SOURCE_AND_REAL_PASS | none |
+| F-422 | native_anchored_top10_5td_v1.combine | backend/tests/advisory_model_first/test_native_anchored_top10_5td_v1.py；真实Top20外/无建议槽不变 | SOURCE_AND_REAL_PASS | none |
+| F-423 | Study.finance / predictions；run | backend/tests/advisory_model_first/test_native_anchored_top10_5td_v1.py；outer/prepared先于金融评价 | SOURCE_AND_REAL_PASS | none |
+| F-424 | comparison_panel / summarize / inner / run | artifact: evaluated/result.json；100共同innerD、205共同outerD，一次候选0fit | RESEARCH_COMPLETE_NEGATIVE_STOP | none |
+| F-425 | Study.read / publish / preregister | artifact: fresh_process_verification.json；exact_retry=true、0新增计算；16定向项 | SOURCE_AND_RECOVERY_PASS | none |
+| F-426 | run资源/registry；Research Result | artifact: source-ownership.json、source-l0.json、source-junit16.xml；无其它owner/DB/服务操作 | SCOPE_AND_REAL_PASS | none |
 
 直接测试覆盖确定性组合、完全相同排名、未知建议原槽、Top20边界/完整人口、真缺收益保留、
 同日不同包/重复键/来源漂移、未来H、inner失败不读outer、成功分支与exact retry。
@@ -118,3 +119,47 @@ OOF被模型选择和先前研究多次消费，导航选择偏差不可消除�
 2. 不吞错误、不填收益、不删未知、不把配对诊断当可交易收益。
 3. 新组合仅本新lineage；旧模型/政策/历史负结果不改判。
 4. 无新增包准入或审批；科学导航/确认与用户日频业务分离。
+
+## Research Result / 实际一次结果
+
+根：`X:/AIstock_temp/ADVISORY/top10-oof-complementarity-20261021/anchored-study`；
+run=`advanchortop10_52251cc72d96cc07c933ce67`；producer=`74724f0aa67ed3f3fb48e7ede97c07b2f77662b6`。
+evaluated stage=`234197f6fe885011aab4633efb654837835d422ad1ac74d662096677b641e1f7`。
+
+inner原126D/12,600候选保留，111成熟D/100共同D；组合−原生+2.313599bps，
+三fold为+3.806802/+6.286243/−2.602120bps；83干预D、覆盖90.0901%，满足事前继续条件。
+组合−完整模型为−13.192779bps，未隐去该机制对照；这一对照不是本设计的outer必要条件。
+
+outer原219D/21,900候选、214成熟D、205三臂两包共同D完整报告：
+
+| 指标 | 结果 |
+| --- | --- |
+| 组合 / 原生 / 完整模型5TD净cohort均值 | 93.207944 / 93.583451 / 69.431135 bps |
+| 组合−原生 | **−0.375507bps**；95%CI[−8.756906,+8.720444]；MDE80=12.531971bps |
+| 组合−完整模型 | +23.776809bps；95%CI[−9.802254,+58.326019] |
+| 真实干预 | 173D/214成熟D=80.8411%；4季度 |
+| 共同成熟覆盖 / UNKNOWN额外比例 | 95.7944% / 0；组合与原生均109未知槽（含未成熟） |
+| 最差10%cohort均值变化 | +27.157844bps；不是资金组合回撤 |
+| 四时间块净增量 | −4.774317 / +0.654706 / +13.548919 / −15.565031bps |
+| 两包共同205D净增量 | pkg_8dbd…：−2.501475；pkg_cc7e…：+1.750462bps |
+
+主端点点值≤0，按事前规则为NOT_WORTH_CONTINUING_THIS_CANDIDATE；区间跨零，
+不能宣称统计证明组合有害或所有组合无效。相对完整替换模型的损失缩小、尾部改善及略高cohort胜率，
+均不能替代超过原生Top10的经济证据；不调权重、挑包/季度或继续确认。
+现有事实只支持“父排序应保留为主基线”，不证明通过组合创造了新Alpha。
+
+新增模型fit=0，新增政策候选=1，累计189研究fit＋1旧index不变；零拟合不隐去这次候选评价。
+一次研究5.465343秒，峰值333,873,152bytes，全部研究产物837,764bytes；0SQL/新H5/Bin/资产复制。
+fresh-process exact_retry返回同一结果，原inner/outer所有身份与原始评分不变，
+每组仍50原候选/10派生选择，Top21～50及无建议槽不变，旧产物未覆盖。
+只读消费已验证历史来源，不升级vintage/native完整性；未读sealed金融值，未确认/激活或改变日频基线。
+
+## Source Review / 多轮修复
+
+第一轮检查固定排名及UNKNOWN边界，直接反例覆盖零干预、单挑战与Top20外保留。
+第二轮检查共同日期、三臂机制比较和真实缺数；修正测试异常类引用并增加未知挑战不填收益测试。
+真实预登记发现元组/JSON列表合同规范化缺陷，RED复现后在生成plan时规范化；
+该失败在研究计算前发生，没有目标读取、候选变更、额外fit或旧plan覆盖。
+第三轮核对真实完整人口、固定得分、排名、预测屏障及fresh-process恢复；最终16定向项/Ruff通过。
+ownership两文件均Advisory；L0仅一项有界按日/两包groupby的P2，已按原人口与实测资源检查，0阻断。
+本轮为本窗口自审，不伪称独立外部评审；源码CI/合入与上述研究完成分别报告。
