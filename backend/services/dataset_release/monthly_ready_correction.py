@@ -242,12 +242,14 @@ def seed_completed_exports(*, context, staging_root, compiled, cas):
         factor_ref = nested.get("refs", {}).get("factor_receipt")
         if factor_ref:
             factor = load_sealed_build_json(cas, factor_ref)
-            proof_ref = factor.get("industry_history_projection_ref")
-            if proof_ref:
-                # A completed historical projection is not another monthly
-                # export. Keep its actual proof so the runner does not redo it.
-                load_sealed_build_json(cas, proof_ref)
-                resume.record["steps"]["industry-history"] = proof_ref
+            for field, step in (("industry_history_projection_ref", "industry-history"),
+                                ("fact_correction_ref", "fact-correction")):
+                proof_ref = factor.get(field)
+                if proof_ref:
+                    # Preserve completed repairs just like completed exports.
+                    # A packaging retry must not copy or rebuild them again.
+                    load_sealed_build_json(cas, proof_ref)
+                    resume.record["steps"][step] = proof_ref
     for name in EXPORT_ROOTS:
         for directory, dirs, files in os.walk(staging_root / name, followlinks=False):
             context.checkpoint()

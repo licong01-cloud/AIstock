@@ -186,6 +186,8 @@ class MonthlyBuildResume:
                 self.record = recover_prev_close(root=staging_root, journal=self.path, record=self.record, cas=cas)
                 from .monthly_minute_repair import recover_minute_correction
                 self.record = recover_minute_correction(root=staging_root, journal=self.path, record=self.record, cas=cas)
+                from .monthly_fact_correction import recover_factor_repairs
+                self.record = recover_factor_repairs(root=staging_root, journal=self.path, record=self.record, cas=cas)
                 for relative, expected in self.record["files"].items():
                     if not isinstance(relative, str) or not relative or any(token in relative for token in ("\\", ":", "\x00")) or ".." in Path(relative).parts or Path(relative).is_absolute():
                         raise MonthlyBuildResumeError("retained data file escaped staging")
