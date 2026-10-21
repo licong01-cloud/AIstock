@@ -1653,6 +1653,50 @@ class MonthlyReleaseService:
             self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
             return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
 
+    def bind_factor_repairs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str,
+                            cas=None) -> dict[str, Any]:
+        """Retain already validated component outputs in the sole READY correction."""
+        from .monthly_fact_correction import BINDING, SCHEMA, capture_factor_repairs
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing = plan.get(BINDING)
+            if existing is not None:
+                ref = plan[BINDING + "_ref"]
+                path = root / ref["id"]
+                if (existing.get("inputs") != inputs or _read_json(path, label="factor correction") != existing
+                        or _file_sha256(path) != ref["sha256"] or path.stat().st_size != ref["size"]):
+                    raise MonthlyReleaseConflict("factor correction binding changed")
+                return {"status": "BOUND", "reference": ref, "authority_ref": existing["authority_ref"]}
+            state = self.store.read_state(operation_id)
+            source = self.store.read_checkpoint(operation_id, "SOURCE")
+            if ("monthly_ready_correction" not in plan or state["status"] != ReleaseState.FAILED.value
+                    or state["current_stage"] != "BUILD" or source is None
+                    or any(self.store.read_checkpoint(operation_id, s) is not None for s in STAGES if s != "SOURCE")):
+                raise MonthlyReleaseConflict("factor correction requires idle retained BUILD with sealed SOURCE")
+            if cas is None:
+                from .monthly_runtime import MonthlyRuntimeSettings
+                from .cas_store import CASStore
+                cas = CASStore(MonthlyRuntimeSettings.from_env().artifact_root)
+            repair_root = Path(plan["candidate_root"]).parent.parent / "data_repair_staging"
+            try:
+                authority = capture_factor_repairs(inputs, repair_root=repair_root, cutoff=plan["target_cutoff"])
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                raise MonthlyReleaseRequestInvalid("validated factor correction is invalid",
+                                                  context={"cause": str(exc)}) from exc
+            binding = {"schema_version": SCHEMA, "operation_id": operation_id, "inputs": dict(inputs),
+                "source_receipt_canonical_sha256": source["canonical_sha256"],
+                "target_cutoff": plan["target_cutoff"],
+                "base_manifest_ref": plan["monthly_ready_correction"]["base_manifest_ref"],
+                "authority_ref": cas.put_json(authority).as_dict(), "bound_by": principal,
+                "database_write": False, "activation_authorized": False}
+            relative = f"inputs/factor-repair-{_digest(binding)}.json"
+            path = root / relative
+            _write_exclusive(path, binding)
+            ref = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
+            self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
+            return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
+
     def bind_minute_repairs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str,
                             cas=None, connection_factory=None) -> dict[str, Any]:
         """Freeze exact historical database rows for the SAME retained export."""

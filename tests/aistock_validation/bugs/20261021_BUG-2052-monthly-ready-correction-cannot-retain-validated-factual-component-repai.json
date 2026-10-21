@@ -8,6 +8,7 @@
     "backend/routers/monthly_dataset_releases.py",
     "backend/services/dataset_release/monthly_fact_correction.py",
     "backend/tests/services/dataset_release/test_monthly_fact_correction.py",
+    "backend/tests/dataset_release/test_monthly_fact_correction.py",
     "tests/aistock_validation/bugs/20261021_BUG-2052-monthly-ready-correction-cannot-retain-validated-factual-component-repai.json"
   ],
   "assigned_agent": null,
@@ -20,6 +21,12 @@
   ],
   "created_at": "2026-10-21T17:24:46.247927Z",
   "description": "Private repaired components PASS their focused checks but the published monthly physical outputs still omit these facts.",
+  "design_compliance_001": {
+    "acceptance": "Real-file H5/Parquet tests and isolated read-only probe of all eight existing repaired files; ordinary release/consumer validation still required before READY, deployment and activation. No new approval or business gate.",
+    "approved_scope": "Reuse already validated changed factor components in the same monthly correction; no DB writes, new dataset branch, model changes or activation shortcut.",
+    "behavior_complete": "Authenticated binding, streamed copy-on-write adoption, exact static input identities, native alias metadata lineage, atomic recovery and retained completion proofs.",
+    "semantic_preservation": "Existing SOURCE remains sealed; monthly alias audit retains its real month scope; historical repair proof stays explicit. Existing price exports and running task bindings stay untouched."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -33,18 +40,31 @@
   ],
   "expected": "Validated changed assets enter the sole monthly successor without re-exporting completed bins; updated receipt pins close on the new bytes and retries preserve both old and new valid data.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261021_BUG-2052-monthly-ready-correction-cannot-retain-validated-factual-component-repai.json",
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_ready_correction.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_fact_correction.py",
+      "backend/tests/services/dataset_release/test_monthly_fact_correction.py"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_fact_correction.py",
       "backend/tests/services/dataset_release/test_monthly_fact_correction.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/monthly_unified.py",
-      "backend/services/dataset_release/monthly_ready_correction.py",
-      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "tests/aistock_validation/bugs/20261021_BUG-2052-monthly-ready-correction-cannot-retain-validated-factual-component-repai.json",
+      "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/monthly_build_resume.py",
-      "backend/routers/monthly_dataset_releases.py"
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_ready_correction.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_fact_correction.py",
+      "backend/tests/services/dataset_release/test_monthly_fact_correction.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py",
@@ -192,14 +212,35 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_readback": [
+    "R1: real H5/Parquet RED-to-GREEN, COW immutability, hash/source drift, dependency identity, formal binding and route checks.",
+    "R2: retained alias month audit now refreshes the physical moneyflow hash only when the validated repair preserves existing finite values and its baseline matches the audited file; no full-history success is fabricated.",
+    "R3: recovery after rename/journal interruptions keeps later completion receipts; partial scratch stays outside release contents. READY correction seeds preserve completed factor repair proof.",
+    "Real-input read-only probe: all eight validated component receipts accepted; September metadata inspected, static=121 columns; no full-history audit, DB or profile write."
+  ],
   "risk_area": "bug",
+  "root_cause": "The formal retained-build correction path preserved completed exports but had no way to adopt existing validated factual H5/static outputs and refresh their native receipt/alias pins. Private repair success therefore did not mean the release contained those facts.",
+  "scope_revision": "Move the task-owned new test into backend/tests/dataset_release, the existing direct qlib_data CI discovery root. No pipeline or unrelated tests changed.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "fresh_process_evidence": [
+      "Isolated AIstock Python pytest: 18 direct tests passed, covering persistent imports, binding/API contract, real H5/static COW, interrupts and runner ordering; no service controlled.",
+      "Isolated real-component read-only probe: eight existing producer receipts accepted, month metadata readable and static has 121 columns; database_write=false, active_profile_write=false.",
+      "Isolated fresh Python loads binding/API and runner; 18 direct real H5/Parquet tests passed; eight real repair receipts and September file metadata verified without DB/profile/service writes"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
