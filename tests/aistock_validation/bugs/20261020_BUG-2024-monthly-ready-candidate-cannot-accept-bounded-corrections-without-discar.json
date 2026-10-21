@@ -1,7 +1,12 @@
 {
   "actual": "No supported READY correction path; old predecessor CAS also predates current v18 profile.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_build_executor.py",
+    "backend/services/dataset_release/monthly_minute_repair.py",
+    "backend/services/dataset_release/monthly_ready_correction.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
     "backend/services/dataset_release/monthly_unified.py",
+    "backend/services/dataset_release/monthly_worker.py",
     "backend/services/dataset_release/monthly_mature_build_runner.py",
     "backend/routers/monthly_dataset_releases.py",
     "backend/tests/dataset_release/test_monthly_unified_v2.py",
@@ -145,8 +150,13 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "AIstock Python fresh-process direct regressions: 106 passed; only the existing route-count assertion required updating for the new authenticated route.",
+      "Native writer test builds actual BIN bytes, seeds the completed export into a copy-on-write successor and fails if prepare/daily/minute/finalize export runs again. Source seal preservation, interrupted copy/metadata commit, bounded minute extension and CAS/rollback are covered.",
+      "Three review passes: checkpoint retirement crash recovery; exact completed-minute lineage and atomic seed journal; current activation predecessor separated from immutable physical build predecessor. No database, active-profile or process writes."
+    ],
     "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
