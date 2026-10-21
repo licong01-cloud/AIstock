@@ -1,7 +1,7 @@
 # Advisory 候选同群残差偏离 Top10 / 固定5TD F1
 
 日期：2026-10-22。假设 `PEER_RESIDUAL_REVERSAL_TOP10_5TD_1`。
-状态：DESIGN_REVIEW_PASS / SOURCE_NOT_IMPLEMENTED / RESEARCH_NOT_STARTED。
+状态：DESIGN_MERGED / SOURCE_LOCAL_PASS / RESEARCH_NOT_STARTED。设计PR #6545已合入704dd7e519197c5aef451aefac7c615f384f4a6b，当前源码与实际研究分别报告。
 目标合同 ALPHA_RANKING；EXPLORATORY_SCREEN / NAVIGATION_ONLY；不是实盘激活合同。
 接续[蓝图§16.0](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)；E1排名历史停止结论不改判。
 
@@ -44,7 +44,8 @@ prepared stage `b9e4881cc599d670a969fef148a96aa1653cf065c35755308ac37ed9309b6c62
 同股跨包的同一D可以因合法同群不同而有不同上下文；原经济标签仍须一致，不把两包当独立时间样本。
 
 输入只读原binding的日Bin close/factor：close已复权，收益用close比，不再乘factor；factor仅检查源有效性。
-不使用绝对复权水平跨股比较。复用 `joint_risk_top10_5td_inputs_v1.load_panel` 的有界读取/消费hash；
+不使用绝对复权水平跨股比较。复用 `joint_risk_top10_5td_inputs_v1.load_panel` 的有界读取/消费hash模式；
+原函数没有节点locator参数，故本研究叶用同一FrozenDataset和显式root_override实现一次批读，不修改旧reader/hash或逻辑。
 每批股票/字段一次读取，内存跨日复用，不复制大资产、不逐日复制文件。
 一次prepare可读取该阶段最后D之前的面板；每个特征计算先切到自身D，再验证和计算数值。
 outer输入、任何未来标签均不允许改变过去特征或异常判断。内层阶段不读取outer金融值。
@@ -62,7 +63,7 @@ m(i,t)为其余49只中实际可观察收益的等权均值；至少40只可测�
 - 前60个收益的结束日<=D-5为校准段，避免用当前五日偏离同时估计beta。
 - 后5个收益为信号段D-4..D，必须全部具有r和m；交易从下一个T开始，不包含当日不可获得的未来价格。
 - 校准段至少48个r/m共同观察；OLS闭式 beta=cov(r,m)/var(m)，alpha=mean(r)-beta*mean(m)。
-- sigma为校准残差的总体标准差。参照方差/残差sigma为0或数值不可计算，返回typed UNKNOWN，不补默认beta或sigma。
+- sigma为校准残差的总体标准差。参照方差为0或sigma不超过64*float64 eps*max(1,max|r|,max|beta*m|)的舍入精度，返回typed UNKNOWN；不补默认beta或sigma，也不按结果调数值容差。
 - s=sum(signal r)，p=sum(signal m)，新增唯一量 `peer_residual_reversal_z5=-(s-5*alpha-beta*p)/(sqrt(5)*sigma)`。
   正值表示相对历史同群暴露的负偏离；不是盈利概率、预计收益或买入价格。
   每股常数价格归一化、统一币种单位改变不能改变该量。
@@ -117,14 +118,14 @@ P0事前选第一训练段6D：2024-07-04/08-01/09-02/10-08、2025-01-02/03-31�
 
 ## Implementation Plan / Allowed APIs / 恢复
 
-直接复用现有 `FrozenDataset`/上述load_panel，`economic_entry_pipeline.publish_stage/read_stage`、
+直接复用现有 `FrozenDataset`/上述批读模式，`economic_entry_pipeline.publish_stage/read_stage`、
 `prequential_top10_5td_study_v1.projected_finance`、research_control登记和锁；不假造新公共API。
 新研究只写X自有root：登记→inner输入→逐fold模型/预测→inner结论→条件final/outer→完整结果。
 源阶段、binding、实际输入内容摘要、代码、库版本、合同与模型进入链；重试不读active配置。
 已完成阶段只读恢复；STARTED无完成记录不得自动重fit，不覆盖旧run或旧金融产物。
 文件漂移必须报错；解码前投影金融窗；模型输出冻结前不能打开相应评价收益。
 现有WSL环境训练、2线程/无GPU；单次研究计算上限30分钟、峰值2GiB、输出200MiB。
-prepare分批受load_panel原2百万单元预算约束，不截断人口；同一股票字段单阶段只读一次。
+prepare受原批读2百万日股单元预算约束，超限明确失败、不截断人口；同一股票字段单阶段只读一次。
 拟合前后核定QE状态/资源，遵守当前研究互斥合同；不控制QE，不因排队开第二研究。
 完整任务预计12–16小时仅为规划，任一候选终止分支提前交付，不凑工时或无限派生模型。
 
@@ -157,17 +158,17 @@ prepare分批受load_panel原2百万单元预算约束，不截断人口；同�
 
 ## Design Acceptance Matrix
 
-下表仅验收本次设计文档交付：实现位置列指已写清的合同章节，不表示业务源码存在。
-源码、完整输入、真实研究、经济确认均未完成；实现后必须用真实代码和测试替换此设计矩阵。
+下表验收源码与直接合同；完整原生输入及真实研究尚未执行，经济确认/启用未发生。
+源码通过不能替代真实运行，后续必须另报研究实际分支及资源收据。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-441 | Background/Scope | artifact: docs/architecture/advisory_peer_residual_top10_5td_v1_f1_design_20261022.md | DESIGN_REVIEW_PASS | none |
-| F-442 | Input/Formula/Feasibility | artifact: X:/AIstock_temp/ADVISORY/next-mechanism-20261022/input_availability_receipt.json | DESIGN_REVIEW_PASS | none |
-| F-443 | Model | artifact: docs/architecture/advisory_peer_residual_top10_5td_v1_f1_design_20261022.md | DESIGN_REVIEW_PASS | none |
-| F-444 | Evaluation | artifact: docs/architecture/advisory_peer_residual_top10_5td_v1_f1_design_20261022.md | DESIGN_REVIEW_PASS | none |
-| F-445 | Implementation Plan | artifact: docs/architecture/advisory_peer_residual_top10_5td_v1_f1_design_20261022.md | DESIGN_REVIEW_PASS | none |
-| F-446 | Scope/Verification/Production Gates | artifact: docs/architecture/advisory_peer_residual_top10_5td_v1_f1_design_20261022.md | DESIGN_REVIEW_PASS | none |
+| F-442 | peer_residual_top10_5td_v1.residual_features/attach；pipeline.read_panel | backend/tests/advisory_model_first/test_peer_residual_top10_5td_v1.py::test_leave_one_out_formula_signal_separation_and_unit_invariance | SOURCE_DIRECT_PASS | none |
+| F-443 | training/fit/predict | backend/tests/advisory_model_first/test_peer_residual_top10_5td_v1.py::test_shared_training_support_json_prediction_unknown_slots_and_future_labels | SOURCE_DIRECT_PASS | none |
+| F-444 | panel/summarize/direction_supported；pipeline.finance/evaluate_inner | backend/tests/advisory_model_first/test_peer_residual_top10_5td_v1.py::test_reversal_direction_is_frozen_not_flipped | SOURCE_DIRECT_PASS | none |
+| F-445 | Study.claim/read/publish；verify_input_files | backend/tests/advisory_model_first/test_peer_residual_top10_5td_v1.py::test_attach_preserves_original_context_and_stages_detect_tampering | SOURCE_DIRECT_PASS | none |
+| F-446 | 两研究叶/单测试；Scope/Verification/Production Gates | artifact: X:/AIstock_temp/ADVISORY/next-mechanism-20261022/ownership.json | SOURCE_DIRECT_PASS | none |
 
 ## Design Review / 本次设计审核
 
@@ -176,3 +177,12 @@ prepare分批受load_panel原2百万单元预算约束，不截断人口；同�
 3. 交付/统计：初始矩阵DESIGN_ONLY不在校验器状态集合内且把实现待办放入设计gap；改为明确设计交付范围的DESIGN_REVIEW_PASS，不伪报源码/模型完成。双端点、缺洞、历史搜索及sealed边界保留。
 
 三轮为同窗口自审。四项DESIGN-COMPLIANCE-001逐项：设计不替代实现；未知/错误不隐藏；不改变原包政策及旧研究；不增包门禁/人工审批/重启前置。
+
+## Source Review / 实施审核
+
+1. 数学/时钟：leave-one-out、D-5校准/五日信号、未来poison与完整日历测试通过；明确Qlib close已复权，不再乘factor。参照恒等时的浮点残差可能放大成假压力，按机器精度处理为UNKNOWN。
+2. 身份/恢复：仅stat不足以检测刻意保留mtime的内容漂移，恢复新增消费片段hash验证；不重读整份大型资产。相同stat但不同内容、阶段产物篡改均被拒绝。
+3. 原人口/经济：匹配两臂共同支持、未知固定槽、训练成熟及未来标签投影、原生cohort复用、方向规则和claim身份通过。首轮测试错误传全部身份列造成merge重复，修成正式FINANCE列合同；阶段hash错的测试改为捕获原生typed错误，不改业务异常。
+
+最终12项直接测试PASS，Ruff PASS；ownership三文件均Advisory，无模糊/未映射；两L0无blocking，3个P2为有界文件/候选遍历，不扩全仓回归。
+这些为同窗口三轮自审，不声称独立外审。无QE/其它owner源码、数据库或服务修改；源码无需重启，真实研究尚未开始。
