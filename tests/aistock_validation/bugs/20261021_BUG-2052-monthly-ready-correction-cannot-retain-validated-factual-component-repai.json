@@ -48,7 +48,7 @@
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_ready_correction.py",
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/tests/dataset_release/test_monthly_fact_correction.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
       "tests/aistock_validation/bugs/20261021_BUG-2052-monthly-ready-correction-cannot-retain-validated-factual-component-repai.json"
     ],
     "added_files": [
@@ -62,7 +62,7 @@
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_ready_correction.py",
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/tests/dataset_release/test_monthly_fact_correction.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
       "tests/aistock_validation/bugs/20261021_BUG-2052-monthly-ready-correction-cannot-retain-validated-factual-component-repai.json"
     ],
     "changed_files_source": "git_finish",
@@ -229,7 +229,8 @@
       "Isolated AIstock Python pytest: 18 direct tests passed, covering persistent imports, binding/API contract, real H5/static COW, interrupts and runner ordering; no service controlled.",
       "Isolated real-component read-only probe: eight existing producer receipts accepted, month metadata readable and static has 121 columns; database_write=false, active_profile_write=false.",
       "Isolated fresh Python loads binding/API and runner; 18 direct real H5/Parquet tests passed; eight real repair receipts and September file metadata verified without DB/profile/service writes",
-      "Isolated fresh AIstock Python loads persistent binding/API/runner and real H5/Parquet COW tests; read-only probe of eight actual repaired components passed without DB/profile/service writes"
+      "Isolated fresh AIstock Python loads persistent binding/API/runner and real H5/Parquet COW tests; read-only probe of eight actual repaired components passed without DB/profile/service writes",
+      "Fresh AIstock Python direct tests 19 passed; existing native monthly matrix 207 passed 1 skipped; eight actual component receipts and September schemas verified read-only"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
