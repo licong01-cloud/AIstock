@@ -164,6 +164,22 @@ def test_recovery_detects_raw_input_drift(tmp_path,monkeypatch):
         pipe.verify_input_files(study,receipt)
 
 
+def test_code_identity_ignores_checkout_newlines_not_source_changes(tmp_path,monkeypatch):
+    monkeypatch.setattr(pipe,'__file__',str(tmp_path/'pipeline.py'))
+    monkeypatch.setattr(pipe.previous,'implementation_sha256',lambda:'a'*64)
+    names=('peer_residual_top10_5td_v1','peer_residual_top10_5td_pipeline_v1',
+        'native_anchored_top10_5td_v1','prequential_top10_5td_study_v1')
+    source=b"literal = b'\\r\\n'\nvalue = 1\n"
+    for name in names:
+        (tmp_path/(name+'.py')).write_bytes(source)
+    expected=pipe.implementation_sha256()
+    for name in names:
+        (tmp_path/(name+'.py')).write_bytes(source.replace(b'\n',b'\r\n'))
+    assert pipe.implementation_sha256()==expected
+    (tmp_path/(names[0]+'.py')).write_bytes(source.replace(b'value = 1',b'value = 2'))
+    assert pipe.implementation_sha256()!=expected
+
+
 def test_perfect_shared_return_does_not_create_huge_fake_pressure():
     p,f,cal=panels()
     p.loc[:,:]=np.tile(p.iloc[:,0].to_numpy()[:,None],(1,50))

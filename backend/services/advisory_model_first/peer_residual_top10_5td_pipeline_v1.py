@@ -28,7 +28,7 @@ def implementation_sha256():
     names = ('peer_residual_top10_5td_v1', 'peer_residual_top10_5td_pipeline_v1',
         'native_anchored_top10_5td_v1', 'prequential_top10_5td_study_v1')
     return model.sha(dict(previous=previous.implementation_sha256(), files={n:hashlib.sha256(
-        Path(__file__).with_name(n+'.py').read_bytes().replace(b'\\r\\n', b'\\n')).hexdigest() for n in names}))
+        Path(__file__).with_name(n+'.py').read_bytes().replace(b'\r\n', b'\n')).hexdigest() for n in names}))
 
 
 def read_panel(source_plan, inputs, budget):

@@ -184,7 +184,7 @@ prepare受原批读2百万日股单元预算约束，超限明确失败、不截
 2. 身份/恢复：仅stat不足以检测刻意保留mtime的内容漂移，恢复新增消费片段hash验证；不重读整份大型资产。相同stat但不同内容、阶段产物篡改均被拒绝。
 3. 原人口/经济：匹配两臂共同支持、未知固定槽、训练成熟及未来标签投影、原生cohort复用、方向规则和claim身份通过。首轮测试错误传全部身份列造成merge重复，修成正式FINANCE列合同；阶段hash错的测试改为捕获原生typed错误，不改业务异常。
 
-收尾复核补齐历史有效48/47样本的直接边界回归；最终14项直接测试PASS，Ruff PASS；ownership三文件均Advisory，无模糊/未映射；两L0无blocking，3个P2为有界文件/候选遍历，不扩全仓回归。该补测未改变研究源码、合同或结果，未重训。
+收尾复核补齐历史有效48/47样本边界，并修复代码hash的换行归一化转义错误；新增LF/CRLF同身份及实质源码变化必须异身份的测试。最终15项直接测试PASS，Ruff PASS；ownership三文件均Advisory，无模糊/未映射；两L0无blocking，3个P2为有界文件/候选遍历，不扩全仓回归。研究数值实现与合同未改、未重训；交付代码身份与原producer分开说明，见下文。
 这些为同窗口三轮自审，不声称独立外审。无QE/其它owner源码、数据库或服务修改；源码无需重启，真实研究随后按下述唯一身份完成。
 
 ## Research Result / 唯一实际运行
@@ -237,3 +237,13 @@ OS峰值389226496字节（约371.20MiB），输入消费6475968字节，发布�
 fresh-process原run完整重试退出0，仍为6个started/6个finished，无final/outer目录；
 evaluated manifest文件SHA保持`7f6c447d5807e9a9ba9fa2fcffa65a66833bea2f5d690a09198dd931df40ec13`。
 只验证既存输入片段及阶段身份、恢复原结果，没有新增fit或解码新的评价收益。
+
+交付前发现`implementation_sha256`将字面反斜杠序列当换行处理，不能兼容Git在Windows的CRLF检出。
+修复只改变源码hash的换行归一化，不改变特征、拟合、预测、估值或停止条件；15项回归含LF/CRLF一致和源码实质变化拒绝。
+原研究及其成功exact retry均绑定上述旧producer，未改写plan、manifest或任何结果hash；修复后的implementation不同，
+必须拒绝直接把旧plan当新代码的exact resume，不提供别名放行。旧研究已终态，不需重跑。
+原四个直接hash输入文件的精确字节（合计64,689 bytes）保留于
+`X:/AIstock_temp/ADVISORY/next-mechanism-20261022/producer-1ddc513f-source-identity`，
+便于核对原producer；其余依赖仍由原commit及原implementation闭包引用，不复制数据/模型资产。
+这项身份修复的通过与旧producer真实研究分别报告，不声称修复后的代码重新训练或产生了新的经济证据。
+修复后交付implementation为`8670c5f2be213aa91ec51e5c5a83a4e45a81476915253e8809cd465e1f5daa27`，不替换上文原研究implementation。

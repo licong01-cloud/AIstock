@@ -3,7 +3,7 @@
 > 初始日期：2026-07-10
 > 修订日期：2026-10-22
 
-> 2026-10-22最新断点：[E2候选同群残差偏离F1](advisory_peer_residual_top10_5td_v1_f1_design_20261022.md)设计#6545已合入；源码14直接项、多轮自审及唯一真实研究已完成。305D/30,500原行保留，30,422可算/78未知；6预测fit与30,422输入统计估计分账，累计201实际研究fit＋1旧index。100共同成熟D的五日cohort增量对原生+8.585565bps、区间跨0，对matched+23.787756bps、描述性区间为正；三折z5条件系数均负，未满足事前机制方向条件，按原合同INNER_NOT_SUPPORTED。不是所有收益为负，也不是已确认盈利；未做final/outer/sealed/激活。不事后删条件、翻转z符号重训或复活旧模型；源码交付与经济状态分开，下一方向决策见§16.0。无重启前置，公告暂缓，原包日频继续。
+> 2026-10-22最新断点：[E2候选同群残差偏离F1](advisory_peer_residual_top10_5td_v1_f1_design_20261022.md)设计#6545已合入；源码15直接项、多轮自审及唯一真实研究已完成。305D/30,500原行保留，30,422可算/78未知；6预测fit与30,422输入统计估计分账，累计201实际研究fit＋1旧index。100共同成熟D的五日cohort增量对原生+8.585565bps、区间跨0，对matched+23.787756bps、描述性区间为正；三折z5条件系数均负，未满足事前机制方向条件，按原合同INNER_NOT_SUPPORTED。不是所有收益为负，也不是已确认盈利；未做final/outer/sealed/激活。不事后删条件、翻转z符号重训或复活旧模型；源码交付与经济状态分开，下一方向决策见§16.0。无重启前置，公告暂缓，原包日频继续。
 
 > 2026-10-21设计历史断点（#6500，非当前状态）：[分钟序列压力F1](advisory_serial_price_pressure_top10_5td_v1_f1_design_20261021.md)完成原生因子/历史分钟输入查重与训练端文件可产性，当时0fit/SQL/评价收益解码。两包50份冻结动态因子未发现分钟来源；保持43个旧分钟量及日OHLCV不变的构造路径仍有不同序列相关，证明不是重命名，不证明Alpha。原219训练D/8760行保留，8212 unique stock-D中8173可测、39正常UNKNOWN，11.185秒/约189MiB。该设计检查点累计160fit＋1旧index；随后真实研究已完成且精确候选停止，以上最新断点及§6.3.14为准，不重新排源码/研究任务。
 
@@ -262,7 +262,7 @@ H0 的权威详细设计为
 | 模型质量升级 | `0 ACTIVATED SELECTOR CHALLENGERS` | M5A/M5B/M5C及P0-D至P0-L均未证明可以替换Selection；P0-D只作为experimental shadow；历史M4实现开盘分布参考而非盈利区间，当前Program未配置该角色 |
 | 长期趋势模型 | `NOT_STARTED` | 长期趋势原生多 Alpha 父包尚未形成可训练输入 |
 | 旧研究族状态 | `P0-D..P0-L FROZEN` | 研究事实完整但无可激活winner；不以同族新变体继续消耗相同开发证据 |
-| 新路线实现状态 | `PEER_RESIDUAL_SOURCE_AND_INNER_RESEARCH_COMPLETE / INNER_NOT_SUPPORTED / ECONOMIC_CONFIRMED_0` | E2源码14项及真实6fit完成；100共同D对原生+8.585565bps/CI跨0，对matched+23.787756bps；三折条件系数负，按事前机制规则停止，未进入outer。累计201fit+1旧index；0确认/激活 |
+| 新路线实现状态 | `PEER_RESIDUAL_SOURCE_AND_INNER_RESEARCH_COMPLETE / INNER_NOT_SUPPORTED / ECONOMIC_CONFIRMED_0` | E2源码15项及真实6fit完成；100共同D对原生+8.585565bps/CI跨0，对matched+23.787756bps；三折条件系数负，按事前机制规则停止，未进入outer。累计201fit+1旧index；0确认/激活 |
 | 固定5TD日频交付 | `SOURCE_MERGED_ROUTE_RESTART_VERIFIED / PRODUCTION_COMPUTED_NOT_VERIFIED` | #5722只读DB来源与#5732 API已合入；43合同、原次日EOD及两个Program本地ASGI真实DB读回完成，用户重启后health/identity与路由200通过。生产接口仍为NOT_CONFIGURED、无DB读，未宣称生产COMPUTED或盈利；仅路由验收不等于模型已启用 |
 | 已有模型的可用价值 | `ENGINEERING_AND_DIAGNOSTIC_VALUE / NO_CONFIRMED_PROFIT_MODEL` | 基线选股、通用输入/回放/API可以复用；OPEN_DISTRIBUTION仅为价格分布参考，liability相关性仅为负担诊断。没有确认的Advisory盈利型模型，不等于所有QE包无Alpha，也不等于源码和统计诊断毫无价值 |
 | 共享选股优化与连续回放 | `SOURCE_MERGED_20D_REPLAYS_COMPLETED_OUTCOMES_READBACK` | #6038无包白名单，原短窗口评分等价结论不变；两包各20D回放及原生结算已完成，见§16.0。结算目标数/总耗时不是单日推理SLA；不声称全年性能或其它消费者已验。源码优化#6300已加载，旧时间戳阻断只影响正式闭环 |
@@ -1147,7 +1147,7 @@ M23/M24已测试父raw/norm五日轨迹。这里的M5不是早期M5A/B/C质量�
 
 [E2 F1及完整结果](advisory_peer_residual_top10_5td_v1_f1_design_20261022.md)以当前D原Top50的leave-one-out同群为参照，
 60日alpha/beta/sigma仅估计至D−5；最近五日残差z新增于包含全部组件的匹配模型。
-它不是全市场/行业模型，不引入外部信息，不改变原包或股票池。三轮同窗口自审及收尾复核、14项及真实WSL链路完成。
+它不是全市场/行业模型，不引入外部信息，不改变原包或股票池。三轮同窗口自审及收尾复核、15项及真实WSL链路完成。
 run `advpeertop10_d942248ff0d2933cbfc36994`保留305D/30,500原行、78正常未知；
 6监督fit，另列30,422输入统计估计。100共同成熟D三臂cohort均值candidate/原生/matched为
 113.630766/105.045200/89.843010bps，cohort胜率均67%，非真实交易胜率或日NAV。
@@ -1161,6 +1161,8 @@ candidate−matched+23.787756bps，区间[8.710133,39.027358]，三fold均为正
 这条设计教训不构成本候选已确认、方向已关闭或新确认已获立项。
 输入prepare297.735248秒、完整305D研究305.881499秒、峰值371.20MiB，非逐日5分钟；
 完整断点重试成功，6fit计数不变。累计201实际研究fit＋1旧index、0经济确认/启用，源码交付另报。
+上述研究及exact retry均属于原producer；收尾另修代码hash换行归一化，未改数学、合同或重训。
+修复后implementation与旧producer不混认，不倒填旧收据；15项包括跨换行身份兼容，细节见E2 F1。
 
 ### 6.4 训练资源边界
 
@@ -2512,7 +2514,7 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 | D1 / 已完成，精确候选停止 | Advisory两研究叶/18直接测试；305D输入/126D评价完整，六fit/100共同D对原生+11.552931bps但CI跨0，对matched−8.047284bps | INNER_NOT_SUPPORTED；不做final/outer，无新增fit重试或收益激活；累计195fit＋1旧index |
 | E0 / 已完成，零fit导航 | 100共同D matched−原生+19.600215bps/描述性区间跨0；两包方向不同，旧政策/信息查重完成，§6.3.19 | NO_CONTROL_PROMOTION；原126D/12,600行保持，未读outer/封存收益、不重fit、不事后选包/列/权重，不证明整个方向无效 |
 | E1 / 已完成筛选，未立项 | 第一训练窗179D/17,900行的五日排名历史可产；进一步查重M5/M23/M24，公式不同但缺充分新经济依据，§6.3.20 | PROPOSAL_NOT_ADVANCED；0新fit/收益/SQL，未交付新F1或源码；不误报数据阻塞、不据此关闭全方向 |
-| E2 / 已完成，按机制合同停止 | 14直接项/多轮自审及一次真实研究；305D/30,500原行、30,422可算/78未知；100共同D对原生+8.585565bps/CI跨0，对matched+23.787756bps | 三fold系数负，仅事前机制方向条件未满足，INNER_NOT_SUPPORTED；6fit，累计201+1旧index；未读outer/封存、0确认/激活，源码交付另报 |
+| E2 / 已完成，按机制合同停止 | 15直接项/多轮自审及一次真实研究；305D/30,500原行、30,422可算/78未知；100共同D对原生+8.585565bps/CI跨0，对matched+23.787756bps | 三fold系数负，仅事前机制方向条件未满足，INNER_NOT_SUPPORTED；6fit，累计201+1旧index；未读outer/封存、0确认/激活，源码交付另报 |
 | P0 / 下一次方向决策，未启动新研究 | 有限评估残差表示的产品价值与机制解释应如何分开，明确原生净增量、未消费评价和停止条件 | 只使用已有结论，不为旧失败补证；不改判E2、不翻符号重训、不把matched描述性区间升级为确认；先给出是否值得新合同的结论，非自动新fit授权 |
 | B4 / 本候选不启动 | 仅未来确实值得确认的新candidate才冻结并一次读取真正未消费历史 | 本轮sealed收益未读；禁止将已消费outer改称确认，不等待自然天数抢救当前失败 |
 | B5 / 本候选不启动 | 仅确认通过的新角色才做最小集成，再逐项研究价格条件集合/退出价值 | 不先造多角色平台；LocalSIM由其owner实施、重启用户所有；未配置角色不阻原包日频 |
