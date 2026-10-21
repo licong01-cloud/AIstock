@@ -200,6 +200,7 @@ def preregister(output, source_root, commit):
     source = previous.Study(source_root)
     plan = dict(contract=CONTRACT, source_root=str(source.root), source_stage_sha256=source.read('evaluated'),
         source_commit=commit, implementation_sha256=implementation_sha256(), versions=previous.versions())
+    plan = json.loads(_json_bytes(plan))
     plan['experiment_id'] = 'advanchortop10_'+previous.sha(plan)[:24]
     study = Study(previous.node_path(output)/plan['experiment_id'], plan)
     study.publish('preregistered', 'preregistered', None, {'plan.json':_json_bytes(plan)})

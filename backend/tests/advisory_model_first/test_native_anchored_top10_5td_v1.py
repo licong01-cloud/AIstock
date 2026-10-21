@@ -171,3 +171,13 @@ def test_unknown_challenger_keeps_hole_not_fake_gain_or_cash(rows):
     assert result['candidate_unknown_slots'] == 6 and result['baseline_unknown_slots'] == 0
     assert result['statistics']['mean_bps'] is None and daily.delta.isna().all()
     assert result['original_candidates'] == len(rows)
+
+
+def test_preregistration_normalizes_json_contract_before_identity_check(tmp_path, monkeypatch):
+    source = SimpleNamespace(root=tmp_path/'source', read=lambda stage:'b'*64,
+        plan={'experiment_id':'parent', 'binding':{'binding_hash':'c'*64}})
+    monkeypatch.setattr(study.previous, 'Study', lambda path:source)
+    monkeypatch.setattr(study.previous, 'load', lambda path:{'config':{'id':study.CONTRACT['config_id']}})
+    result = study.preregister(tmp_path/'study', source.root, 'd'*40)
+    assert result.plan['contract']['folds'] == [list(f) for f in study.base.FOLDS]
+    assert (result.root/'preregistered/manifest.json').exists()
