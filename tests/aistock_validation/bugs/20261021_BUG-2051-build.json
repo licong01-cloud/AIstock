@@ -15,6 +15,12 @@
   ],
   "created_at": "2026-10-21T09:13:15.698237Z",
   "description": "BUILD checkpoint 88017601 bytes; read_checkpoint 6.837s; authenticated status timeout 15s",
+  "design_compliance_001": {
+    "acceptance": "RED to GREEN, direct regression, real-operation fresh-process benchmark, lint/compile; runtime API verification pending user backend restart",
+    "approved_scope": "monthly status performance only; three explicitly allowed files",
+    "behavior_complete": "small-state plus regular checkpoint presence probes, no content validation during polling",
+    "semantic_preservation": "execution retains complete checkpoint verification; presence is not publication acceptance"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -26,12 +32,18 @@
   "evidence_uris": [],
   "expected": "status仅返回小型状态及checkpoint存在性，恢复和激活仍走原完整read_checkpoint校验，不扫描价格或重导数据。",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261021_BUG-2051-build.json",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261021_BUG-2051-build.json",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py",
@@ -106,14 +118,30 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_readback": [
+    "R1: RED 4 then GREEN 4. Status performs no checkpoint content reads or hashing and explicitly reports checkpoint_details_verified=false.",
+    "R2: read_checkpoint, resume, activation, identity and receipt verification remain unchanged. Corrupt content is still rejected by the execution path; non-regular and link/junction paths are rejected by status.",
+    "R3: full direct module 103 passed, 1 skipped including resume/CAS/cancel/producer-digest regressions. Real operation read-only probe 0.9-3.1ms; no completed exports, state, receipts or active profile rewritten."
+  ],
   "risk_area": "bug",
+  "root_cause": "Read-only status polls called read_checkpoint for every stage, repeatedly parsing and verifying the 88,017,601-byte BUILD checkpoint and its receipt instead of reading small state and file presence.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "fresh_process_evidence": [
+      "Fresh pytest: 103 passed, 1 skipped; RED 4 then GREEN 4 for status-only probes.",
+      "Read-only real operation status, isolated process: 0.003039s, 0.001037s, 0.000870s; previous full BUILD checkpoint validation 6.837s. No operation/candidate writes or services launched.",
+      "isolated real monthly operation status -> 0.9-3.1ms; no writes; source receipt 6.837s before fix"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",

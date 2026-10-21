@@ -838,6 +838,18 @@ class MonthlyOperationStore:
             _replace_json(root / "checkpoints" / f"{stage.lower()}.json", checkpoint)
         return receipt_path
 
+    def checkpoint_is_present(self, operation_id: str, stage: str) -> bool:
+        """Status-only presence probe; execution still verifies via read_checkpoint."""
+        if stage not in STAGES:
+            raise ValueError("checkpoint stage is invalid")
+        path = self.operation_root(operation_id) / "checkpoints" / f"{stage.lower()}.json"
+        if not path.exists():
+            return False
+        _require_plain_existing_chain(path, label=f"{stage} checkpoint")
+        if not path.is_file():
+            raise MonthlyReleaseError("checkpoint must be a regular file")
+        return True
+
     def read_checkpoint(
         self,
         operation_id: str,
@@ -1509,9 +1521,9 @@ class MonthlyReleaseService:
     def status(self, operation_id: str) -> dict[str, Any]:
         state = self.store.read_state(operation_id)
         checkpoints = {
-            stage: self.store.read_checkpoint(operation_id, stage) is not None for stage in STAGES
+            stage: self.store.checkpoint_is_present(operation_id, stage) for stage in STAGES
         }
-        return {**state, "checkpoints": checkpoints}
+        return {**state, "checkpoints": checkpoints, "checkpoint_details_verified": False}
 
     def cancel(self, operation_id: str) -> dict[str, Any]:
         return self.store.request_cancel(operation_id)
