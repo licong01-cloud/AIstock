@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2024",
-  "closed_at": null,
+  "closed_at": "2026-10-21T14:51:15.194035Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -179,10 +179,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-2024\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2024",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8750828f58ebf1924e3a889431502e9db46217c2a021f595186943e99ed7230",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "ae093415df809e8b3d6845fef08df195189b1daf",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-21T14:50:40.440307Z",
+      "mode": "read_only",
+      "observed_identity": "ecc976f230ba30604cc364838c34ca2096041ead",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "46cade6e8b256f8154b7854421648e537d90d7af91cb63679f0f07d585ab705b",
+      "receipt_sha256": "bb1b7b336fbcc8f9896a996e3dda88f429502f81cb733a2ecc781623340a9497",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "72b8d65fc9dad57f8914a50797ee32109fb7453a2e1da3b108cb37c8eb92b104",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -216,7 +238,7 @@
     ],
     "validation_evidence_digest": "acf18ed92829410f29979df7fb772d94134f010fb53031d4a9b8da385483bde8"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -229,7 +251,8 @@
     "validation-receipt: id=772ed2baa99564cf commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
     "validation-receipt: id=7a139f0f661df085 commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_unified_v2.py -k correction` result=`passed`",
     "validation-receipt: id=8c91f0300a81008b commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=ruff plan=direct status=passed command=`ruff check changed files` result=`passed`",
-    "validation-receipt: id=ded006d3b21c378d commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=ded006d3b21c378d commit=6c4835fe14c27691099ad1d703a8352e1f1acec4 kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "post-restart-verify BUG-2024 worker-scheduler -> passed; loaded runtime ecc976f2 contains source; existing native BIN reuse correction regression passed; operation not mutated"
   ],
   "verification_budget": {
     "budget": "standard",
