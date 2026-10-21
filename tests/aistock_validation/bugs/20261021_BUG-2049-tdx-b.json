@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2049",
-  "closed_at": null,
+  "closed_at": "2026-10-21T14:51:15.719430Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -17,6 +17,13 @@
   ],
   "created_at": "2026-10-21T08:22:22.513093Z",
   "description": "provider人口SQL显式包含20前缀和900前缀，stock_basic分支无B股过滤。",
+  "design_compliance_review": {
+    "no_new_approval_or_research_gate": true,
+    "no_partial_success_claim": true,
+    "no_placeholder_or_silent_fallback": true,
+    "no_unapproved_semantic_drift": true,
+    "runtime_effective_claim": "pending_user_restart"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -28,14 +35,22 @@
   "evidence_uris": [],
   "expected": "默认和显式本地日线/分钟线同步不请求深圳200/201或上海900 B股；沪深A股、ST和有真实行情的出池证券保持原有来源范围；全局PIT持续明确排除B股。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/routers/ingestion.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "tests/aistock_validation/bugs/20261021_BUG-2049-tdx-b.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
       "backend/routers/ingestion.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
-      "backend/tests/test_stock_universe_pit_spans.py"
+      "backend/tests/test_stock_universe_pit_spans.py",
+      "tests/aistock_validation/bugs/20261021_BUG-2049-tdx-b.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -124,8 +139,9 @@
   },
   "first_seen_at": "2026-10-21T08:22:22.513093Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "270b62938e52df5a8140bb787c793e7218c8db8f",
+  "fix_summary": "默认、显式、手动和定时 TDX 日线/分钟线入口复用共享 B 股过滤；B-only 请求不回落全市场；完成审计排除既存 B 股行但继续报告真实 A 股缺口。旧 B 股数据不删除。",
+  "fixed_at": "2026-10-21T09:02:32Z",
   "github_issue_number": 6533,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6533",
   "last_seen_at": "2026-10-21T08:22:22.513093Z",
@@ -133,30 +149,23 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6537",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py -q -k 'population_excludes_b or raw_completion_excludes_old_b'",
-  "root_cause": "TDX provider 人口并非选股池，旧人口 SQL 的 stock_basic 和真实日线 UNION 均允许 B 股，手动 Go 入口还将空 codes 交由 Go 扩大全市场；完成审计也未排除旧 B 股事实。200706.SZ 的源端无事实导致 0552c871-fb36-40a7-84cb-df51bd50ccf1 批次失败。全局 canonical PIT 本来已明确排除 B_SHARE，本次复用同一代码规则，不改变 PIT 参数、政策身份或北京行情采集范围。",
-  "fix_summary": "默认、显式、手动和定时 TDX 日线/分钟线入口复用共享 B 股过滤；B-only 请求不回落全市场；完成审计排除既存 B 股行但继续报告真实 A 股缺口。旧 B 股数据不删除。",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
   "review_summary": [
     "第一轮：默认人口、显式人口和手动入口闭合；初始 6 个 RED 用例转 GREEN。",
     "第二轮：发现旧 B 股事实可能继续污染完成审计，新增 4 个 RED 用例并修复为 GREEN；覆盖 A 股真缺口仍失败。",
     "第三轮：复核全局 PIT 既有 B_SHARE 排除、ST/出池报价及北京 provider 范围不变；最终相关矩阵 230 passed, 1 skipped，Ruff、编译和 diff 检查通过。"
   ],
-  "design_compliance_review": {
-    "no_partial_success_claim": true,
-    "no_placeholder_or_silent_fallback": true,
-    "no_unapproved_semantic_drift": true,
-    "no_new_approval_or_research_gate": true,
-    "runtime_effective_claim": "pending_user_restart"
-  },
-  "required_verification": [
-    "l0",
-    "data_sync_autonomy_backend"
-  ],
   "risk_area": "bug",
+  "root_cause": "TDX provider 人口并非选股池，旧人口 SQL 的 stock_basic 和真实日线 UNION 均允许 B 股，手动 Go 入口还将空 codes 交由 Go 扩大全市场；完成审计也未排除旧 B 股事实。200706.SZ 的源端无事实导致 0552c871-fb36-40a7-84cb-df51bd50ccf1 批次失败。全局 canonical PIT 本来已明确排除 B_SHARE，本次复用同一代码规则，不改变 PIT 参数、政策身份或北京行情采集范围。",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
@@ -166,11 +175,35 @@
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-2049-close-sync-20261021\\tmp\\issue_workflow\\BUG-2049\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2049",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8750828f58ebf1924e3a889431502e9db46217c2a021f595186943e99ed7230",
+      "contract_digest": "82229bc0069828263041ade613a82bba7d23bd8a288e8249d44d8ddabf9fb8d0",
+      "expected_identity": "270b62938e52df5a8140bb787c793e7218c8db8f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-21T14:46:32.797748Z",
+      "mode": "read_only",
+      "observed_identity": "ecc976f230ba30604cc364838c34ca2096041ead",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "829985f6e9460a62275978d9e0129dc3d03be82c16d67bc5495f9a0c3e70431d",
+      "receipt_sha256": "a681e0bb99f0ff2e5c8bc29e7a0d6a89e8d512f204faf8ed5180550f140ce56a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "bcf502cf54ae2ef63217a6e7c94d7e2022188cecd6dbc815dbffc62ededc7bfc",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -180,7 +213,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2049",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "466cea68bbe9717f",
+    "recorded_at": "2026-10-21T09:03:47.169292Z",
+    "runtime_contract_digest": "82229bc0069828263041ade613a82bba7d23bd8a288e8249d44d8ddabf9fb8d0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "96db063b31a6a4b0ed57a1b8def5712ee7620d8b",
+    "source_merge_commit": "270b62938e52df5a8140bb787c793e7218c8db8f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6537",
+    "validation_evidence": [
+      "validation-receipt: id=cba569d422672a85 commit=96db063b31a6a4b0ed57a1b8def5712ee7620d8b kind=pytest plan=direct status=passed command=`pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_go_integrity.py backend/tests/ingestion/test_daily_sync_recovery.py backend/tests/test_stock_universe_pit_spans.py backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py backend/tests/dataset_release/test_artifact_ready_build_source.py::test_moneyflow_factor_reader_expands_source_alias_and_keeps_both_identities backend/tests/dataset_release/test_factor_materializer.py::test_moneyflow_artifact_restores_provider_code_after_canonical_calculation -q -p no:cacheprovider` result=`passed 230, skipped 1`",
+      "validation-receipt: id=115a6fb8a5ededfb commit=96db063b31a6a4b0ed57a1b8def5712ee7620d8b kind=nox plan=l0 status=passed command=`nox -s l0 -- backend/ingestion/tdx_scheduler.py backend/routers/ingestion.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_stock_universe_pit_spans.py tests/aistock_validation/bugs/20261021_BUG-2049-tdx-b.json` result=`passed`"
+    ],
+    "validation_evidence_digest": "3848fb46a68357618e89ed87c15f2041ee567fa3745a5b013d855e9934837389"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -189,6 +244,11 @@
     "fingerprint": "628effe1315fcb50c6d134f7",
     "source_event_id": "FE-20261021-628effe1315f"
   },
+  "validation_evidence": [
+    "validation-receipt: id=cba569d422672a85 commit=96db063b31a6a4b0ed57a1b8def5712ee7620d8b kind=pytest plan=direct status=passed command=`pytest backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/ingestion/test_tdx_go_integrity.py backend/tests/ingestion/test_daily_sync_recovery.py backend/tests/test_stock_universe_pit_spans.py backend/tests/scripts/test_audit_qe_moneyflow_alias_coverage.py backend/tests/dataset_release/test_artifact_ready_build_source.py::test_moneyflow_factor_reader_expands_source_alias_and_keeps_both_identities backend/tests/dataset_release/test_factor_materializer.py::test_moneyflow_artifact_restores_provider_code_after_canonical_calculation -q -p no:cacheprovider` result=`passed 230, skipped 1`",
+    "validation-receipt: id=115a6fb8a5ededfb commit=96db063b31a6a4b0ed57a1b8def5712ee7620d8b kind=nox plan=l0 status=passed command=`nox -s l0 -- backend/ingestion/tdx_scheduler.py backend/routers/ingestion.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/test_stock_universe_pit_spans.py tests/aistock_validation/bugs/20261021_BUG-2049-tdx-b.json` result=`passed`",
+    "post-restart-verify BUG-2049 backend-main -> passed; runtime ecc976f2 contains source; B-share filtering direct regression previously passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
