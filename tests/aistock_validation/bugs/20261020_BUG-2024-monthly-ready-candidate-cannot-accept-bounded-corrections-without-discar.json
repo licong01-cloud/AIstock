@@ -169,7 +169,8 @@
     "fresh_process_evidence": [
       "AIstock Python fresh-process direct regressions: 106 passed; only the existing route-count assertion required updating for the new authenticated route.",
       "Native writer test builds actual BIN bytes, seeds the completed export into a copy-on-write successor and fails if prepare/daily/minute/finalize export runs again. Source seal preservation, interrupted copy/metadata commit, bounded minute extension and CAS/rollback are covered.",
-      "Three review passes: checkpoint retirement crash recovery; exact completed-minute lineage and atomic seed journal; current activation predecessor separated from immutable physical build predecessor. No database, active-profile or process writes."
+      "Three review passes: checkpoint retirement crash recovery; exact completed-minute lineage and atomic seed journal; current activation predecessor separated from immutable physical build predecessor. No database, active-profile or process writes.",
+      "AIstock Python imported monthly_ready_correction from the task worktree; SHA256 d64627111d19450c8329b4a6695c3f19b716f8128ffbd9fb64da5fc4e8152409. Native BIN reuse and CAS/rollback tests passed in fresh processes."
     ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
