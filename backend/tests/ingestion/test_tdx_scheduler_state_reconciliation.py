@@ -672,6 +672,126 @@ def test_go_provider_population_includes_real_ipo_quotes_without_widening_buy_po
     assert scheduler._go_provider_codes(dt.date(2026, 10, 15), dt.date(2026, 10, 15)) == ["301569.SZ", "920162.BJ"]
 
 
+def test_go_provider_population_excludes_b_shares_from_both_source_branches():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+
+    def fetch(sql, params):
+        assert "stock_universe" not in sql
+        assert "population" in sql
+        for pattern in ("200%%.SZ", "201%%.SZ", "900%%.SH"):
+            assert f"ts_code NOT LIKE '{pattern}'" in sql
+        return [{"ts_code": code} for code in ("000001.SZ", "200706.SZ", "201872.SZ", "900901.SH", "920162.BJ")]
+
+    scheduler._fetchall = fetch
+    assert scheduler._go_provider_codes(dt.date(2026, 10, 20), dt.date(2026, 10, 20)) == ["000001.SZ", "920162.BJ"]
+
+
+def test_explicit_go_population_does_not_fall_back_when_only_b_shares_requested():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    scheduler._fetchall = lambda *_: pytest.fail("explicit codes must not widen to the default population")
+    day = dt.date(2026, 10, 20)
+    assert scheduler._go_provider_codes(day, day, requested_codes=["200706.SZ", "900901.SH"]) == []
+    assert scheduler._go_provider_codes(day, day, requested_codes=["200706.SZ", "000001.SZ"]) == ["000001.SZ"]
+
+
+@pytest.mark.parametrize("dataset", ["kline_daily_raw", "kline_minute_raw"])
+@pytest.mark.parametrize("missing_a", [False, True])
+def test_raw_completion_excludes_old_b_quotes_but_preserves_a_share_gaps(dataset, missing_a):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    latest = dt.datetime(2026, 10, 20, 15)
+    daily = [{"ts_code": code, "volume_hand": 10, "volume_shares": 1000}
+             for code in ["000001.SZ", "200706.SZ"]]
+    minute = [{"ts_code": code, "freq": "1m", "bars": 240, "bad_bars": 0,
+               "traded": True, "data_max_at": latest} for code in ["000001.SZ", "900901.SH"]]
+    if missing_a:
+        (daily if dataset == "kline_daily_raw" else minute).pop(0)
+
+    def fetch(sql, _params=()):
+        if "kline_daily_raw" in sql:
+            return daily
+        if "kline_minute_raw" in sql:
+            return minute
+        return [{"ts_code": code} for code in ["000001.SZ", "200706.SZ", "900901.SH"]]
+
+    scheduler._fetchall = fetch
+    count, _, coverage = scheduler._raw_date_observation(dataset, dt.date(2026, 10, 20))
+    assert count == (0 if missing_a else 1 if dataset == "kline_daily_raw" else 240)
+    assert coverage == {"expected_symbols": 1, "incomplete_symbols": int(missing_a)}
+
+
+@pytest.mark.parametrize("data_kind", ["kline_minute_raw", "kline_daily_raw_go"])
+@pytest.mark.parametrize("entry", ["init", "init_default", "incremental"])
+def test_go_manual_routes_pass_explicit_non_b_population(monkeypatch, data_kind, entry):
+    from backend.routers import ingestion as api
+
+    day = dt.date(2026, 10, 20)
+    calls = []
+    selected = []
+
+    def population(start, end, *, requested_codes=None):
+        assert start == end == day
+        selected.append(requested_codes)
+        return ["000001.SZ"]
+
+    monkeypatch.setattr(api.scheduler, "_go_provider_codes", population)
+    monkeypatch.setattr(api, "_latest_trading_day_on_or_before", lambda *_: day)
+    monkeypatch.setattr(api, "_fetchall", lambda *_: [{"latest": day}])
+    monkeypatch.setattr(api, "_create_init_job", lambda *_: uuid.uuid4())
+    monkeypatch.setattr(api, "_create_job", lambda *_: uuid.uuid4())
+    monkeypatch.setattr(api, "_execute", lambda *_: None)
+    monkeypatch.setattr(api.requests, "post", lambda url, **kw: calls.append(kw["json"]) or SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {"code": 0, "data": {"task_id": str(uuid.uuid4())}}))
+
+    if entry in {"init", "init_default"}:
+        options = {"start_date": str(day)}
+        if entry == "init":
+            options["codes"] = ["200706.SZ", "000001.SZ"]
+        api.start_ingestion_init(api.IngestionInitRequest(dataset=data_kind, options=options))
+        assert selected == [options.get("codes")]
+    else:
+        api.trigger_go_incremental(api.GoIncrementalRequest(data_kind=data_kind, start_date=str(day)))
+        assert selected == [None]
+    assert len(calls) == 1
+    assert calls[0]["codes"] == ["000001.SZ"]
+
+
+@pytest.mark.parametrize("data_kind", ["kline_minute_raw", "kline_daily_raw_go"])
+def test_go_init_b_only_never_creates_job_or_dispatches_all(monkeypatch, data_kind):
+    from fastapi import HTTPException
+    from backend.routers import ingestion as api
+
+    monkeypatch.setattr(api, "_latest_trading_day_on_or_before", lambda *_: dt.date(2026, 10, 20))
+    monkeypatch.setattr(api, "_create_init_job", lambda *_: pytest.fail("must reject before creating a job"))
+    monkeypatch.setattr(api.requests, "post", lambda *_a, **_kw: pytest.fail("empty codes must never mean all"))
+    with pytest.raises(HTTPException, match="no non-B-share"):
+        api.start_ingestion_init(api.IngestionInitRequest(
+            dataset=data_kind, options={"codes": ["200706.SZ", "900901.SH"]}))
+
+
+@pytest.mark.parametrize("requested", [["200706.SZ"], ["200706.SZ", "000001.SZ"]])
+def test_scheduled_explicit_go_codes_exclude_b_before_dispatch(monkeypatch, requested):
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+    day = dt.date(2026, 10, 20)
+    scheduler._latest_completed_trading_day = lambda: day
+    scheduler._execute = lambda *_: None
+    logs, posted = [], []
+    scheduler._log_ingestion_run = lambda *args, **_kwargs: logs.append(args)
+    scheduler._record_refresh_audit_from_table_range = lambda **_kw: True
+    monkeypatch.setattr(scheduler_module.time, "sleep", lambda *_: None)
+    monkeypatch.setattr(scheduler_module.requests, "post", lambda _url, **kw: posted.append(kw["json"]) or SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {"code": 0, "data": {"task_id": str(uuid.uuid4())}}))
+    monkeypatch.setattr(scheduler_module.requests, "get", lambda *_a, **_kw: SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: {"code": 0, "data": {"status": "done"}}))
+    scheduler._run_go_incremental(uuid.uuid4(), None, "kline_daily_raw", "unit", {
+        "start_date": str(day), "end_date": str(day), "codes": requested})
+    if requested == ["200706.SZ"]:
+        assert posted == []
+        assert logs[-1][4] == "failed"
+    else:
+        assert len(posted) == 1
+        assert posted[0]["codes"] == ["000001.SZ"]
+
+
 @pytest.mark.parametrize("go_state,expected", [("missing", 1), ("running", 0), ("transport_error", 0),
                                               ("malformed", 0), ("list_disagrees", 0), ("bad_summary", 0)])
 def test_orphan_go_reconciliation_requires_explicit_native_absence(monkeypatch, go_state, expected):

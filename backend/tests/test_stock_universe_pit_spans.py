@@ -612,6 +612,14 @@ def test_is_b_share_ts_code() -> None:
     assert not is_b_share_ts_code(None)
 
 
+def test_global_canonical_pit_policy_explicitly_excludes_b_shares() -> None:
+    from backend.services.canonical_equity_pit import CANONICAL_RULE_PARAMETERS
+
+    assert CANONICAL_RULE_PARAMETERS["security_type"] == "A_SHARE_EQUITY"
+    assert "B_SHARE" in CANONICAL_RULE_PARAMETERS["excluded_boards"]
+    assert is_b_share_ts_code("200706.SZ")
+
+
 def test_a_share_ts_code_filter_fragment() -> None:
     fragment = a_share_ts_code_filter("s.ts_code")
     for exclude in _B_SHARE_EXCLUDES:

@@ -3840,6 +3840,8 @@ class TDXScheduler:
         self, dataset: str, trade_date: dt.date,
     ) -> Tuple[int, Optional[dt.datetime], Dict[str, int]]:
         """Observe raw totals and the existing 1m completeness contract once."""
+        from scripts.build_stock_universe_pit_spans import is_b_share_ts_code
+
         # Keep hypertable scans independently time-prunable. Joining them
         # together can produce a nested-loop scan over thousands of chunks.
         daily_rows = self._fetchall(
@@ -3859,6 +3861,10 @@ class TDXScheduler:
              WHERE trade_time >= %s AND trade_time < %s GROUP BY ts_code,freq""",
             (day_start, day_start + dt.timedelta(days=1)),
         )
+        # Old B-share facts remain stored, but must not re-enter the completion
+        # population after their collection has been disabled.
+        daily_rows = [row for row in daily_rows if not is_b_share_ts_code(row["ts_code"])]
+        minute_rows = [row for row in minute_rows if not is_b_share_ts_code(row["ts_code"])]
         daily = {str(row["ts_code"]).strip(): row for row in daily_rows}
         minute = {str(row["ts_code"]).strip(): row for row in minute_rows if row["freq"] == "1m"}
         if dataset == "kline_daily_raw":
@@ -5144,14 +5150,13 @@ class TDXScheduler:
 
             # 2) create job record (or reuse one from _scheduled_ingestion_run)
             workers = int(options.get("workers") or spec["default_workers"])
-            codes = options.get("codes")
+            # Provider population is independent of buy eligibility. Explicit
+            # requests must obey the same B-share exclusion as scheduled runs.
+            codes = self._go_provider_codes(
+                start_date, end_date, requested_codes=options.get("codes") or None,
+            )
             if not codes:
-                # Provider population, not a strategy stock pool: retain ST and
-                # historical delisted stocks intersecting an explicit window,
-                # but do not request pre-listing dates or unrelated instruments.
-                codes = self._go_provider_codes(start_date, end_date)
-                if not codes:
-                    raise RuntimeError("date-valid TDX provider population is unavailable")
+                raise RuntimeError("date-valid non-B-share TDX provider population is unavailable")
             summary.update({
                 "data_kind": spec["data_kind"],
                 "start_date": start_date.isoformat(),
@@ -5407,10 +5412,19 @@ class TDXScheduler:
                     return None
         return None
 
-    def _go_provider_codes(self, start_date: dt.date, end_date: dt.date) -> List[str]:
+    def _go_provider_codes(
+        self, start_date: dt.date, end_date: dt.date,
+        *, requested_codes: Optional[List[str]] = None,
+    ) -> List[str]:
+        # Reuse the existing global PIT board identity, not its buy-eligible
+        # members: ST/exit-period quotes and Beijing provider scope stay intact.
+        from scripts.build_stock_universe_pit_spans import a_share_ts_code_filter, is_b_share_ts_code
+
+        if requested_codes is not None:
+            return [str(code).strip() for code in requested_codes if not is_b_share_ts_code(code)]
         # The stock-basic directory may lag an IPO. A real same-window daily
         # quote is also provider-population evidence, never PIT buy eligibility.
-        rows = self._fetchall(r"""WITH bounds AS (SELECT %s::date AS end_day,%s::date AS start_day)
+        sql = r"""WITH bounds AS (SELECT %s::date AS end_day,%s::date AS start_day), population AS (
             SELECT ts_code FROM market.stock_basic,bounds WHERE list_date<=end_day
               AND (delist_date IS NULL OR delist_date>=start_day)
             UNION
@@ -5420,8 +5434,10 @@ class TDXScheduler:
                AND (k.ts_code ~ '^(00|20|30)[0-9]{4}\.SZ$'
                  OR k.ts_code ~ '^(6[0-9]{5}|900[0-9]{3})\.SH$'
                  OR k.ts_code ~ '^[489][0-9]{5}\.BJ$')
-            ORDER BY ts_code""", (end_date, start_date))
-        return [str(row["ts_code"]).strip() for row in rows]
+            ) SELECT ts_code FROM population WHERE TRUE"""
+        sql += a_share_ts_code_filter("ts_code") + " ORDER BY ts_code"
+        rows = self._fetchall(sql, (end_date, start_date))
+        return [str(row["ts_code"]).strip() for row in rows if not is_b_share_ts_code(row["ts_code"])]
 
     def _update_ingestion_job_status(
         self, job_id: uuid.UUID, status: str, start_ts: dt.datetime, summary: Dict[str, Any]
