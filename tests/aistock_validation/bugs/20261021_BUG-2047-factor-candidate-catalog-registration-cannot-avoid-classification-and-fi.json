@@ -24,8 +24,12 @@
       "timestamp": "2026-10-21T03:28:56.941360Z"
     }
   ],
-  "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "evidence_uris": [
+    "X:/AIstock_factor_research/qe-catalog-registration-20261021/technical-review.json",
+    "X:/AIstock_factor_research/qe-catalog-registration-20261021/dev-registration.json",
+    "X:/AIstock_factor_research/qe-catalog-registration-20261021/production-registration.json"
+  ],
+  "expected": "Explicit fresh-process CLI registers only authorized candidate code through ManualFactorService, with insert-only/idempotent SQL, no filesystem/code execution/classification/metrics/rating side effects. Existing save callers stay unchanged.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [
@@ -120,7 +124,11 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/test_manual_factor_service_wsl_output.py -q -> 7 passed",
+      "Fresh-process register_manual_factor.py register-candidate --target dev -> catalog 24; exact retry and conflicting-code rollback verified",
+      "Authorized fresh-process production registration -> catalog 1547; ID206 entire row unchanged; official_offline eligible=true with exact code_text hash 3907bb458a8c433ecadb219b549e707bdbd00aaa9a1586900a1ace6e539fbfc9"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
