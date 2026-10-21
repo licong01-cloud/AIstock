@@ -50,6 +50,7 @@
       "backend/services/dataset_release/monthly_ready_correction.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
       "tests/aistock_validation/bugs/20261021_BUG-2052-monthly-ready-correction-cannot-retain-validated-factual-component-repai.json"
     ],
     "added_files": [
@@ -64,6 +65,7 @@
       "backend/services/dataset_release/monthly_ready_correction.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
       "tests/aistock_validation/bugs/20261021_BUG-2052-monthly-ready-correction-cannot-retain-validated-factual-component-repai.json"
     ],
     "changed_files_source": "git_finish",
@@ -196,8 +198,8 @@
   },
   "first_seen_at": "2026-10-21T17:24:46.247927Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "1800dd0b9c30b7f230a383dc8c917a99e33d19fa",
+  "fixed_at": "2026-10-21T18:26:43Z",
   "github_issue_number": 6546,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6546",
   "last_seen_at": "2026-10-21T17:24:46.247927Z",
@@ -205,6 +207,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6549",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -242,6 +245,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -254,7 +258,30 @@
   "schema_version": "aistock_validation_bug_v1",
   "scope_revision": "Keep the new real-file correction cases in the existing test_monthly_build_resume.py CI target. No new CI target, pipeline rule or unrelated tests changed.",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2052",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "15b3370edd1fb931",
+    "recorded_at": "2026-10-21T18:27:49.826870Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e3b6070b61e4b949e8f5fbf75dbf73972bd78f10",
+    "source_merge_commit": "1800dd0b9c30b7f230a383dc8c917a99e33d19fa",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6549",
+    "validation_evidence": [
+      "pytest backend/tests/dataset_release/test_monthly_build_resume.py -q -> 67 passed",
+      "pytest backend/tests/routers/test_monthly_dataset_releases.py -q -> 16 passed",
+      "gh pr checks 6549 -> passed, CI verdict SUCCESS"
+    ],
+    "validation_evidence_digest": "7cc67464b9ca8aa4626258a65ce1af8bffe2872d45fadc5d6921df5a1b7e5648"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -263,6 +290,11 @@
     "fingerprint": "b8e6b3d829413cc23f824c93",
     "source_event_id": "FE-20261021-b8e6b3d82941"
   },
+  "validation_evidence": [
+    "pytest backend/tests/dataset_release/test_monthly_build_resume.py -q -> 67 passed",
+    "pytest backend/tests/routers/test_monthly_dataset_releases.py -q -> 16 passed",
+    "gh pr checks 6549 -> passed, CI verdict SUCCESS"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
