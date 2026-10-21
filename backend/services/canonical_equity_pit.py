@@ -133,6 +133,24 @@ class CanonicalPitAuthorityResolver:
     def __init__(self, connection_factory: Callable[[], Any] = get_conn) -> None:
         self._connection_factory = connection_factory
 
+    def verifies_rolling_predecessor(
+        self, *, current: PitConsumerBinding, source_digest: str, coverage_start: date, coverage_end: date,
+    ) -> bool:
+        """Recognize an unchanged published prefix, not arbitrary same-generation drift."""
+        with self._connection_factory() as conn:
+            with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT last_build_summary FROM market.stock_universe_pit_state
+                     WHERE universe_key=%s AND source_fingerprint_sha256=%s
+                       AND start_date=%s AND end_date=%s AND status='ready' AND dirty=FALSE
+                """, (current.universe_key, current.state_source_digest, current.coverage_start, current.coverage_end))
+                row = cur.fetchone()
+        if not row:
+            return False
+        summary = row.get("last_build_summary") or {}
+        return {"source_digest": source_digest, "coverage_start": coverage_start.isoformat(),
+                "coverage_end": coverage_end.isoformat()} in summary.get("rolling_predecessors", [])
+
     def resolve_live_binding(self) -> PitConsumerBinding:
         with self._connection_factory() as conn:
             with conn.cursor(cursor_factory=pgx.RealDictCursor) as cur:

@@ -1,0 +1,374 @@
+{
+  "actual": "resolve_live_binding返回ACTIVE_CANONICAL但coverage_end=2026-10-20；10-21仍失败；10-20 16:55 stock_basic后置维护曾因ST尾部快照缺失将活动state置为failed。",
+  "allowed_write_scope": [
+    "backend/services/canonical_equity_pit.py",
+    "backend/services/selection_center/canonical_pit_runtime.py",
+    "backend/tests/selection_center/test_canonical_pit_runtime.py",
+    "backend/services/stock_universe_pit_service.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/ingestion/tdx_scheduler.py",
+    "scripts/build_stock_universe_pit_spans.py",
+    "backend/tests/test_stock_universe_pit_service.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+    "backend/tests/test_stock_universe_pit_spans.py",
+    "tests/aistock_validation/bugs/20261021_BUG-2050-canonical-pit.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2050",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-21T08:44:49.264634Z",
+  "description": "resolve_live_binding返回ACTIVE_CANONICAL但coverage_end=2026-10-20；10-21仍失败；10-20 16:55 stock_basic后置维护曾因ST尾部快照缺失将活动state置为failed。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261021-0e7d8b304068",
+      "timestamp": "2026-10-21T08:44:49.264634Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/LOCALSIM/pit-unification-post-restart-20261021-r1/verification-final-receipt-r2.json"
+  ],
+  "expected": "每个交易日盘前自动物化当日canonical PIT；使用已有规则与D-1已完成来源，不依赖当日收盘数据，不改旧lease或旧冻结文件；并发、失败不破坏上一已发布覆盖。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/stock_universe_pit_service.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_stock_universe_pit_spans.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/stock_universe_pit_service.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "backend/tests/test_stock_universe_pit_service.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/test_stock_universe_pit_spans.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "selection_center",
+        "qe.core",
+        "paper_v2",
+        "qlib_data",
+        "platform.db"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/stock_universe_pit_service.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        },
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/ingestion/tdx_scheduler.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "scripts/build_stock_universe_pit_spans.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        },
+        {
+          "file": "backend/tests/test_stock_universe_pit_service.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        },
+        {
+          "file": "backend/tests/test_tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+          "impact_modules": [
+            "platform.db",
+            "qe.core"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_remaining_tests"
+        },
+        {
+          "file": "backend/tests/test_stock_universe_pit_spans.py",
+          "impact_modules": [
+            "selection_center",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_stock_universe_pit"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/stock_universe_pit_service.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/ingestion/tdx_scheduler.py",
+        "scripts/build_stock_universe_pit_spans.py",
+        "backend/tests/test_stock_universe_pit_service.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+        "backend/tests/test_stock_universe_pit_spans.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/stock_universe_pit_service.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_stock_universe_pit_spans.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/stock_universe_pit_service.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/ingestion/tdx_scheduler.py",
+      "scripts/build_stock_universe_pit_spans.py",
+      "backend/tests/test_stock_universe_pit_service.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/test_stock_universe_pit_spans.py"
+    ]
+  },
+  "first_seen_at": "2026-10-21T08:44:49.264634Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6536,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6536",
+  "last_seen_at": "2026-10-21T08:44:49.264634Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/schedule",
+    "fresh_process_evidence": [
+      "Fresh pytest process: 349 passed, 1 skipped; one scheduler fixture compatibility failure corrected and its nodeid rerun passed. No services launched.",
+      "Existing DEV: D-1 facts project 2026-10-19 to 2026-10-20; dry-run 4.865s, actual atomic apply 2.745s, prior state/spans visible until commit, 4915 tail spans, zero validation errors, duplicate call no writes."
+    ],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "root_cause": "PIT maintenance ran only after EOD source synchronization, required a same-day ST snapshot and published building/failed state before validation; session drift check also rejected verified append-only coverage extension.",
+  "review_readback": [
+    "R1: RED 5 then GREEN 5; historical membership prefix preserved and same-day synthetic snapshot rejected.",
+    "R2: static stock_basic has no dated refresh audit; reuse its existing lifecycle validation, require completed D-1 stock_st/stock_st_events (zero events allowed) only; weekend calendar boundary verified.",
+    "R3: atomic DEV commit verified from independent connection; no fake ST snapshot, historical price scan, policy change, account mutation or production DML.",
+    "R4: existing leases remain unchanged; only exact policy/generation plus producer-proven unchanged prefix is compatible, unverified drift still fails closed. Maintenance uses existing executor, one inflight task and monotonic retry throttle."
+  ],
+  "design_compliance_001": {
+    "approved_scope": "global shared PIT maintenance; no LocalSIM/QE/HMM business rules changed",
+    "behavior_complete": "automatic trading-day sweep, causal source cutoff, atomic publication, idempotency and compatible existing leases",
+    "semantic_preservation": "same 252 trading-session IPO/ST/delist policy and digest; no fabricated facts or implicit date extension of saved leases",
+    "acceptance": "targeted regression and actual existing DEV transaction readback passed; production and post-restart acceptance remain separate"
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "canonical PIT缺少盘前逐交易日日滚并将未发布尾部误作历史缺失",
+  "trigger_condition": {
+    "fingerprint": "0e7d8b304068894a2a561ff6",
+    "source_event_id": "FE-20261021-0e7d8b304068"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
