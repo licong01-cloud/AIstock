@@ -1,13 +1,15 @@
-# Advisory 成交量条件化价格延续 Top10 / 固定5TD F1 v1.0
+# Advisory 成交量条件化价格延续 Top10 / 固定5TD F1 v1.1
 
-日期：2026-10-21。状态：DESIGN_READY，输入可产性抽样完成；源码与监督研究未执行。
+日期：2026-10-21。状态：SOURCE_AND_INNER_RESEARCH_COMPLETE / INNER_NOT_SUPPORTED / NOT_ACTIVATED。
+设计#6529先合入；本轮实现、18项回归、六次真实inner fit与fresh-process恢复完成。源码PR/CI/合入单独报告。
 假设：`VOLUME_CONDITIONED_SERIAL_PRESSURE_TOP10_5TD_1`。
 目标合同：ALPHA_RANKING；类型：EXPLORATORY_SCREEN；用途：NAVIGATION_ONLY。
 本设计接续[蓝图§16.0](advisory_strategy_conditioned_model_blueprint_v1_20260710.md)，不是上一轮3:1组合的改权重版本。
 
 ## Background / Goal
 
-189次已发生研究fit及历史1次index不清零。多时段、成熟更新及3:1组合的精确阴性结论不改判。
+立项前189次已发生研究fit及历史1次index不清零；本轮实际6fit后累计195，仍另列旧index。
+多时段、成熟更新及3:1组合的精确阴性结论不改判。
 目标仍是对既存策略包原Top50重排、选Top10，在固定T开盘至T+4收盘的成本后cohort上超过原生Top10。
 价格区间、退出、仓位暂不扩展；无需先证明所有角色，也不因研究结论阻断原包日频使用。
 
@@ -129,7 +131,7 @@ X根：`X:/AIstock_temp/ADVISORY/next-mechanism-20261021`。
 
 ## Implementation Plan
 
-设计先合入；后继从最新main独立树仅实现：
+设计先合入；本轮从最新main独立树已按以下批准范围实现：
 `backend/services/advisory_model_first/volume_conditioned_pressure_top10_5td_v1.py`（数值/拟合/排名），
 `backend/services/advisory_model_first/volume_conditioned_pressure_top10_5td_pipeline_v1.py`（输入/阶段/研究），
 `backend/tests/advisory_model_first/test_volume_conditioned_pressure_top10_5td_v1.py`（直接合同测试），以及本文/蓝图。
@@ -141,6 +143,25 @@ X根：`X:/AIstock_temp/ADVISORY/next-mechanism-20261021`。
 在X新研究根保存完整人口、特征可用性/原因、每次fit、模型、预测屏障、结果及资源。
 CPU≤2线程、无GPU；一次研究计算≤30分钟、RSS≤2GiB、新产物≤200MiB，不复制大资产。
 失败恢复不重做完成fit；公共缺陷交owner，不自行修改QE/LocalSIM/HMM/数据源码。
+
+### D1 实现与输入解释
+
+两个上述研究叶已实现：`conditional/minute_features/attach`负责同日信息与原人口，
+`training/fit/predict/panel/summarize`负责成熟投影、固定模型及既有cohort评价；
+pipeline的`read_minutes/prepare/fit_pair/evaluate_inner/run`负责批量文件与不可覆盖阶段。
+`preregister`绑定源码、环境、前序阶段hash和原binding；`run`沿同一身份继续，不重新选择active profile。
+每次模型及其预测先原子发布，再记录完成；若发布后完成收据前中断，可沿已验证模型恢复。
+若fit已开始但没有发布，明确停止、不自动再fit；已完成评价的exact retry只验证链和既存结果，不再拟合或解码收益。
+
+原多时段prepared没有`csi300_ret_5`、`relative_ret_5_vs_csi300`、`market_up_ratio`三列。
+这三项属于旧输入schema，但本来源没有观测，两臂均保留全缺并停用，报告`inactive_fields`及输入收据，
+不临时查库、不从评价窗口估计、不把缺失改成零；其他旧列仍使用训练内中位数/IQR和缺失标记。
+这限定本研究的信息集，不说明三字段本身无价值，也不把当前matched说成旧模型原封复用。
+
+复杂度审核：输入上限52,400行；stock/D特征是many-to-one，训练和cohort身份是one-to-one，
+合并前检查重复与人口，防止行数放大。五个分钟流每股票只开一次，交易日索引一次构建，仅读取所需D；
+累计切片摘要不冒充整套Bin内容hash，stat lease不冒充不可变的原生vintage证据。
+这些研究叶不注册API或生产角色，不改变原生选股、调度、其它消费者或数据库。
 
 ## Verification Plan / Design Acceptance Index
 
@@ -159,12 +180,12 @@ CPU≤2线程、无GPU；一次研究计算≤30分钟、RSS≤2GiB、新产物�
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
 | F-431 | Background / Feasibility | artifact: X:/AIstock_temp/ADVISORY/next-mechanism-20261021/input-receipt.json | DESIGN_AND_INPUT_SAMPLE_PASS | none |
-| F-432 | Formula / Input | artifact: X:/AIstock_temp/ADVISORY/next-mechanism-20261021/test_input_probe.py | DESIGN_READY | approved_by_user: 按蓝图先交付设计；正式源码尚未实现，不宣称功能完成 |
-| F-433 | Input / Formula | backend/tests/advisory_model_first/test_volume_conditioned_pressure_top10_5td_v1.py（后继计划） | DESIGN_READY | approved_by_user: 设计阶段；正式实现和测试未完成 |
-| F-434 | Research / Implementation Plan | backend/tests/advisory_model_first/test_volume_conditioned_pressure_top10_5td_v1.py（后继未来poison/fit计数） | DESIGN_READY | approved_by_user: 设计阶段；0监督fit |
-| F-435 | Research | backend/tests/advisory_model_first/test_volume_conditioned_pressure_top10_5td_v1.py（后继停止/继续分支） | DESIGN_READY | approved_by_user: 设计阶段；未做经济评价 |
-| F-436 | Implementation Plan | backend/tests/advisory_model_first/test_volume_conditioned_pressure_top10_5td_v1.py（后继漂移/重试） | DESIGN_READY | approved_by_user: 设计阶段；恢复源码未完成 |
-| F-437 | Implementation Plan / Production Gates | artifact: X:/AIstock_temp/ADVISORY/next-mechanism-20261021/input-receipt.json（仅局部资源） | DESIGN_READY | approved_by_user: 设计阶段；全人口及资源验收未完成 |
+| F-432 | volume_conditioned_pressure_top10_5td_v1.py: conditional/minute_features | backend/tests/advisory_model_first/test_volume_conditioned_pressure_top10_5td_v1.py；真实inner/prepared/receipt.json | IMPLEMENTED_VERIFIED | none |
+| F-433 | 同上: validate_population/attach/predict/panel | backend/tests/advisory_model_first/test_volume_conditioned_pressure_top10_5td_v1.py；305D/30,500原候选与126评价D/12,600行保持 | IMPLEMENTED_VERIFIED | none |
+| F-434 | 同上: training/fit；pipeline: claim/fit_pair | backend/tests/advisory_model_first/test_volume_conditioned_pressure_top10_5td_v1.py；六模型/started/finished，训练支持17,345/21,297/25,586，两臂相同 | IMPLEMENTED_VERIFIED | none |
+| F-435 | 同上: summarize；pipeline: evaluate_inner/run | backend/tests/advisory_model_first/test_volume_conditioned_pressure_top10_5td_v1.py覆盖停止/继续；真实inner/evaluated/report.json为INNER_NOT_SUPPORTED | IMPLEMENTED_VERIFIED_RESEARCH_STOP | none |
+| F-436 | pipeline: Study/read/publish/claim/run | backend/tests/advisory_model_first/test_volume_conditioned_pressure_top10_5td_v1.py；fresh-process 4.504秒/仍6fit，终态hash不变 | IMPLEMENTED_VERIFIED | none |
+| F-437 | pipeline: read_minutes/budget；Production Gates | artifact: X:/AIstock_temp/ADVISORY/volume-conditioned-top10-20261021/study/advvoltop10_483edf14508e90e92d6dd30c/evaluated/result.json | IMPLEMENTED_VERIFIED | none |
 
 正式定向回归必须覆盖上述每项；特别比较同总量不同分配、等权、量纲缩放、零量/常数/缺分钟、
 两臂同人口/无建议原槽、重复键/缺候选/身份漂移、未来poison、内层失败不读取outer、exact retry零新fit。
@@ -179,7 +200,7 @@ CPU≤2线程、无GPU；一次研究计算≤30分钟、RSS≤2GiB、新产物�
 
 ## Production Gates / DESIGN-COMPLIANCE-001
 
-1. 本次交付设计和有限输入检查，不把它说成源码/模型/经济成果完成；后继预定义inner停止可为完整研究终态。
+1. 本次源码及预定义inner研究终态已完成，不能说成outer验证、经济确认或生产模型启用；两分支都有直接测试，真实结果按inner停止，非未批准简化。
 2. 不补价/补收益/删日期/填未知0；文件与身份错误明确失败。
 3. 不改原策略包、Top10经济目标/成本/时钟或旧研究；不能在结果后选权重/包/季度/模型。
 4. 不新增策略包准入、业务审批或生产发布阻断；研究导航标准不是日频业务门禁。
@@ -194,4 +215,39 @@ R2：将普通相关改为同一共同三元组控制，保证缺量不制造伪
 R3：显式冻结训练内分流、主端点与机制分报/实际fit计数、sealed隔离和抽样限制；不将输入PASS升级收益。
 R4：交叉核对蓝图F-288，取消初稿把机制下界设为第二个产品门槛的写法；区分采样RSS与OS峰值。
 R5：补核GP5日频量价滞后原实现，明确这是同一流动性机制的新联合信息检验，不称全新理论；冻结两项字段名。
-以上为本窗口逐项自审，不冒称独立外部审核。完整源码和经济结论尚待后继任务。
+以上R1～R5为设计阶段本窗口逐项自审，不冒称独立外部审核。
+
+源码R1核对共同三元组/量权重、原人口和全缺字段；R2核对成熟时钟、JSON预测等价、独占fit与发布后恢复；
+R3修正测试异常类型与早盘夹具的UNKNOWN期望，复核两分支预测屏障、原轴统计与exact retry不重评。
+最终18项直接测试0失败/跳过，Ruff/ownership/L0通过；三处P2连接复杂度已有上述有界审核。
+WSL现有环境无pytest，未安装依赖；Windows单测与下列真实WSL研究/fresh-process证据分开，不冒称WSL单测通过。
+
+## D1 实测结果与接续决定
+
+唯一run `advvoltop10_483edf14508e90e92d6dd30c`，根
+`X:/AIstock_temp/ADVISORY/volume-conditioned-top10-20261021/study/advvoltop10_483edf14508e90e92d6dd30c`。
+清洁producer `cd24a647bbb643b76a0530ae61cf05c222612664`，implementation
+`429bf273b7005a5dfd2eb579c99f02be5290cd2456cc975d4d7315afa07b99ea`。
+
+- 输入阶段305D/30,500原候选、28,119唯一stock-D；30,406共同支持，71常数、23不足观测保留原槽。
+  消费135,461,960 bytes切片、0SQL；输入536.623秒。未读取outer特征或收益，原524D来源及外层人口仍保留。
+- 三fold各两真实Ridge fit，训练支持17,345/21,297/25,586；模型迭代43/43、43/46、52/49，均收敛。
+  总543.663秒、OS高水位600,543,232 bytes（572.723MiB），最终研究根16,251,657 bytes，满足预定资源预算。
+- 原126评价D/12,600行、252包日保持；111成熟D、100三臂共同D，覆盖90.09%。
+  共同D五会话净cohort均值：原生105.045200、matched124.645415、candidate116.598132bps；
+  cohort胜率67%/69%/67%，不是成交胜率、组合NAV或收益承诺。
+- candidate−原生 **+11.552931bps**，95%区间 **[−27.297378,48.765895]**，MDE80=54.315455bps；
+  三fold为−22.622898/+13.088960/+31.601637bps。candidate−matched **−8.047284bps**，
+  描述性95%区间 **[−18.252072,2.637588]**，三fold均负：−16.451223/−0.135162/−10.651654bps。
+  两比较各有111/107成熟干预D（100%/96.40%），不是零干预恒等陷阱。
+- 主端点两包分化：TCN −23.009033bps，LSTM +46.114896bps；不可挑好包启用。
+  candidate相对原生尾部10%均值恶化25.929733bps，额外未知槽0.1351个百分点；完整包/季度及避亏/漏盈分报在report。
+
+结论为 **INNER_NOT_SUPPORTED**：新增量价联合描述未证明增量，按原预登记结束，不做最终两fit、不解码outer收益，
+不因对原生点估计为正回选matched、改参数或改归属合同。累计195实际研究fit＋1旧index，0独立确认/封存金融读取/激活。
+这不证明市场中没有信号或所有QE包无效；matched的较高点值只是下一假设可参考的导航，不是候选已获验证。
+
+fresh-process同身份重试4.503982秒，started/finished仍各6，无新增fit，终态manifest SHA256保持
+`4c1c6bc0d00cd6b5abc887502bff6944b67ea297c5092bfb023b622be5cd865a`。
+当前候选不进入确认/启用；下一步依蓝图§16.0先对新matched与已完成旧分钟研究做零fit查重/产品价值归因，
+只决定是否值得另立一个新候选，不重跑本失败候选、扩窗口或读取outer来找正结果。
