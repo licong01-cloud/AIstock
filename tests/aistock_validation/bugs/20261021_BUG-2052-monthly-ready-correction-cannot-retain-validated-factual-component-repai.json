@@ -9,6 +9,7 @@
     "backend/services/dataset_release/monthly_fact_correction.py",
     "backend/tests/services/dataset_release/test_monthly_fact_correction.py",
     "backend/tests/dataset_release/test_monthly_fact_correction.py",
+    "backend/tests/dataset_release/test_monthly_build_resume.py",
     "tests/aistock_validation/bugs/20261021_BUG-2052-monthly-ready-correction-cannot-retain-validated-factual-component-repai.json"
   ],
   "assigned_agent": null,
@@ -41,28 +42,28 @@
   "expected": "Validated changed assets enter the sole monthly successor without re-exporting completed bins; updated receipt pins close on the new bytes and retries preserve both old and new valid data.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261021_BUG-2052-monthly-ready-correction-cannot-retain-validated-factual-component-repai.json",
       "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_fact_correction.py",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_ready_correction.py",
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/services/dataset_release/monthly_fact_correction.py",
-      "backend/tests/services/dataset_release/test_monthly_fact_correction.py"
+      "backend/tests/dataset_release/test_monthly_fact_correction.py",
+      "tests/aistock_validation/bugs/20261021_BUG-2052-monthly-ready-correction-cannot-retain-validated-factual-component-repai.json"
     ],
     "added_files": [
       "backend/services/dataset_release/monthly_fact_correction.py",
       "backend/tests/services/dataset_release/test_monthly_fact_correction.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261021_BUG-2052-monthly-ready-correction-cannot-retain-validated-factual-component-repai.json",
       "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_fact_correction.py",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_ready_correction.py",
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/services/dataset_release/monthly_fact_correction.py",
-      "backend/tests/services/dataset_release/test_monthly_fact_correction.py"
+      "backend/tests/dataset_release/test_monthly_fact_correction.py",
+      "tests/aistock_validation/bugs/20261021_BUG-2052-monthly-ready-correction-cannot-retain-validated-factual-component-repai.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -220,7 +221,6 @@
   ],
   "risk_area": "bug",
   "root_cause": "The formal retained-build correction path preserved completed exports but had no way to adopt existing validated factual H5/static outputs and refresh their native receipt/alias pins. Private repair success therefore did not mean the release contained those facts.",
-  "scope_revision": "Move the task-owned new test into backend/tests/dataset_release, the existing direct qlib_data CI discovery root. No pipeline or unrelated tests changed.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
@@ -228,7 +228,8 @@
     "fresh_process_evidence": [
       "Isolated AIstock Python pytest: 18 direct tests passed, covering persistent imports, binding/API contract, real H5/static COW, interrupts and runner ordering; no service controlled.",
       "Isolated real-component read-only probe: eight existing producer receipts accepted, month metadata readable and static has 121 columns; database_write=false, active_profile_write=false.",
-      "Isolated fresh Python loads binding/API and runner; 18 direct real H5/Parquet tests passed; eight real repair receipts and September file metadata verified without DB/profile/service writes"
+      "Isolated fresh Python loads binding/API and runner; 18 direct real H5/Parquet tests passed; eight real repair receipts and September file metadata verified without DB/profile/service writes",
+      "Isolated fresh AIstock Python loads persistent binding/API/runner and real H5/Parquet COW tests; read-only probe of eight actual repaired components passed without DB/profile/service writes"
     ],
     "health_ref": "http://127.0.0.1:8001/api/v1/health",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
@@ -249,6 +250,7 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_revision": "Keep the new real-file correction cases in the existing test_monthly_build_resume.py CI target. No new CI target, pipeline rule or unrelated tests changed.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
