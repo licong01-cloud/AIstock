@@ -135,10 +135,13 @@ def apply_minute_corrections(resume, *, finalized, cas, plan):
         raise MonthlyBuildResumeError("minute correction schema differs")
     inner = dict(load_sealed_build_json(cas, finalized["finalize_receipt_ref"]))
     materialization = load_sealed_build_json(cas, inner["minute_receipt_ref"])
-    if materialization.get("minute_correction") is not None:
-        if materialization["minute_correction"]["authority_ref"] != binding["authority_ref"]:
-            raise MonthlyBuildResumeError("minute correction authority changed")
+    previous_correction = materialization.get("minute_correction")
+    if previous_correction is not None and previous_correction["authority_ref"] == binding["authority_ref"]:
         return finalized
+    if previous_correction is not None:
+        original = plan.get("monthly_ready_correction", {}).get("base_plan", {}).get(BINDING)
+        if original is None or original["authority_ref"] != previous_correction["authority_ref"]:
+            raise MonthlyBuildResumeError("minute correction does not extend its completed base")
     # Failed packaging also leaves finalization_started=True. The private
     # retained staging check above, not that retry marker, is the write boundary.
     root = resume.root
@@ -222,6 +225,9 @@ def apply_minute_corrections(resume, *, finalized, cas, plan):
                   "filled_cells": filled, "checked_cells": checked,
                   "construction_basis": "same_candidate_frozen_daily_float32_v1",
                   "database_read": False, "database_write": False, "existing_finite_values_unchanged": True}
+    from .monthly_ready_correction import extend_minute_correction
+    correction = extend_minute_correction(previous_correction, binding=binding, plan=plan,
+                                          correction=correction, cas=cas)
     updated_materialization = {**materialization, "minute_correction": correction}
     relative = "minute_bin/materialization_receipt.json"
     path = root / relative

@@ -734,7 +734,8 @@ class MonthlyOperationStore:
                 continue
             if status == ReleaseState.READY_TO_ACTIVATE:
                 request = _read_json(child / "request.json", label="monthly request")
-                if request.get("activation_mode") != "activate_when_ready":
+                if (request.get("activation_mode") != "activate_when_ready"
+                        or self.read_plan(str(state["operation_id"])).get("monthly_ready_correction") is not None):
                     continue
             elif status in TERMINAL_STATES or status == ReleaseState.ACTIVATED:
                 continue
@@ -1490,7 +1491,7 @@ class MonthlyReleaseService:
         )
         if ready.get("operation_id") != operation_id or ready.get("status") != state.get("status"):
             raise MonthlyReleaseConflict("ready receipt differs from operation state")
-        predecessor_hash = str(plan["predecessor"]["profile_sha256"])
+        predecessor_hash = str(plan.get("activation_predecessor", plan["predecessor"])["profile_sha256"])
         if _file_sha256(self.active_profile) != predecessor_hash:
             raise MonthlyReleaseConflict("active profile changed before authorization")
         target_hash = _file_sha256(Path(str(plan["profile_candidate"])))
@@ -1531,6 +1532,10 @@ class MonthlyReleaseService:
             cancel_requested=False,
             last_error=None,
         )
+
+    def prepare_ready_correction(self, operation_id: str, *, principal: str) -> dict[str, Any]:
+        from .monthly_ready_correction import prepare_ready_correction
+        return prepare_ready_correction(self, operation_id, principal=principal)
 
     def bind_repair_inputs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str) -> dict[str, Any]:
         """Bind exact existing repair assets before SOURCE, never rewrite a seal.
@@ -2110,6 +2115,11 @@ class MonthlyReleaseService:
                         }
                     }
                 )
+                if stage == "SOURCE" and plan.get("monthly_ready_correction") is not None:
+                    from .monthly_ready_correction import retained_source_receipt
+                    prior[stage] = retained_source_receipt(self, operation_id, plan=plan,
+                                                          request_digest=request_digest)
+                    continue
                 from .monthly_prev_close_repair import SUPPLEMENT_KEYS
                 supplement_names = ("monthly_industry_history", "monthly_prev_close_repairs",
                                     "monthly_suspension_authority", "monthly_minute_repairs")
@@ -2373,7 +2383,8 @@ class MonthlyReleaseService:
             raise MonthlyReleaseNotReady("candidate profile does not bind the ready manifest")
         candidate_profile_ref = _content_ref(profile_path, ref_id=profile_path.name)
         predecessor_profile_ref = _require_content_ref(
-            plan.get("predecessor_profile_ref"), field="predecessor_profile_ref"
+            plan.get("activation_predecessor_profile_ref", plan.get("predecessor_profile_ref")),
+            field="predecessor_profile_ref"
         )
         payload = {
             "schema_version": READY_SCHEMA,
@@ -2457,10 +2468,10 @@ class MonthlyReleaseService:
                 action="ACTIVATE",
                 principal=principal,
                 target_cutoff=str(plan["target_cutoff"]),
-                predecessor_profile_sha256=str(plan["predecessor"]["profile_sha256"]),
+                predecessor_profile_sha256=str(plan.get("activation_predecessor", plan["predecessor"])["profile_sha256"]),
                 target_profile_sha256=candidate_profile_ref["sha256"],
             )
-            expected_old = str(plan["predecessor"]["profile_sha256"])
+            expected_old = str(plan.get("activation_predecessor", plan["predecessor"])["profile_sha256"])
             expected_new = candidate_profile_ref["sha256"]
             profile = _read_json(profile_candidate, label="candidate profile")
             runtime_pit_policy = self._runtime_pit_policy(profile)
@@ -2471,7 +2482,8 @@ class MonthlyReleaseService:
                 "operation_id": operation_id,
                 "status": ReleaseState.ACTIVATING.value,
                 "old_profile_ref": _require_content_ref(
-                    plan["predecessor_profile_ref"], field="old_profile_ref"
+                    plan.get("activation_predecessor_profile_ref", plan["predecessor_profile_ref"]),
+                    field="old_profile_ref"
                 ),
                 "new_profile_ref": _content_ref(
                     profile_candidate,
