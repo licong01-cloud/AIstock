@@ -763,6 +763,70 @@ def test_minute_summary_does_not_store_240_rows():
     assert not hasattr(value, "rows")
 
 
+@pytest.mark.parametrize("empty_open,trade_open", [(1.66, 1.67), (7.10, 7.07), (6.76, 6.77)])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_opening_aggregate_uses_first_trade_not_empty_quotes(empty_open, trade_open, reverse):
+    from copy import deepcopy
+
+    data = rows()
+    bars = data["kline_minute_raw"]
+    for bar in bars:
+        bar.update(open_li=round(trade_open * 1000), close_li=round(trade_open * 1000))
+    bars[0].update(open_li=round(empty_open * 1000), close_li=round(empty_open * 1000),
+                   volume_hand=0, amount_li=0)
+    # Both prices remain inside the true daily range. A zero-trade 09:30
+    # quote outside that range must not supply executed opening/extrema.
+    bars.insert(0, {**bars[0], "trade_time": bars[0]["trade_time"].replace(minute=30),
+                    "open_li": 20000, "high_li": 20000, "low_li": 20000, "close_li": 20000})
+    for bar in bars[1:]:
+        bar.update(high_li=11000, low_li=1000)
+    data["kline_daily_raw"][0].update(open_li=round(trade_open * 1000), high_li=11000,
+                                     low_li=1000, close_li=round(trade_open * 1000),
+                                     volume_hand=239, amount_li=2390000)
+    if reverse:
+        bars.reverse()
+    before = deepcopy(data)
+    assert run(data)["minute_price"].status == "PASS"
+    assert data == before
+
+
+@pytest.mark.parametrize("activity", ["volume_hand", "amount_li", "volume_shares"])
+def test_opening_activity_is_not_rounded_to_an_empty_quote(activity):
+    data = rows()
+    first = data["kline_minute_raw"][0]
+    first.update(open_li=9900, low_li=9900, volume_hand=0, amount_li=0)
+    first[activity] = 1
+    if activity == "volume_shares":
+        first.update(volume_shares_source="hf_china_a_share_1min", volume_shares_sha256="a" * 64)
+    summary = MinuteSummary(DAY)
+    for bar in reversed(data["kline_minute_raw"]):
+        summary.add(bar)
+    assert summary.aggregates()["open"] == 9.9
+
+
+def test_zero_trade_closing_quote_and_real_open_conflict_are_preserved():
+    data = rows()
+    data["kline_minute_raw"][-1].update(open_li=10100, high_li=10100, low_li=10100,
+                                       close_li=10100, volume_hand=0, amount_li=0)
+    data["kline_daily_raw"][0].update(high_li=10100, close_li=10100, volume_hand=239, amount_li=2390000)
+    assert run(data)["minute_price"].status == "PASS"
+    data["kline_minute_raw"][0]["low_li"] = 9900
+    data["kline_daily_raw"][0].update(open_li=9900, low_li=9900)
+    assert run(data)["minute_price"].status == "BLOCKED"
+    data["kline_minute_raw"][0].update(volume_hand=0, amount_li=0)
+    data["kline_daily_raw"][0].update(volume_hand=238, amount_li=2380000)
+    # A later transaction also remains a mismatch; no daily-price substitution.
+    assert run(data)["minute_price"].status == "BLOCKED"
+
+
+def test_whole_day_zero_turnover_preserves_existing_quote_contract():
+    data = rows()
+    for bar in data["kline_minute_raw"]:
+        bar.update(volume_hand=0, amount_li=0)
+    data["kline_daily_raw"][0].update(volume_hand=0, amount_li=0)
+    assert run(data)["minute_price"].status == "PASS"
+
+
 def auction_data():
     data = rows()
     auction = {**data["kline_minute_raw"][0],
