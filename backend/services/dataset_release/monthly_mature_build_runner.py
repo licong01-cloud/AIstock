@@ -247,6 +247,8 @@ class MatureMonthlyPhysicalBuildRunner:
             finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
             from .monthly_industry_history import apply_retained_history
             prepare = apply_retained_history(resume, context=context, compiled=compiled, prepare=prepare, cas=self.cas, profile=self.profile)
+            from .monthly_fact_correction import apply_factor_repairs
+            prepare = apply_factor_repairs(resume, prepare=prepare, plan=context.plan, cas=self.cas)
             prepare_ref = self._seal_stage(prepare, expected="prepare")
             finalize_prerequisites["prepare"] = prepare_ref.sha256
             smoke = tools.consumer_smoke.execute(

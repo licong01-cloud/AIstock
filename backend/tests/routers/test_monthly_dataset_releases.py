@@ -206,7 +206,8 @@ def test_all_routes_require_dataset_release_operator(tmp_path: Path) -> None:
         for route in app.routes
         if isinstance(route, APIRoute) and route.path.startswith("/api/v1/qlib/monthly-releases")
     ]
-    assert len(routes) == 18
+    assert len(routes) == 19
+    assert any(route.path.endswith("/factor-repairs") for route in routes)
     for route in routes:
         dependencies = {dependency.call for dependency in route.dependant.dependencies}
         assert require_dataset_release_operator in dependencies, route.path
