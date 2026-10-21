@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2050",
-  "closed_at": null,
+  "closed_at": "2026-10-21T14:51:22.666194Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -262,10 +262,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-2050-close-sync-20261021\\tmp\\issue_workflow\\BUG-2050\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2050",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8750828f58ebf1924e3a889431502e9db46217c2a021f595186943e99ed7230",
+      "contract_digest": "82229bc0069828263041ade613a82bba7d23bd8a288e8249d44d8ddabf9fb8d0",
+      "expected_identity": "a15bba00b5923bc8de10438e9a1d1bb8aecc163a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-21T14:46:14.310759Z",
+      "mode": "read_only",
+      "observed_identity": "ecc976f230ba30604cc364838c34ca2096041ead",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "829985f6e9460a62275978d9e0129dc3d03be82c16d67bc5495f9a0c3e70431d",
+      "receipt_sha256": "3db8cb5197ddc36be3300055eb5bfae91da12e725336e358efbf94b6a421f2d9",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "bbbd3791008962853a8e62e55a2e491bada1d5868e2970b5ca10953dcf9c11a8",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -297,7 +319,7 @@
     ],
     "validation_evidence_digest": "5be9e44d5c17a0cc3d619152c97e199acf7d0dedfa67fdcda5efa443feb66778"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -308,7 +330,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=e02fd3cc8e920267 commit=5d72e66308fa247dca99e2e8d7f32e1b4d4612b3 kind=pytest plan=direct status=passed command=`pytest backend/tests/test_stock_universe_pit_spans.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_refresh_schedules_reconciles_due_sync_targets backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py::test_pit_day_roll_uses_existing_executor_and_never_duplicates_inflight_work -q -p no:cacheprovider` result=`passed 62`",
-    "validation-receipt: id=0d098885caaa2589 commit=5d72e66308fa247dca99e2e8d7f32e1b4d4612b3 kind=nox plan=l0 status=passed command=`nox -s l0 -- backend/ingestion/tdx_scheduler.py backend/services/canonical_equity_pit.py backend/services/selection_center/canonical_pit_runtime.py backend/services/stock_universe_pit_service.py backend/services/tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/test_stock_universe_pit_service.py backend/tests/test_stock_universe_pit_spans.py backend/tests/test_tushare_sync_engine.py scripts/build_stock_universe_pit_spans.py tests/aistock_validation/bugs/20261021_BUG-2050-canonical-pit.json` result=`passed`"
+    "validation-receipt: id=0d098885caaa2589 commit=5d72e66308fa247dca99e2e8d7f32e1b4d4612b3 kind=nox plan=l0 status=passed command=`nox -s l0 -- backend/ingestion/tdx_scheduler.py backend/services/canonical_equity_pit.py backend/services/selection_center/canonical_pit_runtime.py backend/services/stock_universe_pit_service.py backend/services/tushare_sync_engine.py backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/test_stock_universe_pit_service.py backend/tests/test_stock_universe_pit_spans.py backend/tests/test_tushare_sync_engine.py scripts/build_stock_universe_pit_spans.py tests/aistock_validation/bugs/20261021_BUG-2050-canonical-pit.json` result=`passed`",
+    "post-restart-verify BUG-2050 backend-main -> passed; canonical generation 1 coverage 2026-10-21; selection and localsim date binding PASS"
   ],
   "verification_budget": {
     "budget": "standard",
