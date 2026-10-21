@@ -1,8 +1,9 @@
 # 成熟标签顺序更新的固定5交易日 Top10 研究（F1）
 
-版本：v1.1；日期：2026-10-21；归属：Advisory / model_first。
+版本：v1.2；日期：2026-10-21；归属：Advisory / model_first。
 依据：荐股蓝图v5.22 §6.3.4、§6.10、§6.12和§16.0。
-阶段：设计交付；尚未新增研究fit、outer评价、经济确认或生产激活。
+阶段：设计PR #6521已合入de024b0159248827b73d7cb135cd6bc79e543ead；源码19项直接验证及8次真实inner拟合完成。
+按事前条件为INNER_PROTOCOL_NOT_SUPPORTED，outer、独立确认和角色启用未启动。源码PR/CI/合入与研究结论分别交付。
 
 ## Background / Goal / Feature Card
 
@@ -138,14 +139,15 @@ backend/tests/advisory_model_first/test_prequential_top10_5td_v1.py。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 | --- | --- | --- | --- | --- |
-| F-411 | Source与Operations | artifact: X:/AIstock_temp/ADVISORY/prequential-top10-5td-20261021/preflight.py；父run stage/hash | DESIGN_REVIEW_PASS | none |
-| F-412 | Clocks与500行成熟边界 | backend/tests/advisory_model_first/test_prequential_top10_5td_v1.py（实施时新增） | DESIGN_REVIEW_PASS | none |
-| F-413 | Model与固定18fit预算 | backend/tests/advisory_model_first/test_prequential_top10_5td_v1.py（实施时新增） | DESIGN_REVIEW_PASS | none |
-| F-414 | Model与Outer | backend/tests/advisory_model_first/test_prequential_top10_5td_v1.py（实施时新增） | DESIGN_REVIEW_PASS | none |
-| F-415 | Operations | backend/tests/advisory_model_first/test_prequential_top10_5td_v1.py（实施时新增） | DESIGN_REVIEW_PASS | none |
-| F-416 | Outer、资源与Test Plan | artifact: X:/AIstock_temp/ADVISORY/prequential-top10-5td-20261021/task_plan.md | DESIGN_REVIEW_PASS | none |
+| F-411 | prequential_top10_5td_pipeline_v1.Source / Study | artifact: X:/AIstock_temp/ADVISORY/prequential-top10-5td-20261021/current_study_summary.json | SOURCE_AND_INNER_REAL_PASS | none |
+| F-412 | Source.finance/training；study.schedule/projected_finance；pipeline.boundary_labels | backend/tests/advisory_model_first/test_prequential_top10_5td_v1.py；current_study_summary.json逐块D/H | SOURCE_AND_INNER_REAL_PASS | none |
+| F-413 | study.inner_report；pipeline.claim/fit_count/inner/run | artifact: X:/AIstock_temp/ADVISORY/prequential-top10-5td-20261021/current_study_summary.json；8对fit claims | CONDITIONAL_RESEARCH_COMPLETE | none |
+| F-414 | study.assert_population/inner_report；复用base.predict/cohort/evaluate | backend/tests/advisory_model_first/test_prequential_top10_5td_v1.py；三个初始块6000行与旧静态预测/排序完全相同 | SOURCE_AND_INNER_REAL_PASS | none |
+| F-415 | pipeline.block/read/publish/run | backend/tests/advisory_model_first/test_prequential_top10_5td_v1.py；真实fresh-process exact_retry=true且fit数保持8 | SOURCE_AND_RECOVERY_PASS | none |
+| F-416 | Research Result及run资源记录 | artifact: X:/AIstock_temp/ADVISORY/prequential-top10-5td-20261021/junit-final-19.xml；ownership.json；l0.json | INNER_RESEARCH_COMPLETE | none |
 
-以上是设计交付验收；具体源码和真实研究仍待后续独立实施，未以测试计划代替已执行测试。
+以上证明源码直接合同与本次inner真实研究；outer完整经济执行未发生、500行边界未物化，
+相应分支为源码/定向合同验证，不冒称真实outer、独立确认或模型盈利通过。
 
 ## Test Plan / 多轮审核及合入条件
 
@@ -170,3 +172,40 @@ DESIGN-COMPLIANCE-001：条件终止是完整设计结果；未知不补值、�
 3. 工程/统计审核：原生交易日轴不随UNKNOWN压缩；相对静态改善不能代替相对原生收益；inner失败为设计完整终态，outer金融反馈与整体结果读取分别说明。完成块可重用，中断fit不静默重跑。
 
 三轮为本窗口自审，不冒充独立审核。F1结构检查与diff检查通过后交付设计；后续源码另有直接回归及必需CI。
+
+## Research Result / 一次真实inner完成，按条件停止
+
+run `advpreqtop10_b0ae5a41af9e644af50b77c1`；producer `d9313bc2a95ac6c65bc1e07774dfab51dd568cd2`。
+原子evaluated stage SHA256：`c52ff9e74fbda684a167cc83ce74e6598b5848f38b357761732074973fc5bb70`。
+产物在X:/AIstock_temp/ADVISORY/prequential-top10-5td-20261021/study/上述run。
+126原innerD、12,600候选全保留，111成熟D、100共同完整D，覆盖90.0901%；实际8次fit，累计189研究fit＋1旧index。
+没有触发outer、500行新成熟标签计算、确认或激活；8次是同一个更新协议的拟合次数，不是8个独立假设。
+
+| 训练内时间块 | 更新−原生Top10 bps | 更新−冻结Ridge100 bps |
+| --- | ---: | ---: |
+| 2025-04-01..05-30 | +8.792971 | +14.811249 |
+| 2025-06-03..07-31 | −7.332063 | −23.033165 |
+| 2025-08-01..09-30 | +1.605791 | −27.300383 |
+| 100共同D等重 | **−0.065670** | **−15.572048** |
+
+虽有2/3正向时间块，两个事前总体均值条件均未满足，故为`INNER_PROTOCOL_NOT_SUPPORTED`。
+结果读回追加的原轴block诊断：相对原生95%区间[-23.627032,21.678496]bps，MDE80=32.418107bps；
+相对冻结模型95%区间[-31.858552,0.544731]bps。两区间跨0，不宣称统计证明更新有害，
+不能把接近零的点估计解释成所有动态学习无效，也不能按结果更换周期、窗口或模型。
+该诊断未改变事前继续条件、未新增拟合或消费outer收益。
+
+三个fold首块共6000行与旧静态Ridge100预测逐值差为0、完整排序相同，验证配对仅改变后续更新。
+八块实际最大监督H均≤各自cutoff，cutoff严格早于首预测D；自有模型序列化读回一致。
+fresh-process完整恢复返回exact_retry=true，仍仅8对已完成claims，没有新fit。
+研究阶段7.313614秒、峰值380.375MiB、研究产物289,538字节；这是本轮计算耗时，不是开发/CI耗时。
+0SQL、0新H5/Bin读取、0大型资产复制；父源摘要/日历/既存小Parquet只读；sealed未读。
+
+## Source Review / 修复与交付审查
+
+1. 时钟与身份：RED暴露金融H被改写仍可通过，已要求观察H与原metadata一致；未来D/H投影、成熟缺行、旧边界保留测试通过。
+2. 恢复与预算：RED暴露outer完成后inner总数误判及别名fit claim漏洞，已按阶段计数并检查文件名/事件身份；中断fit保持明确失败，不自动重做。
+3. 状态与范围：初始outer预测必须先于边界标签物化；更新阶段消费过去outer反馈，不沿用静态“outer金融未读”声明。19直接测试/Ruff通过，3个源码/测试文件ownership均Advisory；5个L0 P2为有界日历/两文件/分组遍历，0 blocking。
+
+三轮为本窗口自审。真实inner完成后的逐块时钟、初始模型等价及恢复读回没有增加研究fit。
+DESIGN-COMPLIANCE-001四项通过：条件停止是预定完整终态；错误/未知可见；未改旧候选或政策；无策略包准入/额外审批。
+后续不做B4/B5，不派生更新周期或滚动窗搜索；只有新信息或训练内互补依据支持的新假设才另行设计。
