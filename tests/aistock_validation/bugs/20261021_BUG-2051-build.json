@@ -33,15 +33,15 @@
   "expected": "status仅返回小型状态及checkpoint存在性，恢复和激活仍走原完整read_checkpoint校验，不扫描价格或重导数据。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261021_BUG-2051-build.json",
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261021_BUG-2051-build.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261021_BUG-2051-build.json",
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/tests/dataset_release/test_monthly_unified_v2.py"
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261021_BUG-2051-build.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -100,8 +100,8 @@
   },
   "first_seen_at": "2026-10-21T09:13:15.698237Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "ecc976f230ba30604cc364838c34ca2096041ead",
+  "fixed_at": "2026-10-21T09:29:41Z",
   "github_issue_number": 6541,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6541",
   "last_seen_at": "2026-10-21T09:13:15.698237Z",
@@ -109,6 +109,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6543",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -140,6 +141,7 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -151,7 +153,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2051",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f9f843b093a2ec2f",
+    "recorded_at": "2026-10-21T09:30:30.233104Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "830602758694a3e67c668bcc81c1ff2e2e2f507e",
+    "source_merge_commit": "ecc976f230ba30604cc364838c34ca2096041ead",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6543",
+    "validation_evidence": [
+      "validation-receipt: id=5de6d9ab08b36a2c commit=830602758694a3e67c668bcc81c1ff2e2e2f507e kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_unified_v2.py -q` result=`103 passed, 1 skipped`",
+      "validation-receipt: id=d924e72d4339e83f commit=830602758694a3e67c668bcc81c1ff2e2e2f507e kind=ruff plan=direct status=passed command=`ruff check changed Python files; py_compile; git diff --check` result=`passed`",
+      "validation-receipt: id=e2f7452e88a5ce0f commit=830602758694a3e67c668bcc81c1ff2e2e2f507e kind=nox plan=l0 status=passed command=`nox -s l0 -- changed files` result=`passed`"
+    ],
+    "validation_evidence_digest": "d922d4631039b4de9e5e3d43dd6b99b862dc6385048cb79a122b7ee4e90aa1b3"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -160,6 +185,11 @@
     "fingerprint": "e6e2d14cb60c054e57f0dc43",
     "source_event_id": "FE-20261021-e6e2d14cb60c"
   },
+  "validation_evidence": [
+    "validation-receipt: id=5de6d9ab08b36a2c commit=830602758694a3e67c668bcc81c1ff2e2e2f507e kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_unified_v2.py -q` result=`103 passed, 1 skipped`",
+    "validation-receipt: id=d924e72d4339e83f commit=830602758694a3e67c668bcc81c1ff2e2e2f507e kind=ruff plan=direct status=passed command=`ruff check changed Python files; py_compile; git diff --check` result=`passed`",
+    "validation-receipt: id=e2f7452e88a5ce0f commit=830602758694a3e67c668bcc81c1ff2e2e2f507e kind=nox plan=l0 status=passed command=`nox -s l0 -- changed files` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
