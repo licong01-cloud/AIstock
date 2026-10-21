@@ -72,6 +72,18 @@ def test_peer_coverage_is_observed_not_imputed(missing_peers,available):
     assert len(a) == 50
 
 
+@pytest.mark.parametrize('missing_closes,expected_pairs,reason',[
+    (12,48,'AVAILABLE'),(13,47,'INSUFFICIENT_HISTORY')])
+def test_history_pair_support_boundary(missing_closes,expected_pairs,reason):
+    p,f,cal=panels()
+    p.iloc[:missing_closes,0]=np.nan
+    result=core.residual_features(p,f,day=cal[65],calendar=cal)
+    assert result.iloc[0].peer_history_pairs==expected_pairs
+    assert result.iloc[0].peer_reason==reason
+    assert len(result)==50
+    assert np.isfinite(result.iloc[0][core.NEW])==(reason=='AVAILABLE')
+
+
 def test_future_poison_missing_calendar_and_zero_variance():
     p,f,cal = panels()
     day=cal[65]
