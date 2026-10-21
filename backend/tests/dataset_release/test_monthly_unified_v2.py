@@ -320,6 +320,58 @@ def _request(*, key: str = "monthly-202609") -> MonthlyReleaseRequest:
     )
 
 
+def test_status_reads_checkpoint_presence_without_parsing_or_hashing(tmp_path, monkeypatch):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    state_before = service.store.read_state(operation)
+    checkpoint = service.store.operation_root(operation) / "checkpoints" / "build.json"
+    checkpoint.parent.mkdir(exist_ok=True)
+    checkpoint.write_text("large receipt contents are not needed by status", encoding="utf-8")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("status must not load or hash checkpoint contents")
+
+    monkeypatch.setattr(service.store, "read_checkpoint", forbidden)
+    monkeypatch.setattr(monthly_subject, "_file_sha256", forbidden)
+    result = service.status(operation)
+    assert result == {
+        **state_before,
+        "checkpoints": {stage: stage == "BUILD" for stage in STAGES},
+        "checkpoint_details_verified": False,
+    }
+
+
+def test_status_presence_does_not_accept_corrupt_checkpoint_for_resume(tmp_path):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    checkpoint = service.store.operation_root(operation) / "checkpoints" / "build.json"
+    checkpoint.parent.mkdir(exist_ok=True)
+    checkpoint.write_text("{}", encoding="utf-8")
+    assert service.status(operation)["checkpoints"]["BUILD"] is True
+    with pytest.raises(MonthlyReleaseError, match="checkpoint schema differs"):
+        service.store.read_checkpoint(operation, "BUILD")
+
+
+@pytest.mark.parametrize("non_regular", ["directory", "link"])
+def test_status_rejects_non_regular_checkpoint_paths(tmp_path, monkeypatch, non_regular):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    checkpoint = service.store.operation_root(operation) / "checkpoints" / "build.json"
+    checkpoint.parent.mkdir(exist_ok=True)
+    if non_regular == "directory":
+        checkpoint.mkdir()
+    else:
+        checkpoint.write_text("{}", encoding="utf-8")
+        # Exercise the link/reparse guard without requiring Windows symlink privileges.
+        original = monthly_subject._is_link_or_junction
+        monkeypatch.setattr(
+            monthly_subject, "_is_link_or_junction",
+            lambda path: path == checkpoint or original(path),
+        )
+    with pytest.raises(MonthlyReleaseError, match="regular|link or junction"):
+        service.status(operation)
+
+
 @pytest.mark.parametrize(
     "planned,observed,ready",
     [
