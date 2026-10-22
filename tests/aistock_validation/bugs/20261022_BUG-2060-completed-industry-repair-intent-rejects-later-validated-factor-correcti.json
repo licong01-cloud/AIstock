@@ -16,6 +16,12 @@
   ],
   "created_at": "2026-10-22T04:31:51.365648Z",
   "description": "MonthlyBuildResumeError: completed industry commit identity or output changed; BUILD attempt 290 failed without changing existing exports.",
+  "design_compliance_review": {
+    "business_semantics_preserved": "Data values, shared identity, source completeness, PIT, and file/receipt mismatch rejection remain unchanged.",
+    "full_delivery": "The source fix covers normal completion, legacy completed intent recovery and the actual MonthlyBuildResume caller.",
+    "no_fake_success": "Actual private candidate provenance verified read-only; production READY, activation and post-restart state are not inferred from tests.",
+    "no_new_gate": "Uses existing immutable producer receipts and writer signatures only; no full historical read/hash, approval, resource gate or new framework."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -31,13 +37,20 @@
   ],
   "expected": "Recovery preserves the latest validated journal and retires only the exact completed intent; later authorized factor changes are recognized from frozen receipts, while unknown changes remain errors.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2060-completed-industry-repair-intent-rejects-later-validated-factor-correcti.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/monthly_industry_history.py",
       "backend/services/dataset_release/monthly_build_resume.py",
-      "backend/tests/dataset_release/test_monthly_build_resume.py"
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2060-completed-industry-repair-intent-rejects-later-validated-factor-correcti.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_industry_history.py",
@@ -110,6 +123,7 @@
   "first_seen_at": "2026-10-22T04:31:51.365648Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "Retire the exact completed industry intent after checking durable completion and output provenance. Accept a later factor output only when its current writer signature, immutable correction authority and native factor receipt agree; never replay the obsolete journal, re-export prices, or accept unexplained drift.",
   "fixed_at": null,
   "github_issue_number": 6573,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6573",
@@ -123,30 +137,26 @@
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -k 'interrupted_history_commit or completed_industry_intent' -q",
-  "root_cause": "The industry publisher left its completed commit intent after durable journal publication. Recovery compared legitimate later factor outputs with the obsolete industry's signatures, ignoring the independently sealed correction authority and current native factor receipt.",
-  "fix_summary": "Retire the exact completed industry intent after checking durable completion and output provenance. Accept a later factor output only when its current writer signature, immutable correction authority and native factor receipt agree; never replay the obsolete journal, re-export prices, or accept unexplained drift.",
-  "design_compliance_review": {
-    "full_delivery": "The source fix covers normal completion, legacy completed intent recovery and the actual MonthlyBuildResume caller.",
-    "no_fake_success": "Actual private candidate provenance verified read-only; production READY, activation and post-restart state are not inferred from tests.",
-    "business_semantics_preserved": "Data values, shared identity, source completeness, PIT, and file/receipt mismatch rejection remain unchanged.",
-    "no_new_gate": "Uses existing immutable producer receipts and writer signatures only; no full historical read/hash, approval, resource gate or new framework."
-  },
   "required_verification": [
     "l0",
     "qlib_data_backend"
   ],
   "risk_area": "bug",
+  "root_cause": "The industry publisher left its completed commit intent after durable journal publication. Recovery compared legitimate later factor outputs with the obsolete industry's signatures, ignoring the independently sealed correction authority and current native factor receipt.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
       "Fresh AIstock Python: 13 related history/factor/recovery tests passed, including caller resume, interrupted intent retirement, unknown successor, receipt mismatch, changed output and missing original rejection.",
-      "Fresh AIstock Python: loaded the actual operation's sealed industry projection with source_bundle_sha256 binding and verified both latest files against current journal plus immutable factor-correction receipts; all checks passed, database/data/journal/profile/process writes=false."
+      "Fresh AIstock Python: loaded the actual operation's sealed industry projection with source_bundle_sha256 binding and verified both latest files against current journal plus immutable factor-correction receipts; all checks passed, database/data/journal/profile/process writes=false.",
+      "Fresh AIstock Python loaded persistent source, passed 13 targeted tests and checked actual operation's two factor successor pins without writes",
+      "Fresh AIstock Python loaded persistent source and checked actual sealed projection and both successor pins read-only; passed"
     ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
