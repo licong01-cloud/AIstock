@@ -10,7 +10,8 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2061",
-  "closed_at": null,
+  "ci_compatibility_fix": "CI 39726943134 中655项通过，两条既存启动器文本断言仍要求旧启动命令和旧errorlevel分支；补齐其对主线已批准UTF-8参数及显式Conda退出码的断言，不修改启动器或任何运行进程。",
+  "closed_at": "2026-10-22T06:19:46.774423Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -35,6 +36,7 @@
       "backend/services/dataset_release/candidate_consumer_smoke.py",
       "backend/tests/dataset_release/test_candidate_consumer_smoke.py",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/test_aistock_guardrail_scan.py",
       "docs/standards/aistock_runtime_targets_v1.yaml",
       "tests/aistock_validation/bugs/20261022_BUG-2061-monthly-index-smoke-rejects-valid-full-history-corrected-parquet.json"
     ],
@@ -43,6 +45,7 @@
       "backend/services/dataset_release/candidate_consumer_smoke.py",
       "backend/tests/dataset_release/test_candidate_consumer_smoke.py",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/test_aistock_guardrail_scan.py",
       "docs/standards/aistock_runtime_targets_v1.yaml",
       "tests/aistock_validation/bugs/20261022_BUG-2061-monthly-index-smoke-rejects-valid-full-history-corrected-parquet.json"
     ],
@@ -107,8 +110,8 @@
   },
   "first_seen_at": "2026-10-22T05:04:33.144429Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "5e07fcc9af5a75dd2f7105fa5841988878bbf24a",
+  "fixed_at": "2026-10-22T05:22:46Z",
   "github_issue_number": 6576,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6576",
   "last_seen_at": "2026-10-22T05:04:33.144429Z",
@@ -116,6 +119,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6577",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -133,7 +137,6 @@
   ],
   "risk_area": "bug",
   "root_cause": "指数更正生产器按正式合同输出 frozen_history_and_month_delta；消费 smoke 未做月窗口下推过滤，却要求文件每一行均为本月。另发现共享 smoke 单文件改动缺少既有 monthly worker process probe 的 required_source_globs 锚点。",
-  "ci_compatibility_fix": "CI 39726943134 中655项通过，两条既存启动器文本断言仍要求旧启动命令和旧errorlevel分支；补齐其对主线已批准UTF-8参数及显式Conda退出码的断言，不修改启动器或任何运行进程。",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
@@ -145,9 +148,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-2061\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2061",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "5d4d0f9c9d5abe149449170115c9575d5e1c7d59718d05ff06983895732a2435",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "5e07fcc9af5a75dd2f7105fa5841988878bbf24a",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-22T06:19:22.640336Z",
+      "mode": "read_only",
+      "observed_identity": "c7516f373760d2f0f269f55da5177c808a8733db",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d8252d5374c826079e0e63ba16b4461c82102d21be7fc8e802e72dc922b4ce03",
+      "receipt_sha256": "94f2913505a04034d2abccaf89d7ebf82cba4aa5be1871cd29dc7595be523d3b",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "390a8e3427c02d482bda8269506d90881ea96019ede294938f61d0ef8c8a3cb6",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -157,7 +183,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2061",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "02af3bc5346b46bb",
+    "recorded_at": "2026-10-22T05:23:26.378806Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e5d95c927aa9d69fdad199fdfd6db662db2d7cb9",
+    "source_merge_commit": "5e07fcc9af5a75dd2f7105fa5841988878bbf24a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6577",
+    "validation_evidence": [
+      "validation-receipt: id=ea5e02f7ad1e5641 commit=e5d95c927aa9d69fdad199fdfd6db662db2d7cb9 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+      "validation-receipt: id=50545cf218e74ff5 commit=e5d95c927aa9d69fdad199fdfd6db662db2d7cb9 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_candidate_consumer_smoke.py backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_release_sources_select_their_own_process_probe -q` result=`28 passed`",
+      "validation-receipt: id=521e25ed17942142 commit=e5d95c927aa9d69fdad199fdfd6db662db2d7cb9 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_aistock_guardrail_scan.py::test_windows_backend_launcher_uses_the_aistock_interpreter_in_one_shared_path backend/tests/test_aistock_guardrail_scan.py::test_windows_backend_launcher_fails_before_startup_when_runtime_paths_are_missing -q` result=`2 passed`"
+    ],
+    "validation_evidence_digest": "fac0dd4e47c65c4d38aab3d93cf8cc4dcf685734af8e9b993ee44dcd9946145c"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -166,6 +215,12 @@
     "fingerprint": "711e878c9cbe9b0106d91096",
     "source_event_id": "FE-20261022-711e878c9cbe"
   },
+  "validation_evidence": [
+    "validation-receipt: id=ea5e02f7ad1e5641 commit=e5d95c927aa9d69fdad199fdfd6db662db2d7cb9 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+    "validation-receipt: id=50545cf218e74ff5 commit=e5d95c927aa9d69fdad199fdfd6db662db2d7cb9 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_candidate_consumer_smoke.py backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_release_sources_select_their_own_process_probe -q` result=`28 passed`",
+    "validation-receipt: id=521e25ed17942142 commit=e5d95c927aa9d69fdad199fdfd6db662db2d7cb9 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/test_aistock_guardrail_scan.py::test_windows_backend_launcher_uses_the_aistock_interpreter_in_one_shared_path backend/tests/test_aistock_guardrail_scan.py::test_windows_backend_launcher_fails_before_startup_when_runtime_paths_are_missing -q` result=`2 passed`",
+    "python -m nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
