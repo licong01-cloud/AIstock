@@ -1,17 +1,36 @@
-# LocalSIM 分钟择时接入需求（基础设施就绪后转交）
+# LocalSIM 分钟择时接入包（源码合入后由用户转交）
 
-状态：`CONTRACT_ONLY_DO_NOT_START`。本文件不触发模拟盘窗口开发，也不宣称择时核心/API已经实现。用户要求先完成择时侧基础能力，可接入时再转交。
+状态：`TIMING_SDK_IMPLEMENTED_CONSUMER_PENDING`。择时纯SDK、提醒API/组件和功能回放已实施；本文件不触发或授权本窗口修改LocalSIM。源码合入后由用户转交模拟盘窗口；SDK离线接入无需等待用户后端重启，线上API尚待重启后核验。
 
 权威设计：[总蓝图](../architecture/position_timing_intraday_advice_localsim_blueprint_f2_20261023.md)、[阶段一详细设计](../architecture/position_timing_intraday_phase1_f2_detailed_design_20261023.md)。
 
-## 到时转交的输入
+## 已交付输入
 
-- 择时源码commit、公开evaluate入口及schema/policy hash，B0/C1/C2固定规则。
-- 可重放的分钟前缀、session/日级交易事实、计划和执行视图，预期decision/state与四档delay_intents。
-- 核心/接口测试、inspect/exact retry证据；明确哪些仅是功能证据，经济效果仍未确认。
-- 本模块API/页面是否需用户重启及其状态，不能把未重启当已经启用。
+- 源码身份以携带本文的已合入PR/commit为准，核心入口为 `backend.services.position_timing.intraday.evaluate`；合同位于同目录 `contracts.py`，版本均v1；B0/C1/C2参数见详细设计§4与显式 `Policy`。
+- 每个计划固定 `Policy(source_commit=<实际消费源码commit>, policy_id=..., allow_split=...)`，`digest(policy)`写入 `Plan.policy_sha256`，不得把合成fixture的虚拟source_commit当作已部署身份。
+- 可重放输入、输出、测试与CLI证据见[实施验收记录](../analysis/position_timing_intraday_phase1_implementation_20261023.md)。功能fixture只有1个计划/10根分钟线，不是R8收益研究，所有延迟输出都是未确认成交的意图。
+- API/页面需用户后端重启后核验，当前 `runtime_verified=false`；LocalSIM/Advisory产品接入与经济效果均未确认。
 
-上述输入尚不存在时请勿按本文开始修改LocalSIM，不需要等待模型正收益或未来行情才生成这些输入。
+本包已具备可调用核心与冻结例子，后续owner接入不以模型正收益或未来交易日为前置。纯SDK导入不创建运行客户端、订单、数据库连接或全局策略注册。
+
+### 最小调用与提醒消费
+
+`from backend.services.position_timing.intraday import evaluate, Plan, MarketView, ExecutionView, Policy, State`
+
+`decision, state = evaluate(plan, observed_prefix, execution_view, plan.policy, previous_state, as_of)`
+
+模拟反馈必须给出匹配的symbol/trade_date/available_at、confirmed/reserved_quantity、cash_cny、sellable_quantity、source_ref、feedback_id、last_confirmed_batch/at。下一批仅由确认后的反馈推进；核心输出累计目标比例，owner负责其原有lot/资金/可卖量转换，不能按每次剩余量重复乘1/3。
+
+提醒消费者导入 `frontend/src/app/position-timing/IntradayTimingPanel.tsx`，传入apiBase/planRefs/refreshSourcePlans/onStatus；不复制算法。服务实例的source_resolver协议须由来源owner实现并注入；当前未配置真实Advisory桥接时创建ADVISORY计划返回422，不信任浏览器自行核实。API路径见详细设计§5.1；无成交写回endpoint。
+
+### 冻结功能例子
+
+外置artifact路径见实施验收记录，均在既有position_timing artifact root的 `intraday_v1/research` 下。
+
+- 输入：`functional_inputs/phase1_20261023_v1/spec.json`，来源明确为 `functional_fixture_only`。
+- request：`requests/7685a812fb4a4e1c11e7802a5e9c5cd9319a010f81ea420400a4c7cf495fe575.json`。
+- bundle：`bundles/7685a812fb4a4e1c11e7802a5e9c5cd9319a010f81ea420400a4c7cf495fe575`；manifest canonical SHA256：`06c7aadfc787e2b0ad8b54205a128ea15c8f8622169b12ed27ef4f009ee3bcb1`。
+- 独立进程prepare/run/inspect/exact retry成功，retry为 `ALREADY_MATERIALIZED`，10个decision、1个opportunity、4档delay_intents。未来经济研究不得用此合成candidate冒充正式R8 manifest。
 
 ## LocalSIM窗口负责的最小范围
 
