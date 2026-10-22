@@ -26,7 +26,20 @@
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/LOCALSIM/canonical-pit-frozen-continuation-20261023-r1/pre-fix-receipt.json"
+    "X:/AIstock_temp/LOCALSIM/canonical-pit-frozen-continuation-20261023-r1/pre-fix-receipt.json",
+    "X:/AIstock_temp/LOCALSIM/canonical-pit-frozen-continuation-20261023-r1/related-matrix.xml",
+    "X:/AIstock_temp/LOCALSIM/canonical-pit-frozen-continuation-20261023-r1/actual-native-contract-receipt.json"
+  ],
+  "design_compliance_review": [
+    "禁止简化交付：生产代码接入原有公共继承与权威前缀合同、正式恢复事务；249项定向回归、真实DEV事务及两个原生运行版本只读检查通过。重启和生产恢复明确待验收。",
+    "禁止静默错误：未经证明的前缀、代数漂移、请求重绑、越界日期及任一经济事实仍报错；无数据回填或静默回退。",
+    "禁止改变业务逻辑：保留原PIT租约、源计划、release、完整评分和排序语义、账户资金与持仓账本；共享评分算法不变。",
+    "禁止私增门禁审批：复用现有版本CAS、写入锁、源与账户身份和零经济事实合同，不新增用户审批。"
+  ],
+  "review_rounds": [
+    "第一轮：区分新任务准入与已冻结运行版本继承；补上请求覆盖冻结PIT身份的拒绝测试。",
+    "第二轮：检查正式恢复和endpoint语义合同；补上缺失租约、错误失败日、错误失败类型、七类经济事实及恢复后身份不变检查。",
+    "第三轮：现有DEV数据库实测原任务CAS和并发写入锁；两个真实原生release只读检查、实际9月文件和10月8日数据库边界读取通过。"
   ],
   "expected": "已冻结的合法运行版本保持原PIT身份；同代数且历史前缀受权威合同认可的日滚可继续。新任务、身份漂移和未证前缀仍严格拒绝。原失败任务经零副作用及身份校验后可正式recover。",
   "file_scope_contract": {
@@ -142,12 +155,20 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "backend_restart_required": true,
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/replays/lsreplay_1c19a02bf159ecbb/recovery",
+    "fresh_process_evidence": [
+      "Fresh Python process: seven directly related files -> 249 passed, 3 environment-dependent skipped; X:/AIstock_temp/LOCALSIM/canonical-pit-frozen-continuation-20261023-r1/related-matrix.xml",
+      "Fresh Python process: test_saved_pit_recovery_uses_original_job_cas_and_writer_lock_on_existing_dev -> 1 passed on guarded existing aistock_dev:5433; transaction rolled back, no production writes",
+      "Fresh Python process: actual-native-contract-receipt.json -> both original releases/recovery checks PASS with unchanged frozen identities and zero economic facts; actual September FILE_THEN_DATABASE source readers PASS, first_database_day=2026-10-08; no production replay started"
+    ],
+    "inference_basis": "actual_changed_file_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
