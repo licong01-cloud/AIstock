@@ -32,7 +32,7 @@
     "authorization": "User explicitly authorized the planned node1 remote API update and experiments in this QE long task.",
     "business_readback": {
       "migration_task": "qe_20261023_032933_601a",
-      "node_loop1_and_2_status": "running",
+      "node_loop1_and_2_status": "Initial submission receipts running; six loops later failed before training in unchanged minute coverage validator.",
       "one_start": "passed",
       "six_pending_configs_and_same_dataset_binding": "passed"
     },
@@ -87,7 +87,18 @@
       "linux_targeted_tests": "16 passed",
       "syntax": "passed"
     },
-    "state_root": "/home/lc999/rdagent_state"
+    "state_root": "/home/lc999/rdagent_state",
+    "research_execution_limit": {
+      "task_id": "qe_20261023_032933_601a",
+      "status": "failed_before_model_training",
+      "reason": "QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH",
+      "uncovered_instrument_days": 98,
+      "instruments": 4,
+      "raw_source_rows_exist_for_all_98_dates": true,
+      "old_new_qrun_sha_identical": true,
+      "no_experiment_retry": true,
+      "not_a_runtime_release_acceptance_claim": "API release identity and external state passed; full research data usability did not pass."
+    }
   },
   "file_scope_contract": {
     "actual_changed_files": [
