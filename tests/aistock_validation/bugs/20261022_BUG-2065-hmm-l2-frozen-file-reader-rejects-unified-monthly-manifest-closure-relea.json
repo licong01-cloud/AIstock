@@ -15,7 +15,22 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-22T16:24:10.732343Z",
+  "data_preflight_results": {
+    "business_acceptance": "source_asset_preflight_only_not_model_or_QE_acceptance",
+    "dataset_activation": "owned_by_data_preparation_window_not_performed_here",
+    "generation": "20260930-monthly-v2-unified-correction-4ab0b48642c3",
+    "manifest_identity": "522e8e35896e85fc9289ca2ceca1cd6127f4c7978a72766887c0429dc9b7f410",
+    "qlib_preflight_sha256": "7bd87cd6adf22727e4d09334b6ca60ee19586251487f8c9218c31a3f1fb49e78",
+    "windows_fresh_process": "PASS; 388.40s; 5343 PIT stocks, 64116 field files, benchmark numerical reads bounded through 2026-03-31; socket poison enabled; zero fit and no database access.",
+    "wsl_python310_fresh_process": "PASS; 29.76s; same manifest, metadata/component hashes and Qlib preflight identity as Windows; explicit task-worktree PYTHONPATH; socket poison enabled."
+  },
   "description": "RotationL1InputBundleError: cannot read JSON object: direct_monthly_state.json on 20260930-monthly-v2-correction-4ab0b48642c3",
+  "design_compliance_review": {
+    "business_logic_unchanged": "Existing L2 20-dimensional stock-fact computation, canonical taxonomy, model, windows, seeds, thresholds, suspension and provider-absence semantics unchanged.",
+    "no_silent_errors": "Unknown schemas, receipt/manifest/hash conflicts, missing components and mutable files fail closed; no old release, database or default-state fallback.",
+    "no_simplified_delivery": "Complete native source asset reader and identity readback; no manufactured state, substitute L1 input or placeholder production data.",
+    "no_unapproved_gates": "Uses native producer contracts and existing HMM validation; no resource gates, dependency installation, new approval gate or data-production changes."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -29,14 +44,23 @@
   ],
   "expected": "HMM L2 reader consumes explicitly selected shared monthly release via native manifest/closure with fail-closed identity and bounded reads, while preserving legacy direct-v3 and G2-A L1 boundaries.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/monthly_release_input.py",
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_monthly_release_input.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2065-hmm-l2-frozen-file-reader-rejects-unified-monthly-manifest-closure-relea.json"
+    ],
     "added_files": [
       "backend/services/hmm_risk/monthly_release_input.py",
       "backend/tests/hmm_risk/test_monthly_release_input.py"
     ],
     "changed_files": [
-      "backend/services/hmm_risk/rotation_l1_input_bundle.py"
+      "backend/services/hmm_risk/monthly_release_input.py",
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_monthly_release_input.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2065-hmm-l2-frozen-file-reader-rejects-unified-monthly-manifest-closure-relea.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/rotation_l1_input_bundle.py",
@@ -94,6 +118,7 @@
   "first_seen_at": "2026-10-22T16:24:10.732343Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "Add a HMM-only native monthly consumer adapter, strictly bind active/frozen manifest identity and closure receipts, verify consumed file pins and unchanged readback, reuse the existing stock-fact/H5/index kernel, retain PIT membership while checking physical Bin layout against provider quote spans. Preserve legacy direct-v3/G2-A validation and every model/feature/seed/window/threshold.",
   "fixed_at": null,
   "github_issue_number": 6595,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6595",
@@ -111,28 +136,12 @@
     "l0",
     "hmm_risk_pr_slice"
   ],
-  "risk_area": "bug",
-  "root_cause": "HMM frozen-file loader unconditionally required exporter direct-v3 state, legacy benchmark-only metadata and an unused L1 price panel. Native monthly releases instead authenticate files through their manifest/closure. Provider quote spans can also differ legitimately from PIT membership during suspensions.",
-  "fix_summary": "Add a HMM-only native monthly consumer adapter, strictly bind active/frozen manifest identity and closure receipts, verify consumed file pins and unchanged readback, reuse the existing stock-fact/H5/index kernel, retain PIT membership while checking physical Bin layout against provider quote spans. Preserve legacy direct-v3/G2-A validation and every model/feature/seed/window/threshold.",
   "review_rounds": [
     "Round 1: reproduced missing direct_monthly_state RED; native manifest/closure dispatch and strict identity/hash tests GREEN; real file readback exposed shared CSI provider codes, now admitted only in the provider catalog.",
     "Round 2: separated PIT membership from normal suspended quote spans; added active/frozen identity, rehashed receipt, traversal/duplicate/indirect path, concurrent file mutation and bounded future-value tests. Filesystem errors remain typed and no database/release fallback exists."
   ],
-  "data_preflight_results": {
-    "generation": "20260930-monthly-v2-unified-correction-4ab0b48642c3",
-    "manifest_identity": "522e8e35896e85fc9289ca2ceca1cd6127f4c7978a72766887c0429dc9b7f410",
-    "windows_fresh_process": "PASS; 388.40s; 5343 PIT stocks, 64116 field files, benchmark numerical reads bounded through 2026-03-31; socket poison enabled; zero fit and no database access.",
-    "wsl_python310_fresh_process": "PASS; 29.76s; same manifest, metadata/component hashes and Qlib preflight identity as Windows; explicit task-worktree PYTHONPATH; socket poison enabled.",
-    "qlib_preflight_sha256": "7bd87cd6adf22727e4d09334b6ca60ee19586251487f8c9218c31a3f1fb49e78",
-    "dataset_activation": "owned_by_data_preparation_window_not_performed_here",
-    "business_acceptance": "source_asset_preflight_only_not_model_or_QE_acceptance"
-  },
-  "design_compliance_review": {
-    "no_simplified_delivery": "Complete native source asset reader and identity readback; no manufactured state, substitute L1 input or placeholder production data.",
-    "no_silent_errors": "Unknown schemas, receipt/manifest/hash conflicts, missing components and mutable files fail closed; no old release, database or default-state fallback.",
-    "business_logic_unchanged": "Existing L2 20-dimensional stock-fact computation, canonical taxonomy, model, windows, seeds, thresholds, suspension and provider-absence semantics unchanged.",
-    "no_unapproved_gates": "Uses native producer contracts and existing HMM validation; no resource gates, dependency installation, new approval gate or data-production changes."
-  },
+  "risk_area": "bug",
+  "root_cause": "HMM frozen-file loader unconditionally required exporter direct-v3 state, legacy benchmark-only metadata and an unused L1 price panel. Native monthly releases instead authenticate files through their manifest/closure. Provider quote spans can also differ legitimately from PIT membership during suspensions.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/risk-l2/overview?run_id=88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26",
