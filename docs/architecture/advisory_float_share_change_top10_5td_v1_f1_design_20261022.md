@@ -1,7 +1,7 @@
 # 滞后流通比例变化 Top10 固定五交易日研究（F1）
 
-版本v1.0；2026-10-22；Advisory / model_first。
-状态：输入检查完成，设计待交付；尚无本候选监督fit、评价或经济确认。用户本轮选择“新信息来源：查重与输入验证后研究”；P4/P5已结束，本研究不改其结论或自动进入确认。
+版本v1.1；2026-10-22；Advisory / model_first。
+状态：设计#6593已合入131de01a49f5ef1a24b246516a762ce45327f14a并官方清理；源码直接验证及唯一六fit研究完成，INNER_NOT_SUPPORTED。完整结果见文末，源码PR/CI/合入另报，0经济确认。用户本轮选择“新信息来源：查重与输入验证后研究”；P4/P5已结束，本研究不改其结论或自动进入确认。
 
 ## Background / Goal / Feature Card
 
@@ -99,17 +99,47 @@ source.finance只读父prepared/train_finance，先投影KEY/H，再带H<=cutoff
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-481 | 本文Background/Feasibility | artifact: X:/AIstock_temp/ADVISORY/p6-float-share-change-20261022/screen_receipt.json；factor_audit.json | DESIGN_READY | none |
-| F-482 | inputs叶计划：measure/read_panel/attach | 计划：backend/tests/advisory_model_first/test_float_share_change_top10_5td_v1.py；本文Input | DESIGN_READY | none |
-| F-483 | core叶计划：training/fit/predict | 计划：backend/tests/advisory_model_first/test_float_share_change_top10_5td_v1.py；本文Model | DESIGN_READY | none |
-| F-484 | pipeline.finance/fit_pair、core.summarize计划 | 计划：backend/tests/advisory_model_first/test_float_share_change_top10_5td_v1.py；本文Evaluation | DESIGN_READY | none |
-| F-485 | pipeline.Study/preregister/run计划 | 计划：backend/tests/advisory_model_first/test_float_share_change_top10_5td_v1.py；本文Operations | DESIGN_READY | none |
-| F-486 | 本文Scope/真实结果计划 | 计划artifact: X:/AIstock_temp/ADVISORY/p6-float-share-change-20261022/validation-receipt.json；本文Test Plan | DESIGN_READY | none |
+| F-481 | inputs.screen_evidence/sources；本文Background | artifact: X:/AIstock_temp/ADVISORY/p6-float-share-change-20261022/screen_receipt.json；factor_audit.json | SOURCE_AND_REAL_PASS | none |
+| F-482 | inputs.measure/read_panel/attach/verify_screen_alignment | backend/tests/advisory_model_first/test_float_share_change_top10_5td_v1.py；真实30,500行、17,900行逐值对齐 | SOURCE_AND_REAL_PASS | none |
+| F-483 | core.training/fit/predict | backend/tests/advisory_model_first/test_float_share_change_top10_5td_v1.py；audit-receipt三折共同成熟训练与编码 | SOURCE_AND_REAL_PASS | none |
+| F-484 | pipeline.finance/fit_pair；core.summarize | backend/tests/advisory_model_first/test_float_share_change_top10_5td_v1.py；Execution Result | RESEARCH_COMPLETE_INNER_NOT_SUPPORTED | none |
+| F-485 | pipeline.Study/preregister/run | backend/tests/advisory_model_first/test_float_share_change_top10_5td_v1.py；audit-receipt十stage/十二claim | SOURCE_AND_REAL_PASS | none |
+| F-486 | 本文Scope/Execution Result | artifact: X:/AIstock_temp/ADVISORY/p6-float-share-change-20261022/validation-receipt.json；resource-preflight.json；audit-receipt.json | SCOPE_AND_REAL_PASS_NOT_ACTIVATED | none |
 
-本矩阵验收完整设计；源码和真实研究是下一交付阶段，当前未宣称实现通过。第一轮自审校正稀疏字段缩放、D-1发布时间和M13差别；第二轮核对完整人口、输入支持不当经济确认、六fit/无outer、正常UNKNOWN和模块边界。F1格式校验发现non_goals标题及计划证据路径不完整，已按实际设计状态修正，不绕过未实现状态。
+本矩阵现记录实际源码与研究验收，不把INNER_NOT_SUPPORTED当工程未完成或经济通过。设计阶段第一轮自审校正稀疏字段缩放、D-1发布时间和M13差别；第二轮核对完整人口、输入支持不当经济确认、六fit/无outer、正常UNKNOWN和模块边界。F1格式校验发现non_goals标题及计划证据路径不完整，已按实际设计状态修正。
 
 ## Non-goals / Risks / Production Gates / DESIGN-COMPLIANCE-001
 
 稀疏变化、极端比例变化、历史修订、供给代理含义不唯一、父包间接编码与重复开发消费都可能使候选无用；如实报告，不事后缩放截尾/择股/扩窗/改系数符号。输入支持不是盈利门，不另设父包准入。
 
-设计交付仅为完整设计；源码/真实研究尚未完成，不称模型可用。错误/UNKNOWN不隐去；固定业务/成本/人口不变；无新增设计外审批或门禁。本轮只Advisory离线，不改QE/HMM/LocalSIM/Selection/StrategyPackage/数据发布/公共workflow；无DB、DDL/DML、激活、依赖安装、后端/worker/WSL API/QE进程控制、生产回放。公告、流水线及启动脚本任务不恢复；backend_restart_required=false。
+设计初次交付仅为设计；后续源码/真实研究完成状态见Execution Result，不称模型可用。错误/UNKNOWN不隐去；固定业务/成本/人口不变；无新增设计外审批或门禁。本轮只Advisory离线，不改QE/HMM/LocalSIM/Selection/StrategyPackage/数据发布/公共workflow；无DB、DDL/DML、激活、依赖安装、后端/worker/WSL API/QE进程控制、生产回放。公告、流水线及启动脚本任务不恢复；backend_restart_required=false。
+
+## Execution Result / 唯一真实研究已结束
+
+源码producer `24193927a35e4fad0ede3dbbca5cf5ac07483d7c`，唯一run `advfloatsharetop10_48d325d23bc3806008edcdf3`。
+根：`X:/AIstock_temp/ADVISORY/p6-float-share-change-20261022/study/advfloatsharetop10_48d325d23bc3806008edcdf3`。
+result SHA256 `10572bf70e4f50b08327b8ae189a23aab6353c389ae11d9bc3b0ddd4d682b767`。
+
+完整305D/30,500原行、28,119唯一stock-D；30,430可算，70缺端点UNKNOWN均保留。实际源范围2024-06-26..2025-09-29、2,182原成员、1,326,174数值单元。prepare 8.483752秒；第一训练窗全部17,900行q与预检查逐值相同（含NaN/原因/原身份）。没有补齐或清理缺失人口。
+
+恰好6实际fit，三折两臂共同成熟训练行17,356/21,308/25,593，训练D174/214/257；共同编码逐项相等。总计算17.064441秒、峰值577,224,704bytes、终态目录2,699,979bytes。拟合前QE公开running查询ok=true/total0/has_more=false；WSL 28核、1分钟负载6.04、可用约46.94GB，实际仅2CPU线程/无GPU，没有服务控制。
+
+| 预声明评价项 | 实际结果 |
+|---|---|
+| 原评价人口 / 成熟 / 共同完整 | 126D、252包D、12,600原行；111成熟D、100三臂两包共同D，90.0901%覆盖 |
+| 原生 / matched / candidate净cohort均值 | 105.045200 / 103.034823 / 104.696345 bps |
+| candidate−原生产品主终点 | **−0.348855 bps**；描述性95%[-34.165146,35.963276]；MDE80=50.065016bps |
+| 三折原生增量 | −1.259627 / −20.333035 / +20.210550bps，仅一折正 |
+| candidate−matched解释项 | +1.661522bps；95%[-0.558162,4.353612]；三折+0.375888/−0.263595/+4.398619 |
+| 两包原生增量 | TCN −34.659507；LSTM +33.961797bps，两包等权，不择优 |
+| 原生 / matched干预 | 111/111成熟D；31/111成熟D（27.9279%）；原生覆盖两个季度 |
+| 尾部 / UNKNOWN | 最差10%cohort差+43.677558bps；原生326/candidate329未知槽，额外0.135135pp |
+| 编码尺度下新增系数 | −9.978418 / −10.971278 / −11.275650；描述性系数，不是因果或实际卖压证明 |
+
+主均值<=0，且只有一折正，按事前规则 **INNER_NOT_SUPPORTED**，精确候选停止。区间跨零且MDE较大，不证明真效应必为负或全部股本供给信息无效。matched小正点值/负系数/尾部改善不能替代超越原生的主终点，更不能把单包较好当新确认对象。
+
+第一轮源码审查核对端点时钟、缺失、float32身份、稀疏尺度与screen字段命名映射；第二轮核对共同监督/编码、模型JSON、预测屏障、停止与预算。14直接测试、Ruff、4/4 ownership、两个L0与F1通过。L0保留3项P2复杂度提醒：<=30,500行按D两端点、<=17,900行screen对齐和训练连接；均明确one_to_one/原索引/预算，无阻断。没有安装依赖或重复跑旧研究测试矩阵。
+
+新进程验收只读十个stage链、十二个fit claim及已生成输入/模型/预测，验证所有组50原候选/10选择、UNKNOWN原槽、完整原分数/身份、两臂训练KEY和共同编码相同；0新fit/市场读取/标签解码，未再次调用run补证。详父目录audit-receipt.json。
+
+本轮新增1信息状态候选、6监督fit；累计**219实际研究fit＋1历史index**，28,119确定性测量窗另计。0final/outer/sealed收益读取、0经济确认/角色启用/SQL/激活/生产回放/服务操作。原P4 INNER_SUPPORTED、P5当前冻结工件不推进确认保持；本轮不自动扩窗、改q或回选matched，不恢复公告/流水线/启动脚本。后继研究须另有明确新信息及事前合同，不从本结果择包/变参续试。
