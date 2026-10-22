@@ -4,6 +4,7 @@
     "backend/services/dataset_release/monthly_industry_history.py",
     "backend/services/dataset_release/monthly_build_resume.py",
     "backend/tests/dataset_release/test_monthly_build_resume.py",
+    "backend/tests/dataset_release/test_monthly_sector_mapping.py",
     "tests/aistock_validation/bugs/20261022_BUG-2060-completed-industry-repair-intent-rejects-later-validated-factor-correcti.json"
   ],
   "assigned_agent": null,
@@ -33,7 +34,8 @@
   "evidence_uris": [
     "Monthly operation dmr_63a313d97fd046a38d5a876265565014 BUILD attempt 290: completed industry commit identity or output changed.",
     "Fresh-process read-only provenance check: actual sealed industry projection matches completed intent; sector_data.h5 and static_factors.parquet match current journal signatures and committed fact-correction authority 7f45fbd0527046ebf0a497bdc79f9bdc3ff2b3f59922f1daa2a29a820e5aa7a1. No data or journal writes.",
-    "RED: completed history transaction retains stale intent. GREEN: 13 related tests passed; changed-file Ruff, compilation, git diff --check and nox l0 passed."
+    "RED: completed history transaction retains stale intent. GREEN: 13 related tests passed; changed-file Ruff, compilation, git diff --check and nox l0 passed.",
+    "First CI: 1954 passed, 86 skipped; 10 legacy sector-mapping tests still required the obsolete completed intent. Updated only those obsolete assertions, retaining original backup, output, native receipt and retry checks; all 11 parameter cases passed locally."
   ],
   "expected": "Recovery preserves the latest validated journal and retires only the exact completed intent; later authorized factor changes are recognized from frozen receipts, while unknown changes remain errors.",
   "file_scope_contract": {
