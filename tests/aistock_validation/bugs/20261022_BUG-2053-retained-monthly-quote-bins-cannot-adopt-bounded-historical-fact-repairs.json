@@ -39,33 +39,35 @@
   "expected": "Retain completed exports; adopt bounded frozen stock quote repairs with copy-on-write, matching daily QFQ basis, native receipt pins and real quote catalogs. Missing limit references remain explicit. Index and suspension corrections are separate existing monthly work, not claimed fixed by this BUG.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261022_BUG-2053-retained-monthly-quote-bins-cannot-adopt-bounded-historical-fact-repairs.json",
       "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/monthly_build_resume.py",
       "backend/services/dataset_release/monthly_legacy_validation.py",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_minute_repair.py",
       "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_quote_fact_correction.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py",
       "backend/tests/routers/test_monthly_dataset_releases.py",
-      "backend/services/dataset_release/monthly_quote_fact_correction.py"
+      "tests/aistock_validation/bugs/20261022_BUG-2053-retained-monthly-quote-bins-cannot-adopt-bounded-historical-fact-repairs.json"
     ],
     "added_files": [
       "backend/services/dataset_release/monthly_quote_fact_correction.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261022_BUG-2053-retained-monthly-quote-bins-cannot-adopt-bounded-historical-fact-repairs.json",
       "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/monthly_build_resume.py",
       "backend/services/dataset_release/monthly_legacy_validation.py",
       "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_minute_repair.py",
       "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_quote_fact_correction.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py",
       "backend/tests/routers/test_monthly_dataset_releases.py",
-      "backend/services/dataset_release/monthly_quote_fact_correction.py"
+      "tests/aistock_validation/bugs/20261022_BUG-2053-retained-monthly-quote-bins-cannot-adopt-bounded-historical-fact-repairs.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -199,8 +201,8 @@
   },
   "first_seen_at": "2026-10-22T01:55:58.872822Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e50464f1d08b8caf06baba878c5d22e7aa235b76",
+  "fixed_at": "2026-10-22T02:34:30Z",
   "github_issue_number": 6552,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6552",
   "last_seen_at": "2026-10-22T01:55:58.872822Z",
@@ -208,6 +210,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6553",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -232,6 +235,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -243,7 +247,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2053",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "121756b837bc1800",
+    "recorded_at": "2026-10-22T02:35:19.915907Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "eea4af5e6b5816d1137476cb379eca38b5a913bb",
+    "source_merge_commit": "e50464f1d08b8caf06baba878c5d22e7aa235b76",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6553",
+    "validation_evidence": [
+      "validation-receipt: id=65742b189a1f561d commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; 0 new blocking findings`",
+      "validation-receipt: id=954ab83c9481c587 commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_legacy_validation.py backend/tests/routers/test_monthly_dataset_releases.py -q` result=`152 passed before path relocation regression`",
+      "validation-receipt: id=d56665de9a10cf56 commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py -q` result=`9 passed including copied metadata and relocated original writer path; foreign source and value drift remain rejected`"
+    ],
+    "validation_evidence_digest": "0b50a5e0314aa08c3ac5ea99b7523969fd2532f5895015573ef5363cf9995248"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -252,6 +279,11 @@
     "fingerprint": "3b5dc1ebda687d017b690119",
     "source_event_id": "FE-20261022-3b5dc1ebda68"
   },
+  "validation_evidence": [
+    "validation-receipt: id=65742b189a1f561d commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; 0 new blocking findings`",
+    "validation-receipt: id=954ab83c9481c587 commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_legacy_validation.py backend/tests/routers/test_monthly_dataset_releases.py -q` result=`152 passed before path relocation regression`",
+    "validation-receipt: id=d56665de9a10cf56 commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py -q` result=`9 passed including copied metadata and relocated original writer path; foreign source and value drift remain rejected`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
