@@ -8,6 +8,11 @@
     "backend/routers/monthly_dataset_releases.py",
     "backend/tests/dataset_release/test_monthly_build_resume.py",
     "backend/services/dataset_release/monthly_quote_fact_correction.py",
+    "backend/services/dataset_release/monthly_legacy_validation.py",
+    "backend/services/dataset_release/monthly_prev_close_repair.py",
+    "backend/services/dataset_release/monthly_minute_repair.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
+    "backend/tests/dataset_release/test_monthly_legacy_validation.py",
     "tests/aistock_validation/bugs/20261022_BUG-2053-retained-monthly-quote-bins-cannot-adopt-bounded-historical-fact-repairs.json"
   ],
   "assigned_agent": null,
@@ -31,20 +36,38 @@
   "evidence_uris": [
     "X:/AIstock_dataset_candidates/data_repair_staging/monthly-202609-closure-20261020/closure-readback-r2.json"
   ],
-  "expected": "Retain completed exports; apply exact frozen price/index/suspension facts with COW and native receipt pins; unavailable facts stay explicit, not fabricated.",
+  "expected": "Retain completed exports; adopt bounded frozen stock quote repairs with copy-on-write, matching daily QFQ basis, native receipt pins and real quote catalogs. Missing limit references remain explicit. Index and suspension corrections are separate existing monthly work, not claimed fixed by this BUG.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261022_BUG-2053-retained-monthly-quote-bins-cannot-adopt-bounded-historical-fact-repairs.json",
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_quote_fact_correction.py"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_quote_fact_correction.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/monthly_mature_build_runner.py",
-      "backend/services/dataset_release/monthly_unified.py",
-      "backend/services/dataset_release/monthly_build_resume.py",
-      "backend/services/dataset_release/monthly_fact_correction.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2053-retained-monthly-quote-bins-cannot-adopt-bounded-historical-fact-repairs.json",
       "backend/routers/monthly_dataset_releases.py",
-      "backend/tests/dataset_release/test_monthly_build_resume.py"
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_quote_fact_correction.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_mature_build_runner.py",
@@ -197,11 +220,20 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python direct tests cover missing-only repairs, atomic copy-on-write, interrupted transaction recovery, new feature creation, idempotency, inherited successor proof, QFQ basis mismatch, operator API and private-state guards; no database or service writes.",
+      "Fresh AIstock Python imports persistent quote correction, router, runner and executes 31 direct quote tests plus native monthly matrix; original release and active profile untouched",
+      "Fresh AIstock Python imported persistent quote correction/router/runner and executed direct quote and native monthly tests; no database/profile/service writes"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",

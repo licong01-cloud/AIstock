@@ -162,13 +162,15 @@ def validate_qlib_month(
         not isinstance(native, Mapping) or not isinstance(sealed, Mapping)
         or native.get("schema_version") != "aistock_qlib_bounded_update_receipt_v1"
         or native.get("predecessor_manifest_sha256") != predecessor_manifest_sha256
-        or Path(str(native.get("target_root", ""))).absolute() != provider
         or native.get("historical_content_revalidated") is not False
         or sealed.get("schema_version") != "aistock_monthly_native_qlib_prefix_and_delta_v1"
         or sealed.get("dataset") != dataset
         or sealed.get("predecessor_manifest_sha256") != predecessor_manifest_sha256
     ):
         raise MonthlyLegacyValidationError("native month writer binding differs")
+    # The native target_root records where these bytes were originally
+    # written. A retained correction may relocate them without changing their
+    # source, prefix or content. Validate actual files below, not that old path.
     prepared = cas.get_json_bounded(sealed.get("month_preparation_ref"), max_bytes=16 * 1024 * 1024)
     if (
         prepared.get("schema_version") != "aistock_monthly_legacy_qlib_operation_v1"
@@ -191,19 +193,30 @@ def validate_qlib_month(
             raise MonthlyLegacyValidationError("native month output changed after writing")
         pins[path.relative_to(root).as_posix()] = {"sha256": sha256, "size": size, "signature": signature}
 
-    for relative, sha_key, stat_key in (
-        (f"calendars/{frequency}.txt", "calendar_sha256", "calendar_signature"),
-        ("instruments/all.txt", "instruments_sha256", "instruments_signature"),
+    for relative, sha_key in (
+        (f"calendars/{frequency}.txt", "calendar_sha256"),
+        ("instruments/all.txt", "instruments_sha256"),
     ):
         path = provider / relative
         _plain_chain(path)
         before = _signature(path)
         raw = path.read_bytes()
+        fact = materialization.get('quote_fact_correction', {})
+        if frequency == 'day' and relative == 'instruments/all.txt' and fact.get('catalog_after_ref'):
+            from .monthly_quote_fact_correction import daily_catalog_payload
+            original = cas.get_bytes(cas.validate_reference_metadata(fact['catalog_before_ref']))
+            if hashlib.sha256(original).hexdigest() != native.get(sha_key):
+                raise MonthlyLegacyValidationError('daily quote catalog lost original writer identity')
+            expected = daily_catalog_payload(original, fact['files'], read_calendar(provider/'calendars/day.txt'), cas)
+            if raw != expected or hashlib.sha256(raw).hexdigest() != fact['catalog_after_ref']['sha256']:
+                raise MonthlyLegacyValidationError('daily quote catalog differs from bounded real quotes')
+            record(path, sha256=fact['catalog_after_ref']['sha256'], size=len(raw), signature=list(before))
+            continue
         physical_catalog = frequency == "1min" and relative == "instruments/all.txt"
         quote_authority = materialization.get("quote_catalog_repair", native.get("quote_catalog")) if physical_catalog else None
         expected_hash = quote_authority.get("sha256") if isinstance(quote_authority, Mapping) else native.get(sha_key)
         record(path, sha256=expected_hash if physical_catalog else native.get(sha_key), size=len(raw),
-               signature=list(before) if physical_catalog else native.get(stat_key))
+               signature=list(before))
         if _signature(path) != before or hashlib.sha256(raw).hexdigest() != (expected_hash if physical_catalog else native.get(sha_key)):
             raise MonthlyLegacyValidationError("native month calendar/catalog bytes differ")
         source_ref = prepared["calendar_ref" if relative.startswith("calendars/") else "instruments_ref"]
@@ -224,6 +237,8 @@ def validate_qlib_month(
     corrected_pins, corrected_month = correction_pins(materialization, provider=provider, cas=cas)
     from .monthly_minute_repair import correction_pins as minute_correction_pins
     corrected_pins.update(minute_correction_pins(materialization, provider=provider, cas=cas))
+    from .monthly_quote_fact_correction import correction_pins as quote_correction_pins
+    corrected_pins.update(quote_correction_pins(materialization, provider=provider, cas=cas))
     month_start = cutoff.replace(day=1).isoformat()
     if calendar[-1][:10] != cutoff.isoformat():
         raise MonthlyLegacyValidationError("native month calendar cutoff differs")
@@ -316,6 +331,7 @@ def validate_qlib_month(
         "status": "PASS", "validation_scope": "month_delta", "cutoff": cutoff.isoformat(),
         "predecessor_manifest_sha256": predecessor_manifest_sha256, "source_bundle_sha256": source_bundle_sha256,
         "validated_rows": validated_rows, "value_comparison_count": comparisons,
+        "original_writer_target_root": native.get("target_root"),
         "historical_values_read": 0, "verified_output_files": pins,
         "publication_allowed": False, "database_read": False, "database_write": False,
     }
