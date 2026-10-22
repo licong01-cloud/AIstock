@@ -1,0 +1,277 @@
+{
+  "actual": "CandidateConsumerSmokeError: normalized index month dates/values differ; outer supervisor reports receipt differs without the root error.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/candidate_consumer_smoke.py",
+    "backend/tests/dataset_release/test_candidate_consumer_smoke.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "backend/tests/test_aistock_guardrail_scan.py",
+    "tests/aistock_validation/bugs/20261022_BUG-2061-monthly-index-smoke-rejects-valid-full-history-corrected-parquet.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2061",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-22T05:04:33.144429Z",
+  "description": "CandidateConsumerSmokeError: normalized index month dates/values differ; outer supervisor reports receipt differs without the root error.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261022-711e878c9cbe",
+      "timestamp": "2026-10-22T05:04:33.144429Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:\\AIstock_dataset_release_control\\attempt_runs\\dmr_63a313d97fd046a38d5a876265565014-build-291\\build-consumer-smoke\\logs\\stderr.000001.log"
+  ],
+  "expected": "Index consumer reads only target-month normalized rows from either month-only or full-history shared Parquet, verifies actual month keys/values and cutoff, and does not scan or reject historical values.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/candidate_consumer_smoke.py",
+      "backend/tests/dataset_release/test_candidate_consumer_smoke.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261022_BUG-2061-monthly-index-smoke-rejects-valid-full-history-corrected-parquet.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/candidate_consumer_smoke.py",
+      "backend/tests/dataset_release/test_candidate_consumer_smoke.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "tests/aistock_validation/bugs/20261022_BUG-2061-monthly-index-smoke-rejects-valid-full-history-corrected-parquet.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/candidate_consumer_smoke.py",
+        "backend/tests/dataset_release/test_candidate_consumer_smoke.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/candidate_consumer_smoke.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_candidate_consumer_smoke.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/candidate_consumer_smoke.py",
+        "backend/tests/dataset_release/test_candidate_consumer_smoke.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/candidate_consumer_smoke.py",
+      "backend/tests/dataset_release/test_candidate_consumer_smoke.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/candidate_consumer_smoke.py",
+      "backend/tests/dataset_release/test_candidate_consumer_smoke.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py"
+    ]
+  },
+  "first_seen_at": "2026-10-22T05:04:33.144429Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6576,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6576",
+  "last_seen_at": "2026-10-22T05:04:33.144429Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_results": [
+    "第一轮：仅修消费读取范围，保留月内 schema、唯一键、finite、raw/normalized键值、金额单位和截止日验证；不改变真实行情或消费者业务合同。",
+    "第二轮：真实 Parquet 的历史前缀通过；月内非有限值、重复键、缺行和价格错误均拒绝；文件字节不变。运行态路由补登记一个精确既有来源，不降级为无运行影响。",
+    "第三轮：Ubuntu fresh process 对保留的 attempt-289 候选真实 Qlib 日线、240根分钟、12指数、CSI300及HMM指数读取全部PASS；不写库、不激活、不控制服务。",
+    "DESIGN-COMPLIANCE-001四项逐条通过：无简化交付、无静默错误、不改业务语义、不新增门禁或审批。主进程加载验证仍待用户后续重启，与候选fresh-process消费通过分别报告。"
+  ],
+  "risk_area": "bug",
+  "root_cause": "指数更正生产器按正式合同输出 frozen_history_and_month_delta；消费 smoke 未做月窗口下推过滤，却要求文件每一行均为本月。另发现共享 smoke 单文件改动缺少既有 monthly worker process probe 的 required_source_globs 锚点。",
+  "ci_compatibility_fix": "CI 39726943134 中655项通过，两条既存启动器文本断言仍要求旧启动命令和旧errorlevel分支；补齐其对主线已批准UTF-8参数及显式Conda退出码的断言，不修改启动器或任何运行进程。",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "2026-10-22 Ubuntu rdagent-gpu fresh process imported this worktree candidate_consumer_smoke.py and read retained operation dmr_63a313d97fd046a38d5a876265565014 attempt-289 real candidate: status PASS; daily12 finite,minute240 rows/2880 finite,index12/144 finite,CSI300 return finite,HMM September21 rows/raw-normalized match; historical_values_validated=0,database_writes=0,production_pointer_changes=0,service_process_controls=0."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Monthly index smoke rejects valid full-history corrected Parquet",
+  "trigger_condition": {
+    "fingerprint": "711e878c9cbe9b0106d91096",
+    "source_event_id": "FE-20261022-711e878c9cbe"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
