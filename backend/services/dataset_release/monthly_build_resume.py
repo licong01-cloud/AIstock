@@ -190,6 +190,8 @@ class MonthlyBuildResume:
                 self.record = recover_factor_repairs(root=staging_root, journal=self.path, record=self.record, cas=cas)
                 from .monthly_quote_fact_correction import recover_quote_repairs
                 self.record = recover_quote_repairs(root=staging_root, journal=self.path, record=self.record, cas=cas)
+                from .monthly_index_repair import recover_index_repairs
+                self.record = recover_index_repairs(root=staging_root, journal=self.path, record=self.record, cas=cas)
                 for relative, expected in self.record["files"].items():
                     if not isinstance(relative, str) or not relative or any(token in relative for token in ("\\", ":", "\x00")) or ".." in Path(relative).parts or Path(relative).is_absolute():
                         raise MonthlyBuildResumeError("retained data file escaped staging")

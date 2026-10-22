@@ -1,9 +1,11 @@
 """Startup safety contracts; never launch an application or inspect live services."""
 from contextlib import nullcontext
-import base64
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import json
+import os
 from pathlib import Path
+from threading import Barrier
 from unittest.mock import Mock
 
 import pytest
@@ -12,6 +14,122 @@ SPEC = importlib.util.spec_from_file_location("windows_start", Path(__file__).re
 launcher = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(launcher)
 SHA = "a" * 40
+
+
+def test_all_service_tabs_are_requested_before_any_slow_setup():
+    script = (launcher.ROOT / "start_all_ai_stock.bat").read_text(encoding="utf-8")
+    dispatch = next(line for line in script.splitlines() if line.startswith("wt.exe "))
+    assert dispatch.startswith("wt.exe -w 0 new-tab")
+    assert dispatch.count("new-tab --title") == 3 and dispatch.count(" ; ") == 2
+    for service, title in (("tdx", "TDX"), ("backend", "Backend"), ("frontend", "Frontend")):
+        assert f'--title "AIstock {title}"' in dispatch
+        assert f'cmd.exe /d /k call "%~f0" --service {service}' in dispatch
+    assert script.index(dispatch) < script.index("activate AIstock")
+    assert 'if /i "%~1"=="--check" if "%~2"=="" goto run' in script
+    for forbidden in ("taskkill", "Stop-Process", "--reload", "go run", "pip install"):
+        assert forbidden not in script
+
+
+def test_only_backend_activates_and_activation_temp_is_private():
+    all_script = (launcher.ROOT / "start_all_ai_stock.bat").read_text(encoding="utf-8")
+    bypass = 'if /i "%~1"=="--service" if not "%~2"=="backend" goto launch'
+    assert all_script.index(bypass) < all_script.index('call "%AISTOCK_CONDA_BAT%" activate AIstock')
+    assert 'if /i "%~1"=="--check" goto launch' in all_script
+    for name in ("start_all_ai_stock.bat", "start_backend.bat"):
+        script = (launcher.ROOT / name).read_text(encoding="utf-8")
+        activation = script.index('call "%AISTOCK_CONDA_BAT%" activate AIstock')
+        assert script.index("uuid.uuid4().hex") < script.index('mkdir "%AISTOCK_CONDA_TEMP%"') < activation
+        assert 'set "AISTOCK_CONDA_ID="' in script and 'if not defined AISTOCK_CONDA_ID exit /b 1' in script
+        for variable in ("TEMP", "TMP", "TMPDIR"):
+            assert script.index(f'set "{variable}=%AISTOCK_CONDA_TEMP%"') < activation
+            assert script.index(f'set "{variable}=%AISTOCK_OLD_{variable}%"') > activation
+        assert script.index('set "AISTOCK_CONDA_EXIT=%errorlevel%"') > activation
+        assert 'if not "%AISTOCK_CONDA_EXIT%"=="0"' in script
+        assert 'rmdir "%AISTOCK_CONDA_TEMP%" 2>nul' in script
+        assert "rmdir /s" not in script.lower()
+        assert 'if /i "%~1"=="--check-env" goto check_env' in script
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Concurrent CMD activation isolation is Windows-only")
+@pytest.mark.parametrize("activation_exit", [0, 7])
+def test_real_cmd_isolates_activation_and_preserves_failure(tmp_path, activation_exit):
+    fake_conda = tmp_path / "conda.bat"
+    fake_conda.write_text(f'@echo off\nset "CONDA_PREFIX={launcher.sys.prefix}"\nexit /b {activation_exit}\n')
+    scripts = []
+    for name in ("start_all_ai_stock.bat", "start_backend.bat"):
+        body = (launcher.ROOT / name).read_text()
+        for key, value in (("AISTOCK_CONDA_BAT", str(fake_conda)), ("AISTOCK_BACKEND_PYTHON", launcher.sys.executable)):
+            assignment = next(line for line in body.splitlines() if line.startswith(f'set "{key}='))
+            body = body.replace(assignment, f'set "{key}={value}"')
+        script = tmp_path / name
+        script.write_text(body)
+        scripts.append(script)
+    env = {**os.environ, "RANDOM": "11067"}  # Deliberately identical across processes.
+    def check(script):
+        return launcher.subprocess.run(["cmd.exe", "/d", "/c", "call", str(script), "--check-env"],
+                                       env=env, input="\n", capture_output=True, encoding="utf-8", errors="replace", timeout=15)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        results = list(pool.map(check, [*scripts, scripts[0]]))
+    paths = [next(line for line in result.stdout.splitlines() if line.startswith("Conda activation temp:")).split('"')[1]
+             for result in results]
+    assert len(set(paths)) == 3 and all(not Path(path).exists() for path in paths)
+    for result in results:
+        assert (result.returncode == 0) == (activation_exit == 0), result.stdout + result.stderr
+        assert ("AIstock environment ready:" in result.stdout) == (activation_exit == 0)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real CMD dispatch contract is Windows-only")
+def test_real_cmd_dispatches_three_tabs_once_without_starting_services(tmp_path):
+    compiler = Path(os.environ["WINDIR"]) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+    if not compiler.is_file():
+        pytest.skip("Existing Windows .NET compiler unavailable; never install dependencies")
+    # A recording executable stands in for WT. Neither it nor --check opens UI/services.
+    source = tmp_path / "Capture.cs"
+    source.write_text('class Capture { static void Main(string[] a) { '
+                      'System.IO.File.WriteAllLines(System.Environment.GetEnvironmentVariable("TAB_ARGS"), a); } }')
+    launcher.subprocess.run([str(compiler), "/nologo", f"/out:{tmp_path / 'wt.exe'}", str(source)],
+                            check=True, capture_output=True)
+    root = tmp_path / "space & \u4e2d"
+    root.mkdir()
+    script = root / "start_all_ai_stock.bat"
+    script.write_bytes((launcher.ROOT / script.name).read_bytes())
+    args_file = tmp_path / "args.txt"
+    env = {**os.environ, "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"], "TAB_ARGS": str(args_file)}
+    result = launcher.subprocess.run(["cmd.exe", "/d", "/c", "call", str(script)], env=env,
+                                     capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    args = args_file.read_text(encoding="utf-8-sig").splitlines()
+    assert args[:2] == ["-w", "0"]
+    assert args.count("new-tab") == 3 and args.count(";") == 2
+    assert args.count(str(script)) == 3
+    assert [args[i + 1] for i, arg in enumerate(args) if arg == "--service"] == list(launcher.PORTS)
+    invalid = launcher.subprocess.run(["cmd.exe", "/d", "/c", "call", str(script), "--service", "invalid"],
+                                      env=env, capture_output=True, timeout=15)
+    assert invalid.returncode == 1
+    # Real Go/Node dispatch must not even require an existing Conda BAT.
+    body = script.read_text()
+    for key, value in (("AISTOCK_CONDA_BAT", str(tmp_path / "missing-conda.bat")),
+                       ("AISTOCK_BACKEND_PYTHON", str(tmp_path / "wt.exe"))):
+        assignment = next(line for line in body.splitlines() if line.startswith(f'set "{key}='))
+        body = body.replace(assignment, f'set "{key}={value}"')
+    script.write_text(body)
+    for service in ("tdx", "frontend"):
+        result = launcher.subprocess.run(["cmd.exe", "/d", "/c", "call", str(script), "--service", service],
+                                         env=env, capture_output=True, timeout=15)
+        assert result.returncode == 0, result.stderr
+        assert args_file.read_text(encoding="utf-8-sig").splitlines()[-2:] == ["--service", service]
+
+
+def test_backend_only_tab_launcher_never_controls_other_services():
+    script = (launcher.ROOT / "start_backend.bat").read_text(encoding="utf-8")
+    assert 'wt.exe -w 0 new-tab --title "AIstock Backend"' in script
+    assert 'cmd.exe /d /k call "%~f0" --child' in script
+    assert '"%AISTOCK_BACKEND_PYTHON%" -X utf8 -m uvicorn backend.main:app' in script
+    assert 'call "%AISTOCK_CONDA_BAT%" activate AIstock' in script
+    assert 'socket.SO_EXCLUSIVEADDRUSE' in script and "('0.0.0.0',8001)" in script
+    assert script.index('wt.exe -w 0') < script.index('activate AIstock')
+    for forbidden in ('taskkill', 'Stop-Process', '--reload', 'go run', 'go build', 'npm', '19080', '3000'):
+        assert forbidden not in script
 
 
 def test_inventory_encoding_is_explicit_and_missing_output_is_not_free(monkeypatch):
@@ -114,6 +232,43 @@ def test_old_process_exit_then_absent_start_is_not_a_duplicate(tmp_path, monkeyp
         with pytest.raises(RuntimeError, match="Another one-click startup"):
             with launcher.startup_lock():
                 pytest.fail("concurrent launcher acquired the lock")
+    with launcher.startup_lock("backend"), launcher.startup_lock("tdx"):
+        with pytest.raises(RuntimeError, match="Another one-click startup"):
+            with launcher.startup_lock("backend"):
+                pytest.fail("duplicate backend acquired its service lock")
+
+
+@pytest.mark.parametrize("service", launcher.PORTS)
+def test_service_tab_selects_only_its_service(tmp_path, monkeypatch, service):
+    monkeypatch.setattr(launcher, "ROOT", tmp_path)
+    monkeypatch.setattr(launcher, "RUNTIME", tmp_path / "runtime")
+    launcher.RUNTIME.mkdir()
+    (tmp_path / ".env").touch()
+    monkeypatch.setattr(launcher, "git_head", lambda: SHA)
+    monkeypatch.setattr(launcher, "inventory", lambda: {})
+    state = Mock(return_value="absent")
+    monkeypatch.setattr(launcher, "state", state)
+    monkeypatch.setattr(launcher, "startup_lock", nullcontext)
+    launch, wait = Mock(), Mock(return_value=SHA)
+    monkeypatch.setattr(launcher, "launch", launch)
+    monkeypatch.setattr(launcher, "wait_ready", wait)
+    result = launcher.start(service=service)
+    assert list(result["services"]) == [service]
+    state.assert_called_once_with(service, {})
+    assert launch.call_count == wait.call_count == 1
+    assert launch.call_args.args[0] == wait.call_args.args[0] == service
+
+
+def test_tab_cli_passes_exact_service_and_rejects_mixed_child_mode(monkeypatch):
+    start, child = Mock(return_value={}), Mock()
+    monkeypatch.setattr(launcher, "start", start)
+    monkeypatch.setattr(launcher, "child", child)
+    monkeypatch.setattr(launcher.sys, "argv", ["start_ai_stock.py", "--service", "backend"])
+    assert launcher.main() == 0
+    start.assert_called_once_with(False, [], "backend")
+    monkeypatch.setattr(launcher.sys, "argv", ["start_ai_stock.py", "--service", "backend", "--child", "tdx"])
+    assert launcher.main() == 1
+    child.assert_not_called()
 
 
 def test_absent_services_launch_once_and_bind_expected_revisions(tmp_path, monkeypatch):
@@ -128,14 +283,20 @@ def test_absent_services_launch_once_and_bind_expected_revisions(tmp_path, monke
     monkeypatch.setattr(launcher, "startup_lock", nullcontext)
     events = []
     launch = Mock(side_effect=lambda service, _: events.append(("launch", service)))
-    wait = Mock(side_effect=lambda service, *_: events.append(("ready", service)) or SHA)
+    barrier = Barrier(3)
+    def ready(service, *_):
+        barrier.wait(timeout=5)  # Serial readiness would fail, not take 3 x 120s.
+        events.append(("ready", service))
+        return SHA
+    wait = Mock(side_effect=ready)
     monkeypatch.setattr(launcher, "launch", launch)
     monkeypatch.setattr(launcher, "wait_ready", wait)
     assert len(launcher.start()["services"]) == launch.call_count == 3
-    assert isinstance(wait.call_args_list[0].args[1], Path)
-    assert [c.args[1] for c in wait.call_args_list[1:]] == [SHA, None]
-    assert events == [("launch", "tdx"), ("launch", "backend"), ("launch", "frontend"),
-                      ("ready", "tdx"), ("ready", "backend"), ("ready", "frontend")]
+    expected = {call.args[0]: call.args[1] for call in wait.call_args_list}
+    assert isinstance(expected["tdx"], Path)
+    assert expected["backend"] == SHA and expected["frontend"] is None
+    assert events[:3] == [("launch", "tdx"), ("launch", "backend"), ("launch", "frontend")]
+    assert set(events[3:]) == {("ready", service) for service in launcher.PORTS}
 
 
 def test_cached_tdx_is_executed_without_build_or_receipt_relabel(tmp_path, monkeypatch):
@@ -155,7 +316,14 @@ def test_cached_tdx_is_executed_without_build_or_receipt_relabel(tmp_path, monke
     saved = json.loads((tmp_path / "tdx-executable.json").read_text())
     assert saved == {**receipt, "build_action": "reused"}
     monkeypatch.setattr(helper, "build_fingerprint", lambda _: "changed")
-    with pytest.raises(RuntimeError, match="missing or stale.*Build explicitly"):
+    build = Mock(return_value={**receipt, "input_sha256": "changed", "build_action": "built"})
+    monkeypatch.setattr(helper, "ensure_binary", build)
+    assert launcher.cached_tdx_command(tmp_path)[0] == [str(binary)]
+    build.assert_called_once()
+    assert build.call_args.args[1]["AISTOCK_TDX_ENV_FILE"] == str((launcher.ROOT / ".env").resolve())
+    assert json.loads((tmp_path / "tdx-executable.json").read_text())["build_action"] == "built"
+    build.side_effect = RuntimeError("offline compilation failed")
+    with pytest.raises(RuntimeError, match="compilation failed"):
         launcher.cached_tdx_command(tmp_path)
     binary.write_bytes(b"damaged executable")
     with pytest.raises(RuntimeError, match="incomplete or invalid"):
@@ -228,33 +396,39 @@ def test_child_supervisor_preserves_unicode_log_and_nonzero_exit(tmp_path, monke
 
 
 @pytest.mark.parametrize("terminal", [True, False])
-def test_terminal_tabs_and_console_share_absolute_utf8_supervisor(tmp_path, monkeypatch, terminal):
-    monkeypatch.setenv("WT_SESSION", "present")
-    monkeypatch.setenv("WT_WINDOW_ID", "7")
-    monkeypatch.setattr(launcher.shutil, "which", lambda _: "wt.exe" if terminal else None)
+def test_services_inherit_original_console_without_window_routing(tmp_path, monkeypatch, terminal):
+    monkeypatch.setenv("WT_SESSION", "present" if terminal else "")
+    monkeypatch.setenv("WT_WINDOW_ID", "0")  # Neither a stale override nor MRU may reroute.
     run, popen = Mock(), Mock()
     monkeypatch.setattr(launcher.subprocess, "run", run)
     monkeypatch.setattr(launcher.subprocess, "Popen", popen)
     directory = tmp_path / "space ' \u4e2d"
-    launcher.launch("backend", directory)
-    invoked = run if terminal else popen
-    args = invoked.call_args.args[0]
-    script = base64.b64decode(args[-1]).decode("utf-16-le")
-    assert "'-X' 'utf8'" in script and "'--child' 'backend'" in script
-    assert str(directory).replace("'", "''") in script
-    assert launcher.sys.executable.replace("'", "''") in script
-    assert "-NoProfile" in args and "-NoExit" in args
-    if terminal:
-        assert args[:4] == ["wt.exe", "-w", "7", "new-tab"]
-        assert invoked.call_args.kwargs["check"] is True
-        popen.assert_not_called()
-        run.side_effect = launcher.subprocess.CalledProcessError(1, args)
-        with pytest.raises(launcher.subprocess.CalledProcessError):
-            launcher.launch("backend", directory)
-        popen.assert_not_called()  # A failed tab dispatch never launches a duplicate fallback.
-    else:
-        assert invoked.call_args.kwargs["creationflags"] == launcher.subprocess.CREATE_NEW_CONSOLE
-        run.assert_not_called()
+    assert launcher.launch("backend", directory) is popen.return_value
+    args = popen.call_args.args[0]
+    assert args == [launcher.sys.executable, "-X", "utf8", str(Path(launcher.__file__).resolve()),
+                    "--child", "backend", "--log-dir", str(directory)]
+    assert popen.call_args.kwargs == {"cwd": launcher.ROOT}
+    run.assert_not_called()
+    popen.side_effect = OSError("process dispatch failed")
+    with pytest.raises(OSError, match="dispatch failed"):
+        launcher.launch("backend", directory)
+    assert popen.call_count == 2  # No fallback or retry into any other window.
+
+
+def test_parent_remains_foreground_for_its_children_even_after_readiness_failure(monkeypatch):
+    monkeypatch.setattr(launcher.sys, "argv", ["start_ai_stock.py"])
+    processes = [Mock(), Mock()]
+    for process, code in zip(processes, [7, 0]):
+        process.wait.return_value = code
+    def start(check, children):
+        children.extend(processes)
+        raise RuntimeError("one service failed readiness")
+    monkeypatch.setattr(launcher, "start", start)
+    assert launcher.main() == 1
+    for process in processes:
+        process.wait.assert_called_once_with()
+        process.kill.assert_not_called()
+        process.terminate.assert_not_called()
 
 
 def test_readiness_closed_port_polls_are_cheap_but_final_ownership_is_required(tmp_path, monkeypatch):
@@ -271,3 +445,14 @@ def test_readiness_closed_port_polls_are_cheap_but_final_ownership_is_required(t
     inventory.return_value = snapshot("backend", command="foreign.exe")
     with pytest.raises(RuntimeError, match="unknown process"):
         launcher.wait_ready("backend", SHA, tmp_path)
+
+
+def test_waiting_for_build_has_visible_bounded_progress(tmp_path, monkeypatch, capsys):
+    clock = [0.0]
+    monkeypatch.setattr(launcher.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(launcher.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
+    with pytest.raises(RuntimeError, match="readiness timeout"):
+        launcher.wait_ready("tdx", tmp_path / "tdx-executable.json", tmp_path, timeout=6)
+    output = capsys.readouterr().out
+    assert "0s/6s" in output and "5s/6s" in output and "build receipt" in output
+    assert clock[0] == 6
