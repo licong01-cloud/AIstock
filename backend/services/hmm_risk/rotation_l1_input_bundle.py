@@ -748,6 +748,7 @@ def _read_qlib_stock_rows(
     symbol: str,
     calendar: Sequence[date],
     active_spans: Sequence[tuple[date, date]],
+    suspension_keys: frozenset[tuple[date, str]] = frozenset(),
     window_start: date = SOURCE_START,
     window_end: date = SOURCE_END,
 ) -> np.ndarray:
@@ -785,11 +786,18 @@ def _read_qlib_stock_rows(
         if window_start <= day <= window_end
         and any(span_start <= day <= span_end for span_start, span_end in active_spans)
     ]
-    positions = [index for index in expected_positions if start_index <= index < start_index + length]
-    if positions != expected_positions:
-        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, f"Qlib stock feature omits active span dates: {symbol}")
-    calendar_positions = np.asarray(positions, dtype=np.int64)
-    local_positions = calendar_positions - start_index
+    # Selection PIT eligibility can outlive the physical quote range during a
+    # full-day suspension. Keep those exact, authority-backed dates as quote NA;
+    # neither truncate the PIT span nor invent a quote. Unproven gaps still fail.
+    for index in expected_positions:
+        if not start_index <= index < start_index + length and (calendar[index], symbol) not in suspension_keys:
+            raise _fail(
+                REASON_SOURCE_RANGE_INCOMPLETE,
+                f"Qlib stock feature omits active span dates: {symbol}/{calendar[index]}",
+            )
+    calendar_positions = np.asarray(expected_positions, dtype=np.int64)
+    physical = (calendar_positions >= start_index) & (calendar_positions < start_index + length)
+    local_positions = calendar_positions[physical] - start_index
     result = np.zeros(len(calendar_positions), dtype=_QLIB_SOURCE_DTYPE)
     result["trade_date"] = np.fromiter(
         (
@@ -801,10 +809,13 @@ def _read_qlib_stock_rows(
     )
     result["symbol"] = _ascii(symbol, "qlib.symbol", width=16)
     for field in QLIB_STOCK_FIELDS:
+        result[field] = np.nan
+        if not len(local_positions):
+            continue
         path, _field_start, field_length = inventories[field]
         mapped = np.memmap(path, dtype="<f4", mode="r", offset=4, shape=(field_length,))
         try:
-            result[field] = np.asarray(mapped[local_positions], dtype="<f4")
+            result[field][physical] = np.asarray(mapped[local_positions], dtype="<f4")
         finally:
             del mapped
     return result
@@ -2308,6 +2319,7 @@ def _spool_qlib_months(
     calendar: Sequence[date],
     spans: Mapping[str, Sequence[tuple[date, date]]],
     spool_root: Path,
+    suspension_keys: frozenset[tuple[date, str]] = frozenset(),
     window_start: date = SOURCE_START,
     window_end: date = SOURCE_END,
     resource_started: float | None = None,
@@ -2329,6 +2341,7 @@ def _spool_qlib_months(
                 symbol=symbol,
                 calendar=calendar,
                 active_spans=active_spans,
+                suspension_keys=suspension_keys,
                 window_start=window_start,
                 window_end=window_end,
             )
@@ -2670,6 +2683,7 @@ def _strict_prior_price_state(
                 symbol=symbol,
                 calendar=calendar,
                 active_spans=current,
+                suspension_keys=suspension_keys,
                 window_start=days[first],
                 window_end=days[cursor - 1],
             )
@@ -3325,6 +3339,7 @@ def build_rotation_l1_inputs_from_assets(
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(raw_temporary) / "qlib-months",
+            suspension_keys=suspension_keys,
             resource_started=started,
         )
         resource_receipts.append(
@@ -3686,6 +3701,7 @@ def build_rotation_l1_single_date_source_from_assets(
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(raw_temporary) / "qlib-months",
+            suspension_keys=suspension_keys,
             window_start=stock_history_calendar[0],
             window_end=as_of_date,
         )
