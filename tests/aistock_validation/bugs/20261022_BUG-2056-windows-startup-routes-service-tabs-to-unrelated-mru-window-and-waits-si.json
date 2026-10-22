@@ -1,5 +1,5 @@
 {
-  "actual": "20261022 startup routes tabs to Codex window via wt -w 0; a genuine TDX protocol source change made the fixed EXE stale without a build delivery step; parent prints no per-service progress and readiness waits sequentially. Keep no compilation in ordinary startup, prepare EXE explicitly, eliminate MRU routing, report bounded independent progress. No DB writes or service process control.",
+  "actual": "Startup routed tabs to Codex via wt -w 0, rejected genuinely stale TDX builds without preparation, and waited silently/serially. User requires the original invoking console and no manual window configuration; shared prefixed console output is accepted instead of tabs. Valid cache must execute directly; only missing/stale inputs trigger one offline build in the independent TDX child. Corrupt receipts remain blocked. No DB writes or service process control.",
   "allowed_write_scope": [
     "scripts/start_ai_stock.py",
     "backend/tests/platform_api/test_windows_launcher.py",
@@ -15,7 +15,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-22T03:13:15.221937Z",
-  "description": "20261022 startup routes tabs to Codex window via wt -w 0; a genuine TDX protocol source change made the fixed EXE stale without a build delivery step; parent prints no per-service progress and readiness waits sequentially. Keep no compilation in ordinary startup, prepare EXE explicitly, eliminate MRU routing, report bounded independent progress. No DB writes or service process control.",
+  "description": "Fix original-console routing, conditional offline TDX build preparation and independent bounded readiness with visible progress. User explicitly accepted original-console shared output rather than manual window IDs or a new service window. Scope remains startup orchestration/tests/runbook only; no application services are started by development validation.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -116,11 +116,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "AIstock Python -B fresh-process import and compile scripts/start_ai_stock.py -> PASS; no application service started. Direct launcher/TDX matrix -> 40 passed; original-console process inheritance, parallel readiness, UTF-8, cache reuse, conditional offline build, corrupt receipt and build failure checked. Actual UI/service startup remains pending user action."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
