@@ -14,6 +14,18 @@ SPEC.loader.exec_module(launcher)
 SHA = "a" * 40
 
 
+def test_backend_only_tab_launcher_never_controls_other_services():
+    script = (launcher.ROOT / "start_backend.bat").read_text(encoding="utf-8")
+    assert 'wt.exe -w 0 new-tab --title "AIstock Backend"' in script
+    assert 'cmd.exe /d /k call "%~f0" --child' in script
+    assert '"%AISTOCK_BACKEND_PYTHON%" -X utf8 -m uvicorn backend.main:app' in script
+    assert 'call "%AISTOCK_CONDA_BAT%" activate AIstock' in script
+    assert 'socket.SO_EXCLUSIVEADDRUSE' in script and "('0.0.0.0',8001)" in script
+    assert script.index('wt.exe -w 0') < script.index('activate AIstock')
+    for forbidden in ('taskkill', 'Stop-Process', '--reload', 'go run', 'go build', 'npm', '19080', '3000'):
+        assert forbidden not in script
+
+
 def test_inventory_encoding_is_explicit_and_missing_output_is_not_free(monkeypatch):
     run = Mock(return_value=Mock(stdout='{"processes":[],"listeners":[]}'))
     monkeypatch.setattr(launcher.subprocess, "run", run)
