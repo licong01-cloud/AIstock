@@ -15,7 +15,13 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-22T05:55:04.640026Z",
-  "description": "FAILED BUILD attempt292: native month feature bounds differ; exports complete and fresh-process Qlib smoke PASS.",
+  "description": "September attempt292 incorrectly validates sealed missing-only quote corrections against old CSV bounds/NaNs. The same closure path also rejects byte-identical copied security_source_identity.json solely for a changed inode/mtime. Repair correction-aware month validation and metadata content identity together; preserve genuine drift rejection and all completed exports.",
+  "design_compliance_001": {
+    "no_business_semantic_change": "No PIT, price, quantity, model, training window, threshold, input dataset or active profile change.",
+    "no_new_gates": "Removes stale-CSV and stale-inode false blocks; adds no workflow, source, resource or approval gate.",
+    "no_silent_errors": "Exact correction SHA, original finite facts, untouched CSV values, dimensions and stable file reads remain enforced.",
+    "no_unapproved_partial_delivery": "Source repair and actual data validation are reported separately from pending runtime reload and publication."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -29,13 +35,18 @@
   ],
   "expected": "Same retained operation resumes, approved repaired month bounds and values validate from exact source repair pins; unrelated drift still fails.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261022_BUG-2062-monthly-native-validator-rejects-sealed-bounded-quote-corrections-agains.json",
       "backend/services/dataset_release/monthly_legacy_validation.py",
-      "backend/services/dataset_release/monthly_quote_fact_correction.py",
       "backend/tests/dataset_release/test_monthly_legacy_validation.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261022_BUG-2062-monthly-native-validator-rejects-sealed-bounded-quote-corrections-agains.json",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_legacy_validation.py",
@@ -108,6 +119,7 @@
   "first_seen_at": "2026-10-22T05:55:04.640026Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "Only correction-bound feature files use their verified target end/value identity; all original finite CSV cells remain exact checks, all untouched files retain original validation. Small metadata uses stable-read SHA/size instead of an obsolete inode while publication retains the actual new signature. No producer writes, no data re-export, no additional gate.",
   "fixed_at": null,
   "github_issue_number": 6579,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6579",
@@ -125,14 +137,35 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    {
+      "result": "RED reproduced both incorrect bounds and stale NaN comparisons in daily/minute fixtures; then GREEN direct regression.",
+      "round": 1
+    },
+    {
+      "result": "Exact target tampering, unbound target replacement, changed finite CSV values and unapproved tails remain rejected;190 related recovery/materialization tests passed.",
+      "round": 2
+    },
+    {
+      "result": "Read-only downstream closure probe found byte-identical metadata relocation rejected by inode; RED1 failed/1 passed then GREEN2 passed; retained real factor/index receipts PASS.",
+      "round": 3
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "2026-10-22 isolated AIstock Python loaded this worktree monthly_legacy_validation.py: retained September daily native validation PASS,103380 rows,65186 output pins,31.69 seconds; minute native validation PASS,24750720 rows,62786 output pins,320.99 seconds; retained factor10 and index14 writer pins PASS; no history business-value comparison; database_write=false,candidate_write=false,profile_write=false,service_process_control=false."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
