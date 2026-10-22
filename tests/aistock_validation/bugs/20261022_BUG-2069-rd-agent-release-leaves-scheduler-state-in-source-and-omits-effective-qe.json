@@ -5,7 +5,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2069",
-  "closed_at": null,
+  "closed_at": "2026-10-22T19:44:50Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -64,6 +64,17 @@
     "release_built": true,
     "release_deployed": true,
     "release_path": "/home/lc999/rdagent_releases/e5d75965216d4e322a5be5d3766f33a08f426d01",
+    "research_execution_limit": {
+      "instruments": 4,
+      "no_experiment_retry": true,
+      "not_a_runtime_release_acceptance_claim": "API release identity and external state passed; full research data usability did not pass.",
+      "old_new_qrun_sha_identical": true,
+      "raw_source_rows_exist_for_all_98_dates": true,
+      "reason": "QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH",
+      "status": "failed_before_model_training",
+      "task_id": "qe_20261023_032933_601a",
+      "uncovered_instrument_days": 98
+    },
     "rollback_available": true,
     "rollback_release": "/home/lc999/rdagent_releases/4008ba7732168819613fd0072203562ba98f1fad",
     "runtime_receipt_sha256": "04a37f050ede1098655f7079c6127e80709d17453f3a4ae919ccd287a5147732",
@@ -87,18 +98,7 @@
       "linux_targeted_tests": "16 passed",
       "syntax": "passed"
     },
-    "state_root": "/home/lc999/rdagent_state",
-    "research_execution_limit": {
-      "task_id": "qe_20261023_032933_601a",
-      "status": "failed_before_model_training",
-      "reason": "QE_MINUTE_INSTRUMENT_COVERAGE_MISMATCH",
-      "uncovered_instrument_days": 98,
-      "instruments": 4,
-      "raw_source_rows_exist_for_all_98_dates": true,
-      "old_new_qrun_sha_identical": true,
-      "no_experiment_retry": true,
-      "not_a_runtime_release_acceptance_claim": "API release identity and external state passed; full research data usability did not pass."
-    }
+    "state_root": "/home/lc999/rdagent_state"
   },
   "file_scope_contract": {
     "actual_changed_files": [
@@ -117,15 +117,17 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "tests/aistock_validation/bugs/20261022_BUG-2069-rd-agent-release-leaves-scheduler-state-in-source-and-omits-effective-qe.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
   "first_seen_at": "2026-10-22T18:51:25.619376Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "6456f09e218b0cb21dc4f4e1d0796ea9ab332b9a",
   "fix_summary": "RD-Agent PR24 externalizes Scheduler state and emits the effective QE workspace while preserving node deployment entries; immutable node1 release, external workspace compatibility and central node path alignment are verified.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-22T19:44:50Z",
   "github_issue_number": 6609,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6609",
   "last_seen_at": "2026-10-22T18:51:25.619376Z",
@@ -133,6 +135,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6613",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -149,6 +152,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -158,7 +162,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2069",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "eb58ba619ec65cfe",
+    "recorded_at": "2026-10-22T19:46:08.030876Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8027ebbc53ab3df90b2d60e4a0c3a220ca924054",
+    "source_merge_commit": "6456f09e218b0cb21dc4f4e1d0796ea9ab332b9a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6613",
+    "validation_evidence": [
+      "python -m nox -s l0 -- tests/aistock_validation/bugs/20261022_BUG-2069-rd-agent-release-leaves-scheduler-state-in-source-and-omits-effective-qe.json -> passed: one file, zero findings, zero blocking",
+      "git diff --check -> passed"
+    ],
+    "validation_evidence_digest": "d1da71a856b5e376a400678940bfc6231175965b6888ff21dd356a8b7af3cf73"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "rdagent"
   ],
@@ -167,6 +193,10 @@
     "fingerprint": "7f174ac71bf3060b7f7ed9ee",
     "source_event_id": "FE-20261022-7f174ac71bf3"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- tests/aistock_validation/bugs/20261022_BUG-2069-rd-agent-release-leaves-scheduler-state-in-source-and-omits-effective-qe.json -> passed: one file, zero findings, zero blocking",
+    "git diff --check -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
