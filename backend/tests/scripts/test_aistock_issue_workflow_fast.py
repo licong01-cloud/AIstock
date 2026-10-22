@@ -1503,7 +1503,7 @@ def test_advisory_fixed5_offline_roles_are_exact_and_preserve_online_scope() -> 
         assert mixed["target_ids"] == ["backend-main"]
 
 
-@pytest.mark.parametrize("monthly", [True, False, "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "candidate_consumer_smoke.py", "consumer-script", "monthly_industry_history.py", "history-with-build", "wsl_resource_guardian.py", "resource_supervisor.py", "monthly_minute_repair.py", "monthly_prev_close_repair.py", "monthly_suspension_repair.py"])
+@pytest.mark.parametrize("monthly", [True, False, "build_stage.py", "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "candidate_consumer_smoke.py", "consumer-script", "monthly_industry_history.py", "history-with-build", "wsl_resource_guardian.py", "resource_supervisor.py", "monthly_minute_repair.py", "monthly_prev_close_repair.py", "monthly_suspension_repair.py"])
 def test_release_sources_select_their_own_process_probe(monthly) -> None:
     catalog = workflow._load_runtime_target_catalog()
     target = catalog["targets"]["worker-scheduler"]
@@ -1526,7 +1526,7 @@ def test_release_sources_select_their_own_process_probe(monthly) -> None:
         monthly_sources = [f"backend/services/dataset_release/{monthly}"]
 
     selected, error = workflow._select_runtime_probe_route(
-        target, runtime_files=monthly_sources if monthly else ["backend/services/dataset_release/build_stage.py"],
+        target, runtime_files=monthly_sources if monthly else ["scripts/dataset_release_worker.py"],
     )
 
     assert error is None
@@ -1538,6 +1538,15 @@ def test_release_sources_select_their_own_process_probe(monthly) -> None:
     else:
         assert selected["probe_route_id"] == "dataset_release_worker_heartbeat"
         assert selected["probe_mode"] == workflow._DATASET_RELEASE_WORKER_HEARTBEAT_MODE
+
+
+@pytest.mark.parametrize("other", ["scripts/dataset_release_worker.py", "backend/services/dataset_release/unknown.py"])
+def test_monthly_build_probe_does_not_accept_legacy_or_unknown_mixed_sources(other) -> None:
+    target = workflow._load_runtime_target_catalog()["targets"]["worker-scheduler"]
+    _, error = workflow._select_runtime_probe_route(
+        target, runtime_files=["backend/services/dataset_release/build_stage.py", other],
+    )
+    assert error and "mix routed and non-routed" in error
 
 
 @pytest.mark.parametrize("worker_count", [1, 2])
