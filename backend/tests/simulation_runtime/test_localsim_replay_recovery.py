@@ -1,5 +1,6 @@
 from copy import deepcopy
 from datetime import UTC, date, datetime, timedelta
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -50,7 +51,7 @@ def _snapshot():
     }
 
 
-def _service(snapshot, *, market_error=None):
+def _service(snapshot, *, market_error=None, pit_authority_resolver=None):
     calls = []
 
     def load(**kwargs):
@@ -67,6 +68,7 @@ def _service(snapshot, *, market_error=None):
         repository=SimpleNamespace(get_replay_recovery_snapshot=lambda _: deepcopy(snapshot)),
         source_authority=SimpleNamespace(resolve=lambda **_: source),
         market_provider=SimpleNamespace(load_symbol_input=load), clock=lambda: NOW,
+        pit_authority_resolver=pit_authority_resolver,
     )
     return service, calls
 
@@ -98,6 +100,207 @@ def test_no_run_timeout_recovers_only_after_native_zero_effect_and_path_readback
     assert service.inspect("replay-original").snapshot_sha256 == check.snapshot_sha256
     assert calls[0]["run_id"] == "lsselection_" + "b" * 32
     assert str(calls[0]["witness"]).replace("\\", "/").startswith("X:/AIstock_temp/LOCALSIM/")
+
+
+def _pit_preselection_recovery():
+    from backend.tests.simulation_runtime.test_strategy_package_selection_service import _frozen_pit_release_case
+    from backend.tests.simulation_runtime.test_localsim_native_context import _bundle, _canonical_profile
+
+    case = _frozen_pit_release_case()
+    snapshot = _preselection_snapshot()
+    current = case.resolver.binding
+    case.resolver.binding = case.resolver.previous
+    _, _, _, account, _, native_release, binding = _bundle(
+        _canonical_profile(), pit_authority_resolver=case.resolver)
+    case.resolver.binding = current
+    release = native_release.model_dump(mode="json")
+    snapshot["account"] = account.model_dump(mode="json")
+    snapshot["release"] = release
+    snapshot["binding"] = binding.model_dump(mode="json")
+    snapshot["job"].update(simulation_account_id=account.account_id, binding_id=binding.binding_id,
+        release_id=release["release_id"], failure_code="CanonicalPitRuntimeError",
+        failure_context={"trade_date": snapshot["job"]["next_trade_date"],
+            "message": "supplied canonical PIT lease differs from live pointer"})
+    snapshot["binding"].update(release_id=release["release_id"], release_hash=release["release_hash"],
+        package_id=release["package_id"], manifest_sha256=release["manifest_sha256"])
+    service, calls = _service(snapshot, pit_authority_resolver=case.resolver)
+    return snapshot, service, calls, case
+
+
+def test_saved_pit_preselection_failure_is_recoverable_with_proven_prefix_and_zero_effects():
+    from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_RUNTIME_LEASE_KEY
+
+    snapshot, service, calls, case = _pit_preselection_recovery()
+    original = deepcopy(snapshot)
+    check = service.inspect("replay-original")
+    assert check.ready and check.run_id is None
+    assert check.native_input["recovery_phase"] == "PRESELECTION"
+    assert check.native_input["pit_runtime_lease"] == case.config[CANONICAL_PIT_RUNTIME_LEASE_KEY]
+    assert check.native_input["candidate_run_id"] == snapshot["preselection_absence"]["run_id"]
+    assert service.inspect("replay-original").snapshot_sha256 == check.snapshot_sha256
+    assert snapshot == original and not calls
+
+
+def test_saved_pit_recovery_json_has_a_strict_endpoint_owned_semantic_contract():
+    _, service, _, _ = _pit_preselection_recovery()
+    payload = service.inspect("replay-original").model_dump(mode="json")
+    verdict, reason, evidence = validate_replay_recovery_check(payload)
+    assert verdict == "passed" and reason is None
+    assert evidence["zero_economic_effects"] is True
+    for fault in ["candidate", "lease", "lease_day", "config_hash", "run", "effects"]:
+        bad = deepcopy(payload)
+        if fault == "candidate":
+            bad["native_input"]["candidate_run_id"] = "unknown"
+        elif fault == "lease":
+            bad["native_input"]["pit_runtime_lease"] = {}
+        elif fault == "lease_day":
+            bad["native_input"]["pit_runtime_lease"]["coverage_end"] = "2026-01-20"
+        elif fault == "config_hash":
+            bad["native_input"]["pit_runtime_config_sha256"] = "unknown"
+        elif fault == "run":
+            bad["run_id"] = "existing"
+        else:
+            bad["economic_counts"]["fills"] = 1
+        assert validate_replay_recovery_check(bad)[0] == "failed", fault
+
+
+@pytest.mark.parametrize("table", ECONOMIC_TABLES)
+def test_saved_pit_recovery_rejects_every_existing_economic_fact(table):
+    snapshot, service, _, _ = _pit_preselection_recovery()
+    snapshot["economic_counts"][table] = 1
+    assert not service.inspect("replay-original").ready
+
+
+@pytest.mark.parametrize("fault", ["unverified_prefix", "generation", "missing_lease", "profile_identity", "unknown_failure", "other_day"])
+def test_saved_pit_recovery_preserves_identity_and_failure_boundaries(fault):
+    from dataclasses import replace
+    from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_RUNTIME_LEASE_KEY
+
+    snapshot, service, _, case = _pit_preselection_recovery()
+    if fault == "unverified_prefix":
+        case.resolver.verified = False
+    elif fault == "generation":
+        case.resolver.binding = replace(case.resolver.binding, activation_generation=5)
+    elif fault == "missing_lease":
+        del snapshot["release"]["release_config_json"]["metadata"]["selection_runtime_config"][CANONICAL_PIT_RUNTIME_LEASE_KEY]
+    elif fault == "profile_identity":
+        snapshot["release"]["runtime_profile_sha256"] = "0" * 64
+    elif fault == "unknown_failure":
+        snapshot["job"]["failure_context"]["message"] = "another canonical PIT error"
+    else:
+        snapshot["job"]["failure_context"]["trade_date"] = "2026-01-20"
+    assert not service.inspect("replay-original").ready
+
+
+@pytest.mark.skipif(os.getenv("AISTOCK_DEV_DB_E2E") != "1", reason="guarded existing DEV database only")
+def test_saved_pit_recovery_uses_original_job_cas_and_writer_lock_on_existing_dev():
+    from contextlib import contextmanager
+    from uuid import uuid4
+
+    import psycopg2
+
+    from backend.services.simulation_runtime.localsim_control import LocalSimControlPlaneService
+    from backend.services.simulation_runtime.localsim_replay import LocalSimHistoricalDayRunner, LocalSimReplayCoordinator
+    from backend.services.simulation_runtime.localsim_runtime_profile_repository import LocalSimRuntimeProfileRepository
+    from backend.services.simulation_runtime.localsim_runtime_profile_service import LocalSimRuntimeProfileService
+    from backend.services.simulation_runtime.successor_repository import LocalSimSuccessorRepository
+    from backend.services.strategy_package.execution_policy import local_sim_twap_only_policy_snapshot
+    from backend.tests.paper_trading_v2.fixtures_dev_db import _dev_dsn
+    from backend.tests.simulation_runtime.test_localsim_native_context import _canonical_profile
+    from backend.tests.simulation_runtime.test_localsim_successor_core_postgres import _RuntimeProfileAuthority, _package_identity
+    from backend.tests.simulation_runtime.test_strategy_package_selection_service import RollingPitAuthorityResolver
+
+    dsn = _dev_dsn()
+    package_id, manifest = _package_identity(dsn)
+    conn = psycopg2.connect(**dsn)
+    marker = "test_int_pit_recovery_" + uuid4().hex
+    now = datetime(2026, 10, 23, tzinfo=UTC)
+    days = (date(2026, 1, 20), date(2026, 1, 21))
+    resolver = RollingPitAuthorityResolver()
+    current = resolver.binding
+    resolver.binding = resolver.previous
+
+    @contextmanager
+    def factory():
+        savepoint = "pit_recovery_" + uuid4().hex
+        with conn.cursor() as cur:
+            cur.execute(f"SAVEPOINT {savepoint}")
+        try:
+            yield conn
+        except Exception:
+            with conn.cursor() as cur:
+                cur.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+            raise
+        finally:
+            with conn.cursor() as cur:
+                cur.execute(f"RELEASE SAVEPOINT {savepoint}")
+
+    try:
+        repository = LocalSimSuccessorRepository(conn_factory=factory)
+        profiles = LocalSimRuntimeProfileService(repository=LocalSimRuntimeProfileRepository(conn_factory=factory),
+            authority=_RuntimeProfileAuthority(), clock=lambda: now)
+        profile = profiles.create_profile(package_id=package_id, manifest_sha256=manifest,
+            profile_name=marker, created_by=marker)
+        config = _canonical_profile().model_dump(mode="json")
+        config.pop("runtime_variant_materialized_config")
+        config["schema_version"] = "localsim_runtime_profile_config_request_v1"
+        profile, version = profiles.create_version(profile_id=profile.profile_id, expected_profile_version=profile.version,
+            config_json=config, created_by=marker)
+        policy = local_sim_twap_only_policy_snapshot()
+        account, _, release, binding = LocalSimControlPlaneService(repository=repository, clock=lambda: now,
+            pit_authority_resolver=resolver).create_account(account_name=marker, package_id=package_id,
+            manifest_sha256=manifest, admission_receipt_id=marker, initial_capital=5_000_000,
+            effective_from=days[0], effective_to=days[-1], runtime_profile_id=profile.profile_id,
+            runtime_profile_version_id=version.profile_version_id, runtime_profile_sha256=version.config_sha256,
+            daily_strategy_profile_version_id=version.daily_strategy_profile_version_id,
+            execution_policy_version_id=policy["policy_version_id"], execution_policy_sha256=policy["policy_sha256"],
+            execution_policy_json=policy["policy_json"], tail_policy_version_id="test_int_tail",
+            tail_policy_sha256="d" * 64, release_metadata={"localsim_runtime_profile_config": version.config_json},
+            created_by=marker)
+        coordinator = LocalSimReplayCoordinator(repository=repository, clock=lambda: now,
+            historical_day_runner=LocalSimHistoricalDayRunner(historical_source_id="market.kline_minute_raw.v1",
+                historical_source_sha256="c" * 64, run_day=lambda *_: None))
+        job = coordinator.create_job(simulation_account_id=account.account_id, release_id=release.release_id,
+            binding_id=binding.binding_id, start_trade_date=days[0], end_trade_date=days[-1], trading_days=days,
+            historical_source_id="market.kline_minute_raw.v1", historical_source_sha256="c" * 64, created_by=marker)
+        context = {"trade_date": str(days[1]), "message": "supplied canonical PIT lease differs from live pointer"}
+        job = repository.transition_replay_job(replay_job_id=job.replay_job_id, expected_version=job.version,
+            update={"status": "FAILED_TERMINAL", "completed_trade_date": days[0], "next_trade_date": days[1],
+                "failure_code": "CanonicalPitRuntimeError", "failure_context": context}, updated_at=now)
+        resolver.binding = current
+        source = SimpleNamespace(historical_source_id=job.historical_source_id,
+            historical_source_sha256=job.historical_source_sha256, trading_days=days, current_trading_date=now.date())
+        owner = LocalSimReplayRecoveryService(repository=repository,
+            source_authority=SimpleNamespace(resolve=lambda **_: source), market_provider=SimpleNamespace(),
+            pit_authority_resolver=resolver, clock=lambda: now)
+        check = owner.inspect(job.replay_job_id)
+        assert check.ready, check.model_dump(mode="json")
+        assert check.run_id is None and set(check.economic_counts.values()) == {0}
+        request = LocalSimReplayRecoverRequestV1(expected_version=job.version, snapshot_sha256=check.snapshot_sha256)
+        with pytest.raises(InvalidStateTransitionError, match="evidence is blocked"):
+            owner.recover(job.replay_job_id, request.model_copy(update={"snapshot_sha256": "f" * 64}))
+        with psycopg2.connect(**dsn) as other:
+            with other.cursor() as cur:
+                cur.execute("SELECT pg_advisory_lock(2403, hashtext(%s))", (check.native_input["candidate_run_id"],))
+                try:
+                    with pytest.raises(InvalidStateTransitionError, match="writer is active"):
+                        owner.recover(job.replay_job_id, request)
+                finally:
+                    cur.execute("SELECT pg_advisory_unlock(2403, hashtext(%s))", (check.native_input["candidate_run_id"],))
+        assert repository.get_replay_job(job.replay_job_id) == job
+        result = owner.recover(job.replay_job_id, request)
+        assert result.status.value == "FAILED_RETRYABLE" and result.version == job.version + 1
+        assert result.replay_hash == job.replay_hash and result.completed_trade_date == job.completed_trade_date
+        assert result.next_trade_date == job.next_trade_date and result.binding_id == job.binding_id
+        assert repository.get_release(release.release_id) == release
+        assert repository.get_replay_recovery_snapshot(job.replay_job_id)["economic_counts"] == check.economic_counts
+        receipt = result.failure_context["localsim_preselection_recovery_v1"]
+        assert receipt["native_input"] == check.native_input and receipt["original_failure"] == context
+        with pytest.raises(InvalidStateTransitionError, match="CAS"):
+            owner.recover(job.replay_job_id, request)
+    finally:
+        conn.rollback()
+        conn.close()
 
 
 @pytest.mark.parametrize("section,key,value,reason", [
