@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2060",
-  "closed_at": null,
+  "closed_at": "2026-10-22T06:23:55.336490Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -43,6 +43,7 @@
       "backend/services/dataset_release/monthly_build_resume.py",
       "backend/services/dataset_release/monthly_industry_history.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
       "tests/aistock_validation/bugs/20261022_BUG-2060-completed-industry-repair-intent-rejects-later-validated-factor-correcti.json"
     ],
     "added_files": [],
@@ -50,6 +51,7 @@
       "backend/services/dataset_release/monthly_build_resume.py",
       "backend/services/dataset_release/monthly_industry_history.py",
       "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
       "tests/aistock_validation/bugs/20261022_BUG-2060-completed-industry-repair-intent-rejects-later-validated-factor-correcti.json"
     ],
     "changed_files_source": "git_finish",
@@ -124,9 +126,9 @@
   },
   "first_seen_at": "2026-10-22T04:31:51.365648Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "2329c55d41199cefa3daed87ddbc818935b22a02",
   "fix_summary": "Retire the exact completed industry intent after checking durable completion and output provenance. Accept a later factor output only when its current writer signature, immutable correction authority and native factor receipt agree; never replay the obsolete journal, re-export prices, or accept unexplained drift.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-22T04:55:45Z",
   "github_issue_number": 6573,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6573",
   "last_seen_at": "2026-10-22T04:31:51.365648Z",
@@ -134,6 +136,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6574",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -156,9 +159,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-2060\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2060",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "5d4d0f9c9d5abe149449170115c9575d5e1c7d59718d05ff06983895732a2435",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "2329c55d41199cefa3daed87ddbc818935b22a02",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-22T06:19:22.640336Z",
+      "mode": "read_only",
+      "observed_identity": "c7516f373760d2f0f269f55da5177c808a8733db",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d8252d5374c826079e0e63ba16b4461c82102d21be7fc8e802e72dc922b4ce03",
+      "receipt_sha256": "f7c7d8c802a1b268bbfbb0bb112dd903d0ce15e353e036fcea38040d6569ccce",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "41dfc27dd5cee9b0c6ef0635d75122226b2d468097f91d063bab08eb831d3563",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -168,7 +194,33 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2060",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5b303ce20685245e",
+    "recorded_at": "2026-10-22T04:56:21.462303Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "fd0a770bf32ae2763fde40c877136b76dd27e2bd",
+    "source_merge_commit": "2329c55d41199cefa3daed87ddbc818935b22a02",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6574",
+    "validation_evidence": [
+      "validation-receipt: id=3ec61790f21e00d0 commit=fd0a770bf32ae2763fde40c877136b76dd27e2bd kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -k 'industry or history_commit or factor_repair or fresh_resume or committed_transaction_cleanup' -q` result=`13 passed`",
+      "validation-receipt: id=59aa4d68f4ac3c84 commit=fd0a770bf32ae2763fde40c877136b76dd27e2bd kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py::test_native_factor_receipt_survives_real_history_repair_and_retry -q` result=`11 passed`",
+      "validation-receipt: id=785deebac058cdba commit=fd0a770bf32ae2763fde40c877136b76dd27e2bd kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=848fd7f5d189c533 commit=fd0a770bf32ae2763fde40c877136b76dd27e2bd kind=ruff plan=direct status=passed command=`ruff check backend/services/dataset_release/monthly_industry_history.py backend/services/dataset_release/monthly_build_resume.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_sector_mapping.py` result=`passed`",
+      "validation-receipt: id=af5853914c00cf28 commit=fd0a770bf32ae2763fde40c877136b76dd27e2bd kind=compile plan=direct status=passed command=`python -m compileall -q backend/services/dataset_release/monthly_industry_history.py backend/services/dataset_release/monthly_build_resume.py backend/tests/dataset_release/test_monthly_build_resume.py` result=`passed`",
+      "validation-receipt: id=bf81edbac7538d5b commit=fd0a770bf32ae2763fde40c877136b76dd27e2bd kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "262e94df29bfcd7bc16c5e1da3277a21f49bd3ae610db119051878ae4acf2ad4"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -177,6 +229,15 @@
     "fingerprint": "02a7b7b3ddf61d3528055886",
     "source_event_id": "FE-20261022-02a7b7b3ddf6"
   },
+  "validation_evidence": [
+    "validation-receipt: id=3ec61790f21e00d0 commit=fd0a770bf32ae2763fde40c877136b76dd27e2bd kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -k 'industry or history_commit or factor_repair or fresh_resume or committed_transaction_cleanup' -q` result=`13 passed`",
+    "validation-receipt: id=59aa4d68f4ac3c84 commit=fd0a770bf32ae2763fde40c877136b76dd27e2bd kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py::test_native_factor_receipt_survives_real_history_repair_and_retry -q` result=`11 passed`",
+    "validation-receipt: id=785deebac058cdba commit=fd0a770bf32ae2763fde40c877136b76dd27e2bd kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=848fd7f5d189c533 commit=fd0a770bf32ae2763fde40c877136b76dd27e2bd kind=ruff plan=direct status=passed command=`ruff check backend/services/dataset_release/monthly_industry_history.py backend/services/dataset_release/monthly_build_resume.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_sector_mapping.py` result=`passed`",
+    "validation-receipt: id=af5853914c00cf28 commit=fd0a770bf32ae2763fde40c877136b76dd27e2bd kind=compile plan=direct status=passed command=`python -m compileall -q backend/services/dataset_release/monthly_industry_history.py backend/services/dataset_release/monthly_build_resume.py backend/tests/dataset_release/test_monthly_build_resume.py` result=`passed`",
+    "validation-receipt: id=bf81edbac7538d5b commit=fd0a770bf32ae2763fde40c877136b76dd27e2bd kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python -m nox -s l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
