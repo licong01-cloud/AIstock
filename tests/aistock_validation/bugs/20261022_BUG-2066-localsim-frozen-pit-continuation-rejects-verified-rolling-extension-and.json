@@ -17,6 +17,12 @@
   ],
   "created_at": "2026-10-22T16:46:34.295560Z",
   "description": "两个原任务FAILED_TERMINAL，shared admission拒绝已验证前缀延续，正式恢复报LOCALSIM_REPLAY_RECOVERY_FAILURE_UNSUPPORTED。",
+  "design_compliance_review": [
+    "禁止简化交付：生产代码接入原有公共继承与权威前缀合同、正式恢复事务；249项定向回归、真实DEV事务及两个原生运行版本只读检查通过。重启和生产恢复明确待验收。",
+    "禁止静默错误：未经证明的前缀、代数漂移、请求重绑、越界日期及任一经济事实仍报错；无数据回填或静默回退。",
+    "禁止改变业务逻辑：保留原PIT租约、源计划、release、完整评分和排序语义、账户资金与持仓账本；共享评分算法不变。",
+    "禁止私增门禁审批：复用现有版本CAS、写入锁、源与账户身份和零经济事实合同，不新增用户审批。"
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -30,27 +36,24 @@
     "X:/AIstock_temp/LOCALSIM/canonical-pit-frozen-continuation-20261023-r1/related-matrix.xml",
     "X:/AIstock_temp/LOCALSIM/canonical-pit-frozen-continuation-20261023-r1/actual-native-contract-receipt.json"
   ],
-  "design_compliance_review": [
-    "禁止简化交付：生产代码接入原有公共继承与权威前缀合同、正式恢复事务；249项定向回归、真实DEV事务及两个原生运行版本只读检查通过。重启和生产恢复明确待验收。",
-    "禁止静默错误：未经证明的前缀、代数漂移、请求重绑、越界日期及任一经济事实仍报错；无数据回填或静默回退。",
-    "禁止改变业务逻辑：保留原PIT租约、源计划、release、完整评分和排序语义、账户资金与持仓账本；共享评分算法不变。",
-    "禁止私增门禁审批：复用现有版本CAS、写入锁、源与账户身份和零经济事实合同，不新增用户审批。"
-  ],
-  "review_rounds": [
-    "第一轮：区分新任务准入与已冻结运行版本继承；补上请求覆盖冻结PIT身份的拒绝测试。",
-    "第二轮：检查正式恢复和endpoint语义合同；补上缺失租约、错误失败日、错误失败类型、七类经济事实及恢复后身份不变检查。",
-    "第三轮：现有DEV数据库实测原任务CAS和并发写入锁；两个真实原生release只读检查、实际9月文件和10月8日数据库边界读取通过。"
-  ],
   "expected": "已冻结的合法运行版本保持原PIT身份；同代数且历史前缀受权威合同认可的日滚可继续。新任务、身份漂移和未证前缀仍严格拒绝。原失败任务经零副作用及身份校验后可正式recover。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
+      "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2066-localsim-frozen-pit-continuation-rejects-verified-rolling-extension-and.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/simulation_signal/strategy_package_selection.py",
       "backend/services/simulation_runtime/localsim_replay_recovery.py",
+      "backend/services/simulation_signal/strategy_package_selection.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py",
       "backend/tests/simulation_runtime/test_strategy_package_selection_service.py",
-      "backend/tests/simulation_runtime/test_localsim_replay_recovery.py"
+      "tests/aistock_validation/bugs/20261022_BUG-2066-localsim-frozen-pit-continuation-rejects-verified-rolling-extension-and.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/simulation_signal/strategy_package_selection.py",
@@ -134,8 +137,8 @@
   },
   "first_seen_at": "2026-10-22T16:46:34.295560Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "029e8e4a8a9b18446edca7f439bf333152a5565b",
+  "fixed_at": "2026-10-22T17:23:30Z",
   "github_issue_number": 6596,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6596",
   "last_seen_at": "2026-10-22T16:46:34.295560Z",
@@ -143,6 +146,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6599",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -153,22 +157,29 @@
     "platform_api_backend",
     "simulation_core_l2"
   ],
+  "review_rounds": [
+    "第一轮：区分新任务准入与已冻结运行版本继承；补上请求覆盖冻结PIT身份的拒绝测试。",
+    "第二轮：检查正式恢复和endpoint语义合同；补上缺失租约、错误失败日、错误失败类型、七类经济事实及恢复后身份不变检查。",
+    "第三轮：现有DEV数据库实测原任务CAS和并发写入锁；两个真实原生release只读检查、实际9月文件和10月8日数据库边界读取通过。"
+  ],
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_required": true,
     "backend_restart_owner": "user",
-    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "backend_restart_required": true,
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/replays/lsreplay_1c19a02bf159ecbb/recovery",
     "fresh_process_evidence": [
       "Fresh Python process: seven directly related files -> 249 passed, 3 environment-dependent skipped; X:/AIstock_temp/LOCALSIM/canonical-pit-frozen-continuation-20261023-r1/related-matrix.xml",
       "Fresh Python process: test_saved_pit_recovery_uses_original_job_cas_and_writer_lock_on_existing_dev -> 1 passed on guarded existing aistock_dev:5433; transaction rolled back, no production writes",
       "Fresh Python process: actual-native-contract-receipt.json -> both original releases/recovery checks PASS with unchanged frozen identities and zero economic facts; actual September FILE_THEN_DATABASE source readers PASS, first_database_day=2026-10-08; no production replay started"
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_file_scope",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -178,7 +189,32 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2066",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "469b0c297a42dcf4",
+    "recorded_at": "2026-10-22T17:24:22.111804Z",
+    "runtime_contract_digest": "af7e1134e781b44ba2d728cb77af44a6369c01b68f575f7b0f64a01a5ab60a68",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "07d0f54d9aeed6dc8b8f92ad3d2c85908755223a",
+    "source_merge_commit": "029e8e4a8a9b18446edca7f439bf333152a5565b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6599",
+    "validation_evidence": [
+      "validation-receipt: id=f13b3e1445b93a2e commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_signal/strategy_package_selection.py backend/services/simulation_runtime/localsim_replay_recovery.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/simulation_runtime/test_localsim_replay_recovery.py tests/aistock_validation/bugs/20261022_BUG-2066-localsim-frozen-pit-continuation-rejects-verified-rolling-extension-and.json` result=`passed`",
+      "validation-receipt: id=01a83a82122d7b6e commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/simulation_runtime/test_localsim_replay_recovery.py backend/tests/simulation_runtime/test_localsim_input_source_plan.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/simulation_runtime/test_localsim_native_context.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/simulation_architecture/test_layer_import_boundaries.py -q --tb=short -p no:cacheprovider` result=`passed (249 passed, 3 skipped)`",
+      "validation-receipt: id=f72e8cee7d90f8b0 commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_localsim_replay_recovery.py::test_saved_pit_recovery_uses_original_job_cas_and_writer_lock_on_existing_dev -q --tb=short -p no:cacheprovider` result=`passed (1 passed; existing DEV rollback)`",
+      "validation-receipt: id=24714d6b8399720e commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=ruff plan=direct status=passed command=`ruff check --no-cache backend/services/simulation_runtime/localsim_replay_recovery.py backend/services/simulation_signal/strategy_package_selection.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/simulation_runtime/test_localsim_replay_recovery.py` result=`passed`",
+      "validation-receipt: id=c04174c132de33ed commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "ebc34ddadaa42f83234f50cbf3f0001fff8e47777433937ab7640b230d65516e"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -187,6 +223,13 @@
     "fingerprint": "c963cee2882e9a6d13db1692",
     "source_event_id": "FE-20261022-c963cee2882e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f13b3e1445b93a2e commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/simulation_signal/strategy_package_selection.py backend/services/simulation_runtime/localsim_replay_recovery.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/simulation_runtime/test_localsim_replay_recovery.py tests/aistock_validation/bugs/20261022_BUG-2066-localsim-frozen-pit-continuation-rejects-verified-rolling-extension-and.json` result=`passed`",
+    "validation-receipt: id=01a83a82122d7b6e commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/simulation_runtime/test_localsim_replay_recovery.py backend/tests/simulation_runtime/test_localsim_input_source_plan.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/simulation_runtime/test_localsim_native_context.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/simulation_architecture/test_layer_import_boundaries.py -q --tb=short -p no:cacheprovider` result=`passed (249 passed, 3 skipped)`",
+    "validation-receipt: id=f72e8cee7d90f8b0 commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_localsim_replay_recovery.py::test_saved_pit_recovery_uses_original_job_cas_and_writer_lock_on_existing_dev -q --tb=short -p no:cacheprovider` result=`passed (1 passed; existing DEV rollback)`",
+    "validation-receipt: id=24714d6b8399720e commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=ruff plan=direct status=passed command=`ruff check --no-cache backend/services/simulation_runtime/localsim_replay_recovery.py backend/services/simulation_signal/strategy_package_selection.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/simulation_runtime/test_localsim_replay_recovery.py` result=`passed`",
+    "validation-receipt: id=c04174c132de33ed commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
