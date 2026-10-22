@@ -1,6 +1,6 @@
 # 分钟级留一同群同步结构 Top10 固定五交易日研究（F1）
 
-版本v1.0；2026-10-23；Advisory / model_first。状态：无标签查重及输入检查通过；本文交付设计，源码与真实六fit研究尚未执行。累计219实际研究fit＋1旧index，不是219个独立假设。
+版本v1.1；2026-10-23；Advisory / model_first。设计#6610合入0a4862420f61a58e27765db45de0336e23248e04并官方清理。无标签查重及输入检查通过；源码15项直接合同测试、Ruff、两L0/ownership通过，真实六fit研究待执行。累计219实际研究fit＋1旧index，不是219个独立假设。
 
 ## Background / Goal / Feature Card
 
@@ -37,7 +37,7 @@ screen_rows SHA `4e11500f9d4a6522aaee2698f5ca73da150d4ef634b01fd1bbfd7aecf872c09
 
 固定首个训练窗179D/17,900行、16,280唯一stock-D。17,854可用；41零方差、5共同边不足均UNKNOWN。两包179/179D均达到事前“至少80%行可算、至少80%包D合格”，179D均有横截面变化（事前最低20D、std>=1e-6）。78,502,080源bytes，95.757秒，峰值391,122,944bytes，0标签/0fit/0SQL。预算与支持规则冻结在spec后才读取；输入支持不代表成熟监督或经济支持。
 
-绑定screen/spec/code/rows/factor/synthetic的SHA，冻结小元数据全hash、文件size/mtime租约和实际消费切片hash；不把stat冒称大bin全hash。完整prepare须与首窗17,900行身份、43旧分钟/6控制/2新量/UNKNOWN原因逐值对齐后才fit。源数据CURRENT_DATABASE_NON_VINTAGE，D时钟约束不创造captured-at版本证明。
+绑定screen/spec/code/rows/factor/synthetic的SHA，冻结小元数据全hash、文件size/mtime租约和实际消费切片hash；不把stat冒称大bin全hash。完整prepare须与首窗17,900行身份、43旧分钟/6控制/2新量/UNKNOWN原因逐值对齐后才fit；身份、原因、计数精确一致，跨Windows/WSL浮点测量使用事前rtol=1e-12/atol=1e-10并另报是否逐bit相等，不容许经济差异。源数据CURRENT_DATABASE_NON_VINTAGE，D时钟约束不创造captured-at版本证明。
 
 ## Model / 唯一有限实验
 
@@ -96,7 +96,7 @@ Ridge(alpha100,lsqr,tol1e-6,max_iter2000,fit_intercept=False)，不调参/模型
 | F-495 | 计划pipeline.Study/preregister/run | backend/tests/advisory_model_first/test_intraday_peer_synchrony_top10_5td_v1.py（计划）；本文Operations | DESIGN_READY | none |
 | F-496 | 本文Scope/Production Gates | backend/tests/advisory_model_first/test_intraday_peer_synchrony_top10_5td_v1.py（计划）；本文Non-goals | DESIGN_SCOPE_READY | none |
 
-设计自审一：核对自包含留一、共同边覆盖、共同控制、旧单股与日频查重边界及非vintage。自审二：核对原人口/成本、两臂共同支持、先预测后评价、最多6fit、全部终态停止、非独立确认、研报继续搁置。本文只报设计完成，不报源码或研究完成。
+设计自审一核对自包含留一、共同边覆盖、共同控制、旧单股与日频查重边界及非vintage；第二轮核对人口/成本、共同支持、先预测后评价、6fit与全部终态停止。源码两轮同窗口自审修复恢复时重复特征拼接，补齐分钟测量依赖合同hash，并在读完整输入/标签前明确跨节点浮点容差。15项直接测试分别14项基础矩阵、1项新增实际文件读取；容差改动后仅重跑直接对齐项。L0三个P2复杂度提醒已审：唯一stock-D×5字段切片<=300MB、包D×50共同计算<=305D、监督merge one_to_one<=30,500行；0blocking，不修改公共baseline。真实结果及源码必需CI另报。
 
 ## Non-goals / Risks / Production Gates / DESIGN-COMPLIANCE-001
 
