@@ -235,7 +235,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\monthly-202609-closure-20261020\\bounded-quote-facts-r2\\post-restart-bug2053.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -282,7 +282,8 @@
   "validation_evidence": [
     "validation-receipt: id=65742b189a1f561d commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; 0 new blocking findings`",
     "validation-receipt: id=954ab83c9481c587 commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_legacy_validation.py backend/tests/routers/test_monthly_dataset_releases.py -q` result=`152 passed before path relocation regression`",
-    "validation-receipt: id=d56665de9a10cf56 commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py -q` result=`9 passed including copied metadata and relocated original writer path; foreign source and value drift remain rejected`"
+    "validation-receipt: id=d56665de9a10cf56 commit=eea4af5e6b5816d1137476cb379eca38b5a913bb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py -q` result=`9 passed including copied metadata and relocated original writer path; foreign source and value drift remain rejected`",
+    "BUG-2053 worker-scheduler post-restart read-only identity and business smoke verified; runtime_identity_match=true; process_control_performed=false"
   ],
   "verification_budget": {
     "budget": "standard",
