@@ -1,5 +1,6 @@
 """Startup safety contracts; never launch an application or inspect live services."""
 from contextlib import nullcontext
+from concurrent.futures import ThreadPoolExecutor
 import importlib.util
 import json
 import os
@@ -27,6 +28,54 @@ def test_all_service_tabs_are_requested_before_any_slow_setup():
     assert 'if /i "%~1"=="--check" if "%~2"=="" goto run' in script
     for forbidden in ("taskkill", "Stop-Process", "--reload", "go run", "pip install"):
         assert forbidden not in script
+
+
+def test_only_backend_activates_and_activation_temp_is_private():
+    all_script = (launcher.ROOT / "start_all_ai_stock.bat").read_text(encoding="utf-8")
+    bypass = 'if /i "%~1"=="--service" if not "%~2"=="backend" goto launch'
+    assert all_script.index(bypass) < all_script.index('call "%AISTOCK_CONDA_BAT%" activate AIstock')
+    assert 'if /i "%~1"=="--check" goto launch' in all_script
+    for name in ("start_all_ai_stock.bat", "start_backend.bat"):
+        script = (launcher.ROOT / name).read_text(encoding="utf-8")
+        activation = script.index('call "%AISTOCK_CONDA_BAT%" activate AIstock')
+        assert script.index("uuid.uuid4().hex") < script.index('mkdir "%AISTOCK_CONDA_TEMP%"') < activation
+        assert 'set "AISTOCK_CONDA_ID="' in script and 'if not defined AISTOCK_CONDA_ID exit /b 1' in script
+        for variable in ("TEMP", "TMP", "TMPDIR"):
+            assert script.index(f'set "{variable}=%AISTOCK_CONDA_TEMP%"') < activation
+            assert script.index(f'set "{variable}=%AISTOCK_OLD_{variable}%"') > activation
+        assert script.index('set "AISTOCK_CONDA_EXIT=%errorlevel%"') > activation
+        assert 'if not "%AISTOCK_CONDA_EXIT%"=="0"' in script
+        assert 'rmdir "%AISTOCK_CONDA_TEMP%" 2>nul' in script
+        assert "rmdir /s" not in script.lower()
+        assert 'if /i "%~1"=="--check-env" goto check_env' in script
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Concurrent CMD activation isolation is Windows-only")
+@pytest.mark.parametrize("activation_exit", [0, 7])
+def test_real_cmd_isolates_activation_and_preserves_failure(tmp_path, activation_exit):
+    fake_conda = tmp_path / "conda.bat"
+    fake_conda.write_text(f'@echo off\nset "CONDA_PREFIX={launcher.sys.prefix}"\nexit /b {activation_exit}\n')
+    scripts = []
+    for name in ("start_all_ai_stock.bat", "start_backend.bat"):
+        body = (launcher.ROOT / name).read_text()
+        for key, value in (("AISTOCK_CONDA_BAT", str(fake_conda)), ("AISTOCK_BACKEND_PYTHON", launcher.sys.executable)):
+            assignment = next(line for line in body.splitlines() if line.startswith(f'set "{key}='))
+            body = body.replace(assignment, f'set "{key}={value}"')
+        script = tmp_path / name
+        script.write_text(body)
+        scripts.append(script)
+    env = {**os.environ, "RANDOM": "11067"}  # Deliberately identical across processes.
+    def check(script):
+        return launcher.subprocess.run(["cmd.exe", "/d", "/c", "call", str(script), "--check-env"],
+                                       env=env, input="\n", capture_output=True, encoding="utf-8", errors="replace", timeout=15)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        results = list(pool.map(check, [*scripts, scripts[0]]))
+    paths = [next(line for line in result.stdout.splitlines() if line.startswith("Conda activation temp:")).split('"')[1]
+             for result in results]
+    assert len(set(paths)) == 3 and all(not Path(path).exists() for path in paths)
+    for result in results:
+        assert (result.returncode == 0) == (activation_exit == 0), result.stdout + result.stderr
+        assert ("AIstock environment ready:" in result.stdout) == (activation_exit == 0)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Real CMD dispatch contract is Windows-only")
@@ -57,6 +106,18 @@ def test_real_cmd_dispatches_three_tabs_once_without_starting_services(tmp_path)
     invalid = launcher.subprocess.run(["cmd.exe", "/d", "/c", "call", str(script), "--service", "invalid"],
                                       env=env, capture_output=True, timeout=15)
     assert invalid.returncode == 1
+    # Real Go/Node dispatch must not even require an existing Conda BAT.
+    body = script.read_text()
+    for key, value in (("AISTOCK_CONDA_BAT", str(tmp_path / "missing-conda.bat")),
+                       ("AISTOCK_BACKEND_PYTHON", str(tmp_path / "wt.exe"))):
+        assignment = next(line for line in body.splitlines() if line.startswith(f'set "{key}='))
+        body = body.replace(assignment, f'set "{key}={value}"')
+    script.write_text(body)
+    for service in ("tdx", "frontend"):
+        result = launcher.subprocess.run(["cmd.exe", "/d", "/c", "call", str(script), "--service", service],
+                                         env=env, capture_output=True, timeout=15)
+        assert result.returncode == 0, result.stderr
+        assert args_file.read_text(encoding="utf-8-sig").splitlines()[-2:] == ["--service", service]
 
 
 def test_backend_only_tab_launcher_never_controls_other_services():

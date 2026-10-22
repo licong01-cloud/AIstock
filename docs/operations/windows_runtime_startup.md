@@ -16,7 +16,15 @@ changes firewall rules, or invokes a database migration.
   keep the intended window active during the immediate request. The launcher
   does not reroute tabs after slow setup. No shared-console fallback is attempted
   if Terminal is unavailable or dispatch fails.
-- Each tab checks Conda and the absolute AIstock Python before service startup.
+- All tabs use the absolute AIstock Python for orchestration; only the backend
+  activates AIstock. TDX runs its fixed Go EXE and frontend runs Node, so neither
+  needs Conda activation. Read-only `--check` also skips activation. The backend
+  checks the Conda entry and activates with its normal hooks/DLL configuration.
+  Each activation gets a UUID-named, atomically created private directory under
+  `AIstock_runtime/startup/conda/`; TEMP, TMP and TMPDIR all point there only during
+  activation, then are restored even on failure. This isolates Conda's
+  RANDOM-based temporary filenames from other CMD processes. Only the empty owned
+  directory is removed; nonempty failure artifacts are retained with a warning.
   CMD `/k` preserves the tab and error output after exit. Supervisors and their
   service processes remain attached to their own tabs, with no extra shell profile.
   Live output has service prefixes; separate full logs are preserved.
@@ -92,6 +100,12 @@ success only means the tab was requested, not that the API is healthy.
 
 `start_backend.bat --check` checks the existing interpreter/Conda entry only;
 it does not open a tab, activate Conda, bind a port or start a service.
+
+`start_backend.bat --check-env` and `start_all_ai_stock.bat --check-env` perform
+real isolated Conda activation and verify interpreter/environment prefix agreement,
+without opening tabs, binding ports or starting applications. These are diagnostic
+commands, not additional mandatory startup gates. The backend-only entry uses the
+same private activation-temp policy as the all-service backend tab.
 
 ### All-service check and runtime verification
 
