@@ -15,7 +15,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2052",
-  "closed_at": null,
+  "closed_at": "2026-10-22T01:50:58.276671Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -244,10 +244,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\monthly-202609-closure-20261020\\known-recovered-facts-r1\\post-restart-bug2052-canonical.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2052",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b8750828f58ebf1924e3a889431502e9db46217c2a021f595186943e99ed7230",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "1800dd0b9c30b7f230a383dc8c917a99e33d19fa",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-22T01:50:45.055546Z",
+      "mode": "read_only",
+      "observed_identity": "88c4fc4c2aa8b4b50fb3aad2f77194d5d41e67fb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "9b5a62280d156f496bd164f4e281d57ecf3ab76de65430e79a6ced90dca74123",
+      "receipt_sha256": "633a58d354e5e03f474bff9a4af20046dd53d1dcf313bbda55dab72ebc0eef8b",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "65b319adb0e57dd2a60c28b0150aeff64ad7d555b4acc62356f28624bc8b0a98",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -281,7 +303,7 @@
     ],
     "validation_evidence_digest": "7cc67464b9ca8aa4626258a65ce1af8bffe2872d45fadc5d6921df5a1b7e5648"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -293,7 +315,8 @@
   "validation_evidence": [
     "pytest backend/tests/dataset_release/test_monthly_build_resume.py -q -> 67 passed",
     "pytest backend/tests/routers/test_monthly_dataset_releases.py -q -> 16 passed",
-    "gh pr checks 6549 -> passed, CI verdict SUCCESS"
+    "gh pr checks 6549 -> passed, CI verdict SUCCESS",
+    "post-restart canonical worker identity + supervised parent/child + BUILD attempt289; factor-repairs8 bound -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
