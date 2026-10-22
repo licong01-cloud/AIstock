@@ -112,13 +112,41 @@
     "hmm_risk_pr_slice"
   ],
   "risk_area": "bug",
+  "root_cause": "HMM frozen-file loader unconditionally required exporter direct-v3 state, legacy benchmark-only metadata and an unused L1 price panel. Native monthly releases instead authenticate files through their manifest/closure. Provider quote spans can also differ legitimately from PIT membership during suspensions.",
+  "fix_summary": "Add a HMM-only native monthly consumer adapter, strictly bind active/frozen manifest identity and closure receipts, verify consumed file pins and unchanged readback, reuse the existing stock-fact/H5/index kernel, retain PIT membership while checking physical Bin layout against provider quote spans. Preserve legacy direct-v3/G2-A validation and every model/feature/seed/window/threshold.",
+  "review_rounds": [
+    "Round 1: reproduced missing direct_monthly_state RED; native manifest/closure dispatch and strict identity/hash tests GREEN; real file readback exposed shared CSI provider codes, now admitted only in the provider catalog.",
+    "Round 2: separated PIT membership from normal suspended quote spans; added active/frozen identity, rehashed receipt, traversal/duplicate/indirect path, concurrent file mutation and bounded future-value tests. Filesystem errors remain typed and no database/release fallback exists."
+  ],
+  "data_preflight_results": {
+    "generation": "20260930-monthly-v2-unified-correction-4ab0b48642c3",
+    "manifest_identity": "522e8e35896e85fc9289ca2ceca1cd6127f4c7978a72766887c0429dc9b7f410",
+    "windows_fresh_process": "PASS; 388.40s; 5343 PIT stocks, 64116 field files, benchmark numerical reads bounded through 2026-03-31; socket poison enabled; zero fit and no database access.",
+    "wsl_python310_fresh_process": "PASS; 29.76s; same manifest, metadata/component hashes and Qlib preflight identity as Windows; explicit task-worktree PYTHONPATH; socket poison enabled.",
+    "qlib_preflight_sha256": "7bd87cd6adf22727e4d09334b6ca60ee19586251487f8c9218c31a3f1fb49e78",
+    "dataset_activation": "owned_by_data_preparation_window_not_performed_here",
+    "business_acceptance": "source_asset_preflight_only_not_model_or_QE_acceptance"
+  },
+  "design_compliance_review": {
+    "no_simplified_delivery": "Complete native source asset reader and identity readback; no manufactured state, substitute L1 input or placeholder production data.",
+    "no_silent_errors": "Unknown schemas, receipt/manifest/hash conflicts, missing components and mutable files fail closed; no old release, database or default-state fallback.",
+    "business_logic_unchanged": "Existing L2 20-dimensional stock-fact computation, canonical taxonomy, model, windows, seeds, thresholds, suspension and provider-absence semantics unchanged.",
+    "no_unapproved_gates": "Uses native producer contracts and existing HMM validation; no resource gates, dependency installation, new approval gate or data-production changes."
+  },
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/risk-l2/overview?run_id=88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe isolated stdin import PASS; backend.routers.hmm_risk, backend.routers.health, rotation_l1_input_bundle and monthly_release_input loaded exclusively from BUG-2065 worktree; socket poison enabled; database/network attempts=0; service_started=false; fits=0; runtime_verified=false.",
+      "Windows and WSL Python 3.10 isolated native monthly dataset preflights PASS with explicit BUG-2065 PYTHONPATH; same manifest, metadata/component SHA and Qlib preflight hash; numerical benchmark read ends 2026-03-31; active profile/dataset/database/model untouched."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
