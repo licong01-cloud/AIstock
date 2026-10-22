@@ -1,7 +1,7 @@
 # 分钟级交易时机建议与 LocalSIM 执行适配 F2 蓝图
 
-> 版本：v1.1；日期：2026-10-23；Feature tier：F2。
-> 状态：`BLUEPRINT_CONFIRMED_PHASE1_DESIGN_REVIEWED`；用户已要求开展阶段一详细设计，见[详细设计](position_timing_intraday_phase1_f2_detailed_design_20261023.md)。本次仅交付文档，代码、实验及上线均未执行。
+> 版本：v1.2；日期：2026-10-23；Feature tier：F2。
+> 状态：`PHASE1_TIMING_SOURCE_IMPLEMENTED_CONSUMERS_PENDING`；本模块核心、API、页面提醒及冻结文件决策回放已实施，见[详细设计与验收](position_timing_intraday_phase1_f2_detailed_design_20261023.md)。用户后端重启/运行核验、LocalSIM/Advisory消费接入和经济评价仍未完成。
 > 源码核查基线：`029e8e4a8a9b18446edca7f439bf333152a5565b`（本任务独立工作树起点）。
 > 唯一开发规范：`../standards/aistock_development_standard_v1.5_20260523.md`。
 > 范围：独立分钟择时核心、LocalSIM 分钟模拟执行适配、荐股可嵌入提醒；不接实盘，不适配 MiniQMT。
@@ -31,7 +31,7 @@
 
 ### 2.1 核查事实，不把存在文件等同于上线
 
-以下路径均相对本仓库，符号与源码提交用于定位；本次没有运行策略、查询数据库或确认生产模块激活状态。
+以下现状核查来自蓝图初稿时源码基线；实施增量见§7。本轮仅执行功能测试和冻结fixture决策回放，没有查询数据库、读取实时行情或确认生产模块激活状态。
 
 | 资产 | 已核实的源码语义 | 复用/缺口 |
 |---|---|---|
@@ -63,7 +63,7 @@
         LocalSIM 既有账户与绩效
 ```
 
-核心建议置于 `backend/services/position_timing/intraday/`（拟新增），不单独部署。核心不导入 FastAPI、TDX、数据库、荐股仓库或 LocalSIM 运行对象；只消费显式输入、输出新状态与决策。模型推理以后通过显式函数/权重对象注入，不改变消费接口。最初只使用少量固定实现，不建热加载平台。
+核心已置于 `backend/services/position_timing/intraday/`，不单独部署。核心不导入 FastAPI、TDX、数据库、荐股仓库或 LocalSIM 运行对象；只消费显式输入、输出新状态与决策。模型推理以后通过显式函数/权重对象注入，不改变消费接口。最初只使用少量固定实现，不建热加载平台。
 
 依赖方向：LocalSIM adapter → 纯择时核心；荐股组件 → 择时 HTTP API；择时 HTTP service → 自有计划/状态和既有只读数据能力。核心不反向依赖消费者。接口能力不等于必须建立两个 HTTP 服务，LocalSIM 优先进程内调用，提醒使用 HTTP。
 
@@ -189,7 +189,7 @@ LocalSIM 按自身冻结费用模型记账，不在本窗口覆盖默认值。�
 
 ### 第一阶段：可用闭环与接口交付
 
-下一步编写**一份紧凑的F2详细设计**：固化最小schema、规则参数、时间/成交代理、提醒状态转换和各owner文件清单。并行工作面是同一阶段，不再拆为多轮独立大项目：
+F2详细设计已固化schema、规则参数、时间/成交代理、提醒状态转换和各owner文件清单；本模块实施见§7。以下工作面属于同一阶段，不再拆为多轮独立大项目：
 
 | 工作面 | 责任与交付 | 不等待什么 |
 |---|---|---|
@@ -215,7 +215,7 @@ LocalSIM 按自身冻结费用模型记账，不在本窗口覆盖默认值。�
 
 回滚：停止新计划引用新策略，保留旧研究和提醒记录；在途模拟计划由LocalSIM owner按既有生命周期处理，不把清理文件当取消订单。提醒故障只使本组件UNAVAILABLE，不影响原荐股页面。
 
-本次 `code_change=false; experiment_started=false; database_read=false; database_write=false; dataset_mutation=false; runtime_action=false; backend_restart=noop`。仅文档和源码读取、Git元数据操作、文档校验；没有本次行情采样。未来若需后端重启由用户操作；不提前申请或执行生产迁移。
+本轮 `code_change=true; functional_fixture_replay=true; economic_experiment_started=false; database_read=false; database_write=false; dataset_mutation=false; user_runtime_action=false; backend_restart=pending_user`。前端依赖只安装于独立worktree，Playwright仅启动隔离测试前端；无行情采样、模型训练、生产迁移或用户服务进程操作。
 
 ### 6.2 风险与处置
 
@@ -250,7 +250,7 @@ LocalSIM 按自身冻结费用模型记账，不在本窗口覆盖默认值。�
 
 ### 6.4 Design Acceptance Matrix
 
-`DESIGN_VERIFIED` 仅表示条款已在设计中闭合；`gap_or_exception=none` 仅针对本次设计范围。所有新接口/核心/策略/实验仍未实施；§5中的跨模块交付是未来实施任务，不以本矩阵掩盖。
+`DESIGN_VERIFIED` 仅表示总蓝图条款在设计中闭合；`gap_or_exception=none` 仅针对设计范围。实现验收以详细设计矩阵和§7记录为准；LocalSIM/Advisory消费接入及账户经济评价仍未实施，不以本矩阵掩盖。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
@@ -267,4 +267,8 @@ LocalSIM 按自身冻结费用模型记账，不在本窗口覆盖默认值。�
 | F-011 | 本文§2.3/§5 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md | DESIGN_VERIFIED | none |
 | F-012 | 本文§6.1/§6.2/§6.4 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md | DESIGN_VERIFIED | none |
 
-用户已确认进入阶段一详细设计；本次同步交付详细设计及[LocalSIM延后接入需求](../handoff/position_timing_intraday_localsim_integration_request_20261023.md)。下一步先在择时模块实现核心、提醒和决策回放，实际可调用基础能力具备后再由用户转交模拟盘窗口；不提前修改LocalSIM或解除TWAP-only。本次不启动开发或实验，也不声称任一候选优于现有执行策略。
+## 7. 2026-10-23 实施增量与下一步
+
+本模块已实现纯核心B0/C1/C2、严格分钟/日级输入、独立不可变状态、五个API、可导入组件及现有页面挂载、prepare/run/inspect/exact retry决策回放。实际证据见[实施验收记录](../analysis/position_timing_intraday_phase1_implementation_20261023.md)。功能回放仅使用标注的合成fixture，不代表R8历史研究或实盘采样，不给出收益优劣结论。
+
+源码合入后由用户重启后端，再只读核验加载身份/API；可将[LocalSIM接入包](../handoff/position_timing_intraday_localsim_integration_request_20261023.md)转交模拟盘窗口。纯SDK无需等待后端重启才可被其离线消费；LocalSIM产品接入和匹配成交代理的D0/1/3/5经济验证由owner完成。荐股挂载/真实来源resolver亦由对应窗口接入，本窗口没有跨模块修改，也不解除TWAP-only。以上接入与经济验证完成前，不宣称完整阶段或双消费产品交付。

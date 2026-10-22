@@ -1,9 +1,9 @@
 # 分钟择时阶段一 F2 详细设计：独立核心、提醒接口与延后消费接入
 
-> 版本：v1.0；日期：2026-10-23；状态：`DESIGN_REVIEWED_NOT_IMPLEMENTED`；Feature tier：F2。
-> 上位：[分钟择时与LocalSIM蓝图](position_timing_intraday_advice_localsim_blueprint_f2_20261023.md)。用户已要求开展阶段一详细设计，基础能力就绪后再转交LocalSIM窗口接入。
-> 本文合入不等于源码、模型、实验或运行态交付。本次只修改文档，不启动开发/训练/回放，不操作数据库/数据集或服务进程。
-> 源码核查基线：`c8a6ad045fd38c3b57540b1d57fd3bd9e1a48b21`；上一轮蓝图由本分支携带合入，不另造第二套上位规范。
+> 版本：v1.1；日期：2026-10-23；状态：`SOURCE_IMPLEMENTED_RUNTIME_PENDING`；Feature tier：F2。
+> 上位：[分钟择时与LocalSIM蓝图](position_timing_intraday_advice_localsim_blueprint_f2_20261023.md)。本模块核心/API/页面/决策回放已实施并有本地功能证据；LocalSIM与Advisory产品接入仍交owner。
+> 源码交付不等于生产已加载、模型训练或经济有效。后端重启及重启后运行核验未执行；未查询数据库、抓取行情、修改数据集或控制用户服务。
+> 原设计基线：`c8a6ad045fd38c3b57540b1d57fd3bd9e1a48b21`；实施起点：`cb303549a6ced76a1a311b48b490085de2aedc2e`。实际变更与验证见[实施验收记录](../analysis/position_timing_intraday_phase1_implementation_20261023.md)。
 > 唯一开发权威：`../standards/aistock_development_standard_v1.5_20260523.md`。
 
 ## 1. Background / Scope / Non-goals
@@ -39,7 +39,7 @@ TDX/冻结文件 → NormalizedMinutePrefix → evaluate（纯函数）
 
 同一输入、policy、前态、执行视图和时钟得到同一决策。核心不得导入TDX、FastAPI、DB、Advisory或LocalSIM运行对象。HTTP只支持人工建议；未来LocalSIM用进程内函数，不通过HTTP把“提醒”转换为交易。
 
-### 2.2 后续代码允许范围（本次尚不修改）
+### 2.2 本轮已实施文件范围
 
 | 文件 | 职责 |
 |---|---|
@@ -51,20 +51,20 @@ TDX/冻结文件 → NormalizedMinutePrefix → evaluate（纯函数）
 | 同目录 `service.py` | API应用逻辑、来源校验、幂等批评估、轻量缓存、claim |
 | 同目录 `replay.py` | prepare/run/inspect/exact retry的决策/延迟意图回放，无账户撮合 |
 | `backend/routers/position_timing.py` | 追加intraday路由，保留旧接口行为，不改backend main |
-| `frontend/src/components/position-timing/IntradayTimingPanel.tsx` | 自包含API调用、状态展示、刷新和toast；props注入源刷新回调，不充当后端权威resolver |
+| `frontend/src/app/position-timing/IntradayTimingPanel.tsx` | 自包含、可导入的API/提醒组件；沿用本模块ownership路径，props注入源刷新回调，不充当后端权威resolver |
 | `frontend/src/app/position-timing/page.tsx` | 挂载新组件；旧日频卡片/提醒不改逻辑 |
 | `backend/tests/position_timing/test_intraday_core.py` | 因果、规则、状态及可执行性边界 |
 | `backend/tests/position_timing/test_intraday_api_store.py` | 接口、CAS/恢复/claim和无交易副作用 |
 | `backend/tests/position_timing/test_intraday_replay.py` | 冻结身份、前缀/延迟意图、inspect/retry |
-| `frontend/tests/position-timing-intraday.spec.ts` | 使用现有Playwright测试发现规则实现一份行为测试，不新建runner |
+| `frontend/tests/position-timing/position-timing.spec.ts` | 在现有CI已执行的Playwright文件中追加分钟提醒业务测试，复用runner |
 
-`frontend/playwright.config.ts`已确认收集`tests/**/*.spec.ts`，`package.json`已有`test:e2e`；不增加Jest/Vitest或另起测试框架。不创建大批内部实现断言或重复fixture；已有规则/日历/价格计算不重复一套测试。
+实施核查确认：现有ownership精确覆盖`frontend/src/app/position-timing/**`和`frontend/tests/position-timing/**`，CI前端计划执行既有`position-timing.spec.ts`。因此组件保持可导入但放在本模块目录，测试追加既有文件，不要求其他窗口扩展catalog。此项为文件布局收敛，不改变接口/产品范围。`package.json`已有Playwright；不增加Jest/Vitest或重复fixture、内部实现断言。
 
 ### 2.3 已核实复用点
 
 - `tdx_adapter.fetch_minute_kline_tdx` 已按单日有界读取；仍需本模块闭合bar/新鲜度判定，不能继承旧报价5分钟阈值。
 - 全局 `TradingCalendarStatusService` / `simulation_data.trading_calendar.TradeCalendarProvider` 提供交易日，不能把交易日列表误当交易时段列表。时段由输入中的显式session snapshot约束，缺失不按工作日猜。
-- 现有 `PositionTimingDependencies` 中日级快照/支持事实loader及 `trading_core.a_share_live_limit_rule.derive_live_reference_limit_prices` 是只读/纯计算复用候选；适配前逐字段验证来源日期，不调用原日频materialize来“顺便”获取数据。
+- 线上实际复用 `DailyTradingContextProvider.load_supporting_facts/load_stk_limit_authority_attempt` 的只读入口，验证股票和日期；不加载含当日收盘/历史fallback的日频快照，不调用旧日频materialize来“顺便”取数据。缺限价行返回未知，不伪造合法无限价状态。
 - `PositionTimingArtifactStore` 提供canonical、no-replace、atomic-replace与文件锁范式。新namespace单独解析新schema，不把新事件塞进只支持旧三类事件的 `_validated_event_payload`。
 - LocalSIM真实owner为 `simulation_execution/localsim`；`paper_trading_v2/broker/localsim.py`仅兼容导出。`LocalSimPlanner.assert_plan_uses_twap` 和 `ExecutionAlgoAdapter.compute_step → StepFill` 的约束不变；`FeeModel`不等于个人分项费用。
 
@@ -76,7 +76,7 @@ TDX/冻结文件 → NormalizedMinutePrefix → evaluate（纯函数）
 |---|---|
 | `position_timing_intraday_plan_v1` | `plan_id`、正整数`revision`、`source_kind/ref/revision`、canonical symbol、BUY/SELL、target_trade_date、valid_from/until、lifecycle、policy_id/hash、price_constraint、可空target_quantity、quantity_source_ref；日期内有效，不允许悄悄跨日 |
 | `position_timing_intraday_market_v1` | session/calendar snapshot及hash、日级limit/suspend/reference来源与available_at、当日已完成bars；bar含start/end、OHLC原币元、volume_shares、可空amount_cny、received_at、源版本 |
-| `position_timing_intraday_execution_view_v1` | consumer_kind、confirmed/reserved quantity、cash/sellable及身份、last_confirmed_batch、feedback_id；HUMAN_UNKNOWN字段为null，模拟输入才要求完整 |
+| `position_timing_intraday_execution_view_v1` | consumer_kind、symbol/trade_date/available_at、confirmed/reserved quantity、cash/sellable及身份、last_confirmed_batch、last_confirmed_at、feedback_id；HUMAN_UNKNOWN字段为null，模拟输入才要求完整；身份匹配且available_at不晚于决策 |
 | `position_timing_intraday_state_v1` | plan/policy身份、last_processed_bar、时钟事件、批次、机会编号、last_condition、last_decision_ref；不能把alert_count当executed_quantity |
 | `position_timing_intraday_decision_v1` | 决策身份、输入/state hash、as_of、WAIT/OPPORTUNITY/EXPIRED/UNAVAILABLE、batch_id、建议比例/可空数量、原因、data_as_of、valid_until、source_status、execution_status |
 
@@ -166,13 +166,13 @@ C2分批目标累计比例为1/3、2/3、1（序列化为整数分子/分母，�
 
 方案从蓝图的逐计划evaluate细化为有界批评估，减少页面对TDX重复请求；没有增加第二业务能力。路由错误：422 schema/不支持组合，409 revision/幂等内容冲突，404不存在；正常尚无bar/价不合适/停牌等作为200内typed状态，源I/O异常或预算未完成逐项返回UNAVAILABLE/DEFERRED，禁止整批空success。错误日志不含密钥、凭证或外部原始payload。
 
-source validation在evaluate开始及claim前执行：MANUAL核本模块revision；未来ADVISORY由注入resolver核当前ref/revision/lifecycle。不得仅接受浏览器 `source_valid=true`。只读resolver预算包含在15秒内；无法核实则 `SOURCE_UNVERIFIED` 并保留历史显示，不更改源模块名单。已有系统访问控制沿用，不建设新的审批/RBAC系统，也不绕过已有鉴权。
+source validation在evaluate开始及claim前执行：MANUAL核本模块revision；未来ADVISORY由注入resolver核当前ref/revision/lifecycle。不得仅接受浏览器 `source_valid=true`。评估resolver预算包含在15秒内，claim最多等待5秒且共用4个有界worker槽；无法核实则 `SOURCE_UNVERIFIED` 并保留历史显示，不更改源模块名单。已有系统访问控制沿用，不建设新的审批/RBAC系统，也不绕过已有鉴权。
 
 GET只报告最后核验来源的时间与已知状态，不调用外部resolver，因此不保证发现尚未观察到的源撤销；领取时必须重新核验。过期/未知状态不能标成“当前已核实”。每个计划提交使用实际输入完成后的as_of，不能用请求开始时间接纳后来才收到的bar；批响应包含逐项evaluated_at，不声称50项是同一市场瞬时快照。
 
 ### 5.2 幂等、存储与崩溃恢复
 
-根目录沿用 `POSITION_TIMING_ARTIFACT_ROOT`，新数据仅在 `intraday_v1/`：plans、inputs、transitions、heads、claims、batches及research。路径由经过约束的ID或内容hash生成，拒绝路径分隔符/越界，不接受客户端传任意磁盘路径。
+根目录沿用 `POSITION_TIMING_ARTIFACT_ROOT`，新数据仅在 `intraday_v1/`：inputs、transitions（含不可变plan版本）、heads、requests（幂等预留）、claims、batches、locks及research。路径由经过约束的ID或内容hash生成，拒绝路径分隔符/越界，不接受客户端传任意磁盘路径。
 
 每计划锁保护CAS；锁持有期间不访问网络。获取锁最多1秒，超时返回 `BUSY_RETRYABLE`；不能直接继承无限等待而锁住API。复用既有Windows/Linux锁与原子写范式，在本模块实现有界等待，不修改共享工具默认值。
 
@@ -200,7 +200,7 @@ claim在相同计划锁内，检查head后写独立no-replace领取记录；即�
 
 v1离线输入是冻结JSONL/Parquet的明确映射列，不要求新建数据集：inputs.py只在本研究产物目录建立必要的不可变规范化视图，原candidate只读；不能利用规范化偷偷补缺失值。缺raw还原、单位、日级事实或身份时输出source failure，不能等行情来补研究。开始读取可用于收益计算的未来执行bar之前，完成整个spec的source身份和覆盖检查；请求中的策略输入永远只读前缀。
 
-run输出 `decisions`、`opportunities`、`delay_intents` 和receipt，不生成虚构账户NAV。inspect重算request/policy/input/output hash、行数、时间因果、计划保留与原因分布；exact retry同产物或ALREADY_MATERIALIZED。receipt区分 `decision_replay_complete` 与 `economic_evaluation=NOT_RUN_LOCALSIM_ADAPTER_PENDING`。
+run输出 `decisions`、`opportunities`、`delay_intents` 和receipt，不生成虚构账户NAV。inspect重算request/policy/input/output hash、行数、时间因果、计划保留与原因分布；exact retry同产物或ALREADY_MATERIALIZED。Python源码身份采用UTF8_SOURCE_LF_V1（只统一Git LF/CRLF换行），数据文件仍校验原始字节SHA，不放宽数据身份。receipt区分 `decision_replay_complete` 与 `economic_evaluation=NOT_RUN_LOCALSIM_ADAPTER_PENDING`。
 
 首次验证用明确冻结的少量计划窗口覆盖买卖、午休、收盘、缺bar、暂停/限价、计划变更及partial反馈模拟；fixture用于功能而不是获利证据。先不启动新的全市场策略搜索。真实历史人口与研究窗口在实施后的首个request中按可用文件显式固定，不事后按收益删股缩期。
 
@@ -256,11 +256,11 @@ LocalSIM沿用自身冻结费用/父订单身份，分批不得重复或漏收�
 
 源码上线仅挂载新namespace和本模块页面，不改旧日频cards/alerts、原策略/模型路由、共享默认值或其他模块。未配置模型不会加载模型，第一版无需模型资产。回滚关闭新页面入口/不再创建新revision，保留不可变证据；不覆盖历史策略和在途LocalSIM实例。
 
-本次仅文档：database/experiment/runtime/process均noop，无依赖安装、无生产配置修改。后续实现也不安排数据库DDL；若真实需要应另向owner提出具体需求。backend重启始终用户执行。
+本轮实现与验证：database/dataset/用户runtime/process均noop；仅在独立worktree安装既有lockfile声明的前端测试依赖、运行隔离Playwright前端和冻结功能fixture回放。无训练/账户收益实验，无生产配置修改或数据库DDL。backend重启始终用户执行。
 
 ## 9. Design Acceptance Index
 
-本表验收本次详细设计，不是未开发功能。`DESIGN_VERIFIED`仅表示设计条款经审核闭合；实现状态统一为NOT_IMPLEMENTED，LocalSIM接入明确DEFERRED_TO_OWNER。未来实施另附源码/测试/API证据，不以本表代替。
+本表验收本模块实施范围。`SOURCE_VERIFIED`表示源码与本地功能证据闭合，不表示生产已加载或有收益；`CONTRACT_VERIFIED`用于用户明确延后至owner的消费/经济合同，不伪称这些消费者已经接入。LocalSIM/Advisory接入、后端重启后核验及经济评价分别保持待完成。
 
 | ID | 验收设计条款 |
 |---|---|
@@ -283,17 +283,17 @@ LocalSIM沿用自身冻结费用/父订单身份，分批不得重复或漏收�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-101 | 本文§1/§7 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-102 | 本文§2 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-103 | 本文§3.1/§5.1 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-104 | 本文§3.2/§3.3 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-105 | 本文§4.1/§4.2 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-106 | 本文§4.3 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-107 | 本文§5.1 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-108 | 本文§5.2 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-109 | 本文§5.3 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-110 | 本文§6.1 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-111 | 本文§6.2 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-112 | 本文§6.3 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-113 | 本文§6.4 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
-| F-114 | 本文§7/§8 | artifact:docs/analysis/position_timing_intraday_phase1_design_review_20261023.md | DESIGN_VERIFIED | none |
+| F-101 | intraday/__init__.py、service.py；本文§1/§7 | backend/tests/position_timing/test_isolation.py | SOURCE_VERIFIED | none |
+| F-102 | backend/services/position_timing/intraday/；本文§2 | backend/tests/position_timing/test_intraday_core.py | SOURCE_VERIFIED | none |
+| F-103 | intraday/contracts.py、service.py | backend/tests/position_timing/test_intraday_api_store.py | SOURCE_VERIFIED | none |
+| F-104 | intraday/inputs.py、core.py | backend/tests/position_timing/test_intraday_core.py | SOURCE_VERIFIED | none |
+| F-105 | intraday/contracts.py、core.py | backend/tests/position_timing/test_intraday_core.py | SOURCE_VERIFIED | none |
+| F-106 | intraday/core.py、service.py | backend/tests/position_timing/test_intraday_api_store.py | SOURCE_VERIFIED | none |
+| F-107 | backend/routers/position_timing.py、intraday/service.py | backend/tests/position_timing/test_intraday_api_store.py | SOURCE_VERIFIED | none |
+| F-108 | intraday/store.py、service.py | backend/tests/position_timing/test_intraday_api_store.py | SOURCE_VERIFIED | none |
+| F-109 | frontend/src/app/position-timing/IntradayTimingPanel.tsx、page.tsx | frontend/tests/position-timing/position-timing.spec.ts | SOURCE_VERIFIED | none |
+| F-110 | intraday/replay.py、inputs.py | backend/tests/position_timing/test_intraday_replay.py；artifact:docs/analysis/position_timing_intraday_phase1_implementation_20261023.md | SOURCE_VERIFIED | none |
+| F-111 | intraday/replay.py | backend/tests/position_timing/test_intraday_replay.py | SOURCE_VERIFIED | none |
+| F-112 | 本文§6.3；LocalSIM延后接入需求 | artifact:docs/handoff/position_timing_intraday_localsim_integration_request_20261023.md | CONTRACT_VERIFIED | none |
+| F-113 | 三个intraday测试、既有API/隔离测试与前端用例 | artifact:docs/analysis/position_timing_intraday_phase1_implementation_20261023.md | SOURCE_VERIFIED | none |
+| F-114 | 本文§7/§8及转交包 | artifact:docs/handoff/position_timing_intraday_localsim_integration_request_20261023.md | CONTRACT_VERIFIED | none |
