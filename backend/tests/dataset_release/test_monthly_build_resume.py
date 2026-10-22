@@ -13,6 +13,9 @@ import pytest
 import numpy as np
 import pandas as pd
 from backend.services.dataset_release import monthly_fact_correction as factor_correction_subject
+from backend.services.dataset_release import monthly_index_repair as index_repair_subject
+from backend.services.dataset_release.index_contract import DOMESTIC_INDEX_DEFINITIONS
+from backend.services.dataset_release.index_materializer import _index_csv_frames, _to_context_frame
 from backend.services.dataset_release.monthly_unified import MonthlyReleaseConflict, MonthlyReleaseService
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
@@ -1234,3 +1237,292 @@ def test_factor_correction_next_ready_correction_retains_completed_factor_proof(
     assert seed_completed_exports(context=context, staging_root=staging, compiled=compiled, cas=cas)
     seeded = MonthlyBuildResume(context=context, compiled=compiled, staging_root=staging, release_root=tmp_path, cas=cas)
     assert seeded.record["steps"]["fact-correction"] == plan[factor_correction_subject.BINDING]["authority_ref"]
+
+
+def _index_fixture(tmp_path):
+    repair = tmp_path / 'data_repair_staging'
+    out = repair / 'index-history'
+    out.mkdir(parents=True)
+    baseline = tmp_path / 'backtest_dataset_candidates/base'
+    baseline.mkdir(parents=True)
+    manifest = baseline / 'qe_dataset_manifest.json'
+    manifest.write_text('{}')
+    rows = [dict(ts_code=d.daily_code,trade_date=day,open=10,high=12,low=9,close=11,
+                 pre_close=10,pct_chg=10,vol=5,amount=50)
+            for d in DOMESTIC_INDEX_DEFINITIONS for day in ['2026-08-31','2026-09-30']]
+    source = out / 'source.json'
+    source.write_text(json.dumps(dict(schema_version='aistock_frozen_index_facts_v1',
+        source_dataset='market.index_daily', rows=rows, captured_at='2026-10-20T00:00:00+00:00')))
+    context = _to_context_frame(rows)
+    context.to_parquet(out/'index_context.parquet')
+    raw = pd.DataFrame([dict(ts_code=r['ts_code'],trade_date=pd.Timestamp(r['trade_date']),
+        **{k:float(r[k]) for k in ['open','high','low','close','amount']},volume=float(r['vol'])*100) for r in rows])
+    raw.to_hdf(out/'index_daily.h5',key='data',format='fixed')
+    (baseline/'index_context').mkdir()
+    for name in ['index_daily.h5','index_context.parquet']:
+        (baseline/'index_context'/name).write_bytes((out/name).read_bytes())
+    inventory = []
+    for code,frame in _index_csv_frames(context).items():
+        for field in frame.columns[2:]:
+            path = out/'index_features'/code.lower()/(field+'.day.bin')
+            path.parent.mkdir(parents=True,exist_ok=True)
+            original = np.array([0,np.nan,float(frame[field].iloc[-1])],dtype='<f4').tobytes()
+            target = np.r_[np.float32(0),frame[field].to_numpy(dtype='<f4')].astype('<f4').tobytes()
+            path.write_bytes(target)
+            inventory.append(dict(code=code,feature=field,target_path=str(path),
+                original_sha256=hashlib.sha256(original).hexdigest(),corrected_sha256=_index_sha(path)))
+    receipt = dict(schema_version=index_repair_subject.PRODUCER_SCHEMA,baseline_candidate=str(baseline),
+        source_sha256=_index_sha(source),raw_h5_sha256=_index_sha(out/'index_daily.h5'),
+        context_parquet_sha256=_index_sha(out/'index_context.parquet'),inventory=inventory,
+        status='PRIVATE_COMPONENT_NOT_PUBLISHED', database_write=False,profile_write=False,runtime_action=False,
+        full_source_calendar_coverage_verified=True,no_quote_interpolation=True,
+        raw_h5_amount_unit='thousand_cny',normalized_and_bin_amount_unit='cny',source_rows=len(rows))
+    receipt_path = out/'receipt.json'
+    receipt_path.write_text(json.dumps(receipt))
+    inputs = dict(receipt_path=str(receipt_path),receipt_sha256=_index_sha(receipt_path))
+    cas = CASStore(ControlStore.initialize(tmp_path/'control').root)
+    base_ref = dict(sha256=_index_sha(manifest))
+    return repair, out, inputs, cas, base_ref
+
+
+def _index_sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_index_adoption_capture_freezes_existing_outputs_and_source_units(tmp_path):
+    repair,out,inputs,cas,base = _index_fixture(tmp_path)
+    result = index_repair_subject.capture_index_repairs(inputs,repair_root=repair,base_manifest_ref=base,cutoff='2026-09-30',cas=cas)
+    assert len(result['files']) == 146
+    assert result['source_rows'] == 24 and result['database_write'] is False
+    assert result['base_manifest_ref'] == base
+    assert cas.get_json(result['source_ref'])['source_dataset'] == 'market.index_daily'
+
+
+@pytest.mark.parametrize('defect',['source','receipt','output','baseline','wrong_index','duplicate','unit'])
+def test_index_adoption_capture_rejects_drift_and_cross_component_data(tmp_path,defect):
+    repair,out,inputs,cas,base = _index_fixture(tmp_path)
+    receipt = json.loads((out/'receipt.json').read_bytes())
+    if defect == 'source':
+        (out/'source.json').write_text('{}')
+    elif defect == 'output':
+        (out/'index_context.parquet').write_bytes(b'bad')
+    elif defect == 'baseline':
+        base['sha256'] = '0'*64
+    elif defect == 'wrong_index':
+        receipt['inventory'][0]['code'] = '600519.SH'
+    elif defect == 'duplicate':
+        receipt['inventory'].append(receipt['inventory'][0])
+    elif defect == 'unit':
+        receipt['raw_h5_amount_unit'] = 'cny'
+    else:
+        inputs['receipt_sha256'] = '0'*64
+    if defect in {'wrong_index','duplicate','unit'}:
+        (out/'receipt.json').write_text(json.dumps(receipt))
+        inputs['receipt_sha256'] = _index_sha(out/'receipt.json')
+    with pytest.raises((ValueError,KeyError)):
+        index_repair_subject.capture_index_repairs(inputs,repair_root=repair,base_manifest_ref=base,cutoff='2026-09-30',cas=cas)
+
+
+def _index_prepared(tmp_path):
+    repair,out,inputs,cas,base = _index_fixture(tmp_path)
+    authority = index_repair_subject.capture_index_repairs(inputs,repair_root=repair,base_manifest_ref=base,cutoff='2026-09-30',cas=cas)
+    root = tmp_path/'releases/.staging/correction.building'
+    root.mkdir(parents=True)
+    files = {}
+    features = []
+    for row in authority['files']:
+        path = root/row['relative_path']
+        path.parent.mkdir(parents=True,exist_ok=True)
+        if row['relative_path'].endswith('.bin'):
+            values = np.frombuffer(cas.get_bytes(cas.validate_reference_metadata(row['target_ref'])),dtype='<f4').copy()
+            values[1] = np.nan
+            path.write_bytes(values.tobytes())
+            features.append(dict(instrument=row['code'],feature=row['feature'],target_sha256=_index_sha(path),
+                target_size=path.stat().st_size,target_signature=list(_signature(path)),start_index=0,end_index=1))
+        else:
+            path.write_bytes(b'original')
+        row['original_sha256'] = _index_sha(path)
+        files[row['relative_path']] = list(_signature(path))
+    daily = dict(native_writer=dict(feature_receipts=features),cutoff='2026-09-30')
+    native = root/'daily_bin/materialization_receipt.json'
+    native.write_text(json.dumps(daily))
+    files['daily_bin/materialization_receipt.json'] = list(_signature(native))
+    index = dict(month_rows=12,rows=12,files=[dict(relative_path=r['relative_path'].removeprefix('index_context/'))
+        for r in authority['files'] if r['relative_path'].startswith('index_context/')])
+    index_path = root/'index_context/index_materialization_receipt.json'
+    index_path.write_text(json.dumps(index))
+    files['index_context/index_materialization_receipt.json'] = list(_signature(index_path))
+    prep = dict(prepare_receipt_ref=cas.put_json(dict(refs=dict(index_receipt=cas.put_json(index).as_dict()))).as_dict())
+    final = dict(finalize_receipt_ref=cas.put_json(dict(daily_receipt_ref=cas.put_json(daily).as_dict())).as_dict())
+    record = dict(binding_digest='b'*64,files=files,steps=dict(prepare=cas.put_json(prep).as_dict(),
+        **{'finalize-bins':cas.put_json(final).as_dict()}))
+    journal = tmp_path/'journal.json'
+    _atomic(journal,record)
+    resume = SimpleNamespace(root=root,path=journal,record=record,
+        context=SimpleNamespace(operation_id='operation',checkpoint=lambda:None))
+    binding = dict(operation_id='operation',target_cutoff='2026-09-30',authority_ref=cas.put_json(authority).as_dict())
+    plan = dict(target_cutoff='2026-09-30',monthly_ready_correction=dict(base_manifest_ref=base),
+        **{index_repair_subject.BINDING:binding})
+    return resume,prep,final,plan,cas,authority
+
+
+def test_index_adoption_apply_copy_on_write_updates_real_pins_and_is_idempotent(tmp_path):
+    resume,prep,final,plan,cas,authority = _index_prepared(tmp_path)
+    target = resume.root/authority['files'][0]['relative_path']
+    old = tmp_path/'published.bin'
+    os.link(target,old)
+    before = old.read_bytes()
+    result_p,result_f = index_repair_subject.apply_index_repairs(resume,prepare=prep,finalized=final,plan=plan,cas=cas)
+    assert old.read_bytes() == before and target.read_bytes() != before
+    index = cas.get_json(cas.get_json(result_p['prepare_receipt_ref'])['refs']['index_receipt'])
+    assert index['normalized_parquet_scope'] == 'frozen_history_and_month_delta'
+    daily = cas.get_json(cas.get_json(result_f['finalize_receipt_ref'])['daily_receipt_ref'])
+    assert daily['index_fact_correction']['authority_ref'] == plan[index_repair_subject.BINDING]['authority_ref']
+    assert daily['native_writer']['feature_receipts'][0]['target_signature'] == list(_signature(target))
+    assert index_repair_subject.apply_index_repairs(resume,prepare=result_p,finalized=result_f,plan=plan,cas=cas) == (result_p,result_f)
+
+
+def test_index_adoption_apply_rejects_changed_output_before_any_replacement(tmp_path):
+    resume,prep,final,plan,cas,authority = _index_prepared(tmp_path)
+    target = resume.root/authority['files'][-1]['relative_path']
+    target.write_bytes(b'concurrent')
+    first = resume.root/authority['files'][0]['relative_path']
+    before = first.read_bytes()
+    with pytest.raises(ValueError,match='changed|provenance|original'):
+        index_repair_subject.apply_index_repairs(resume,prepare=prep,finalized=final,plan=plan,cas=cas)
+    assert first.read_bytes() == before
+
+
+def test_index_adoption_commit_interruption_recovers_without_export_or_old_release_write(tmp_path,monkeypatch):
+    resume,prep,final,plan,cas,authority = _index_prepared(tmp_path)
+    replace = index_repair_subject.os.replace
+    count = 0
+    def interrupted(path,payload):
+        nonlocal count
+        count += 1
+        if count == 2:
+            raise OSError('interruption')
+        return replace(path,payload)
+    monkeypatch.setattr(index_repair_subject.os,'replace',interrupted)
+    with pytest.raises(OSError,match='interruption'):
+        index_repair_subject.apply_index_repairs(resume,prepare=prep,finalized=final,plan=plan,cas=cas)
+    monkeypatch.setattr(index_repair_subject.os,'replace',replace)
+    resume.record = index_repair_subject.recover_index_repairs(root=resume.root,journal=resume.path,record=resume.record,cas=cas)
+    p = cas.get_json(resume.record['steps']['prepare'])
+    f = cas.get_json(resume.record['steps']['finalize-bins'])
+    assert index_repair_subject.apply_index_repairs(resume,prepare=p,finalized=f,plan=plan,cas=cas) == (p,f)
+
+
+@pytest.mark.parametrize('field,new,accepted',[
+    ('amount',50000,True),('amount',50,True),('amount',5000,False),('close',50000,False)])
+def test_index_adoption_only_diagnosed_amount_unit_conversion_can_change_finite_values(field,new,accepted):
+    old = np.array([0,50],dtype='<f4').tobytes()
+    target = np.array([0,new],dtype='<f4').tobytes()
+    if accepted:
+        index_repair_subject.validate_feature_change(old,target,field)
+    else:
+        with pytest.raises(ValueError,match='finite fact'):
+            index_repair_subject.validate_feature_change(old,target,field)
+
+
+def test_index_adoption_binding_uses_existing_operator_route_without_resume_or_activation(tmp_path):
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseService, MonthlyReleaseConflict
+    from backend.routers.monthly_dataset_releases import bind_monthly_index_fact_repairs,UnifiedMonthlyRepairInputsRequest
+    repair,out,inputs,cas,base = _index_fixture(tmp_path)
+    root = tmp_path/'operation'
+    root.mkdir()
+    plan = dict(candidate_root=str(tmp_path/'backtest_dataset_candidates/correction'),target_cutoff='2026-09-30',
+                monthly_ready_correction=dict(base_manifest_ref=base))
+    state = dict(status='FAILED',current_stage='BUILD')
+    checkpoints = {'SOURCE':{'canonical_sha256':'b'*64}}
+    service = SimpleNamespace(store=SimpleNamespace(operation_root=lambda _:root,read_plan=lambda _:plan,
+        read_state=lambda _:state,read_checkpoint=lambda _,s:checkpoints.get(s),replace_plan=lambda _,p:plan.update(p)))
+    adapter = SimpleNamespace(bind_index_fact_repairs=lambda op,**kwargs:
+        MonthlyReleaseService.bind_index_fact_repairs(service,op,cas=cas,**kwargs))
+    bound = bind_monthly_index_fact_repairs('operation',UnifiedMonthlyRepairInputsRequest(inputs=inputs),
+        SimpleNamespace(principal_id='operator'),adapter)
+    assert bound['data']['status'] == 'BOUND'
+    assert plan[index_repair_subject.BINDING]['activation_authorized'] is False
+    assert state['status'] == 'FAILED' and set(checkpoints) == {'SOURCE'}
+    assert bound == bind_monthly_index_fact_repairs('operation',UnifiedMonthlyRepairInputsRequest(inputs=inputs),
+        SimpleNamespace(principal_id='operator'),adapter)
+    with pytest.raises(MonthlyReleaseConflict,match='binding changed'):
+        MonthlyReleaseService.bind_index_fact_repairs(service,'operation',inputs={},principal='operator',cas=cas)
+
+
+@pytest.mark.parametrize('defect',['running','published','wrong_operation','cutoff','authority'])
+def test_index_adoption_apply_never_writes_outside_the_same_private_operation(tmp_path,defect):
+    resume,prep,final,plan,cas,authority = _index_prepared(tmp_path)
+    if defect == 'running':
+        resume.path = None
+    elif defect == 'published':
+        (resume.root/'qe_dataset_manifest.json').write_text('{}')
+    elif defect == 'wrong_operation':
+        plan[index_repair_subject.BINDING]['operation_id'] = 'other'
+    elif defect == 'cutoff':
+        plan['target_cutoff'] = '2026-10-30'
+    else:
+        plan['monthly_ready_correction']['base_manifest_ref'] = {'sha256':'c'*64}
+    first = resume.root/authority['files'][0]['relative_path']
+    before = first.read_bytes()
+    with pytest.raises(ValueError):
+        index_repair_subject.apply_index_repairs(resume,prepare=prep,finalized=final,plan=plan,cas=cas)
+    assert first.read_bytes() == before
+
+
+def test_index_adoption_committed_transaction_cleanup_keeps_later_steps(tmp_path,monkeypatch):
+    resume,prep,final,plan,cas,authority = _index_prepared(tmp_path)
+    unlink = index_repair_subject.Path.unlink
+    def interrupted(path,*args,**kwargs):
+        if path == index_repair_subject._pending(resume.root):
+            raise OSError('after commit')
+        return unlink(path,*args,**kwargs)
+    monkeypatch.setattr(index_repair_subject.Path,'unlink',interrupted)
+    with pytest.raises(OSError,match='after commit'):
+        index_repair_subject.apply_index_repairs(resume,prepare=prep,finalized=final,plan=plan,cas=cas)
+    monkeypatch.setattr(index_repair_subject.Path,'unlink',unlink)
+    resume.record = json.loads(resume.path.read_bytes())
+    resume.record['steps']['later'] = cas.put_json({'status':'PASS'}).as_dict()
+    result = index_repair_subject.recover_index_repairs(root=resume.root,journal=resume.path,record=resume.record,cas=cas)
+    assert result == resume.record and 'later' in result['steps']
+
+
+@pytest.mark.parametrize('defect',['running','no_source','not_correction','build_done'])
+def test_index_adoption_binding_cannot_mutate_a_running_or_published_operation(tmp_path,defect):
+    from backend.services.dataset_release.monthly_unified import MonthlyReleaseService,MonthlyReleaseConflict
+    root = tmp_path/'operation'
+    root.mkdir()
+    plan = dict(monthly_ready_correction={})
+    state = dict(status='FAILED',current_stage='BUILD')
+    checkpoints = {'SOURCE':{}}
+    if defect == 'running':
+        state['status'] = 'RUNNING'
+    elif defect == 'no_source':
+        checkpoints.clear()
+    elif defect == 'not_correction':
+        plan.clear()
+    else:
+        checkpoints['BUILD'] = {}
+    service = SimpleNamespace(store=SimpleNamespace(operation_root=lambda _:root,
+        read_plan=lambda _:plan,read_state=lambda _:state,read_checkpoint=lambda _,s:checkpoints.get(s)))
+    with pytest.raises(MonthlyReleaseConflict,match='idle retained BUILD'):
+        MonthlyReleaseService.bind_index_fact_repairs(service,'operation',inputs={},principal='operator')
+
+
+def test_index_adoption_runner_adopts_index_after_existing_factor_and_quote_repairs(tmp_path,monkeypatch):
+    from backend.services.dataset_release import monthly_mature_build_runner as runner_module
+    from backend.tests.dataset_release.test_monthly_mature_build_runner import _native_month_fixture
+    runner,context,staging,compiled,operation,_,_ = _native_month_fixture(tmp_path)
+    invoked = []
+    def stage(invocation):
+        result = {'schema_version':'dataset_release_build_stage_result_v1','stage':invocation.stage,'status':'PASS'}
+        if invocation.stage == 'prepare':
+            result['qlib_dump_operations'] = [operation]
+        return result
+    def applied(resume,*,prepare,finalized,**kwargs):
+        invoked.append('index')
+        return prepare,finalized
+    monkeypatch.setattr(runner_module,'run_build_stage',stage)
+    monkeypatch.setattr(index_repair_subject,'apply_index_repairs',applied)
+    runner.execute(context=context,staging_root=staging,compiled=compiled)
+    assert invoked == ['index']

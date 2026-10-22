@@ -1,0 +1,217 @@
+{
+  "actual": "September operation dmr_63a313d97fd046a38d5a876265565014 retains completed price exports and a sealed prepare receipt. Already prepared index-history-fact-rebuild-r1 contains authoritative captured index rows, 166 restored raw keys and exact corrected shared index bins/context. Existing index_history_repairs only runs at initial prepare and cannot repair retained builds. Add bounded index repair adoption through the existing monthly API and resumable private build only; bind source capture, old manifest, cutoff and exact old/new file hashes. Preserve ordinary month validation, raw H5 thousand-CNY vs normalized/bin CNY, no historical reexport/audit or finite-value changes beyond independently established amount unit correction. Allowed writes: backend/services/dataset_release/monthly_index_repair.py, monthly_mature_build_runner.py, monthly_build_resume.py, monthly_unified.py, backend/routers/monthly_dataset_releases.py, backend/tests/dataset_release/test_monthly_index_repair.py, backend/tests/routers/test_monthly_dataset_releases.py, this BUG JSON. No database writes, activation, service control or HMM/QE changes.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_index_repair.py",
+    "backend/services/dataset_release/monthly_mature_build_runner.py",
+    "backend/services/dataset_release/monthly_build_resume.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/routers/monthly_dataset_releases.py",
+    "backend/tests/dataset_release/test_monthly_build_resume.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
+    "tests/aistock_validation/bugs/20261022_BUG-2054-retained-monthly-build-cannot-adopt-prepared-bounded-index-fact-repairs.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2054",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-22T02:40:56.133601Z",
+  "description": "September operation dmr_63a313d97fd046a38d5a876265565014 retains completed price exports and a sealed prepare receipt. Already prepared index-history-fact-rebuild-r1 contains authoritative captured index rows, 166 restored raw keys and exact corrected shared index bins/context. Existing index_history_repairs only runs at initial prepare and cannot repair retained builds. Add bounded index repair adoption through the existing monthly API and resumable private build only; bind source capture, old manifest, cutoff and exact old/new file hashes. Preserve ordinary month validation, raw H5 thousand-CNY vs normalized/bin CNY, no historical reexport/audit or finite-value changes beyond independently established amount unit correction. Allowed writes: backend/services/dataset_release/monthly_index_repair.py, monthly_mature_build_runner.py, monthly_build_resume.py, monthly_unified.py, backend/routers/monthly_dataset_releases.py, backend/tests/dataset_release/test_monthly_index_repair.py, backend/tests/routers/test_monthly_dataset_releases.py, this BUG JSON. No database writes, activation, service control or HMM/QE changes.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261022-7c36f794639b",
+      "timestamp": "2026-10-22T02:40:56.133601Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "The same unpublished monthly operation can adopt its existing, source-pinned index repairs with copy-on-write and crash recovery. Only the 144 index feature files, raw H5, normalized Parquet and their true receipts change; normal month and consumer verification still decide readiness. No stock export, database write, service control or activation.",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-10-22T02:40:56.133601Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6556,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6556",
+  "last_seen_at": "2026-10-22T02:40:56.133601Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -k index_adoption -q --tb=short",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python: RED missing index adopter before implementation; 22 direct tests passed after implementation, covering frozen source/output drift, COW, idempotency, interruption recovery and amount-only unit correction.",
+      "Fresh AIstock Python captured the existing 23438 source rows and 146 bounded index outputs into CAS, then read the 146 actual retained-staging originals: all original hashes and finite-value correction contracts passed; no database or candidate/profile/service writes."
+    ],
+    "inference_basis": "planned_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": ["worker-scheduler"]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Retained monthly build cannot adopt prepared bounded index fact repairs",
+  "trigger_condition": {
+    "fingerprint": "7c36f794639b9a6d2365f69a",
+    "source_event_id": "FE-20261022-7c36f794639b"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "review_rounds": [
+    {"round": 1, "result": "passed_after_fix", "scope": "RED to GREEN; exact source/old manifest/cutoff binding; only canonical shared index identities and frozen files"},
+    {"round": 2, "result": "passed_after_fix", "scope": "Atomic copy-on-write, interruption and completed-journal cleanup; preserve old releases, unrelated files and later steps"},
+    {"round": 3, "result": "passed", "scope": "Existing 146 real staged originals and 23438 frozen source rows; missing facts or diagnosed amount unit correction only; no new market/history audit"}
+  ],
+  "design_compliance_001": {
+    "full_requested_bounded_behavior": "PASS; adoption is implemented, not a READY flag or exporter rerun",
+    "no_fake_success_or_hidden_error": "PASS; source/output drift and finite conflicts remain explicit errors; overall candidate readiness remains pending",
+    "business_semantics_preserved": "PASS; raw H5 thousand-CNY and normalized/bin CNY remain explicit; PIT, HMM/QE contracts and old task bindings unchanged",
+    "no_unapproved_gates_or_partial_completion": "PASS; reuse existing operator/API/private-build checks only; no database, service or activation action"
+  },
+  "workflow_gate": "fix_in_progress"
+}
