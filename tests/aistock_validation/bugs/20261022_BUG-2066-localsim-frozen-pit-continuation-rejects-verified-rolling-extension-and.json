@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2066",
-  "closed_at": null,
+  "closed_at": "2026-10-22T17:50:10.670150Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -176,10 +176,32 @@
     "inference_basis": "actual_changed_file_scope",
     "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock_worktrees/BUG-2066-close-sync-20261022/tmp/issue_workflow/BUG-2066/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2066",
+      "business_smoke_semantic": {
+        "contract_id": "localsim_replay_recovery",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6ed39c0110d4f78cf40a1e30ab2c7a65c41b686cfa91d51ee13d55137c37362f",
+      "contract_digest": "af7e1134e781b44ba2d728cb77af44a6369c01b68f575f7b0f64a01a5ab60a68",
+      "expected_identity": "029e8e4a8a9b18446edca7f439bf333152a5565b",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-22T17:48:53.856408Z",
+      "mode": "read_only",
+      "observed_identity": "c8a6ad045fd38c3b57540b1d57fd3bd9e1a48b21",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "71da431e444b44d29fa64966bb4a65639a346e93b88be3d01fdc6af32917eaea",
+      "receipt_sha256": "792b06dadc5ed28fbd25e94b88e8cd09eeab943d61daa5e6b75417f8cc17270c",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6f5367bfd8692010a8fd582d7e25bf11a6f3b0e28c95a19dcd60af52b49a6f32",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -214,7 +236,7 @@
     ],
     "validation_evidence_digest": "ebc34ddadaa42f83234f50cbf3f0001fff8e47777433937ab7640b230d65516e"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "simulation_runtime"
   ],
@@ -228,7 +250,8 @@
     "validation-receipt: id=01a83a82122d7b6e commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/simulation_runtime/test_localsim_replay_recovery.py backend/tests/simulation_runtime/test_localsim_input_source_plan.py backend/tests/simulation_runtime/test_localsim_shared_selection_signal.py backend/tests/simulation_runtime/test_localsim_native_context.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/simulation_architecture/test_layer_import_boundaries.py -q --tb=short -p no:cacheprovider` result=`passed (249 passed, 3 skipped)`",
     "validation-receipt: id=f72e8cee7d90f8b0 commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=pytest plan=direct status=passed command=`pytest backend/tests/simulation_runtime/test_localsim_replay_recovery.py::test_saved_pit_recovery_uses_original_job_cas_and_writer_lock_on_existing_dev -q --tb=short -p no:cacheprovider` result=`passed (1 passed; existing DEV rollback)`",
     "validation-receipt: id=24714d6b8399720e commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=ruff plan=direct status=passed command=`ruff check --no-cache backend/services/simulation_runtime/localsim_replay_recovery.py backend/services/simulation_signal/strategy_package_selection.py backend/tests/simulation_runtime/test_strategy_package_selection_service.py backend/tests/simulation_runtime/test_localsim_replay_recovery.py` result=`passed`",
-    "validation-receipt: id=c04174c132de33ed commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    "validation-receipt: id=c04174c132de33ed commit=07d0f54d9aeed6dc8b8f92ad3d2c85908755223a kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2066 --target backend-main --expected-identity 029e8e4a8a9b18446edca7f439bf333152a5565b -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
