@@ -70,6 +70,8 @@ SOURCE_ASSET_SCHEMA_VERSION = "hmm_risk_dataset_release_asset_binding_v1"
 SOURCE_INVENTORY_SCHEMA_VERSION = "hmm_risk_rotation_l1_source_inventory_v1"
 DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1 = "hmm_risk_qe_direct_v2_dataset_identity_v1"
 DIRECT_V2_IDENTITY_SCHEMA_VERSION = "hmm_risk_qe_direct_v2_dataset_identity_v3"
+MONTHLY_IDENTITY_SCHEMA_VERSION = "hmm_risk_qe_monthly_dataset_identity_v1"
+MONTHLY_SOURCE_REVISION = "hmm-risk-monthly-file-source-v1"
 DIRECT_V2_STATE_SCHEMA_VERSION_V2 = "qe_direct_monthly_state_v2"
 DIRECT_V2_STATE_SCHEMA_VERSION = "qe_direct_monthly_state_v3"
 DIRECT_V2_SUPPORTED_STATE_SCHEMA_VERSIONS = frozenset(
@@ -691,7 +693,9 @@ def _fixed_h5_inventory(
         }
 
 
-def _parse_instrument_spans(path: Path) -> dict[str, tuple[tuple[date, date], ...]]:
+def _parse_instrument_spans(
+    path: Path, *, allowed_nonstock_codes: Sequence[str] = ()
+) -> dict[str, tuple[tuple[date, date], ...]]:
     spans: dict[str, list[tuple[date, date]]] = defaultdict(list)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -703,7 +707,7 @@ def _parse_instrument_spans(path: Path) -> dict[str, tuple[tuple[date, date], ..
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib instrument row schema differs", line=line_number)
         symbol = parts[0].strip().upper()
         _ascii(symbol, "instrument.symbol", width=16)
-        if _STOCK_CODE.fullmatch(symbol) is None:
+        if _STOCK_CODE.fullmatch(symbol) is None and symbol not in allowed_nonstock_codes:
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib instrument symbol is outside canonical sh/sz scope")
         start = _as_date(parts[1], "instrument.start")
         end = _as_date(parts[2], "instrument.end")
@@ -1663,6 +1667,18 @@ def load_rotation_l1_direct_v2_source_assets(
     except OSError as exc:
         raise _fail(REASON_SOURCE_COMPONENT_MISSING, "direct-v2 candidate root does not exist") from exc
     state_path = root / "direct_monthly_state.json"
+    # Native monthly releases close through a manifest/receipt DAG, not the
+    # retired exporter state. Never hide an existing, invalid legacy state.
+    if not state_path.exists() and not _is_indirect_path(state_path):
+        from backend.services.hmm_risk.monthly_release_input import load_monthly_l2_source_assets
+
+        return load_monthly_l2_source_assets(
+            root,
+            security_identity_manifest=security_identity_manifest,
+            provider_absence_manifest=provider_absence_manifest,
+            data_window_end=data_window_end,
+            frozen_release_binding=frozen_release_binding,
+        )
     state = _read_json_object(state_path)
     validation = state.get("validation")
     state_schema_version = state.get("schema_version")
@@ -4397,6 +4413,7 @@ def _validated_source_identity(value: Any) -> dict[str, Any]:
     if release_identity.get("schema_version") in {
         DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1,
         DIRECT_V2_IDENTITY_SCHEMA_VERSION,
+        MONTHLY_IDENTITY_SCHEMA_VERSION,
     } and value.get("source_binding_manifest_sha256") != canonical_sha256(release_identity):
         raise _fail(REASON_HASH_MISMATCH, "direct-v2 source binding identity hash differs")
     for field in (
@@ -4416,6 +4433,11 @@ def _validated_source_identity(value: Any) -> dict[str, Any]:
 
 def _validated_release_identity(value: Any) -> tuple[dict[str, Any], str, str, str]:
     direct_schema = value.get("schema_version") if isinstance(value, Mapping) else None
+    if direct_schema == MONTHLY_IDENTITY_SCHEMA_VERSION:
+        from backend.services.hmm_risk.monthly_release_input import validate_monthly_release_identity
+
+        identity = validate_monthly_release_identity(value)
+        return identity, DIRECT_V2_UNIVERSE_KEY, identity["rule_version"], MONTHLY_SOURCE_REVISION
     if direct_schema in {DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1, DIRECT_V2_IDENTITY_SCHEMA_VERSION}:
         expected = {
             "schema_version",
