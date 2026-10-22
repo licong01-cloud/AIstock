@@ -1,6 +1,6 @@
 # Advisory 资金流—日内价格协动 Top10 / 固定5TD F1 v1
 
-2026-10-22。唯一假设 `FLOW_PRICE_COUPLING_5D_TOP10_5TD_1`。F1单模块离线研究设计。测量冻结与六D必要输入检查已完成；本设计交付不等于源码、已训练模型、经济确认或生产角色。
+2026-10-22。唯一假设 `FLOW_PRICE_COUPLING_5D_TOP10_5TD_1`。F1单模块离线研究。设计#6590、源码直接验证与真实六fit已完成，INNER_SUPPORTED仅支持未来确认设计，0经济确认/生产角色；完整执行证据见Execution Result。
 
 ## Background / 目标与修正
 
@@ -105,6 +105,37 @@ SHA256 `fb93b70dac833b2d19d90861d8aa7add644da82f746b2a9697cba231edf6cf8b`。
 第一轮：为避免重开流量强度/持续性，已将M6/M17对应控制同窗纳入matched；固定单一协方差、无方差分母，常数为合法0。明确新输入是预测表示而非可识别因果冲击，未增加符号条件。
 第二轮：将六D可产和完整inner/经济验证分开，固定六fit和2025-09-30金融边界，明确旧shared runner的outer/八fit不能沿用；生产与其它ownership均noop。四项DESIGN-COMPLIANCE-001：设计交付范围明确；错误/UNKNOWN不隐去；原生主终点/成本/人口不改；无额外审批或父包门禁。
 
+## Execution Result / 单次研究已完成
+
+设计PR #6590先合入；研究源码commit `b626786732b3d0c78d78d680dcdb6f251a06bf29`，唯一run `advflowpricetop10_64b5c7a379fcb9792ca07c9b`。本节的源码直接验证和研究状态覆盖前文设计时态；源码PR/合入读回另报，不把已研究等同生产已加载。
+
+两个本窗口自审分别核对数学/单位/成熟时钟/原人口与恢复/资源/只读边界，不冒称独立外审。11直接测试，最终含19模块smoke/证据边界的30项矩阵全部通过；Ruff、ownership（4/4，无歧义）、两个L0及F1六项索引通过。L0两项P2复杂度提醒保留：输入按D最多5×100成员投影、30,500行上限，训练KEY一对一连接禁止行膨胀。WSL既有环境缺pytest，直接测试使用既有Windows环境，未安装依赖；真实研究仍在冻结WSL解释器运行。
+
+拟合前公开QE running接口ok=true/total=0/has_more=false；WSL 28核、1分钟load1.11、可用59,667,664,896bytes，Windows观测可用10,499,817,472bytes；实际限制2线程/无GPU，无服务控制。
+
+完整输入305D/30,500原行/28,119唯一股票日，30,044共同可算、369零分母UNKNOWN、87必需来源缺失UNKNOWN；所有行/槽保留。消费6,608,794源数值单元，prepare21.616235秒，0参数拟合；原六D的600行全部12测量值与事前筛选逐值一致（含NaN）。大H5仍仅既有pin/尺寸/stamp及消费片段hash，并未重新计算全文件hash。三折两臂共同成熟训练行17,038/20,975/25,223（174/214/257D），均为19/20字段。
+
+| 事前完整评价项 | 实际结果 |
+|---|---|
+| 原人口/成熟/共同可估值 | 126D、252包D、12,600原行；111成熟D、100共同D；90.0901%共同成熟覆盖 |
+| 原生 / matched / candidate固定5TD Top10净组均值 | 105.045200 / 115.519671 / 109.901749 bps |
+| candidate−原生主终点 | +4.856549 bps；描述性95%区间[-26.234364,33.171700]；MDE80 42.286734 bps |
+| 三折原生增量 | +1.962842 / −1.279703 / +12.820406 bps；两折正 |
+| candidate−matched解释项 | −5.617921 bps；95%[-16.636180,4.409546]；三折−20.239689/+3.243594/−5.244635 |
+| 两包原生增量 | LSTM +54.011907；TCN −44.298809 bps；不据此择包/回选 |
+| 原生/matched干预 | 111/111成熟D、109/111成熟D；原生跨三折 |
+| 尾部/UNKNOWN | 尾差+27.592235 bps；原生326、candidate333未知槽；额外0.315315百分点 |
+| 协方差系数 | −13.323372/−12.553279/−12.510108；编码尺度系数，仅描述，不作因果或固定符号证明 |
+
+事前原生产品合同给出 **INNER_SUPPORTED**，`supports_future_confirmation_design=true`，但`proceed_outer=false`。跨零区间、低于MDE的点估计、两包强烈异向及matched负增量均完整保留：它没有证明盈利，也没有证明新增协方差的独立价值。组均值不是账户NAV/实际成交；既消费开发窗口保持NAVIGATION_ONLY/NON_VINTAGE，不是独立OOS。不得事后升格matched、只选LSTM、换符号或重判E2。
+
+真实恰好6fit，累计213实际fit＋1旧index；28.210226秒、峰值730,648,576bytes，结束前输出约5.35MB，未超预算。10个immutable stage链及六个started/finished身份通过；无隐式重fit。0final/outer/sealed、0SQL/数据激活/确认/生产角色/服务控制。本轮结束，下一步仅评审是否值得为同一冻结候选做确认设计，另行界定未消费数据、经济目标和资源；不自动执行确认或再筛新候选。
+
+工件根 `X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/`：
+- `validation-receipt.json`、`resource-preflight.json`、`audit-receipt.json`；
+- `study/advflowpricetop10_64b5c7a379fcb9792ca07c9b/evaluated/result.json`，SHA256 `318beaca003cc9d4b229eca09a6575ba7a091d685995a7b3a8ed3fa243240981`；
+- `inner/prepared/receipt.json` SHA256 `55831c2f06a693b3d65c4b6a360d4d897b696096fe135c43aa1071728fe77c7d`；terminal stage `b30e4312275ba0ab75111bb44891a079d09b6249d894b71d8b68d2b608d56f81`。
+
 ## Design Acceptance Index
 
 - F-461：唯一五日流价协方差及19/20匹配控制，常数/缺失/单位/未来边界。
@@ -116,13 +147,13 @@ SHA256 `fb93b70dac833b2d19d90861d8aa7add644da82f746b2a9697cba231edf6cf8b`。
 
 ## Design Acceptance Matrix
 
-本表仅验收设计和已完成必要输入检查；源码/真实研究证据在实施后替换，不将DESIGN_VERIFIED称SOURCE_VERIFIED。
+本表验收精确源码与单次离线研究；SOURCE_VERIFIED不代表PR已合入、生产已加载或经济已确认。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-461 | Formula/匹配控制及Verification Plan | artifact: X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/screen_receipt.json | DESIGN_VERIFIED | none |
-| F-462 | Scope/Feasibility/Input | artifact: X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/input_spec.json | DESIGN_VERIFIED | none |
-| F-463 | Research/Scope金融投影及训练 | artifact: X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/contract.md | DESIGN_VERIFIED | none |
-| F-464 | Research/Implementation Plan | artifact: X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/contract.md | DESIGN_VERIFIED | none |
-| F-465 | Research/Risks | artifact: X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/contract.md | DESIGN_VERIFIED | none |
-| F-466 | Scope/Review/Production Gates | artifact: X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/screen_receipt.json | DESIGN_VERIFIED | none |
+| F-461 | backend/services/advisory_model_first/flow_price_coupling_top10_5td_inputs_v1.py::measure/attach | artifact: X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/validation-receipt.json | SOURCE_VERIFIED | none |
+| F-462 | backend/services/advisory_model_first/flow_price_coupling_top10_5td_inputs_v1.py::sources/read_panel | artifact: X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/audit-receipt.json | SOURCE_VERIFIED | none |
+| F-463 | backend/services/advisory_model_first/flow_price_coupling_top10_5td_v1.py::training/fit/predict | artifact: X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/validation-receipt.json | SOURCE_VERIFIED | none |
+| F-464 | backend/services/advisory_model_first/flow_price_coupling_top10_5td_pipeline_v1.py::finance/claim/fit_pair/run | artifact: X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/audit-receipt.json | SOURCE_VERIFIED | none |
+| F-465 | backend/services/advisory_model_first/flow_price_coupling_top10_5td_v1.py::summarize及Execution Result | artifact: X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/validation-receipt.json | SOURCE_VERIFIED | none |
+| F-466 | Execution Result/Production Gates | artifact: X:/AIstock_temp/ADVISORY/p4-flow-price-coupling-20261022/validation-receipt.json | SOURCE_VERIFIED | none |
