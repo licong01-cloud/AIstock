@@ -1,7 +1,9 @@
 {
-  "actual": "User reconfirms each TDX/backend/frontend must have its own tab in the original invoking Windows Terminal, no manual window ID or dedicated new window. Restore one batched wt dispatch after identifying the actual caller HWND, foreground pin and child HWND validation before service execution. Keep conditional offline TDX build, independent readiness, UTF-8 and no duplicate fallback. Development tests must not launch/control application services.",
+  "actual": "After the shared-console change there is no dedicated backend-only tab entry. User explicitly requests ONLY a separate tab launcher and will manually close the old backend tab. Automated restart and all-service launcher changes are out of scope.",
   "allowed_write_scope": [
-    "scripts/start_ai_stock.py",
+    "start_backend.bat",
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
     "backend/tests/platform_api/test_windows_launcher.py",
     "docs/operations/windows_runtime_startup.md",
     "tests/aistock_validation/bugs/20261022_BUG-2057-restore-three-original-window-service-tabs-with-verified-console-ownersh.json"
@@ -15,7 +17,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-22T03:40:47.764193Z",
-  "description": "User reconfirms each TDX/backend/frontend must have its own tab in the original invoking Windows Terminal, no manual window ID or dedicated new window. Restore one batched wt dispatch after identifying the actual caller HWND, foreground pin and child HWND validation before service execution. Keep conditional offline TDX build, independent readiness, UTF-8 and no duplicate fallback. Development tests must not launch/control application services.",
+  "description": "User narrowed scope: ONLY provide start_backend.bat opening FastAPI in a new Windows Terminal tab. User manually closes the old backend tab. No stop/kill/restart logic, no TDX/frontend calls, no changes to start_ai_stock.py or start_all_ai_stock.bat. Add exact ownership/runtime registration and a direct contract test. Do not start any service during development. Original three-tab orchestration and automated restart are deferred by the latest instruction.",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -25,11 +27,12 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "start_backend.bat requests one AIstock Backend tab, uses the absolute AIstock interpreter and UTF-8, refuses occupied port 8001 and never starts/stops TDX/frontend or terminates any process.",
   "file_scope_contract": {
-    "added_files": [],
+    "added_files": ["start_backend.bat"],
     "changed_files": [
-      "scripts/start_ai_stock.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "backend/tests/platform_api/test_windows_launcher.py",
       "docs/operations/windows_runtime_startup.md"
     ],
@@ -82,13 +85,17 @@
       "unmatched_files": []
     },
     "planned_files": [
-      "scripts/start_ai_stock.py",
+      "start_backend.bat",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "backend/tests/platform_api/test_windows_launcher.py",
       "docs/operations/windows_runtime_startup.md"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "scripts/start_ai_stock.py",
+      "start_backend.bat",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "backend/tests/platform_api/test_windows_launcher.py",
       "docs/operations/windows_runtime_startup.md"
     ]
@@ -116,11 +123,18 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "cmd.exe /d /c start_backend.bat --check -> passed in a fresh CMD process, no tab/service/port bind or Conda activation. Launcher direct tests -> 23 passed. Actual Windows Terminal tab and API startup remain pending user execution."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -134,7 +148,7 @@
   "suspected_modules": [
     "platform.api"
   ],
-  "title": "Restore three original-window service tabs with verified console ownership instead of shared output",
+  "title": "Provide backend-only Windows Terminal tab launcher without process control",
   "trigger_condition": {
     "fingerprint": "b39669c30e6245010af513db",
     "source_event_id": "FE-20261022-b39669c30e62"

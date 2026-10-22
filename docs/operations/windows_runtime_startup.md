@@ -68,6 +68,23 @@ changes firewall rules, or invokes a database migration.
 
 ## Read-only check and runtime verification
 
+### Start only the backend in a new tab
+
+Run `.\start_backend.bat` in the Windows Terminal window where the new
+`AIstock Backend` tab should appear. Close the old backend tab manually first.
+The entry requests one tab in the most recently active Terminal window (`-w 0`);
+it does not configure a permanent window ID or guarantee routing if another
+Terminal window becomes active during dispatch. It does not alter the all-service
+launcher, start TDX/frontend, stop any process or use reload. It activates AIstock
+and uses its absolute UTF-8 Python. An occupied/unavailable 8001 port fails visibly
+without stopping its owner. The tab remains open after backend exit. Dispatch
+success only means the tab was requested, not that the API is healthy.
+
+`start_backend.bat --check` checks the existing interpreter/Conda entry only;
+it does not open a tab, activate Conda, bind a port or start a service.
+
+### All-service check and runtime verification
+
 `start_all_ai_stock.bat --check` inspects prerequisites, process ownership and ports;
 it does not build, create logs/locks, or start services. It is not a health or business
 acceptance receipt. A task worktree without existing frontend dependencies fails

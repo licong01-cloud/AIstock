@@ -83,6 +83,7 @@ targets:
       - scripts/qrun_limit_minute.py
       - aistock_models/**/*.py
       - start_all_ai_stock.bat
+      - start_backend.bat
       - scripts/start_ai_stock.py
       - requirements*.txt
       - pyproject.toml
