@@ -558,3 +558,101 @@ def test_monthly_fact_materialization_keeps_never_pit_security(tmp_path):
         actual = pd.concat(list(iter_parquet_frames([produced.source_root / chunk.relative_path for chunk in chunks], max_rows=1000)))
         assert set(actual.index.get_level_values("instrument")) == set(STOCKS)
     assert {span.ts_code for span in pit.spans} == {STOCKS[0]}
+
+
+def _industry_factor_successor(tmp_path, mutate=lambda _a, _f: None):
+    from backend.services.dataset_release.factor_materializer import FACTOR_H5_DATASETS
+    from backend.services.dataset_release.monthly_fact_correction import SCHEMA
+
+    cas = CASStore(ControlStore.initialize(tmp_path / "control").root)
+    entries = [{"dataset": name, "sha256": hashlib.sha256(name.encode()).hexdigest(),
+                "size": 123, "inherited_rows": 90, "month_rows": 10, "cutoff": "2026-09-30"}
+               for name in (*FACTOR_H5_DATASETS, "static_factors")]
+    files = [{"dataset": entry["dataset"],
+              "relative_path": "factor_bundle/" + entry["dataset"] + (".parquet" if entry["dataset"] == "static_factors" else ".h5"),
+              "sha256": entry["sha256"], "size": entry["size"],
+              "validation_payload": {"row_count": 100, "september_rows": 10}}
+             for entry in entries if entry["dataset"] in {"sector_data", "static_factors"}]
+    files[-1]["validation_payload"]["input_sha256"] = {
+        entry["dataset"]: entry["sha256"] for entry in entries if entry["dataset"] != "static_factors"}
+    authority = {"schema_version": SCHEMA, "target_cutoff": "2026-09-30", "files": files,
+                 "database_write": False, "active_profile_write": False, "runtime_action": False}
+    factor = {"files": entries}
+    mutate(authority, factor)
+    reference = cas.put_json(authority).as_dict()
+    factor["fact_correction_ref"] = reference
+    for entry in entries:
+        if entry["dataset"] in {"sector_data", "static_factors"}:
+            entry["fact_correction_ref"] = reference
+    return SimpleNamespace(cas=cas), factor, {"sector_row_count": 80}
+
+
+def test_industry_rows_accept_pinned_factor_successor_without_old_row_count(tmp_path):
+    invocation, factor, proof = _industry_factor_successor(tmp_path)
+    stages._validate_industry_factor_rows(invocation, factor_receipt=factor, proof=proof)
+
+
+@pytest.mark.parametrize("change", ["sector_hash", "static_hash", "static_dependency", "row_count",
+                                   "month_rows", "cutoff", "schema", "duplicate", "write_flag", "path", "missing"])
+def test_industry_rows_reject_unverified_factor_successor(tmp_path, change):
+    def mutate(authority, factor):
+        sector = next(row for row in authority["files"] if row["dataset"] == "sector_data")
+        static = next(row for row in authority["files"] if row["dataset"] == "static_factors")
+        if change == "sector_hash":
+            sector["sha256"] = "f" * 64
+        elif change == "static_hash":
+            static["sha256"] = "f" * 64
+        elif change == "static_dependency":
+            static["validation_payload"]["input_sha256"]["sector_data"] = "f" * 64
+        elif change == "row_count":
+            sector["validation_payload"]["row_count"] = 101
+        elif change == "month_rows":
+            sector["validation_payload"]["september_rows"] = 11
+        elif change == "cutoff":
+            authority["target_cutoff"] = "2026-08-31"
+        elif change == "schema":
+            authority["schema_version"] = "unapproved"
+        elif change == "write_flag":
+            authority["database_write"] = True
+        elif change == "path":
+            sector["relative_path"] = "factor_bundle/unrelated.h5"
+        elif change == "missing":
+            authority["files"].remove(static)
+        else:
+            authority["files"].append(sector)
+
+    invocation, factor, proof = _industry_factor_successor(tmp_path, mutate)
+    with pytest.raises(stages.CandidateBuildStageError):
+        stages._validate_industry_factor_rows(invocation, factor_receipt=factor, proof=proof)
+
+
+def test_industry_rows_preserve_original_contract_without_successor(tmp_path):
+    invocation, factor, proof = _industry_factor_successor(tmp_path)
+    factor.pop("fact_correction_ref")
+    with pytest.raises(stages.CandidateBuildStageError):
+        stages._validate_industry_factor_rows(invocation, factor_receipt=factor, proof=proof)
+    proof["sector_row_count"] = 100
+    stages._validate_industry_factor_rows(invocation, factor_receipt=factor, proof=proof)
+
+
+def test_industry_row_metadata_fails_before_month_value_validation(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_build_bridge, monthly_industry_history
+
+    def invalid_rows(authority, factor):
+        authority["files"][0]["validation_payload"]["row_count"] = 101
+
+    invocation, factor, proof = _industry_factor_successor(tmp_path, invalid_rows)
+    proof.update(projection={}, status="PASS", database_write=False)
+    factor["industry_history_projection_ref"] = invocation.cas.put_json(proof).as_dict()
+    invocation.plan = {"industry_history_projection_sha256": "a" * 64}
+    invocation.build_inputs = {"monthly_legacy_predecessor": {}, "source_bundle_sha256": "b" * 64}
+    invocation.staging_root = tmp_path
+    invocation.profile = SimpleNamespace()
+    monkeypatch.setattr(monthly_build_bridge, "load_monthly_predecessor_prefix",
+                        lambda **_: SimpleNamespace(manifest_sha256="c" * 64))
+    monkeypatch.setattr(monthly_industry_history.IndustryHistoryProjection, "read",
+                        lambda _: SimpleNamespace(sha256="a" * 64))
+    with pytest.raises(stages.CandidateBuildStageError, match="row counts"):
+        stages._validate_native_month(invocation, pit=SimpleNamespace(cutoff=date(2026, 9, 30)),
+            factor_receipt=factor, index_receipt={}, daily_receipt={}, minute_receipt={},
+            ledger=None, checkpoint=lambda: pytest.fail("month value scan must not run"))
