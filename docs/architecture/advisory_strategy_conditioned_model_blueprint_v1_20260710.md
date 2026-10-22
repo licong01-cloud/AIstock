@@ -1,9 +1,11 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.38
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.39
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-23
 
-> 2026-10-23最新断点：P7[研究合同与输入联合评审](../analysis/advisory_research_contract_and_input_review_20261023.md)完成零fit分支，RESEARCH_CONTRACT_NOT_ADVANCED_CURRENT_INPUTS。report_rc已有展示接入；固定20240704查询250行/67股票/36机构，85个多预测期报告组，现展示去重会少165行，140行在报告日后更新；20250930超时且未重试。只证明单日结构可读，历史修正对/原Top50支持/D时钟未就绪。9月修正版发布存在，但原两份预测SHA及覆盖仍未变；P5五源stamp不变，复用原结论。累计219fit＋1旧index，0新F1/源码/标签或收益读取/SQL/确认/激活；仅收到实际版本化面板或兼容新预测等变化证据才重开，当前无自动实验。
+> 2026-10-23最新断点：P8[原生Top10替换决策查重](../analysis/advisory_replacement_decision_review_20261023.md)完成，PROPOSAL_NOT_ADVANCED_AFTER_DEDUP。固定十槽净替换归因及可分打分已有；完整线性配对平方损失在同人口/权重/正则条件下等价于中心化，10×40边界损失不完全等价但当前依据不足，不扩展成权重/门槛/SPO搜索。10项合成代数检查PASS，0新F1/fit/真实输入或标签读取；累计219fit＋1旧index，经济状态NOT_TESTED。report_rc整个方向DEFERRED_BY_USER：本轮结论条件已满足，数据窗口当前任务完成条件仍UNKNOWN，尚不恢复。无自动备用方向，完整边界见§6.3.27/§16.0。
+
+> 2026-10-23 P7历史断点（后续暂停与P8见上方）：P7[研究合同与输入联合评审](../analysis/advisory_research_contract_and_input_review_20261023.md)完成零fit分支，RESEARCH_CONTRACT_NOT_ADVANCED_CURRENT_INPUTS。report_rc已有展示接入；固定20240704查询250行/67股票/36机构，85个多预测期报告组，现展示去重会少165行，140行在报告日后更新；20250930超时且未重试。只证明单日结构可读，历史修正对/原Top50支持/D时钟未就绪。9月修正版发布存在，但原两份预测SHA及覆盖仍未变；P5五源stamp不变，复用原结论。累计219fit＋1旧index，0新F1/源码/标签或收益读取/SQL/确认/激活；仅收到实际版本化面板或兼容新预测等变化证据才重开，当前无自动实验。
 
 > 2026-10-22最新断点：用户明确选择新信息路径后，P6[滞后流通比例变化F1](advisory_float_share_change_top10_5td_v1_f1_design_20261022.md)设计#6593已合入，源码验证及唯一6fit研究完成，INNER_NOT_SUPPORTED。305D/30,500原行、30,430可算/70UNKNOWN；100共同D原生−0.348855bps，95%[-34.165146,35.963276]，三折仅一正；matched+1.661522bps/区间跨零，不能替代产品主终点。累计219fit＋1旧index，0outer/sealed收益读取/确认/启用。精确候选停止；P4 INNER_SUPPORTED与P5当前不推进确认保持，不择包/变参/扩窗续试。
 
@@ -13,7 +15,7 @@
 
 > 现行方向（2026-10-23）：固定原Top50内5TD Top10成本后净增量，产品/机制/数据与动作/证据等级分报；解释不唯一或符号未知不否决可测预测研究。先联合评估信息差异、实际输入与确认路径，再决定单一F1及必要源码。P7来源结构可读不等于历史面板/修正对可消费，不默认延续新表示→六fit循环；NON_VINTAGE可有界探索但不冒称PIT或确认。P4/P5/P6原结论保持；价格区间、Exit/仓位/平台及包准入不扩张。
 
-> 当前进展：P7完成既有来源查重、两次有界结构查询、新发布/原预测元数据核查及零fit输入合同。P6设计#6593/源码#6594已合入清理，INNER_NOT_SUPPORTED；P4设计#6590/源码#6591、INNER_SUPPORTED及P5确认评审不改。累计219fit＋1旧index，0独立确认/激活；本轮只交付分析与蓝图，不改其它owner、业务服务或数据。
+> 当前进展：P8完成原Top10替换任务/数学查重及零fit停止分支；P7来源输入结论保留但report_rc按用户暂缓。P6设计#6593/源码#6594已合入清理，INNER_NOT_SUPPORTED；P4设计#6590/源码#6591、INNER_SUPPORTED及P5确认评审不改。累计219fit＋1旧index，0独立确认/激活；本轮只交付分析与蓝图，不改其它owner、业务服务或数据。
 
 > 2026-10-19用户调整：#6330、公告标题设计#6341已合入并清理；[公告标题方向](advisory_announcement_title_value_v1_f1_design_20261019.md)改为`DEFERRED_BY_USER / 待执行`，不作为主线前置、不继续补采或等待。随后完成[独立Top50→Top10同日中心化排序](advisory_group_centered_rank_5td_v1_f1_design_20261019.md)：只读已有两包文件，固定五会话、两Ridge对照，检验去除日期共同项是否改善原Top10；不预测买价或决定弃权。旧M1/M5/P0-I已做过排名，此次是不同人口/政策下的明确学习合同测试，不冒称全新信息或独立OOS。该精确候选已停止，源码/真实研究/经济确认分态，结果见§6.3.12/§16.0。
 
@@ -264,7 +266,7 @@ H0 的权威详细设计为
 | 模型质量升级 | `0 ACTIVATED SELECTOR CHALLENGERS` | M5A/M5B/M5C及P0-D至P0-L均未证明可以替换Selection；P0-D只作为experimental shadow；历史M4实现开盘分布参考而非盈利区间，当前Program未配置该角色 |
 | 长期趋势模型 | `NOT_STARTED` | 长期趋势原生多 Alpha 父包尚未形成可训练输入 |
 | 旧研究族状态 | `P0-D..P0-L FROZEN` | 研究事实完整但无可激活winner；不以同族新变体继续消耗相同开发证据 |
-| 新路线实现状态 | `P7_INPUT_REVIEW_COMPLETE / RESEARCH_CONTRACT_NOT_ADVANCED_CURRENT_INPUTS / ECONOMIC_CONFIRMED_0` | report_rc单日250行结构可读，历史修正对/Top50支持/时钟未就绪；第二固定日期超时未重试。0新fit/F1/源码，累计219fit＋1旧index；P6精确候选停止及#6593/#6594交付保留，结构探测不算经济确认 |
+| 新路线实现状态 | `P8_REVIEW_COMPLETE / PROPOSAL_NOT_ADVANCED_AFTER_DEDUP / ECONOMIC_CONFIRMED_0` | 净替换标签/可分动作重复，边界损失不完全等价但当前不推进；10项合成代数PASS、0新fit/F1/真实payload。累计219fit＋1旧index；report_rc全方向DEFERRED_BY_USER，本轮结论已形成、数据窗口完成仍UNKNOWN；P4～P7原结论保留 |
 | 固定5TD日频交付 | `SOURCE_MERGED_ROUTE_RESTART_VERIFIED / PRODUCTION_COMPUTED_NOT_VERIFIED` | #5722只读DB来源与#5732 API已合入；43合同、原次日EOD及两个Program本地ASGI真实DB读回完成，用户重启后health/identity与路由200通过。生产接口仍为NOT_CONFIGURED、无DB读，未宣称生产COMPUTED或盈利；仅路由验收不等于模型已启用 |
 | 已有模型的可用价值 | `ENGINEERING_AND_DIAGNOSTIC_VALUE / NO_CONFIRMED_PROFIT_MODEL` | 基线选股、通用输入/回放/API可以复用；OPEN_DISTRIBUTION仅为价格分布参考，liability相关性仅为负担诊断。没有确认的Advisory盈利型模型，不等于所有QE包无Alpha，也不等于源码和统计诊断毫无价值 |
 | 共享选股优化与连续回放 | `SOURCE_MERGED_20D_REPLAYS_COMPLETED_OUTCOMES_READBACK` | #6038无包白名单，原短窗口评分等价结论不变；两包各20D回放及原生结算已完成，见§16.0。结算目标数/总耗时不是单日推理SLA；不声称全年性能或其它消费者已验。源码优化#6300已加载，旧时间戳阻断只影响正式闭环 |
@@ -1363,6 +1365,14 @@ HMM/rotation是可选上下文，不是必经网关。raw-market必须保留为c
 9月修正版注册/闭合及source-readiness、component-validation PASS收据存在，canonical为522e8e35896e85fc9289ca2ceca1cd6127f4c7978a72766887c0429dc9b7f410；SEALED_SUCCESSOR只是发布谱系状态。原两prediction SHA不变，覆盖仍止于2026-08-31；P5 plan/result/calendar/registry/prepared五源size/mtime_ns不变，直接复用旧窗口结论，无标签/收益重读。不能说全项目无新数据，也不能把新行情发布当独立确认就绪。
 
 终态RESEARCH_CONTRACT_NOT_ADVANCED_CURRENT_INPUTS；已交付原始面板/同机构同quarter配对/单位与股本口径/可得时钟/原Top50支持需求，未代owner采集、发消息或写数据。NON_VINTAGE仍可申请明确限制的探索，不能以最新抓取冒称历史可见。当前fit预算0、无新F1/研究叶；累计219fit＋1旧index，0SQL/outer或sealed收益/确认/启用。收据SHA256=510eaa5be24e6654359b2fa3a722ffe9e2dc43bb5b3f1a6d5636e7587635c5e4，根X:/AIstock_temp/ADVISORY/p7-research-contract-review-20261023/。只对新交付事实重开，不自动第二来源或六fit循环。
+
+### 6.3.27 P8替换决策查重：目标已有，边界权重不同但当前不推进
+
+[P8正式报告](../analysis/advisory_replacement_decision_review_20261023.md)完成用户授权的先查重分支。现行固定Top10净估值可加，单次替换价值为(r_j−r_i)/10；旧中心化/多时段实现已对换入换出贡献与完整净增量对账。相同D信息条件下期望差仍可分，不产生新的持仓/订单动作。完整配对平方损失只在相同人口、编码、组权重与正则缩放下等价于中心化；只取原10×40边界的二部图损失确实不同，不能用前者恒等式将后者或所有决策学习一并否定。
+
+当前提案剩余差异为未充分论证的边界权重/新动作合同，故PROPOSAL_NOT_ADVANCED_AFTER_DEDUP；没有临时挑选loss、swap上限、阈值或SPO继续实验。真正listwise/SPO目标仍未评估，不要求所有未来研究必须新字段。10项确定性合成代数检查PASS，不是Alpha或真实输入可用性；输入NOT_ASSESSED_AFTER_NOVELTY_SCREEN、经济NOT_TESTED。0新F1/研究源码/fit/真实payload/SQL/outer/sealed，累计219fit＋1旧index。收据根X:/AIstock_temp/ADVISORY/p8-replacement-decision-review-20261023/，receipt SHA256=a7f48bab3c3a7916a6b59f83f8e4d7cb0cc6f5c9ee3917fe86ecab1707ee1206。
+
+用户已暂缓report_rc全方向，覆盖§6.3.26历史条件下一步：需数据准备窗口当前任务完成且下一轮其它方向有可审查结论，才恢复输入范围/面板交付。P8满足后者，前者未确认保持UNKNOWN，故仍DEFERRED_BY_USER；不假定面板随其它数据任务生成、不发消息或轮询其它窗口。备用分钟同步、旧公告、流水线和启动脚本均不自动启动。P4～P7历史结果不改，0经济确认/角色激活。
 
 ## 7. 荐股产品行为
 
@@ -2569,7 +2579,7 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 
 ### 16.0 当前唯一任务队列与真实断点（2026-10-23 接续）
 
-本节是2026-10-23唯一队列。P7来源/输入/确认联合评审已完成零fit分支，RESEARCH_CONTRACT_NOT_ADVANCED_CURRENT_INPUTS；只证实report_rc一个固定日期的结构可读，未得到可消费历史面板/修正对/原Top50支持。9月发布存在但原两预测SHA/覆盖未变，P5五源stamp不变，直接复用旧结论。累计219fit＋1旧index，0新增标签/outer/sealed收益读取/确认/激活。P4 INNER_SUPPORTED、P5 CONFIRMATION_DESIGN_NOT_ADVANCED_CURRENT_ARTIFACTS、P6 INNER_NOT_SUPPORTED及其它旧候选结论保留，不自动换来源或追加六fit。
+本节是2026-10-23唯一队列。P8原Top10替换任务/数学查重已完成，PROPOSAL_NOT_ADVANCED_AFTER_DEDUP；完整配对等价有明确条件，边界损失不等价但当前依据不足，10项合成检查不冒称真实研究收益。0新F1/fit/真实payload；累计219fit＋1旧index，0确认/激活。report_rc全方向按用户DEFERRED_BY_USER，恢复需数据窗口当前任务完成且其它方向研究结论形成；后者由P8满足，前者UNKNOWN，故尚不恢复。P4 INNER_SUPPORTED、P5 CONFIRMATION_DESIGN_NOT_ADVANCED_CURRENT_ARTIFACTS、P6 INNER_NOT_SUPPORTED、P7输入评审及其它旧结论保留，不自动换方向或追加六fit。
 
 | 优先级 | 具体任务及交付 | 完成条件与分支 |
 |---|---|---|
@@ -2593,7 +2603,9 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 | P5 / 已完成确认价值评审，0fit | §6.3.24及确认评审报告：524准备D=305inner+219已消费outer，sealed准备/完整5TD成熟D均0；10bps目标的样本尺度仅作条件敏感性估算 | CONFIRMATION_DESIGN_NOT_ADVANCED_CURRENT_ARTIFACTS，原INNER_SUPPORTED不改；暂不立确认F1/拟合/补数，不选择LSTM或matched |
 | P6 / 已完成新信息研究，精确候选停止 | §6.3.25；D-1/D-6流通比例变化，11/12字段共同成熟三折；14直接项、六fit/17.064441秒，30,500原行/30,430可算 | INNER_NOT_SUPPORTED；原生−0.348855bps/CI跨零/仅一折正，matched+1.661522bps；累计219＋1旧index，不择包或改变尺度/窗口续试 |
 | P7 / 已完成输入评审与零fit合同 | §6.3.26；已有report_rc接入查重、2固定日期查询1成功/1超时；9月发布收据与原预测元数据核对；完整输入需求已交付 | RESEARCH_CONTRACT_NOT_ADVANCED_CURRENT_INPUTS，0新F1/源码/fit/标签读取；单日结构支持不等于历史修正对或可训练面板，不把超时当来源无效 |
-| 条件下一 / 无自动实验 | 收到版本化report_rc面板后，仅核新增输入的同机构同预测期配对、D时钟及原Top50支持；兼容新预测若改变P5则另评确认，不自动双线 | 够条件才单一F1/一次有界实验；当前无待恢复fit或请求，不重做两日期探测、不换日期/来源救结果；旧outer不当独立确认，公告/流水线/启动脚本不恢复 |
+| P8 / 已完成查重停止分支 | §6.3.27；原Top10净替换标签/可分动作已有；完整配对与中心化条件等价，边界损失不等价反例保留；10项合成代数PASS | PROPOSAL_NOT_ADVANCED_AFTER_DEDUP；0F1/fit/真实payload，经济NOT_TESTED；不临时转为边界权重、SPO、swap门槛或分钟同步实验 |
+| report_rc / DEFERRED_BY_USER | 全方向暂缓；恢复条件①数据准备窗口完成当前任务；②下一轮其它方向结论形成 | ②由P8满足，①未确认UNKNOWN；两者齐备才恢复输入范围/版本化面板交付，不能假定已随其它任务交付；不重做两日期探测或轮询其它窗口 |
+| 条件下一 / 无自动实验 | 暂缓解除后先验证新增历史面板的同机构同预测期配对、D时钟及原Top50支持；兼容新预测改变P5则另评确认，不自动双线 | 充分成立才单一F1/一次有界实验；当前无待恢复fit或请求；旧outer不当独立确认，公告/流水线/启动脚本不恢复 |
 | B4 / 本候选不启动 | 仅未来确实值得确认的新candidate才冻结并一次读取真正未消费历史 | 本轮sealed收益未读；禁止将已消费outer改称确认，不等待自然天数抢救当前失败 |
 | B5 / 本候选不启动 | 仅确认通过的新角色才做最小集成，再逐项研究价格条件集合/退出价值 | 不先造多角色平台；LocalSIM由其owner实施、重启用户所有；未配置角色不阻原包日频 |
 | 条件辅线 | 直接影响日频基线或本次研究的正确性BUG/可复现性能阻塞 | 仅本模块精确修复；共享三模式生产行为若业务需要再按已有接口验证，不为已加载源码重复重启，不代LocalSIM操作 |
