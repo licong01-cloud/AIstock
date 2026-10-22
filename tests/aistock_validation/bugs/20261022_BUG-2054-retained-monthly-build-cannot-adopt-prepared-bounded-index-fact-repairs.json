@@ -1,6 +1,13 @@
 {
   "actual": "September operation dmr_63a313d97fd046a38d5a876265565014 retains completed price exports and a sealed prepare receipt. Already prepared index-history-fact-rebuild-r1 contains authoritative captured index rows, 166 restored raw keys and exact corrected shared index bins/context. Existing index_history_repairs only runs at initial prepare and cannot repair retained builds. Add bounded index repair adoption through the existing monthly API and resumable private build only; bind source capture, old manifest, cutoff and exact old/new file hashes. Preserve ordinary month validation, raw H5 thousand-CNY vs normalized/bin CNY, no historical reexport/audit or finite-value changes beyond independently established amount unit correction. Allowed writes: backend/services/dataset_release/monthly_index_repair.py, monthly_mature_build_runner.py, monthly_build_resume.py, monthly_unified.py, backend/routers/monthly_dataset_releases.py, backend/tests/dataset_release/test_monthly_index_repair.py, backend/tests/routers/test_monthly_dataset_releases.py, this BUG JSON. No database writes, activation, service control or HMM/QE changes.",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_index_repair.py",
+    "backend/services/dataset_release/monthly_mature_build_runner.py",
+    "backend/services/dataset_release/monthly_build_resume.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/routers/monthly_dataset_releases.py",
+    "backend/tests/dataset_release/test_monthly_build_resume.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
     "tests/aistock_validation/bugs/20261022_BUG-2054-retained-monthly-build-cannot-adopt-prepared-bounded-index-fact-repairs.json"
   ],
   "assigned_agent": null,
@@ -22,7 +29,7 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "The same unpublished monthly operation can adopt its existing, source-pinned index repairs with copy-on-write and crash recovery. Only the 144 index feature files, raw H5, normalized Parquet and their true receipts change; normal month and consumer verification still decide readiness. No stock export, database write, service control or activation.",
   "file_scope_contract": {
     "added_files": [],
     "changed_files": [],
@@ -54,7 +61,7 @@
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
-  "reproduce_command": "n/a",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -k index_adoption -q --tb=short",
   "required_verification": [
     "l0",
     "data_sync_autonomy_backend"
@@ -62,15 +69,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python: RED missing index adopter before implementation; 22 direct tests passed after implementation, covering frozen source/output drift, COW, idempotency, interruption recovery and amount-only unit correction.",
+      "Fresh AIstock Python captured the existing 23438 source rows and 146 bounded index outputs into CAS, then read the 146 actual retained-staging originals: all original hashes and finite-value correction contracts passed; no database or candidate/profile/service writes."
+    ],
+    "inference_basis": "planned_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": ["worker-scheduler"]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -191,5 +202,16 @@
       "target_cost_percent_of_legacy": "30-45%"
     }
   },
-  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+  "review_rounds": [
+    {"round": 1, "result": "passed_after_fix", "scope": "RED to GREEN; exact source/old manifest/cutoff binding; only canonical shared index identities and frozen files"},
+    {"round": 2, "result": "passed_after_fix", "scope": "Atomic copy-on-write, interruption and completed-journal cleanup; preserve old releases, unrelated files and later steps"},
+    {"round": 3, "result": "passed", "scope": "Existing 146 real staged originals and 23438 frozen source rows; missing facts or diagnosed amount unit correction only; no new market/history audit"}
+  ],
+  "design_compliance_001": {
+    "full_requested_bounded_behavior": "PASS; adoption is implemented, not a READY flag or exporter rerun",
+    "no_fake_success_or_hidden_error": "PASS; source/output drift and finite conflicts remain explicit errors; overall candidate readiness remains pending",
+    "business_semantics_preserved": "PASS; raw H5 thousand-CNY and normalized/bin CNY remain explicit; PIT, HMM/QE contracts and old task bindings unchanged",
+    "no_unapproved_gates_or_partial_completion": "PASS; reuse existing operator/API/private-build checks only; no database, service or activation action"
+  },
+  "workflow_gate": "fix_in_progress"
 }

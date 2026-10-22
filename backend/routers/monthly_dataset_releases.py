@@ -229,6 +229,18 @@ def bind_monthly_quote_fact_repairs(
                 inputs=request.inputs, principal=principal.principal_id))}
 
 
+@router.post("/{operation_id}/index-repairs")
+def bind_monthly_index_fact_repairs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_index_fact_binding_response_v1",
+            "data": _call(lambda: service.bind_index_fact_repairs(operation_id,
+                inputs=request.inputs, principal=principal.principal_id))}
+
+
 @router.post("/{operation_id}/suspension-authority")
 def bind_monthly_suspension_authority(
     operation_id: str,

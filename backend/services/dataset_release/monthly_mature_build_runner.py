@@ -253,6 +253,8 @@ class MatureMonthlyPhysicalBuildRunner:
             finalized = apply_quote_repairs(resume, finalized=finalized, prepare=prepare, plan=context.plan, cas=self.cas)
             if context.plan.get('monthly_quote_fact_repairs') is not None:
                 finalized = refresh_retained_quote_catalog(resume, finalized=finalized, cas=self.cas)
+            from .monthly_index_repair import apply_index_repairs
+            prepare, finalized = apply_index_repairs(resume, prepare=prepare, finalized=finalized, plan=context.plan, cas=self.cas)
             finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
             prepare_ref = self._seal_stage(prepare, expected="prepare")
             finalize_prerequisites["prepare"] = prepare_ref.sha256
