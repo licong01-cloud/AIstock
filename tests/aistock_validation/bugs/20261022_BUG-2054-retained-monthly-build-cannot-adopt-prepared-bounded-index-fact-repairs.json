@@ -67,7 +67,16 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_index_repair.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2054-retained-monthly-build-cannot-adopt-prepared-bounded-index-fact-repairs.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
@@ -120,7 +129,7 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\monthly-202609-closure-20261020\\index-history-fact-rebuild-r1\\post-restart-bug2054.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -167,7 +176,8 @@
   "validation_evidence": [
     "validation-receipt: id=806fd013939e5de3 commit=ca093a6b161857a31cf83cb0b6d7a91be5d3311f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -k index_adoption -q --tb=short` result=`passed 27 direct bounded index tests`",
     "validation-receipt: id=c40a5e36eb05fe22 commit=ca093a6b161857a31cf83cb0b6d7a91be5d3311f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/routers/test_monthly_dataset_releases.py::test_all_routes_require_dataset_release_operator -q --tb=short` result=`passed all 21 routes operator contract`",
-    "validation-receipt: id=f0775c6a4b57952d commit=ca093a6b161857a31cf83cb0b6d7a91be5d3311f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed 0 blocking findings`"
+    "validation-receipt: id=f0775c6a4b57952d commit=ca093a6b161857a31cf83cb0b6d7a91be5d3311f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed 0 blocking findings`",
+    "BUG-2054 worker-scheduler post-restart read-only identity and business smoke verified; runtime_identity_match=true; process_control_performed=false"
   ],
   "verification_budget": {
     "budget": "standard",
