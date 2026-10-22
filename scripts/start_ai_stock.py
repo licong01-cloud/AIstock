@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import importlib.util
 import json
 import os
@@ -174,10 +174,12 @@ def cached_tdx_command(directory: Path) -> tuple[list[str], Path, dict]:
 
 
 @contextmanager
-def startup_lock():
+def startup_lock(service: str = "all"):
     import msvcrt
     RUNTIME.mkdir(parents=True, exist_ok=True)
-    with (RUNTIME / "startup.lock").open("a+b") as lock:
+    if service not in (*PORTS, "all"):
+        raise ValueError("Invalid startup lock service")
+    with (RUNTIME / f"startup-{service}.lock").open("a+b") as lock:
         if lock.tell() == 0:
             lock.write(b"0")
             lock.flush()
@@ -194,8 +196,8 @@ def startup_lock():
 
 
 def launch(service: str, directory: Path) -> subprocess.Popen:
-    # Inherit the invoking console. WT_SESSION is not a window ID, and routing
-    # through wt -w 0 (MRU) can send services to an unrelated Codex window.
+    # The BAT entry already created this service's tab. Keep its child attached;
+    # never resolve MRU again or create a second window from this delayed stage.
     command = [sys.executable, "-X", "utf8", str(Path(__file__).resolve()),
                "--child", service, "--log-dir", str(directory)]
     return subprocess.Popen(command, cwd=ROOT)
@@ -287,7 +289,10 @@ def settle(service: str, timeout: float = 120) -> str:
         time.sleep(2)
 
 
-def start(check: bool = False, children: list | None = None) -> dict:
+def start(check: bool = False, children: list | None = None, service: str | None = None) -> dict:
+    if service is not None and service not in PORTS:
+        raise ValueError("Invalid startup service")
+    services = [service] if service is not None else list(PORTS)
     if not check:
         print("Checking source and startup prerequisites...", flush=True)
     head = git_head()
@@ -297,21 +302,23 @@ def start(check: bool = False, children: list | None = None) -> dict:
         for service in ("backend", "frontend"):
             commands(service)
         snapshot = inventory()
-        states = {service: state(service, snapshot) for service in PORTS}
+        states = {service: state(service, snapshot) for service in services}
         return {"check_only": True, "head": head, "states": states, "services_started": False}
-    with startup_lock():
+    with ExitStack() as locks:
+        # Tabs run independently; only duplicate launches of the same service
+        # contend. A direct all-service invocation acquires the same three locks.
+        for selected in services:
+            locks.enter_context(startup_lock(selected))
         directory = RUNTIME / (time.strftime("%Y%m%d-%H%M%S-") + uuid4().hex[:8])
         directory.mkdir()
         print(f"Startup logs: {directory}", flush=True)
         result = {"logs": str(directory), "business_acceptance": "not_evaluated", "services": {}}
-        # One shared fresh snapshot under the lock, not two PowerShell scans
-        # between each tab. Dispatch every independent service before readiness.
-        print("Checking the three service ports and process ownership...", flush=True)
+        print(f"Checking service ports and process ownership: {', '.join(services)}...", flush=True)
         snapshot = inventory()
-        states = {service: state(service, snapshot) for service in PORTS}
+        states = {service: state(service, snapshot) for service in services}
         expected_revisions, errors = {}, []
         # Old processes may need to settle; never delay the other absent services.
-        order = sorted(PORTS, key=lambda service: states[service] not in ("absent", "listening"))
+        order = sorted(services, key=lambda service: states[service] not in ("absent", "listening"))
         for service in order:
             if git_head() != head:
                 raise RuntimeError("Source HEAD changed during startup; no further services started")
@@ -333,7 +340,7 @@ def start(check: bool = False, children: list | None = None) -> dict:
                 errors.append(f"{service}: {exc}")
                 result["services"][service]["error"] = str(exc)
         # One shared readiness interval, not three serial 120-second waits.
-        with ThreadPoolExecutor(max_workers=len(PORTS)) as pool:
+        with ThreadPoolExecutor(max_workers=len(services)) as pool:
             waits = {pool.submit(wait_ready, service, expected, directory): service
                      for service, expected in expected_revisions.items()}
             for completed in as_completed(waits):
@@ -356,6 +363,7 @@ def start(check: bool = False, children: list | None = None) -> dict:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--check", action="store_true", help="Read-only prerequisite/port check; no build or startup")
+    parser.add_argument("--service", choices=PORTS, help="Start only the service assigned to this tab")
     parser.add_argument("--child", choices=PORTS, help=argparse.SUPPRESS)
     parser.add_argument("--log-dir", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -363,10 +371,13 @@ def main() -> int:
     code = 0
     try:
         if args.child:
-            if args.check or args.log_dir is None:
+            if args.check or args.service or args.log_dir is None:
                 raise RuntimeError("Child launch requires only its assigned log directory")
             return child(args.child, args.log_dir)
-        print(json.dumps(start(args.check, children), ensure_ascii=False, indent=2), flush=True)
+        if args.log_dir is not None:
+            raise RuntimeError("Log directory is valid only for an internal child")
+        result = start(args.check, children, args.service) if args.service else start(args.check, children)
+        print(json.dumps(result, ensure_ascii=False, indent=2), flush=True)
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         if args.child and args.log_dir and args.log_dir.resolve().parent == RUNTIME.resolve() and args.log_dir.is_dir():
             (args.log_dir / f"{args.child}.exit.json").write_text(
@@ -374,10 +385,9 @@ def main() -> int:
         print(f"ERROR: {exc}", file=sys.stderr, flush=True)
         code = 1
     if children:
-        print("Services remain attached to this original console; individual logs are in the startup log directory.",
+        print("Service processes remain attached to this tab; logs are in the startup log directory.",
               flush=True)
-        # Keep the original shell in the foreground rather than returning its
-        # prompt into three live log streams. Never kill/restart another service.
+        # Keep the tab foreground while its child runs. Never kill/restart it.
         for process in children:
             if process.wait() != 0:
                 code = 1

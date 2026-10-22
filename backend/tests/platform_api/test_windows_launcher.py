@@ -2,6 +2,7 @@
 from contextlib import nullcontext
 import importlib.util
 import json
+import os
 from pathlib import Path
 from threading import Barrier
 from unittest.mock import Mock
@@ -12,6 +13,50 @@ SPEC = importlib.util.spec_from_file_location("windows_start", Path(__file__).re
 launcher = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(launcher)
 SHA = "a" * 40
+
+
+def test_all_service_tabs_are_requested_before_any_slow_setup():
+    script = (launcher.ROOT / "start_all_ai_stock.bat").read_text(encoding="utf-8")
+    dispatch = next(line for line in script.splitlines() if line.startswith("wt.exe "))
+    assert dispatch.startswith("wt.exe -w 0 new-tab")
+    assert dispatch.count("new-tab --title") == 3 and dispatch.count(" ; ") == 2
+    for service, title in (("tdx", "TDX"), ("backend", "Backend"), ("frontend", "Frontend")):
+        assert f'--title "AIstock {title}"' in dispatch
+        assert f'cmd.exe /d /k call "%~f0" --service {service}' in dispatch
+    assert script.index(dispatch) < script.index("activate AIstock")
+    assert 'if /i "%~1"=="--check" if "%~2"=="" goto run' in script
+    for forbidden in ("taskkill", "Stop-Process", "--reload", "go run", "pip install"):
+        assert forbidden not in script
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Real CMD dispatch contract is Windows-only")
+def test_real_cmd_dispatches_three_tabs_once_without_starting_services(tmp_path):
+    compiler = Path(os.environ["WINDIR"]) / "Microsoft.NET/Framework64/v4.0.30319/csc.exe"
+    if not compiler.is_file():
+        pytest.skip("Existing Windows .NET compiler unavailable; never install dependencies")
+    # A recording executable stands in for WT. Neither it nor --check opens UI/services.
+    source = tmp_path / "Capture.cs"
+    source.write_text('class Capture { static void Main(string[] a) { '
+                      'System.IO.File.WriteAllLines(System.Environment.GetEnvironmentVariable("TAB_ARGS"), a); } }')
+    launcher.subprocess.run([str(compiler), "/nologo", f"/out:{tmp_path / 'wt.exe'}", str(source)],
+                            check=True, capture_output=True)
+    root = tmp_path / "space & \u4e2d"
+    root.mkdir()
+    script = root / "start_all_ai_stock.bat"
+    script.write_bytes((launcher.ROOT / script.name).read_bytes())
+    args_file = tmp_path / "args.txt"
+    env = {**os.environ, "PATH": str(tmp_path) + os.pathsep + os.environ["PATH"], "TAB_ARGS": str(args_file)}
+    result = launcher.subprocess.run(["cmd.exe", "/d", "/c", "call", str(script)], env=env,
+                                     capture_output=True, timeout=15)
+    assert result.returncode == 0, result.stderr
+    args = args_file.read_text(encoding="utf-8-sig").splitlines()
+    assert args[:2] == ["-w", "0"]
+    assert args.count("new-tab") == 3 and args.count(";") == 2
+    assert args.count(str(script)) == 3
+    assert [args[i + 1] for i, arg in enumerate(args) if arg == "--service"] == list(launcher.PORTS)
+    invalid = launcher.subprocess.run(["cmd.exe", "/d", "/c", "call", str(script), "--service", "invalid"],
+                                      env=env, capture_output=True, timeout=15)
+    assert invalid.returncode == 1
 
 
 def test_backend_only_tab_launcher_never_controls_other_services():
@@ -126,6 +171,43 @@ def test_old_process_exit_then_absent_start_is_not_a_duplicate(tmp_path, monkeyp
         with pytest.raises(RuntimeError, match="Another one-click startup"):
             with launcher.startup_lock():
                 pytest.fail("concurrent launcher acquired the lock")
+    with launcher.startup_lock("backend"), launcher.startup_lock("tdx"):
+        with pytest.raises(RuntimeError, match="Another one-click startup"):
+            with launcher.startup_lock("backend"):
+                pytest.fail("duplicate backend acquired its service lock")
+
+
+@pytest.mark.parametrize("service", launcher.PORTS)
+def test_service_tab_selects_only_its_service(tmp_path, monkeypatch, service):
+    monkeypatch.setattr(launcher, "ROOT", tmp_path)
+    monkeypatch.setattr(launcher, "RUNTIME", tmp_path / "runtime")
+    launcher.RUNTIME.mkdir()
+    (tmp_path / ".env").touch()
+    monkeypatch.setattr(launcher, "git_head", lambda: SHA)
+    monkeypatch.setattr(launcher, "inventory", lambda: {})
+    state = Mock(return_value="absent")
+    monkeypatch.setattr(launcher, "state", state)
+    monkeypatch.setattr(launcher, "startup_lock", nullcontext)
+    launch, wait = Mock(), Mock(return_value=SHA)
+    monkeypatch.setattr(launcher, "launch", launch)
+    monkeypatch.setattr(launcher, "wait_ready", wait)
+    result = launcher.start(service=service)
+    assert list(result["services"]) == [service]
+    state.assert_called_once_with(service, {})
+    assert launch.call_count == wait.call_count == 1
+    assert launch.call_args.args[0] == wait.call_args.args[0] == service
+
+
+def test_tab_cli_passes_exact_service_and_rejects_mixed_child_mode(monkeypatch):
+    start, child = Mock(return_value={}), Mock()
+    monkeypatch.setattr(launcher, "start", start)
+    monkeypatch.setattr(launcher, "child", child)
+    monkeypatch.setattr(launcher.sys, "argv", ["start_ai_stock.py", "--service", "backend"])
+    assert launcher.main() == 0
+    start.assert_called_once_with(False, [], "backend")
+    monkeypatch.setattr(launcher.sys, "argv", ["start_ai_stock.py", "--service", "backend", "--child", "tdx"])
+    assert launcher.main() == 1
+    child.assert_not_called()
 
 
 def test_absent_services_launch_once_and_bind_expected_revisions(tmp_path, monkeypatch):
