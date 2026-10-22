@@ -586,8 +586,9 @@ def test_interrupted_history_commit_keeps_price_exports_and_finishes_without_wri
                        "target_signature": _signature(path), "original_signature": _signature(factor / name)}
         proposed["files"][f"factor_bundle/{name}"] = _signature(path)
     pending = root.parent / f".{root.name}.industry-history-commit.json"
-    _atomic(pending, {"binding_digest": journal.record["binding_digest"], "projection_sha256": "e" * 64,
-                      "record": proposed, "files": files})
+    intent = {"binding_digest": journal.record["binding_digest"], "projection_sha256": "e" * 64,
+              "record": proposed, "files": files}
+    _atomic(pending, intent)
     original_rename = Path.rename
     def interrupted(path, target):
         if path.parent == scratch and path.name == "static_factors.parquet":
@@ -599,6 +600,7 @@ def test_interrupted_history_commit_keeps_price_exports_and_finishes_without_wri
     monkeypatch.setattr(Path, "rename", original_rename)
     recovered = recover_history_commit(root=root, journal=journal.path, record=journal.record, expected_projection="e" * 64)
     assert recovered == proposed
+    assert not pending.exists()
     assert (root / "daily_bin/close.bin").read_bytes() == b"accurate"
     for name in names:
         assert (factor / name).read_bytes() == b"repaired"
@@ -615,12 +617,15 @@ def test_interrupted_history_commit_keeps_price_exports_and_finishes_without_wri
     later["steps"]["finalize-bins"] = cas.put_json({"later_correction": True}).as_dict()
     _atomic(journal.path, later)
     before = journal.path.read_bytes(), journal.path.stat().st_mtime_ns
+    _atomic(pending, intent)  # Legacy workers left a completed intent behind.
     assert recover_history_commit(root=root, journal=journal.path, record=later, expected_projection="e" * 64) == later
+    assert not pending.exists()
     assert (journal.path.read_bytes(), journal.path.stat().st_mtime_ns) == before
     assert price.read_bytes() == b"later verified correction"
 
     forged = copy.deepcopy(later)
     forged["steps"]["industry-history"] = cas.put_json({"different_projection": True}).as_dict()
+    _atomic(pending, intent)
     with pytest.raises(MonthlyBuildResumeError, match="industry commit"):
         recover_history_commit(root=root, journal=journal.path, record=forged, expected_projection="e" * 64)
     forged = copy.deepcopy(later)
@@ -631,6 +636,94 @@ def test_interrupted_history_commit_keeps_price_exports_and_finishes_without_wri
     with pytest.raises(MonthlyBuildResumeError, match="completed industry"):
         recover_history_commit(root=root, journal=journal.path, record=later, expected_projection="e" * 64)
     assert journal.path.read_bytes() == before[0]
+
+
+@pytest.mark.parametrize("fault", [None, "resume", "retire_crash", "missing_cas", "authority", "receipt", "signature", "tamper", "backup"])
+def test_completed_industry_intent_preserves_pinned_later_factor_outputs(tmp_path, monkeypatch, fault):
+    import copy
+    from backend.services.dataset_release.monthly_industry_history import recover_history_commit
+    context, compiled, root, cas, journal = _fixture(tmp_path)
+    factor = root / "factor_bundle"
+    factor.mkdir()
+    scratch = root.parent / f".{root.name}.industry-history-{'e' * 64}"
+    scratch.mkdir()
+    proposed, files = copy.deepcopy(journal.record), {}
+    proposed["steps"]["industry-history"] = cas.put_json({"projection_sha256": "e" * 64}).as_dict()
+    pins, rows = [], []
+    for name in ("sector_data.h5", "static_factors.parquet"):
+        target, original = factor / name, scratch / (name + ".before")
+        original.write_bytes(b"original")
+        target.write_bytes(b"industry corrected")
+        relative = "factor_bundle/" + name
+        files[name] = {"scratch_relative_path": (scratch / name).relative_to(root.parent).as_posix(),
+                       "original_signature": _signature(original), "target_signature": _signature(target)}
+        proposed["files"][relative] = _signature(target)
+        replacement = scratch / (name + ".factor")
+        replacement.write_bytes(b"later validated factor output")
+        os.replace(replacement, target)
+        dataset = name.split(".")[0]
+        digest = hashlib.sha256(target.read_bytes()).hexdigest()
+        rows.append({"dataset": dataset, "relative_path": relative, "sha256": digest, "size": target.stat().st_size})
+        pins.append({"dataset": dataset, "sha256": digest, "size": target.stat().st_size,
+                     "target_signature": _signature(target)})
+    authority = cas.put_json({"schema_version": factor_correction_subject.SCHEMA, "target_cutoff": "2026-09-30", "files": rows}).as_dict()
+    latest = copy.deepcopy(proposed)
+    latest["steps"]["fact-correction"] = authority
+    for pin in pins:
+        relative = "factor_bundle/" + factor_correction_subject._name(pin["dataset"])
+        latest["files"][relative] = pin["target_signature"]
+        pin["fact_correction_ref"] = authority
+    if fault == "authority":
+        latest["steps"]["fact-correction"] = cas.put_json({"schema_version": "unknown", "files": rows}).as_dict()
+    if fault == "receipt":
+        pins[0]["sha256"] = "f" * 64
+    if fault == "signature":
+        latest["files"]["factor_bundle/sector_data.h5"] = [0, 0, 0, 0]
+    factor_ref = cas.put_json({"files": pins, "fact_correction_ref": authority}).as_dict()
+    nested = cas.put_json({"refs": {"factor_receipt": factor_ref}}).as_dict()
+    latest["steps"]["prepare"] = cas.put_json({"prepare_receipt_ref": nested}).as_dict()
+    _atomic(journal.path, latest)
+    pending = root.parent / f".{root.name}.industry-history-commit.json"
+    _atomic(pending, {"binding_digest": latest["binding_digest"], "projection_sha256": "e" * 64,
+                      "record": proposed, "files": files})
+    if fault == "tamper":
+        (factor / "sector_data.h5").write_bytes(b"unexplained change")
+    if fault == "backup":
+        (scratch / "sector_data.h5.before").write_bytes(b"lost original")
+    before = journal.path.read_bytes(), {p.name: p.read_bytes() for p in factor.iterdir()}
+    def recover():
+        return recover_history_commit(root=root, journal=journal.path, record=latest,
+            expected_projection="e" * 64, cas=None if fault == "missing_cas" else cas)
+    if fault == "retire_crash":
+        original_unlink = Path.unlink
+        def fail_retirement(path, *args, **kwargs):
+            if path == pending:
+                raise OSError("interrupted intent retirement")
+            return original_unlink(path, *args, **kwargs)
+        monkeypatch.setattr(Path, "unlink", fail_retirement)
+        with pytest.raises(OSError, match="intent retirement"):
+            recover()
+        assert pending.exists()
+        monkeypatch.setattr(Path, "unlink", original_unlink)
+        fault = None
+    if fault == "resume":
+        from backend.services.dataset_release import monthly_industry_history as history
+        monkeypatch.setattr(history, "load_frozen_history", lambda *a, **kw: SimpleNamespace(sha256="e" * 64))
+        compiled.physical_plan["build_inputs"] = {}
+        retry = MonthlyBuildResume(context=replace(context, attempt=3), compiled=compiled,
+            release_root=tmp_path, staging_root=root, cas=cas)
+        assert retry.record == latest
+        assert not pending.exists()
+    elif fault:
+        with pytest.raises(MonthlyBuildResumeError):
+            recover()
+        assert pending.exists()
+    else:
+        assert recover() == latest
+        assert not pending.exists()
+        assert recover() == latest
+    assert (journal.path.read_bytes(), {p.name: p.read_bytes() for p in factor.iterdir()}) == before
+    assert (root / "daily_bin/close.bin").read_bytes() == b"accurate"
 
 
 def test_fresh_process_recovers_completed_export_without_any_writer(tmp_path):

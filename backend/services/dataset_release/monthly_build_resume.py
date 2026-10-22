@@ -179,7 +179,7 @@ class MonthlyBuildResume:
                     if history is None:
                         raise MonthlyBuildResumeError("pending history repair has no frozen authority")
                     self.record = dict(recover_history_commit(root=staging_root, journal=self.path,
-                        record=self.record, expected_projection=history.sha256))
+                        record=self.record, expected_projection=history.sha256, cas=cas))
                 from .monthly_quote_catalog import recover_quote_catalog
                 self.record = recover_quote_catalog(root=staging_root, journal=self.path, record=self.record, cas=cas)
                 from .monthly_prev_close_repair import recover_prev_close
