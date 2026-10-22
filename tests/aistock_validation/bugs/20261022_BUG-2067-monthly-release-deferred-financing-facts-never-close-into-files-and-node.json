@@ -39,18 +39,18 @@
   "expected": "Controlled one-day margin H5/static amendment, exact source/readback and reproducible old release; monthly source readiness notices only bounded late facts and repairs; activation verifies actual configured node endpoints.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261022_BUG-2067-monthly-release-deferred-financing-facts-never-close-into-files-and-node.json",
+      "backend/services/dataset_release/monthly_late_publication.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_existing_adoption.py",
+      "backend/tests/dataset_release/test_monthly_late_publication.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_monthly_worker_nodes.py",
       "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
       "noxfile.py",
-      "backend/services/dataset_release/monthly_late_publication.py",
-      "backend/tests/dataset_release/test_monthly_existing_adoption.py",
-      "backend/tests/dataset_release/test_monthly_late_publication.py",
-      "scripts/dataset_release_margin_detail_correction.py"
+      "scripts/dataset_release_margin_detail_correction.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2067-monthly-release-deferred-financing-facts-never-close-into-files-and-node.json"
     ],
     "added_files": [
       "backend/services/dataset_release/monthly_late_publication.py",
@@ -58,18 +58,18 @@
       "scripts/dataset_release_margin_detail_correction.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261022_BUG-2067-monthly-release-deferred-financing-facts-never-close-into-files-and-node.json",
+      "backend/services/dataset_release/monthly_late_publication.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_existing_adoption.py",
+      "backend/tests/dataset_release/test_monthly_late_publication.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_monthly_worker_nodes.py",
       "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
       "noxfile.py",
-      "backend/services/dataset_release/monthly_late_publication.py",
-      "backend/tests/dataset_release/test_monthly_existing_adoption.py",
-      "backend/tests/dataset_release/test_monthly_late_publication.py",
-      "scripts/dataset_release_margin_detail_correction.py"
+      "scripts/dataset_release_margin_detail_correction.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2067-monthly-release-deferred-financing-facts-never-close-into-files-and-node.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -186,8 +186,8 @@
   },
   "first_seen_at": "2026-10-22T17:21:45.544377Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cb303549a6ced76a1a311b48b490085de2aedc2e",
+  "fixed_at": "2026-10-22T18:19:12Z",
   "github_issue_number": 6600,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6600",
   "last_seen_at": "2026-10-22T17:21:45.544377Z",
@@ -195,6 +195,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6604",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -235,6 +236,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -246,7 +248,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2067",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "99a426cb540865c3",
+    "recorded_at": "2026-10-22T18:19:50.082799Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "967f3d55c1ac95f7709a1e878347a27cc71d38e5",
+    "source_merge_commit": "cb303549a6ced76a1a311b48b490085de2aedc2e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6604",
+    "validation_evidence": [
+      "validation-receipt: id=de05381bb6509a5e commit=967f3d55c1ac95f7709a1e878347a27cc71d38e5 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 8 tests and findings=0`",
+      "validation-receipt: id=2f404305d0e51455 commit=967f3d55c1ac95f7709a1e878347a27cc71d38e5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_existing_adoption.py backend/tests/dataset_release/test_monthly_late_publication.py -q` result=`passed 17 tests`"
+    ],
+    "validation_evidence_digest": "e2ebc22b643d3fac75ccbf8156af125948bf938b5b3f3f886c35f311946555dc"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -255,6 +279,10 @@
     "fingerprint": "1212506101a0a1af20a4f7c9",
     "source_event_id": "FE-20261022-1212506101a0"
   },
+  "validation_evidence": [
+    "validation-receipt: id=de05381bb6509a5e commit=967f3d55c1ac95f7709a1e878347a27cc71d38e5 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 8 tests and findings=0`",
+    "validation-receipt: id=2f404305d0e51455 commit=967f3d55c1ac95f7709a1e878347a27cc71d38e5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_existing_adoption.py backend/tests/dataset_release/test_monthly_late_publication.py -q` result=`passed 17 tests`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
