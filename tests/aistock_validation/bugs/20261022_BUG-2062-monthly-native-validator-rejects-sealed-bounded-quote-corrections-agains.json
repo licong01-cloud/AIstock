@@ -36,15 +36,15 @@
   "expected": "Same retained operation resumes, approved repaired month bounds and values validate from exact source repair pins; unrelated drift still fails.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261022_BUG-2062-monthly-native-validator-rejects-sealed-bounded-quote-corrections-agains.json",
       "backend/services/dataset_release/monthly_legacy_validation.py",
-      "backend/tests/dataset_release/test_monthly_legacy_validation.py"
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2062-monthly-native-validator-rejects-sealed-bounded-quote-corrections-agains.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261022_BUG-2062-monthly-native-validator-rejects-sealed-bounded-quote-corrections-agains.json",
       "backend/services/dataset_release/monthly_legacy_validation.py",
-      "backend/tests/dataset_release/test_monthly_legacy_validation.py"
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2062-monthly-native-validator-rejects-sealed-bounded-quote-corrections-agains.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -118,9 +118,9 @@
   },
   "first_seen_at": "2026-10-22T05:55:04.640026Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "c7516f373760d2f0f269f55da5177c808a8733db",
   "fix_summary": "Only correction-bound feature files use their verified target end/value identity; all original finite CSV cells remain exact checks, all untouched files retain original validation. Small metadata uses stable-read SHA/size instead of an obsolete inode while publication retains the actual new signature. No producer writes, no data re-export, no additional gate.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-22T06:08:33Z",
   "github_issue_number": 6579,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6579",
   "last_seen_at": "2026-10-22T05:55:04.640026Z",
@@ -128,6 +128,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6581",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -164,6 +165,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -175,7 +177,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2062",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e8a0c2fd2e2df9dd",
+    "recorded_at": "2026-10-22T06:09:11.743240Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6c6853e443e6f3cfafb241a17e26025ff47704f5",
+    "source_merge_commit": "c7516f373760d2f0f269f55da5177c808a8733db",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6581",
+    "validation_evidence": [
+      "validation-receipt: id=4e47e3f4f6bf7a7c commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=921d1d452a971096 commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+      "validation-receipt: id=909e54f86340f600 commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_legacy_build_stage.py -q` result=`190 passed`",
+      "validation-receipt: id=0ec5d0ba3ab0e1ae commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py::test_native_factor_metadata_relocation_keeps_content_identity_not_old_inode -q` result=`2 passed`"
+    ],
+    "validation_evidence_digest": "aece85bc6d4081e19de061148427e0155f4fd0a99473ef55b6c6a29955428b98"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -184,6 +210,12 @@
     "fingerprint": "7e10fb75596b56b31571f866",
     "source_event_id": "FE-20261022-7e10fb75596b"
   },
+  "validation_evidence": [
+    "validation-receipt: id=4e47e3f4f6bf7a7c commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=921d1d452a971096 commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+    "validation-receipt: id=909e54f86340f600 commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_legacy_build_stage.py -q` result=`190 passed`",
+    "validation-receipt: id=0ec5d0ba3ab0e1ae commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py::test_native_factor_metadata_relocation_keeps_content_identity_not_old_inode -q` result=`2 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
