@@ -23,6 +23,24 @@ def test_native_month_validator_compares_actual_tail_to_frozen_csv(tmp_path, dat
     assert len(report["verified_output_files"]) == 12 * (2 if dataset == "daily_bin" else 1) + 2
 
 
+@pytest.mark.parametrize('dataset',['daily_bin','minute_bin'])
+def test_native_month_validator_reuses_same_content_after_private_path_relocation(tmp_path,dataset):
+    from backend.services.dataset_release.monthly_legacy_validation import validate_qlib_month
+    invocation, _, receipt = _append_and_finalize(tmp_path,dataset=dataset)
+    # target_root is the writer's historical location, not a fact identity.
+    # The SOURCE, predecessor, actual file signatures and values stay exact.
+    receipt['native_writer']['target_root'] = str(tmp_path/'retained-original-export'/dataset/'qlib')
+    frequency = 'day' if dataset=='daily_bin' else '1min'
+    for name in [f'calendars/{frequency}.txt','instruments/all.txt']:
+        target = invocation.staging_root/dataset/'qlib'/name
+        copied = target.with_suffix('.copied')
+        copied.write_bytes(target.read_bytes())
+        copied.replace(target)
+    report = validate_qlib_month(root=invocation.staging_root,materialization=receipt,cas=invocation.cas,
+        cutoff=date(2026,9,1),predecessor_manifest_sha256=receipt['predecessor_manifest_sha256'],source_bundle_sha256='e'*64)
+    assert report['status']=='PASS' and report['historical_values_read']==0
+
+
 def test_native_month_validator_rejects_real_bin_value_drift_not_only_signature(tmp_path):
     from backend.services.dataset_release.monthly_legacy_validation import validate_qlib_month
     invocation, _, receipt = _append_and_finalize(tmp_path)

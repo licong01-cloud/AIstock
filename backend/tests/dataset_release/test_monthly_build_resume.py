@@ -32,6 +32,232 @@ from backend.services.dataset_release.monthly_worker import ProducerContext
 
 DAY, CODE = "2026-07-10", "603900.SH"
 
+
+@pytest.mark.parametrize("mode", ["fill", "prepend", "new"])
+def test_quote_fact_patch_retains_finite_values_and_accepts_only_real_fills(mode):
+    from backend.services.dataset_release.monthly_quote_fact_correction import validate_missing_only
+    old = None if mode == "new" else np.array([3, 7, np.nan], dtype="<f4").tobytes()
+    target = np.array([1, 4, np.nan, 7, 9], dtype="<f4").tobytes() if mode == "prepend" else np.array([3, 7, 9], dtype="<f4").tobytes()
+    assert validate_missing_only(old, target) == (2 if mode in {"new", "prepend"} else 1)
+
+
+@pytest.mark.parametrize("target", [[3, 8, 9], [4, 9], [3, 7, float('inf')], [3.5, 7, 9], [3, 7]])
+def test_quote_fact_patch_rejects_changed_facts_and_invalid_bounds(target):
+    from backend.services.dataset_release.monthly_quote_fact_correction import validate_missing_only
+    old = np.array([3, 7, np.nan], dtype="<f4").tobytes()
+    with pytest.raises(ValueError):
+        validate_missing_only(old, np.array(target, dtype="<f4").tobytes())
+
+
+def _quote_prepared(tmp_path):
+    from backend.services.dataset_release import monthly_quote_fact_correction as quote
+    resume, finalized, plan = prepared(tmp_path)
+    path = resume.root / f'minute_bin/qlib/features/{CODE.lower()}/close.1min.bin'
+    values = np.frombuffer(path.read_bytes(), dtype='<f4').copy()
+    values[1:241] = 5
+    base = {"sha256": "b" * 64}
+    entry = {"relative_path": path.relative_to(resume.root).as_posix(),
+        "original_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "target_ref": resume.cas.put_bytes(values.tobytes()).as_dict()}
+    factor = resume.cas.put_json({'files':[{'dataset':'daily_pv','sha256':'c'*64}]}).as_dict()
+    prepared_ref = resume.cas.put_json({'refs':{'factor_receipt':factor}}).as_dict()
+    resume.record['steps']['prepare'] = resume.cas.put_json({'prepare_receipt_ref':prepared_ref}).as_dict()
+    authority = {"schema_version": quote.SCHEMA, "base_manifest_ref": base, "files": [entry],
+        "daily_pv_sha256":'c'*64, "coverage": {"stock_days": 1}}
+    plan["monthly_ready_correction"] = {"base_manifest_ref": base}
+    plan[quote.BINDING] = {"operation_id": resume.context.operation_id, "target_cutoff": plan['target_cutoff'],
+        "authority_ref": resume.cas.put_json(authority).as_dict()}
+    _atomic(resume.path, resume.record)
+    return quote, resume, finalized, plan, path
+
+
+@pytest.mark.parametrize('crash', [False, True])
+def test_quote_fact_patch_is_atomic_cow_and_idempotent(tmp_path, monkeypatch, crash):
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    old = tmp_path / 'old-release.bin'
+    os.link(path, old)
+    original = old.read_bytes()
+    if crash:
+        replace_file = transaction._replace
+        calls = [0]
+        def fail_after_one(target, payload):
+            calls[0] += 1
+            if calls[0] == 2:
+                raise OSError('crash after first quote rename')
+            return replace_file(target, payload)
+        monkeypatch.setattr(transaction, '_replace', fail_after_one)
+        with pytest.raises(OSError, match='crash'):
+            quote.apply_quote_repairs(resume, finalized=finalized, plan=plan, cas=resume.cas)
+        monkeypatch.setattr(transaction, '_replace', replace_file)
+        resume.record = quote.recover_quote_repairs(root=resume.root,journal=resume.path,record=resume.record,cas=resume.cas)
+    result = quote.apply_quote_repairs(resume, finalized=finalized, plan=plan, cas=resume.cas)
+    assert old.read_bytes() == original
+    assert np.all(np.fromfile(path,dtype='<f4')[1:241] == 5)
+    assert result == quote.apply_quote_repairs(resume,finalized=result,plan=plan,cas=resume.cas)
+    inner = resume.cas.get_json(result['finalize_receipt_ref'])
+    materialization = resume.cas.get_json(inner['minute_receipt_ref'])
+    assert len(quote.correction_pins(materialization,provider=path.parents[2],cas=resume.cas)) == 1
+
+
+@pytest.mark.parametrize('defect', ['running','published','wrong_operation','changed_target','qfq_basis'])
+def test_quote_fact_patch_fails_closed_without_touching_other_files(tmp_path, defect):
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    old = path.read_bytes()
+    if defect == 'running':
+        resume.root = resume.root.with_name('outside').parent
+    elif defect == 'published':
+        (resume.root/'qe_dataset_manifest.json').write_text('{}')
+    elif defect == 'wrong_operation':
+        plan[quote.BINDING]['operation_id'] = 'other'
+    elif defect == 'changed_target':
+        path.write_bytes(np.array([0,7],dtype='<f4').tobytes())
+    else:
+        authority = resume.cas.get_json(plan[quote.BINDING]['authority_ref'])
+        authority['daily_pv_sha256'] = 'd'*64
+        plan[quote.BINDING]['authority_ref'] = resume.cas.put_json(authority).as_dict()
+    before = path.read_bytes()
+    with pytest.raises(ValueError):
+        quote.apply_quote_repairs(resume,finalized=finalized,plan=plan,cas=resume.cas)
+    assert path.read_bytes() == before
+    assert before == old or defect == 'changed_target'
+
+
+def test_quote_fact_daily_catalog_exposes_real_history_without_extending_other_stocks(tmp_path):
+    from backend.services.dataset_release.monthly_quote_fact_correction import daily_catalog_payload
+    cas = CASStore(ControlStore.initialize(tmp_path/'control').root)
+    values = np.array([0, 10, np.nan, 12, 13],dtype='<f4').tobytes()
+    entries = [{'relative_path':'daily_bin/qlib/features/000001.sz/close.day.bin',
+                'target_ref':cas.put_bytes(values).as_dict()}]
+    payload = daily_catalog_payload(b'000001.SZ\t2026-09-04\t2026-09-04\n000002.SZ\t2026-09-02\t2026-09-02\n',
+        entries,['2026-09-01','2026-09-02','2026-09-03','2026-09-04'],cas)
+    assert payload.decode().splitlines() == ['000001.SZ\t2026-09-01\t2026-09-01',
+        '000001.SZ\t2026-09-03\t2026-09-04','000002.SZ\t2026-09-02\t2026-09-02']
+
+
+def _quote_capture_fixture(tmp_path):
+    from backend.services.dataset_release import monthly_quote_fact_correction as quote
+    repair = tmp_path/'data_repair_staging'
+    repair.mkdir()
+    source = repair/'source.gz'
+    source.write_bytes(b'frozen exact DB capture')
+    target = repair/'close.bin'
+    target.write_bytes(np.array([0,9],dtype='<f4').tobytes())
+    receipt = repair/'receipt.json'
+    receipt.write_text(json.dumps({'schema_version':quote.PRODUCER_SCHEMA,'status':'PRIVATE_COMPONENTS_NOT_A_RELEASE',
+        'base_manifest_file_sha256':'a'*64,'daily_pv_sha256':'c'*64,'cutoff':'2026-09-30','database_write':False,'profile_write':False,'runtime_action':False,
+        'source_captures':[{'path':str(source),'sha256':hashlib.sha256(source.read_bytes()).hexdigest(),'size':source.stat().st_size}],
+        'files':[{'relative_path':'daily_bin/qlib/features/000001.sz/close.day.bin','source_path':str(target),
+            'sha256':hashlib.sha256(target.read_bytes()).hexdigest(),'original_sha256':None}], 'coverage':{'stock_days':1}}))
+    inputs = {'receipt_path':str(receipt),'receipt_sha256':hashlib.sha256(receipt.read_bytes()).hexdigest()}
+    cas = CASStore(ControlStore.initialize(tmp_path/'control').root)
+    return quote, repair, source, target, receipt, inputs, cas
+
+
+@pytest.mark.parametrize('defect', [None,'source','output','receipt','cutoff','base','path'])
+def test_quote_fact_capture_reuses_exact_frozen_facts_and_rejects_drift(tmp_path, defect):
+    quote, repair, source, target, receipt, inputs, cas = _quote_capture_fixture(tmp_path)
+    if defect in {'source','output','receipt'}:
+        {'source':source,'output':target,'receipt':receipt}[defect].write_bytes(b'changed')
+    elif defect == 'path':
+        value = json.loads(receipt.read_bytes())
+        value['files'][0]['relative_path'] = '../active_profile.json'
+        receipt.write_text(json.dumps(value))
+        inputs['receipt_sha256'] = hashlib.sha256(receipt.read_bytes()).hexdigest()
+    arguments = dict(repair_root=repair,base_manifest_ref={'sha256': ('b' if defect=='base' else 'a')*64},
+        cutoff='2026-08-31' if defect=='cutoff' else '2026-09-30',cas=cas)
+    if defect is not None:
+        with pytest.raises(ValueError):
+            quote.capture_quote_repairs(inputs,**arguments)
+    else:
+        result = quote.capture_quote_repairs(inputs,**arguments)
+        assert result['database_write'] is False and len(result['files']) == len(result['source_capture_refs']) == 1
+
+
+def test_quote_fact_binding_and_operator_route_do_not_start_or_activate(tmp_path):
+    quote, repair, source, target, receipt, inputs, cas = _quote_capture_fixture(tmp_path)
+    root = tmp_path/'operation'
+    root.mkdir()
+    plan = {'candidate_root':str(tmp_path/'releases/new'),'target_cutoff':'2026-09-30',
+        'monthly_ready_correction':{'base_manifest_ref':{'sha256':'a'*64}}}
+    state = {'status':'FAILED','current_stage':'BUILD'}
+    checkpoints = {'SOURCE':{'canonical_sha256':'b'*64}}
+    service = SimpleNamespace(store=SimpleNamespace(operation_root=lambda _:root,read_plan=lambda _:plan,
+        read_state=lambda _:state,read_checkpoint=lambda _,s:checkpoints.get(s),replace_plan=lambda _,p:plan.update(p)))
+    bound = MonthlyReleaseService.bind_quote_fact_repairs(service,'operation',inputs=inputs,principal='operator',cas=cas)
+    assert state == {'status':'FAILED','current_stage':'BUILD'} and set(checkpoints) == {'SOURCE'}
+    assert not plan[quote.BINDING]['activation_authorized']
+    from backend.routers.monthly_dataset_releases import bind_monthly_quote_fact_repairs, UnifiedMonthlyRepairInputsRequest
+    adapter = SimpleNamespace(bind_quote_fact_repairs=lambda op,**kw:MonthlyReleaseService.bind_quote_fact_repairs(service,op,cas=cas,**kw))
+    result = bind_monthly_quote_fact_repairs('operation',UnifiedMonthlyRepairInputsRequest(inputs=inputs),
+        SimpleNamespace(principal_id='operator'),adapter)
+    assert result['data'] == bound
+    with pytest.raises(MonthlyReleaseConflict, match='binding changed'):
+        MonthlyReleaseService.bind_quote_fact_repairs(service,'operation',inputs={},principal='operator',cas=cas)
+
+
+@pytest.mark.parametrize('defect', ['running','not_correction','no_source','build_done'])
+def test_quote_fact_binding_requires_idle_source_bound_private_build(tmp_path, defect):
+    quote, repair, source, target, receipt, inputs, cas = _quote_capture_fixture(tmp_path)
+    root = tmp_path/'operation'
+    root.mkdir()
+    plan = {'candidate_root':str(tmp_path/'releases/new'),'target_cutoff':'2026-09-30',
+        'monthly_ready_correction':{'base_manifest_ref':{'sha256':'a'*64}}}
+    state, checkpoints = {'status':'FAILED','current_stage':'BUILD'}, {'SOURCE':{'canonical_sha256':'b'*64}}
+    if defect == 'running':
+        state['status'] = 'BUILDING'
+    elif defect == 'not_correction':
+        plan.pop('monthly_ready_correction')
+    elif defect == 'no_source':
+        checkpoints.clear()
+    else:
+        checkpoints['BUILD'] = {}
+    service = SimpleNamespace(store=SimpleNamespace(operation_root=lambda _:root,read_plan=lambda _:plan,
+        read_state=lambda _:state,read_checkpoint=lambda _,s:checkpoints.get(s)))
+    with pytest.raises(MonthlyReleaseConflict,match='idle retained BUILD'):
+        MonthlyReleaseService.bind_quote_fact_repairs(service,'operation',inputs=inputs,principal='operator',cas=cas)
+    assert quote.BINDING not in plan
+
+
+def test_quote_fact_completed_commit_recovery_preserves_later_steps(tmp_path, monkeypatch):
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    unlink = Path.unlink
+    def interrupted(path, *args, **kwargs):
+        if path == quote._pending(resume.root):
+            raise OSError('after quote journal commit')
+        return unlink(path,*args,**kwargs)
+    monkeypatch.setattr(Path,'unlink',interrupted)
+    with pytest.raises(OSError,match='after quote journal commit'):
+        quote.apply_quote_repairs(resume,finalized=finalized,plan=plan,cas=resume.cas)
+    monkeypatch.setattr(Path,'unlink',unlink)
+    resume.record = json.loads(resume.path.read_bytes())
+    resume.record['steps']['later'] = resume.cas.put_json({'status':'PASS'}).as_dict()
+    _atomic(resume.path,resume.record)
+    assert quote.recover_quote_repairs(root=resume.root,journal=resume.path,record=resume.record,cas=resume.cas) == resume.record
+
+
+def test_quote_fact_inherited_private_successor_keeps_completed_proof(tmp_path):
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    completed = quote.apply_quote_repairs(resume,finalized=finalized,plan=plan,cas=resume.cas)
+    binding = dict(plan[quote.BINDING])
+    plan['monthly_ready_correction'] = {'base_manifest_ref':{'sha256':'e'*64},'base_plan':{quote.BINDING:binding}}
+    resume.record['steps'].pop('quote-facts')
+    _atomic(resume.path,resume.record)
+    assert quote.apply_quote_repairs(resume,finalized=completed,plan=plan,cas=resume.cas) == completed
+    assert resume.record['steps']['quote-facts'] == binding['authority_ref']
+
+
+def test_quote_fact_creates_missing_feature_without_touching_other_files(tmp_path):
+    quote, resume, finalized, plan, path = _quote_prepared(tmp_path)
+    # This fixture-owned file is absent in the old export, not in another release.
+    path.unlink()
+    resume.record['files'].pop(path.relative_to(resume.root).as_posix())
+    authority = resume.cas.get_json(plan[quote.BINDING]['authority_ref'])
+    authority['files'][0]['original_sha256'] = None
+    plan[quote.BINDING]['authority_ref'] = resume.cas.put_json(authority).as_dict()
+    _atomic(resume.path,resume.record)
+    quote.apply_quote_repairs(resume,finalized=finalized,plan=plan,cas=resume.cas)
+    assert np.all(np.fromfile(path,dtype='<f4')[1:241] == 5)
+
 @pytest.mark.parametrize("mode", ["prepend", "append", "absent"])
 @pytest.mark.parametrize("crash", [False, True])
 def test_expand_real_minute_facts_keeps_published_bytes_and_recovers(tmp_path, monkeypatch, mode, crash):

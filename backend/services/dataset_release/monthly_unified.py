@@ -1697,6 +1697,46 @@ class MonthlyReleaseService:
             self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
             return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
 
+    def bind_quote_fact_repairs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str, cas=None) -> dict[str, Any]:
+        """Adopt missing-only output from the bounded shared quote producer."""
+        from .monthly_quote_fact_correction import BINDING, SCHEMA, capture_quote_repairs
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing = plan.get(BINDING)
+            if existing is not None:
+                ref = plan[BINDING + "_ref"]
+                path = root / ref["id"]
+                if (existing.get("inputs") != inputs or _read_json(path, label="quote binding") != existing
+                        or _file_sha256(path) != ref["sha256"] or path.stat().st_size != ref["size"]):
+                    raise MonthlyReleaseConflict("quote repair binding changed")
+                return {"status": "BOUND", "reference": ref, "authority_ref": existing["authority_ref"]}
+            state = self.store.read_state(operation_id)
+            source = self.store.read_checkpoint(operation_id, "SOURCE")
+            if (state["status"] != ReleaseState.FAILED.value or state["current_stage"] != "BUILD"
+                    or source is None or "monthly_ready_correction" not in plan
+                    or any(self.store.read_checkpoint(operation_id, s) is not None for s in STAGES if s != "SOURCE")):
+                raise MonthlyReleaseConflict("quote repair requires idle retained BUILD")
+            if cas is None:
+                from .monthly_runtime import MonthlyRuntimeSettings
+                from .cas_store import CASStore
+                cas = CASStore(MonthlyRuntimeSettings.from_env().artifact_root)
+            try:
+                authority = capture_quote_repairs(inputs, repair_root=Path(plan["candidate_root"]).parent.parent / "data_repair_staging",
+                    base_manifest_ref=plan["monthly_ready_correction"]["base_manifest_ref"], cutoff=plan["target_cutoff"], cas=cas)
+            except (ValueError, KeyError, TypeError) as exc:
+                raise MonthlyReleaseRequestInvalid("quote repair producer receipt is invalid", context={"cause": str(exc)}) from exc
+            binding = {"schema_version": SCHEMA, "operation_id": operation_id, "inputs": dict(inputs),
+                "target_cutoff": plan["target_cutoff"], "authority_ref": cas.put_json(authority).as_dict(),
+                "source_receipt_canonical_sha256": source["canonical_sha256"], "bound_by": principal,
+                "database_write": False, "activation_authorized": False}
+            relative = f"inputs/quote-fact-repair-{_digest(binding)}.json"
+            path = root / relative
+            _write_exclusive(path, binding)
+            ref = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
+            self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
+            return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
+
     def bind_minute_repairs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str,
                             cas=None, connection_factory=None) -> dict[str, Any]:
         """Freeze exact historical database rows for the SAME retained export."""

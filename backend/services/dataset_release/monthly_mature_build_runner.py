@@ -249,6 +249,11 @@ class MatureMonthlyPhysicalBuildRunner:
             prepare = apply_retained_history(resume, context=context, compiled=compiled, prepare=prepare, cas=self.cas, profile=self.profile)
             from .monthly_fact_correction import apply_factor_repairs
             prepare = apply_factor_repairs(resume, prepare=prepare, plan=context.plan, cas=self.cas)
+            from .monthly_quote_fact_correction import apply_quote_repairs
+            finalized = apply_quote_repairs(resume, finalized=finalized, prepare=prepare, plan=context.plan, cas=self.cas)
+            if context.plan.get('monthly_quote_fact_repairs') is not None:
+                finalized = refresh_retained_quote_catalog(resume, finalized=finalized, cas=self.cas)
+            finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
             prepare_ref = self._seal_stage(prepare, expected="prepare")
             finalize_prerequisites["prepare"] = prepare_ref.sha256
             smoke = tools.consumer_smoke.execute(
