@@ -260,6 +260,7 @@ targets:
           - backend/services/dataset_release/monthly_node_probe_runner.py
           - backend/services/dataset_release/monthly_supervised_build.py
           - scripts/dataset_release_candidate_consumer_smoke.py
+          - backend/services/dataset_release/candidate_consumer_smoke.py
           - backend/services/dataset_release/monthly_repair_journal.py
           - backend/services/dataset_release/monthly_postgres_source.py
           - backend/services/dataset_release/monthly_frozen_source_audit.py
