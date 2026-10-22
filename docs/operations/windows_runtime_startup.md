@@ -7,31 +7,38 @@ changes firewall rules, or invokes a database migration.
 
 ## Behaviour
 
-- Conda activation and the absolute AIstock Python are checked before dispatch.
-- All three services inherit the original invoking console, in Windows Terminal
-  or legacy PowerShell alike. No new tab/window is opened and no manual window ID
-  is required. `WT_SESSION`, `WT_WINDOW_ID`, foreground focus and MRU are not used
-  for routing: switching to Codex cannot redirect startup there. The absolute
-  Python supervisors run without additional shell profiles. Live output has
-  `[tdx]`, `[backend]` or `[frontend]` prefixes; separate full logs are preserved.
+- Run the BAT entry from the intended, active Windows Terminal window. One
+  immediate `wt.exe -w 0` request creates three separate tabs: `AIstock TDX`,
+  `AIstock Backend`, and `AIstock Frontend`. Tab dispatch precedes Conda activation
+  and process inventory; those checks run independently inside each service tab.
+  No permanent window ID or manual configuration is needed. `-w 0` means the
+  most recently active Terminal window, not a guaranteed caller-window binding:
+  keep the intended window active during the immediate request. The launcher
+  does not reroute tabs after slow setup. No shared-console fallback is attempted
+  if Terminal is unavailable or dispatch fails.
+- Each tab checks Conda and the absolute AIstock Python before service startup.
+  CMD `/k` preserves the tab and error output after exit. Supervisors and their
+  service processes remain attached to their own tabs, with no extra shell profile.
+  Live output has service prefixes; separate full logs are preserved.
 - The supervisor and Python service stdout/stderr explicitly use UTF-8, including
   redirected logs; a GBK parent locale must not crash Unicode startup messages.
 - Ports 19080, 8001 and 3000 are checked with their process ancestry. An unknown
   listener blocks startup. DEV TDX ports 19081/19082 are not managed.
 - An old startup/shutdown process or monthly worker is allowed up to 120 seconds
-  to settle. A second launcher is rejected while the OS startup lock is held.
+  to settle. Per-service OS locks reject duplicate starts without making TDX,
+  backend and frontend wait for each other's initialization.
 - Each service has up to 120 seconds for readiness, checked concurrently rather
-  than in three serial waits. The original console shows prerequisite checks,
+  than in three serial waits. Each service tab shows prerequisite checks,
   dispatch and five-second readiness progress, including per-service failures.
   Backend health and its frozen
   source identity must match the clean checkout. TDX health requires metadata-ready
   and production identity; a newly started TDX must match its verified build receipt,
   not an unrelated repository HEAD. Frontend stays on port 3000, not a fallback port.
-- All absent services are dispatched in the original console before any service
-  readiness wait. Backend startup does not wait for TDX; each service initializes
-  independently. A shared process/port snapshot precedes dispatch instead of
-  repeated inventories between services. Services with old processes still settling
-  are handled after the other services have been dispatched. Service-specific
+- All three tabs are requested together before any service readiness wait.
+  Backend startup does not wait for TDX; each service initializes independently.
+  Each tab takes one process/port snapshot and checks only its assigned service;
+  another service's slow shutdown or unknown listener cannot suppress its dispatch.
+  Service-specific
   prerequisites (such as frontend dependencies) are checked in that service's
   child; a missing prerequisite must not suppress the other services' dispatch.
 - Closed-port polling uses a cheap loopback connection, not
@@ -61,10 +68,13 @@ changes firewall rules, or invokes a database migration.
   `summary.json`, including per-service errors on failure. A service failure does
   not suppress dispatch/readiness of the others. There is no automatic kill,
   retry loop or rollback of other services.
-- The launcher keeps the original console occupied while its own children are
-  running, including after a readiness failure, so PowerShell does not print a
-  command prompt into live service logs. The final exit code is nonzero on startup
-  or child failure. Existing healthy processes are not adopted or controlled.
+- Each service supervisor keeps its own tab occupied while its child is running,
+  including after a readiness failure. The original invoking tab returns after
+  tab dispatch, not after application readiness. A successful dispatch is not a
+  health receipt: check all three tabs/logs for actual startup results. Each service
+  tab reports nonzero startup/child failures. Existing healthy processes are not
+  adopted or controlled. Close the actual old service tabs manually before restart;
+  closing only the original invoking tab does not stop services in the other tabs.
 
 ## Read-only check and runtime verification
 
