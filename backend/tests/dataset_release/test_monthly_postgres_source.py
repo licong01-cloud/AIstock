@@ -152,7 +152,7 @@ def test_frozen_bundle_pins_formal_source_stage_receipt() -> None:
     assert bundle["source_stage_receipt_ref"] == reference.as_dict()
 
 
-@pytest.mark.parametrize("repair_kind", ["deferred", "no_deferral", "absent", "wrong_date", "wrong_predecessor"])
+@pytest.mark.parametrize("repair_kind", ["deferred", "arrived", "no_deferral", "absent", "wrong_date", "wrong_predecessor"])
 def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp_path, monkeypatch, repair_kind):
     from dataclasses import replace
     from backend.services.dataset_release import monthly_postgres_source as source
@@ -171,7 +171,7 @@ def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp
         "schema_version": "aistock_monthly_repair_inputs_v1", "target_cutoff": "2026-09-30",
         "predecessor_manifest_sha256": "a" * 64, "factor_prefixes": {}, "daily_basic_null_repairs": None,
         "deferred_source_dates": ([{"dataset": "margin_detail", "trade_date": "2026-09-30",
-                                   "reason_code": "USER_DEFERRED_COLLECTION"}] if repair_kind in {"deferred", "wrong_date"} else []),
+                                   "reason_code": "USER_DEFERRED_COLLECTION"}] if repair_kind in {"deferred", "arrived", "wrong_date"} else []),
     }
     if repair_kind == "wrong_date":
         repair["deferred_source_dates"][0]["trade_date"] = "2026-09-29"
@@ -197,6 +197,8 @@ def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp
 
     def audit(**kwargs):
         expected_sha = deferred_margin_authority(repair, target_cutoff=date(2026, 9, 30))
+        if repair_kind == "arrived":
+            expected_sha = None  # Historical deferral stays pinned, but no longer exempts arrived facts.
         assert kwargs["deferred_margin_authority_sha256"] == expected_sha
         assert kwargs["audit_causal_history"] is False
         gates, artifacts = [], []
@@ -227,7 +229,10 @@ def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp
         assert not freeze_calls
         assert not (tmp_path / "monthly").exists()
         return
-    read_set = adapter.read(None, MonthlySnapshotIdentity("1-AA-1", "2026-10-01T00:00:00+00:00", "repair"), context)
+    from unittest.mock import MagicMock
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value.fetchone.return_value = (repair_kind == "arrived",)
+    read_set = adapter.read(connection, MonthlySnapshotIdentity("1-AA-1", "2026-10-01T00:00:00+00:00", "repair"), context)
     _, hashes = _validated_source_artifacts(read_set.input_artifacts)
     _require_source_provenance(read_set, artifact_hashes=hashes)
     bundle_path = next(item.path for item in read_set.input_artifacts if item.path.name == "frozen-source-bundle.json")
@@ -1217,7 +1222,7 @@ def test_suspended_placeholder_conflicts_remain_blocked(conflict):
 @pytest.mark.parametrize('files, expected', [
     (['monthly_frozen_source_audit.py'], 'monthly_release_worker_process'),
     (['monthly_frozen_source_audit.py', 'canonical_stock_transformer.py', 'build_stage.py'], 'monthly_release_worker_process'),
-    (['canonical_stock_transformer.py', 'build_stage.py'], 'dataset_release_worker_heartbeat'),
+    (['canonical_stock_transformer.py', 'build_stage.py'], 'monthly_release_worker_process'),
 ])
 def test_monthly_suspend_fix_selects_real_worker_probe(files, expected):
     from pathlib import Path

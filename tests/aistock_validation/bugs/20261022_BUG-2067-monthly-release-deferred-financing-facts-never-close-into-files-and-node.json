@@ -1,6 +1,11 @@
 {
   "actual": "SOURCE remains USER_DEFERRED_COLLECTION after DB reconciliation, final file remains empty; generated activation URLs refuse connection on both nodes.",
   "allowed_write_scope": [
+    "noxfile.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
+    "backend/services/dataset_release/monthly_postgres_source.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/tests/dataset_release/test_monthly_existing_adoption.py",
     "backend/services/dataset_release/monthly_worker_nodes.py",
     "backend/tests/dataset_release/test_monthly_worker_nodes.py",
     "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
@@ -27,20 +32,46 @@
       "timestamp": "2026-10-22T17:21:45.544377Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/monthly-release-closure-20261023/source-20260930-r1/capture.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/monthly-release-closure-20261023/adoption-validation.json"
+  ],
   "expected": "Controlled one-day margin H5/static amendment, exact source/readback and reproducible old release; monthly source readiness notices only bounded late facts and repairs; activation verifies actual configured node endpoints.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261022_BUG-2067-monthly-release-deferred-financing-facts-never-close-into-files-and-node.json",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "noxfile.py",
+      "backend/services/dataset_release/monthly_late_publication.py",
+      "backend/tests/dataset_release/test_monthly_existing_adoption.py",
+      "backend/tests/dataset_release/test_monthly_late_publication.py",
+      "scripts/dataset_release_margin_detail_correction.py"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_late_publication.py",
       "backend/tests/dataset_release/test_monthly_late_publication.py",
       "scripts/dataset_release_margin_detail_correction.py"
     ],
     "changed_files": [
+      "tests/aistock_validation/bugs/20261022_BUG-2067-monthly-release-deferred-financing-facts-never-close-into-files-and-node.json",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_unified.py",
       "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_monthly_worker_nodes.py",
-      "docs/operations/monthly_unified_dataset_release_v2_runbook.md"
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "noxfile.py",
+      "backend/services/dataset_release/monthly_late_publication.py",
+      "backend/tests/dataset_release/test_monthly_existing_adoption.py",
+      "backend/tests/dataset_release/test_monthly_late_publication.py",
+      "scripts/dataset_release_margin_detail_correction.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_worker_nodes.py",
@@ -173,14 +204,39 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_rounds": [
+    {
+      "result": "passed_after_fix",
+      "round": 1,
+      "scope": "Bounded source capture and COW: preserve original source NULL, signed rqchl correction and static as-of contract; only exact financing date."
+    },
+    {
+      "result": "passed_after_fix",
+      "round": 2,
+      "scope": "Exact v4 adoption: pinned source/factor/lineage, unchanged 267259 pins, all-node readback, idempotency and exact activated predecessor; no active write."
+    },
+    {
+      "result": "passed_after_fix",
+      "round": 3,
+      "scope": "Source integration and CI: arrived deferral no longer exempts facts; missing source remains explicitly deferred; corrected inherited stale runtime-probe expectation reproduced on canonical main; direct tests registered in existing nox lane."
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python: 15 direct amendment/adoption tests passed; one-day source NULL preservation, signed provider correction, unchanged history/PIT, missing-node rejection and idempotent READY without activation.",
+      "Fresh controller/WSL/node1 file readback: 3531 raw source facts and 28246 finite static fields match exactly on each node; manifest/pins and official controller/installed RD-Agent identity readers passed. Exact adoption validation passed; active profile unchanged."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
