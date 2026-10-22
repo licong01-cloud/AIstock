@@ -390,6 +390,11 @@ class PostgresMonthlySourceAdapter:
             repair_prefix = load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile)
             repair_inputs = validate_monthly_repair_inputs(repair_inputs, predecessor=repair_prefix, target_cutoff=target_cutoff)
         deferred_margin_sha = deferred_margin_authority(repair_inputs, target_cutoff=target_cutoff)
+        if deferred_margin_sha is not None:
+            from .monthly_late_publication import effective_margin_deferral
+            effective = effective_margin_deferral(connection, repair_inputs, trade_date=target_cutoff.isoformat())
+            if effective["deferred_trade_date"] is None:
+                deferred_margin_sha = None  # Include arrived facts; existing strict SOURCE audit decides completeness.
         if self.profile.profile == CANONICAL_PROFILE_ID:
             self._require_pit_coverage(connection, target_cutoff)
         fact_stock_codes = ()
