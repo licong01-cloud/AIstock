@@ -1,4 +1,4 @@
-# Advisory 同群先导—滞后 Top10 固定五交易日研究 F1 v1.0
+# Advisory 同群先导—滞后 Top10 固定五交易日研究 F1 v1.1
 
 日期：2026-10-22。依据蓝图v5.32 §6.3.22/16.0与用户继续实施授权。单模块离线研究，先设计交付，再源码及一次研究；后端无需重启。
 
@@ -73,6 +73,8 @@ outer若执行：主均值>=10bps、95%下界>0、覆盖>=80%、原生干预>=20
 
 已有WSL环境、2CPU线程、无GPU；2GiB RSS、单进程30分钟、200MiB输出、原52,400行与2M批读单元上限。只读核对QE公开运行状态和资源，遵守既有并发授权；不提交/控制QE。Linux临时指向验证可用/mnt/x/AIstock_temp/ADVISORY/lead-lag-20261022，Windows全X。
 
+实现细节：复用原有有界Bin reader，以纯范围查询向前扩一交易日获得67价格行；范围查询不是候选名单，不改变任何原候选行。每股/字段一次批读，不逐D复制文件。attach与金融merge使用完整package/D/T/instrument唯一键和one_to_one校验，最多52,400行，不产生笛卡尔积；特征参数按package/D的50股矩阵向量化。源研究类仅复用原子存储、成熟金融投影、fit claim与资源护栏，并显式检查复用的时间/预算常量相同；新表示、计划、登记、两臂fit、推进和结果完全独立，不调用旧E2机制判定。
+
 ## Non-goals
 
 本候选不预测开盘价、买卖区间、资金仓位或分钟执行，不研究新父包，不给其它消费者复用研究结果。公告及新UI仍待后续优先级；不恢复已停止E2或旧frontier。
@@ -104,13 +106,29 @@ DESIGN-COMPLIANCE-001四项：完整来源/实现/研究/盈利分态；未知/�
 | F-455 | 原子登记/阶段/claim/代码与消费内容/恢复/资源身份 |
 | F-456 | 精确Advisory归属、直接回归、多轮审修与零生产变更 |
 
+## Execution / 当前真实结果
+
+设计PR #6555已合入`ae9fc7d33dd16d14b4714349be4039ae9028fcb3`并清理。源码三文件commit `f545ebf31abec759cc07b0c157d7fb50ec0a59ea`，两轮同窗口不同关注点审核；首轮发现attach没有携带target_trade_date，已按完整原KEY一对一关联修正。最终直接矩阵15项、changed Ruff、两类L0、ownership 3/3通过；未做独立外审。三处量级P2提示由上述52,400行/one_to_one/矩阵化说明覆盖，无P0/P1阻断。
+
+唯一run `advleadlagtop10_d1fccdfdaeca44bc076ce451`，根`X:/AIstock_temp/ADVISORY/lead-lag-20261022/study/advleadlagtop10_d1fccdfdaeca44bc076ce451`；plan SHA `c2c4845556180697872e0893950ee87f8aa3e44ad4ce936cca570bdef5e884c2`，evaluated stage SHA `e13f8e25ebc78c25311fbcc424ce89536adb8769337398f6996147ef93f338d6`，result内容SHA `309436b9ad7a8825cd18f8fe098261385836c90d271104e06332443e21a46a4d`。
+
+原305D/30,500项全部保留；30,500次闭式统计估计另计，30,442数值/原B8共同支持、58最新端点/peer未知，不删股。三fold两臂训练键精确相同，分别17,372/21,328/25,621行；6实际监督fit，累计207fit＋1旧index。126D/12,600评价行，111成熟D、100三臂共同完整D，覆盖90.0901%；原生/匹配/candidate五日十槽成本后组均值105.045200/106.993973/110.408397bps。
+
+candidate−原生 **+5.363197bps**，95%区间`[-29.124041,35.510981]`，MDE80 `46.632265bps`；三fold`−0.285961/−10.221934/+24.516218bps`，仅一折正，不满足事前至少两折正。candidate−matched `+3.414425bps`，区间`[-2.859086,9.138926]`。原生干预111/111成熟D，matched干预76/111；尾部差+16.539719bps，UNKNOWN超额0.180180pp。两包对原生分别−20.951342/+31.677736bps，仅描述，不回选包。交互系数−2.953404/−5.288347/−4.112012完整报告，负号没有参与产品否决。
+
+终态 **INNER_INCONCLUSIVE / NAVIGATION_ONLY**。这是正点估计但跨折不稳定、区间跨零，不是已确认收益，也不等同“全方向无效”。按事前合同结束本轮，0 final/outer fit、未解码outer/sealed收益，不补旧证据、不搜索lag/seed/字段/包或翻符号救结果。组均值/组胜率不是账户NAV、单笔成交胜率或真实收益。
+
+耗时265.382529秒（其中prepare259.031360秒，剩余约6.35秒含6fit/评价/发布；不是单日推理SLA），峰值RSS397,430,784bytes，消费6,493,416bytes，输入片段hash `4921c45c5b681a11ba50f0ba844d74ff85d30c7534c292338a709bb786821f89`；终态输出6,397,290bytes。0研究SQL/复制大资产/训练上游/GPU/服务控制/生产写入。只读资源核对本机WSL可用55.98GiB、CPU0.2%，QE有远端node1任务，按既有资源并行授权仅使用本地两CPU线程，不操作QE。源码交付不要求后端重启、不启用生产模型；自然运行、LocalSIM和收益确认未冒称完成。
+
+fresh-process exact retry完成138.483248秒，12条STARTED/FINISHED claim内容不变（聚合SHA `d2597b65d5358cd14f7aedbf9a1149427473e97609cbe1c343a5293bb0155a0c`），0新增fit、原结果/输入身份不变。收据`X:/AIstock_temp/ADVISORY/lead-lag-20261022/exact-retry-receipt.json`。研究结束后QE三公开只读接口连接被拒绝，最新QE运行态为UNKNOWN而非0/PASS；不因该外部状态重跑已结束研究或控制服务。
+
 ## Design Acceptance Matrix
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-451 | Background/Inputs/Feasibility | artifact: X:/AIstock_temp/ADVISORY/lead-lag-20261022/input_availability_receipt.json | DESIGN_REVIEW_PASS | none |
-| F-452 | Model/Inputs | target: backend/tests/advisory_model_first/test_peer_lead_lag_top10_5td_v1.py | DESIGN_REVIEW_PASS | approved_by_user: 设计先交付，后续源码与全窗按本F1实施，未称SOURCE_PASS |
-| F-453 | Model/Scope | target: backend/tests/advisory_model_first/test_peer_lead_lag_top10_5td_v1.py | DESIGN_REVIEW_PASS | approved_by_user: 同上，当前0fit |
-| F-454 | Evaluation | target: backend/tests/advisory_model_first/test_peer_lead_lag_top10_5td_v1.py | DESIGN_REVIEW_PASS | approved_by_user: 收益屏障与完整评价待源码实施，不称经济通过 |
-| F-455 | Implementation Plan | target: backend/tests/advisory_model_first/test_peer_lead_lag_top10_5td_v1.py | DESIGN_REVIEW_PASS | approved_by_user: 登记恢复待实现，现有输入收据仅六D |
-| F-456 | Scope/Verification | artifact: 本F1精确范围和验证方案 | DESIGN_REVIEW_PASS | approved_by_user: SOURCE/真实研究/合入及清理后分别回报 |
+| F-451 | Background/Inputs/Feasibility | artifact: X:/AIstock_temp/ADVISORY/lead-lag-20261022/input_availability_receipt.json | PASS | none |
+| F-452 | backend/services/advisory_model_first/peer_lead_lag_top10_5td_v1.py:lag_features | backend/tests/advisory_model_first/test_peer_lead_lag_top10_5td_v1.py | PASS | none |
+| F-453 | backend/services/advisory_model_first/peer_lead_lag_top10_5td_v1.py:training/fit/predict | backend/tests/advisory_model_first/test_peer_lead_lag_top10_5td_v1.py; artifact: X:/AIstock_temp/ADVISORY/lead-lag-20261022/study/advleadlagtop10_d1fccdfdaeca44bc076ce451/evaluated/result.json | PASS | none |
+| F-454 | backend/services/advisory_model_first/peer_lead_lag_top10_5td_v1.py:summarize; 按合同不确定停止，非经济确认 | artifact: X:/AIstock_temp/ADVISORY/lead-lag-20261022/study/advleadlagtop10_d1fccdfdaeca44bc076ce451/inner/evaluated/report.json | PASS | none |
+| F-455 | backend/services/advisory_model_first/peer_lead_lag_top10_5td_pipeline_v1.py | backend/tests/advisory_model_first/test_peer_lead_lag_top10_5td_v1.py | PASS | none |
+| F-456 | Scope/Verification/Execution; CI/合入/清理按交付状态另报 | artifact: X:/AIstock_temp/ADVISORY/lead-lag-20261022/junit-final.xml; artifact: X:/AIstock_temp/ADVISORY/lead-lag-20261022/ownership.json | PASS | none |
