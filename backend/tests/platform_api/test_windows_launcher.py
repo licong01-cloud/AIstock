@@ -1,9 +1,9 @@
 """Startup safety contracts; never launch an application or inspect live services."""
 from contextlib import nullcontext
-import base64
 import importlib.util
 import json
 from pathlib import Path
+from threading import Barrier
 from unittest.mock import Mock
 
 import pytest
@@ -128,14 +128,20 @@ def test_absent_services_launch_once_and_bind_expected_revisions(tmp_path, monke
     monkeypatch.setattr(launcher, "startup_lock", nullcontext)
     events = []
     launch = Mock(side_effect=lambda service, _: events.append(("launch", service)))
-    wait = Mock(side_effect=lambda service, *_: events.append(("ready", service)) or SHA)
+    barrier = Barrier(3)
+    def ready(service, *_):
+        barrier.wait(timeout=5)  # Serial readiness would fail, not take 3 x 120s.
+        events.append(("ready", service))
+        return SHA
+    wait = Mock(side_effect=ready)
     monkeypatch.setattr(launcher, "launch", launch)
     monkeypatch.setattr(launcher, "wait_ready", wait)
     assert len(launcher.start()["services"]) == launch.call_count == 3
-    assert isinstance(wait.call_args_list[0].args[1], Path)
-    assert [c.args[1] for c in wait.call_args_list[1:]] == [SHA, None]
-    assert events == [("launch", "tdx"), ("launch", "backend"), ("launch", "frontend"),
-                      ("ready", "tdx"), ("ready", "backend"), ("ready", "frontend")]
+    expected = {call.args[0]: call.args[1] for call in wait.call_args_list}
+    assert isinstance(expected["tdx"], Path)
+    assert expected["backend"] == SHA and expected["frontend"] is None
+    assert events[:3] == [("launch", "tdx"), ("launch", "backend"), ("launch", "frontend")]
+    assert set(events[3:]) == {("ready", service) for service in launcher.PORTS}
 
 
 def test_cached_tdx_is_executed_without_build_or_receipt_relabel(tmp_path, monkeypatch):
@@ -155,7 +161,14 @@ def test_cached_tdx_is_executed_without_build_or_receipt_relabel(tmp_path, monke
     saved = json.loads((tmp_path / "tdx-executable.json").read_text())
     assert saved == {**receipt, "build_action": "reused"}
     monkeypatch.setattr(helper, "build_fingerprint", lambda _: "changed")
-    with pytest.raises(RuntimeError, match="missing or stale.*Build explicitly"):
+    build = Mock(return_value={**receipt, "input_sha256": "changed", "build_action": "built"})
+    monkeypatch.setattr(helper, "ensure_binary", build)
+    assert launcher.cached_tdx_command(tmp_path)[0] == [str(binary)]
+    build.assert_called_once()
+    assert build.call_args.args[1]["AISTOCK_TDX_ENV_FILE"] == str((launcher.ROOT / ".env").resolve())
+    assert json.loads((tmp_path / "tdx-executable.json").read_text())["build_action"] == "built"
+    build.side_effect = RuntimeError("offline compilation failed")
+    with pytest.raises(RuntimeError, match="compilation failed"):
         launcher.cached_tdx_command(tmp_path)
     binary.write_bytes(b"damaged executable")
     with pytest.raises(RuntimeError, match="incomplete or invalid"):
@@ -228,33 +241,39 @@ def test_child_supervisor_preserves_unicode_log_and_nonzero_exit(tmp_path, monke
 
 
 @pytest.mark.parametrize("terminal", [True, False])
-def test_terminal_tabs_and_console_share_absolute_utf8_supervisor(tmp_path, monkeypatch, terminal):
-    monkeypatch.setenv("WT_SESSION", "present")
-    monkeypatch.setenv("WT_WINDOW_ID", "7")
-    monkeypatch.setattr(launcher.shutil, "which", lambda _: "wt.exe" if terminal else None)
+def test_services_inherit_original_console_without_window_routing(tmp_path, monkeypatch, terminal):
+    monkeypatch.setenv("WT_SESSION", "present" if terminal else "")
+    monkeypatch.setenv("WT_WINDOW_ID", "0")  # Neither a stale override nor MRU may reroute.
     run, popen = Mock(), Mock()
     monkeypatch.setattr(launcher.subprocess, "run", run)
     monkeypatch.setattr(launcher.subprocess, "Popen", popen)
     directory = tmp_path / "space ' \u4e2d"
-    launcher.launch("backend", directory)
-    invoked = run if terminal else popen
-    args = invoked.call_args.args[0]
-    script = base64.b64decode(args[-1]).decode("utf-16-le")
-    assert "'-X' 'utf8'" in script and "'--child' 'backend'" in script
-    assert str(directory).replace("'", "''") in script
-    assert launcher.sys.executable.replace("'", "''") in script
-    assert "-NoProfile" in args and "-NoExit" in args
-    if terminal:
-        assert args[:4] == ["wt.exe", "-w", "7", "new-tab"]
-        assert invoked.call_args.kwargs["check"] is True
-        popen.assert_not_called()
-        run.side_effect = launcher.subprocess.CalledProcessError(1, args)
-        with pytest.raises(launcher.subprocess.CalledProcessError):
-            launcher.launch("backend", directory)
-        popen.assert_not_called()  # A failed tab dispatch never launches a duplicate fallback.
-    else:
-        assert invoked.call_args.kwargs["creationflags"] == launcher.subprocess.CREATE_NEW_CONSOLE
-        run.assert_not_called()
+    assert launcher.launch("backend", directory) is popen.return_value
+    args = popen.call_args.args[0]
+    assert args == [launcher.sys.executable, "-X", "utf8", str(Path(launcher.__file__).resolve()),
+                    "--child", "backend", "--log-dir", str(directory)]
+    assert popen.call_args.kwargs == {"cwd": launcher.ROOT}
+    run.assert_not_called()
+    popen.side_effect = OSError("process dispatch failed")
+    with pytest.raises(OSError, match="dispatch failed"):
+        launcher.launch("backend", directory)
+    assert popen.call_count == 2  # No fallback or retry into any other window.
+
+
+def test_parent_remains_foreground_for_its_children_even_after_readiness_failure(monkeypatch):
+    monkeypatch.setattr(launcher.sys, "argv", ["start_ai_stock.py"])
+    processes = [Mock(), Mock()]
+    for process, code in zip(processes, [7, 0]):
+        process.wait.return_value = code
+    def start(check, children):
+        children.extend(processes)
+        raise RuntimeError("one service failed readiness")
+    monkeypatch.setattr(launcher, "start", start)
+    assert launcher.main() == 1
+    for process in processes:
+        process.wait.assert_called_once_with()
+        process.kill.assert_not_called()
+        process.terminate.assert_not_called()
 
 
 def test_readiness_closed_port_polls_are_cheap_but_final_ownership_is_required(tmp_path, monkeypatch):
@@ -271,3 +290,14 @@ def test_readiness_closed_port_polls_are_cheap_but_final_ownership_is_required(t
     inventory.return_value = snapshot("backend", command="foreign.exe")
     with pytest.raises(RuntimeError, match="unknown process"):
         launcher.wait_ready("backend", SHA, tmp_path)
+
+
+def test_waiting_for_build_has_visible_bounded_progress(tmp_path, monkeypatch, capsys):
+    clock = [0.0]
+    monkeypatch.setattr(launcher.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(launcher.time, "sleep", lambda delay: clock.__setitem__(0, clock[0] + delay))
+    with pytest.raises(RuntimeError, match="readiness timeout"):
+        launcher.wait_ready("tdx", tmp_path / "tdx-executable.json", tmp_path, timeout=6)
+    output = capsys.readouterr().out
+    assert "0s/6s" in output and "5s/6s" in output and "build receipt" in output
+    assert clock[0] == 6
