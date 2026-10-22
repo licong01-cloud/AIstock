@@ -27,13 +27,20 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/platform_api/test_windows_launcher.py",
+      "docs/operations/windows_runtime_startup.md",
+      "scripts/start_ai_stock.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2056-windows-startup-routes-service-tabs-to-unrelated-mru-window-and-waits-si.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "scripts/start_ai_stock.py",
       "backend/tests/platform_api/test_windows_launcher.py",
-      "docs/operations/windows_runtime_startup.md"
+      "docs/operations/windows_runtime_startup.md",
+      "scripts/start_ai_stock.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2056-windows-startup-routes-service-tabs-to-unrelated-mru-window-and-waits-si.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "scripts/start_ai_stock.py",
@@ -95,8 +102,8 @@
   },
   "first_seen_at": "2026-10-22T03:13:15.221937Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "c6feed51fc926033f4dbd334bafbb95509dc9e46",
+  "fixed_at": "2026-10-22T03:30:32Z",
   "github_issue_number": 6560,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6560",
   "last_seen_at": "2026-10-22T03:13:15.221937Z",
@@ -104,6 +111,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6562",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -127,6 +135,7 @@
     "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -138,7 +147,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2056",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "088d128ded04ebee",
+    "recorded_at": "2026-10-22T03:31:07.559764Z",
+    "runtime_contract_digest": "33ee594bf6bdad5fe44ba9c2d89df8035c327a632f4f9a4b52b59efb0c8772b9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3b462f9e9a42984df08ed5a764c5425c16ff5dc3",
+    "source_merge_commit": "c6feed51fc926033f4dbd334bafbb95509dc9e46",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6562",
+    "validation_evidence": [
+      "python -m pytest backend/tests/platform_api/test_windows_launcher.py backend/tests/scripts/test_start_tdx_go_backend.py -q --no-cov -> 40 passed",
+      "python -m nox -s l0 -- scripts/start_ai_stock.py backend/tests/platform_api/test_windows_launcher.py docs/operations/windows_runtime_startup.md -> passed; blocking=0"
+    ],
+    "validation_evidence_digest": "f4644e7705e3f4784b535af721960d6eb67e5f4ca1ec54824cb8732e15a1fc64"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "platform.api"
   ],
@@ -147,6 +178,10 @@
     "fingerprint": "f78b96bcd544971a027c29c2",
     "source_event_id": "FE-20261022-f78b96bcd544"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/platform_api/test_windows_launcher.py backend/tests/scripts/test_start_tdx_go_backend.py -q --no-cov -> 40 passed",
+    "python -m nox -s l0 -- scripts/start_ai_stock.py backend/tests/platform_api/test_windows_launcher.py docs/operations/windows_runtime_startup.md -> passed; blocking=0"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
