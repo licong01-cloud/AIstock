@@ -129,10 +129,13 @@ def validate_aggregate_month_receipt(
             before = _signature(path)
             raw = path.read_bytes()
             if (
-                list(before) != item.get("target_signature") or before[2] != item.get("size")
+                before[2] != item.get("size")
                 or _signature(path) != before or hashlib.sha256(raw).hexdigest() != item.get("sha256")
             ):
                 raise MonthlyLegacyValidationError("native factor metadata changed after sealing")
+            # Small sealed metadata can be copied into retained staging with a
+            # different inode/mtime. Its bytes, not its previous physical path,
+            # are the identity; keep the current stable signature for publish.
             pins[path.relative_to(root).as_posix()] = {"sha256": item["sha256"], "size": before[2], "signature": list(before)}
     return {"validation_scope": "month_delta", "status": "PASS", "verified_output_files": pins,
             "physical_month_ranges": month_ranges, "historical_values_read": 0}
@@ -238,7 +241,8 @@ def validate_qlib_month(
     from .monthly_minute_repair import correction_pins as minute_correction_pins
     corrected_pins.update(minute_correction_pins(materialization, provider=provider, cas=cas))
     from .monthly_quote_fact_correction import correction_pins as quote_correction_pins
-    corrected_pins.update(quote_correction_pins(materialization, provider=provider, cas=cas))
+    quote_pins = quote_correction_pins(materialization, provider=provider, cas=cas)
+    corrected_pins.update(quote_pins)
     month_start = cutoff.replace(day=1).isoformat()
     if calendar[-1][:10] != cutoff.isoformat():
         raise MonthlyLegacyValidationError("native month calendar cutoff differs")
@@ -304,20 +308,30 @@ def validate_qlib_month(
                 start = int(start)
                 end = start + before[2] // 4 - 2
                 first = max(start, bisect_left(calendar, month_start))
-                last = max(rows)
                 expected_start = output_pin.get("start_index", item.get("start_index"))
                 expected_end = output_pin.get("end_index", item.get("end_index"))
-                if start > min(rows) or end != last or end >= len(calendar) or expected_start != start or expected_end != end:
+                # A sealed missing-only repair may restore genuine quotes after
+                # the old CSV's last row. Its exact target bytes were verified
+                # by quote_correction_pins; the old CSV is not its new boundary.
+                last = expected_end if path in quote_pins else max(rows)
+                if start > min(rows) or end < max(rows) or end != last or end >= len(calendar) or expected_start != start or expected_end != end:
                     raise MonthlyLegacyValidationError("native month feature bounds differ")
                 stream.seek(4 + (first - start) * 4)
                 observed = np.frombuffer(stream.read((last - first + 1) * 4), dtype="<f4")
             if _signature(path) != before or len(observed) != last - first + 1:
                 raise MonthlyLegacyValidationError("native month feature changed during validation")
-            expected = np.full(last - first + 1, np.nan, dtype="<f4")
+            # The correction's SHA-bound target is authoritative for restored
+            # missing cells, including dates absent from the original CSV.
+            # Still compare every original finite month fact to that CSV, so
+            # a repair cannot silently change existing values. No history is
+            # materialized or compared a second time here.
+            expected = observed.copy() if path in quote_pins else np.full(last - first + 1, np.nan, dtype="<f4")
             with np.errstate(over="ignore", invalid="ignore"):
                 for position, row in rows.items():
                     value = corrected_month.get((code, calendar[position][:10]), row[field]) if field == "prev_close" else row[field]
-                    expected[position - first] = float(value)
+                    value = float(value)
+                    if path not in quote_pins or not math.isnan(value):
+                        expected[position - first] = value
             if np.isinf(expected).any() or not np.array_equal(observed, expected, equal_nan=True):
                 raise MonthlyLegacyValidationError(f"native month {code}/{field} differs from frozen CSV")
             comparisons += len(rows)
