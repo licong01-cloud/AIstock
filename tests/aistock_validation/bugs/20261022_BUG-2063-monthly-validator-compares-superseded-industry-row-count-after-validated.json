@@ -15,6 +15,18 @@
   ],
   "created_at": "2026-10-22T06:35:44.589629Z",
   "description": "BUILD failed after genuine WSL consumer smoke PASS and completed monthly price validation, due to comparing old industry projection row_count against corrected factor file.",
+  "diagnosis": "原行业投影回执为8073285行；既有7f45fbd0封存修复将sector_data扩展至9013068行，其中9月109523行，static同时绑定该sector SHA。验证器仍强制旧行数相等，错误拒绝正式后继，并且晚于耗时分钟核验才检查这份小型元数据。不是新行情缺失。",
+  "review_rounds": [
+    "第一轮：RED复现有效后继仍被旧行数拒绝；GREEN明确匹配封存factor authority、sector/static字节pin、实际行数与static输入身份，不修改旧回执。",
+    "第二轮：增加错误sector/static hash、依赖、行数、月份、cutoff、schema、重复、写入标志、路径和缺文件反例；未授权变化仍失败。",
+    "第三轮：核对后续shared-components与ready-correction的调用点；该处是唯一强制旧行数的位置。元数据检查前移，不重复导出或扫描历史，不修改消费者及发布状态。"
+  ],
+  "design_compliance_001": [
+    "完整交付：修复通用数据准备回执组合及直接回归，并用真实保留回执fresh-process只读验证。",
+    "错误可见：原始无后继的行数冲突和所有错误后继仍显式失败，不手改READY。",
+    "业务语义不变：保留PIT、源数据、因子与消费者合同；仅识别既有正式修复。",
+    "不新增门禁：复用原封存producer metadata，检查前移节省失败重试成本，无额外审批和全历史扫描。"
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -111,9 +123,12 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh AIstock Python loaded tracked build_stage._validate_industry_factor_rows and read the real retained operation/CAS receipts: old rows8073285, current rows9013068, month rows109523, sector SHA2103b795c402d15a6b62af1d53e200ca50e9d200386d5c0c2020ab754394def8, sealed factor correction7f45fbd0527046ebf0a497bdc79f9bdc3ff2b3f59922f1daa2a29a820e5aa7a1; PASS; DB/data/profile/process writes=false."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
     "runtime_impact": "worker_scheduler",
