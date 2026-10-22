@@ -1,7 +1,7 @@
 # 分钟级交易时机建议与 LocalSIM 执行适配 F2 蓝图
 
-> 版本：v1.0；日期：2026-10-23；Feature tier：F2。
-> 状态：`DESIGN_REVIEWED_AWAITING_USER_CONFIRMATION`；本次交付仅为蓝图，详细设计、代码、实验及上线均未执行。
+> 版本：v1.1；日期：2026-10-23；Feature tier：F2。
+> 状态：`BLUEPRINT_CONFIRMED_PHASE1_DESIGN_REVIEWED`；用户已要求开展阶段一详细设计，见[详细设计](position_timing_intraday_phase1_f2_detailed_design_20261023.md)。本次仅交付文档，代码、实验及上线均未执行。
 > 源码核查基线：`029e8e4a8a9b18446edca7f439bf333152a5565b`（本任务独立工作树起点）。
 > 唯一开发规范：`../standards/aistock_development_standard_v1.5_20260523.md`。
 > 范围：独立分钟择时核心、LocalSIM 分钟模拟执行适配、荐股可嵌入提醒；不接实盘，不适配 MiniQMT。
@@ -113,7 +113,7 @@ LocalSIM 接口扩展未交付时，核心回放和提醒仍可先验收；整�
 
 ### 3.4 LocalSIM 分钟执行接口
 
-向 LocalSIM 窗口提供一个纯函数入口和薄策略 facade，目标映射现有 `init_order/compute_step/is_complete`，不使用 MiniQMT 协议。入口示意：`evaluate(plan, observed_prefix, execution_view, policy, as_of) -> decision, next_state`。
+向 LocalSIM 窗口提供一个纯函数入口和薄策略 facade，目标映射现有 `init_order/compute_step/is_complete`，不使用 MiniQMT 协议。入口：`evaluate(plan, observed_prefix, execution_view, policy, previous_state, as_of) -> decision, next_state`；状态显式传入，不依赖进程全局变量。
 
 当前 `StepResult/StepFill` 代表模拟子成交，**不能把本分钟刚产生的 OPPORTUNITY 直接包装为本分钟成交**。LocalSIM adapter 保存待执行决策，到满足延迟与后续可成交条件的bar才生成自己的 StepFill；成交价格和合法数量由 LocalSIM 现有执行/风险/账本链路确认，核心不提前增加 executed_quantity。重试/恢复必须保存未完成批次与执行游标，避免重复成交或丢掉剩余量。
 
@@ -128,7 +128,7 @@ LocalSIM 接口扩展未交付时，核心回放和提醒仍可先验收；整�
 
 ### 3.5 荐股可嵌入接口与提醒
 
-建议的 HTTP 面：PUT `/position-timing/intraday/plans/{plan_id}` 创建/修订自有计划；POST 同计划 `/evaluate` 进行幂等计算并推进 timing-owned 状态；GET 同计划 `/status`；GET `/position-timing/intraday/alerts` 只读当前机会。提醒claim复用现有POST机制并独立namespace。路径在详细设计与现有 router 合并确认；无模拟下单/切换执行模式 endpoint。GET 不推进决策游标、不写事件或假装送达；POST evaluate只写自有状态/有界证据，不创建订单。相同计划版本、输入与时钟事件的重试不重复推进。
+HTTP面由阶段一详细设计冻结：在`/api/v1`下，PUT `/position-timing/intraday/plans/{plan_id}` 创建/修订自有计划；POST `/position-timing/intraday/evaluations` 有界批评估并推进timing-owned状态；GET同计划`/status`；GET `/position-timing/intraday/alerts`只读当前机会；POST `/position-timing/intraday/alerts/{opportunity_id}/claim`领取一次提醒授权。无模拟下单/切换执行模式endpoint。GET不推进游标、不写事件或假装送达；POST只写自有状态/有界证据，不创建订单。批评估不是跨计划事务，逐项时间和幂等恢复按详细设计§5，不把缓存来源状态冒充实时核验。
 
 荐股端最少改动：传入原 list/item/plan revision 与已有价集引用；挂载一个 timing-owned 组件；收到原计划取消/修订时同步更新，页面每次刷新机会前通过原有计划读取能力核对来源revision。来源无法核实时保留旧内容作历史并停止新弹窗，不继续消费无法确认有效的旧计划。普通股票名单不自动生成目标仓位。组件显示中文状态、数据时间、原因、区间、有效期；缺数据保留可见状态，不影响原荐股名单。
 
@@ -267,4 +267,4 @@ LocalSIM 按自身冻结费用模型记账，不在本窗口覆盖默认值。�
 | F-011 | 本文§2.3/§5 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md | DESIGN_VERIFIED | none |
 | F-012 | 本文§6.1/§6.2/§6.4 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md | DESIGN_VERIFIED | none |
 
-本蓝图确认后才进入第一阶段详细设计和开发；本次不启动实验，也不声称任一候选优于现有执行策略。
+用户已确认进入阶段一详细设计；本次同步交付详细设计及[LocalSIM延后接入需求](../handoff/position_timing_intraday_localsim_integration_request_20261023.md)。下一步先在择时模块实现核心、提醒和决策回放，实际可调用基础能力具备后再由用户转交模拟盘窗口；不提前修改LocalSIM或解除TWAP-only。本次不启动开发或实验，也不声称任一候选优于现有执行策略。
