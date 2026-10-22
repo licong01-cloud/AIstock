@@ -250,6 +250,9 @@ targets:
           - backend/services/dataset_release/monthly_industry_history.py
           - backend/services/dataset_release/monthly_mature_build_runner.py
           - backend/services/dataset_release/artifact_ready_build_source.py
+          # New monthly releases own shared BUILD-only fixes as well. The old
+          # direct-v2 worker entry keeps its separate heartbeat route below.
+          - backend/services/dataset_release/build_stage.py
           - backend/services/dataset_release/monthly_unified.py
           - backend/services/dataset_release/monthly_worker.py
           - backend/services/dataset_release/monthly_shared_components.py
@@ -286,7 +289,6 @@ targets:
           - backend/services/dataset_release/a_share_limit_rule.py
           - backend/services/dataset_release/artifact_ready_source.py
           - backend/services/dataset_release/build_processor.py
-          - backend/services/dataset_release/build_stage.py
           - backend/services/dataset_release/candidate_validator.py
           - backend/services/dataset_release/canonical_stock_transformer.py
           - backend/services/dataset_release/factor_materializer.py

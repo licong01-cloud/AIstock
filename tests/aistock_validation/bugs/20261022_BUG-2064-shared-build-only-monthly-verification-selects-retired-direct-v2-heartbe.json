@@ -15,6 +15,18 @@
   ],
   "created_at": "2026-10-22T06:58:35.454354Z",
   "description": "BUG-2063 source is loaded by backend9951edf2 and exactly one healthy supervised monthly worker. A build_stage.py-only fix routes to retired direct-v2 heartbeat c65bc157, blocking formal aftercare despite true restart. Route this shared BUILD entry to the sole current monthly process verification; keep dedicated legacy worker entry and unknown/mixed source failures unchanged. No backend restart, database, data or profile changes.",
+  "diagnosis": "build_stage.py 已在月更 process source_globs 中，却缺少独立 required anchor；单文件修复被旧 direct-v2 heartbeat 路由接管。真实后端9951edf2和唯一监督月更worker均健康，旧心跳c65bc157不代表本次运行态。",
+  "review_rounds": [
+    "第一轮RED：新增BUILD单文件和混合旧入口反例，18通过2失败；精确修改catalog后失败项2通过。",
+    "第二轮：保留旧scripts/dataset_release_worker.py的独立heartbeat；BUILD加旧入口或unknown仍失败；唯一进程、后端身份、重启要求均不放宽。最终相关矩阵36通过。",
+    "第三轮：无后端实现、数据、DB或profile变动；只修CLI验收目录。L0、ownership、Ruff、编译和workflow-smoke通过，不新增门禁，不要求重启。"
+  ],
+  "design_compliance_001": [
+    "完整交付：精确catalog路由和直接回归；合入后以官方post-restart-verify核对真实运行态，不用fixture宣称生产已验证。",
+    "错误可见：未知及新旧入口混合仍明确失败，保留单worker和真实身份验证。",
+    "业务不变：未改变数据集/PIT、发布、消费者和后台进程逻辑。",
+    "不增门禁：移除旧探针误阻断，复用现有monthly process probe；不加审批、全历史校验或重启。"
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
