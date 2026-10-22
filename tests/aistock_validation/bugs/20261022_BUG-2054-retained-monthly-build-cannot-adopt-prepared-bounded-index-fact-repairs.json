@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2054",
-  "closed_at": null,
+  "closed_at": "2026-10-22T04:27:20.180038Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -20,6 +20,12 @@
   ],
   "created_at": "2026-10-22T02:40:56.133601Z",
   "description": "September operation dmr_63a313d97fd046a38d5a876265565014 retains completed price exports and a sealed prepare receipt. Already prepared index-history-fact-rebuild-r1 contains authoritative captured index rows, 166 restored raw keys and exact corrected shared index bins/context. Existing index_history_repairs only runs at initial prepare and cannot repair retained builds. Add bounded index repair adoption through the existing monthly API and resumable private build only; bind source capture, old manifest, cutoff and exact old/new file hashes. Preserve ordinary month validation, raw H5 thousand-CNY vs normalized/bin CNY, no historical reexport/audit or finite-value changes beyond independently established amount unit correction. Allowed writes: backend/services/dataset_release/monthly_index_repair.py, monthly_mature_build_runner.py, monthly_build_resume.py, monthly_unified.py, backend/routers/monthly_dataset_releases.py, backend/tests/dataset_release/test_monthly_index_repair.py, backend/tests/routers/test_monthly_dataset_releases.py, this BUG JSON. No database writes, activation, service control or HMM/QE changes.",
+  "design_compliance_001": {
+    "business_semantics_preserved": "PASS; raw H5 thousand-CNY and normalized/bin CNY remain explicit; PIT, HMM/QE contracts and old task bindings unchanged",
+    "full_requested_bounded_behavior": "PASS; adoption is implemented, not a READY flag or exporter rerun",
+    "no_fake_success_or_hidden_error": "PASS; source/output drift and finite conflicts remain explicit errors; overall candidate readiness remains pending",
+    "no_unapproved_gates_or_partial_completion": "PASS; reuse existing operator/API/private-build checks only; no database, service or activation action"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -31,9 +37,28 @@
   "evidence_uris": [],
   "expected": "The same unpublished monthly operation can adopt its existing, source-pinned index repairs with copy-on-write and crash recovery. Only the 144 index feature files, raw H5, normalized Parquet and their true receipts change; normal month and consumer verification still decide readiness. No stock export, database write, service control or activation.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_index_repair.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2054-retained-monthly-build-cannot-adopt-prepared-bounded-index-fact-repairs.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_index_repair.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2054-retained-monthly-build-cannot-adopt-prepared-bounded-index-fact-repairs.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -42,14 +67,23 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_build_resume.py",
+      "backend/services/dataset_release/monthly_index_repair.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2054-retained-monthly-build-cannot-adopt-prepared-bounded-index-fact-repairs.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
   "first_seen_at": "2026-10-22T02:40:56.133601Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b222c628add6476222e754b945454f017ba89c40",
+  "fixed_at": "2026-10-22T03:06:10Z",
   "github_issue_number": 6556,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6556",
   "last_seen_at": "2026-10-22T02:40:56.133601Z",
@@ -57,6 +91,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6558",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -66,6 +101,23 @@
     "l0",
     "data_sync_autonomy_backend"
   ],
+  "review_rounds": [
+    {
+      "result": "passed_after_fix",
+      "round": 1,
+      "scope": "RED to GREEN; exact source/old manifest/cutoff binding; only canonical shared index identities and frozen files"
+    },
+    {
+      "result": "passed_after_fix",
+      "round": 2,
+      "scope": "Atomic copy-on-write, interruption and completed-journal cleanup; preserve old releases, unrelated files and later steps"
+    },
+    {
+      "result": "passed",
+      "round": 3,
+      "scope": "Existing 146 real staged originals and 23438 frozen source rows; missing facts or diagnosed amount unit correction only; no new market/history audit"
+    }
+  ],
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
@@ -74,18 +126,67 @@
       "Fresh AIstock Python captured the existing 23438 source rows and 146 bounded index outputs into CAS, then read the 146 actual retained-staging originals: all original hashes and finite-value correction contracts passed; no database or candidate/profile/service writes."
     ],
     "inference_basis": "planned_changed_files",
-    "persistence_basis": "git_tracked_source",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "post_restart_effective_gate": "pending_user_restart",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\monthly-202609-closure-20261020\\index-history-fact-rebuild-r1\\post-restart-bug2054.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2054",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3b17641f19ef1e7bff942a1d8a0c6ad393644c44dbf4837c00db4c180be96e6d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "b222c628add6476222e754b945454f017ba89c40",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-22T04:24:51.598043Z",
+      "mode": "read_only",
+      "observed_identity": "a9d2bbf1006feb2970513c169e5615bada2e184b",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "37a2ea3c8f7ec1aeb8e1f8ccbacf357cea250c53329cb6490d0c072afbf3f03a",
+      "receipt_sha256": "45be8ca87567c010820a75ace52fcc3f12cde1b92df56b13fae22a637d601ecf",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a99caab23bf4f657a85a9cb4f7dd03a3374b1a80d86d5eac9a279d18b6c2bdb1",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
-    "target_ids": ["worker-scheduler"]
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2054",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "9b08f8602a659390",
+    "recorded_at": "2026-10-22T03:06:46.431410Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ca093a6b161857a31cf83cb0b6d7a91be5d3311f",
+    "source_merge_commit": "b222c628add6476222e754b945454f017ba89c40",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6558",
+    "validation_evidence": [
+      "validation-receipt: id=806fd013939e5de3 commit=ca093a6b161857a31cf83cb0b6d7a91be5d3311f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -k index_adoption -q --tb=short` result=`passed 27 direct bounded index tests`",
+      "validation-receipt: id=c40a5e36eb05fe22 commit=ca093a6b161857a31cf83cb0b6d7a91be5d3311f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/routers/test_monthly_dataset_releases.py::test_all_routes_require_dataset_release_operator -q --tb=short` result=`passed all 21 routes operator contract`",
+      "validation-receipt: id=f0775c6a4b57952d commit=ca093a6b161857a31cf83cb0b6d7a91be5d3311f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed 0 blocking findings`"
+    ],
+    "validation_evidence_digest": "2658ae393904a0c72d724ac2061e87b48a55cb87865ced55ed7db140a70a77db"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -94,6 +195,13 @@
     "fingerprint": "7c36f794639b9a6d2365f69a",
     "source_event_id": "FE-20261022-7c36f794639b"
   },
+  "validation_evidence": [
+    "validation-receipt: id=806fd013939e5de3 commit=ca093a6b161857a31cf83cb0b6d7a91be5d3311f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -k index_adoption -q --tb=short` result=`passed 27 direct bounded index tests`",
+    "validation-receipt: id=c40a5e36eb05fe22 commit=ca093a6b161857a31cf83cb0b6d7a91be5d3311f kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/routers/test_monthly_dataset_releases.py::test_all_routes_require_dataset_release_operator -q --tb=short` result=`passed all 21 routes operator contract`",
+    "validation-receipt: id=f0775c6a4b57952d commit=ca093a6b161857a31cf83cb0b6d7a91be5d3311f kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed 0 blocking findings`",
+    "BUG-2054 worker-scheduler post-restart read-only identity and business smoke verified; runtime_identity_match=true; process_control_performed=false",
+    "Post-restart worker-scheduler identity and business smoke PASS; bounded 146 actual index-original identities and 23438 frozen source rows PASS; database_write=false; process_control=false"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -201,17 +309,6 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "review_rounds": [
-    {"round": 1, "result": "passed_after_fix", "scope": "RED to GREEN; exact source/old manifest/cutoff binding; only canonical shared index identities and frozen files"},
-    {"round": 2, "result": "passed_after_fix", "scope": "Atomic copy-on-write, interruption and completed-journal cleanup; preserve old releases, unrelated files and later steps"},
-    {"round": 3, "result": "passed", "scope": "Existing 146 real staged originals and 23438 frozen source rows; missing facts or diagnosed amount unit correction only; no new market/history audit"}
-  ],
-  "design_compliance_001": {
-    "full_requested_bounded_behavior": "PASS; adoption is implemented, not a READY flag or exporter rerun",
-    "no_fake_success_or_hidden_error": "PASS; source/output drift and finite conflicts remain explicit errors; overall candidate readiness remains pending",
-    "business_semantics_preserved": "PASS; raw H5 thousand-CNY and normalized/bin CNY remain explicit; PIT, HMM/QE contracts and old task bindings unchanged",
-    "no_unapproved_gates_or_partial_completion": "PASS; reuse existing operator/API/private-build checks only; no database, service or activation action"
   },
   "workflow_gate": "fix_in_progress"
 }
