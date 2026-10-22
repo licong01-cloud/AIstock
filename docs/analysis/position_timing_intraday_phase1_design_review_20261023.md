@@ -59,6 +59,8 @@
 
 第三轮完成结构、链接与变更范围检查。首次F2校验发现合并的Index/Matrix标题未满足矩阵标题组，已拆出正式Design Acceptance Matrix小节；不放宽validator。随后实际执行结果：
 
+合入前再次检查预算退化路径：固定顺序批量处理可能让后排计划长期饥饿，已在详细设计§3.3补充DEFERRED优先/其余轮转、超50项分页与迟到结果不提交；只用页面内有界ID队列，不增加后台任务库。
+
 ```text
 python scripts/aistock_feature_workflow.py validate --design docs/architecture/position_timing_intraday_phase1_f2_detailed_design_20261023.md --tier F2
 PASS: design_items=14 matrix_rows=14 warnings=0
