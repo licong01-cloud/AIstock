@@ -45,6 +45,10 @@ def prepare(args):
         raise ValueError('physical manifest identity changed')
     original = _read(physical / 'reports/minute-coverage-amendment.json')
     addition = _read(args.minute_component / 'component-amendment.json')
+    direct = (base == physical and file_pin(args.profile) == file_pin(args.physical_profile))
+    if direct:
+        original = copy.deepcopy(addition)
+        original.update(files={}, stock_dates=[], checked_cells=0, filled_cells=0, source_rows=0)
     if (original['predecessor_profile']['sha256'] != file_pin(args.profile)['sha256']
             or addition['predecessor_profile']['sha256'] != file_pin(args.physical_profile)['sha256']):
         raise ValueError('correction input chain differs')
@@ -75,7 +79,7 @@ def prepare(args):
     correction['status'] = 'PRIVATE_COMPONENT_NOT_A_RELEASE'
     correction['existing_finite_values_unchanged'] = True
     source = {'schema_version': 'aistock_combined_frozen_minute_source_refs_v1',
-              'sources': [original['source_ref'], addition['source_ref']],
+              'sources': [addition['source_ref']] if direct else [original['source_ref'], addition['source_ref']],
               'database_write': False, 'active_profile_write': False, 'runtime_action': False}
     for entry in source['sources']:
         if file_pin(Path(entry['path'])) != {k: entry[k] for k in ('sha256', 'size')}:
