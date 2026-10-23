@@ -1268,6 +1268,10 @@ class MonthlyReleaseService:
         typed_evidence: dict[str, Mapping[str, Any]] = {}
         from .monthly_quote_adoption import QUOTE_SCHEMAS, validate_quote_adoption
         from .monthly_late_publication import SCHEMA as LATE_SCHEMA, READBACK_SCHEMA as LATE_READBACK, validate_late_financing_adoption
+        from .monthly_minute_adoption import (
+            SCHEMAS as MINUTE_SCHEMAS, AMENDMENT as MINUTE_AMENDMENT,
+            validate_minute_adoption, verify_pending_predecessor, retire_pending_predecessor,
+        )
         for raw in evidence_refs:
             relative = str(raw.get("relative_path") or "")
             relative_path = Path(relative)
@@ -1290,7 +1294,8 @@ class MonthlyReleaseService:
             if value.get("schema_version") != schema:
                 raise MonthlyReleaseConflict("adoption evidence schema differs")
             if value.get("status") not in {None, "PASS"} and not (
-                schema == LATE_SCHEMA and value.get("status") == "PRIVATE_COMPONENTS_NOT_A_RELEASE"
+                (schema == LATE_SCHEMA and value.get("status") == "PRIVATE_COMPONENTS_NOT_A_RELEASE")
+                or (schema == MINUTE_AMENDMENT and value.get("status") == "PRIVATE_COMPONENT_NOT_A_RELEASE")
             ):
                 raise MonthlyReleaseNotReady("adoption evidence is not PASS")
             if schema == "qe_moneyflow_alias_coverage_receipt_v1" and (
@@ -1308,7 +1313,7 @@ class MonthlyReleaseService:
             ):
                 raise MonthlyReleaseNotReady("HMM adoption evidence binds another manifest")
             schemas.add(schema)
-            if schema in QUOTE_SCHEMAS | {LATE_SCHEMA, LATE_READBACK} and schema in typed_evidence:
+            if schema in QUOTE_SCHEMAS | {LATE_SCHEMA, LATE_READBACK} | MINUTE_SCHEMAS and schema in typed_evidence:
                 raise MonthlyReleaseConflict("adoption evidence schema is duplicated")
             typed_evidence[schema] = value
             normalized_evidence.append(
@@ -1325,9 +1330,23 @@ class MonthlyReleaseService:
         }
         quote_only = bool(QUOTE_SCHEMAS.intersection(schemas))
         late_financing = bool({LATE_SCHEMA, LATE_READBACK}.intersection(schemas))
-        if profile.get("schema_version") == "aistock_active_dataset_profile_v4" and not (late_financing or quote_only):
+        minute_repair = bool(MINUTE_SCHEMAS.intersection(schemas))
+        supersession = None
+        if profile.get("schema_version") == "aistock_active_dataset_profile_v4" and not (late_financing or quote_only or minute_repair):
             raise MonthlyReleaseNotReady("v4 adoption requires its typed late-financing proof")
-        if late_financing:
+        if minute_repair:
+            if quote_only or late_financing:
+                raise MonthlyReleaseNotReady("minute successor requires its own complete typed proof")
+            try:
+                supersession = validate_minute_adoption(
+                    predecessor_root=Path(predecessor.candidate_root),
+                    predecessor_profile=_read_json(predecessor.path, label="minute logical predecessor"),
+                    predecessor_profile_sha256=expected_predecessor,
+                    candidate=candidate, profile=profile, manifest=manifest,
+                    evidence=typed_evidence, required_nodes=REQUIRED_NODES)
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
+                raise MonthlyReleaseNotReady(f"minute successor adoption proof failed: {exc}") from exc
+        elif late_financing:
             if quote_only or not {LATE_SCHEMA, LATE_READBACK}.issubset(schemas):
                 raise MonthlyReleaseNotReady("late financing adoption evidence is incomplete or mixed")
             try:
@@ -1360,12 +1379,17 @@ class MonthlyReleaseService:
             "dataset_manifest_file_sha256": manifest_file_hash,
             "node_manifest_file_sha256": dict(sorted(node_hashes.items())),
             "evidence_refs": normalized_evidence,
+            **({"supersedes_pending_operation": supersession} if supersession else {}),
         }
         semantic_digest = _digest(semantic)
         observed = datetime.now(UTC)
         self.store.operations.mkdir(parents=True, exist_ok=True)
         self.store.locks.mkdir(parents=True, exist_ok=True)
-        with _exclusive_lock(self.store.locks / f"{product_profile}.lock"):
+        with _exclusive_lock(self.store.locks / f"{product_profile}.lock"), _exclusive_lock(self.store.locks / "active-profile.lock"):
+            if ActiveProfileSnapshot.read(self.active_profile).file_sha256 != expected_predecessor:
+                raise MonthlyReleaseConflict("active changed while adopting successor")
+            if supersession:
+                verify_pending_predecessor(self, supersession, expected_predecessor, target_profile_hash)
             for child in self.store.operations.iterdir():
                 request_path = child / "request.json"
                 if not request_path.is_file():
@@ -1377,11 +1401,22 @@ class MonthlyReleaseService:
                 ):
                     if existing.get("semantic_digest") != semantic_digest:
                         raise MonthlyReleaseConflict("adoption idempotency key is already bound")
+                    if supersession:
+                        retire_pending_predecessor(self, supersession, str(existing["operation_id"]),
+                                                   expected_predecessor, target_profile_hash)
                     return self.store.read_state(str(existing["operation_id"]))
                 if (
                     existing.get("product_profile") == product_profile
                     and existing.get("target_cutoff") == target_cutoff.isoformat()
                 ):
+                    if supersession and existing.get("operation_id") == supersession["operation_id"]:
+                        continue
+                    if minute_repair:
+                        prior = self.store.read_state(str(existing["operation_id"]))
+                        intent_path = child / "receipts" / "activation.json"
+                        if prior.get("status") == ReleaseState.ACTIVATED_VERIFIED.value and intent_path.is_file():
+                            if _read_json(intent_path, label="minute activated predecessor").get("new_profile_ref", {}).get("sha256") == expected_predecessor:
+                                continue
                     if late_financing:
                         prior = self.store.read_state(str(existing["operation_id"]))
                         intent_path = self.store.operation_root(str(existing["operation_id"])) / "receipts" / "activation.json"
@@ -1455,7 +1490,7 @@ class MonthlyReleaseService:
                 "node_roots": actual_node_roots,
                 "target_roots": {"controller": str(candidate), **actual_node_roots},
                 "required_consumers": list(REQUIRED_CONSUMERS),
-                "actions": {component: (ComponentAction.SELECTIVE_REBUILD.value if (quote_only and component == "minute") or (late_financing and component == "factor")
+                "actions": {component: (ComponentAction.SELECTIVE_REBUILD.value if (quote_only and component == "minute") or (late_financing and component == "factor") or (minute_repair and component in {"minute", "factor"})
                                         else ComponentAction.REUSE.value) for component in COMPONENTS},
                 "adoption_ref": _content_ref(
                     root / "receipts" / "adoption.json", ref_id="receipts/adoption.json"
@@ -1504,6 +1539,8 @@ class MonthlyReleaseService:
             _write_exclusive(root / "plan.json", plan)
             _write_exclusive(root / "receipts" / "ready.json", ready)
             _write_exclusive(root / "state.json", state)
+            if supersession:
+                retire_pending_predecessor(self, supersession, operation_id, expected_predecessor, target_profile_hash)
             return state
 
     def issue_action_authorization(
@@ -1552,6 +1589,8 @@ class MonthlyReleaseService:
         return self.store.request_cancel(operation_id)
 
     def resume(self, operation_id: str) -> dict[str, Any]:
+        if (self.store.operation_root(operation_id) / "receipts" / "superseded.json").exists():
+            raise MonthlyReleaseConflict("superseded immutable candidate cannot be resumed")
         state = self.store.read_state(operation_id)
         status = ReleaseState(str(state["status"]))
         if status not in {
@@ -2594,6 +2633,8 @@ class MonthlyReleaseService:
     ) -> dict[str, Any]:
         root = self.store.operation_root(operation_id)
         with _exclusive_lock(self.store.locks / "active-profile.lock"):
+            from .monthly_minute_adoption import guard_minute_activation
+            guard_minute_activation(self, operation_id)
             state = self.store.read_state(operation_id)
             if state.get("status") not in {
                 ReleaseState.READY_TO_ACTIVATE.value,

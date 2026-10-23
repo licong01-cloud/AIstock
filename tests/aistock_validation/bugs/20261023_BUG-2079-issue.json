@@ -1,0 +1,238 @@
+{
+  "actual": "BUG-2070修正版margin1-minute1已封存并完成双节点部署、177变更pins/101证券日/291792单元和原QE coverage新进程验证。现有monthly_unified.adopt_existing_successor只接受late_financing或quote-only proof，不支持minute physical typed proof；同cutoff已有READY_TO_ACTIVATE margin1 operation dmr_304c3e2dffdd448c8b4a8927158fc0ed，直接接续被拒。需现有统一发布范围内版本化接续，保留原active/操作/候选/授权历史，严格校验融资继承及分钟差异，不伪造READY、不重导、不重启。生产激活另列，代码先验证。",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_unified.py",
+    "tests/aistock_validation/bugs/20261023_BUG-2079-issue.json",
+    "backend/services/dataset_release/monthly_minute_adoption.py",
+    "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+    "docs/operations/monthly_minute_adoption_20261023.md",
+    "noxfile.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2079",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-23T09:04:20.646660Z",
+  "description": "BUG-2070修正版margin1-minute1已封存并完成双节点部署、177变更pins/101证券日/291792单元和原QE coverage新进程验证。现有monthly_unified.adopt_existing_successor只接受late_financing或quote-only proof，不支持minute physical typed proof；同cutoff已有READY_TO_ACTIVATE margin1 operation dmr_304c3e2dffdd448c8b4a8927158fc0ed，直接接续被拒。需现有统一发布范围内版本化接续，保留原active/操作/候选/授权历史，严格校验融资继承及分钟差异，不伪造READY、不重导、不重启。生产激活另列，代码先验证。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261023-39374c2fc87b",
+      "timestamp": "2026-10-23T09:04:20.646641Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "通过既有统一发布接口接续精确未激活margin1到已封存minute1；两段证据、可恢复退役、独立激活均严格校验。",
+  "file_scope_contract": {
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_unified.py"
+    ],
+    "changed_files_source": "planned_intake",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_unified.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_unified.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_unified.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2079-issue.json",
+      "backend/services/dataset_release/monthly_minute_adoption.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "docs/operations/monthly_minute_adoption_20261023.md",
+      "noxfile.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_unified.py"
+    ]
+  },
+  "first_seen_at": "2026-10-23T09:04:20.646660Z",
+  "fix_branch": "bug/BUG-2079-issue-20261023",
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6637,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6637",
+  "last_seen_at": "2026-10-23T09:04:20.646660Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "Fresh Python: 17 existing/minute adoption tests passed; 2 injected crash tests passed for both candidates activation blocking and same-operation recovery.",
+      "Real sealed candidate read-only typed proof PASS, target manifest 3760d9b257c2870d2b0db4c48576e90f9246add45553d5b3592a0ccea3148e7b; three nodes 101 stock-dates and 291792 field cells each; active unchanged."
+    ],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md"
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "in_progress",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "月更已封存分钟物理修正版无法接续未激活融资修订并正式登记",
+  "trigger_condition": {
+    "fingerprint": "39374c2fc87bacdafd1b622f",
+    "source_event_id": "FE-20261023-39374c2fc87b"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "scope_expansion_reason": "Required CI classifier found new test unexecuted; add only test_monthly_minute_adoption.py to existing qlib_data_backend plan."
+}
