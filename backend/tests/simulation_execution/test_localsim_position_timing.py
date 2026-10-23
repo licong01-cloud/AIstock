@@ -153,6 +153,27 @@ def test_future_decision_rejected_without_mutating_account():
     assert not backend._ledger.fills
 
 
+@pytest.mark.parametrize("condition", ["opportunity_expired", "price_condition_withdrawn"])
+def test_expiry_and_withdrawal_invalidate_delayed_intent(condition):
+    backend, session = execution("PRICE_TOUCH_V1", delay=300)
+    decision = session.facade.evaluate(session.market, session.feedback(at("09:31:10")), at("09:31:10"))
+    assert decision.status == "OPPORTUNITY"
+    if condition == "price_condition_withdrawn":
+        changed = session.market.bars[1].model_copy(update={"close": Decimal("10.5"), "high": Decimal("10.6")})
+        market = session.market.model_copy(update={"bars": (session.market.bars[0], changed, *session.market.bars[2:])})
+        next_decision = session.facade.evaluate(market, session.feedback(at("09:32:10")), at("09:32:10"))
+        assert next_decision.status != "OPPORTUNITY"
+        bar = session.market.bars[8]
+    else:
+        clock = min(decision.valid_until, session.facade.plan.valid_until)
+        bar = session.market.bars[0].model_copy(update={"start": clock, "end": clock + timedelta(minutes=1),
+                                                       "received_at": clock + timedelta(seconds=65)})
+    assert session.step(bar) == []
+    assert session.facade.pending is None
+    assert session.order.filled_quantity == 0
+    assert backend._ledger.cash == 100000
+
+
 def test_backend_fill_feedback_and_cancel_use_existing_broker_chain():
     backend, session = execution()
     received = []
