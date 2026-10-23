@@ -305,3 +305,51 @@ def test_backfill_stays_blocked_and_points_to_versioned_recovery(tmp_path):
     assert item.status == "unrecoverable" and item.frozen_manifest is None
     assert item.context["asset_recovery"]["in_place_backfill_allowed"] is False
     assert item.context["asset_recovery"]["execution_retirement_checks_unchanged"] is True
+
+
+def test_cli_rejects_production_database_identity(monkeypatch):
+    from scripts.recover_multi_alpha_seed_assets import dev_connection_factory
+
+    with pytest.raises(ValueError, match="separate existing DEV"):
+        dev_connection_factory({"TDX_DB_DEV_NAME": "production", "TDX_DB_NAME": "production"})
+
+
+def test_cli_factory_owns_transaction_and_checks_database_before_writes(monkeypatch):
+    import psycopg2
+    from scripts.recover_multi_alpha_seed_assets import dev_connection_factory
+
+    events = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql):
+            events.append(sql)
+
+        def fetchone(self):
+            return ("dev_for_unit",)
+
+    conn = SimpleNamespace(
+        cursor=Cursor,
+        commit=lambda: events.append("commit"),
+        rollback=lambda: events.append("rollback"),
+        close=lambda: events.append("close"),
+    )
+    monkeypatch.setattr(psycopg2, "connect", lambda **kwargs: conn)
+    factory = dev_connection_factory(
+        {
+            "TDX_DB_DEV_NAME": "dev_for_unit",
+            "TDX_DB_NAME": "production",
+            "TDX_DB_DEV_HOST": "unit",
+            "TDX_DB_DEV_PORT": "1",
+            "TDX_DB_DEV_USER": "unit",
+            "TDX_DB_DEV_PASSWORD": "unit",
+        }
+    )
+    with factory(autocommit=False, manage_transaction=True):
+        events.append("body")
+    assert events == ["SELECT current_database()", "body", "commit", "close"]

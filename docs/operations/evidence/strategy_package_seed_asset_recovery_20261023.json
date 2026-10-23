@@ -4189,7 +4189,7 @@
     }
   ],
   "verification": {
-    "targeted_pytest": "11 passed",
+    "targeted_pytest": "11 passed plus 2 additional CLI isolation/transaction tests passed",
     "ruff": "passed",
     "py_compile": "passed",
     "paper_v2_backend": {

@@ -8,7 +8,8 @@
     "backend/tests/strategy_package/test_seed_asset_recovery.py",
     "docs/operations/strategy_package_seed_asset_recovery_20261023.md",
     "tests/aistock_validation/bugs/20261023_BUG-2076-alpha-seed.json",
-    "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json"
+    "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2076",
@@ -44,7 +45,8 @@
     ],
     "changed_files": [
       "backend/services/strategy_package/package_asset_backfill.py",
-      "backend/services/strategy_package/multi_alpha_promotion.py"
+      "backend/services/strategy_package/multi_alpha_promotion.py",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "planned_intake",
     "ownership": {
@@ -145,7 +147,8 @@
       "scripts/recover_multi_alpha_seed_assets.py",
       "backend/tests/strategy_package/test_seed_asset_recovery.py",
       "docs/operations/strategy_package_seed_asset_recovery_20261023.md",
-      "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json"
+      "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
@@ -155,7 +158,8 @@
       "scripts/recover_multi_alpha_seed_assets.py",
       "backend/tests/strategy_package/test_seed_asset_recovery.py",
       "docs/operations/strategy_package_seed_asset_recovery_20261023.md",
-      "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json"
+      "docs/operations/evidence/strategy_package_seed_asset_recovery_20261023.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ]
   },
   "first_seen_at": "2026-10-23T06:45:23.572361Z",
@@ -333,5 +337,6 @@
     "no_silent_failure": "pass; 38 per-seed receipts and incomplete/no-write",
     "no_semantic_drift": "pass; identity/version/seed/IC/V25 tests",
     "no_extra_approval": "pass; only user-requested production asset/activation separation"
-  }
+  },
+  "scope_expansion_ci": "Map the new recovery CLI to the existing strategy_package CI lane; no new business scope."
 }
