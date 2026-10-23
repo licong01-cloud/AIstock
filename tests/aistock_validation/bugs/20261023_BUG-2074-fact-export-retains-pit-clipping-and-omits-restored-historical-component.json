@@ -1,22 +1,18 @@
 {
   "actual": "PIT-window PASS masks clipped history and stale sector components.",
   "allowed_write_scope": [
-    "backend/qlib_exporter/authoritative_bin_exporter.py",
-    "backend/tests/test_authoritative_bin_pit_universe.py",
-    "backend/tests/test_qlib_export_stock_universe_filters.py",
     "backend/services/dataset_release/monthly_minute_coverage.py",
     "backend/services/dataset_release/monthly_postgres_source.py",
-    "backend/services/dataset_release/monthly_fact_correction.py",
     "backend/services/dataset_release/factor_materializer.py",
     "backend/services/dataset_release/canonical_stock_transformer.py",
+    "backend/tests/dataset_release/test_fact_population.py",
     "backend/tests/dataset_release/test_monthly_minute_coverage.py",
     "backend/tests/dataset_release/test_monthly_postgres_source.py",
     "backend/tests/dataset_release/test_factor_partition_producer.py",
     "backend/tests/dataset_release/test_canonical_stock_transformer.py",
-    "backend/services/dataset_release/fact_population.py",
-    "backend/tests/dataset_release/test_fact_population.py",
-    "backend/tests/dataset_release/test_monthly_fact_correction.py",
-    "tests/aistock_validation/bugs/20261023_BUG-2074-fact-export-retains-pit-clipping-and-omits-restored-historical-component.json"
+    "tests/aistock_validation/bugs/20261023_BUG-2074-fact-export-retains-pit-clipping-and-omits-restored-historical-component.json",
+    "backend/services/dataset_release/source_fact_history.py",
+    "backend/tests/dataset_release/test_source_fact_history.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2074",
@@ -41,278 +37,61 @@
   ],
   "expected": "Export all real SH/SZ A-share facts independently of PIT; preserve real quote bounds, PIT buy policy, consistent H5/static population and incremental repaired-history adoption.",
   "file_scope_contract": {
-    "added_files": [
-      "backend/services/dataset_release/fact_population.py",
-      "backend/tests/dataset_release/test_fact_population.py",
-      "backend/tests/dataset_release/test_monthly_fact_correction.py"
-    ],
-    "changed_files": [
-      "backend/qlib_exporter/authoritative_bin_exporter.py",
-      "backend/tests/test_authoritative_bin_pit_universe.py",
-      "backend/tests/test_qlib_export_stock_universe_filters.py",
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261023_BUG-2074-fact-export-retains-pit-clipping-and-omits-restored-historical-component.json",
+      "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/services/dataset_release/factor_materializer.py",
       "backend/services/dataset_release/monthly_minute_coverage.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/services/dataset_release/monthly_fact_correction.py",
-      "backend/services/dataset_release/factor_materializer.py",
-      "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/services/dataset_release/source_fact_history.py",
       "backend/tests/dataset_release/test_monthly_minute_coverage.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_factor_partition_producer.py",
-      "backend/tests/dataset_release/test_canonical_stock_transformer.py"
+      "backend/tests/dataset_release/test_source_fact_history.py"
     ],
-    "changed_files_source": "planned_intake",
-    "ownership": {
-      "changed_files": [
-        "backend/qlib_exporter/authoritative_bin_exporter.py",
-        "backend/tests/test_authoritative_bin_pit_universe.py",
-        "backend/tests/test_qlib_export_stock_universe_filters.py",
-        "backend/services/dataset_release/monthly_minute_coverage.py",
-        "backend/services/dataset_release/monthly_postgres_source.py",
-        "backend/services/dataset_release/monthly_fact_correction.py",
-        "backend/services/dataset_release/factor_materializer.py",
-        "backend/services/dataset_release/canonical_stock_transformer.py",
-        "backend/tests/dataset_release/test_monthly_minute_coverage.py",
-        "backend/tests/dataset_release/test_monthly_postgres_source.py",
-        "backend/tests/dataset_release/test_factor_partition_producer.py",
-        "backend/tests/dataset_release/test_canonical_stock_transformer.py",
-        "backend/services/dataset_release/fact_population.py",
-        "backend/tests/dataset_release/test_fact_population.py",
-        "backend/tests/dataset_release/test_monthly_fact_correction.py"
-      ],
-      "impacted_modules": [
-        "qlib_data",
-        "qe.core",
-        "factor_library",
-        "paper_v2",
-        "local_data",
-        "platform.api"
-      ],
-      "matched_rules": [
-        {
-          "file": "backend/qlib_exporter/authoritative_bin_exporter.py",
-          "impact_modules": [
-            "qe.core",
-            "factor_library",
-            "paper_v2"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_data_pipeline"
-        },
-        {
-          "file": "backend/tests/test_authoritative_bin_pit_universe.py",
-          "impact_modules": [
-            "qe.core"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_remaining_tests"
-        },
-        {
-          "file": "backend/tests/test_qlib_export_stock_universe_filters.py",
-          "impact_modules": [
-            "qe.core",
-            "factor_library",
-            "paper_v2"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_data_pipeline"
-        },
-        {
-          "file": "backend/services/dataset_release/monthly_minute_coverage.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/services/dataset_release/monthly_postgres_source.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/services/dataset_release/monthly_fact_correction.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/services/dataset_release/factor_materializer.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/services/dataset_release/canonical_stock_transformer.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_monthly_minute_coverage.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_monthly_postgres_source.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_factor_partition_producer.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_canonical_stock_transformer.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/services/dataset_release/fact_population.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_fact_population.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        },
-        {
-          "file": "backend/tests/dataset_release/test_monthly_fact_correction.py",
-          "impact_modules": [
-            "qe.core",
-            "local_data",
-            "platform.api"
-          ],
-          "primary_module": "qlib_data",
-          "risk_level": "critical",
-          "rule_id": "qlib_monthly_dataset_release"
-        }
-      ],
-      "risk_levels": [
-        "critical"
-      ],
-      "suggested_scope": [
-        "backend/qlib_exporter/authoritative_bin_exporter.py",
-        "backend/tests/test_authoritative_bin_pit_universe.py",
-        "backend/tests/test_qlib_export_stock_universe_filters.py",
-        "backend/services/dataset_release/monthly_minute_coverage.py",
-        "backend/services/dataset_release/monthly_postgres_source.py",
-        "backend/services/dataset_release/monthly_fact_correction.py",
-        "backend/services/dataset_release/factor_materializer.py",
-        "backend/services/dataset_release/canonical_stock_transformer.py",
-        "backend/tests/dataset_release/test_monthly_minute_coverage.py",
-        "backend/tests/dataset_release/test_monthly_postgres_source.py",
-        "backend/tests/dataset_release/test_factor_partition_producer.py",
-        "backend/tests/dataset_release/test_canonical_stock_transformer.py",
-        "backend/services/dataset_release/fact_population.py",
-        "backend/tests/dataset_release/test_fact_population.py",
-        "backend/tests/dataset_release/test_monthly_fact_correction.py"
-      ],
-      "unmatched_files": []
-    },
-    "planned_files": [
-      "backend/qlib_exporter/authoritative_bin_exporter.py",
-      "backend/tests/test_authoritative_bin_pit_universe.py",
-      "backend/tests/test_qlib_export_stock_universe_filters.py",
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261023_BUG-2074-fact-export-retains-pit-clipping-and-omits-restored-historical-component.json",
+      "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/services/dataset_release/factor_materializer.py",
       "backend/services/dataset_release/monthly_minute_coverage.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/services/dataset_release/monthly_fact_correction.py",
+      "backend/services/dataset_release/source_fact_history.py",
+      "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_source_fact_history.py"
+    ],
+    "changed_files_source": "git_finish",
+    "planned_files": [
+      "backend/services/dataset_release/monthly_minute_coverage.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/factor_materializer.py",
       "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/tests/dataset_release/test_fact_population.py",
       "backend/tests/dataset_release/test_monthly_minute_coverage.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_factor_partition_producer.py",
       "backend/tests/dataset_release/test_canonical_stock_transformer.py",
-      "backend/services/dataset_release/fact_population.py",
-      "backend/tests/dataset_release/test_fact_population.py",
-      "backend/tests/dataset_release/test_monthly_fact_correction.py"
+      "backend/services/dataset_release/source_fact_history.py",
+      "backend/tests/dataset_release/test_source_fact_history.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
-      "backend/qlib_exporter/authoritative_bin_exporter.py",
-      "backend/tests/test_authoritative_bin_pit_universe.py",
-      "backend/tests/test_qlib_export_stock_universe_filters.py",
       "backend/services/dataset_release/monthly_minute_coverage.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
-      "backend/services/dataset_release/monthly_fact_correction.py",
       "backend/services/dataset_release/factor_materializer.py",
       "backend/services/dataset_release/canonical_stock_transformer.py",
+      "backend/tests/dataset_release/test_fact_population.py",
       "backend/tests/dataset_release/test_monthly_minute_coverage.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_factor_partition_producer.py",
       "backend/tests/dataset_release/test_canonical_stock_transformer.py",
-      "backend/services/dataset_release/fact_population.py",
-      "backend/tests/dataset_release/test_fact_population.py",
-      "backend/tests/dataset_release/test_monthly_fact_correction.py"
+      "backend/services/dataset_release/source_fact_history.py",
+      "backend/tests/dataset_release/test_source_fact_history.py"
     ]
   },
   "first_seen_at": "2026-10-23T05:36:12.109297Z",
   "fix_branch": null,
   "fix_commit": null,
+  "fix_summary": "SOURCE18 captures A-share factual population and historical daily quote-catalog deltas; factor default uses factual QFQ population; daily/minute transformers lazily union actual fact days without PIT clipping; existing static input pin contract rejects mixed component adoption.",
   "fixed_at": null,
   "github_issue_number": 6628,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6628",
@@ -331,18 +110,22 @@
     "qlib_data_backend"
   ],
   "risk_area": "bug",
+  "root_cause": "Legacy eligibility fallback in producer filters and PIT-based historical minute catalog delta. Restored sector facts exist in private producer output but were not adopted by latest candidate; actual candidate supplementation remains pending user restart.",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh-process pytest: 152 related tests passed; 12 transformer tests passed after streaming factual-union review; 4 RED failures reproduced eligibility clipping, PIT fallback and historical catalog omissions before fixes. No DB access, build, activation or service control.",
+      "Fresh process imported SOURCE18 and all changed producers; direct no-PIT factual daily/minute union tests pass; no service or DB access",
+      "Fresh-process real transformer and factor producer regressions passed without DB or service access; SOURCE18 imported from tracked source"
+    ],
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main",
       "worker-scheduler"
     ]
   },
@@ -356,6 +139,20 @@
   "trigger_condition": {
     "fingerprint": "b826d092f8e1e3441b314d45",
     "source_event_id": "FE-20261023-b826d092f8e1"
+  },
+  "validation": {
+    "design_compliance_001": {
+      "no_business_semantic_drift": "PIT selection rules unchanged; factual exports intentionally decoupled per user requirement",
+      "no_silent_failure": "Missing facts still error; no zero fill or overwrite",
+      "no_simplified_delivery": "Source fixes only; physical candidate correction explicitly pending restart",
+      "no_unapproved_gates": "No new authorization, source provenance gate or full-history monthly audit"
+    },
+    "green": "152 related tests passed; 12 final transformer tests passed",
+    "red": "4 regression failures reproduced before fix",
+    "review_rounds": [
+      "R1 population/selection separation and native query review",
+      "R2 streaming union, real bounds, missing-day safety and no historical Cartesian scan review"
+    ]
   },
   "verification_budget": {
     "budget": "standard",

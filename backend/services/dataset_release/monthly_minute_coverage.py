@@ -59,7 +59,12 @@ def capture_historical_coverage(*, prefix, pit, cutoff, connection):
     sessions = calendar_sessions(provider / 'calendars/1min.txt')
     # Some inherited calendars contain a 13:00 placeholder; it is not a bar.
     sessions = {day: [t for t in rows if t[11:] != '13:00:00'] for day, rows in sessions.items()}
-    keys = historical_catalog_gaps([(s.ts_code, s.eligible_start, s.eligible_end) for s in pit.spans],
+    daily = prefix.root / Path(prefix.manifest['components']['daily_meta_export']['path']).parent
+    spans = [line.split('\t') for line in
+             (daily / 'instruments/all.txt').read_text(encoding='utf-8').splitlines() if line.strip()]
+    # Daily all is the factual quote catalog. Never substitute eligible spans:
+    # ST, IPO-warmup and exited securities still require their real minute bars.
+    keys = historical_catalog_gaps(spans,
         provider=provider, days=sessions, before=cutoff.replace(day=1))
     if not keys:
         return None

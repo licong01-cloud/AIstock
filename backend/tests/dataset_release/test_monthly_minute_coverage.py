@@ -84,15 +84,21 @@ def test_patch_duplicate_and_noncalendar_rows_fail_closed(tmp_path):
                 day_calendar=['2024-12-16'], minute_calendar=['2024-12-16 09:30:00'])
 
 
-def test_history_capture_uses_current_pit_and_same_source_snapshot(tmp_path, monkeypatch):
+def test_history_capture_uses_daily_fact_catalog_not_pit_and_same_snapshot(tmp_path, monkeypatch):
     from backend.services.dataset_release import monthly_minute_repair
     provider = tmp_path / 'components/minute'
     (provider / 'instruments').mkdir(parents=True)
     (provider / 'calendars').mkdir()
     (provider / 'instruments/all.txt').write_text('600811.SH\t2024-01-02\t2024-12-13\n')
     (provider / 'calendars/1min.txt').write_text('2024-12-16 09:30:00\n2024-12-16 09:31:00\n2024-12-16 13:00:00\n')
-    prefix = SimpleNamespace(root=tmp_path, manifest={'components': {'minute_meta_export': {'path': 'components/minute/meta.json'}}})
-    pit = SimpleNamespace(spans=[SimpleNamespace(ts_code='600811.SH', eligible_start=date(2024,12,16), eligible_end=date(2025,3,14))])
+    daily = tmp_path / 'components/daily/instruments'
+    daily.mkdir(parents=True)
+    (daily / 'all.txt').write_text('600811.SH\t2024-12-16\t2025-03-14\n')
+    prefix = SimpleNamespace(root=tmp_path, manifest={'components': {
+        'minute_meta_export': {'path': 'components/minute/meta.json'},
+        'daily_meta_export': {'path': 'components/daily/meta.json'}}})
+    # ST/exited securities may have no buy-eligible interval at all.
+    pit = SimpleNamespace(spans=())
     connection = object()
     def capture(inputs, **kwargs):
         assert inputs == {'stock_dates': [{'ts_code': '600811.SH', 'trade_date': '2024-12-16'}]}
