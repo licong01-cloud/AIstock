@@ -32,6 +32,8 @@
 
 > 2026-10-24 用户批准的 LocalSIM 分钟择时修订：旧账户、历史 release 和普通生产入口保持 `localsim_twap_only_v1 / TWAP`。新增显式选择的 `localsim_position_timing_v1 / POSITION_TIMING_INTRADAY_V1`，本轮仅接受冻结文件驱动的离线研究；唯一调用 `position_timing.intraday.evaluate`，沿用 LocalSIM OMS、撮合、账本、父订单费用和确认反馈。此前“唯一 TWAP”条款对这个明确 opt-in 的离线身份作此有限修订，不恢复任何 V25，也不自动激活生产账户。详细合同及验收见 `localsim_position_timing_integration_f2_detailed_design_20261024.md`。未来生产启用另需完整 immutable runtime release/control-plane 接入，不能仅因 planner 能识别该身份而自动执行。
 
+> 连续离线研究在这一显式身份内允许单一账户同时管理多个股票父订单，并复用原生目标、调仓和 T+1 结算；三规则与四档延迟使用12个独立账户。恢复边界是原子提交的完整交易日，不能用提醒或未确认机会推进账本。全年价格偏好输入缺失时保持研究阻断，不修改原 TWAP 账户配置。
+
 ## 0. 权威声明与执行红线
 
 ### 0.1 唯一权威关系

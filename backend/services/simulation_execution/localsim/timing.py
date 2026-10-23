@@ -373,9 +373,9 @@ class TimingExecution:
                     "remaining_quantity": max(0, plan.target_quantity - self.order.filled_quantity)}
         return {"status": "AWAITING_FRESH_OPPORTUNITY", "confirmed_quantity": self.order.filled_quantity}
 
-    def snapshot(self) -> dict:
+    def snapshot(self, *, include_account: bool = True) -> dict:
         ledger = self.backend._ledger
-        return {"schema_version": "localsim_timing_account_receipt_v1", "run_id": self.run_id,
+        receipt = {"schema_version": "localsim_timing_account_receipt_v1", "run_id": self.run_id,
                 "portfolio_id": self.backend.portfolio_id, "package_id": self.backend.package_id,
                 "market_sha256": digest(self.market), "execution_policy": policy_snapshot(),
                 "binding_id": self.binding_id, "plan": payload(self.facade.plan),
@@ -383,9 +383,6 @@ class TimingExecution:
                 "order": self.order.model_dump(mode="json"),
                 "fills": [f.model_dump(mode="json") for f in self.fills],
                 "events": [e.model_dump(mode="json") for e in self.events],
-                "cash_cny": str(ledger.cash_decimal),
-                "positions": {s: p.model_dump(mode="json") for s, p in ledger.positions.items()},
-                "cash_entries": [local_sim_fact_payload(e, fact_type="cash_entry") for e in ledger.cash_entries],
                 "execution_state": self.execution_state.model_dump(mode="json"),
                 "core_state": payload(self.facade.core_state) if self.facade.core_state else None,
                 "decision": payload(self.facade.decision) if self.facade.decision else None,
@@ -398,6 +395,17 @@ class TimingExecution:
                 "feedback_history": payload(self.feedback_history),
                 "bar_hashes": self.bar_hashes, "waits": payload(self.waits), "reasons": self.reasons,
                 "liquidity_proxy": "EX_POST_INTERVAL_VOLUME_NOT_OPEN_QUEUE_PROOF"}
+        if include_account:
+            receipt.update(cash_cny=str(ledger.cash_decimal),
+                           positions={s: p.model_dump(mode="json") for s, p in ledger.positions.items()},
+                           cash_entries=[local_sim_fact_payload(e, fact_type="cash_entry") for e in ledger.cash_entries])
+        else:
+            # The portfolio day owns one account and one economic journal. A
+            # parent audit must not duplicate every other parent's cash facts,
+            # nor be accepted by single-account restore as a complete receipt.
+            receipt["schema_version"] = "localsim_timing_parent_audit_v1"
+            receipt["account_scope"] = "PORTFOLIO_DAY_RECEIPT"
+        return receipt
 
     @classmethod
     def restore(cls, backend, market: MarketView, receipt: dict):

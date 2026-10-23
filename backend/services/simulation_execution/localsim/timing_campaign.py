@@ -12,17 +12,446 @@ from decimal import Decimal
 import hashlib
 import json
 from pathlib import Path
+import re
+import sys
+from typing import Literal
 
-from backend.services.position_timing.intraday.contracts import CHINA, digest
-from backend.services.position_timing.intraday.replay import FileRef
-from backend.services.position_timing.intraday.research import ARMS, DELAYS, CostContract
+from pydantic import Field, model_validator
+
+from backend.services.position_timing.intraday.contracts import (
+    CHINA, Contract, Plan, PlanDraft, Policy, PriceConstraint, Sha256, Timestamp, digest, payload,
+)
+from backend.services.position_timing.intraday.replay import FileRef, PlanEvent, implementation_identity
+from backend.services.position_timing.intraday.research import ARMS, DELAYS, EXECUTION_CONTRACT, CostContract
 from backend.services.position_timing.intraday.research_inputs import CandidateReader, checked_file
 from backend.services.strategy_package.manifest import compute_manifest_json_sha256
 from backend.services.strategy_package.package_asset_store import LocalPackageAssetStore
 from backend.services.trading_core.ledger import InMemoryLedger
 
-from .timing_research import fee_model, ref
+from .timing_research import fee_model, ref, source_identity
 from .timing_store import file_sha256, publish, read_json
+
+
+class PriceTemplateEvent(Contract):
+    """Owner-supplied preference; quantity and account remain LocalSIM owned."""
+
+    symbol: str
+    side: Literal["BUY", "SELL"]
+    trade_date: date
+    revision: int = Field(strict=True, ge=1)
+    lifecycle: Literal["ACTIVE", "CANCELLED", "COMPLETED"] = "ACTIVE"
+    available_at: Timestamp
+    valid_from: Timestamp
+    valid_until: Timestamp
+    source_file: FileRef
+    source_available_at: Timestamp
+    price_constraint: PriceConstraint
+
+    @model_validator(mode="after")
+    def coherent(self):
+        PlanDraft(symbol=self.symbol, side=self.side, target_trade_date=self.trade_date,
+                  source_ref=self.source_file.sha256, source_revision=str(self.revision),
+                  valid_from=self.valid_from, valid_until=self.valid_until,
+                  price_constraint=self.price_constraint, policy_id="PRICE_TOUCH_V1")
+        price = self.price_constraint
+        if (not price.intervals or price.source_sha256 != self.source_file.sha256
+                or not price.source_ref or self.source_available_at > self.available_at
+                or self.available_at >= self.valid_until
+                or price.valid_from is None or price.valid_until is None
+                or price.valid_from > self.valid_from or price.valid_until < self.valid_until
+                or self.valid_from.astimezone(CHINA).time() < time(9, 30)
+                or self.valid_until.astimezone(CHINA).time() > time(14, 57)):
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_PROVENANCE_INVALID")
+        return self
+
+
+class PriceTemplateDay(Contract):
+    trade_date: date
+    events: FileRef
+
+
+class CampaignPriceTemplates(Contract):
+    schema_version: Literal["localsim_timing_campaign_price_templates_v1"]
+    producer_source_commit: str = Field(pattern=r"^[0-9a-f]{40}$")
+    package_manifest_sha256: Sha256
+    candidate_manifest_sha256: Sha256
+    selection_inventory_sha256: Sha256
+    price_policy_id: str = Field(min_length=1, max_length=200)
+    policy_document: FileRef
+    days: tuple[PriceTemplateDay, ...] = Field(min_length=1)
+
+
+def inspect_price_templates(preflight_ref: FileRef, templates_ref: FileRef) -> dict:
+    """Inspect the entire immutable source batch before any account outcomes."""
+    preflight = read_json(checked_file(preflight_ref))
+    templates = CampaignPriceTemplates.model_validate_json(checked_file(templates_ref).read_text(encoding="utf-8"))
+    inventory_ref = FileRef.model_validate(preflight["selection_inventory"])
+    inventory = read_json(checked_file(inventory_ref))
+    if (templates.package_manifest_sha256 != preflight["manifest_sha256"]
+            or templates.candidate_manifest_sha256 != preflight["inputs"]["candidate_manifest"]["sha256"]
+            or templates.selection_inventory_sha256 != inventory_ref.sha256
+            or inventory["missing_trade_dates"] or inventory["conflicting_trade_dates"]):
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_INPUT_IDENTITY_CONFLICT")
+    policy = read_json(checked_file(templates.policy_document))
+    if (policy.get("price_policy_id") != templates.price_policy_id
+            or policy.get("package_manifest_sha256") != templates.package_manifest_sha256
+            or policy.get("candidate_manifest_sha256") != templates.candidate_manifest_sha256
+            or policy.get("start_trade_date") != preflight["start_trade_date"]
+            or policy.get("end_trade_date") != preflight["candidate_end_trade_date"]
+            or policy.get("mode") != "CONFIRMED_FEEDBACK_CLOSED_LOOP"
+            or not policy.get("applicability_statement")):
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_POLICY_SCOPE_UNDECLARED")
+    expected_days = [row["trade_date"] for row in inventory["days"]]
+    if [str(day.trade_date) for day in templates.days] != expected_days:
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_DAY_POPULATION_CONFLICT")
+    candidate = CandidateReader(FileRef.model_validate(preflight["inputs"]["candidate_manifest"]))
+    native_dates = [str(d.date()) for d in candidate.calendar("day")
+                    if preflight["start_trade_date"] <= str(d.date()) <= preflight["candidate_end_trade_date"]]
+    if expected_days != native_dates:
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_CALENDAR_POPULATION_CONFLICT")
+    all_refs = [preflight_ref, templates_ref, inventory_ref, templates.policy_document]
+    for value in preflight["inputs"].values():
+        item = FileRef.model_validate(value)
+        checked_file(item)
+        all_refs.append(item)
+    inspected, possible_holdings = {}, set()
+    for day, native in zip(templates.days, inventory["days"], strict=True):
+        projection_ref = FileRef.model_validate(native["projection"])
+        completion_ref = FileRef.model_validate(native["completion"])
+        for item in (projection_ref, completion_ref, day.events):
+            checked_file(item)
+            all_refs.append(item)
+        projection = read_json(Path(projection_ref.path))
+        if (projection["manifest_sha256_by_package"] != {preflight["package_id"]: preflight["manifest_sha256"]}
+                or len(projection["aggregate_results"]) != native["target_count"]
+                or projection["runtime_config"]["point_in_time_context"]["cutoff_date"] != native["data_cutoff"]):
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_NATIVE_TARGET_IDENTITY_CONFLICT")
+        current_targets = {target["symbol"] for target in projection["aggregate_results"]}
+        possible_holdings.update(current_targets)
+        events = [PriceTemplateEvent.model_validate(row) for row in read_json(Path(day.events.path))]
+        series = {}
+        for event in events:
+            if event.trade_date != day.trade_date:
+                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_EVENT_DAY_CONFLICT")
+            checked_file(event.source_file)
+            all_refs.append(event.source_file)
+            key = (event.symbol, event.side)
+            prior = series.setdefault(key, [])
+            if (not prior and (event.revision != 1 or event.lifecycle != "ACTIVE" or event.available_at > event.valid_from)
+                    or prior and (event.revision != prior[-1].revision + 1
+                                  or event.available_at <= prior[-1].available_at
+                                  or prior[-1].lifecycle != "ACTIVE")):
+                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_REVISION_CONFLICT")
+            prior.append(event)
+        # A previous target can remain held after a no-fill. Its future SELL
+        # preference is needed even when it is absent from today's top stocks.
+        expected = {(symbol, "BUY") for symbol in current_targets} | {
+            (symbol, "SELL") for symbol in possible_holdings}
+        if not expected.issubset(series):
+            missing = sorted(expected - set(series))
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_TEMPLATE_MISSING:" + repr(missing[:20]))
+        inspected[str(day.trade_date)] = {"series": series, "native": native}
+    candidate.verify_pins()
+    return {"preflight": preflight, "inventory": inventory, "templates": templates,
+            "days": inspected, "source_refs": list({(r.path, r.sha256): r for r in all_refs}.values()),
+            "outcomes_read": False, "stage": "COMPLETE_SOURCE_BATCH_INSPECTED"}
+
+
+def campaign_source_identity() -> dict:
+    root = Path(__file__).resolve().parents[4]
+    names = ["backend/services/simulation_execution/localsim/timing_campaign.py",
+             "backend/services/simulation_execution/localsim/timing_portfolio.py",
+             "backend/services/strategy_package/runtime.py", "backend/services/simulation_runtime/decision.py"]
+    return {"localsim": source_identity(), "timing_core": implementation_identity(),
+            "campaign": {name: hashlib.sha256((root / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+                         for name in names}}
+
+
+def continuous_execution_contract() -> dict:
+    return {"base_contract": payload(EXECUTION_CONTRACT), "mode": "CONFIRMED_FEEDBACK_CLOSED_LOOP",
+            "parent_ordering": "SELL_FIRST_THEN_SYMBOL", "recovery_unit": "ATOMIC_COMPLETED_DAY",
+            "visibility": "ASSUMED_END_PLUS_5_SECONDS",
+            "valuation": "LAST_COMPLETED_VISIBLE_RAW_MARK_AT_COMMON_TERMINAL"}
+
+
+def freeze_continuous_campaign(*, preflight_ref: FileRef, templates_ref: FileRef,
+                               output_root: Path, producer_commit: str) -> dict:
+    inspected = inspect_price_templates(preflight_ref, templates_ref)
+    if not re.fullmatch(r"[0-9a-f]{40}", producer_commit):
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRODUCER_COMMIT_INVALID")
+    preflight = inspected["preflight"]
+    initial_accounts = []
+    population = set()
+    for row in preflight["initial_accounts"]:
+        item = FileRef.model_validate(row)
+        account = read_json(checked_file(item))
+        if (account["cash_cny"] != "10000000" or account["origin_initial_cash_cny"] != "10000000"
+                or account["positions"] or account["fills"] or account["production_account_created"]
+                or account["manifest_sha256"] != preflight["manifest_sha256"]
+                or account["package_id"] != preflight["package_id"]):
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_INITIAL_ACCOUNT_CONFLICT")
+        population.add((account["rule"], account["delay_seconds"]))
+        initial_accounts.append(row)
+    if len(initial_accounts) != 12 or population != {(rule, delay) for rule in ARMS for delay in DELAYS}:
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_ACCOUNT_POPULATION_CONFLICT")
+    request = {"schema_version": "localsim_timing_continuous_request_v1",
+               "preflight": preflight_ref.model_dump(), "price_templates": templates_ref.model_dump(),
+               "producer_source_commit": producer_commit, "source_identity": campaign_source_identity(),
+               "initial_accounts": initial_accounts, "trade_dates": list(inspected["days"]),
+               "mode": "CONFIRMED_FEEDBACK_CLOSED_LOOP", "common_terminal_local": "14:57",
+               "execution_contract": continuous_execution_contract(),
+               "execution_contract_sha256": digest(continuous_execution_contract()),
+               "comparison": "COMMON_EXOGENOUS_TARGETS_FEEDBACK_DIVERGENT_QUANTITIES",
+               "account_count": 12, "initial_cash_cny": "10000000"}
+    request["identity"] = digest(request)
+    request["release_identity"] = "localsim_timing_campaign_v1_" + request["identity"][:24]
+    path = output_root / request["identity"] / "continuous_request.json"
+    publish(path, request)
+    return {"status": "FROZEN", "request": ref(path), "account_count": 12,
+            "outcomes_read": False, "source_inspection_stage": inspected["stage"]}
+
+
+def build_timing_plan_events(*, intents, series, rule, source_commit, day, quantity_source):
+    """Bind shared preference events to native quantities, without rule logic."""
+    policy = Policy(policy_id=rule, source_commit=source_commit, allow_split=False)
+    events = []
+    for intent in intents:
+        key = (intent.symbol, intent.side.value)
+        if key not in series:
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_TEMPLATE_MISSING:" + repr(key))
+        plan_id = "lscp_" + digest([quantity_source, intent.intent_id])[:48]
+        for template in series[key]:
+            plan = Plan(plan_id=plan_id, revision=template.revision, source_kind="FROZEN_REPLAY",
+                        source_ref=template.source_file.sha256, source_revision=str(template.revision),
+                        symbol=intent.symbol, side=intent.side.value, target_trade_date=day,
+                        valid_from=template.valid_from, valid_until=template.valid_until,
+                        lifecycle=template.lifecycle, target_quantity=intent.quantity,
+                        quantity_source_ref=quantity_source, price_constraint=template.price_constraint,
+                        policy_id=rule, policy=policy, policy_sha256=digest(policy))
+            events.append(PlanEvent(available_at=template.available_at, plan=plan))
+    return events
+
+
+def _campaign_day_summary(*, record, receipt_ref, request, initial, day_index, previous):
+    account = record["checkpoint"]["account"]
+    return {"schema_version": "localsim_timing_continuous_day_v1",
+            "request_identity": request["identity"], "initial_account_id": initial["account_id"],
+            "day_index": day_index, "trade_date": request["trade_dates"][day_index],
+            "previous_day": previous, "account_receipt": receipt_ref,
+            "cash_cny": account["cash_cny"], "positions": account["positions"],
+            "marks_raw_cny": account["marks_raw_cny"], "initial_nav_cny": account["initial_nav_cny"],
+            "terminal_nav_cny": account["terminal_nav_cny"], "terminal_as_of": account["terminal_as_of"],
+            "nav_observations": account["nav_observations"], "fees_cny": account["fees_cny"],
+            "minimum_fee_parent_count": account["minimum_fee_parent_count"],
+            "fee_positive_parent_count": account["fee_positive_parent_count"],
+            "fees_by_side_cny": account["fees_by_side_cny"],
+            "parents": [{k: v for k, v in row.items() if k != "session"} for row in account["parents"]],
+            "native_quantity_evidence": account["native_quantity_evidence"],
+            "mode": "CONFIRMED_FEEDBACK_CLOSED_LOOP"}
+
+
+def _read_campaign_day(*, path, store, request, initial, day_index, previous, child_identity, cost):
+    from .timing_portfolio import validate_day_ledger
+
+    record = store.latest()
+    if record is None:
+        if path.exists():
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_ORPHAN_DAY_SUMMARY")
+        return None
+    if (record["generation"] != 1 or record["checkpoint"]["extra"] != {
+            "input_identity": child_identity, "day_index": 0}
+            or record["checkpoint"]["account"]["trade_date"] != request["trade_dates"][day_index]
+            or record["checkpoint"]["account"]["portfolio_id"] != initial["account_id"]):
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_DAY_RECEIPT_IDENTITY_CONFLICT")
+    validate_day_ledger(record, initial=initial, cost=cost)
+    journal = store.root / "generations" / "00000001.json"
+    summary = _campaign_day_summary(record=record, receipt_ref=ref(journal), request=request,
+                                     initial=initial, day_index=day_index, previous=previous)
+    if path.exists() and read_json(path) != summary:
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_DAY_SUMMARY_CONFLICT")
+    publish(path, summary)  # Also completes a committed day whose summary was interrupted.
+    return summary
+
+
+def summarize_continuous_campaign(accounts: list[dict]) -> list[dict]:
+    """Descriptive portfolio comparison; no pure-delay or alpha assertion."""
+    baselines = {a["delay_seconds"]: a for a in accounts if a["rule"] == "FIRST_OBSERVABLE_V1"}
+    if len(accounts) != 12 or set(baselines) != set(DELAYS):
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_RESULT_POPULATION_CONFLICT")
+    rows = []
+    for account in accounts:
+        baseline = baselines[account["delay_seconds"]]
+        bparents = {(day["trade_date"], p["symbol"], p["side"]): p
+                    for day in baseline["day_summaries"] for p in day["parents"]}
+        for side in ("BUY", "SELL", "ALL"):
+            parents = [(day["trade_date"], p) for day in account["day_summaries"] for p in day["parents"]
+                       if side == "ALL" or p["side"] == side]
+            filled = sum(p["filled_quantity"] for _, p in parents)
+            waits = sum((Decimal(p["weighted_wait_seconds"]) for _, p in parents), Decimal(0))
+            paired = []
+            for day, parent in parents:
+                other = bparents.get((day, parent["symbol"], parent["side"]))
+                if parent["average_price_raw"] is not None and other and other["average_price_raw"] is not None:
+                    price, base = Decimal(parent["average_price_raw"]), Decimal(other["average_price_raw"])
+                    paired.append((base - price if parent["side"] == "BUY" else price - base) / base * 10000)
+            rows.append({"rule": account["rule"], "delay_seconds": account["delay_seconds"], "side": side,
+                         "parent_count": len(parents), "filled_parent_count": sum(p["status"] == "FILLED" for _, p in parents),
+                         "actual_parent_order_count": sum(p["order_created"] for _, p in parents),
+                         "blocked_before_order_count": sum(not p["order_created"] for _, p in parents),
+                         "requested_quantity": sum(p["requested_quantity"] for _, p in parents),
+                         "legal_quantity": sum(p["legal_quantity"] for _, p in parents),
+                         "partial_parent_count": sum(p["status"] == "PARTIAL" for _, p in parents),
+                         "no_fill_parent_count": sum(p["status"] == "NO_FILL" for _, p in parents),
+                         "filled_quantity": filled, "mean_wait_seconds": str(waits / filled) if filled else None,
+                         "fees_cny": str(sum((Decimal(d["fees_cny"]) if side == "ALL" else Decimal(d["fees_by_side_cny"][side])
+                                             for d in account["day_summaries"]), Decimal(0))),
+                         "conditional_price_pair_count": len(paired),
+                         "conditional_price_improvement_bp": str(sum(paired) / len(paired)) if paired else None,
+                         "terminal_net_lift_cny": str(Decimal(account["terminal_nav_cny"]) - Decimal(baseline["terminal_nav_cny"])) if side == "ALL" else None,
+                         "max_drawdown_reduction": str(Decimal(baseline["max_drawdown"]) - Decimal(account["max_drawdown"])) if side == "ALL" else None,
+                         "side_nav_attribution": "NOT_IDENTIFIED_IN_CONTINUOUS_FEEDBACK_PORTFOLIO" if side != "ALL" else "WHOLE_ACCOUNT",
+                         "quantity_matched": False, "economic_confirmation": False})
+    return rows
+
+
+def run_continuous_campaign(request_ref: FileRef) -> dict:
+    """Run/read back all twelve accounts only after a complete input inspect."""
+    from backend.services.strategy_package.models import StrategyPackageManifest
+
+    from .timing_portfolio import (
+        attach_native_quantity_evidence, commit_portfolio_day, compile_native_intents, run_portfolio_day,
+    )
+    from .timing_store import TimingFileRepository
+
+    request_path = checked_file(request_ref)
+    request = read_json(request_path)
+    identity_fields = {k: v for k, v in request.items() if k not in {"identity", "release_identity"}}
+    if (request.get("schema_version") != "localsim_timing_continuous_request_v1"
+            or digest(identity_fields) != request["identity"]
+            or request["release_identity"] != "localsim_timing_campaign_v1_" + request["identity"][:24]):
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_REQUEST_IDENTITY_CONFLICT")
+    inspected = inspect_price_templates(FileRef.model_validate(request["preflight"]),
+                                         FileRef.model_validate(request["price_templates"]))
+    if (list(inspected["days"]) != request["trade_dates"]
+            or request["initial_accounts"] != inspected["preflight"]["initial_accounts"]
+            or request["mode"] != "CONFIRMED_FEEDBACK_CLOSED_LOOP"
+            or request["common_terminal_local"] != "14:57"
+            or request["execution_contract"] != continuous_execution_contract()
+            or request["execution_contract_sha256"] != digest(continuous_execution_contract())
+            or request["account_count"] != 12 or request["initial_cash_cny"] != "10000000"):
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_REQUEST_DAY_POPULATION_CONFLICT")
+    root = request_path.parent
+    completed_path = root / "continuous_results.json"
+    same_source = request["source_identity"] == campaign_source_identity()
+    if not same_source and not completed_path.exists():
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_SOURCE_CHANGED")
+    preflight = inspected["preflight"]
+    package = read_json(checked_file(FileRef.model_validate(preflight["inputs"]["package"])))["package"]
+    if compute_manifest_json_sha256(package["manifest"]) != preflight["manifest_sha256"]:
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PACKAGE_IDENTITY_CONFLICT")
+    manifest = StrategyPackageManifest.model_validate(package["manifest"])
+    cost = CostContract.model_validate_json(checked_file(FileRef.model_validate(
+        preflight["inputs"]["cost_policy"])).read_text(encoding="utf-8"))
+    initials = [read_json(checked_file(FileRef.model_validate(row))) for row in request["initial_accounts"]]
+    if (len(initials) != 12 or {(a["rule"], a["delay_seconds"]) for a in initials} != {(r, d) for r in ARMS for d in DELAYS}
+            or len({a["account_id"] for a in initials}) != 12
+            or any(Decimal(a["cash_cny"]) != Decimal("10000000") or a["positions"] or a["fills"] for a in initials)):
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_INITIAL_ACCOUNT_CONFLICT")
+    candidate = CandidateReader(FileRef.model_validate(preflight["inputs"]["candidate_manifest"]))
+    histories = {a["account_id"]: [] for a in initials}
+    day_refs = {a["account_id"]: [] for a in initials}
+    for day_index, day_string in enumerate(request["trade_dates"]):
+        day = date.fromisoformat(day_string)
+        day_input = inspected["days"][day_string]
+        projection = read_json(checked_file(FileRef.model_validate(day_input["native"]["projection"])))
+        pending, markets = [], {}
+        for initial in initials:
+            account_id = initial["account_id"]
+            previous = day_refs[account_id][-1] if day_refs[account_id] else None
+            child_identity = digest([request["identity"], account_id, day_string, previous])
+            store = TimingFileRepository(root / "journals", "lsc_" + child_identity[:48])
+            path = root / "days" / account_id / (day_string + ".json")
+            summary = _read_campaign_day(path=path, store=store, request=request, initial=initial,
+                                          day_index=day_index, previous=previous, child_identity=child_identity, cost=cost)
+            if summary is None:
+                if completed_path.exists():
+                    raise ValueError("LOCALSIM_TIMING_CAMPAIGN_COMPLETED_PREFIX_MISSING")
+                prior = histories[account_id][-1] if histories[account_id] else initial
+                account = {"portfolio_id": account_id, "package_id": initial["package_id"],
+                           "manifest_sha256": initial["manifest_sha256"],
+                           "origin_initial_cash_cny": "10000000", "cash_cny": prior["cash_cny"],
+                           "positions": prior["positions"]}
+                pending.append((initial, account, prior, store, path, previous, child_identity))
+            else:
+                histories[account_id].append(summary)
+                day_refs[account_id].append(ref(path))
+        if not pending:
+            continue
+        symbols = {row["symbol"] for row in projection["aggregate_results"]}
+        for _, account, *_ in pending:
+            symbols.update(account["positions"])
+        for symbol in sorted(symbols):
+            markets[symbol] = candidate.market(symbol, day)
+        if not markets:
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_EMPTY_MARKET_UNSUPPORTED")
+        candidate.verify_pins()
+        for initial, account, prior, store, path, previous, child_identity in pending:
+            prices = {s: m.day_facts.reference_price for s, m in markets.items() if m.day_facts.reference_price is not None}
+            prices.update({row["symbol"]: Decimal(str(row["reference_price"])) for row in projection["aggregate_results"]
+                           if row.get("reference_price") is not None})
+            for symbol in account["positions"]:
+                if symbol not in prices:
+                    if (not markets[symbol].day_facts.is_suspended
+                            or symbol not in prior.get("marks_raw_cny", {})):
+                        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_HELD_MARK_UNAVAILABLE")
+                    prices[symbol] = Decimal(prior["marks_raw_cny"][symbol])
+            backend, targets, native = compile_native_intents(projection=projection, manifest=manifest,
+                                                              account=account, markets=markets, prices=prices, cost=cost)
+            events = build_timing_plan_events(intents=native.order_intents, series=day_input["series"],
+                                               rule=initial["rule"], source_commit=request["producer_source_commit"],
+                                               day=day, quantity_source=child_identity)
+            result = run_portfolio_day(backend=backend, markets=markets, events=events, initial_marks=prices,
+                                        delay_seconds=initial["delay_seconds"], run_id=store.run_id)
+            attach_native_quantity_evidence(result, targets=targets, native=native,
+                                             projection_ref=day_input["native"]["projection"],
+                                             price_policy_sha256=inspected["templates"].policy_document.sha256)
+            commit_portfolio_day(store=store, result=result, input_identity=child_identity, day_index=0)
+            summary = _read_campaign_day(path=path, store=store, request=request, initial=initial,
+                                          day_index=day_index, previous=previous, child_identity=child_identity, cost=cost)
+            histories[initial["account_id"]].append(summary)
+            day_refs[initial["account_id"]].append(ref(path))
+    accounts = []
+    for initial in initials:
+        days = histories[initial["account_id"]]
+        values = [Decimal("10000000")] + [Decimal(nav["nav_cny"]) for d in days for nav in d["nav_observations"]]
+        peak, mdd = values[0], Decimal(0)
+        for value in values:
+            peak = max(peak, value)
+            mdd = max(mdd, (peak - value) / peak)
+        accounts.append({"account_id": initial["account_id"], "rule": initial["rule"], "delay_seconds": initial["delay_seconds"],
+                         "initial_cash_cny": "10000000", "terminal_nav_cny": str(values[-1]), "max_drawdown": str(mdd),
+                         "fees_cny": str(sum((Decimal(d["fees_cny"]) for d in days), Decimal(0))),
+                         "minimum_fee_parent_count": sum(d["minimum_fee_parent_count"] for d in days),
+                         "fee_positive_parent_count": sum(d["fee_positive_parent_count"] for d in days),
+                         "days": day_refs[initial["account_id"]], "day_summaries": days})
+    results = {"schema_version": "localsim_timing_continuous_results_v1", "producer": "LOCALSIM",
+               "producer_source_commit": request["producer_source_commit"], "release_identity": request["release_identity"],
+               "request": request_ref.model_dump(), "source_inspection_stage": inspected["stage"],
+               "cost_policy_file_sha256": preflight["inputs"]["cost_policy"]["sha256"],
+               "execution_contract_sha256": request["execution_contract_sha256"],
+               "outcomes_read_stage": "AFTER_COMPLETE_SOURCE_BATCH_INSPECTION", "mode": request["mode"],
+               "comparison": request["comparison"], "max_drawdown_definition": "POSITIVE_PEAK_TO_TROUGH_FRACTION",
+               "accounts": [{k: v for k, v in a.items() if k != "day_summaries"} for a in accounts],
+               "comparisons": payload(summarize_continuous_campaign(accounts)),
+               "economic_confirmation": False, "production_account_created": False,
+               "database_accessed": False, "dataset_mutated": False, "market_network_accessed": False,
+               "service_process_control": False}
+    already = completed_path.exists()
+    publish(completed_path, results)
+    return {"status": "ALREADY_MATERIALIZED" if already else "MATERIALIZED", "results": ref(completed_path),
+            "account_count": 12, "trading_day_count": len(request["trade_dates"]),
+            "source_identity_match": same_source, "outcomes_read_stage": results["outcomes_read_stage"],
+            "computation_performed": not already}
 
 
 def _asset_bindings(value):
@@ -190,6 +619,35 @@ def prepare(*, package_snapshot: FileRef, admission: FileRef, native_accounts: F
 
 
 def main():
+    if len(sys.argv) > 1 and sys.argv[1] in {"inspect", "freeze", "run"}:
+        command = sys.argv[1]
+        parser = argparse.ArgumentParser(description=__doc__)
+        if command == "run":
+            parser.add_argument("--request", type=Path, required=True)
+            parser.add_argument("--request-sha256", required=True)
+        else:
+            for name in ("preflight", "price-templates"):
+                parser.add_argument("--" + name, type=Path, required=True)
+                parser.add_argument("--" + name + "-sha256", required=True)
+            if command == "freeze":
+                parser.add_argument("--output-root", type=Path, required=True)
+                parser.add_argument("--producer-commit", required=True)
+        args = parser.parse_args(sys.argv[2:])
+        if command == "run":
+            result = run_continuous_campaign(FileRef(path=str(args.request.resolve()), sha256=args.request_sha256))
+        else:
+            kwargs = {"preflight_ref": FileRef(path=str(args.preflight.resolve()), sha256=args.preflight_sha256),
+                      "templates_ref": FileRef(path=str(args.price_templates.resolve()), sha256=args.price_templates_sha256)}
+            if command == "freeze":
+                result = freeze_continuous_campaign(**kwargs, output_root=args.output_root,
+                                                     producer_commit=args.producer_commit)
+            else:
+                inspected = inspect_price_templates(**kwargs)
+                result = {"status": "PASS", "stage": inspected["stage"], "outcomes_read": False,
+                          "trading_day_count": len(inspected["days"]),
+                          "source_file_count": len(inspected["source_refs"])}
+        print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("package-snapshot", "admission", "native-accounts", "profile", "candidate-manifest", "cost-policy"):
         parser.add_argument("--" + name, type=Path, required=True)

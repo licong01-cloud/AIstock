@@ -38,7 +38,9 @@
 - backend/services/simulation_execution/localsim/timing_research.py
 - backend/services/simulation_execution/localsim/timing_store.py
 - backend/services/simulation_execution/localsim/timing_campaign.py
+- backend/services/simulation_execution/localsim/timing_portfolio.py
 - backend/tests/simulation_execution/test_localsim_position_timing.py
+- backend/tests/simulation_execution/test_localsim_timing_campaign.py
 
 不可修改 position_timing、StrategyPackage、Advisory、QE、HMM、数据准备或共享规则实现。若必要公共接缝无法在上述 owner 内闭合，记录准确缺口交回用户，不跨模块改写。
 
@@ -86,6 +88,42 @@ candidate/费用/执行合同从 consumption.json 读取，不覆盖旧 artifact
 4. 账户来源闭合后，在 WSL 整批 inspect、冻结账户、288 case、比较器、exact retry；不等未来行情或重启。
 5. F2、L0、scope/ownership、CI 通过后提交独立 PR，按已有授权合入并只清理本任务。
 
+### 连续账户长任务执行计划（2026-10-24 r2）
+
+用户授权按以下顺序完成；本节是本任务的持久进度表，不改变原 288 场景身份。
+
+| 阶段 | 任务与完成标准 | 当前状态 |
+|---|---|---|
+| P1 | 核验最新 main、已有原生选股及择时合同；冻结价格偏好消费 schema，形成外部 owner 的精确输入要求 | 消费合同已交付，外部生产者待返回 |
+| P2 | 复用 TargetPositionEngine、RebalanceIntentService 和既有 LocalSIM 账本/OMS；实现多股票、跨日账户执行、共同计划和日事务恢复 | 实现及59项定向验证通过，真实首日数量规划通过 |
+| P3 | 合法价格计划返回后，冻结最新 LightGBM＋12 因子、12 个 1000 万元账户，运行 01-05 至 09-30 的连续研究 | 待外部合同 |
+| P4 | 比较同延迟 B0、费用/最低额、收益/回撤/等待/未成交；验证完整人口、前缀恢复和 exact retry | 待 P3 |
+| P5 | 多轮审核修复、直接回归、L0、F2 和最终 HEAD CI 全部通过；更新原 PR、合入、只清理本任务 | 待全范围验收 |
+
+P1 缺口不得阻止 P2 中独立开发，但不得借合成功能测试宣称 P3 已完成。年初连续研究明确采用 `CONFIRMED_FEEDBACK_CLOSED_LOOP`，不是原 288 场景的冻结机会流纯延迟实验。日计划的数量和跨日持仓由 LocalSIM 负责；择时 owner 不负责创建账户、撮合、数量计算或资金管理。
+
+#### 价格计划最小消费合同
+
+价格偏好须由 owner 提供不可变文件及完整文件 SHA，明确生产者源码和政策身份、适用的策略包 manifest、candidate/PIT 身份、覆盖日期、来源可见时间、有效窗口和修订/撤销。文件只提供规则无关的 `PriceConstraint` 及版本事件（按日期、股票、BUY/SELL）；LocalSIM 再将同一模板绑定三规则及四延迟，不能由各规则分别挑选偏好。每个事件引用可回读的原始来源文件和 SHA，且来源可见时间不晚于事件可见时间。
+
+当日目标需要 BUY/SELL 模板；可能仍被持有、但已离开当日目标的股票只需要 SELL 模板，不强制提供不会被消费的重新买入偏好。
+
+原 `PREDECLARED_MECHANISM_PLAN_NOT_PRODUCTION` 的 0.5% PREFERRED 工程政策不得自动扩大人口。owner 可以交付正式可复用构造器及适用性合同，也可以直接交付完整冻结模板；LocalSIM 不复制该构造算法、不修改核心参数、不用参考价猜测偏好。PRICE_TOUCH 缺合法 PREFERRED/HARD 时整批仍为输入阻断。
+
+#### 连续账户和比较合同
+
+各规则/延迟共用同一初始账户、外生选股与价格模板、日历、费用和数据；全部从纯现金 1000 万元起步。连续账户成交分化后持仓、净值及再平衡数量可以分化，不能继续宣称逐日数量完全相同。报告这是连续组合闭环比较；原 288 个共同计划场景仍单独保留。
+
+复用原生目标引擎及 rebalance 服务，不重新实现权重、lot 或可卖量规则。所有同一时点的意图按固定顺序执行，卖出优先、随后 symbol 排序；该顺序在全部账户一致，不用未来成交挑顺序。费用使用既有父订单累计模型。每日开盘前依原生 settle_trade_date 释放 T+1，14:57 撤销未完成意图；估值使用当时已可见的 raw 市价，不能用成本代价或缺价填零。
+
+连续账户采用日原子提交：仅已提交日的订单/成交/现金/持仓和运行状态成为可恢复前缀；中断日无对外发布经济事实，从原提交前缀用相同冻结输入重算。日内部分成交及取消仍走 TimingExecution 和既有账本，不能以提醒数量代替成交。恢复校验 source、全部输入、政策、日期前缀和 receipt 链，不删除失败前缀、不跨源码继续未完成运行。
+
+#### 复杂度及落盘审查（ALGO-COMPLEXITY-001）
+
+原固定研究为288个独立场景，每个场景最多240根分钟线，按场景顺序执行，没有跨股票join。连续研究固定12账户、181日、每天50个目标，181日合计9050目标及615个不同股票；单日行情只装载当日目标与实际持仓的并集，12账户共用只读日行情。以D日、A账户、P日内父订单、C决策时点、B分钟前缀计，保守计算量为O(D×A×P×C×B)，不构造多日股票笛卡尔积；终态父订单不再调用核心。按日提交限制未提交状态，历史摘要和NAV轨迹仍随D增长。
+
+组合日只保存一份账户快照和coordinator现金事实；父订单保留 `localsim_timing_parent_audit_v1`，不在每个父订单重复全组合持仓和现金明细，也不能用该审计片段恢复单账户。旧单计划完整receipt和恢复语义不变。四处P2复杂度提示已逐项审查；真实连续运行耗时、峰值内存及磁盘占用仍须在合法价格输入返回后实测，未用理论上界或首日数量规划替代性能验收。
+
 ## Verification Plan / Design Acceptance Index
 
 | ID | 必须验收 |
@@ -100,6 +138,7 @@ candidate/费用/执行合同从 consumption.json 读取，不覆盖旧 artifact
 | F-008 | EconomicResults 兼容、先整批 inspect 后 outcomes_read、matched B0 报告 |
 | F-009 | 无 DB/数据集/行情网络/服务操作，交付与运行/经济证据分离 |
 | F-010 | 最新加入策略绑定、12 个连续离线账户、1000 万元及年初日历；合法计划缺口不能伪造 |
+| F-011 | 连续消费者的价格模板整批校验、原生数量规划、多股票共享账户、确认时钟、日事务恢复及独立比较 |
 
 ## Rollout / Rollback / Risks / Production Gates
 
@@ -111,15 +150,16 @@ database_read/write=false；dataset_mutation=false；live_market_network=false�
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | ???LocalSIM?????runtime.py/planning.py | pytest backend/tests/simulation_execution/test_twap_policy_authority.py?????????? | PASS | - |
-| F-002 | localsim/timing.py | pytest backend/tests/simulation_execution/test_localsim_position_timing.py??????????? | PASS | - |
-| F-003 | localsim/timing.py | pytest backend/tests/simulation_execution/test_localsim_position_timing.py????????????/???? | PASS | - |
-| F-004 | localsim/timing.py | pytest backend/tests/simulation_execution/test_localsim_position_timing.py?partial??????????????? | PASS | - |
-| F-005 | localsim/timing.py???OMS/ledger/engine | pytest backend/tests/simulation_execution/test_localsim_position_timing.py?cash/sellable/lot/T+1/HARD/??limit/suspend | PASS | - |
-| F-006 | localsim/timing_research.py | artifact: X:/AIstock_temp/localsim-position-timing/run-metrics-r1.json?288?215FILLED/73NO_FILL?24?????12???? | PASS | - |
-| F-007 | localsim/timing_store.py/timing_research.py | artifact: X:/AIstock_temp/localsim-position-timing/recovery-proof-r1.json??????????????retry-metrics-r1/r2.json | PASS | - |
-| F-008 | localsim/timing_research.py????????? | artifact: X:/AIstock_temp/localsim-position-timing/compare-metrics-r1.json?36?matched B0?outcomes_read???inspect?? | PASS | - |
-| F-009 | ?????WSL????????? | artifact: X:/AIstock_temp/localsim-position-timing/run-metrics-r1.json?????????????????????false | PASS | - |
-| F-010 | localsim/timing_campaign.py??????7? | artifact: X:/AIstock_temp/localsim-position-timing/campaign-preflight-metrics-r1.json?12???181?/9050?????????? | BLOCKED | ???????????????????/??????????? |
+| F-001 | 两份自身上位设计；runtime.py/planning.py | pytest backend/tests/simulation_execution/test_twap_policy_authority.py -q；2项，旧账户默认未修改 | PASS | - |
+| F-002 | localsim/timing.py | pytest backend/tests/simulation_execution/test_localsim_position_timing.py -q；三规则调用唯一evaluate | PASS | - |
+| F-003 | localsim/timing.py/timing_portfolio.py | pytest backend/tests/simulation_execution/test_localsim_timing_campaign.py -q；未来隔离、strict-after、四延迟和确认时钟 | PASS | - |
+| F-004 | localsim/timing.py | pytest backend/tests/simulation_execution/test_localsim_position_timing.py -q；部分成交、取消、修订和到期 | PASS | - |
+| F-005 | localsim/timing.py及既有OMS/ledger/engine | pytest backend/tests/simulation_execution/test_localsim_position_timing.py -q；cash、可卖、T+1、lot、HARD及限停牌 | PASS | - |
+| F-006 | localsim/timing_research.py | artifact: X:/AIstock_temp/localsim-position-timing/run-metrics-r1.json；288行，215 FILLED、73 NO_FILL，24共同初态 | PASS | - |
+| F-007 | localsim/timing_store.py/timing_research.py | artifact: X:/AIstock_temp/localsim-position-timing/recovery-proof-r1.json；retry-metrics-r3.json：原288行SHA不变 | PASS | - |
+| F-008 | localsim/timing_research.py及现有只读比较器 | artifact: X:/AIstock_temp/localsim-position-timing/compare-metrics-r1.json；36组matched B0，先inspect后读结果 | PASS | - |
+| F-009 | WSL离线验证及审计钩子 | artifact: X:/AIstock_temp/localsim-position-timing/native-quantity-validation-r2.json；数据库/数据集/行情/服务操作均false | PASS | - |
+| F-010 | localsim/timing_campaign.py；本报告第7节 | artifact: X:/AIstock_temp/localsim-position-timing/campaign-preflight-metrics-r1.json；181日/9050目标及12初态已冻结 | BLOCKED | 缺择时owner的合法全年价格偏好合同；12账户真实连续研究尚未启动，不能合入结项 |
+| F-011 | localsim/timing_campaign.py/timing_portfolio.py/runtime.py | artifact: X:/AIstock_temp/localsim-position-timing/direct-validation-r3.json；59项，12账户×2日恢复，真实首日50目标数量规划 | PASS | - |
 
-??producer?288????????????????????????producer???????????????????????????????????????35?????????????F-010???????????????????????????????
+F-011只验收消费能力、功能不变量与原生数量规划，不代替F-010真实历史模拟。F2完整范围仍不满足合入条件，PR保留草稿。源码、离线研究、运行激活和经济效果必须分别报告。

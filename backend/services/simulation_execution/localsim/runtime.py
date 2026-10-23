@@ -280,6 +280,39 @@ class LocalSimBackend(BrokerBackend):
             list(execution.fills), list(execution.events), execution.execution_state,
         )
         self._intent_index[handle.intent_id] = handle.handle_id
+        if not hasattr(self, "_timing_executions"):
+            self._timing_executions = {}
+        self._timing_executions[handle.handle_id] = execution
+
+    def open_timing_portfolio_execution(self, *, plan: Any, market: Any,
+                                        delay_seconds: int, run_id: str,
+                                        binding_id: str) -> Any:
+        """Explicit offline multi-parent scope on this backend's one account.
+
+        The single-plan study API remains exclusive. This API is for the new
+        continuous research consumer; it does not change broker submission or
+        select this policy for any existing account.
+        """
+        from .timing import ALGO_CODE, CLOSED_LOOP_MODE, TimingExecution
+
+        self._ensure_alive()
+        if self._execution_policy["algo_code"] != ALGO_CODE:
+            raise ValueError("LOCALSIM_TIMING_POLICY_NOT_SELECTED")
+        if getattr(self, "_timing_execution", None) is not None:
+            raise ValueError("LOCALSIM_TIMING_SINGLE_ORDER_SCOPE_REQUIRED")
+        scope = (run_id, binding_id, plan.target_trade_date)
+        if getattr(self, "_timing_portfolio_scope", scope) != scope:
+            raise ValueError("LOCALSIM_TIMING_PORTFOLIO_SCOPE_CONFLICT")
+        executions = getattr(self, "_timing_executions", {})
+        if len(self._records) != len(executions) or any(
+                e.facade.plan.plan_id == plan.plan_id for e in executions.values()):
+            raise ValueError("LOCALSIM_TIMING_PORTFOLIO_PARENT_CONFLICT")
+        execution = TimingExecution(self, plan=plan, market=market,
+                                    delay_seconds=delay_seconds, mode=CLOSED_LOOP_MODE,
+                                    run_id=run_id, binding_id=binding_id)
+        self._timing_portfolio_scope = scope
+        self._register_timing_execution(execution)
+        return execution
 
     def _sync_timing_execution(self, execution: Any, fills: list[Fill]) -> None:
         record = self._records[execution.handle.handle_id]
@@ -1286,8 +1319,8 @@ class LocalSimBackend(BrokerBackend):
     def cancel(self, handle: OrderHandle) -> CancelAck:
         self._ensure_alive()
         with self._lock:
-            timing = getattr(self, "_timing_execution", None)
-            if timing is not None and timing.handle.handle_id == handle.handle_id:
+            timing = getattr(self, "_timing_executions", {}).get(handle.handle_id)
+            if timing is not None:
                 accepted = timing.order.status not in {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED}
                 if accepted:
                     timing.cancel("USER_CANCELLED")

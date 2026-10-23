@@ -1,0 +1,507 @@
+"""Continuous-account functional evidence, never annual research outcomes."""
+
+from datetime import timedelta
+from decimal import Decimal
+
+import pytest
+
+from backend.services.position_timing.intraday.contracts import digest
+from backend.services.position_timing.intraday.replay import PlanEvent
+from backend.services.position_timing.intraday.research import CostContract
+from backend.services.simulation_execution.localsim.timing_portfolio import (
+    commit_portfolio_day, compile_native_intents, run_portfolio_day,
+)
+from backend.services.simulation_execution.localsim.timing_research import backend_for
+from backend.services.simulation_execution.localsim.timing_store import TimingFileRepository
+from backend.tests.simulation_execution.test_localsim_position_timing import at, inputs
+
+
+def cost():
+    return CostContract(open_rate="0.000095", close_rate="0.000595", minimum_cny="5")
+
+
+def initial(cash="100000"):
+    return {"portfolio_id": "functional_campaign", "package_id": "FUNCTIONAL_FIXTURE",
+            "manifest_sha256": "a" * 64, "origin_initial_cash_cny": cash,
+            "cash_cny": cash, "positions": {}}
+
+
+def pair():
+    p1, m1 = inputs()
+    prototype = m1.bars[0]
+    bars = tuple(prototype.model_copy(update={"start": at("09:30:00") + timedelta(minutes=n),
+                                              "end": at("09:31:00") + timedelta(minutes=n),
+                                              "received_at": at("09:31:05") + timedelta(minutes=n)})
+                 for n in range(327) if n < 120 or n >= 210)
+    m1 = m1.model_copy(update={"bars": bars})
+    p2 = p1.model_copy(update={"plan_id": "other", "symbol": "600000.SH"})
+    m2 = m1.model_copy(update={"symbol": p2.symbol,
+                              "day_facts": m1.day_facts.model_copy(update={"symbol": p2.symbol})})
+    return [PlanEvent(available_at=p.valid_from, plan=p) for p in (p1, p2)], {m.symbol: m for m in (m1, m2)}
+
+
+def execute(account=None, *, events=None, markets=None, run_id="functional_campaign", delay=0):
+    default_events, default_markets = pair()
+    events = default_events if events is None else events
+    markets = default_markets if markets is None else markets
+    backend = backend_for(account or initial(), next(iter(markets.values())), cost())
+    result = run_portfolio_day(backend=backend, markets=markets, events=events,
+                               initial_marks={s: Decimal("10") for s in markets},
+                               delay_seconds=delay, run_id=run_id)
+    return result
+
+
+@pytest.mark.parametrize("delay", [0, 60, 180, 300])
+def test_multiple_stocks_share_real_cash_parent_fees_and_four_delays(delay):
+    result = execute(initial("15010"), delay=delay)
+    account, backend = result["account"], result["backend"]
+    assert [p["filled_quantity"] for p in account["parents"]] == [1000, 500]
+    assert [p["status"] for p in account["parents"]] == ["FILLED", "PARTIAL"]
+    assert backend._ledger.cash_decimal == 0
+    assert Decimal(account["fees_cny"]) == 10
+    assert len(backend._ledger.fills) == 2
+    assert all(p.available_quantity == 0 for p in backend._ledger.positions.values())
+    assert all(s.waits[0][1] == Decimal(50 + delay) for s in result["sessions"])
+    assert len(backend._records) == len(result["sessions"]) == 2
+    audit = account["parents"][0]["session"]
+    assert audit["schema_version"] == "localsim_timing_parent_audit_v1"
+    assert not {"cash_cny", "positions", "cash_entries"}.intersection(audit)
+    from backend.services.simulation_execution.localsim.timing import TimingExecution
+    with pytest.raises(ValueError, match="RESTORE_IDENTITY_MISMATCH"):
+        TimingExecution.restore(backend, result["sessions"][0].market, audit)
+    # A new single-order study must still reject an existing portfolio scope.
+    session = result["sessions"][0]
+    with pytest.raises(ValueError, match="SINGLE_ORDER_SCOPE"):
+        backend.open_timing_execution(plan=session.facade.plan, delay_seconds=0,
+                                       mode=session.facade.mode, run_id="other", binding_id=backend.portfolio_id)
+
+
+def next_day_events(events, markets):
+    advanced, out = [], {}
+    for event in events:
+        plan = event.plan
+        constraint = plan.price_constraint.model_copy(update={
+            "valid_from": plan.price_constraint.valid_from + timedelta(days=1),
+            "valid_until": plan.price_constraint.valid_until + timedelta(days=1)})
+        plan = plan.model_copy(update={"plan_id": plan.plan_id + "_next", "side": "SELL",
+                                      "target_trade_date": plan.target_trade_date + timedelta(days=1),
+                                      "valid_from": plan.valid_from + timedelta(days=1),
+                                      "valid_until": plan.valid_until + timedelta(days=1),
+                                      "price_constraint": constraint})
+        advanced.append(PlanEvent(available_at=plan.valid_from, plan=plan))
+    for symbol, market in markets.items():
+        bars = tuple(b.model_copy(update={key: getattr(b, key) + timedelta(days=1)
+                                         for key in ("start", "end", "received_at")}) for b in market.bars)
+        out[symbol] = market.model_copy(update={
+            "trade_date": market.trade_date + timedelta(days=1), "bars": bars,
+            "day_facts": market.day_facts.model_copy(update={"trade_date": market.trade_date + timedelta(days=1),
+                                                            "available_at": market.day_facts.available_at + timedelta(days=1)}),
+            "calendar": market.calendar.model_copy(update={"trade_date": market.trade_date + timedelta(days=1),
+                                                          "available_at": market.calendar.available_at + timedelta(days=1)})})
+    return advanced, out
+
+
+def test_multi_day_t1_settlement_and_day_atomic_retry(tmp_path):
+    events, markets = pair()
+    first = execute(events=events, markets=markets)
+    store = TimingFileRepository(tmp_path, "functional_campaign")
+    commit_portfolio_day(store=store, result=first, input_identity="f" * 64, day_index=0)
+    assert commit_portfolio_day(store=store, result=first, input_identity="f" * 64,
+                                day_index=0)["status"] == "ALREADY_MATERIALIZED"
+    account = {**initial(), "cash_cny": first["account"]["cash_cny"], "positions": first["account"]["positions"]}
+    events, markets = next_day_events(events, markets)
+    second = execute(account, events=events, markets=markets)
+    assert [p["filled_quantity"] for p in second["account"]["parents"]] == [1000, 1000]
+    assert second["backend"]._ledger.positions == {}
+    assert Decimal(second["account"]["fees_cny"]) == Decimal("11.90")
+    with pytest.raises(ValueError, match="SOURCE_CHANGED"):
+        commit_portfolio_day(store=store, result=second, input_identity="e" * 64, day_index=1)
+    commit_portfolio_day(store=store, result=second, input_identity="f" * 64, day_index=1)
+    record = store.latest()
+    assert record["generation"] == 2
+    assert len(record["facts"]["fills"]) == len(record["facts"]["cash_entries"]) == 4
+    assert record["checkpoint"]["account"] == second["account"]
+
+
+def test_day_commit_failure_keeps_confirmed_prefix(tmp_path, monkeypatch):
+    from backend.services.simulation_execution.localsim import timing_store
+
+    events, markets = pair()
+    first = execute(events=events, markets=markets)
+    store = TimingFileRepository(tmp_path, "functional_campaign")
+    commit_portfolio_day(store=store, result=first, input_identity="f" * 64, day_index=0)
+    prior = digest(store.latest())
+    account = {**initial(), "cash_cny": first["account"]["cash_cny"], "positions": first["account"]["positions"]}
+    events, markets = next_day_events(events, markets)
+    second = execute(account, events=events, markets=markets)
+    publish = timing_store.publish
+
+    def fail_before_publish(*args, **kwargs):
+        raise OSError("injected publication failure")
+
+    monkeypatch.setattr(timing_store, "publish", fail_before_publish)
+    with pytest.raises(OSError, match="publication failure"):
+        commit_portfolio_day(store=store, result=second, input_identity="f" * 64, day_index=1)
+    assert digest(store.latest()) == prior
+    monkeypatch.setattr(timing_store, "publish", publish)
+    commit_portfolio_day(store=store, result=second, input_identity="f" * 64, day_index=1)
+    assert len(store.latest()["facts"]["fills"]) == 4
+
+
+def test_native_quantity_compiler_and_trading_rule_service_are_reused():
+    _, markets = pair()
+    projection = {"manifest_sha256_by_package": {"FUNCTIONAL_FIXTURE": "a" * 64},
+                  "runtime_config": {"point_in_time_context": {"effective_trade_date": "2026-09-21",
+                                                                "cutoff_date": "2026-09-18"}},
+                  "aggregate_results": [{"symbol": symbol, "score": 1, "rank": rank,
+                                         "target_weight": 0.5, "reference_price": 10}
+                                        for rank, symbol in enumerate(markets, 1)]}
+    backend, targets, result = compile_native_intents(
+        projection=projection, manifest=None, account=initial("15010"), markets=markets,
+        prices={s: Decimal("10") for s in markets}, cost=cost())
+    assert backend._ledger.cash_decimal == Decimal("15010")
+    assert [t.target_quantity for t in targets] == [700, 700]
+    assert [i.quantity for i in result.order_intents] == [700, 700]
+    assert len(result.trading_rule_decisions) == 2
+
+
+def test_future_suffix_never_changes_prior_orders_or_core_decisions():
+    events, markets = pair()
+    original = execute(events=events, markets=markets)
+    changed = {symbol: market.model_copy(update={"bars": tuple(
+        b if b.start < at("09:40:00") else b.model_copy(update={"open": Decimal("10.5"), "high": Decimal("10.5"),
+                                                               "low": Decimal("10.5"), "close": Decimal("10.5")})
+        for b in market.bars)}) for symbol, market in markets.items()}
+    amended = execute(events=events, markets=changed)
+    assert [p["filled_quantity"] for p in amended["account"]["parents"]] == [1000, 1000]
+    assert [f.model_dump(mode="json") for f in original["backend"]._ledger.fills] == [
+        f.model_dump(mode="json") for f in amended["backend"]._ledger.fills]
+
+
+def test_revised_price_plan_cancels_pending_intent_before_execution():
+    events, markets = pair()
+    events = [events[0]]
+    original = events[0].plan
+    revoked = original.model_copy(update={"revision": 2, "lifecycle": "CANCELLED"})
+    events.append(PlanEvent(available_at=at("09:32:00"), plan=revoked))
+    result = execute(events=events, markets=markets, delay=300)
+    assert result["account"]["parents"][0]["status"] == "NO_FILL"
+    assert result["backend"]._ledger.cash_decimal == Decimal("100000")
+
+
+def test_visibility_contract_and_unknown_tradability_fail_before_account_effects():
+    events, markets = pair()
+    symbol = events[0].plan.symbol
+    market = markets[symbol]
+    bad = market.bars[0].model_copy(update={"received_at": market.bars[0].end})
+    markets[symbol] = market.model_copy(update={"bars": (bad,) + market.bars[1:]})
+    with pytest.raises(ValueError, match="VISIBILITY_CONTRACT"):
+        execute(events=events, markets=markets)
+
+
+def test_missing_terminal_minutes_are_unavailable_instead_of_morning_mark_carry():
+    events, markets = pair()
+    symbol = events[0].plan.symbol
+    markets[symbol] = markets[symbol].model_copy(update={"bars": markets[symbol].bars[:30]})
+    with pytest.raises(ValueError, match="MINUTE_PREFIX_INCOMPLETE"):
+        execute(events=events, markets=markets)
+
+
+def test_buy_waits_for_other_parents_confirmed_sell_cash():
+    from backend.services.trading_core.models import PositionLot
+
+    events, markets = pair()
+    sell = events[0].plan.model_copy(update={"side": "SELL"})
+    events[0] = PlanEvent(available_at=sell.valid_from, plan=sell)
+    account = {**initial(), "cash_cny": "0", "positions": {
+        sell.symbol: PositionLot(portfolio_id="functional_campaign", symbol=sell.symbol,
+                                 quantity=1000, available_quantity=1000, avg_cost=10,
+                                 trade_date=sell.target_trade_date - timedelta(days=3)).model_dump(mode="json")}}
+    result = execute(account, events=events, markets=markets)
+    seller, buyer = result["sessions"]
+    assert seller.order.side.value == "SELL" and buyer.order.side.value == "BUY"
+    assert seller.fills[0].trade_time == at("09:32:00")
+    assert buyer.fills[0].trade_time == at("09:34:00")
+    assert buyer.order.filled_quantity == 900
+    assert result["backend"]._ledger.cash_decimal >= 0
+
+
+def test_native_blocked_request_remains_in_denominator_and_minimum_fee():
+    from backend.services.simulation_execution.localsim.timing_portfolio import attach_native_quantity_evidence
+
+    events, markets = pair()
+    symbol = "600000.SH"
+    markets[symbol] = markets[symbol].model_copy(update={"bars": (), "day_facts": markets[symbol].day_facts.model_copy(
+        update={"is_suspended": True, "has_daily_limit": None, "reference_price": None})})
+    projection = {"manifest_sha256_by_package": {"FUNCTIONAL_FIXTURE": "a" * 64},
+                  "runtime_config": {"point_in_time_context": {"effective_trade_date": "2026-09-21", "cutoff_date": "2026-09-18"}},
+                  "aggregate_results": [{"symbol": s, "score": 1, "rank": rank, "target_weight": 0.5, "reference_price": 10}
+                                        for rank, s in enumerate(markets, 1)]}
+    backend, targets, native = compile_native_intents(projection=projection, manifest=None, account=initial("15010"),
+                                                      markets=markets, prices={s: Decimal("10") for s in markets}, cost=cost())
+    plan = events[0].plan.model_copy(update={"target_quantity": native.order_intents[0].quantity})
+    result = run_portfolio_day(backend=backend, markets=markets, events=[PlanEvent(available_at=plan.valid_from, plan=plan)],
+                               initial_marks={s: Decimal("10") for s in markets}, delay_seconds=0, run_id="functional_campaign")
+    attach_native_quantity_evidence(result, targets=targets, native=native, projection_ref={}, price_policy_sha256="a" * 64)
+    assert len(result["account"]["parents"]) == 2
+    blocked = result["account"]["parents"][1]
+    assert blocked["status"] == "NO_FILL" and blocked["requested_quantity"] == 700
+    assert blocked["order_created"] is False and blocked["legal_quantity"] == 0
+    assert blocked["reason_codes"] == ["SUSPENDED_BY_SUSPEND_D"]
+    assert result["account"]["minimum_fee_parent_count"] == 1
+    assert result["account"]["fees_cny"] == "5.00"
+
+
+def test_portfolio_cancel_handle_reaches_only_the_matching_native_parent():
+    from backend.services.trading_core.models import OrderStatus
+
+    events, markets = pair()
+    backend = backend_for(initial(), next(iter(markets.values())), cost())
+    sessions = [backend.open_timing_portfolio_execution(plan=e.plan, market=markets[e.plan.symbol],
+                                                        delay_seconds=0, run_id="functional_campaign",
+                                                        binding_id=backend.portfolio_id) for e in events]
+    assert backend.cancel(sessions[0].handle).accepted
+    assert sessions[0].order.status == OrderStatus.CANCELLED
+    assert sessions[1].order.status != OrderStatus.CANCELLED
+    assert backend._ledger.cash_decimal == Decimal("100000")
+
+
+def price_campaign_fixture(tmp_path, monkeypatch, *, two_days=False):
+    """Synthetic file-contract fixture; never a real annual study artifact."""
+    from datetime import date
+    from pathlib import Path
+
+    import pandas as pd
+
+    from backend.services.simulation_execution.localsim import timing_campaign as module
+    from backend.services.simulation_execution.localsim.timing_store import publish
+    from backend.services.strategy_package.manifest import compute_manifest_json_sha256
+
+    def put(name, value):
+        path = tmp_path / name
+        publish(path, value)
+        return module.ref(path)
+
+    raw_manifest = {"package_id": "FUNCTIONAL_FIXTURE"}
+    manifest_sha = compute_manifest_json_sha256(raw_manifest)
+    dates = ["2026-09-21", "2026-09-22"] if two_days else ["2026-09-21"]
+    events, markets = pair()
+    _, next_markets = next_day_events(events, markets)
+
+    class FunctionalCandidate:
+        def __init__(self, ref):
+            self.ref = ref
+
+        def calendar(self, frequency):
+            assert frequency == "day"
+            return pd.DatetimeIndex(dates)
+
+        def market(self, symbol, day):
+            chosen = markets if day == date(2026, 9, 21) else next_markets
+            market = chosen[symbol]
+            return market.model_copy(update={"bars": tuple(b.model_copy(update={"volume_shares": Decimal("1000000")})
+                                                           for b in market.bars)})
+
+        def verify_pins(self):
+            pass
+
+    monkeypatch.setattr(module, "CandidateReader", FunctionalCandidate)
+    candidate = put("candidate.json", {"role": "FUNCTIONAL_FIXTURE_ONLY"})
+    package = put("package.json", {"package": {"manifest": raw_manifest, "manifest_sha256": manifest_sha}})
+    cost_ref = put("cost.json", cost().model_dump(mode="json"))
+    dummy = put("source.json", {"role": "FUNCTIONAL_FIXTURE_ONLY"})
+    inventory_days, price_days = [], []
+    for day in dates:
+        projection = {"manifest_sha256_by_package": {"FUNCTIONAL_FIXTURE": manifest_sha},
+                      "runtime_config": {"point_in_time_context": {"effective_trade_date": day,
+                                                                    "cutoff_date": "2026-09-18" if day == dates[0] else dates[0]}},
+                      "aggregate_results": [{"symbol": symbol, "score": 1, "rank": rank,
+                                             "target_weight": 0.5, "reference_price": 10}
+                                            for rank, symbol in enumerate(markets, 1)]}
+        projection_ref = put(day + "/projection.json", projection)
+        inventory_days.append({"trade_date": day, "projection": projection_ref, "completion": dummy,
+                               "target_count": 2, "data_cutoff": projection["runtime_config"]["point_in_time_context"]["cutoff_date"]})
+        templates = []
+        for symbol in markets:
+            for side in ("BUY", "SELL"):
+                templates.append({"symbol": symbol, "side": side, "trade_date": day, "revision": 1,
+                                  "available_at": day + "T09:20:00+08:00", "valid_from": day + "T09:30:00+08:00",
+                                  "valid_until": day + "T14:57:00+08:00", "source_file": dummy,
+                                  "source_available_at": day + "T09:00:00+08:00",
+                                  "price_constraint": {"mode": "PREFERRED", "intervals": [{"lower": "9.8", "upper": "10.2"}],
+                                                       "source_ref": "FUNCTIONAL_FIXTURE_ONLY", "source_sha256": dummy["sha256"],
+                                                       "valid_from": day + "T09:30:00+08:00", "valid_until": day + "T14:57:00+08:00"}})
+        price_days.append({"trade_date": day, "events": put(day + "/price_events.json", templates)})
+    inventory = put("inventory.json", {"days": inventory_days, "missing_trade_dates": [], "conflicting_trade_dates": []})
+    initials = []
+    for rule in module.ARMS:
+        for delay in module.DELAYS:
+            account = {"account_id": "functional_" + digest([rule, delay])[:24],
+                       "package_id": "FUNCTIONAL_FIXTURE", "manifest_sha256": manifest_sha,
+                       "rule": rule, "delay_seconds": delay, "cash_cny": "10000000",
+                       "origin_initial_cash_cny": "10000000", "positions": {}, "fills": [],
+                       "production_account_created": False}
+            initials.append(put("initials/" + account["account_id"] + ".json", account))
+    preflight = put("preflight.json", {"package_id": "FUNCTIONAL_FIXTURE", "manifest_sha256": manifest_sha,
+                                      "selection_inventory": inventory, "initial_accounts": initials,
+                                      "start_trade_date": dates[0], "candidate_end_trade_date": dates[-1],
+                                      "inputs": {"package": package, "candidate_manifest": candidate, "cost_policy": cost_ref}})
+    policy = put("policy.json", {"price_policy_id": "FUNCTIONAL_ONLY", "package_manifest_sha256": manifest_sha,
+                                "candidate_manifest_sha256": candidate["sha256"], "start_trade_date": dates[0],
+                                "end_trade_date": dates[-1], "mode": "CONFIRMED_FEEDBACK_CLOSED_LOOP",
+                                "applicability_statement": "SYNTHETIC_FUNCTIONAL_FIXTURE_NOT_ANNUAL_EVIDENCE"})
+    templates = put("templates.json", {"schema_version": "localsim_timing_campaign_price_templates_v1",
+                                       "producer_source_commit": "1" * 40, "package_manifest_sha256": manifest_sha,
+                                       "candidate_manifest_sha256": candidate["sha256"], "selection_inventory_sha256": inventory["sha256"],
+                                       "price_policy_id": "FUNCTIONAL_ONLY", "policy_document": policy, "days": price_days})
+    return module, module.FileRef.model_validate(preflight), module.FileRef.model_validate(templates), Path
+
+
+def test_entire_price_batch_is_inspected_before_freezing_account_request(tmp_path, monkeypatch):
+    module, preflight, templates, _ = price_campaign_fixture(tmp_path, monkeypatch)
+    inspected = module.inspect_price_templates(preflight, templates)
+    assert inspected["outcomes_read"] is False
+    assert inspected["stage"] == "COMPLETE_SOURCE_BATCH_INSPECTED"
+    frozen = module.freeze_continuous_campaign(preflight_ref=preflight, templates_ref=templates,
+                                                output_root=tmp_path / "output", producer_commit="1" * 40)
+    assert frozen["account_count"] == 12
+    assert frozen["status"] == "FROZEN"
+    assert not list((tmp_path / "output").rglob("continuous_results.json"))
+
+
+@pytest.mark.parametrize("problem", [None, "missing_held_sell", "missing_current_buy"])
+def test_departed_target_needs_sell_preference_without_unused_buy(tmp_path, monkeypatch, problem):
+    """A held stock may leave TopK; keep its exit without fabricating reentry."""
+    module, preflight_ref, templates_ref, Path = price_campaign_fixture(tmp_path, monkeypatch, two_days=True)
+    preflight = module.read_json(Path(preflight_ref.path))
+    templates = module.read_json(Path(templates_ref.path))
+    inventory = module.read_json(Path(preflight["selection_inventory"]["path"]))
+    second = inventory["days"][1]
+    projection = module.read_json(Path(second["projection"]["path"]))
+    departed = projection["aggregate_results"].pop(0)["symbol"]
+    remaining = projection["aggregate_results"][0]["symbol"]
+    projection_path = tmp_path / "second_projection_one_target.json"
+    module.publish(projection_path, projection)
+    second.update(projection=module.ref(projection_path), target_count=1)
+    inventory_path = tmp_path / "departed_inventory.json"
+    module.publish(inventory_path, inventory)
+    preflight["selection_inventory"] = module.ref(inventory_path)
+    templates["selection_inventory_sha256"] = preflight["selection_inventory"]["sha256"]
+    events = module.read_json(Path(templates["days"][1]["events"]["path"]))
+    excluded = {(departed, "BUY")}
+    if problem == "missing_held_sell":
+        excluded.add((departed, "SELL"))
+    elif problem == "missing_current_buy":
+        excluded.add((remaining, "BUY"))
+    events = [event for event in events if (event["symbol"], event["side"]) not in excluded]
+    events_path = tmp_path / "departed_price_events.json"
+    module.publish(events_path, events)
+    templates["days"][1]["events"] = module.ref(events_path)
+    changed_preflight = tmp_path / "departed_preflight.json"
+    changed_templates = tmp_path / "departed_templates.json"
+    module.publish(changed_preflight, preflight)
+    module.publish(changed_templates, templates)
+    args = (module.FileRef.model_validate(module.ref(changed_preflight)),
+            module.FileRef.model_validate(module.ref(changed_templates)))
+    if problem is not None:
+        with pytest.raises(ValueError, match="PRICE_TEMPLATE_MISSING"):
+            module.inspect_price_templates(*args)
+    else:
+        inspected = module.inspect_price_templates(*args)
+        assert inspected["stage"] == "COMPLETE_SOURCE_BATCH_INSPECTED"
+        assert (departed, "SELL") in inspected["days"][second["trade_date"]]["series"]
+
+
+@pytest.mark.parametrize("problem", ["missing_side", "late_source", "wrong_candidate", "unknown_scope", "reused_day"])
+def test_bad_price_contract_fails_before_account_or_result_writes(tmp_path, monkeypatch, problem):
+    from backend.services.simulation_execution.localsim.timing_store import read_json
+
+    module, preflight, templates, Path = price_campaign_fixture(tmp_path, monkeypatch)
+    body = read_json(Path(templates.path))
+    if problem in {"missing_side", "late_source"}:
+        events = read_json(Path(body["days"][0]["events"]["path"]))
+        if problem == "missing_side":
+            events.pop()
+        else:
+            events[0]["source_available_at"] = "2026-09-21T10:00:00+08:00"
+        event_path = tmp_path / "bad_events.json"
+        module.publish(event_path, events)
+        body["days"][0]["events"] = module.ref(event_path)
+    elif problem == "wrong_candidate":
+        body["candidate_manifest_sha256"] = "b" * 64
+    elif problem == "unknown_scope":
+        policy = read_json(Path(body["policy_document"]["path"]))
+        policy.pop("applicability_statement")
+        policy_path = tmp_path / "bad_policy.json"
+        module.publish(policy_path, policy)
+        body["policy_document"] = module.ref(policy_path)
+    else:
+        body["days"].append(body["days"][0])
+    bad_path = tmp_path / "bad_templates.json"
+    module.publish(bad_path, body)
+    bad = module.FileRef.model_validate(module.ref(bad_path))
+    with pytest.raises(ValueError):
+        module.freeze_continuous_campaign(preflight_ref=preflight, templates_ref=bad,
+                                           output_root=tmp_path / "output", producer_commit="1" * 40)
+    assert not (tmp_path / "output").exists()
+
+
+def test_twelve_continuous_accounts_retry_and_committed_summary_recovery(tmp_path, monkeypatch):
+    from backend.services.strategy_package.models import StrategyPackageManifest
+    from backend.services.simulation_execution.localsim import timing_portfolio
+
+    module, preflight, templates, Path = price_campaign_fixture(tmp_path, monkeypatch, two_days=True)
+    # Synthetic native-weight fixture only; production validates the full manifest.
+    monkeypatch.setattr(StrategyPackageManifest, "model_validate", lambda value: None)
+    frozen = module.freeze_continuous_campaign(preflight_ref=preflight, templates_ref=templates,
+                                                output_root=tmp_path / "output", producer_commit="1" * 40)
+    request = module.FileRef.model_validate(frozen["request"])
+    original_run = timing_portfolio.run_portfolio_day
+    attempted = []
+
+    def interrupt_third_account(**kwargs):
+        attempted.append(kwargs["run_id"])
+        if len(attempted) == 3:
+            raise OSError("injected offline account interruption")
+        return original_run(**kwargs)
+
+    monkeypatch.setattr(timing_portfolio, "run_portfolio_day", interrupt_third_account)
+    with pytest.raises(OSError, match="offline account interruption"):
+        module.run_continuous_campaign(request)
+    assert len(list((Path(request.path).parent / "journals").glob("*/generations/00000001.json"))) == 2
+    resumed = []
+
+    def count_resumed(**kwargs):
+        resumed.append(kwargs["run_id"])
+        return original_run(**kwargs)
+
+    monkeypatch.setattr(timing_portfolio, "run_portfolio_day", count_resumed)
+    first = module.run_continuous_campaign(request)
+    assert len(resumed) == 22
+    result = module.read_json(Path(first["results"]["path"]))
+    assert len(result["accounts"]) == 12
+    assert len(result["comparisons"]) == 36
+    assert all(len(a["days"]) == 2 for a in result["accounts"])
+    assert result["outcomes_read_stage"] == "AFTER_COMPLETE_SOURCE_BATCH_INSPECTION"
+    assert result["economic_confirmation"] is False
+    retry = module.run_continuous_campaign(request)
+    assert retry["status"] == "ALREADY_MATERIALIZED"
+    assert retry["results"] == first["results"]
+    # Only an immutable index is removed in this synthetic recovery fixture.
+    # The committed journal remains authoritative and cannot be recomputed.
+    day_path = Path(result["accounts"][0]["days"][0]["path"])
+    original = day_path.read_bytes()
+    day_path.unlink()
+    recovered = module.run_continuous_campaign(request)
+    assert recovered["status"] == "ALREADY_MATERIALIZED"
+    assert day_path.read_bytes() == original
+    assert recovered["results"] == first["results"]
+
+
+def test_unfinished_campaign_cannot_resume_with_changed_source(tmp_path, monkeypatch):
+    module, preflight, templates, _ = price_campaign_fixture(tmp_path, monkeypatch)
+    frozen = module.freeze_continuous_campaign(preflight_ref=preflight, templates_ref=templates,
+                                                output_root=tmp_path / "output", producer_commit="1" * 40)
+    monkeypatch.setattr(module, "campaign_source_identity", lambda: {"changed": True})
+    with pytest.raises(ValueError, match="SOURCE_CHANGED"):
+        module.run_continuous_campaign(module.FileRef.model_validate(frozen["request"]))
