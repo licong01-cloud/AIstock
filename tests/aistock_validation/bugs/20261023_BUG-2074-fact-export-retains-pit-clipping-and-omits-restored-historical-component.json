@@ -122,7 +122,7 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\postrestart-20261023-fact-export\\BUG-2074.json",
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -180,7 +180,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=632c59bd1e86f3fd commit=d48878dad5c8f8e65e561ee8546c9597257af929 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
-    "validation-receipt: id=eec305ee9a077760 commit=d48878dad5c8f8e65e561ee8546c9597257af929 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_monthly_minute_coverage.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_canonical_stock_transformer.py backend/tests/dataset_release/test_factor_partition_producer.py -q --tb=short` result=`passed 157 tests`"
+    "validation-receipt: id=eec305ee9a077760 commit=d48878dad5c8f8e65e561ee8546c9597257af929 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_monthly_minute_coverage.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_canonical_stock_transformer.py backend/tests/dataset_release/test_factor_partition_producer.py -q --tb=short` result=`passed 157 tests`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2074 --target worker-scheduler -> passed; runtime_identity_match=true"
   ],
   "verification_budget": {
     "budget": "standard",
