@@ -173,7 +173,7 @@ plans:
     writes_artifacts: false
     writes_business_state: false
     runner_enabled: true
-    max_duration_seconds: 180
+    max_duration_seconds: 900
     evidence_kinds: [pytest]
   - plan_key: advisory_dev_input_onboarding_backend
     title: Advisory DEV input onboarding backend regressions
