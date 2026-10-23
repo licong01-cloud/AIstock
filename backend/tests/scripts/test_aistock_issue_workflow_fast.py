@@ -1715,6 +1715,53 @@ def test_runtime_preflight_checks_semantic_registration_without_http(path, regis
     assert (contract["pre_pr_ready"], contract["runtime_impact"], contract["target_ids"]) == (registered, "backend", ["backend-main"])
 
 
+HMM_DATABASE_SOURCE = "backend/services/hmm_risk/risk_l2_database_inference.py"
+
+
+@pytest.mark.parametrize("refs,extra,ready", [
+    ({}, [], True), ({"fresh_process_evidence": []}, [], False),
+    *(({}, [path], False) for path in ("backend/main.py", "backend/services/hmm_risk/contracts.py")),
+    ({"operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+      "identity_ref": "http://localhost:8001/api/v1/runtime-identity",
+      "business_smoke_ref": "http://localhost:8001/api/v1/hmm-risk/risk-l2/overview?run_id=" + "b" * 64}, [], True),
+    *(({key: value}, [], False) for key, value in (
+        ("operator_runbook_ref", ""), ("operator_runbook_ref", "docs/operations/absent.md"),
+        ("identity_ref", ""), ("identity_ref", "http://untrusted:8001/api/v1/runtime-identity"),
+        ("business_smoke_ref", ""), ("business_smoke_ref", "http://127.0.0.1:8001/api/v1/health"),
+        ("business_smoke_ref", "http://127.0.0.1:8001/api/v1/unregistered")))])
+def test_hmm_database_finish_contract_keeps_real_acceptance_pending(monkeypatch, refs, extra, ready):
+    monkeypatch.setattr(workflow, "_read_only_http_probe", lambda *a, **kw: pytest.fail("finish must not probe services"))
+    record = {"runtime_contract": {"schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "fresh_process_evidence": ["unit-fixture-only"], **refs}}
+    contract = workflow.build_runtime_contract(record=record, changed_files=[HMM_DATABASE_SOURCE, "backend/services/hmm_risk/stock_fact_repository.py", *extra])
+    assert (contract["runtime_impact"], contract["target_ids"], contract["backend_restart_required"], contract["backend_restart_owner"]) == ("backend", ["backend-main"], True, "user")
+    assert (contract["pre_pr_ready"], bool(contract["blocking"])) == (ready, not ready)
+    assert (contract["post_restart_effective_gate"], contract["runtime_identity_match"], contract["activation_states"]["backend_restart"]) == ("pending_user_restart", "pending", "pending_user_action")
+    if ready:
+        assert contract["operator_runbook_ref"] == refs.get("operator_runbook_ref", "docs/operations/hmm_database_runtime_finish_runbook.md")
+        probes = contract["target"]["probes"]
+        assert probes["identity_ref"] == refs.get("identity_ref", "http://127.0.0.1:8001/api/v1/runtime-identity")
+        altered = {**contract, "target": {**contract["target"], "business_smoke_contract_id": "health_ok"}}
+        assert workflow._runtime_contract_digest(contract) != workflow._runtime_contract_digest(altered)
+
+
+@pytest.mark.parametrize("field,value", [
+    *(("route.source_globs", [path]) for path in ("backend/**/*.py", "../backend/main.py", "backend/services/hmm_risk/missing.py")),
+    ("route.operator_runbook_ref", "docs/operations/missing.md"), ("route.probes", None),
+    ("route.probes.identity_ref", "http://untrusted:8001/api/v1/runtime-identity"),
+    ("route.probes.business_smoke_ref", "http://127.0.0.1:8001/api/v1/health"),
+    ("target.runtime_kind", "worker_scheduler"), ("target.probe_routes", "duplicate")])
+def test_http_route_catalog_does_not_relax_validation(monkeypatch, field, value):
+    catalog = workflow._load_runtime_target_catalog()
+    target = catalog["targets"]["backend-main"]
+    obj, parts = {"target": target, "route": target["probe_routes"][0]}, field.split(".")
+    for part in parts[:-1]:
+        obj = obj[part]
+    obj[parts[-1]] = target["probe_routes"] * 2 if value == "duplicate" else value
+    monkeypatch.setattr(workflow.yaml, "safe_load", lambda _: catalog)
+    with pytest.raises(workflow.WorkflowError):
+        workflow._load_runtime_target_catalog()
+
+
 def test_find_bug_record_parses_only_matching_or_opaque_filenames(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

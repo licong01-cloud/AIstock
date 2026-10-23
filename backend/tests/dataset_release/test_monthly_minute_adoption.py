@@ -353,6 +353,70 @@ def test_successor_retains_history_is_idempotent_and_does_not_activate(tmp_path)
         service.resume(pending["operation_id"])
 
 
+def _activation_history(service, operation_id, old_sha, new_sha, **request_changes):
+    root = service.store.operation_root(operation_id)
+    _canonical(root / "request.json", {
+        "operation_id": operation_id, "product_profile": "qe_hmm_full_v2",
+        "target_cutoff": "2026-08-31", "idempotency_key": operation_id,
+        **request_changes,
+    })
+    _canonical(root / "state.json", {"status": "ACTIVATED_VERIFIED"})
+    _canonical(root / "receipts/activation.json", {
+        "old_profile_ref": {"sha256": old_sha}, "new_profile_ref": {"sha256": new_sha},
+    })
+    return root
+
+
+@pytest.mark.parametrize("kind", ["minute", "financing"])
+def test_verified_activation_ancestry_allows_next_correction_without_rewriting_history(tmp_path, kind):
+    if kind == "minute":
+        service, values, _ = fixture(tmp_path)
+    else:
+        service = _service(tmp_path, Pipeline())
+        values = _financing_successor(tmp_path, service)
+    base = _activation_history(service, "dmr_" + "1" * 32, "a" * 64, "b" * 64)
+    direct = _activation_history(service, "dmr_" + "2" * 32, "b" * 64,
+                                 values["predecessor_profile_sha256"])
+    cancelled = _activation_history(service, "dmr_" + "3" * 32, "a" * 64, "b" * 64)
+    _canonical(cancelled / "state.json", {"status": "CANCELLED"})
+    _canonical(cancelled / "receipts/superseded.json", {"successor_operation_id": "dmr_" + "1" * 32})
+    if kind != "minute":
+        # Pending minute supersession is not a financing adoption contract.
+        _canonical(cancelled / "request.json", {"product_profile": "other"})
+    saved = {p: p.read_bytes() for root in (base, direct, cancelled) for p in root.rglob("*.json")}
+    active = service.active_profile.read_bytes()
+    result = service.adopt_existing_successor(**values)
+    assert result["status"] == "READY_TO_ACTIVATE"
+    assert service.adopt_existing_successor(**values)["operation_id"] == result["operation_id"]
+    assert {p: p.read_bytes() for p in saved} == saved
+    assert service.active_profile.read_bytes() == active
+
+
+@pytest.mark.parametrize("break_at", ["unrelated", "missing_receipt", "not_verified", "cutoff", "product", "cycle", "invalid_hash"])
+def test_unproven_activation_ancestry_remains_a_conflict(tmp_path, break_at):
+    service, values, pending = fixture(tmp_path)
+    _activation_history(service, "dmr_" + "1" * 32, "a" * 64, "b" * 64)
+    changes = {"target_cutoff": "2026-09-30"} if break_at == "cutoff" else (
+        {"product_profile": "another-product"} if break_at == "product" else {})
+    direct = _activation_history(service, "dmr_" + "2" * 32, "b" * 64,
+                                 values["predecessor_profile_sha256"], **changes)
+    if break_at == "missing_receipt":
+        (direct / "receipts/activation.json").unlink()
+    elif break_at == "not_verified":
+        _canonical(direct / "state.json", {"status": "ACTIVATING"})
+    elif break_at in {"unrelated", "cycle", "invalid_hash"}:
+        _canonical(direct / "receipts/activation.json", {
+            "old_profile_ref": {"sha256": "b" * 64 if break_at != "invalid_hash" else "invalid"},
+            "new_profile_ref": {"sha256": (values["predecessor_profile_sha256"] if break_at == "invalid_hash"
+                                           else "a" * 64 if break_at == "cycle" else "f" * 64)},
+        })
+    active = service.active_profile.read_bytes()
+    with pytest.raises(MonthlyReleaseConflict, match="another operation"):
+        service.adopt_existing_successor(**values)
+    assert service.active_profile.read_bytes() == active
+    assert service.store.read_state(pending["operation_id"])["status"] == "READY_TO_ACTIVATE"
+
+
 @pytest.mark.parametrize("failure", ["node", "cells", "identity", "active", "unrelated", "intent", "duplicate_proof"])
 def test_invalid_successor_keeps_original_ready(tmp_path, failure):
     service, values, pending = fixture(tmp_path)
