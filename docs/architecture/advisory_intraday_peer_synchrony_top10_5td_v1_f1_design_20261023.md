@@ -1,6 +1,6 @@
 # 分钟级留一同群同步结构 Top10 固定五交易日研究（F1）
 
-版本v1.0；2026-10-23；Advisory / model_first。状态：无标签查重及输入检查通过；本文交付设计，源码与真实六fit研究尚未执行。累计219实际研究fit＋1旧index，不是219个独立假设。
+版本v1.2；2026-10-23；Advisory / model_first。设计#6610合入0a4862420f61a58e27765db45de0336e23248e04并官方清理。源码15项直接合同测试、Ruff、两L0/ownership通过；唯一六fit内层研究及十stage审计完成，INNER_SUPPORTED，新增同步增量/盈利未确认。累计225实际研究fit＋1旧index；源码PR/CI/合入另报，不冒称生产启用。
 
 ## Background / Goal / Feature Card
 
@@ -37,7 +37,7 @@ screen_rows SHA `4e11500f9d4a6522aaee2698f5ca73da150d4ef634b01fd1bbfd7aecf872c09
 
 固定首个训练窗179D/17,900行、16,280唯一stock-D。17,854可用；41零方差、5共同边不足均UNKNOWN。两包179/179D均达到事前“至少80%行可算、至少80%包D合格”，179D均有横截面变化（事前最低20D、std>=1e-6）。78,502,080源bytes，95.757秒，峰值391,122,944bytes，0标签/0fit/0SQL。预算与支持规则冻结在spec后才读取；输入支持不代表成熟监督或经济支持。
 
-绑定screen/spec/code/rows/factor/synthetic的SHA，冻结小元数据全hash、文件size/mtime租约和实际消费切片hash；不把stat冒称大bin全hash。完整prepare须与首窗17,900行身份、43旧分钟/6控制/2新量/UNKNOWN原因逐值对齐后才fit。源数据CURRENT_DATABASE_NON_VINTAGE，D时钟约束不创造captured-at版本证明。
+绑定screen/spec/code/rows/factor/synthetic的SHA，冻结小元数据全hash、文件size/mtime租约和实际消费切片hash；不把stat冒称大bin全hash。完整prepare须与首窗17,900行身份、43旧分钟/6控制/2新量/UNKNOWN原因逐值对齐后才fit；身份、原因、计数精确一致，跨Windows/WSL浮点测量使用事前rtol=1e-12/atol=1e-10并另报是否逐bit相等，不容许经济差异。源数据CURRENT_DATABASE_NON_VINTAGE，D时钟约束不创造captured-at版本证明。
 
 ## Model / 唯一有限实验
 
@@ -90,16 +90,39 @@ Ridge(alpha100,lsqr,tol1e-6,max_iter2000,fit_intercept=False)，不调参/模型
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-491 | 本文Background/Feasibility | artifact: X:/AIstock_temp/ADVISORY/p9-intraday-peer-synchrony-20261023/screen_receipt.json；synthetic_receipt.json | DESIGN_AND_INPUT_PASS | none |
-| F-492 | 计划inputs.synchrony/read_panel/verify_screen_alignment | backend/tests/advisory_model_first/test_intraday_peer_synchrony_top10_5td_v1.py（计划）；screen_rows.parquet | DESIGN_READY | none |
-| F-493 | 计划core.training/fit/predict | backend/tests/advisory_model_first/test_intraday_peer_synchrony_top10_5td_v1.py（计划） | DESIGN_READY | none |
-| F-494 | 计划pipeline.finance/fit_pair及core.summarize | backend/tests/advisory_model_first/test_intraday_peer_synchrony_top10_5td_v1.py（计划）；本文Evaluation | DESIGN_READY | none |
-| F-495 | 计划pipeline.Study/preregister/run | backend/tests/advisory_model_first/test_intraday_peer_synchrony_top10_5td_v1.py（计划）；本文Operations | DESIGN_READY | none |
-| F-496 | 本文Scope/Production Gates | backend/tests/advisory_model_first/test_intraday_peer_synchrony_top10_5td_v1.py（计划）；本文Non-goals | DESIGN_SCOPE_READY | none |
+| F-492 | inputs.synchrony/read_panel/verify_screen_alignment | backend/tests/advisory_model_first/test_intraday_peer_synchrony_top10_5td_v1.py；真实30,500行与首窗对齐回执 | SOURCE_AND_REAL_INPUT_PASS | none |
+| F-493 | core.training/fit/predict | backend/tests/advisory_model_first/test_intraday_peer_synchrony_top10_5td_v1.py；三折两臂相同训练KEY与编码 | SOURCE_AND_SIX_FITS_PASS | none |
+| F-494 | pipeline.finance/fit_pair及core.summarize | backend/tests/advisory_model_first/test_intraday_peer_synchrony_top10_5td_v1.py；文末完整内层结果 | RESEARCH_COMPLETE_INNER_SUPPORTED_NOT_CONFIRMED | none |
+| F-495 | pipeline.Study/preregister/run | backend/tests/advisory_model_first/test_intraday_peer_synchrony_top10_5td_v1.py；真实stage/claims及audit-receipt.json | SOURCE_AND_REAL_STAGE_PASS | none |
+| F-496 | 本文Scope/Production Gates | artifact: X:/AIstock_temp/ADVISORY/p9-intraday-peer-synchrony-20261023/validation-receipt.json；文末结果与交付分态 | OFFLINE_SCOPE_PASS_NOT_ACTIVATED | none |
 
-设计自审一：核对自包含留一、共同边覆盖、共同控制、旧单股与日频查重边界及非vintage。自审二：核对原人口/成本、两臂共同支持、先预测后评价、最多6fit、全部终态停止、非独立确认、研报继续搁置。本文只报设计完成，不报源码或研究完成。
+设计自审一核对自包含留一、共同边覆盖、共同控制、旧单股与日频查重边界及非vintage；第二轮核对人口/成本、共同支持、先预测后评价、6fit与全部终态停止。源码两轮同窗口自审修复恢复时重复特征拼接，补齐分钟测量依赖合同hash，并在读完整输入/标签前明确跨节点浮点容差。15项直接测试分别14项基础矩阵、1项新增实际文件读取；容差改动后仅重跑直接对齐项。L0三个P2复杂度提醒已审：唯一stock-D×5字段切片<=300MB、包D×50共同计算<=305D、监督merge one_to_one<=30,500行；0blocking，不修改公共baseline。真实结果及源码必需CI另报。
 
 ## Non-goals / Risks / Production Gates / DESIGN-COMPLIANCE-001
 
 原Top50成员关系可能带选择偏差，同群不是市场，相关不是因果；分钟bar缺失/精度及当前历史修订可能影响代理。低预测能力/无增量均为允许终态；不按结果改定义、窗口或包权重。
 
-四项逐一检查：设计完整但源码/研究待实现明确分态；错误与UNKNOWN不伪成功；固定业务/费用/人口/验收不改；无设计外审批或门禁。只Advisory离线，不改QE/HMM/LocalSIM/Selection/StrategyPackage/数据发布/公共workflow。production_ddl_gate=noop、dependency_gate=noop、activation=noop、backend_restart_required=false；无DB/DDL/DML、修数/采集、生产回放或服务控制。
+四项逐一检查：设计初次交付仅为设计；当前源码与一次真实研究完整交付，经济确认和源码合入独立分态；错误与UNKNOWN不伪成功；固定业务/费用/人口/验收不改；无设计外审批或门禁。只Advisory离线，不改QE/HMM/LocalSIM/Selection/StrategyPackage/数据发布/公共workflow。production_ddl_gate=noop、dependency_gate=noop、activation=noop、backend_restart_required=false；无DB/DDL/DML、修数/采集、生产回放或服务控制。
+
+## Execution Result / 一次六fit内层研究
+
+clean producer `529788ad95d4e2c6b519c58e3d708690a3b22c47`；唯一run `advintradaysynctop10_f3bb47a2de475c0856ebeb23`，根位于本轮X目录/study/下。完整原305D/30,500行、28,119唯一stock-D保留；30,417可算，23共同边不足与60零方差UNKNOWN保留。读取135,461,960源bytes、10,910原成员字段文件，日期2024-07-04..2025-09-30；没有缺源文件或修数。prepare264.847384秒、峰值614,342,656bytes。
+
+完整研究542.650634秒、峰值678,789,120bytes、终态目录16,855,009bytes。result SHA256 `1c9e0a76fa999dc269b70071f818b70d385ae4a9bba7a1a6bc2ebda86f42e1ff`；`audit-receipt.json`独立读回十stage链、六STARTED/六FINISHED、原人口/固定十槽、共同编码与producer实现hash，未重新拟合。消费文件终态回查通过。跨节点首窗最大绝对差8.895995e-12，两个新量最大差1.459943e-14，均在事前容差内。
+
+首窗17,900行/53个测量及计数字段通过事前rtol1e-12/atol1e-10；身份/原因一致。Windows与WSL浮点结果不是逐bit相同，容差不是经济差异容许。三折两臂共同成熟训练17,353/21,306/25,597行、174/214/257D；共享字段/median/scale逐项相同，训练KEY hash相同。六fit共6个STARTED/6个FINISHED，未做final、outer或sealed拟合。
+
+| 预声明评价项 | 实际结果 |
+|---|---|
+| 原评价 / 成熟 / 共同完整 | 126D、252包D、12,600原行；111成熟D、100三臂两包共同D，90.0901%覆盖 |
+| 原生 / matched / candidate净cohort均值 | 105.045200 / 122.951607 / 120.727901bps |
+| candidate−原生产品主终点 | **+15.682701bps**；描述性95%[-22.066937,51.997402]，MDE80=53.653164bps |
+| 三折产品增量 | −3.857194 / +24.595883 / +19.110504bps，两折正 |
+| candidate−matched解释项 | **−2.223706bps**；95%[-15.568311,11.492307]；三折+12.408881/+7.780440/−21.469486 |
+| 两包产品增量 | TCN −10.608997；LSTM +41.974398bps；两包等权，未择优 |
+| 原生 / matched干预 | 111/111成熟D；104/111成熟D（93.6937%）；原生跨两个季度 |
+| 尾部 / UNKNOWN | 最差10%cohort差+4.659806bps；原生326/candidate329未知槽，额外0.135135pp |
+| 编码后同步相关系数项 | +21.674805 / +20.491924 / +15.021478 |
+| 编码后方向交互项 | −11.903077 / −14.272986 / −10.879051；系数仅描述，不作第二经济门 |
+
+按事前产品门为 **INNER_SUPPORTED**，`supports_future_confirmation_design=true`且`proceed_outer=false`。这不是同步新增价值通过：candidate低于matched，区间跨零、两包异向，不能把整体超过原生归因于同步，也不回选matched或LSTM。当前已消费/NON_VINTAGE开发证据只支持未来另行评审确认价值；本次六fit预算结束，不启动额外候选、final/outer/封存或生产启用。实际研究累计225fit＋1旧index，0独立OOS/盈利确认。
