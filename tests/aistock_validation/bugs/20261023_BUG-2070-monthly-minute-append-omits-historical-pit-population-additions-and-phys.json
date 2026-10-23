@@ -1,6 +1,12 @@
 {
   "actual": "Daily PIT contains 000861.SZ,002505.SZ,600811.SH,601989.SH historical intervals but minute bins omit 98 required days although raw data exists.",
   "allowed_write_scope": [
+    "scripts/dataset_release_margin_detail_correction.py",
+    "backend/services/dataset_release/monthly_build_bridge.py",
+    "backend/services/dataset_release/monthly_mature_build_runner.py",
+    "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+    "backend/tests/dataset_release/test_monthly_build_bridge.py",
+    "backend/tests/dataset_release/test_monthly_build_resume.py",
     "backend/services/dataset_release/build_stage.py",
     "backend/services/dataset_release/monthly_postgres_source.py",
     "backend/services/dataset_release/monthly_minute_repair.py",
@@ -36,21 +42,40 @@
   ],
   "expected": "Same shared release has complete physical execution minute fields for selected PIT intervals and actual frozen calendar; unchanged components and old identities retained; historical population delta is not silently treated as monthly tail.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261023_BUG-2070-monthly-minute-append-omits-historical-pit-population-additions-and-phys.json",
+      "backend/services/dataset_release/monthly_build_bridge.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "noxfile.py",
+      "scripts/dataset_release_margin_detail_correction.py",
+      "backend/services/dataset_release/monthly_minute_coverage.py",
+      "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+      "scripts/dataset_release_minute_coverage_correction.py"
+    ],
     "added_files": [
       "backend/services/dataset_release/monthly_minute_coverage.py",
       "backend/tests/dataset_release/test_monthly_minute_coverage.py",
       "scripts/dataset_release_minute_coverage_correction.py"
     ],
     "changed_files": [
-      "backend/services/dataset_release/build_stage.py",
-      "backend/services/dataset_release/monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2070-monthly-minute-append-omits-historical-pit-population-additions-and-phys.json",
+      "backend/services/dataset_release/monthly_build_bridge.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
       "backend/services/dataset_release/monthly_minute_repair.py",
-      "backend/services/dataset_release/monthly_unified.py",
-      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
-      "noxfile.py"
+      "noxfile.py",
+      "scripts/dataset_release_margin_detail_correction.py",
+      "backend/services/dataset_release/monthly_minute_coverage.py",
+      "backend/tests/dataset_release/test_monthly_minute_coverage.py",
+      "scripts/dataset_release_minute_coverage_correction.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/build_stage.py",
@@ -258,11 +283,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh-process pytest historical catalog delta, same-snapshot 241/240 timestamp capture and automatic BUILD binding passed.",
+      "Fresh-process correction seal loaded shared release/profile/closure producers; source and active profile unchanged; no services controlled.",
+      "pytest exact coverage tests and fresh-process sealed candidate build PASS; no runtime process control",
+      "X:/AIstock_dataset_candidates/data_repair_staging/monthly-minute-coverage-20261023/component-101/full-window-validation.json: isolated QE pure consumer PASS; expected_spans=5181; physical unexplained=0",
+      "X:/AIstock_dataset_candidates/data_repair_staging/monthly-minute-coverage-20261023/component-101/full-window-validation.json: isolated QE consumer PASS; expected_spans=5181; uncovered=0",
+      "X:/AIstock_dataset_candidates/data_repair_staging/monthly-minute-coverage-20261023/component-101/full-window-validation.json: QE original consumer PASS; expected_spans=5181; uncovered=0"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
