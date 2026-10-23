@@ -620,8 +620,11 @@ def test_prev_close_binding_retains_source_and_is_idempotent(tmp_path, monkeypat
             authority, provenance = correction.build_authority(
                 cas, SimpleNamespace(source_manifest_ref=cas.put_json({})),
                 plan=plan, operation_id=operation, source_bundle_sha256=HEX)
-            assert [(row["ts_code"], row["trade_date"]) for row in authority["entries"]] == [
-                ("601238.SH", "2026-09-15")]
+            from backend.data_service.suspension_day_authority import load_authority
+            # Explicitly reviewed historical entries must survive a monthly
+            # binding; only entries beyond the release cutoff are excluded.
+            assert authority["entries"] == [row for row in load_authority()["entries"]
+                if row["trade_date"] <= "2026-09-30"]
             assert provenance["source_bundle_sha256"] == HEX
         path = service.store.operation_root(operation) / plan[correction.BINDING + "_ref"]["id"]
         path.write_bytes(path.read_bytes() + b" ")
