@@ -240,8 +240,16 @@ def seal(args):
     predecessor_path = runtime.settings.active_profile
     predecessor = json.loads(predecessor_path.read_text(encoding="utf-8"))
     correction = json.loads((args.component / "component-amendment.json").read_text(encoding="utf-8"))
+    minute_amendment = correction.get("schema_version") == "aistock_monthly_minute_coverage_amendment_v1"
+    physical_profile_path = Path(correction["predecessor_profile"]["path"])
+    if file_pin(physical_profile_path)["sha256"] != correction["predecessor_profile"]["sha256"]:
+        raise ValueError("physical correction predecessor changed before sealing")
+    physical_profile = json.loads(physical_profile_path.read_text(encoding="utf-8"))
     if file_pin(predecessor_path)["sha256"] != correction["predecessor_profile"]["sha256"]:
-        raise ValueError("active predecessor changed before sealing")
+        lineage = json.loads((Path(correction["predecessor_candidate_root"]) / "provenance/release-lineage.json").read_text(encoding="utf-8"))
+        if (not minute_amendment or lineage["predecessor_profile_ref"]["sha256"] != file_pin(predecessor_path)["sha256"]
+                or lineage["predecessor_dataset_manifest_sha256"] != predecessor["components"]["dataset_manifest_sha256"]):
+            raise ValueError("active predecessor changed before sealing")
     manifest_path = root / "qe_dataset_manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     # Refresh the existing consumer-layout summary from pins only, not content.
@@ -250,6 +258,19 @@ def seal(args):
     layout = json.loads(layout_path.read_text(encoding="utf-8"))
     by_path = {pin["path"]: pin for pin in manifest["components"].values()}
     layout["components"]["factor"] = _content_summary(by_path, prefix="components/factor_h5_static_candidate_v2/")
+    if minute_amendment:
+        layout["components"]["minute"] = _content_summary(by_path, prefix="components/minute_bin_candidate/")
+        proof = json.loads((args.component / "full-window-validation.json").read_text(encoding="utf-8"))
+        if (proof.get("status") != "PASS" or proof.get("physical_unexplained_gap_days_after") != 0
+                or proof.get("generation") != draft["generation"]
+                or proof.get("minute_content_digest") != hashlib.sha256(canonical_json_bytes({
+                    p: pin for p, pin in by_path.items() if p.startswith("components/minute_bin_candidate/")})).hexdigest()):
+            raise ValueError("minute correction full-window readback differs")
+        proof_relative = "reports/minute-full-window-validation.json"
+        _write(root / proof_relative, proof)
+        proof_pin = {"path": proof_relative, **file_pin(root / proof_relative)}
+        manifest["components"][proof_relative.replace("/", "__")] = proof_pin
+        by_path[proof_relative] = proof_pin
     layout.pop("consumer_layout_digest", None)
     layout["consumer_layout_digest"] = digest_named_fields(CONSUMER_LAYOUT_RECEIPT_SCHEMA, layout)
     temporary = args.component / "consumer-layout-amended.json"
@@ -272,9 +293,9 @@ def seal(args):
         "predecessor_profile_ref": reference,
         "predecessor": {"profile_path": str(predecessor_path), "profile_sha256": reference["sha256"],
             "generation": predecessor["generation"], "release_id": predecessor["release_id"],
-            "cutoff": predecessor["cutoff"], "candidate_root": correction["predecessor_candidate_root"],
-            "dataset_manifest_sha256": correction["predecessor_manifest_sha256"]}}
-    context = ProducerContext(stage="DERIVE", operation_id="margin-amendment-" + identity[:16], attempt=1,
+            "cutoff": predecessor["cutoff"], "candidate_root": predecessor["controller_paths"]["candidate_root"],
+            "dataset_manifest_sha256": predecessor["components"]["dataset_manifest_sha256"]}}
+    context = ProducerContext(stage="DERIVE", operation_id=("minute-amendment-" if minute_amendment else "margin-amendment-") + identity[:16], attempt=1,
         request={}, plan=plan, prior_receipts={"BUILD": {"scope": {"dataset_manifest_sha256": identity}}})
     derive_receipt = args.component / "derive-scope.json"
     if derive_receipt.exists():
@@ -303,19 +324,22 @@ def seal(args):
     source_path, validation_path, lineage_path = [provenance / name for name in (
         "source-readiness.json", "component-validation.json", "release-lineage.json")]
     inherited = {"path": str(Path(correction["predecessor_candidate_root"]) / "release_closure_receipt.json"),
-                 "sha256": predecessor["components"]["release_closure_sha256"]}
+                 "sha256": physical_profile["components"]["release_closure_sha256"]}
+    amendment_path = "reports/minute-coverage-amendment.json" if minute_amendment else "reports/late-financing-amendment.json"
     _write(source_path, {"schema_version": SOURCE_READINESS_SCHEMA, "dataset_manifest_sha256": identity,
-        "inherited_unchanged_readiness": inherited, "late_fact_amendment_ref": by_path["reports/late-financing-amendment.json"],
+        "inherited_unchanged_readiness": inherited, "late_fact_amendment_ref": by_path[amendment_path],
         "source_freeze": True, "database_write": False, "unexplained_gap_count": 0, "status": "PASS"})
     _write(validation_path, {"schema_version": COMPONENT_VALIDATION_SCHEMA, "dataset_manifest_sha256": identity,
         "deployment_content_sha256": manifest["deployment_content_sha256"], "manifest_component_count": len(by_path),
         "logical_components": sorted(groups), "derived_asset_count": len(derived_pins),
-        "validation_scope": "EXACT_LATE_FACT_DATE_AND_INHERITED_PINS", "inherited_unchanged_readiness": inherited,
-        "raw_rows_added": correction["raw_rows_added"], "static_cells_changed": correction["static_cells_changed"],
+        "validation_scope": "FULL_EXECUTION_WINDOW_AND_EXACT_MINUTE_REPAIRS" if minute_amendment else "EXACT_LATE_FACT_DATE_AND_INHERITED_PINS", "inherited_unchanged_readiness": inherited,
+        **({"minute_full_window_validation_ref": by_path[proof_relative], "minute_cells_filled": correction["filled_cells"]}
+           if minute_amendment else {"raw_rows_added": correction["raw_rows_added"], "static_cells_changed": correction["static_cells_changed"]}),
         "historical_content_revalidated": False, "status": "PASS"})
     _write(lineage_path, {"schema_version": RELEASE_LINEAGE_SCHEMA, "dataset_manifest_sha256": identity,
         "release_id": plan["release_id"], "revision": plan["revision"], "cutoff_trade_date": plan["target_cutoff"],
-        "predecessor_dataset_manifest_sha256": correction["predecessor_manifest_sha256"],
+        "predecessor_dataset_manifest_sha256": predecessor["components"]["dataset_manifest_sha256"],
+        "component_revision_predecessor_manifest_sha256": correction["predecessor_manifest_sha256"],
         "predecessor_profile_ref": reference, "status": "SEALED_SUCCESSOR"})
     closure_path = root / "release_closure_receipt.json"
     build_release_closure(output_path=closure_path, dataset_manifest_path=manifest_path,

@@ -54,7 +54,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "16"
+POSTGRES_SOURCE_ADAPTER_VERSION = "17"
 REFRESH_READINESS_POLICY = "same_snapshot_target_month_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -363,6 +363,7 @@ class PostgresMonthlySourceAdapter:
                 "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
                 "managed_writer_scope_policy": MANAGED_WRITER_SCOPE_POLICY,
                 "repair_input_provenance_policy": "canonical_repair_payload_cas_pin_v1",
+                "historical_minute_coverage_policy": "pit_catalog_delta_same_snapshot_all_execution_fields_v1",
             },
         )
 
@@ -669,6 +670,15 @@ class PostgresMonthlySourceAdapter:
             gates = tuple(prepared_limit if gate.gate == "suspend_limit" else gate for gate in gates)
             audit_artifacts = (*audit_artifacts, *prepared_artifacts)
         close_source_audit(cutoff=target_cutoff, predecessor_cutoff=predecessor_cutoff, gates=gates, changes=changes)
+        from .monthly_minute_coverage import capture_historical_coverage
+        from .monthly_build_bridge import load_monthly_predecessor_prefix
+
+        prefix = load_monthly_predecessor_prefix(context_plan=context.plan, profile=self.profile)
+        historical_minutes = capture_historical_coverage(
+            prefix=prefix, pit=frozen.pit_snapshot, cutoff=target_cutoff, connection=connection,
+        ) if prefix is not None else None
+        historical_minutes_ref = self.cas.put_json(historical_minutes) if historical_minutes is not None else None
+        checkpoint()
         source_stage_ref = seal_source_stage_receipt(self.cas, frozen, profile=self.profile.profile)
 
         bundle_path = input_root / "frozen-source-bundle.json"
@@ -680,6 +690,8 @@ class PostgresMonthlySourceAdapter:
             source_stage_ref=source_stage_ref,
         )
         bundle["monthly_repair_inputs"] = repair_inputs
+        if historical_minutes_ref is not None:
+            bundle["historical_minute_coverage_ref"] = historical_minutes_ref.as_dict()
         repair_payload_ref = None
         if repair_inputs is not None:
             # Typed deferrals bind this exact canonical payload, not the outer
@@ -698,6 +710,8 @@ class PostgresMonthlySourceAdapter:
         ]
         if repair_payload_ref is not None:
             artifacts.append(_cas_artifact(self.cas, repair_payload_ref))
+        if historical_minutes_ref is not None:
+            artifacts.append(_cas_artifact(self.cas, historical_minutes_ref))
 
         cas_refs = self._all_refs(frozen, source_stage_ref)
         artifacts.extend(_cas_artifact(self.cas, reference) for reference in cas_refs)

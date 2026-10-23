@@ -242,7 +242,11 @@ class MatureMonthlyPhysicalBuildRunner:
             from .monthly_prev_close_repair import apply_prev_close_corrections
             finalized = apply_prev_close_corrections(resume, finalized=finalized, cas=self.cas, plan=context.plan)
             from .monthly_minute_repair import apply_minute_corrections
-            finalized = apply_minute_corrections(resume, finalized=finalized, cas=self.cas, plan=context.plan)
+            from .monthly_minute_coverage import automatic_repair_plan
+            minute_plan = automatic_repair_plan(context.plan,
+                build_inputs=compiled.physical_plan.get("build_inputs", {}), cas=self.cas,
+                operation_id=context.operation_id)
+            finalized = apply_minute_corrections(resume, finalized=finalized, cas=self.cas, plan=minute_plan)
             finalized = refresh_retained_quote_catalog(resume, finalized=finalized, cas=self.cas)
             finalized_ref = self._seal_stage(finalized, expected="finalize-bins")
             from .monthly_industry_history import apply_retained_history
