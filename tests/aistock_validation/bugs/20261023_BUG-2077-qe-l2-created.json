@@ -1,7 +1,11 @@
 {
   "actual": "已批准QE-L2-RISK-ENTRY-GATE-D1..D7的两条完成实验6ed6c1be/aeae55e7真实执行1min/TWAP，但登记custom_params遗漏分钟合同，Archive误判daily_without_authoritative_limit_suspend。d1ab9d9e仅created无reservation/workspace，既有入口拒绝同ID续接。需基于冻结conf和封存hash的有审计元数据修正、DEV先验与单次未派发续接；不改结果/旧运行包，不重跑完成账户，不进入FULL_TRAIN队列，不改默认策略/数据/服务。关联本轮原F2 feature-qe-l2-risk-consumer-20261023；限定QE模块和精确ID。",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20261023_BUG-2077-qe-l2-created.json"
+    "tests/aistock_validation/bugs/20261023_BUG-2077-qe-l2-created.json",
+    "scripts/qe_l2_registration_recovery.py",
+    "backend/tests/quantevolver/test_qe_l2_registration_recovery.py",
+    "docs/operations/qe_l2_registration_recovery_20261023.md",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2077",
@@ -22,11 +26,24 @@
     }
   ],
   "evidence_uris": [],
-  "expected": "Expected behavior should be restored.",
+  "expected": "对精确三条原实验提供基于冻结配置及封存SHA的登记修复和无派发证明，原结果、状态、参数语义保持；生产执行须DEV通过及独立明确授权。原F2 CLI用该证明续接created同ID。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261023_BUG-2077-qe-l2-created.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/quantevolver/test_qe_l2_registration_recovery.py",
+      "docs/operations/qe_l2_registration_recovery_20261023.md",
+      "scripts/qe_l2_registration_recovery.py"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261023_BUG-2077-qe-l2-created.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "backend/tests/quantevolver/test_qe_l2_registration_recovery.py",
+      "docs/operations/qe_l2_registration_recovery_20261023.md",
+      "scripts/qe_l2_registration_recovery.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -35,7 +52,12 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "scripts/qe_l2_registration_recovery.py",
+      "backend/tests/quantevolver/test_qe_l2_registration_recovery.py",
+      "docs/operations/qe_l2_registration_recovery_20261023.md",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
@@ -62,10 +84,12 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
@@ -73,7 +97,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
   "suspected_modules": [
     "quantevolver"
   ],

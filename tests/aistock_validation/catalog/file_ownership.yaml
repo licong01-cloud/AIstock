@@ -1,5 +1,15 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: qe_l2_registration_recovery
+    priority: 145
+    include:
+      - scripts/qe_l2_registration_recovery.py
+      - backend/tests/quantevolver/test_qe_l2_registration_recovery.py
+    primary_module: qe.core
+    impact_modules: [qe.archive]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: Explicit fresh-process metadata recovery for three frozen QE L2 registrations; no resident service or experiment dispatch.
   - rule_id: qe_read_contract_runner_config
     priority: 141
     include: [frontend/tests/qe-read-contract.config.ts]
