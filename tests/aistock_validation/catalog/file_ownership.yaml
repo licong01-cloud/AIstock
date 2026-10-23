@@ -1,5 +1,15 @@
 schema_version: aistock_file_ownership_v1
 rules:
+  - rule_id: manual_factor_service_contract_entrypoints
+    priority: 132
+    include:
+      - scripts/register_manual_factor.py
+      - backend/tests/test_manual_factor_service_wsl_output.py
+    primary_module: platform.api
+    impact_modules: [factor_library]
+    layer: backend_service
+    risk_level: high
+    ownership_reason: These exact CLI and test entrypoints exercise ManualFactorService, whose existing shared API ownership selects platform_api_backend; that executor runs their direct test file without starting a backend or writing a database. Factor-library business impact and runtime source attribution remain separate.
   - rule_id: qe_l2_registration_recovery
     priority: 145
     include:
