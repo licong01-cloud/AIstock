@@ -531,11 +531,14 @@ def test_real_quote_for_never_eligible_security_does_not_create_buy_membership()
                                       fact_stock_codes=codes, quote_days=((other, DAY1),))
     context = _TransformContext(spec)
     assert context.is_expected_day(other, DAY1)
-    assert not context.is_expected_day(other, DAY2)
+    # Admission of real source rows is independent of buy eligibility. This
+    # must not create required/synthesized days without observed quotes.
+    assert context.is_expected_day(other, DAY2)
     assert list(context.expected_code_days()) == [(other, DAY1), (CODE, DAY1), (CODE, DAY2)]
     assert {span.ts_code for span in pit.spans} == {CODE}
-    with pytest.raises(CanonicalStockTransformError):
-        CanonicalStockTransformSpec(DAY2, pit, (DAY1, DAY2), authority)
+    inferred = CanonicalStockTransformSpec(DAY2, pit, (DAY1, DAY2), authority)
+    assert _TransformContext(inferred).codes == frozenset(codes)
+    assert list(_TransformContext(inferred).expected_code_days()) == [(CODE, DAY1), (CODE, DAY2)]
 
 
 def test_monthly_fact_materialization_keeps_never_pit_security(tmp_path):

@@ -7,6 +7,7 @@
     "backend/qlib_exporter/quote_catalog.py",
     "backend/tests/test_authoritative_bin_pit_universe.py",
     "backend/tests/test_qlib_export_stock_universe_filters.py",
+    "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
     "tests/aistock_validation/bugs/20261023_BUG-2075-legacy-qlib-export-api-clips-factual-data-by-eligibility-and-ipo-filters.json"
   ],
   "assigned_agent": null,
@@ -37,6 +38,7 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
       "backend/qlib_exporter/authoritative_bin_exporter.py",
       "backend/qlib_exporter/db_reader.py",
       "backend/qlib_exporter/quote_catalog.py",
@@ -45,6 +47,7 @@
       "tests/aistock_validation/bugs/20261023_BUG-2075-legacy-qlib-export-api-clips-factual-data-by-eligibility-and-ipo-filters.json"
     ],
     "changed_files": [
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
       "backend/qlib_exporter/authoritative_bin_exporter.py",
       "backend/qlib_exporter/db_reader.py",
       "backend/qlib_exporter/quote_catalog.py",
@@ -54,6 +57,7 @@
     ],
     "changed_files_source": "git_finish",
     "planned_files": [
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
       "backend/qlib_exporter/authoritative_bin_exporter.py",
       "backend/qlib_exporter/router.py",
       "backend/qlib_exporter/db_reader.py",
@@ -63,6 +67,7 @@
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
       "backend/qlib_exporter/authoritative_bin_exporter.py",
       "backend/qlib_exporter/router.py",
       "backend/qlib_exporter/db_reader.py",
@@ -94,7 +99,8 @@
   "review_rounds": [
     "R1: removed eligibility filters in source population, H5 queries and API code resolution; PIT helper remains selection-only.",
     "R2: validated real finite quote boundaries, NaN tails, empty selection and IPO sidecar isolation; no prices or PIT rules modified.",
-    "R3: corrected all nine A-share SQL regex literals and aligned export receipts with factual rather than current-listing scope."
+    "R3: corrected all nine A-share SQL regex literals and aligned export receipts with factual rather than current-listing scope.",
+    "R4: first CI passed 2027 tests, skipped 86, found one stale PIT-clipped source admission assertion. Updated it to the approved factual contract; exact required-day and unchanged PIT membership assertions remain; failed node passed locally."
   ],
   "risk_area": "bug",
   "runtime_contract": {
