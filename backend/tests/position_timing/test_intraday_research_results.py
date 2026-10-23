@@ -51,6 +51,10 @@ def test_missing_duplicate_and_mismatched_accounts_cannot_produce_comparison():
     changed = results.rows[-1].model_copy(update={'initial_account_sha256': 'e' * 64})
     with pytest.raises(IntradayError, match='NOT_MATCHED'):
         summarize(consumption, results.model_copy(update={'rows': (*results.rows[:-1], changed)}))
+    changed_delay = tuple(r.model_copy(update={'initial_nav_cny': Decimal('21000')})
+                          if c['delay_seconds'] == 300 else r for c, r in zip(consumption['cases'], results.rows))
+    with pytest.raises(IntradayError, match='NOT_MATCHED'):
+        summarize(consumption, results.model_copy(update={'rows': changed_delay}))
 
 
 def test_unavailable_is_visible_not_zero_and_no_fill_terminal_is_counted():

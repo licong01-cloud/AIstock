@@ -69,7 +69,7 @@ def test_no_price_preserves_inapplicable_population_and_source_drift_fails(tmp_p
         inspect(result["bundle"])
 
 
-def qlib_fixture(tmp_path):
+def qlib_fixture(tmp_path, *, factor=2, upper=11, header=0):
     components = {}
     def record(relative, data):
         path = tmp_path / relative
@@ -81,10 +81,10 @@ def qlib_fixture(tmp_path):
     record(daily + '/calendars/day.txt', b'2026-10-22\n')
     record(minute + '/calendars/1min.txt', b'2026-10-22 09:31:00\n')
     record(minute + '/instruments/all.txt', b'000001.SZ\t2026-10-22 09:31:00\t2026-10-22 15:00:00\n')
-    for field, value in {'prev_close': 10, 'up_limit_price': 11, 'down_limit_price': 9}.items():
+    for field, value in {'prev_close': 10, 'up_limit_price': upper, 'down_limit_price': 9}.items():
         record(f'{daily}/features/000001.sz/{field}.day.bin', np.array([0, value], dtype='<f4').tobytes())
-    for field, value in {'open': 20, 'high': 20.2, 'low': 19.8, 'close': 20, 'factor': 2, 'volume': 500, 'amount': 10000}.items():
-        record(f'{minute}/features/000001.sz/{field}.1min.bin', np.array([0, value], dtype='<f4').tobytes())
+    for field, value in {'open': 20, 'high': 20.2, 'low': 19.8, 'close': 20, 'factor': factor, 'volume': 500, 'amount': 10000}.items():
+        record(f'{minute}/features/000001.sz/{field}.1min.bin', np.array([header, value], dtype='<f4').tobytes())
     path = tmp_path / 'components/suspend_d_daily_candidate_v2/suspend_d.parquet'
     path.parent.mkdir(parents=True, exist_ok=True)
     pd.DataFrame({'ts_code': pd.Series(dtype=str), 'trade_date': pd.Series(dtype='datetime64[ns]'),
@@ -104,3 +104,11 @@ def test_qlib_raw_price_volume_and_producer_hash_are_authoritative(tmp_path):
     path.write_bytes(np.array([0, 3], dtype='<f4').tobytes())
     with pytest.raises(ValueError, match='differs'):
         CandidateReader(manifest).market('000001.SZ', at().date())
+
+
+@pytest.mark.parametrize('kwargs,reason', [({'factor': 0}, 'invalid file adjustment factor'),
+                                         ({'upper': 8}, 'LIMIT_ORDER_INVALID'),
+                                         ({'header': 1}, 'BIN_OUTSIDE_CALENDAR')])
+def test_invalid_market_economics_fail_before_replay(tmp_path, kwargs, reason):
+    with pytest.raises((ValueError, IntradayError), match=reason):
+        CandidateReader(qlib_fixture(tmp_path, **kwargs)).market('000001.SZ', at().date())

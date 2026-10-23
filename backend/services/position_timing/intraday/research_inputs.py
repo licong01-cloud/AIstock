@@ -81,6 +81,8 @@ class CandidateReader:
         header = float(values[0])
         if not np.isfinite(header) or header < 0 or not header.is_integer():
             raise IntradayError("RESEARCH_BIN_HEADER_INVALID", 422)
+        if int(header) + len(values) - 1 > len(calendar):
+            raise IntradayError("RESEARCH_BIN_OUTSIDE_CALENDAR", 422)
         offsets = indexes - int(header) + 1
         if (offsets < 1).any() or (offsets >= len(values)).any():
             raise IntradayError("RESEARCH_BIN_HISTORY_INCOMPLETE", 422)
@@ -118,6 +120,8 @@ class CandidateReader:
                 if value is None or value <= 0:
                     raise IntradayError("RESEARCH_DAILY_PRICE_UNAVAILABLE", 422)
                 prices[name] = value / 1000
+            if prices["down_limit_price"] >= prices["up_limit_price"]:
+                raise IntradayError("RESEARCH_DAILY_LIMIT_ORDER_INVALID", 422)
         facts = DayFacts(symbol=symbol, trade_date=day, is_suspended=suspended,
                          has_daily_limit=None if suspended else True, reference_price=prices.get("prev_close"),
                          limit_up=prices.get("up_limit_price"), limit_down=prices.get("down_limit_price"),

@@ -80,7 +80,8 @@ def summarize(consumption: dict, results: EconomicResults) -> dict:
         if row.target_quantity != case["target_quantity"] or row.terminal_as_of != terminal:
             raise IntradayError("RESEARCH_RESULT_TARGET_OR_TERMINAL_MISMATCH", 422)
         attributes = ("initial_account_sha256", "initial_nav_cny", "target_quantity", "target_notional_cny", "terminal_as_of")
-        if any(getattr(row, name) != getattr(baseline, name) for name in attributes):
+        initial = keyed[(case["plan_id"], ARMS[0], DELAYS[0])]
+        if any(getattr(row, name) != getattr(initial, name) for name in attributes):
             raise IntradayError("RESEARCH_RESULT_NOT_MATCHED_TO_BASELINE", 422)
         usable = row.status != "UNAVAILABLE" and baseline.status != "UNAVAILABLE"
         paired_price = usable and row.filled_quantity > 0 and baseline.filled_quantity > 0
