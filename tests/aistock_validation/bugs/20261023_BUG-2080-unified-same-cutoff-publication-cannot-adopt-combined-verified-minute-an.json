@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2080",
-  "closed_at": null,
+  "closed_at": "2026-10-23T17:17:58.561880Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -107,10 +107,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\september-finalization-20261023\\post-restart-verification-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2080",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6ed39c0110d4f78cf40a1e30ab2c7a65c41b686cfa91d51ee13d55137c37362f",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "8a94e39a6a1bbaeccd3f07faae4c4b22e4e53bed",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-23T17:16:11.069917Z",
+      "mode": "read_only",
+      "observed_identity": "9c8db2c420875b1076ea8f2f5ba78e3a9c35e2a2",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "63a4a281fda0c52a7dcf58c3760f54061b532dc467895697c79a2ecbc1053aa3",
+      "receipt_sha256": "1ebb412967de248c65291ec47a04804ceaade20b4ffb06ad0341c312ca567498",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ee439475f611c3bee4b86fb7cb170e580e9cdd5b23240965627833c10a25b668",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -142,7 +164,7 @@
     ],
     "validation_evidence_digest": "66b771b6f141e31b4d4b612576ea9e6c54e0e4687f9063a67ca2df92bbcd08d3"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -153,7 +175,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=fdc8f453f2fe91d9 commit=056861770380b5e75179a5a6be40d8ddd248cb82 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --force-venv-backend none -- --changed-only` result=`passed`",
-    "validation-receipt: id=36b19a91d27b0015 commit=056861770380b5e75179a5a6be40d8ddd248cb82 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_minute_adoption.py backend/tests/dataset_release/test_monthly_existing_adoption.py -q` result=`28 passed`"
+    "validation-receipt: id=36b19a91d27b0015 commit=056861770380b5e75179a5a6be40d8ddd248cb82 kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_minute_adoption.py backend/tests/dataset_release/test_monthly_existing_adoption.py -q` result=`28 passed`",
+    "pytest backend/tests/dataset_release/test_monthly_minute_adoption.py backend/tests/dataset_release/test_monthly_existing_adoption.py -q -> 28 passed; source PR CI SUCCESS; post-restart worker-scheduler verified"
   ],
   "verification_budget": {
     "budget": "standard",
