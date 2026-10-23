@@ -1185,24 +1185,10 @@ jobs:
           RUN_ID: ${{ github.run_id }}
           SOURCE_HEAD: ${{ github.sha }}
         run: |
-          python - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          # This is an infrastructure diagnostic, never a synthetic test result.
-          path = Path("tmp/validation/nightly_failure_issue/artifact-transport.json")
-          path.parent.mkdir(parents=True, exist_ok=True)
-          path.write_text(json.dumps({
-              "schema_version": "aistock_nightly_artifact_transport_v1",
-              "run_id": os.environ["RUN_ID"],
-              "head_commit": os.environ["SOURCE_HEAD"],
-              "failure_kind": "artifact_transport",
-              "artifact_name": "nightly-l3-results-" + os.environ["RUN_ID"],
-              "download_attempts": 2,
-          }, indent=2) + "\n", encoding="utf-8")
-          raise SystemExit("Nightly L3 artifact unavailable after two download attempts")
-          PY
+          python scripts/ci_failure_issue_summary.py \
+            --artifact-transport-output tmp/validation/nightly_failure_issue/artifact-transport.json \
+            --run-id "${RUN_ID}" --commit "${SOURCE_HEAD}" \
+            --download-outcome failure --retry-download-outcome failure
 
       - name: Compose nightly summary
         if: always()

@@ -5,7 +5,8 @@
     "scripts/nightly_adaptive_scheduler.py",
     "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "tests/aistock_validation/bugs/20261023_BUG-2072-validation-ci-failure-requires-triage-test-nightly-workflow-wires-warnin.json",
-    "backend/tests/scripts/test_ci_failure_issue_summary.py"
+    "backend/tests/scripts/test_ci_failure_issue_summary.py",
+    "scripts/ci_failure_issue_summary.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2072",
@@ -156,7 +157,7 @@
     "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
-  "scope_expansion_reason": "User retirement requirement and exact missing workflow implementation behind #6520; no backend/DB/service control.",
+  "scope_expansion_reason": "User retirement requirement and exact missing workflow implementation behind #6520; no backend/DB/service control. Move transport receipt creation into existing failure-summary Python entrypoint, validate run/head and outcomes, and exercise real implementation from CLI.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [

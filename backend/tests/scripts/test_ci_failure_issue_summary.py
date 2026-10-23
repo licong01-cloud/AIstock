@@ -593,13 +593,36 @@ def test_nightly_workflow_exports_setup_outcomes_without_fabricating_results():
         assert any(f"steps.{name}.outcome" in value for value in l3["outputs"].values())
     summary_steps = workflow["jobs"]["full-summary"]["steps"]
     transport = next(step for step in summary_steps if step.get("id") == "exhausted_nightly_transport")
-    assert 'artifact-transport.json' in transport['run']
-    assert 'session-results.json' not in transport['run']
-    assert 'execution-plan.json' not in transport['run']
     assert "retry_download_nightly_l3.outcome == 'failure'" in transport['if']
     build = next(step for step in summary_steps if step.get("name") == "Build Nightly failure issue context")
     assert '"nightly_l3_execution"' in build["run"]
     assert "needs.nightly-l3.outputs.workspace_result" in build["env"]["L3_WORKSPACE_RESULT"]
+
+
+@pytest.mark.parametrize("first,retry", [("success", "skipped"), ("failure", "success"), ("skipped", "skipped")])
+def test_recovered_or_unattempted_transport_does_not_materialize_failure(tmp_path, first, retry):
+    output = tmp_path / "artifact-transport.json"
+    assert summary.materialize_artifact_transport_failure(
+        output, run_id="9001", head_commit="a" * 40,
+        download_outcome=first, retry_download_outcome=retry,
+    ) is None
+    assert not output.exists()
+
+
+def test_transport_receipt_keeps_real_failures_and_rejects_foreign_run(tmp_path):
+    payload = {"run_id": "9001", "commit": "a" * 40, "statuses": {"nightlyL3": "failure"},
+               "nightly_session_results": [{"session": "advisory_modeling_backend", "result": "failure"}]}
+    receipt = summary.materialize_artifact_transport_failure(
+        tmp_path / "artifact-transport.json", run_id="9001", head_commit="a" * 40,
+        download_outcome="failure", retry_download_outcome="failure",
+    )
+    payload["nightly_artifact_transport"] = receipt
+    groups = summary._nightly_failure_groups(payload)
+    assert any(group["sessions"] == ["advisory_modeling_backend"] for group in groups)
+    assert any(group["failure_kinds"] == ["artifact_transport"] for group in groups)
+    receipt["run_id"] = "9000"
+    assert any(group["failure_kinds"] == ["invalid_transport_diagnostic"]
+               for group in summary._nightly_failure_groups(payload))
 
 
 def test_nightly_heterogeneous_failure_groups_are_bounded_with_overflow() -> None:

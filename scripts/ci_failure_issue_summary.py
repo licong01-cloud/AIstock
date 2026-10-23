@@ -1571,6 +1571,29 @@ def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
             "failure_kinds": [kind],
             "errors": [error],
         }
+    transport = payload.get("nightly_artifact_transport")
+    if transport is not None:
+        valid_transport = (
+            isinstance(transport, dict)
+            and transport.get("schema_version") == "aistock_nightly_artifact_transport_v1"
+            and re.fullmatch(r"[0-9a-f]{40}", str(payload.get("commit") or "")) is not None
+            and transport.get("head_commit") == payload.get("commit")
+            and str(payload.get("run_id") or "").isdigit()
+            and transport.get("run_id") == str(payload.get("run_id"))
+            and transport.get("artifact_name") == f"nightly-l3-results-{payload.get('run_id')}"
+            and type(transport.get("download_attempts")) is int
+            and transport["download_attempts"] == 2
+            and transport.get("download_outcome") == "failure"
+            and transport.get("retry_download_outcome") == "failure"
+            and transport.get("failure_kind") == "artifact_transport"
+            and transport.get("executed_test_failure_inferred") is False
+        )
+        kind = "artifact_transport" if valid_transport else "invalid_transport_diagnostic"
+        group = groups.setdefault("validation.runner", {
+            "sessions": [], "failure_kinds": [], "errors": [], "infrastructure": True,
+        })
+        group["failure_kinds"].append(kind)
+        group["errors"].append(f"Nightly infrastructure: {kind}; session coverage is unavailable")
     normalized_groups: list[dict[str, Any]] = []
     for module, details in sorted(groups.items()):
         sessions = sorted(set(details["sessions"]))
@@ -2456,6 +2479,40 @@ def persist_candidate_history(summary: dict[str, Any], *, history_dir: str | Non
     return target
 
 
+def materialize_artifact_transport_failure(
+    output: Path, *, run_id: str, head_commit: str,
+    download_outcome: str, retry_download_outcome: str,
+) -> dict[str, Any] | None:
+    """Persist exhausted transport separately from executed-test receipts."""
+    outcomes = {"failure", "success", "skipped", "cancelled"}
+    if download_outcome not in outcomes or retry_download_outcome not in outcomes:
+        raise ValueError("Unknown Nightly artifact download outcome")
+    if download_outcome != "failure" or retry_download_outcome != "failure":
+        return None
+    if not re.fullmatch(r"[0-9]+", run_id):
+        raise ValueError("Nightly artifact transport requires a numeric run id")
+    if not re.fullmatch(r"[0-9a-f]{40}", head_commit):
+        raise ValueError("Nightly artifact transport requires a full source HEAD")
+    if output.name != "artifact-transport.json":
+        raise ValueError("Transport diagnostics must not replace test/plan receipts")
+    receipt = {
+        "schema_version": "aistock_nightly_artifact_transport_v1",
+        "run_id": run_id,
+        "head_commit": head_commit,
+        "failure_kind": "artifact_transport",
+        "artifact_name": f"nightly-l3-results-{run_id}",
+        "download_attempts": 2,
+        "download_outcome": download_outcome,
+        "retry_download_outcome": retry_download_outcome,
+        "executed_test_failure_inferred": False,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Exclusive creation avoids replacing an artifact from another attempt.
+    with output.open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(receipt, indent=2) + "\n")
+    return receipt
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Summarize AIstock CI/Nightly failures for actionable GitHub Issues.")
     parser.add_argument("--repo", default=DEFAULT_REPO)
@@ -2469,6 +2526,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--severity", default="P1", choices=["P0", "P1", "P2", "P3"])
     parser.add_argument("--manual-summary")
     parser.add_argument("--nightly-status-json", help="Parse compact Nightly job result JSON instead of Actions logs.")
+    parser.add_argument("--artifact-transport-output", type=Path)
+    parser.add_argument("--download-outcome")
+    parser.add_argument("--retry-download-outcome")
     parser.add_argument("--source-name")
     parser.add_argument("--branch")
     parser.add_argument("--commit")
@@ -2550,7 +2610,22 @@ def build_stdout_payload(summary: dict[str, Any], args: argparse.Namespace, *, c
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.artifact_transport_output:
+        try:
+            receipt = materialize_artifact_transport_failure(
+                args.artifact_transport_output, run_id=str(args.run_id or ""),
+                head_commit=str(args.commit or ""), download_outcome=args.download_outcome,
+                retry_download_outcome=args.retry_download_outcome,
+            )
+        except (OSError, ValueError) as exc:
+            parser.error(f"Cannot record Nightly transport failure: {exc}")
+        if receipt:
+            print(f"Nightly artifact_transport: {args.artifact_transport_output}")
+            return 1
+        print("Nightly artifact transport recovered or did not run")
+        return 0
     if args.log_file:
         log_text = Path(args.log_file).read_text(encoding="utf-8")
         job = parse_job_log(log_text, job_name=args.job_name)
@@ -2585,6 +2660,18 @@ def main(argv: list[str] | None = None) -> int:
                 payload["nightly_plan_status"] = json.loads(plan_status_path.read_text(encoding="utf-8-sig"))
             except (OSError, ValueError):
                 payload["nightly_plan_status"] = {}
+        transport_path = Path(args.nightly_status_json).resolve().with_name("artifact-transport.json")
+        if transport_path.is_file():
+            try:
+                # A transport diagnostic is tiny; never read an unbounded foreign
+                # artifact as a control receipt or infer any executed test here.
+                with transport_path.open("rb") as stream:
+                    content = stream.read(8193)
+                if len(content) > 8192:
+                    raise ValueError("oversized transport diagnostic")
+                payload["nightly_artifact_transport"] = json.loads(content.decode("utf-8"))
+            except (OSError, ValueError):
+                payload["nightly_artifact_transport"] = {}
         summary = summarize_nightly_status(
             payload,
             repo=args.repo,
