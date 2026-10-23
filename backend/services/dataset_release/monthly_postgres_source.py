@@ -54,7 +54,7 @@ from .source_authority import (
 
 FROZEN_SOURCE_BUNDLE_SCHEMA = "aistock_monthly_frozen_source_bundle_v1"
 SOURCE_DIFF_SCHEMA = "aistock_monthly_frozen_source_diff_v1"
-POSTGRES_SOURCE_ADAPTER_VERSION = "17"
+POSTGRES_SOURCE_ADAPTER_VERSION = "18"
 REFRESH_READINESS_POLICY = "same_snapshot_target_month_before_payload_v1"
 _PARTITION_DATE = re.compile(r"(?P<start>\d{4}-\d{2}-\d{2})_(?P<end>\d{4}-\d{2}-\d{2})")
 
@@ -363,7 +363,7 @@ class PostgresMonthlySourceAdapter:
                 "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
                 "managed_writer_scope_policy": MANAGED_WRITER_SCOPE_POLICY,
                 "repair_input_provenance_policy": "canonical_repair_payload_cas_pin_v1",
-                "historical_minute_coverage_policy": "pit_catalog_delta_same_snapshot_all_execution_fields_v1",
+                "historical_minute_coverage_policy": "fact_catalog_delta_same_snapshot_all_execution_fields_v1",
             },
         )
 
@@ -409,7 +409,8 @@ class PostgresMonthlySourceAdapter:
                                "WHERE trade_date BETWEEN %s AND %s AND adjust_type='none' "
                                "AND ts_code ~ '^[0-9]{6}\\.(SH|SZ)$' ORDER BY ts_code",
                                (target_cutoff, target_cutoff.replace(day=1), target_cutoff))
-                fact_stock_codes = tuple(str(row[0]).strip() for row in cursor.fetchall())
+                from .source_fact_history import fact_codes
+                fact_stock_codes = fact_codes(row[0] for row in cursor.fetchall())
 
         # The native month path inherits the controller-bound immutable release,
         # not a historical SOURCE inventory. Comparing old raw partition keys
