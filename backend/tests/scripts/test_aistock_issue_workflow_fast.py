@@ -1449,6 +1449,7 @@ def test_required_check_unknown_bucket_fails_closed() -> None:
             ["worker-scheduler"],
         ),
         ("backend/services/hmm_risk/rotation_l1_gbdt.py", "none", []),
+        ("backend/services/hmm_risk/observed_industry_authority.py", "none", []),
         ("backend/services/hmm_risk/risk_l2_value_replay.py", "none", []),
         ("backend/services/hmm_risk/risk_l2_prediction.py", "backend", ["backend-main"]),
         ("backend/routers/hmm_risk.py", "backend", ["backend-main"]),
@@ -1481,6 +1482,30 @@ def test_hmm_offline_value_family_does_not_downgrade_mixed_online_scope() -> Non
     assert mixed["runtime_impact"] == "backend"
     assert mixed["runtime_files"] == ["backend/routers/hmm_risk.py"]
     assert mixed["target_ids"] == ["backend-main"]
+
+
+def test_observed_industry_builder_role_is_exact_and_cannot_downgrade_backend() -> None:
+    source = "backend/services/hmm_risk/observed_industry_authority.py"
+    rule = next(rule for rule in workflow._load_runtime_target_catalog()["source_role_rules"]
+                if rule["rule_id"] == "offline-hmm-observed-industry-authority")
+    assert rule["source_globs"] == [source]
+    files = [source, "scripts/hmm_risk/build_observed_industry_authority.py",
+             "backend/tests/hmm_risk/test_observed_industry_authority.py"]
+    offline = workflow.build_runtime_contract(record={}, changed_files=files)
+    assert offline["runtime_impact"] == "none"
+    assert offline["backend_restart_required"] is False
+    assert offline["blocking"] == []
+    for online in ["backend/routers/hmm_risk.py",
+                   "backend/services/hmm_risk/observed_industry_authority_consumer.py"]:
+        mixed = workflow.build_runtime_contract(
+            record={"runtime_contract": {"schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                                         "runtime_impact": "none"}},
+            changed_files=[*files, online],
+        )
+        assert mixed["runtime_impact"] == "backend"
+        assert mixed["target_ids"] == ["backend-main"]
+        assert mixed["backend_restart_required"] is True
+        assert any("cannot downgrade" in reason for reason in mixed["blocking"])
 
 
 def test_advisory_fixed5_offline_roles_are_exact_and_preserve_online_scope() -> None:

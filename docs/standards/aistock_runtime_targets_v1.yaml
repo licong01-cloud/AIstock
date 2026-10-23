@@ -49,6 +49,12 @@ non_runtime_source_paths:
   - scripts/start_aistock_github_runner.ps1
   - scripts/supervise_aistock_github_runner.ps1
 source_role_rules:
+  # Only the fresh-process builder and its tests import this source. The
+  # produced C-013 bundle is consumed as data; activation is a separate action.
+  - rule_id: offline-hmm-observed-industry-authority
+    role: non_runtime
+    source_globs:
+      - backend/services/hmm_risk/observed_industry_authority.py
   # Exact offline sources pending their business PR; do not exempt adjacent versions or API consumers.
   - rule_id: offline-advisory-fixed5-valuation
     role: non_runtime

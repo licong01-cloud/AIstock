@@ -5,7 +5,10 @@
     "backend/services/hmm_risk/observed_industry_authority.py",
     "scripts/hmm_risk/build_observed_industry_authority.py",
     "backend/tests/hmm_risk/test_observed_industry_authority.py",
-    "tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json"
+    "tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "docs/operations/hmm_observed_industry_authority_runbook.md"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2081",
@@ -23,22 +26,54 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261023-812e202f4e04",
       "timestamp": "2026-10-23T15:28:54.149849Z"
+    },
+    {
+      "action": "expand_scope",
+      "actor": "Codex",
+      "note": "User-authorized delivery gate repair: register exact CLI-only authority builder source role after caller audit, add fail-closed mixed/neighbor regressions and offline runbook. No inference-rule weakening, production writes, authority activation or process control.",
+      "timestamp": "2026-10-23T16:46:38.456484+00:00"
+    },
+    {
+      "action": "delivery_role_review",
+      "actor": "Codex",
+      "note": "Caller audit confirms exact CLI-only source role. 31 direct/source-role tests passed; fresh-process CLI help and pinned authority/source identity readback passed. Build-02 target coverage 4918/4918 is independent of full DB preflight BLOCKED (calendar internal gap; observed pre-10/13 classification unavailability); no authority/DB/runtime activation or writes. DESIGN-COMPLIANCE-001 four checks passed for delivery scope; business preflight not claimed complete.",
+      "timestamp": "2026-10-23T16:48:09.938612+00:00"
     }
   ],
   "evidence_uris": [
-    "X:/AIstock_temp/HMM/industry-classification-readback-20261023-r1/classification_readback_receipt.json"
+    "X:/AIstock_temp/HMM/industry-classification-readback-20261023-r1/classification_readback_receipt.json",
+    "F:/Dev/AIstock_runtime/hmm_l2_live_authority/BUG-2081/build-02/build_receipt.json",
+    "F:/Dev/AIstock_runtime/hmm_l2_live_authority/BUG-2081/database-preflight-01/summary.json",
+    "F:/Dev/AIstock_runtime/hmm_l2_live_authority/BUG-2081/database-preflight-01/calendar_gap_diagnosis.json"
   ],
   "expected": "A new HMM authority can bind the pinned official observation with conservative causal knowledge/eligibility boundaries independent of monthly dataset cutoff; complete read-only HMM database preflight reports real readiness and all typed historical NAs.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md",
+      "backend/services/hmm_risk/observed_industry_authority.py",
+      "scripts/hmm_risk/build_observed_industry_authority.py",
+      "backend/tests/hmm_risk/test_observed_industry_authority.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/operations/hmm_observed_industry_authority_runbook.md"
+    ],
     "added_files": [
       "backend/services/hmm_risk/observed_industry_authority.py",
       "scripts/hmm_risk/build_observed_industry_authority.py",
       "backend/tests/hmm_risk/test_observed_industry_authority.py"
     ],
     "changed_files": [
-      "docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md"
+      "docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md",
+      "backend/services/hmm_risk/observed_industry_authority.py",
+      "scripts/hmm_risk/build_observed_industry_authority.py",
+      "backend/tests/hmm_risk/test_observed_industry_authority.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "docs/operations/hmm_observed_industry_authority_runbook.md"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md",
@@ -131,18 +166,29 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "attribution_review": {
+      "callers": [
+        "scripts/hmm_risk/build_observed_industry_authority.py",
+        "backend/tests/hmm_risk/test_observed_industry_authority.py"
+      ],
+      "offline_runbook_ref": "docs/operations/hmm_observed_industry_authority_runbook.md",
+      "scope": "exact observed_industry_authority.py only; mixed online changes remain backend and cannot be downgraded",
+      "server_consumer": "none in repository import/symbol search; consumers read C-013 artifacts, not builder source"
+    },
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
-    "runtime_impact": "backend",
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
-    "target_ids": [
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
       "backend-main"
-    ]
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
