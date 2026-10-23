@@ -17,6 +17,12 @@
   ],
   "created_at": "2026-10-23T04:07:35.204764Z",
   "description": "Failure summary: assert 'Materialize exhausted Nightly artifact transport receipt' in \"name: AIstock Nightly L3 + DR\\nrun-name: ${{ github.event_name == 'repository_dispatch' && format('AIstock schedule n... }}\\n          path: tmp/validation/nightly_summary/\\n          if-no-files-found: ignore\\n          overwrite: true\\n\"\n2026-10-23 user-authorized scope: remove retired miniQMT paper simulation from Nightly automatic/full/retry selection and live job; retain LocalSIM/shared core coverage. Implement exhausted download transport diagnostic without fabricated session results.",
+  "design_compliance_review": {
+    "business_semantics": "Retirement explicitly requested; LocalSIM and shared core remain eligible",
+    "no_new_gates": "Existing failure, retry and intake flow reused",
+    "no_partial_delivery": "Scope covers automatic/full/retry retirement and transport errors; full Nightly pending after merge",
+    "no_silent_error": "Two failed downloads fail summary job and route infrastructure diagnostic"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -33,13 +39,22 @@
   ],
   "expected": "CI/Nightly failure issues include enough diagnostic detail to enter the BUG JSON workflow without manual log rediscovery.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
+      "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
+      "scripts/nightly_adaptive_scheduler.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2072-validation-ci-failure-requires-triage-test-nightly-workflow-wires-warnin.json"
+    ],
     "added_files": [],
     "changed_files": [
+      ".github/workflows/nightly.yml",
+      "backend/tests/scripts/test_ci_failure_issue_summary.py",
       "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
-      "scripts/ci_failure_issue_summary.py",
-      "scripts/aistock_issue_workflow.py"
+      "scripts/nightly_adaptive_scheduler.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2072-validation-ci-failure-requires-triage-test-nightly-workflow-wires-warnin.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
@@ -129,16 +144,19 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "not_required",
+    "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
     "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": null,
     "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "User retirement requirement and exact missing workflow implementation behind #6520; no backend/DB/service control.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
@@ -149,6 +167,11 @@
     "fingerprint": "7c0b0b0ae939833fb8063f62",
     "source_event_id": "FE-20261023-7c0b0b0ae939"
   },
+  "validation_evidence": [
+    "118 related scheduler/failure-summary tests passed; retired manual dispatch contract corrected and its node passed separately",
+    "workflow-smoke --changed-file .github/workflows/nightly.yml --changed-file scripts/nightly_adaptive_scheduler.py --module validation -> passed (dry-run)",
+    "Direct transport step subprocess: failure exit, run/head-bound diagnostic, no synthetic session results"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -257,17 +280,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "scope_expansion_reason": "User retirement requirement and exact missing workflow implementation behind #6520; no backend/DB/service control.",
-  "validation_evidence": [
-    "118 related scheduler/failure-summary tests passed; retired manual dispatch contract corrected and its node passed separately",
-    "workflow-smoke --changed-file .github/workflows/nightly.yml --changed-file scripts/nightly_adaptive_scheduler.py --module validation -> passed (dry-run)",
-    "Direct transport step subprocess: failure exit, run/head-bound diagnostic, no synthetic session results"
-  ],
-  "design_compliance_review": {
-    "no_partial_delivery": "Scope covers automatic/full/retry retirement and transport errors; full Nightly pending after merge",
-    "no_silent_error": "Two failed downloads fail summary job and route infrastructure diagnostic",
-    "business_semantics": "Retirement explicitly requested; LocalSIM and shared core remain eligible",
-    "no_new_gates": "Existing failure, retry and intake flow reused"
   }
 }
