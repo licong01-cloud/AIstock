@@ -1,0 +1,243 @@
+{
+  "actual": "BUG-2074 companion for backend API/legacy exporters: preserve all real A-share facts and separate all quote catalog from stock_universe eligibility; fix legacy H5 DB reader filtering, API preselection and daily/IPO catalog rewrite. No data build, activation, DB write or process control.",
+  "allowed_write_scope": [
+    "backend/qlib_exporter/authoritative_bin_exporter.py",
+    "backend/qlib_exporter/router.py",
+    "backend/qlib_exporter/db_reader.py",
+    "backend/qlib_exporter/quote_catalog.py",
+    "backend/tests/test_authoritative_bin_pit_universe.py",
+    "backend/tests/test_qlib_export_stock_universe_filters.py",
+    "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+    "tests/aistock_validation/bugs/20261023_BUG-2075-legacy-qlib-export-api-clips-factual-data-by-eligibility-and-ipo-filters.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2075",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-23T05:48:31.520196Z",
+  "description": "BUG-2074 companion for backend API/legacy exporters: preserve all real A-share facts and separate all quote catalog from stock_universe eligibility; fix legacy H5 DB reader filtering, API preselection and daily/IPO catalog rewrite. No data build, activation, DB write or process control.",
+  "design_compliance_001": {
+    "no_new_gates": "Reuse existing source tests and release workflow; no new approval, source provenance gate, data-wide scan or service control.",
+    "no_silent_errors": "Missing/invalid prices and unknown explicit source codes still error; no fabricated rows, zero fill or forward fill introduced.",
+    "no_simplified_delivery": "Code contract covered in monthly worker BUG-2074 and legacy API BUG-2075; actual candidate supplementation and runtime verification explicitly pending user restart.",
+    "no_unapproved_business_drift": "Factual data retains IPO/ST/retired history per user request; separate PIT selection policy is unchanged; no QE/HMM/LocalSIM business changes."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261023-3bb98d932ade",
+      "timestamp": "2026-10-23T05:48:31.520196Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/qlib_exporter/db_reader.py",
+      "backend/qlib_exporter/quote_catalog.py",
+      "backend/qlib_exporter/router.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2075-legacy-qlib-export-api-clips-factual-data-by-eligibility-and-ipo-filters.json"
+    ],
+    "changed_files": [
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/qlib_exporter/db_reader.py",
+      "backend/qlib_exporter/quote_catalog.py",
+      "backend/qlib_exporter/router.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2075-legacy-qlib-export-api-clips-factual-data-by-eligibility-and-ipo-filters.json"
+    ],
+    "changed_files_source": "git_finish",
+    "planned_files": [
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/qlib_exporter/router.py",
+      "backend/qlib_exporter/db_reader.py",
+      "backend/qlib_exporter/quote_catalog.py",
+      "backend/tests/test_authoritative_bin_pit_universe.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/qlib_exporter/router.py",
+      "backend/qlib_exporter/db_reader.py",
+      "backend/qlib_exporter/quote_catalog.py",
+      "backend/tests/test_authoritative_bin_pit_universe.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py"
+    ]
+  },
+  "first_seen_at": "2026-10-23T05:48:31.520196Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6629,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6629",
+  "last_seen_at": "2026-10-23T05:48:31.520196Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_rounds": [
+    "R1: removed eligibility filters in source population, H5 queries and API code resolution; PIT helper remains selection-only.",
+    "R2: validated real finite quote boundaries, NaN tails, empty selection and IPO sidecar isolation; no prices or PIT rules modified.",
+    "R3: corrected all nine A-share SQL regex literals and aligned export receipts with factual rather than current-listing scope.",
+    "R4: first CI passed 2027 tests, skipped 86, found one stale PIT-clipped source admission assertion. Updated it to the approved factual contract; exact required-day and unchanged PIT membership assertions remain; failed node passed locally."
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/config",
+    "fresh_process_evidence": [
+      "Fresh-process pytest actual exporter/router/reader imports and filesystem catalog regressions: 51 passed; no DB, deployment, activation or service access.",
+      "Fresh-process targeted pytest imported real exporter, router, DBReader and physical quote catalog: 51 passed, no DB or service access"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Legacy Qlib export API clips factual data by eligibility and IPO filters",
+  "trigger_condition": {
+    "fingerprint": "3bb98d932ade906e6bd8f246",
+    "source_event_id": "FE-20261023-3bb98d932ade"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}
