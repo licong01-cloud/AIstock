@@ -14,7 +14,8 @@ from pathlib import Path
 import re
 from typing import Any, Iterable, Mapping
 
-DEFAULT_PATH = Path(__file__).with_name("suspension_day_authority_v1.json")
+# Keep the legacy payload unchanged for processes awaiting the user-owned restart.
+DEFAULT_PATH = Path(__file__).with_name("suspension_day_authority_v2.json")
 SCHEMA = "aistock_suspension_day_authority_v1"
 POLICY = "provider_events_with_disclosure_resolution_v1"
 
@@ -46,9 +47,16 @@ def load_authority(payload: Mapping[str, Any] | None = None) -> dict[str, Any]:
     for entry in value["entries"]:
         required = {"ts_code", "trade_date", "state", "announcement_id", "disclosure_date", "source_url",
                     "source_content_sha256", "source_file_size", "historical_publication_time_proven"}
+        if entry.get("state") == "INTRADAY_SUSPENDED":
+            required |= {"provider_suspend_timing", "effective_suspend_timing"}
+            if (not isinstance(entry.get("provider_suspend_timing"), str)
+                or not entry["provider_suspend_timing"].strip()
+                or not isinstance(entry.get("effective_suspend_timing"), str)
+                or not _intraday(entry["effective_suspend_timing"])):
+                raise ValueError("suspension intraday disclosure timing differs")
         if set(entry) != required or not re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", entry["ts_code"]):
             raise ValueError("suspension disclosure fields differ")
-        if (entry["state"] != "FULL_DAY_SUSPENDED" or not entry["announcement_id"]
+        if (entry["state"] not in {"FULL_DAY_SUSPENDED", "INTRADAY_SUSPENDED"} or not entry["announcement_id"]
             or not re.fullmatch(r"[0-9a-f]{64}", entry["source_content_sha256"])
             or not entry["source_url"].startswith("https://")
             or type(entry["source_file_size"]) is not int or entry["source_file_size"] <= 0
@@ -106,6 +114,7 @@ def project_suspension_days(rows: Iterable[Mapping[str, Any]], *, authority: Map
     for (symbol, day), raw in sorted(grouped.items()):
         entry = official.get((symbol, day))
         state, basis = "UNRESOLVED", "PROVIDER_EVENTS"
+        effective_timing = None
         valid = all(row["suspend_type"] in {"S", "R"} for row in raw)
         # A disclosure settles an ambiguous day or the provider's zero-length
         # opening S marker, never a positive intraday span or duplicate event.
@@ -115,7 +124,16 @@ def project_suspension_days(rows: Iterable[Mapping[str, Any]], *, authority: Map
             or (row["suspend_type"] == "S" and row["suspend_timing"] in ("09:30-09:30", "9:30-9:30"))
             for row in raw
         )
-        if entry is not None and disclosure_compatible:
+        # A provider clock pair without dates is not, by itself, an ordered
+        # same-day interval. Only an exact-key disclosure can establish the
+        # effective session. Never swap clocks or infer a next-day resumption.
+        intraday_compatible = (entry is not None and entry["state"] == "INTRADAY_SUSPENDED"
+            and len(raw) == 1 and raw[0]["suspend_type"] == "S"
+            and raw[0]["suspend_timing"] in (entry["provider_suspend_timing"], entry["effective_suspend_timing"]))
+        if intraday_compatible:
+            state, basis = entry["state"], "OFFICIAL_DISCLOSURE"
+            effective_timing = entry["effective_suspend_timing"]
+        elif entry is not None and entry["state"] == "FULL_DAY_SUSPENDED" and disclosure_compatible:
             state, basis = entry["state"], "OFFICIAL_DISCLOSURE"
         elif entry is None and valid and len({row["suspend_type"] for row in raw}) == len(raw):
             events = {row["suspend_type"]: str(row["suspend_timing"] or "").strip() for row in raw}
@@ -129,6 +147,7 @@ def project_suspension_days(rows: Iterable[Mapping[str, Any]], *, authority: Map
                 elif events == {"R": ""}:
                     state = "RESUMED"
         result.append({"ts_code": symbol, "trade_date": day.isoformat(), "state": state, "basis": basis,
+                       **({"effective_suspend_timing": effective_timing} if effective_timing else {}),
                        "raw_events_sha256": digest(sorted(raw, key=canonical_bytes)), "raw_event_count": len(raw),
                        "authority_sha256": authority_sha256, "historical_publication_time_proven": False,
                        "source_content_sha256": entry["source_content_sha256"] if entry else None,
