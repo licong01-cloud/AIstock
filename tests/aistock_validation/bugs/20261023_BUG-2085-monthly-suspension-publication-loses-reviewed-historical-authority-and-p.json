@@ -1,6 +1,7 @@
 {
   "actual": "Current frozen metadata is stale and known historical suspension keys are unresolved or absent.",
   "allowed_write_scope": [
+    "backend/tests/dataset_release/test_monthly_unified_v2.py",
     "backend/services/dataset_release/monthly_suspension_repair.py",
     "backend/services/dataset_release/monthly_shared_components.py",
     "backend/services/dataset_release/monthly_unified.py",
