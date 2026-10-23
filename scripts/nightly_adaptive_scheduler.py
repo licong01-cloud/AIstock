@@ -36,6 +36,13 @@ STATUS_FAILURE_MODULES = {
 BASELINE_NIGHTLY_PLAN_KEYS = ("l0",)
 CHANGE_FILE_ONLY_PLAN_KEYS = frozenset({"l0"})
 CHANGE_FILE_ONLY_SESSIONS = frozenset({"l0"})
+# miniQMT paper simulation is retired. Shared/LocalSIM and the independent
+# MiniQMT execution runtime remain eligible; historical failed receipts cannot
+# reintroduce the retired simulation lanes.
+RETIRED_SIMULATION_PLANS = frozenset({
+    "paper_v2_live", "miniqmt_sim_stub_l3", "miniqmt_sim_trading_hours_l5",
+    "simulation_dual_backend_l4",
+})
 CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".go", ".sql", ".sh", ".ps1")
 
 
@@ -188,12 +195,16 @@ def build_nightly_execution_plan(
 
     plans = issue_flow._plans_by_key()
     operational_plans = {key for key, plan in plans.items() if plan.get("execution_scope") == "operations"}
+    retired_sessions = {str(plan.get("nox_session") or "") for key, plan in plans.items()
+                        if key in RETIRED_SIMULATION_PLANS}
     operational_sessions = {str(plans[key].get("nox_session") or "") for key in operational_plans}
     automation_denied = {key for key, plan in plans.items()
                          if (plan.get("runtime_policy") or {}).get("allow_github_actions") is False}
     denied_sessions = {str(plans[key].get("nox_session") or ""): key for key in automation_denied}
     retry_context = retry_context or {}
     retry_sessions = unique_values([str(item) for item in retry_context.get("failed_sessions") or []])
+    retired_retry_sessions = [session for session in retry_sessions if session in retired_sessions]
+    retry_sessions = [session for session in retry_sessions if session not in retired_sessions]
     operational_retry_sessions = [session for session in retry_sessions if session in operational_sessions]
     excluded_automation = {denied_sessions[session]: "not_executed: catalog allow_github_actions=false"
                            for session in retry_sessions if session in denied_sessions}
@@ -218,7 +229,7 @@ def build_nightly_execution_plan(
     selected_sessions: list[str] = []
     nightly_plan_keys: list[str] = []
     for key in unique_values(plan_keys):
-        if key in operational_plans:
+        if key in operational_plans or key in RETIRED_SIMULATION_PLANS:
             continue
         plan = plans.get(key) or {}
         if not full_run and plan.get("execution_scope") == "pr":
@@ -234,6 +245,8 @@ def build_nightly_execution_plan(
             ):
                 raise ValueError(f"Nightly replacement plan is invalid for PR-only plan {key}: {replacement_key}")
             key = replacement_key
+        if key in RETIRED_SIMULATION_PLANS:
+            continue
         if key in automation_denied:
             excluded_automation[key] = "not_executed: catalog allow_github_actions=false"
             continue
@@ -252,6 +265,7 @@ def build_nightly_execution_plan(
         str(plan.get("nox_session") or "").strip(): key
         for key, plan in plans.items()
         if plan.get("execution_scope") != "pr"
+        and key not in RETIRED_SIMULATION_PLANS
         and key not in automation_denied
         and plan.get("enabled", True)
         and plan.get("runner_enabled")
@@ -307,6 +321,8 @@ def build_nightly_execution_plan(
         "excluded_change_file_only_plans": sorted(CHANGE_FILE_ONLY_PLAN_KEYS) if full_run else [],
         "excluded_operational_plans": sorted(operational_plans),
         "excluded_operational_retry_sessions": operational_retry_sessions,
+        "excluded_retired_simulation_plans": sorted(RETIRED_SIMULATION_PLANS),
+        "excluded_retired_simulation_retry_sessions": retired_retry_sessions,
         "excluded_automation_plans": excluded_automation,
         "excluded_pr_only_plans": (
             sorted(key for key, plan in plans.items() if plan.get("execution_scope") == "pr") if full_run else []

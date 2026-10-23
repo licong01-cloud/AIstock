@@ -592,7 +592,11 @@ def test_nightly_workflow_exports_setup_outcomes_without_fabricating_results():
         assert name in steps
         assert any(f"steps.{name}.outcome" in value for value in l3["outputs"].values())
     summary_steps = workflow["jobs"]["full-summary"]["steps"]
-    assert not any("Materialize exhausted" in step.get("name", "") for step in summary_steps)
+    transport = next(step for step in summary_steps if step.get("id") == "exhausted_nightly_transport")
+    assert 'artifact-transport.json' in transport['run']
+    assert 'session-results.json' not in transport['run']
+    assert 'execution-plan.json' not in transport['run']
+    assert "retry_download_nightly_l3.outcome == 'failure'" in transport['if']
     build = next(step for step in summary_steps if step.get("name") == "Build Nightly failure issue context")
     assert '"nightly_l3_execution"' in build["run"]
     assert "needs.nightly-l3.outputs.workspace_result" in build["env"]["L3_WORKSPACE_RESULT"]
@@ -1586,7 +1590,7 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     dispatch_inputs = triggers["workflow_dispatch"]["inputs"]
     assert dispatch_inputs["run_dr"]["default"] is False
     assert dispatch_inputs["run_nightly_l3"]["default"] is True
-    assert dispatch_inputs["run_paper_v2_live"]["default"] is False
+    assert "run_paper_v2_live" not in dispatch_inputs
     assert dispatch_inputs["run_code_intelligence"]["default"] is False
     assert dispatch_inputs["llm_triage_mode"]["default"] == "warning_only"
     assert dispatch_inputs["llm_auto_file_opt_in"]["default"] is False
@@ -1597,8 +1601,7 @@ def test_nightly_workflow_manual_dispatch_can_skip_dr_and_live() -> None:
     assert "inputs.run_dr" not in l3_condition  # DR opt-out must not suppress independent L3.
     assert "always()" in l3_condition
     assert "needs.runner-preflight.result == 'success'" in l3_condition
-    assert "inputs.run_nightly_l3 && inputs.run_paper_v2_live" in workflow["jobs"]["paper-v2-live"]["if"]
-    assert "inputs.run_paper_v2_live" in workflow["jobs"]["paper-v2-live"]["if"]
+    assert "paper-v2-live" not in workflow["jobs"]
     code_steps = "\n".join(step.get("run", "") for step in workflow["jobs"]["code-intelligence-weekly"]["steps"])
     assert "triage-quality-smoke" in code_steps
     assert "llm-triage-quality.json" in code_steps

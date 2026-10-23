@@ -20,10 +20,6 @@ on:
         required: false
         default: false
         type: boolean
-      run_paper_v2_live:
-        description: 'Run Paper v2 live catch-up after L3. Scheduled Nightly always runs it.'
-        type: boolean
-        default: false
       run_code_intelligence:
         description: 'Legacy manual compatibility only; scheduled refreshes use code-intelligence-refresh.yml.'
         type: boolean
@@ -559,72 +555,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
           overwrite: true
-
-  paper-v2-live:
-    name: Paper v2 live catch-up (skip realtime by default)
-    needs: nightly-l3
-    if: needs.nightly-l3.outputs.background_admitted == 'true' && (github.event_name != 'workflow_dispatch' || (inputs.run_nightly_l3 && inputs.run_paper_v2_live))
-    outputs:
-      background_admitted: ${{ steps.background_window.outputs.background_admitted }}
-    runs-on: [self-hosted, Windows, aistock-ci]
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: powershell
-    env:
-      PAPER_V2_SKIP_REALTIME: '1'
-    steps:
-      - name: Recheck overnight admission after runner queue
-        id: background_window
-        timeout-minutes: 1
-        shell: powershell
-        run: |
-          python "F:/Dev/AIstock/scripts/aistock_runner_health.py" scheduled-admission `
-            --budget-minutes 60 `
-            --output-json "$env:RUNNER_TEMP/background-admission-$env:GITHUB_JOB.json"
-          if ($LASTEXITCODE -ne 0) { throw "background admission failed closed" }
-
-      - name: Prepare local workspace (no GitHub checkout)
-        if: steps.background_window.outputs.background_admitted == 'true'
-        timeout-minutes: 2
-        run: |
-          python "${env:AISTOCK_SELF_HOSTED_SOURCE}/scripts/ci/prepare_self_hosted_workspace.py" `
-            --source "${env:AISTOCK_SELF_HOSTED_SOURCE}" `
-            --dest "${env:GITHUB_WORKSPACE}" `
-            --expected-commit "${env:GITHUB_SHA}" `
-            --repo "${env:GITHUB_REPOSITORY}" `
-            --package-asset-store-root "${env:AISTOCK_SELF_HOSTED_SOURCE}/rdagent_assets/package_assets" `
-            --github-env-file "${env:GITHUB_ENV}" `
-            --summary-json "${env:RUNNER_TEMP}/aistock_self_hosted_workspace/${env:GITHUB_JOB}.json"
-
-      - name: Prepare X-only temporary storage before Conda
-        if: steps.background_window.outputs.background_admitted == 'true'
-        run: |
-          python scripts/ci_environment_verify.py --prepare-temp-only
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: Verify prebuilt AIstock-CI and isolated test storage
-        if: steps.background_window.outputs.background_admitted == 'true'
-        env:
-          AISTOCK_CI_ENV_NAME: AIstock-CI
-          AISTOCK_CI_TEST_TEMP_REQUIRED: '1'
-        run: |
-          conda run -n AIstock-CI python scripts/ci_environment_verify.py
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
-      - name: nox -s paper_v2_live
-        if: steps.background_window.outputs.background_admitted == 'true'
-        run: |
-          conda run -n AIstock-CI python -m nox -s paper_v2_live
-
-      - name: Print paper-v2 live evidence manifest
-        if: always() && steps.background_window.outputs.background_admitted == 'true'
-        run: |
-          if (Test-Path -LiteralPath "tmp/paper_v2") {
-            $files = Get-ChildItem -LiteralPath "tmp/paper_v2" -Recurse -File
-            $count = ($files | Measure-Object).Count
-            Write-Host "gate=paper_v2_live_evidence root=tmp/paper_v2 file_count=$count manifest=omitted_on_success"
-          }
 
   code-intelligence-weekly:
     name: Code intelligence daily graph refresh and summary
@@ -1202,7 +1132,7 @@ jobs:
 
   full-summary:
     name: Nightly summary + auto-bug on failure
-    needs: [runner-preflight, dr-snapshot, dr-validate, nightly-l3, paper-v2-live, code-intelligence-weekly]
+    needs: [runner-preflight, dr-snapshot, dr-validate, nightly-l3, code-intelligence-weekly]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -1248,7 +1178,34 @@ jobs:
           path: tmp/validation/nightly_l3/
         continue-on-error: true
 
+      - name: Materialize exhausted Nightly artifact transport receipt
+        id: exhausted_nightly_transport
+        if: always() && steps.download_nightly_l3.outcome == 'failure' && steps.retry_download_nightly_l3.outcome == 'failure'
+        env:
+          RUN_ID: ${{ github.run_id }}
+          SOURCE_HEAD: ${{ github.sha }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          # This is an infrastructure diagnostic, never a synthetic test result.
+          path = Path("tmp/validation/nightly_failure_issue/artifact-transport.json")
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(json.dumps({
+              "schema_version": "aistock_nightly_artifact_transport_v1",
+              "run_id": os.environ["RUN_ID"],
+              "head_commit": os.environ["SOURCE_HEAD"],
+              "failure_kind": "artifact_transport",
+              "artifact_name": "nightly-l3-results-" + os.environ["RUN_ID"],
+              "download_attempts": 2,
+          }, indent=2) + "\n", encoding="utf-8")
+          raise SystemExit("Nightly L3 artifact unavailable after two download attempts")
+          PY
+
       - name: Compose nightly summary
+        if: always()
         # Per Codex r4 P1.1 review (drawer d09a0a0): the summary MUST
         # include the dr-validate result line. full-summary.needs already
         # depends on dr-validate, but the markdown report previously
@@ -1258,12 +1215,10 @@ jobs:
           RUNNER_PREFLIGHT_RESULT: ${{ needs.runner-preflight.outputs.background_admitted == 'false' && 'deferred' || needs.runner-preflight.result }}
           DR_RESULT: ${{ needs.dr-snapshot.outputs.background_admitted == 'false' && 'deferred' || needs.dr-snapshot.result }}
           DR_VALIDATE_RESULT: ${{ needs.dr-validate.outputs.background_admitted == 'false' && 'deferred' || needs.dr-validate.result }}
-          L3_RESULT: ${{ needs.nightly-l3.outputs.background_admitted == 'false' && 'deferred' || needs.nightly-l3.result }}
-          LIVE_RESULT: ${{ needs.paper-v2-live.outputs.background_admitted == 'false' && 'deferred' || needs.paper-v2-live.result }}
+          L3_RESULT: ${{ steps.exhausted_nightly_transport.outcome == 'failure' && 'failure' || needs.nightly-l3.outputs.background_admitted == 'false' && 'deferred' || needs.nightly-l3.result }}
           CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.outputs.background_admitted == 'false' && 'deferred' || needs.code-intelligence-weekly.result }}
           RUN_DR_INPUT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_dr }}
           RUN_L3_INPUT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_nightly_l3 }}
-          RUN_LIVE_INPUT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_paper_v2_live }}
           RUN_CODE_INTELLIGENCE_INPUT: ${{ github.event_name != 'workflow_dispatch' || inputs.run_code_intelligence }}
           RUN_ID: ${{ github.run_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -1278,11 +1233,9 @@ jobs:
           - dr-snapshot: ${DR_RESULT}
           - dr-validate: ${DR_VALIDATE_RESULT}
           - nightly-l3: ${L3_RESULT}
-          - paper-v2-live: ${LIVE_RESULT}
           - code-intelligence-daily: ${CODE_INTELLIGENCE_RESULT}
           - run_dr_requested: ${RUN_DR_INPUT}
           - run_nightly_l3_requested: ${RUN_L3_INPUT}
-          - run_paper_v2_live_requested: ${RUN_LIVE_INPUT}
           - run_code_intelligence_requested: ${RUN_CODE_INTELLIGENCE_INPUT}
 
           Run: ${RUN_URL}
@@ -1319,14 +1272,13 @@ jobs:
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
       - name: Build Nightly failure issue context
-        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
           RUNNER_PREFLIGHT_RESULT: ${{ needs.runner-preflight.outputs.background_admitted == 'false' && 'deferred' || needs.runner-preflight.result }}
           DR_RESULT: ${{ needs.dr-snapshot.outputs.background_admitted == 'false' && 'deferred' || needs.dr-snapshot.result }}
           DR_VALIDATE_RESULT: ${{ needs.dr-validate.outputs.background_admitted == 'false' && 'deferred' || needs.dr-validate.result }}
-          L3_RESULT: ${{ needs.nightly-l3.outputs.background_admitted == 'false' && 'deferred' || needs.nightly-l3.result }}
-          LIVE_RESULT: ${{ needs.paper-v2-live.outputs.background_admitted == 'false' && 'deferred' || needs.paper-v2-live.result }}
+          L3_RESULT: ${{ steps.exhausted_nightly_transport.outcome == 'failure' && 'failure' || needs.nightly-l3.outputs.background_admitted == 'false' && 'deferred' || needs.nightly-l3.result }}
           CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.outputs.background_admitted == 'false' && 'deferred' || needs.code-intelligence-weekly.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           L3_WORKSPACE_RESULT: ${{ needs.nightly-l3.outputs.workspace_result }}
@@ -1348,7 +1300,6 @@ jobs:
               "drSnapshot": "${DR_RESULT}",
               "drValidate": "${DR_VALIDATE_RESULT}",
               "nightlyL3": "${L3_RESULT}",
-              "paperV2Live": "${LIVE_RESULT}",
               "codeIntelligence": "${CODE_INTELLIGENCE_RESULT}"
             },
             "run_id": "${{ github.run_id }}",
@@ -1398,7 +1349,7 @@ jobs:
 
       - name: Upload Nightly failure issue context
         id: upload_nightly_failure_context
-        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
@@ -1418,7 +1369,7 @@ jobs:
           overwrite: true
 
       - name: Auto-register failure as actionable GitHub Issue
-        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         uses: actions/github-script@v9
         with:
           script: |
@@ -1559,7 +1510,7 @@ jobs:
             core.info(`Nightly failure issues: ${issueRecords.map((item) => `#${item.issue_number}`).join(', ') || 'none'}`);
 
       - name: Promote Nightly failure issue to BUG draft
-        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         env:
           GH_TOKEN: ${{ github.token }}
           AISTOCK_CANONICAL_ROOT: ${{ github.workspace }}
@@ -1706,7 +1657,7 @@ jobs:
 
       - name: Upload Nightly BUG promotion context
         id: upload_nightly_bug_promotion
-        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.paper-v2-live.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
+        if: failure() || needs.runner-preflight.result == 'failure' || needs.nightly-l3.result == 'failure' || needs.dr-snapshot.result == 'failure' || needs.dr-validate.result == 'failure' || needs.code-intelligence-weekly.result == 'failure'
         continue-on-error: true
         uses: actions/upload-artifact@v7
         with:
