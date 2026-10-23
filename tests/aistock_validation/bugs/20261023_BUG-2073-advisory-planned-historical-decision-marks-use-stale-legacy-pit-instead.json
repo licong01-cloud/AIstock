@@ -10,7 +10,7 @@
   "assigned_agent": null,
   "bug_id": "BUG-2073",
   "business_smoke_acceptance_pending": "After user restarts backend-main at merged source identity, create a separately versioned bounded historical task using existing authorized date range and validate canonical mark-state sealed parameters and actual mark statuses. Preserve the completed affected run ca59667a51599e600e6e032b77879c485e477656aadf1f84410fc5f1983901fe; no in-place repair or automatic rerun before restart.",
-  "closed_at": null,
+  "closed_at": "2026-10-23T08:01:03.785745Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -164,10 +164,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2073/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2073",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6ed39c0110d4f78cf40a1e30ab2c7a65c41b686cfa91d51ee13d55137c37362f",
+      "contract_digest": "12312a3c5c72cbce54b214b187d923e852172a6cee215193d2a8773eff187ead",
+      "expected_identity": "f1b21d33ad32434b31b2216ed2b3b83d0733bc20",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-23T07:59:23.947294Z",
+      "mode": "read_only",
+      "observed_identity": "dba51ff094c402d1eea4fa655b10030e1f260d55",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "0b9973195d6fcc617168608e4fea28c7d9542d4d38190af93d84e80ac11cebf7",
+      "receipt_sha256": "846fdc9bdd925114631a384ae4689a01b960a53437876d68ca37ee737473bc3e",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "601a1031063556e9c0808e04780cb7f34d88666ba28aa99bfbe77aad68e18f5d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -199,7 +221,7 @@
     ],
     "validation_evidence_digest": "eefb0dfc365016321497bc9f4cf39dcc396418209988da2e7c05173017394fde"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "advisory"
   ],
@@ -209,7 +231,8 @@
     "source_event_id": "FE-20261023-612b67c43159"
   },
   "validation_evidence": [
-    "CI verdict run 39902733890 at source HEAD 218b55719e3f33ae2668f1544d4a1374c01bf535 -> passed; L0 and 34 related cases passed; read-only real PIT source preflight passed; user authorized Advisory mainline merge and own cleanup; backend restart remains user owned"
+    "CI verdict run 39902733890 at source HEAD 218b55719e3f33ae2668f1544d4a1374c01bf535 -> passed; L0 and 34 related cases passed; read-only real PIT source preflight passed; user authorized Advisory mainline merge and own cleanup; backend restart remains user owned",
+    "BUG-2073 versioned replay ahrb_7c599932395d88d88d3654c05bb6cb44 plus readonly terminal receipt audit -> passed; 9 of 9 days, 479 close marks, 4 old OUTSIDE marks now TRADABLE with unchanged quotes; final 6c42498d286b475cd405726adfbc80d41805b902f146b6cb1bf920a95cb02505; evidence X:/AIstock_temp/ADVISORY/daily-five-packages-20261023/pit-replay-v2-validation.json; official post-restart verify passed; overall five-program acceptance remains partial for separate assets and natural forward."
   ],
   "verification_budget": {
     "budget": "standard",
