@@ -1,6 +1,6 @@
 # 分钟择时历史研究与比较能力 F2 详细设计
 
-日期：2026-10-23；状态：DESIGN_VERIFIED_IMPLEMENTATION_IN_PROGRESS。
+日期：2026-10-23；验收更新：2026-10-24；状态：TIMING_RESEARCH_IMPLEMENTED_VERIFIED。
 上位蓝图：[分钟择时蓝图](position_timing_intraday_advice_localsim_blueprint_f2_20261023.md)。
 源码起点：267198349d766c6c39a69d037f9513fc580122d7。
 
@@ -74,7 +74,7 @@ inspect 重新校验 source/request/子包/汇总/manifest；exact retry 同输�
 结果文件须声明 schema、producer=LOCALSIM、producer_source_commit、release_identity、研究bundle manifest SHA、cost-policy SHA、execution-contract SHA。
 每个原计划 × 适用规则 × 四档延迟必须且只能有一条结果；无机会/无成交也必须有行。
 结果行携带原计划身份、初始账户hash、初始净值、目标数量、成交数量、成交均价（未成交为null）、费用、共同终止时刻/终值、MDD、等待及typed结果状态。
-同计划/同延迟比较必须有相同初始账户、初始净值、目标数量、共同终止时刻及费用/执行合同。
+同计划的全部规则及四档延迟必须有相同初始账户、初始净值、目标数量/金额、共同终止时刻及费用/执行合同；净结果仍与同延迟B0配对。
 未完成计划仍有终值，包含原现金/剩余持仓；UNAVAILABLE 行保留分母，不能填0终值。
 读取外部结果前必须 inspect 整个研究成功；结果文件先校验SHA再解析，记录 outcomes_read_stage=AFTER_COMPLETE_SOURCE_AND_BUNDLE_INSPECTION。
 价差仅在双方均有成交时报告并披露配对数量；买方 (baseline_price-candidate_price)/baseline_price，卖方相反。
@@ -117,13 +117,13 @@ database_read/write=false、live_market/network_data=false、process_control=fal
 
 ## Design Acceptance Matrix
 
-DESIGN_VERIFIED仅表示设计闭合；实现证据在开发完成后回填。
+下表验收仅覆盖本轮择时侧研究能力；LocalSIM真实账户结果生成/产品接入不在本窗口实施范围，仍按上位蓝图单列未完成。验证及真实回放证据见本轮实施记录，不用fixture证明真实经济收益。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | 本文输入合同；intraday/research_inputs.py（计划） | artifact:docs/architecture/position_timing_intraday_research_f2_detailed_design_20261023.md | DESIGN_VERIFIED | none |
-| F-002 | 本文时间合同；intraday/research.py（计划） | artifact:docs/architecture/position_timing_intraday_research_f2_detailed_design_20261023.md | DESIGN_VERIFIED | none |
-| F-003 | 本文人口合同；intraday/research.py（计划） | artifact:docs/architecture/position_timing_intraday_research_f2_detailed_design_20261023.md | DESIGN_VERIFIED | none |
-| F-004 | 本文不可变身份；intraday/research.py（计划） | artifact:docs/architecture/position_timing_intraday_research_f2_detailed_design_20261023.md | DESIGN_VERIFIED | none |
-| F-005 | 本文结果合同；intraday/research_results.py（计划） | artifact:docs/architecture/position_timing_intraday_research_f2_detailed_design_20261023.md | DESIGN_VERIFIED | none |
-| F-006 | 本文范围/实施方案；LocalSIM交接包 | artifact:docs/architecture/position_timing_intraday_research_f2_detailed_design_20261023.md | DESIGN_VERIFIED | none |
+| F-001 | intraday/research_inputs.py::CandidateReader；research.py::_request | backend/tests/position_timing/test_intraday_research.py；artifact:docs/analysis/position_timing_intraday_research_implementation_20261023.md | VERIFIED | none |
+| F-002 | intraday/research.py::prepare/_outputs；replay.py::simulate | backend/tests/position_timing/test_intraday_research.py；backend/tests/position_timing/test_intraday_replay.py | VERIFIED | none |
+| F-003 | intraday/research.py::_inputs/run；inputs.py::visible_prefix | backend/tests/position_timing/test_intraday_replay.py；artifact:docs/analysis/position_timing_intraday_research_implementation_20261023.md | VERIFIED | none |
+| F-004 | intraday/research.py::inspect/run；research_results.py::compare | backend/tests/position_timing/test_intraday_research.py；backend/tests/position_timing/test_intraday_research_results.py | VERIFIED | none |
+| F-005 | intraday/research_results.py::EconomicResults/summarize/compare | backend/tests/position_timing/test_intraday_research_results.py | VERIFIED | none |
+| F-006 | research.py::_outputs；research_results.py::compare；LocalSIM交接包 | artifact:docs/analysis/position_timing_intraday_research_implementation_20261023.md | VERIFIED | none |
