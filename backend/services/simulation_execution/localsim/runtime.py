@@ -162,7 +162,7 @@ class LocalSimBackend(BrokerBackend):
         portfolio_id: str,
         initial_cash: float,
         data_source: MinuteDataSource,
-        manifest: StrategyPackageManifest,
+        manifest: StrategyPackageManifest | None,
         package_id: str | None = None,
         market_data_provider: Any | None = None,
         oms: OMS | None = None,
@@ -184,14 +184,24 @@ class LocalSimBackend(BrokerBackend):
         assert_broker_market_source_match(self.backend_id, data_source)
 
         self._portfolio_id = portfolio_id
-        self._package_id = package_id or manifest.package_id
+        self._package_id = package_id or (manifest.package_id if manifest else None)
+        if self._package_id is None:
+            raise ValueError("LocalSIM requires an explicit package or frozen research scope")
         self._manifest = manifest
         self._execution_policy = self._resolve_execution_policy(
             manifest=manifest,
             execution_policy=execution_policy,
         )
         self._data_source = data_source
-        if data_source == MinuteDataSource.DATASET_FILES:
+        from .timing import ALGO_CODE as timing_algo_code
+
+        timing_selected = self._execution_policy["algo_code"] == timing_algo_code
+        if timing_selected:
+            from backend.services.position_timing.intraday.contracts import MarketView
+
+            if data_source != MinuteDataSource.DATASET_FILES or not isinstance(market_data_provider, MarketView):
+                raise ValueError("LOCALSIM_TIMING_EXPLICIT_FROZEN_MARKET_REQUIRED")
+        if data_source == MinuteDataSource.DATASET_FILES and not timing_selected:
             from backend.services.simulation_data.frozen_file_adapters import FileMinuteMarketDataProvider
             from backend.services.simulation_runtime.localsim_file_inputs import (
                 current_file_dataset, historical_suspension_provider as file_suspension_provider,
@@ -243,6 +253,41 @@ class LocalSimBackend(BrokerBackend):
         self._historical_terminalization_plan_id: str | None = None
 
     # ----- Read accessors used by adapter / tests -----
+    def open_timing_execution(self, *, plan: Any, delay_seconds: int, mode: str,
+                              run_id: str, binding_id: str) -> Any:
+        """Opt-in plan execution on this backend's sole OMS/ledger, without I/O."""
+        from .timing import ALGO_CODE, TimingExecution
+
+        self._ensure_alive()
+        if self._execution_policy["algo_code"] != ALGO_CODE:
+            raise ValueError("LOCALSIM_TIMING_POLICY_NOT_SELECTED")
+        if self._records or getattr(self, "_timing_execution", None) is not None:
+            raise ValueError("LOCALSIM_TIMING_SINGLE_ORDER_SCOPE_REQUIRED")
+        execution = TimingExecution(self, plan=plan, market=self._market_data_provider,
+                                    delay_seconds=delay_seconds, mode=mode,
+                                    run_id=run_id, binding_id=binding_id)
+        self._timing_execution = execution
+        self._register_timing_execution(execution)
+        return execution
+
+    def _register_timing_execution(self, execution: Any) -> None:
+        handle = OrderHandle(handle_id="lsh_" + execution.order.order_id,
+                             backend_id=self.backend_id, submitted_at=execution.facade.plan.valid_from,
+                             intent_id=execution.order.intent_id)
+        execution.handle = handle
+        self._records[handle.handle_id] = _OrderRecord(
+            handle, execution.order, self._build_status(handle.handle_id, execution.order),
+            list(execution.fills), list(execution.events), execution.execution_state,
+        )
+        self._intent_index[handle.intent_id] = handle.handle_id
+
+    def _sync_timing_execution(self, execution: Any, fills: list[Fill]) -> None:
+        record = self._records[execution.handle.handle_id]
+        record.order, record.execution_state = execution.order, execution.execution_state
+        record.status = self._build_status(record.handle.handle_id, execution.order)
+        record.fills, record.events = list(execution.fills), list(execution.events)
+        self._dispatch_record_fills(record, fills)
+
     @property
     def portfolio_id(self) -> str:
         return self._portfolio_id
@@ -907,6 +952,11 @@ class LocalSimBackend(BrokerBackend):
 
     def submit_order_intent(self, intent: OrderIntent) -> OrderHandle:
         self._ensure_alive()
+        from .timing import ALGO_CODE
+
+        if self._execution_policy["algo_code"] == ALGO_CODE:
+            raise BrokerSubmitError("LocalSIM timing requires an explicit plan and execution clock",
+                                    context={"reason_code": "LOCALSIM_TIMING_PLAN_REQUIRED"})
         if intent.portfolio_id != self._portfolio_id:
             raise BrokerSubmitError(
                 "OrderIntent.portfolio_id does not match LocalSim binding",
@@ -1236,6 +1286,13 @@ class LocalSimBackend(BrokerBackend):
     def cancel(self, handle: OrderHandle) -> CancelAck:
         self._ensure_alive()
         with self._lock:
+            timing = getattr(self, "_timing_execution", None)
+            if timing is not None and timing.handle.handle_id == handle.handle_id:
+                accepted = timing.order.status not in {OrderStatus.FILLED, OrderStatus.CANCELLED, OrderStatus.REJECTED}
+                if accepted:
+                    timing.cancel("USER_CANCELLED")
+                return CancelAck(handle_id=handle.handle_id, accepted=accepted,
+                                 reason="user_cancel" if accepted else "order already terminal")
             record = self._records.get(handle.handle_id)
             if record is None:
                 raise BrokerSubmitError(
@@ -2524,6 +2581,9 @@ class LocalSimBackend(BrokerBackend):
         record.status = self._build_status(record.handle.handle_id, final_order)
         record.fills.extend(fills)
         record.events.extend(events)
+        self._dispatch_record_fills(record, fills)
+
+    def _dispatch_record_fills(self, record: _OrderRecord, fills: list[Fill]) -> None:
         for fill in fills:
             fill_event = FillEvent(
                 handle_id=record.handle.handle_id,
@@ -2589,16 +2649,16 @@ class LocalSimBackend(BrokerBackend):
     @staticmethod
     def _resolve_execution_policy(
         *,
-        manifest: StrategyPackageManifest,
+        manifest: StrategyPackageManifest | None,
         execution_policy: Mapping[str, Any] | None,
     ) -> dict[str, Any]:
         snapshot = validate_frozen_execution_policy_snapshot(
             execution_policy,
             context={
                 "stage": "LOCAL_SIM_BROKER_INITIALIZATION",
-                "package_id": manifest.package_id,
-                "manifest_sha256": manifest.manifest_sha256,
-                "manifest_version": manifest.manifest_version,
+                "package_id": manifest.package_id if manifest else None,
+                "manifest_sha256": manifest.manifest_sha256 if manifest else None,
+                "manifest_version": manifest.manifest_version if manifest else None,
                 "manifest_policy_consulted": False,
             },
         )
@@ -2608,6 +2668,13 @@ class LocalSimBackend(BrokerBackend):
             operation="localsim_backend_initialize",
             semantic_path="execution_policy.policy_json.algo_code",
         )
+        from .timing import ALGO_CODE, require_timing_policy
+
+        if algo_code == ALGO_CODE:
+            require_timing_policy(snapshot)
+            return policy_json
+        if manifest is None:
+            raise ValueError("LOCALSIM_STRATEGY_PACKAGE_MANIFEST_REQUIRED")
         if algo_code != "TWAP":
             raise RuntimeConfigInvalidError(
                 "LocalSimBackend only accepts the explicit TWAP runtime policy",

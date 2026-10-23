@@ -30,6 +30,8 @@
 >
 > 首次基线代码：`main@954e7ac691975b0d88cfb658835b380cca912c13`
 
+> 2026-10-24 用户批准的 LocalSIM 分钟择时修订：旧账户、历史 release 和普通生产入口保持 `localsim_twap_only_v1 / TWAP`。新增显式选择的 `localsim_position_timing_v1 / POSITION_TIMING_INTRADAY_V1`，本轮仅接受冻结文件驱动的离线研究；唯一调用 `position_timing.intraday.evaluate`，沿用 LocalSIM OMS、撮合、账本、父订单费用和确认反馈。此前“唯一 TWAP”条款对这个明确 opt-in 的离线身份作此有限修订，不恢复任何 V25，也不自动激活生产账户。详细合同及验收见 `localsim_position_timing_integration_f2_detailed_design_20261024.md`。未来生产启用另需完整 immutable runtime release/control-plane 接入，不能仅因 planner 能识别该身份而自动执行。
+
 ## 0. 权威声明与执行红线
 
 ### 0.1 唯一权威关系
