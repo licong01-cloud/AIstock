@@ -38,7 +38,6 @@
   "expected": "Export all real SH/SZ A-share facts independently of PIT; preserve real quote bounds, PIT buy policy, consistent H5/static population and incremental repaired-history adoption.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261023_BUG-2074-fact-export-retains-pit-clipping-and-omits-restored-historical-component.json",
       "backend/services/dataset_release/canonical_stock_transformer.py",
       "backend/services/dataset_release/factor_materializer.py",
       "backend/services/dataset_release/monthly_minute_coverage.py",
@@ -46,10 +45,10 @@
       "backend/services/dataset_release/source_fact_history.py",
       "backend/tests/dataset_release/test_monthly_minute_coverage.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_source_fact_history.py"
+      "backend/tests/dataset_release/test_source_fact_history.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2074-fact-export-retains-pit-clipping-and-omits-restored-historical-component.json"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261023_BUG-2074-fact-export-retains-pit-clipping-and-omits-restored-historical-component.json",
       "backend/services/dataset_release/canonical_stock_transformer.py",
       "backend/services/dataset_release/factor_materializer.py",
       "backend/services/dataset_release/monthly_minute_coverage.py",
@@ -57,7 +56,8 @@
       "backend/services/dataset_release/source_fact_history.py",
       "backend/tests/dataset_release/test_monthly_minute_coverage.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
-      "backend/tests/dataset_release/test_source_fact_history.py"
+      "backend/tests/dataset_release/test_source_fact_history.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2074-fact-export-retains-pit-clipping-and-omits-restored-historical-component.json"
     ],
     "changed_files_source": "git_finish",
     "planned_files": [
@@ -90,9 +90,9 @@
   },
   "first_seen_at": "2026-10-23T05:36:12.109297Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "91cb200752b045c741776773d1e6c534511c0696",
   "fix_summary": "SOURCE18 captures A-share factual population and historical daily quote-catalog deltas; factor default uses factual QFQ population; daily/minute transformers lazily union actual fact days without PIT clipping; existing static input pin contract rejects mixed component adoption.",
-  "fixed_at": null,
+  "fixed_at": "2026-10-23T06:09:38Z",
   "github_issue_number": 6628,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6628",
   "last_seen_at": "2026-10-23T05:36:12.109297Z",
@@ -100,6 +100,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6630",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -121,6 +122,7 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
@@ -131,7 +133,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2074",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ea038c21455b104a",
+    "recorded_at": "2026-10-23T06:10:18.050090Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d48878dad5c8f8e65e561ee8546c9597257af929",
+    "source_merge_commit": "91cb200752b045c741776773d1e6c534511c0696",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6630",
+    "validation_evidence": [
+      "validation-receipt: id=632c59bd1e86f3fd commit=d48878dad5c8f8e65e561ee8546c9597257af929 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=eec305ee9a077760 commit=d48878dad5c8f8e65e561ee8546c9597257af929 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_monthly_minute_coverage.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_canonical_stock_transformer.py backend/tests/dataset_release/test_factor_partition_producer.py -q --tb=short` result=`passed 157 tests`"
+    ],
+    "validation_evidence_digest": "599528b46d79399f12f05e0b66199f7b8bc7324a4a6832db3c99ad9f55c2785f"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -154,6 +178,10 @@
       "R2 streaming union, real bounds, missing-day safety and no historical Cartesian scan review"
     ]
   },
+  "validation_evidence": [
+    "validation-receipt: id=632c59bd1e86f3fd commit=d48878dad5c8f8e65e561ee8546c9597257af929 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=eec305ee9a077760 commit=d48878dad5c8f8e65e561ee8546c9597257af929 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_source_fact_history.py backend/tests/dataset_release/test_monthly_minute_coverage.py backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_canonical_stock_transformer.py backend/tests/dataset_release/test_factor_partition_producer.py -q --tb=short` result=`passed 157 tests`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
