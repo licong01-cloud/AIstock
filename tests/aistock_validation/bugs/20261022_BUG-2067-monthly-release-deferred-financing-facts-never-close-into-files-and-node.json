@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2067",
-  "closed_at": null,
+  "closed_at": "2026-10-23T02:05:12.972578Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -39,18 +39,18 @@
   "expected": "Controlled one-day margin H5/static amendment, exact source/readback and reproducible old release; monthly source readiness notices only bounded late facts and repairs; activation verifies actual configured node endpoints.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261022_BUG-2067-monthly-release-deferred-financing-facts-never-close-into-files-and-node.json",
+      "backend/services/dataset_release/monthly_late_publication.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_existing_adoption.py",
+      "backend/tests/dataset_release/test_monthly_late_publication.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_monthly_worker_nodes.py",
       "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
       "noxfile.py",
-      "backend/services/dataset_release/monthly_late_publication.py",
-      "backend/tests/dataset_release/test_monthly_existing_adoption.py",
-      "backend/tests/dataset_release/test_monthly_late_publication.py",
-      "scripts/dataset_release_margin_detail_correction.py"
+      "scripts/dataset_release_margin_detail_correction.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2067-monthly-release-deferred-financing-facts-never-close-into-files-and-node.json"
     ],
     "added_files": [
       "backend/services/dataset_release/monthly_late_publication.py",
@@ -58,18 +58,18 @@
       "scripts/dataset_release_margin_detail_correction.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261022_BUG-2067-monthly-release-deferred-financing-facts-never-close-into-files-and-node.json",
+      "backend/services/dataset_release/monthly_late_publication.py",
       "backend/services/dataset_release/monthly_postgres_source.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/services/dataset_release/monthly_worker_nodes.py",
+      "backend/tests/dataset_release/test_monthly_existing_adoption.py",
+      "backend/tests/dataset_release/test_monthly_late_publication.py",
       "backend/tests/dataset_release/test_monthly_postgres_source.py",
       "backend/tests/dataset_release/test_monthly_worker_nodes.py",
       "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
       "noxfile.py",
-      "backend/services/dataset_release/monthly_late_publication.py",
-      "backend/tests/dataset_release/test_monthly_existing_adoption.py",
-      "backend/tests/dataset_release/test_monthly_late_publication.py",
-      "scripts/dataset_release_margin_detail_correction.py"
+      "scripts/dataset_release_margin_detail_correction.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2067-monthly-release-deferred-financing-facts-never-close-into-files-and-node.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -186,8 +186,8 @@
   },
   "first_seen_at": "2026-10-22T17:21:45.544377Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "cb303549a6ced76a1a311b48b490085de2aedc2e",
+  "fixed_at": "2026-10-22T18:19:12Z",
   "github_issue_number": 6600,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6600",
   "last_seen_at": "2026-10-22T17:21:45.544377Z",
@@ -195,6 +195,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6604",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -234,9 +235,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\monthly-release-closure-20261023\\post-restart-verification-canonical.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2067",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6ed39c0110d4f78cf40a1e30ab2c7a65c41b686cfa91d51ee13d55137c37362f",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "cb303549a6ced76a1a311b48b490085de2aedc2e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-23T02:03:27.672956Z",
+      "mode": "read_only",
+      "observed_identity": "1a53df8becf909b307f402f0945cd19aa0aa3393",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8743950d6b1ddb48b8ae6b349cca565e0c785d1dd85a6edde735c2f71ad5072f",
+      "receipt_sha256": "67dd215febe0e5cd6e0455f1e4b49624ffbb82d1d796b3e17789d38fac37c416",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "e42c2336f69139a826401fa88ba716e936352b180e54c93ee6231d43f12a6c56",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -246,7 +270,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2067",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "99a426cb540865c3",
+    "recorded_at": "2026-10-22T18:19:50.082799Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "967f3d55c1ac95f7709a1e878347a27cc71d38e5",
+    "source_merge_commit": "cb303549a6ced76a1a311b48b490085de2aedc2e",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6604",
+    "validation_evidence": [
+      "validation-receipt: id=de05381bb6509a5e commit=967f3d55c1ac95f7709a1e878347a27cc71d38e5 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 8 tests and findings=0`",
+      "validation-receipt: id=2f404305d0e51455 commit=967f3d55c1ac95f7709a1e878347a27cc71d38e5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_existing_adoption.py backend/tests/dataset_release/test_monthly_late_publication.py -q` result=`passed 17 tests`"
+    ],
+    "validation_evidence_digest": "e2ebc22b643d3fac75ccbf8156af125948bf938b5b3f3f886c35f311946555dc"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -255,6 +301,11 @@
     "fingerprint": "1212506101a0a1af20a4f7c9",
     "source_event_id": "FE-20261022-1212506101a0"
   },
+  "validation_evidence": [
+    "validation-receipt: id=de05381bb6509a5e commit=967f3d55c1ac95f7709a1e878347a27cc71d38e5 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`passed 8 tests and findings=0`",
+    "validation-receipt: id=2f404305d0e51455 commit=967f3d55c1ac95f7709a1e878347a27cc71d38e5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_existing_adoption.py backend/tests/dataset_release/test_monthly_late_publication.py -q` result=`passed 17 tests`",
+    "Post-restart official worker-scheduler identity and supervision PASS; cb303549a6ced76a1a311b48b490085de2aedc2e is ancestor of live runtime 1a53df8becf909b307f402f0945cd19aa0aa3393; exact three-node financing adoption readback PASS; no process control or active profile change."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
