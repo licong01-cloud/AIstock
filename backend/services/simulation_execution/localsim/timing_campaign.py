@@ -115,12 +115,22 @@ def prepare(*, package_snapshot: FileRef, admission: FileRef, native_accounts: F
         raise ValueError("LOCALSIM_TIMING_CAMPAIGN_LATEST_ACCOUNT_NOT_IDENTIFIED")
     store = LocalPackageAssetStore(asset_root)
     verified_assets = {}
-    for asset in _asset_bindings(manifest):
-        if not asset.get("sha256") or asset.get("size_bytes") is None:
+    bindings = list(_asset_bindings(manifest))
+    sizes = {}
+    for asset in bindings:
+        if asset.get("size_bytes") is not None:
+            sha = asset.get("sha256")
+            if sha in sizes and sizes[sha] != asset["size_bytes"]:
+                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_ASSET_SIZE_CONFLICT")
+            sizes[sha] = asset["size_bytes"]
+    for asset in bindings:
+        # Evidence may repeat an asset reference without its byte size. Resolve
+        # that size only from a complete binding of the same frozen digest.
+        sha = asset.get("sha256")
+        if not sha or sha not in sizes:
             raise ValueError("LOCALSIM_TIMING_CAMPAIGN_ASSET_IDENTITY_INCOMPLETE")
-        if asset["sha256"] not in verified_assets:
-            blob = store.verify(asset["asset_ref"], sha256=asset["sha256"], size_bytes=asset["size_bytes"])
-            verified_assets[asset["sha256"]] = {"uri": blob.uri, "size_bytes": blob.size_bytes}
+        blob = store.verify(asset["asset_ref"], sha256=sha, size_bytes=sizes[sha])
+        verified_assets[sha] = {"uri": blob.uri, "size_bytes": blob.size_bytes}
     if not verified_assets or initial_cash <= 0:
         raise ValueError("LOCALSIM_TIMING_CAMPAIGN_ASSETS_OR_CAPITAL_INVALID")
     candidate = CandidateReader(candidate_manifest)
