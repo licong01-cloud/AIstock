@@ -6,7 +6,10 @@
     "backend/tests/scripts/test_nightly_adaptive_scheduler.py",
     "tests/aistock_validation/bugs/20261023_BUG-2072-validation-ci-failure-requires-triage-test-nightly-workflow-wires-warnin.json",
     "backend/tests/scripts/test_ci_failure_issue_summary.py",
-    "scripts/ci_failure_issue_summary.py"
+    "scripts/ci_failure_issue_summary.py",
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/bugs/20261020_BUG-2031-hmm-nightly-full-regression-still-exceeds-1800-seconds-after-previous-fi.json",
+    "tests/aistock_validation/bugs/20261020_BUG-2032-advisory-nightly-full-regression-times-out-without-per-node-diagnostics.json"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2072",
@@ -157,7 +160,7 @@
     "target_ids": []
   },
   "schema_version": "aistock_validation_bug_v1",
-  "scope_expansion_reason": "User retirement requirement and exact missing workflow implementation behind #6520; no backend/DB/service control. Move transport receipt creation into existing failure-summary Python entrypoint, validate run/head and outcomes, and exercise real implementation from CLI.",
+  "scope_expansion_reason": "User retirement requirement and exact missing workflow implementation behind #6520; no backend/DB/service control. Move transport receipt creation into existing failure-summary Python entrypoint, validate run/head and outcomes, and exercise real implementation from CLI. Consolidate dependent Nightly repairs into one source PR so catalog budget contract and transport workflow are validated together; BUG2031/2032 remain open pending complete Nightly.",
   "severity": "P1",
   "status": "open",
   "suspected_modules": [
@@ -169,9 +172,10 @@
     "source_event_id": "FE-20261023-7c0b0b0ae939"
   },
   "validation_evidence": [
-    "118 related scheduler/failure-summary tests passed; retired manual dispatch contract corrected and its node passed separately",
-    "workflow-smoke --changed-file .github/workflows/nightly.yml --changed-file scripts/nightly_adaptive_scheduler.py --module validation -> passed (dry-run)",
-    "Direct transport step subprocess: failure exit, run/head-bound diagnostic, no synthetic session results"
+    "validation-receipt: id=7a78265c6a5f9f31 commit=d2fa7ba1ec9399a3015f337cb626982c754826bd kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_failure_issue_summary.py::test_transport_receipt_keeps_real_failures_and_rejects_foreign_run backend/tests/scripts/test_nightly_adaptive_scheduler.py::test_retired_simulation_cannot_enter_nightly_from_changes_or_retry backend/tests/scripts/test_aistock_validation_budget.py::test_workflow_automation_has_an_honest_production_denominator` result=`passed`",
+    "validation-receipt: id=e3d95a505d0aa0ff commit=d2fa7ba1ec9399a3015f337cb626982c754826bd kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=b8f8c170332062e1 commit=d2fa7ba1ec9399a3015f337cb626982c754826bd kind=ruff plan=direct status=passed command=`python -m ruff check changed Python files` result=`passed`",
+    "validation-receipt: id=11dedea1ff9eb7d4 commit=d2fa7ba1ec9399a3015f337cb626982c754826bd kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
   ],
   "verification_budget": {
     "budget": "standard",
