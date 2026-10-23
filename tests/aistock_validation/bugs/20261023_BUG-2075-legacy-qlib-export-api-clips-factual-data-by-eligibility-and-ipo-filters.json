@@ -1,6 +1,12 @@
 {
   "actual": "BUG-2074 companion for backend API/legacy exporters: preserve all real A-share facts and separate all quote catalog from stock_universe eligibility; fix legacy H5 DB reader filtering, API preselection and daily/IPO catalog rewrite. No data build, activation, DB write or process control.",
   "allowed_write_scope": [
+    "backend/qlib_exporter/authoritative_bin_exporter.py",
+    "backend/qlib_exporter/router.py",
+    "backend/qlib_exporter/db_reader.py",
+    "backend/qlib_exporter/quote_catalog.py",
+    "backend/tests/test_authoritative_bin_pit_universe.py",
+    "backend/tests/test_qlib_export_stock_universe_filters.py",
     "tests/aistock_validation/bugs/20261023_BUG-2075-legacy-qlib-export-api-clips-factual-data-by-eligibility-and-ipo-filters.json"
   ],
   "assigned_agent": null,
@@ -24,20 +30,32 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
-    "ownership": {
-      "changed_files": [],
-      "impacted_modules": [],
-      "matched_rules": [],
-      "risk_levels": [],
-      "suggested_scope": [],
-      "unmatched_files": []
-    },
-    "planned_files": [],
     "schema_version": "aistock_submit_bug_file_scope_v1",
-    "scope_files": []
+    "scope_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/qlib_exporter/router.py",
+      "backend/qlib_exporter/db_reader.py",
+      "backend/qlib_exporter/quote_catalog.py",
+      "backend/tests/test_authoritative_bin_pit_universe.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py"
+    ],
+    "changed_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/qlib_exporter/router.py",
+      "backend/qlib_exporter/db_reader.py",
+      "backend/qlib_exporter/quote_catalog.py",
+      "backend/tests/test_authoritative_bin_pit_universe.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py"
+    ],
+    "planned_files": [
+      "backend/qlib_exporter/authoritative_bin_exporter.py",
+      "backend/qlib_exporter/router.py",
+      "backend/qlib_exporter/db_reader.py",
+      "backend/qlib_exporter/quote_catalog.py",
+      "backend/tests/test_authoritative_bin_pit_universe.py",
+      "backend/tests/test_qlib_export_stock_universe_filters.py"
+    ],
+    "changed_files_source": "planned_scope_split_by_runtime_target"
   },
   "first_seen_at": "2026-10-23T05:48:31.520196Z",
   "fix_branch": null,
@@ -61,16 +79,16 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
-    "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "runtime_impact": "backend",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ],
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": []
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",

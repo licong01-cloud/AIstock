@@ -66,7 +66,8 @@ from .authoritative_bin_exporter import (
     export_stock_daily_csv,
     export_stock_minute_csv,
     normalize_stock_export_exchanges,
-    resolve_stock_universe_from_pit_spans,
+    resolve_stock_universe,
+    StockUniverseConfig,
     rewrite_stock_all_txt_for_ipo_filter,
     rewrite_stock_all_txt_from_pit_spans,
 )
@@ -986,13 +987,8 @@ def _resolve_h5_ts_codes_for_pit(
     if not key:
         return ts_codes, None, None
     pit_ensure = _ensure_stock_pit_universe_for_export(universe_key=key, start=start, end=end)
-    codes = resolve_stock_universe_from_pit_spans(
-        start=start,
-        end=end,
-        universe_key=key,
-        exchanges=exchanges,
-        ts_codes=ts_codes,
-    )
+    codes = resolve_stock_universe(StockUniverseConfig(
+        start=start, end=end, exchanges=exchanges, ts_codes=ts_codes))
     return codes, pit_ensure, key
 
 
@@ -1015,11 +1011,11 @@ def _rewrite_h5_all_txt_from_pit(
 
 
 def _h5_effective_exclude_st(pit_key: Optional[str], requested: bool) -> bool:
-    return False if pit_key else requested
+    return False  # compatibility flag is selection-only
 
 
 def _h5_effective_exclude_delisted_or_paused(pit_key: Optional[str], requested: bool) -> bool:
-    return True if pit_key else requested
+    return False
 
 
 def _load_h5_snapshot_meta(snapshot_id: str) -> Dict[str, Any]:
@@ -1070,13 +1066,7 @@ def _resolve_h5_incremental_ts_codes_for_pit(
         return None, None, None
     start = _h5_meta_start(snapshot_id, DEFAULT_ST_PIT_START_DATE)
     pit_ensure = _ensure_stock_pit_universe_for_export(universe_key=key, start=start, end=end)
-    codes = resolve_stock_universe_from_pit_spans(
-        start=start,
-        end=end,
-        universe_key=key,
-        exchanges=exchanges,
-        ts_codes=None,
-    )
+    codes = resolve_stock_universe(StockUniverseConfig(start=start, end=end, exchanges=exchanges))
     return codes, pit_ensure, key
 
 
@@ -1217,11 +1207,6 @@ def _export_daily_to_csv_for_dump_bin(
         stock_exchanges = normalize_stock_export_exchanges(exchanges)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    if universe_key is None and (not exclude_st or not exclude_delisted_or_paused):
-        raise HTTPException(
-            status_code=400,
-            detail="authoritative stock bin export requires excluding ST and delisted/paused stocks",
-        )
 
     summary = export_stock_daily_csv(
         snapshot_id=snapshot_id,
@@ -1262,11 +1247,6 @@ def _export_minute_to_csv_for_dump_bin(
         stock_exchanges = normalize_stock_export_exchanges(exchanges)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
-    if universe_key is None and (not exclude_st or not exclude_delisted_or_paused):
-        raise HTTPException(
-            status_code=400,
-            detail="authoritative stock bin export requires excluding ST and delisted/paused stocks",
-        )
 
     dump_freq = MINUTE_FREQ_QLIB if freq in {"1m", "1min"} else freq
     if dump_freq != MINUTE_FREQ_QLIB:
