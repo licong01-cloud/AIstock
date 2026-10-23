@@ -25,6 +25,8 @@
 
 本轮通过正式 QE workspace API 对 `wsl2-5080` 与 `rdagent-node1` 的原坐标读取 LSTM `conf.yaml`、`model.py` 和 `mlruns-params`，返回缺失/404。集中 prediction-store 的对应 manifest 保有权重/预测/标签，但不含这些训练闭包文件。这是当前可访问来源的缺口，不等同于断言所有历史备份都不存在。
 
+另按注册工作区根目录复查全部 33 个 LSTM 的精确 task/Loop 路径：66 个 Windows 候选目录、99 个本地 Ubuntu 候选目录均不存在。该检查限定于原坐标和已注册根目录，没有扫描其他历史备份。
+
 ## 版本化恢复路径
 
 入口：`scripts/recover_multi_alpha_seed_assets.py`；实现：`SeedAssetRecoveryService`。默认只读取生产来源并写独立本地 staging CAS；`--apply-dev` 只连接 `.env` 的 `TDX_DB_DEV_*` 指向的现有 DEV。脚本没有生产写入或激活选项，不创建数据库、不修改数据集、不训练、不控制服务。
@@ -75,6 +77,8 @@ python scripts/recover_multi_alpha_seed_assets.py `
 下一步先按 JSON 的 33 个 task/loop 坐标，从原始留存或可信归档补回 `conf.yaml`、模型代码及与已确认权重 SHA 配对的原 `dataset`。不要复制主 seed、生成新配置冒充旧配置、用同结构模型重训或重新拟合预处理。若原训练闭包不可找回，则旧 LSTM leg 的等价恢复不能成立，旧父包继续保持阻断；新训练只能是另立研究版本，不能标记为本包恢复。
 
 全部原资产验证通过、DEV 新版本验证通过，并取得生产资产写入/登记授权后，按新 ID/SHA 发布完整资产闭包。Advisory 窗口再按现有 Selection 准入与 program 版本流程接续新包，保留旧历史账本与失败原因，记录新 package-set hash。当前旧包不可仅靠清空错误、换标签、复用主 seed 或提前换绑恢复成功复评。
+
+生产发布应先将 `plan.assets` 按 SHA/长度复制到既有 package asset CAS 并逐项 `verify`，再通过注入正式 repository 的恢复服务保存新 DRAFT、读回资产行和旧包身份；不得直接登记只存在于 DEV staging 的 URI。资产 CAS 发布、数据库登记、Selection/Advisory 准入分别留回执，本次均未执行。
 
 ## DESIGN-COMPLIANCE-001 逐项审查
 

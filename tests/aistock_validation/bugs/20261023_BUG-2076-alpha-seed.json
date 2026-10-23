@@ -164,7 +164,7 @@
   },
   "first_seen_at": "2026-10-23T06:45:23.572361Z",
   "fix_branch": "bug/BUG-2076-alpha-seed-20261023",
-  "fix_commit": null,
+  "fix_commit": "a80eff3af8ccbc8adc32b49adfc1cba69a0a7a8b",
   "fixed_at": null,
   "github_issue_number": 6634,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6634",
@@ -324,7 +324,7 @@
   },
   "scope_expansion_note": "新增可移植的38项资产核验收据；仅证据文件，不增加生产操作。",
   "delivery_states": {
-    "source_fix": "implemented_pending_PR",
+    "source_fix": "PR_open",
     "real_asset_recovery": "blocked_LSTM_33_original_closures_missing",
     "dev_governance": "passed_transaction_rolled_back",
     "production_asset_write": "not_executed_not_authorized",
@@ -338,5 +338,6 @@
     "no_semantic_drift": "pass; identity/version/seed/IC/V25 tests",
     "no_extra_approval": "pass; only user-requested production asset/activation separation"
   },
-  "scope_expansion_ci": "Map the new recovery CLI to the existing strategy_package CI lane; no new business scope."
+  "scope_expansion_ci": "Map the new recovery CLI to the existing strategy_package CI lane; no new business scope.",
+  "fix_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6635"
 }

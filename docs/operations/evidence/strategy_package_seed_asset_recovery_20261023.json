@@ -415,7 +415,13 @@
       "model.py",
       "mlruns-params paired fitted dataset"
     ],
-    "responses": "missing/404"
+    "responses": "missing/404",
+    "registered_local_root_readback": {
+      "windows_seed_directories_checked": 66,
+      "wsl_seed_directories_checked": 99,
+      "existing_target_directories": 0,
+      "scope": "33 exact LSTM task/Loop coordinates in registered Windows and local Ubuntu workspace roots; no global scan"
+    }
   },
   "dev_actual_candidate": {
     "database": "aistock_dev",
@@ -4198,6 +4204,8 @@
       "requires_backend": false,
       "requires_frontend": false,
       "status": "delegated_to_PR_CI_or_nightly"
-    }
+    },
+    "l0": "passed, 0 findings",
+    "validation_module_registry_l0": "passed, 8 tests, 14 files mapped"
   }
 }
