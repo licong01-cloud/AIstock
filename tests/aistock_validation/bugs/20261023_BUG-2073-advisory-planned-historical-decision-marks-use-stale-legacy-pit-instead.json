@@ -9,6 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2073",
+  "business_smoke_acceptance_pending": "After user restarts backend-main at merged source identity, create a separately versioned bounded historical task using existing authorized date range and validate canonical mark-state sealed parameters and actual mark statuses. Preserve the completed affected run ca59667a51599e600e6e032b77879c485e477656aadf1f84410fc5f1983901fe; no in-place repair or automatic rerun before restart.",
   "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
@@ -17,6 +18,12 @@
   ],
   "created_at": "2026-10-23T04:39:32.847483Z",
   "description": "9/9 day execution completed with wrong legacy PIT state marks; full business acceptance withheld.",
+  "design_compliance_review": {
+    "no_semantic_drift": "Original package bindings, policies, all seeds, unplanned legacy and frozen canonical identities preserved; quotes remain broad and factual.",
+    "no_silent_errors": "Planned catalog universe/date mismatch fails before reader/artifact writes; existing affected replay is explicitly not fully accepted.",
+    "no_unapproved_human_gates": "No new approval or publication gate; enforce existing frozen source identity closure. User-owned restart remains unchanged.",
+    "no_unapproved_simplification": "Five-program business success remains partial; source completion is separate from runtime and replay acceptance."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -30,14 +37,22 @@
   ],
   "expected": "New planned mark-state requirements and verified reads use the same pinned PIT universe as native selection, with exact sealed catalog closure; old frozen inputs are never silently rewritten or read under a different identity.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_historical_range/decision_mark_provider.py",
+      "backend/services/advisory_historical_range/requirement_planner.py",
+      "backend/tests/advisory_historical_range/test_r3_decision_mark_provider.py",
+      "backend/tests/advisory_historical_range/test_r3_decision_mark_requirements.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2073-advisory-planned-historical-decision-marks-use-stale-legacy-pit-instead.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/advisory_historical_range/requirement_planner.py",
       "backend/services/advisory_historical_range/decision_mark_provider.py",
+      "backend/services/advisory_historical_range/requirement_planner.py",
+      "backend/tests/advisory_historical_range/test_r3_decision_mark_provider.py",
       "backend/tests/advisory_historical_range/test_r3_decision_mark_requirements.py",
-      "backend/tests/advisory_historical_range/test_r3_decision_mark_provider.py"
+      "tests/aistock_validation/bugs/20261023_BUG-2073-advisory-planned-historical-decision-marks-use-stale-legacy-pit-instead.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/advisory_historical_range/requirement_planner.py",
@@ -135,27 +150,32 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches",
     "fresh_process_evidence": [
       "Fresh pytest processes: final related matrix 33 passed with one Windows-X basetemp environment failure; exact failed node rerun under previously absent X:/AIstock_temp/ADVISORY/daily-five-packages-20261023/bug2073-pytest-failed-node passed. All 34 selected cases pass across these receipts. Coverage includes three planned source modes, real tmp_path artifact sealing, canonical-vs-outside quote marks, catalog universe/date mismatch rejection before read/write, no active PIT pointer on restore, and unchanged unplanned/canonical package semantics.",
-      "Fresh source import in the task checkout plus existing public frozen Program and read-only PostgresHistoricalRangeDecisionMarkReader: pinned canonical key gives 4918 eligible members versus legacy 0 on 2026-10-22; all four actual ENTER names are canonical eligible, legacy ineligible, with unchanged factual quotes and unchanged frozen Program. Receipt X:/AIstock_temp/ADVISORY/daily-five-packages-20261023/pit-mark-issue.json. No task rerun, SQL writes, training, or service control."
+      "Fresh source import in the task checkout plus existing public frozen Program and read-only PostgresHistoricalRangeDecisionMarkReader: pinned canonical key gives 4918 eligible members versus legacy 0 on 2026-10-22; all four actual ENTER names are canonical eligible, legacy ineligible, with unchanged factual quotes and unchanged frozen Program. Receipt X:/AIstock_temp/ADVISORY/daily-five-packages-20261023/pit-mark-issue.json. No task rerun, SQL writes, training, or service control.",
+      "Fresh process loads task checkout source, tests artifact sealing and sealed identity rejection; live readonly source receipt X:/AIstock_temp/ADVISORY/daily-five-packages-20261023/pit-mark-issue.json validates pinned canonical universe against actual 4 ENTER names without task mutations"
     ],
-    "inference_basis": "planned_scope",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches",
-    "runtime_identity_match": "pending"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
+  "source_fix_summary": "Resolve planned decision-mark state from validated frozen native policy; verify sealed universe/date before reading; retain explicit frozen package bindings, unplanned legacy identity, and unfiltered factual quotes.",
   "status": "open",
   "suspected_modules": [
     "advisory"
@@ -212,6 +232,12 @@
     "schema_version": "aistock_verification_budget_v1",
     "target_cost_percent_of_legacy": "30-45%"
   },
+  "verification_evidence": [
+    "rtk ruff check 4 changed Python files -> no issues",
+    "rtk pytest 4 related files -> 33 passed, 1 environment failure; exact failed node with X basetemp -> 1 passed",
+    "read-only real frozen Program and PostgreSQL state preflight -> 4/4 actual ENTER names corrected by canonical identity; no stored result mutation",
+    "git diff --check -> passed"
+  ],
   "verification_run_id": null,
   "workflow_efficiency_recommendations": {
     "batch_candidate": false,
@@ -272,19 +298,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "source_fix_summary": "Resolve planned decision-mark state from validated frozen native policy; verify sealed universe/date before reading; retain explicit frozen package bindings, unplanned legacy identity, and unfiltered factual quotes.",
-  "verification_evidence": [
-    "rtk ruff check 4 changed Python files -> no issues",
-    "rtk pytest 4 related files -> 33 passed, 1 environment failure; exact failed node with X basetemp -> 1 passed",
-    "read-only real frozen Program and PostgreSQL state preflight -> 4/4 actual ENTER names corrected by canonical identity; no stored result mutation",
-    "git diff --check -> passed"
-  ],
-  "business_smoke_acceptance_pending": "After user restarts backend-main at merged source identity, create a separately versioned bounded historical task using existing authorized date range and validate canonical mark-state sealed parameters and actual mark statuses. Preserve the completed affected run ca59667a51599e600e6e032b77879c485e477656aadf1f84410fc5f1983901fe; no in-place repair or automatic rerun before restart.",
-  "design_compliance_review": {
-    "no_unapproved_simplification": "Five-program business success remains partial; source completion is separate from runtime and replay acceptance.",
-    "no_silent_errors": "Planned catalog universe/date mismatch fails before reader/artifact writes; existing affected replay is explicitly not fully accepted.",
-    "no_semantic_drift": "Original package bindings, policies, all seeds, unplanned legacy and frozen canonical identities preserved; quotes remain broad and factual.",
-    "no_unapproved_human_gates": "No new approval or publication gate; enforce existing frozen source identity closure. User-owned restart remains unchanged."
   }
 }
