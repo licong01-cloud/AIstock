@@ -35,6 +35,7 @@ from .sector_enrichment import FrozenSectorEnricher, UNKNOWN_L2_CODE_ID
 from .monthly_sector_mapping import (
     build_bound_sector_enricher, frozen_sector_mapping_binding, sector_mapping_catalog_receipt,
 )
+from .monthly_suspension_prefix import refresh_prefix
 from .shared_sector_context import (
     MARKET_CONTEXT_SCHEMA,
     MARKET_VOLUME_DEFINITION,
@@ -354,12 +355,23 @@ def _build_suspend(
             or old_meta.get("row_count") != len(old) or not isinstance(old_counts, Mapping)
             or set(old_counts).intersection(daily_counts)):
             raise MonthlySharedComponentsError("inherited suspend metadata differs")
-        frame = pd.concat([old, frame], ignore_index=True)
+        try:
+            old, authority, old_raw, old_resolutions, reviewed_keys, legacy_inputs = refresh_prefix(
+                old, old_meta, authority=authority, calendar=calendar, cutoff=prefix.cutoff)
+        except ValueError as exc:
+            raise MonthlySharedComponentsError(str(exc)) from exc
+        frame = pd.concat([part for part in (old, frame) if not part.empty], ignore_index=True) if len(old) or len(frame) else frame
+        raw_events = old_raw + raw_events
+        resolutions = old_resolutions + resolutions
         daily_counts = {**old_counts, **daily_counts}
+        for day in {r["trade_date"] for r in reviewed_keys}:
+            daily_counts[day] = int(old.trade_date.eq(pd.Timestamp(day)).sum())
         lineage = {
             "validation_scope": "month_delta", "historical_values_validated": 0,
             "predecessor_manifest_sha256": prefix.manifest_sha256,
             "inherited_suspend_sha256": prefix.manifest["components"]["suspend_data"]["sha256"],
+            "historical_authority_reprojected_keys": reviewed_keys,
+            "historical_projection_legacy_normalized_inputs": legacy_inputs,
         }
     component = root / "components" / "suspend_d_daily_candidate_v2"
     component.mkdir(parents=True, exist_ok=False)
