@@ -135,7 +135,10 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "Fresh pytest processes: final related matrix 33 passed with one Windows-X basetemp environment failure; exact failed node rerun under previously absent X:/AIstock_temp/ADVISORY/daily-five-packages-20261023/bug2073-pytest-failed-node passed. All 34 selected cases pass across these receipts. Coverage includes three planned source modes, real tmp_path artifact sealing, canonical-vs-outside quote marks, catalog universe/date mismatch rejection before read/write, no active PIT pointer on restore, and unchanged unplanned/canonical package semantics.",
+      "Fresh source import in the task checkout plus existing public frozen Program and read-only PostgresHistoricalRangeDecisionMarkReader: pinned canonical key gives 4918 eligible members versus legacy 0 on 2026-10-22; all four actual ENTER names are canonical eligible, legacy ineligible, with unchanged factual quotes and unchanged frozen Program. Receipt X:/AIstock_temp/ADVISORY/daily-five-packages-20261023/pit-mark-issue.json. No task rerun, SQL writes, training, or service control."
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -145,7 +148,11 @@
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches",
+    "runtime_identity_match": "pending"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -265,5 +272,19 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "source_fix_summary": "Resolve planned decision-mark state from validated frozen native policy; verify sealed universe/date before reading; retain explicit frozen package bindings, unplanned legacy identity, and unfiltered factual quotes.",
+  "verification_evidence": [
+    "rtk ruff check 4 changed Python files -> no issues",
+    "rtk pytest 4 related files -> 33 passed, 1 environment failure; exact failed node with X basetemp -> 1 passed",
+    "read-only real frozen Program and PostgreSQL state preflight -> 4/4 actual ENTER names corrected by canonical identity; no stored result mutation",
+    "git diff --check -> passed"
+  ],
+  "business_smoke_acceptance_pending": "After user restarts backend-main at merged source identity, create a separately versioned bounded historical task using existing authorized date range and validate canonical mark-state sealed parameters and actual mark statuses. Preserve the completed affected run ca59667a51599e600e6e032b77879c485e477656aadf1f84410fc5f1983901fe; no in-place repair or automatic rerun before restart.",
+  "design_compliance_review": {
+    "no_unapproved_simplification": "Five-program business success remains partial; source completion is separate from runtime and replay acceptance.",
+    "no_silent_errors": "Planned catalog universe/date mismatch fails before reader/artifact writes; existing affected replay is explicitly not fully accepted.",
+    "no_semantic_drift": "Original package bindings, policies, all seeds, unplanned legacy and frozen canonical identities preserved; quotes remain broad and factual.",
+    "no_unapproved_human_gates": "No new approval or publication gate; enforce existing frozen source identity closure. User-owned restart remains unchanged."
   }
 }
