@@ -479,16 +479,28 @@ def test_authoritative_explicit_bj_codes_fail_fast() -> None:
 def test_h5_reader_never_crops_facts_by_ipo_st_or_current_listing(monkeypatch, method):
     import backend.qlib_exporter.db_reader as subject
     seen = []
+    class Captured(Exception):
+        pass
     def read(sql, *args, **kwargs):
         seen.append(sql)
         assert 'stock_st' not in sql and 'list_status' not in sql
         assert 'INTERVAL' not in sql
         assert "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'" in sql
-        return pd.DataFrame()
-    monkeypatch.setattr(subject, 'get_conn', _DummyConn)
+        raise Captured()
+    class Cursor:
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+        execute = staticmethod(read)
+    class Connection(Cursor):
+        def cursor(self):
+            return Cursor()
+    monkeypatch.setattr(subject, 'get_conn', Connection)
     monkeypatch.setattr(subject.pd, 'read_sql', read)
-    getattr(DBReader(), method)(start=date(2024,7,1), end=date(2026,9,30),
-        exclude_st=True, exclude_delisted_or_paused=True)
+    with pytest.raises(Captured):
+        getattr(DBReader(), method)(start=date(2024,7,1), end=date(2026,9,30),
+            exclude_st=True, exclude_delisted_or_paused=True)
     assert len(seen) == 1
 
 

@@ -94,6 +94,7 @@ class CsvExportSummary:
     generated_at: str
     rule_derived_limit_rows: int = 0
     resumed_csv_files: int = 0
+    fact_population_policy: str = "all_real_shsz_a_share_facts_independent_of_pit_v1"
 
 
 STOCK_EXPORT_EXCHANGES = ("sh", "sz")
@@ -453,7 +454,7 @@ def _build_pit_all_txt_lines(
     start: date,
     end: date,
 ) -> tuple[list[str], list[dict[str, str]]]:
-    """Build Qlib instruments/all.txt lines from PIT spans and bin data ranges."""
+    """Build selection-sidecar lines from PIT spans and physical quote ranges."""
 
     lines: list[str] = []
     skipped: list[dict[str, str]] = []
@@ -1903,11 +1904,13 @@ def write_bin_meta(
         "start": start.isoformat() if start else None,
         "end": end.isoformat(),
         "exchanges": _normalize_exchanges(exchanges),
-        "exclude_st": bool(exclude_st),
-        "exclude_delisted_or_paused": bool(exclude_delisted_or_paused),
+        "exclude_st": False,
+        "exclude_delisted_or_paused": False,
+        "fact_population_policy": "all_real_shsz_a_share_facts_independent_of_pit_v1",
+        "quote_catalog_pit_clipped": False,
         "exclude_bj": True,
         "min_listed_days": IPO_FILTER_DAYS,
-        "ipo_filter_mode": "instruments_all_txt",
+        "ipo_filter_mode": "separate_ipo_selection",
         "bin_contains_pre_ipo_filter_data": True,
         "stock_universe_min_listed_days_prefilter": False,
         "freq_types": list(freq_types),

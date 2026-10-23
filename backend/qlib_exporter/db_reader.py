@@ -141,7 +141,7 @@ class DBReader:
         
         # 构建基础过滤条件
         base_conds = [
-            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH),",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
             f"s.list_date <= '{end.isoformat()}'",
         ]
         
@@ -246,7 +246,7 @@ class DBReader:
         
         # 构建基础过滤条件
         base_conds = [
-            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH),",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
             f"s.list_date <= '{end.isoformat()}'",
         ]
         
@@ -297,7 +297,7 @@ class DBReader:
         
         # 构建基础过滤条件
         base_conds = [
-            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH),",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
             f"s.list_date <= '{end.isoformat()}'",
         ]
         
@@ -349,7 +349,7 @@ class DBReader:
         
         # 构建基础过滤条件
         base_conds = [
-            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH),",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
             f"s.list_date <= '{end.isoformat()}'",
         ]
         
@@ -1277,7 +1277,7 @@ class DBReader:
         
         # 构建基础过滤条件
         base_conds = [
-            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH),",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
             f"s.list_date <= '{end.isoformat()}'",
         ]
         
@@ -1405,7 +1405,7 @@ class DBReader:
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
 
         base_conds = [
-            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH),",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
             f"s.list_date <= '{end.isoformat()}'",
         ]
         if exchange_conds:
@@ -1603,7 +1603,7 @@ class DBReader:
 
         股票池严格基于 stock_basic：
         - 默认只包含 SH/SZ A 股（.SH/.SZ），不含 BJ；
-        - 根据 exclude_st / exclude_delisted_or_paused 统一剔除 ST 和退市 / 暂停上市股票；
+        - ST、退市及上市预热事实不由兼容筛选参数裁剪，选股资格由独立 PIT 控制；
         - 然后在给定日期区间内从日线原始表加载数据。
         """
 
@@ -1916,7 +1916,7 @@ class DBReader:
         
         # 构建基础过滤条件（ST、退市、上市时间）
         base_conds = [
-            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH),  # 上市状态",  # 上市状态
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
             f"s.list_date <= '{end.isoformat()}'",  # 已上市
             "b.trade_date >= s.list_date",  # 只导出上市日期之后的数据
         ]
@@ -2062,7 +2062,7 @@ class DBReader:
         
         # 构建基础过滤条件
         base_conds = [
-            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH),",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
             f"s.list_date <= '{end.isoformat()}'",
         ]
         
@@ -2154,7 +2154,7 @@ class DBReader:
             exchange_conds.append("(s.ts_code LIKE '%.SH' OR s.ts_code LIKE '%.SZ')")
 
         base_conds = [
-            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH),",
+            "s.ts_code ~ '^([03][0-9]{5}[.]SZ|6[0-9]{5}[.]SH)$'",
             f"s.list_date <= '{end.isoformat()}'",
             "m.trade_date >= s.list_date",
         ]
