@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/data_service/suspension_day_authority.py",
     "backend/data_service/suspension_day_authority_v1.json",
+    "backend/data_service/suspension_day_authority_v2.json",
     "backend/services/dataset_release/monthly_shared_components.py",
     "backend/tests/services/test_suspend_d_coverage.py",
     "backend/tests/dataset_release/test_monthly_shared_components.py",
@@ -32,7 +33,7 @@
     "https://static.cninfo.com.cn/finalpage/2026-01-14/1224932970.PDF",
     "X:/AIstock_dataset_candidates/data_repair_staging/BUG-2071-suspension-20261023-r1/diagnosis-dev-readback.json",
     "X:/AIstock_dataset_candidates/data_repair_staging/BUG-2071-suspension-20261023-r1/suspension_day_authority.json",
-    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-2071-suspension-20261023-r1/consumer-readback.json"
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-2071-suspension-20261023-r1/consumer-readback-r2.json"
   ],
   "design_compliance_review": {
     "no_partial_delivery": "源码及必要回归完成；生产运行态与LocalSIM接续明确待办，不宣称原回放已恢复。",
@@ -177,7 +178,7 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
-      "RED: exact afternoon authority reproduction failed before code change. GREEN: final focused suspension/monthly matrix 90 passed; includes full-day, intraday, resumed, same-day S/R, zero-length, unknown reverse ranges, exact disclosure and frozen-authority isolation. Fresh AIstock process read production only and validated production event copies in existing DEV transaction with rollback. Receipt SHA256 29bbe677f4fbf9bf0aa6978b872a90dde9bcf6a75541eaaabdd7dcc10bed25a7. All 17333 frozen suspension rows before 2026-01-09 retain identical semantic decisions; authority identity intentionally changes. No production, candidate, profile, replay or process writes."
+      "RED: exact afternoon authority and legacy hot-reload compatibility reproductions failed before their fixes. GREEN: final focused suspension/monthly matrix 91 passed; includes full-day, intraday, resumed, same-day S/R, zero-length, unknown reverse ranges, exact disclosure, frozen-authority isolation and byte-preserved legacy payload. New payload uses a separate versioned file. Fresh AIstock process read production only and validated production event copies in existing DEV transaction with rollback. DEV receipt SHA256 29bbe677f4fbf9bf0aa6978b872a90dde9bcf6a75541eaaabdd7dcc10bed25a7. Native exact-day reader/adapter verified 4911 symbols and 9 suspension rows, unresolved 1 to 0; consumer readback SHA256 c5db83a62fba1124fa1141fea5fcf161259053568eed0fafa22baeb0588159ba. All 17333 frozen suspension rows before 2026-01-09 retain identical semantic decisions; authority identity intentionally changes. No production, candidate, profile, replay or process writes."
     ],
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "health_ref": "http://127.0.0.1:8001/health",

@@ -20,6 +20,20 @@ def _afternoon_authority():
     }]}
 
 
+def test_new_authority_does_not_replace_old_process_payload():
+    import json
+    from pathlib import Path
+    from backend.data_service import suspension_day_authority as public
+
+    legacy_path = Path(public.__file__).with_name("suspension_day_authority_v1.json")
+    assert public.DEFAULT_PATH != legacy_path
+    legacy = json.loads(legacy_path.read_bytes())["entries"]
+    current = public.load_authority()["entries"]
+    assert all(entry["state"] == "FULL_DAY_SUSPENDED" for entry in legacy)
+    assert all(entry in current for entry in legacy)
+    assert any(entry["state"] == "INTRADAY_SUSPENDED" for entry in current)
+
+
 @pytest.mark.parametrize("timing", ["13:00-9:30", "13:00-15:00"])
 def test_official_afternoon_resolution_preserves_raw_cross_session_marker(timing):
     from backend.data_service.suspension_day_authority import full_day_keys, project_suspension_days
