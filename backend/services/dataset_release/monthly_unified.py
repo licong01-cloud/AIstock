@@ -1317,6 +1317,7 @@ class MonthlyReleaseService:
         schemas: set[str] = set()
         typed_evidence: dict[str, Mapping[str, Any]] = {}
         from .monthly_quote_adoption import QUOTE_SCHEMAS, validate_quote_adoption
+        from .monthly_suspension_adoption import SCHEMAS as SUSPENSION_SCHEMAS, validate_suspension_adoption
         from .monthly_late_publication import SCHEMA as LATE_SCHEMA, READBACK_SCHEMA as LATE_READBACK, validate_late_financing_adoption
         from .monthly_minute_adoption import (
             SCHEMAS as MINUTE_SCHEMAS, AMENDMENT as MINUTE_AMENDMENT,
@@ -1363,7 +1364,7 @@ class MonthlyReleaseService:
             ):
                 raise MonthlyReleaseNotReady("HMM adoption evidence binds another manifest")
             schemas.add(schema)
-            if schema in QUOTE_SCHEMAS | {LATE_SCHEMA, LATE_READBACK} | MINUTE_SCHEMAS and schema in typed_evidence:
+            if schema in QUOTE_SCHEMAS | {LATE_SCHEMA, LATE_READBACK} | MINUTE_SCHEMAS | SUSPENSION_SCHEMAS and schema in typed_evidence:
                 raise MonthlyReleaseConflict("adoption evidence schema is duplicated")
             typed_evidence[schema] = value
             normalized_evidence.append(
@@ -1381,10 +1382,21 @@ class MonthlyReleaseService:
         quote_only = bool(QUOTE_SCHEMAS.intersection(schemas))
         late_financing = bool({LATE_SCHEMA, LATE_READBACK}.intersection(schemas))
         minute_repair = bool(MINUTE_SCHEMAS.intersection(schemas))
+        suspension_repair = bool(SUSPENSION_SCHEMAS.intersection(schemas))
         supersession = None
-        if profile.get("schema_version") == "aistock_active_dataset_profile_v4" and not (late_financing or quote_only or minute_repair):
+        if profile.get("schema_version") == "aistock_active_dataset_profile_v4" and not (late_financing or quote_only or minute_repair or suspension_repair):
             raise MonthlyReleaseNotReady("v4 adoption requires its typed late-financing proof")
-        if minute_repair:
+        if suspension_repair:
+            if minute_repair or quote_only or late_financing or not SUSPENSION_SCHEMAS.issubset(schemas):
+                raise MonthlyReleaseNotReady("suspension successor proof is incomplete or mixed")
+            try:
+                validate_suspension_adoption(predecessor_root=Path(predecessor.candidate_root),
+                    predecessor_profile=_read_json(predecessor.path, label="suspension predecessor profile"),
+                    candidate=candidate, profile=profile, manifest=manifest,
+                    evidence=typed_evidence, required_nodes=REQUIRED_NODES)
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError, AssertionError) as exc:
+                raise MonthlyReleaseNotReady(f"suspension successor adoption proof failed: {exc}") from exc
+        elif minute_repair:
             if quote_only or late_financing:
                 raise MonthlyReleaseNotReady("minute successor requires its own complete typed proof")
             try:
@@ -1442,7 +1454,7 @@ class MonthlyReleaseService:
                 verify_pending_predecessor(self, supersession, expected_predecessor, target_profile_hash)
             activated_ancestors = self._verified_adoption_ancestors(
                 product_profile, target_cutoff, expected_predecessor,
-            ) if minute_repair or late_financing or quote_only else set()
+            ) if minute_repair or late_financing or quote_only or suspension_repair else set()
             for child in self.store.operations.iterdir():
                 request_path = child / "request.json"
                 if not request_path.is_file():
