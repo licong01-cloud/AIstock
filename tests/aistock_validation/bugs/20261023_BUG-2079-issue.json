@@ -29,11 +29,24 @@
   "evidence_uris": [],
   "expected": "通过既有统一发布接口接续精确未激活margin1到已封存minute1；两段证据、可恢复退役、独立激活均严格校验。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_minute_adoption.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "docs/operations/monthly_minute_adoption_20261023.md",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2079-issue.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/monthly_unified.py"
+      "backend/services/dataset_release/monthly_minute_adoption.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "docs/operations/monthly_minute_adoption_20261023.md",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2079-issue.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py"
@@ -80,8 +93,8 @@
   },
   "first_seen_at": "2026-10-23T09:04:20.646660Z",
   "fix_branch": "bug/BUG-2079-issue-20261023",
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "55737f41d1158d3859c12f2a06537b3d10249ebb",
+  "fixed_at": "2026-10-23T15:19:28Z",
   "github_issue_number": 6637,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6637",
   "last_seen_at": "2026-10-23T09:04:20.646660Z",
@@ -89,6 +102,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6639",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -106,20 +120,47 @@
       "Real sealed candidate read-only typed proof PASS, target manifest 3760d9b257c2870d2b0db4c48576e90f9246add45553d5b3592a0ccea3148e7b; three nodes 101 stock-dates and 291792 field cells each; active unchanged."
     ],
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
     "target_ids": [
       "worker-scheduler"
-    ],
-    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_reason": "Required CI classifier found new test unexecuted; add only test_monthly_minute_adoption.py to existing qlib_data_backend plan.",
   "severity": "P1",
-  "status": "in_progress",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2079",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2b7474579f663dc8",
+    "recorded_at": "2026-10-23T15:23:59.597101Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e6011d33093a3e78db45ef08296fa14ac6dcbba3",
+    "source_merge_commit": "55737f41d1158d3859c12f2a06537b3d10249ebb",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6639",
+    "validation_evidence": [
+      "rtk pytest backend/tests/dataset_release/test_monthly_existing_adoption.py backend/tests/dataset_release/test_monthly_minute_adoption.py -q -> 17 passed",
+      "rtk pytest backend/tests/dataset_release/test_monthly_minute_adoption.py::test_interrupted_retirement_blocks_both_activations_and_resumes_same_operation -q -> 2 passed",
+      "python -m nox -s l0 -> passed",
+      "python -m nox -s validation_catalog_integrity -> passed"
+    ],
+    "validation_evidence_digest": "7d2c9a125bc734c182e6437827107f2dbf36fd50cf6cb91f5294a0758a2a4601"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -128,6 +169,12 @@
     "fingerprint": "39374c2fc87bacdafd1b622f",
     "source_event_id": "FE-20261023-39374c2fc87b"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/dataset_release/test_monthly_existing_adoption.py backend/tests/dataset_release/test_monthly_minute_adoption.py -q -> 17 passed",
+    "rtk pytest backend/tests/dataset_release/test_monthly_minute_adoption.py::test_interrupted_retirement_blocks_both_activations_and_resumes_same_operation -q -> 2 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_catalog_integrity -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -233,6 +280,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "scope_expansion_reason": "Required CI classifier found new test unexecuted; add only test_monthly_minute_adoption.py to existing qlib_data_backend plan."
+  }
 }
