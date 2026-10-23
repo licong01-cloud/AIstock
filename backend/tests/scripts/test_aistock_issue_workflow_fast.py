@@ -1715,6 +1715,106 @@ def test_runtime_preflight_checks_semantic_registration_without_http(path, regis
     assert (contract["pre_pr_ready"], contract["runtime_impact"], contract["target_ids"]) == (registered, "backend", ["backend-main"])
 
 
+HMM_DATABASE_SOURCE = "backend/services/hmm_risk/risk_l2_database_inference.py"
+
+
+def _hmm_database_finish_contract(**refs):
+    # Unit fixture only: this string is not a real operational acceptance receipt.
+    return workflow.build_runtime_contract(
+        record={"runtime_contract": {"schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                                    "fresh_process_evidence": ["unit-test-load-evidence"], **refs}},
+        changed_files=[HMM_DATABASE_SOURCE, "backend/services/hmm_risk/stock_fact_repository.py",
+                       "backend/tests/hmm_risk/test_risk_l2_database_inference.py"],
+    )
+
+
+def test_hmm_database_finish_resolves_refs_without_claiming_runtime_acceptance(monkeypatch):
+    monkeypatch.setattr(workflow, "_read_only_http_probe", lambda *a, **kw: pytest.fail("finish must not probe a service"))
+    contract = _hmm_database_finish_contract()
+    assert contract["blocking"] == [] and contract["pre_pr_ready"] is True
+    assert contract["runtime_impact"] == "backend" and contract["target_ids"] == ["backend-main"]
+    assert contract["backend_restart_required"] is True and contract["backend_restart_owner"] == "user"
+    assert contract["activation_states"]["backend_restart"] == "pending_user_action"
+    assert contract["post_restart_effective_gate"] == "pending_user_restart"
+    assert contract["runtime_identity_match"] == "pending"
+    assert contract["operator_runbook_ref"] == "docs/operations/hmm_database_runtime_finish_runbook.md"
+    probes = contract["target"]["probes"]
+    assert probes["identity_ref"] == "http://127.0.0.1:8001/api/v1/runtime-identity"
+    assert workflow._business_smoke_semantic_contract(urllib.parse.urlsplit(probes["business_smoke_ref"]).path)[0] == "hmm_risk_l2_overview"
+    assert _business_semantic(probes["business_smoke_ref"], {"status": "ok"}, "f" * 64)["verdict"] == "failed"
+    original_digest = workflow._runtime_contract_digest(contract)
+    contract["target"]["business_smoke_contract_id"] = "health_ok"
+    assert workflow._runtime_contract_digest(contract) != original_digest
+
+
+def test_hmm_database_defaults_do_not_supply_missing_fresh_process_evidence():
+    contract = _hmm_database_finish_contract(fresh_process_evidence=[])
+    assert contract["blocking"] == ["fresh-process load evidence is missing"]
+    assert contract["pre_pr_ready"] is False
+
+
+@pytest.mark.parametrize("other", ["backend/main.py", "backend/services/hmm_risk/contracts.py"])
+def test_hmm_database_defaults_reject_mixed_runtime_sources(other):
+    contract = workflow.build_runtime_contract(record={}, changed_files=[HMM_DATABASE_SOURCE, other])
+    assert contract["runtime_impact"] == "backend" and contract["target_ids"] == ["backend-main"]
+    assert contract["pre_pr_ready"] is False
+    assert any("mix routed and non-routed" in error for error in contract["blocking"])
+    assert any("identity_ref" in error for error in contract["blocking"])
+
+
+def test_hmm_database_defaults_preserve_explicit_bug_refs():
+    refs = dict(operator_runbook_ref="docs/operations/backend_main_runtime_restart_runbook.md",
+                identity_ref="http://localhost:8001/api/v1/runtime-identity",
+                business_smoke_ref="http://localhost:8001/api/v1/hmm-risk/risk-l2/overview?run_id=" + "b" * 64,
+                database_readback_ref="http://localhost:8001/api/v1/hmm-risk/risk-l2/overview?run_id=" + "b" * 64)
+    contract = _hmm_database_finish_contract(**refs)
+    assert contract["pre_pr_ready"] is True
+    assert contract["operator_runbook_ref"] == refs.pop("operator_runbook_ref")
+    assert all(contract["target"]["probes"][key] == value for key, value in refs.items())
+
+
+@pytest.mark.parametrize("refs", [
+    {"operator_runbook_ref": ""}, {"operator_runbook_ref": "docs/operations/absent.md"},
+    {"identity_ref": ""}, {"identity_ref": "http://untrusted:8001/api/v1/runtime-identity"},
+    {"business_smoke_ref": ""}, {"business_smoke_ref": "http://127.0.0.1:8001/api/v1/health"},
+    {"business_smoke_ref": "http://127.0.0.1:8001/api/v1/unregistered"},
+])
+def test_hmm_database_defaults_never_hide_invalid_explicit_refs(refs):
+    contract = _hmm_database_finish_contract(**refs)
+    assert contract["pre_pr_ready"] is False and contract["blocking"]
+
+
+@pytest.mark.parametrize("source", ["backend/**/*.py", "../backend/main.py", "backend/services/hmm_risk/missing.py"])
+def test_http_route_catalog_requires_exact_existing_owned_sources(monkeypatch, source):
+    catalog = workflow._load_runtime_target_catalog()
+    catalog["targets"]["backend-main"]["probe_routes"][0]["source_globs"] = [source]
+    monkeypatch.setattr(workflow.yaml, "safe_load", lambda _: catalog)
+    with pytest.raises(workflow.WorkflowError, match="HTTP probe route requires exact target-owned sources"):
+        workflow._load_runtime_target_catalog()
+
+
+@pytest.mark.parametrize("fault", ["runbook", "probes", "identity", "smoke", "worker", "duplicate"])
+def test_http_route_catalog_does_not_relax_validation(monkeypatch, fault):
+    catalog = workflow._load_runtime_target_catalog()
+    target = catalog["targets"]["backend-main"]
+    route = target["probe_routes"][0]
+    if fault == "runbook":
+        route["operator_runbook_ref"] = "docs/operations/missing.md"
+    elif fault == "probes":
+        route["probes"] = None
+    elif fault == "identity":
+        route["probes"]["identity_ref"] = "http://untrusted:8001/api/v1/runtime-identity"
+    elif fault == "smoke":
+        route["probes"]["business_smoke_ref"] = "http://127.0.0.1:8001/api/v1/health"
+    elif fault == "worker":
+        target["runtime_kind"] = "worker_scheduler"
+    else:
+        target["probe_routes"].append(dict(route))
+    monkeypatch.setattr(workflow.yaml, "safe_load", lambda _: catalog)
+    with pytest.raises(workflow.WorkflowError):
+        workflow._load_runtime_target_catalog()
+
+
 def test_find_bug_record_parses_only_matching_or_opaque_filenames(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
