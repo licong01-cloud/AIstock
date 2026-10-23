@@ -35,13 +35,14 @@
   "expected": "Frozen suspension projection preserves reviewed historical resolutions and raw lineage, all unchanged data components reused, no implicit runtime authority fallback.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261023_BUG-2085-monthly-suspension-publication-loses-reviewed-historical-authority-and-p.json",
       "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_suspension_adoption.py",
+      "backend/services/dataset_release/monthly_suspension_prefix.py",
       "backend/services/dataset_release/monthly_suspension_repair.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_shared_components.py",
-      "backend/services/dataset_release/monthly_suspension_adoption.py",
-      "backend/services/dataset_release/monthly_suspension_prefix.py"
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2085-monthly-suspension-publication-loses-reviewed-historical-authority-and-p.json"
     ],
     "added_files": [
       "backend/services/dataset_release/monthly_suspension_prefix.py",
@@ -49,13 +50,14 @@
       "backend/tests/dataset_release/test_monthly_suspension_adoption.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261023_BUG-2085-monthly-suspension-publication-loses-reviewed-historical-authority-and-p.json",
       "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_suspension_adoption.py",
+      "backend/services/dataset_release/monthly_suspension_prefix.py",
       "backend/services/dataset_release/monthly_suspension_repair.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_shared_components.py",
-      "backend/services/dataset_release/monthly_suspension_adoption.py",
-      "backend/services/dataset_release/monthly_suspension_prefix.py"
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2085-monthly-suspension-publication-loses-reviewed-historical-authority-and-p.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -212,7 +214,8 @@
     "backend_restart_owner": "user",
     "fresh_process_evidence": [
       "Fresh-process RED to GREEN reproduces missing historical disclosure and lost prefix raw events; 17 exact production-read-only keys captured and suspension component independently projected with zero unresolved states. X:/AIstock_temp/DATA_PREPARATION/non-report-closure-20261024/component-readback.json",
-      "X:/AIstock_temp/DATA_PREPARATION/non-report-closure-20261024/component-readback.json: fresh process exact 17-key correction; 18534 to 18538 suspension rows, no unresolved known keys, production read-only, no active/runtime writes"
+      "X:/AIstock_temp/DATA_PREPARATION/non-report-closure-20261024/component-readback.json: fresh process exact 17-key correction; 18534 to 18538 suspension rows, no unresolved known keys, production read-only, no active/runtime writes",
+      "X:\\AIstock_temp\\DATA_PREPARATION\\non-report-closure-20261024\\component-readback.json"
     ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
