@@ -325,6 +325,8 @@ class TDXScheduler:
         self._tracker = _FutureTracker()
         self._delayed_retry_keys: set[str] = set()
         self._completion_callbacks: dict[str, _CompletionCallback] = {}
+        self._canonical_pit_roll_future: Future | None = None
+        self._canonical_pit_roll_next_check = 0.0
         DEFAULT_TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     def register_completion_callback(
@@ -985,6 +987,7 @@ class TDXScheduler:
     # schedule management
     def refresh_schedules(self) -> None:
         """Reload enabled schedules from database and update in-memory jobs."""
+        self._dispatch_canonical_pit_roll()
         try:
             self._reconcile_lost_go_jobs()
         except Exception:  # noqa: BLE001 - never infer absence from a transport failure.
@@ -1033,6 +1036,32 @@ class TDXScheduler:
         except Exception as exc:  # noqa: BLE001
             _logger.warning("data sync target reconciliation failed: %s", exc)
         self._dispatch_completion_callbacks()
+
+    def _dispatch_canonical_pit_roll(self) -> None:
+        """Reuse the maintenance executor; never block collection or business loops."""
+        if getattr(self, "_schedule_thread", None) is None:
+            return
+        now = time.monotonic()
+        with self._lock:
+            pending = getattr(self, "_canonical_pit_roll_future", None)
+            if pending is not None and not pending.done():
+                return
+            if now < getattr(self, "_canonical_pit_roll_next_check", 0.0):
+                return
+            self._canonical_pit_roll_next_check = now + 60.0
+            self._canonical_pit_roll_future = self._executor.submit(self._run_canonical_pit_roll)
+
+    @staticmethod
+    def _run_canonical_pit_roll() -> dict[str, Any]:
+        from backend.services.stock_universe_pit_service import StockUniversePitService
+        try:
+            result = StockUniversePitService(existing_schema_only=True).advance_canonical_trade_day()
+            if result.get("rebuilt"):
+                _logger.info("canonical PIT daily roll: %s", _json_dump(result))
+            return result
+        except Exception as exc:  # noqa: BLE001 - retry maintenance, never re-fetch source facts.
+            _logger.warning("canonical PIT daily roll waiting: %s", exc)
+            return {"status": "waiting", "error": str(exc)}
 
     def _reconcile_lost_go_jobs(self) -> int:
         """Release only expired jobs whose accepted native task is explicitly gone.
@@ -3840,6 +3869,8 @@ class TDXScheduler:
         self, dataset: str, trade_date: dt.date,
     ) -> Tuple[int, Optional[dt.datetime], Dict[str, int]]:
         """Observe raw totals and the existing 1m completeness contract once."""
+        from scripts.build_stock_universe_pit_spans import is_b_share_ts_code
+
         # Keep hypertable scans independently time-prunable. Joining them
         # together can produce a nested-loop scan over thousands of chunks.
         daily_rows = self._fetchall(
@@ -3859,6 +3890,10 @@ class TDXScheduler:
              WHERE trade_time >= %s AND trade_time < %s GROUP BY ts_code,freq""",
             (day_start, day_start + dt.timedelta(days=1)),
         )
+        # Old B-share facts remain stored, but must not re-enter the completion
+        # population after their collection has been disabled.
+        daily_rows = [row for row in daily_rows if not is_b_share_ts_code(row["ts_code"])]
+        minute_rows = [row for row in minute_rows if not is_b_share_ts_code(row["ts_code"])]
         daily = {str(row["ts_code"]).strip(): row for row in daily_rows}
         minute = {str(row["ts_code"]).strip(): row for row in minute_rows if row["freq"] == "1m"}
         if dataset == "kline_daily_raw":
@@ -5144,14 +5179,13 @@ class TDXScheduler:
 
             # 2) create job record (or reuse one from _scheduled_ingestion_run)
             workers = int(options.get("workers") or spec["default_workers"])
-            codes = options.get("codes")
+            # Provider population is independent of buy eligibility. Explicit
+            # requests must obey the same B-share exclusion as scheduled runs.
+            codes = self._go_provider_codes(
+                start_date, end_date, requested_codes=options.get("codes") or None,
+            )
             if not codes:
-                # Provider population, not a strategy stock pool: retain ST and
-                # historical delisted stocks intersecting an explicit window,
-                # but do not request pre-listing dates or unrelated instruments.
-                codes = self._go_provider_codes(start_date, end_date)
-                if not codes:
-                    raise RuntimeError("date-valid TDX provider population is unavailable")
+                raise RuntimeError("date-valid non-B-share TDX provider population is unavailable")
             summary.update({
                 "data_kind": spec["data_kind"],
                 "start_date": start_date.isoformat(),
@@ -5407,10 +5441,19 @@ class TDXScheduler:
                     return None
         return None
 
-    def _go_provider_codes(self, start_date: dt.date, end_date: dt.date) -> List[str]:
+    def _go_provider_codes(
+        self, start_date: dt.date, end_date: dt.date,
+        *, requested_codes: Optional[List[str]] = None,
+    ) -> List[str]:
+        # Reuse the existing global PIT board identity, not its buy-eligible
+        # members: ST/exit-period quotes and Beijing provider scope stay intact.
+        from scripts.build_stock_universe_pit_spans import a_share_ts_code_filter, is_b_share_ts_code
+
+        if requested_codes is not None:
+            return [str(code).strip() for code in requested_codes if not is_b_share_ts_code(code)]
         # The stock-basic directory may lag an IPO. A real same-window daily
         # quote is also provider-population evidence, never PIT buy eligibility.
-        rows = self._fetchall(r"""WITH bounds AS (SELECT %s::date AS end_day,%s::date AS start_day)
+        sql = r"""WITH bounds AS (SELECT %s::date AS end_day,%s::date AS start_day), population AS (
             SELECT ts_code FROM market.stock_basic,bounds WHERE list_date<=end_day
               AND (delist_date IS NULL OR delist_date>=start_day)
             UNION
@@ -5420,8 +5463,10 @@ class TDXScheduler:
                AND (k.ts_code ~ '^(00|20|30)[0-9]{4}\.SZ$'
                  OR k.ts_code ~ '^(6[0-9]{5}|900[0-9]{3})\.SH$'
                  OR k.ts_code ~ '^[489][0-9]{5}\.BJ$')
-            ORDER BY ts_code""", (end_date, start_date))
-        return [str(row["ts_code"]).strip() for row in rows]
+            ) SELECT ts_code FROM population WHERE TRUE"""
+        sql += a_share_ts_code_filter("ts_code") + " ORDER BY ts_code"
+        rows = self._fetchall(sql, (end_date, start_date))
+        return [str(row["ts_code"]).strip() for row in rows if not is_b_share_ts_code(row["ts_code"])]
 
     def _update_ingestion_job_status(
         self, job_id: uuid.UUID, status: str, start_ts: dt.datetime, summary: Dict[str, Any]

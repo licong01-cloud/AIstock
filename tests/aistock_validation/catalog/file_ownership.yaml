@@ -1152,6 +1152,7 @@ rules:
     priority: 90
     include:
       - start_all_ai_stock.bat
+      - start_backend.bat
     primary_module: platform.config
     impact_modules: [platform.api]
     layer: runtime_launcher

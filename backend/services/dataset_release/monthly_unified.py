@@ -734,7 +734,8 @@ class MonthlyOperationStore:
                 continue
             if status == ReleaseState.READY_TO_ACTIVATE:
                 request = _read_json(child / "request.json", label="monthly request")
-                if request.get("activation_mode") != "activate_when_ready":
+                if (request.get("activation_mode") != "activate_when_ready"
+                        or self.read_plan(str(state["operation_id"])).get("monthly_ready_correction") is not None):
                     continue
             elif status in TERMINAL_STATES or status == ReleaseState.ACTIVATED:
                 continue
@@ -836,6 +837,18 @@ class MonthlyOperationStore:
                 raise MonthlyReleaseCancelled("cancelled before checkpoint publication")
             _replace_json(root / "checkpoints" / f"{stage.lower()}.json", checkpoint)
         return receipt_path
+
+    def checkpoint_is_present(self, operation_id: str, stage: str) -> bool:
+        """Status-only presence probe; execution still verifies via read_checkpoint."""
+        if stage not in STAGES:
+            raise ValueError("checkpoint stage is invalid")
+        path = self.operation_root(operation_id) / "checkpoints" / f"{stage.lower()}.json"
+        if not path.exists():
+            return False
+        _require_plain_existing_chain(path, label=f"{stage} checkpoint")
+        if not path.is_file():
+            raise MonthlyReleaseError("checkpoint must be a regular file")
+        return True
 
     def read_checkpoint(
         self,
@@ -1164,7 +1177,7 @@ class MonthlyReleaseService:
         expected_node_roots: Mapping[str, str],
         principal: str,
     ) -> dict[str, Any]:
-        """Adopt a verified immutable v3 hotfix without rebuilding its bytes."""
+        """Adopt a verified same-cutoff immutable hotfix without rebuilding its bytes."""
 
         if not idempotency_key.strip() or len(idempotency_key) > 256:
             raise MonthlyReleaseRequestInvalid("adoption idempotency key is invalid")
@@ -1216,7 +1229,7 @@ class MonthlyReleaseService:
         controller_paths = profile.get("controller_paths")
         node_bindings = profile.get("node_bindings")
         if (
-            profile.get("schema_version") != "aistock_active_dataset_profile_v3"
+            profile.get("schema_version") not in {"aistock_active_dataset_profile_v3", "aistock_active_dataset_profile_v4"}
             or not isinstance(components, Mapping)
             or not isinstance(controller_paths, Mapping)
             or not isinstance(node_bindings, Mapping)
@@ -1254,6 +1267,7 @@ class MonthlyReleaseService:
         schemas: set[str] = set()
         typed_evidence: dict[str, Mapping[str, Any]] = {}
         from .monthly_quote_adoption import QUOTE_SCHEMAS, validate_quote_adoption
+        from .monthly_late_publication import SCHEMA as LATE_SCHEMA, READBACK_SCHEMA as LATE_READBACK, validate_late_financing_adoption
         for raw in evidence_refs:
             relative = str(raw.get("relative_path") or "")
             relative_path = Path(relative)
@@ -1275,7 +1289,9 @@ class MonthlyReleaseService:
             schema = str(raw.get("schema_version") or "")
             if value.get("schema_version") != schema:
                 raise MonthlyReleaseConflict("adoption evidence schema differs")
-            if value.get("status") not in {None, "PASS"}:
+            if value.get("status") not in {None, "PASS"} and not (
+                schema == LATE_SCHEMA and value.get("status") == "PRIVATE_COMPONENTS_NOT_A_RELEASE"
+            ):
                 raise MonthlyReleaseNotReady("adoption evidence is not PASS")
             if schema == "qe_moneyflow_alias_coverage_receipt_v1" and (
                 int(value.get("unknown", -1)) != 0
@@ -1292,7 +1308,7 @@ class MonthlyReleaseService:
             ):
                 raise MonthlyReleaseNotReady("HMM adoption evidence binds another manifest")
             schemas.add(schema)
-            if schema in QUOTE_SCHEMAS and schema in typed_evidence:
+            if schema in QUOTE_SCHEMAS | {LATE_SCHEMA, LATE_READBACK} and schema in typed_evidence:
                 raise MonthlyReleaseConflict("adoption evidence schema is duplicated")
             typed_evidence[schema] = value
             normalized_evidence.append(
@@ -1308,7 +1324,20 @@ class MonthlyReleaseService:
             "hmm_risk_rotation_l2_input_bundle_v1",
         }
         quote_only = bool(QUOTE_SCHEMAS.intersection(schemas))
-        if quote_only:
+        late_financing = bool({LATE_SCHEMA, LATE_READBACK}.intersection(schemas))
+        if profile.get("schema_version") == "aistock_active_dataset_profile_v4" and not (late_financing or quote_only):
+            raise MonthlyReleaseNotReady("v4 adoption requires its typed late-financing proof")
+        if late_financing:
+            if quote_only or not {LATE_SCHEMA, LATE_READBACK}.issubset(schemas):
+                raise MonthlyReleaseNotReady("late financing adoption evidence is incomplete or mixed")
+            try:
+                validate_late_financing_adoption(predecessor_root=Path(predecessor.candidate_root),
+                    predecessor_profile=_read_json(predecessor.path, label="financing predecessor profile"),
+                    candidate=candidate, profile=profile, manifest=manifest, evidence=typed_evidence,
+                    required_nodes=REQUIRED_NODES)
+            except (ValueError, KeyError, TypeError, OSError, RuntimeError) as exc:
+                raise MonthlyReleaseNotReady(f"late financing adoption proof failed: {exc}") from exc
+        elif quote_only:
             try:
                 validate_quote_adoption(predecessor_root=Path(predecessor.candidate_root),
                     predecessor_profile=_read_json(predecessor.path, label="quote predecessor profile"),
@@ -1353,6 +1382,13 @@ class MonthlyReleaseService:
                     existing.get("product_profile") == product_profile
                     and existing.get("target_cutoff") == target_cutoff.isoformat()
                 ):
+                    if late_financing:
+                        prior = self.store.read_state(str(existing["operation_id"]))
+                        intent_path = self.store.operation_root(str(existing["operation_id"])) / "receipts" / "activation.json"
+                        if prior.get("status") == ReleaseState.ACTIVATED_VERIFIED.value and intent_path.is_file():
+                            intent = _read_json(intent_path, label="activated financing predecessor")
+                            if intent.get("new_profile_ref", {}).get("sha256") == expected_predecessor:
+                                continue
                     if quote_only and existing.get("target_profile_sha256") == expected_predecessor:
                         previous_state = self.store.read_state(str(existing["operation_id"]))
                         if previous_state.get("status") == ReleaseState.ACTIVATED_VERIFIED.value:
@@ -1419,7 +1455,7 @@ class MonthlyReleaseService:
                 "node_roots": actual_node_roots,
                 "target_roots": {"controller": str(candidate), **actual_node_roots},
                 "required_consumers": list(REQUIRED_CONSUMERS),
-                "actions": {component: (ComponentAction.SELECTIVE_REBUILD.value if quote_only and component == "minute"
+                "actions": {component: (ComponentAction.SELECTIVE_REBUILD.value if (quote_only and component == "minute") or (late_financing and component == "factor")
                                         else ComponentAction.REUSE.value) for component in COMPONENTS},
                 "adoption_ref": _content_ref(
                     root / "receipts" / "adoption.json", ref_id="receipts/adoption.json"
@@ -1490,7 +1526,7 @@ class MonthlyReleaseService:
         )
         if ready.get("operation_id") != operation_id or ready.get("status") != state.get("status"):
             raise MonthlyReleaseConflict("ready receipt differs from operation state")
-        predecessor_hash = str(plan["predecessor"]["profile_sha256"])
+        predecessor_hash = str(plan.get("activation_predecessor", plan["predecessor"])["profile_sha256"])
         if _file_sha256(self.active_profile) != predecessor_hash:
             raise MonthlyReleaseConflict("active profile changed before authorization")
         target_hash = _file_sha256(Path(str(plan["profile_candidate"])))
@@ -1508,9 +1544,9 @@ class MonthlyReleaseService:
     def status(self, operation_id: str) -> dict[str, Any]:
         state = self.store.read_state(operation_id)
         checkpoints = {
-            stage: self.store.read_checkpoint(operation_id, stage) is not None for stage in STAGES
+            stage: self.store.checkpoint_is_present(operation_id, stage) for stage in STAGES
         }
-        return {**state, "checkpoints": checkpoints}
+        return {**state, "checkpoints": checkpoints, "checkpoint_details_verified": False}
 
     def cancel(self, operation_id: str) -> dict[str, Any]:
         return self.store.request_cancel(operation_id)
@@ -1531,6 +1567,10 @@ class MonthlyReleaseService:
             cancel_requested=False,
             last_error=None,
         )
+
+    def prepare_ready_correction(self, operation_id: str, *, principal: str) -> dict[str, Any]:
+        from .monthly_ready_correction import prepare_ready_correction
+        return prepare_ready_correction(self, operation_id, principal=principal)
 
     def bind_repair_inputs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str) -> dict[str, Any]:
         """Bind exact existing repair assets before SOURCE, never rewrite a seal.
@@ -1632,6 +1672,130 @@ class MonthlyReleaseService:
                     raise MonthlyReleaseConflict("retained prev_close binding differs")
             else:
                 _write_exclusive(path, binding)
+            ref = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
+            self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
+            return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
+
+    def bind_factor_repairs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str,
+                            cas=None) -> dict[str, Any]:
+        """Retain already validated component outputs in the sole READY correction."""
+        from .monthly_fact_correction import BINDING, SCHEMA, capture_factor_repairs
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing = plan.get(BINDING)
+            if existing is not None:
+                ref = plan[BINDING + "_ref"]
+                path = root / ref["id"]
+                if (existing.get("inputs") != inputs or _read_json(path, label="factor correction") != existing
+                        or _file_sha256(path) != ref["sha256"] or path.stat().st_size != ref["size"]):
+                    raise MonthlyReleaseConflict("factor correction binding changed")
+                return {"status": "BOUND", "reference": ref, "authority_ref": existing["authority_ref"]}
+            state = self.store.read_state(operation_id)
+            source = self.store.read_checkpoint(operation_id, "SOURCE")
+            if ("monthly_ready_correction" not in plan or state["status"] != ReleaseState.FAILED.value
+                    or state["current_stage"] != "BUILD" or source is None
+                    or any(self.store.read_checkpoint(operation_id, s) is not None for s in STAGES if s != "SOURCE")):
+                raise MonthlyReleaseConflict("factor correction requires idle retained BUILD with sealed SOURCE")
+            if cas is None:
+                from .monthly_runtime import MonthlyRuntimeSettings
+                from .cas_store import CASStore
+                cas = CASStore(MonthlyRuntimeSettings.from_env().artifact_root)
+            repair_root = Path(plan["candidate_root"]).parent.parent / "data_repair_staging"
+            try:
+                authority = capture_factor_repairs(inputs, repair_root=repair_root, cutoff=plan["target_cutoff"])
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                raise MonthlyReleaseRequestInvalid("validated factor correction is invalid",
+                                                  context={"cause": str(exc)}) from exc
+            binding = {"schema_version": SCHEMA, "operation_id": operation_id, "inputs": dict(inputs),
+                "source_receipt_canonical_sha256": source["canonical_sha256"],
+                "target_cutoff": plan["target_cutoff"],
+                "base_manifest_ref": plan["monthly_ready_correction"]["base_manifest_ref"],
+                "authority_ref": cas.put_json(authority).as_dict(), "bound_by": principal,
+                "database_write": False, "activation_authorized": False}
+            relative = f"inputs/factor-repair-{_digest(binding)}.json"
+            path = root / relative
+            _write_exclusive(path, binding)
+            ref = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
+            self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
+            return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
+
+    def bind_quote_fact_repairs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str, cas=None) -> dict[str, Any]:
+        """Adopt missing-only output from the bounded shared quote producer."""
+        from .monthly_quote_fact_correction import BINDING, SCHEMA, capture_quote_repairs
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing = plan.get(BINDING)
+            if existing is not None:
+                ref = plan[BINDING + "_ref"]
+                path = root / ref["id"]
+                if (existing.get("inputs") != inputs or _read_json(path, label="quote binding") != existing
+                        or _file_sha256(path) != ref["sha256"] or path.stat().st_size != ref["size"]):
+                    raise MonthlyReleaseConflict("quote repair binding changed")
+                return {"status": "BOUND", "reference": ref, "authority_ref": existing["authority_ref"]}
+            state = self.store.read_state(operation_id)
+            source = self.store.read_checkpoint(operation_id, "SOURCE")
+            if (state["status"] != ReleaseState.FAILED.value or state["current_stage"] != "BUILD"
+                    or source is None or "monthly_ready_correction" not in plan
+                    or any(self.store.read_checkpoint(operation_id, s) is not None for s in STAGES if s != "SOURCE")):
+                raise MonthlyReleaseConflict("quote repair requires idle retained BUILD")
+            if cas is None:
+                from .monthly_runtime import MonthlyRuntimeSettings
+                from .cas_store import CASStore
+                cas = CASStore(MonthlyRuntimeSettings.from_env().artifact_root)
+            try:
+                authority = capture_quote_repairs(inputs, repair_root=Path(plan["candidate_root"]).parent.parent / "data_repair_staging",
+                    base_manifest_ref=plan["monthly_ready_correction"]["base_manifest_ref"], cutoff=plan["target_cutoff"], cas=cas)
+            except (ValueError, KeyError, TypeError) as exc:
+                raise MonthlyReleaseRequestInvalid("quote repair producer receipt is invalid", context={"cause": str(exc)}) from exc
+            binding = {"schema_version": SCHEMA, "operation_id": operation_id, "inputs": dict(inputs),
+                "target_cutoff": plan["target_cutoff"], "authority_ref": cas.put_json(authority).as_dict(),
+                "source_receipt_canonical_sha256": source["canonical_sha256"], "bound_by": principal,
+                "database_write": False, "activation_authorized": False}
+            relative = f"inputs/quote-fact-repair-{_digest(binding)}.json"
+            path = root / relative
+            _write_exclusive(path, binding)
+            ref = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
+            self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
+            return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
+
+    def bind_index_fact_repairs(self, operation_id: str, *, inputs: Mapping[str, Any], principal: str, cas=None) -> dict[str, Any]:
+        """Adopt previously validated shared index files without re-export."""
+        from .monthly_index_repair import BINDING, SCHEMA, capture_index_repairs
+        root = self.store.operation_root(operation_id)
+        with _exclusive_lock(root / ".writer.lock", blocking=False):
+            plan = self.store.read_plan(operation_id)
+            existing = plan.get(BINDING)
+            if existing is not None:
+                ref = plan[BINDING + "_ref"]
+                path = root / ref["id"]
+                if (existing.get("inputs") != inputs or _read_json(path, label="index repair binding") != existing
+                        or _file_sha256(path) != ref["sha256"] or path.stat().st_size != ref["size"]):
+                    raise MonthlyReleaseConflict("index repair binding changed")
+                return {"status": "BOUND", "reference": ref, "authority_ref": existing["authority_ref"]}
+            state = self.store.read_state(operation_id)
+            source = self.store.read_checkpoint(operation_id, "SOURCE")
+            if (state["status"] != ReleaseState.FAILED.value or state["current_stage"] != "BUILD"
+                    or source is None or "monthly_ready_correction" not in plan
+                    or any(self.store.read_checkpoint(operation_id, s) is not None for s in STAGES if s != "SOURCE")):
+                raise MonthlyReleaseConflict("index repair requires idle retained BUILD")
+            if cas is None:
+                from .monthly_runtime import MonthlyRuntimeSettings
+                from .cas_store import CASStore
+                cas = CASStore(MonthlyRuntimeSettings.from_env().artifact_root)
+            try:
+                authority = capture_index_repairs(inputs, repair_root=Path(plan["candidate_root"]).parent.parent / "data_repair_staging",
+                    base_manifest_ref=plan["monthly_ready_correction"]["base_manifest_ref"], cutoff=plan["target_cutoff"], cas=cas)
+            except (ValueError, KeyError, TypeError, OSError) as exc:
+                raise MonthlyReleaseRequestInvalid("index repair producer receipt is invalid", context={"cause": str(exc)}) from exc
+            binding = {"schema_version": SCHEMA, "operation_id": operation_id, "inputs": dict(inputs),
+                "target_cutoff": plan["target_cutoff"], "authority_ref": cas.put_json(authority).as_dict(),
+                "source_receipt_canonical_sha256": source["canonical_sha256"], "bound_by": principal,
+                "database_write": False, "activation_authorized": False}
+            relative = f"inputs/index-fact-repair-{_digest(binding)}.json"
+            path = root / relative
+            _write_exclusive(path, binding)
             ref = {"id": relative, "sha256": _file_sha256(path), "size": path.stat().st_size}
             self.store.replace_plan(operation_id, {**plan, BINDING: binding, BINDING + "_ref": ref})
             return {"status": "BOUND", "reference": ref, "authority_ref": binding["authority_ref"]}
@@ -2110,6 +2274,11 @@ class MonthlyReleaseService:
                         }
                     }
                 )
+                if stage == "SOURCE" and plan.get("monthly_ready_correction") is not None:
+                    from .monthly_ready_correction import retained_source_receipt
+                    prior[stage] = retained_source_receipt(self, operation_id, plan=plan,
+                                                          request_digest=request_digest)
+                    continue
                 from .monthly_prev_close_repair import SUPPLEMENT_KEYS
                 supplement_names = ("monthly_industry_history", "monthly_prev_close_repairs",
                                     "monthly_suspension_authority", "monthly_minute_repairs")
@@ -2373,7 +2542,8 @@ class MonthlyReleaseService:
             raise MonthlyReleaseNotReady("candidate profile does not bind the ready manifest")
         candidate_profile_ref = _content_ref(profile_path, ref_id=profile_path.name)
         predecessor_profile_ref = _require_content_ref(
-            plan.get("predecessor_profile_ref"), field="predecessor_profile_ref"
+            plan.get("activation_predecessor_profile_ref", plan.get("predecessor_profile_ref")),
+            field="predecessor_profile_ref"
         )
         payload = {
             "schema_version": READY_SCHEMA,
@@ -2457,10 +2627,10 @@ class MonthlyReleaseService:
                 action="ACTIVATE",
                 principal=principal,
                 target_cutoff=str(plan["target_cutoff"]),
-                predecessor_profile_sha256=str(plan["predecessor"]["profile_sha256"]),
+                predecessor_profile_sha256=str(plan.get("activation_predecessor", plan["predecessor"])["profile_sha256"]),
                 target_profile_sha256=candidate_profile_ref["sha256"],
             )
-            expected_old = str(plan["predecessor"]["profile_sha256"])
+            expected_old = str(plan.get("activation_predecessor", plan["predecessor"])["profile_sha256"])
             expected_new = candidate_profile_ref["sha256"]
             profile = _read_json(profile_candidate, label="candidate profile")
             runtime_pit_policy = self._runtime_pit_policy(profile)
@@ -2471,7 +2641,8 @@ class MonthlyReleaseService:
                 "operation_id": operation_id,
                 "status": ReleaseState.ACTIVATING.value,
                 "old_profile_ref": _require_content_ref(
-                    plan["predecessor_profile_ref"], field="old_profile_ref"
+                    plan.get("activation_predecessor_profile_ref", plan["predecessor_profile_ref"]),
+                    field="old_profile_ref"
                 ),
                 "new_profile_ref": _content_ref(
                     profile_candidate,

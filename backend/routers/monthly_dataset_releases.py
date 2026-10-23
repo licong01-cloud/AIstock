@@ -193,6 +193,18 @@ def bind_monthly_prev_close_repairs(
                 inputs=request.inputs, principal=principal.principal_id))}
 
 
+@router.post("/{operation_id}/factor-repairs")
+def bind_monthly_factor_repairs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_factor_binding_response_v1",
+            "data": _call(lambda: service.bind_factor_repairs(operation_id,
+                inputs=request.inputs, principal=principal.principal_id))}
+
+
 @router.post("/{operation_id}/minute-repairs")
 def bind_monthly_minute_repairs(
     operation_id: str,
@@ -202,6 +214,30 @@ def bind_monthly_minute_repairs(
 ) -> dict[str, Any]:
     return {"schema_version": "aistock_monthly_minute_binding_response_v1",
             "data": _call(lambda: service.bind_minute_repairs(operation_id,
+                inputs=request.inputs, principal=principal.principal_id))}
+
+
+@router.post("/{operation_id}/quote-repairs")
+def bind_monthly_quote_fact_repairs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_quote_fact_binding_response_v1",
+            "data": _call(lambda: service.bind_quote_fact_repairs(operation_id,
+                inputs=request.inputs, principal=principal.principal_id))}
+
+
+@router.post("/{operation_id}/index-repairs")
+def bind_monthly_index_fact_repairs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_index_fact_binding_response_v1",
+            "data": _call(lambda: service.bind_index_fact_repairs(operation_id,
                 inputs=request.inputs, principal=principal.principal_id))}
 
 
@@ -264,6 +300,17 @@ def bind_monthly_repair_inputs(
     return {"schema_version": "aistock_monthly_repair_inputs_response_v1", "data": _call(
         lambda: service.bind_repair_inputs(operation_id, inputs=request.inputs, principal=principal.principal_id)
     )}
+
+
+@router.post("/{operation_id}/prepare-correction")
+def prepare_monthly_ready_correction(
+    operation_id: str,
+    request: EmptyCommandRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_ready_correction_response_v1", "data": _call(lambda: service.prepare_ready_correction(
+        operation_id, principal=principal.principal_id))}
 
 
 @router.post("/adopt", status_code=201)
