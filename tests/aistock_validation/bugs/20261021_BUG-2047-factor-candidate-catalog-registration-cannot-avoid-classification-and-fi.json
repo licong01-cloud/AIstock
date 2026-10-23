@@ -30,20 +30,20 @@
     {
       "action": "expand_scope",
       "actor": "Codex",
-      "timestamp": "2026-10-23",
-      "note": "User-authorized Issue #6523 merge blocker repair: exact direct CI ownership/execution mappings and regression, plus backend-main runbook and identity/business smoke contract; no runtime catalog or inference rule weakening, no production writes/process control."
+      "note": "User-authorized Issue #6523 merge blocker repair: exact direct CI ownership/execution mappings and regression, plus backend-main runbook and identity/business smoke contract; no runtime catalog or inference rule weakening, no production writes/process control.",
+      "timestamp": "2026-10-23"
     },
     {
       "action": "expand_scope",
       "actor": "Codex",
-      "timestamp": "2026-10-23",
-      "note": "Use existing DIRECT_BACKEND_PLAN_KEYS_BY_FILE for the two exact unmapped paths; preserve existing ownership and inference semantics."
+      "note": "Use existing DIRECT_BACKEND_PLAN_KEYS_BY_FILE for the two exact unmapped paths; preserve existing ownership and inference semantics.",
+      "timestamp": "2026-10-23"
     },
     {
       "action": "merge_blocker_validation",
       "actor": "Codex",
-      "timestamp": "2026-10-23T15:27:27.476535+00:00",
-      "note": "Direct mapping via existing classifier table; platform_api_backend 54 passed including original 7; classifier 145 passed; explicit 8-file L0 blocking=0; Ruff F, compileall and workflow smoke passed. Runtime contract missing-field/downgrade negatives passed. Read-only live business probe connection refused on catalog origin 127.0.0.1:8001; backend activation remains pending, no service control, DB writes or QE start. DESIGN-COMPLIANCE-001 four checks passed for source scope; no partial runtime claim, silent fallback, business semantic change or extra approval gate."
+      "note": "Direct mapping via existing classifier table; platform_api_backend 54 passed including original 7; classifier 145 passed; explicit 8-file L0 blocking=0; Ruff F, compileall and workflow smoke passed. Runtime contract missing-field/downgrade negatives passed. Read-only live business probe connection refused on catalog origin 127.0.0.1:8001; backend activation remains pending, no service control, DB writes or QE start. DESIGN-COMPLIANCE-001 four checks passed for source scope; no partial runtime claim, silent fallback, business semantic change or extra approval gate.",
+      "timestamp": "2026-10-23T15:27:27.476535+00:00"
     },
     {
       "action": "scope_refinement",
@@ -53,8 +53,8 @@
     {
       "action": "merge_blocker_source_ready",
       "actor": "Codex",
-      "timestamp": "2026-10-23T15:31:48.972166+00:00",
-      "note": "Final exact ownership catalog entries route CLI/test to platform_api_backend; no classifier or runtime inference source/rule changes. Canonical finish and pre_pr_gate passed with zero blockers. Final catalog/routing matrix 19 passed; platform API executor 54 passed. Backend runtime remains pending; live origin refused connection. No production writes, QE start or service control."
+      "note": "Final exact ownership catalog entries route CLI/test to platform_api_backend; no classifier or runtime inference source/rule changes. Canonical finish and pre_pr_gate passed with zero blockers. Final catalog/routing matrix 19 passed; platform API executor 54 passed. Backend runtime remains pending; live origin refused connection. No production writes, QE start or service control.",
+      "timestamp": "2026-10-23T15:31:48.972166+00:00"
     }
   ],
   "evidence_uris": [
@@ -66,13 +66,28 @@
   ],
   "expected": "Explicit fresh-process CLI registers only authorized candidate code through ManualFactorService, with insert-only/idempotent SQL, no filesystem/code execution/classification/metrics/rating side effects. Existing save callers stay unchanged.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/manual_factor_service.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/test_manual_factor_service_wsl_output.py",
+      "docs/operations/manual_factor_candidate_registration_runbook.md",
+      "noxfile.py",
+      "scripts/register_manual_factor.py",
+      "tests/aistock_validation/bugs/20261021_BUG-2047-factor-candidate-catalog-registration-cannot-avoid-classification-and-fi.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/manual_factor_service.py",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/test_manual_factor_service_wsl_output.py",
+      "docs/operations/manual_factor_candidate_registration_runbook.md",
+      "noxfile.py",
       "scripts/register_manual_factor.py",
-      "backend/tests/test_manual_factor_service_wsl_output.py"
+      "tests/aistock_validation/bugs/20261021_BUG-2047-factor-candidate-catalog-registration-cannot-avoid-classification-and-fi.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/manual_factor_service.py",
@@ -138,8 +153,8 @@
   },
   "first_seen_at": "2026-10-21T03:28:56.941377Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "59146e1906742a993759af9b77381ac1910b542f",
+  "fixed_at": "2026-10-23T15:44:11Z",
   "github_issue_number": 6523,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6523",
   "last_seen_at": "2026-10-21T03:28:56.941377Z",
@@ -147,6 +162,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6646",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -158,35 +174,66 @@
   ],
   "risk_area": "bug",
   "runtime_contract": {
+    "attribution_review": {
+      "backend": "quantevolver router template/validate/save/full-pipeline imports the same manual_factor_service module; file-level backend-main attribution retained",
+      "cli": "register-candidate -> factor_research.configure -> ManualFactorService.register_candidate; no API request",
+      "evidence_boundary": "CLI DEV evidence is not backend activation or production registration; existing factor_lifecycle_detail smoke checks catalog visibility only"
+    },
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-library/factors/price_volume_roc5_divergence_corr20?source=manual&expected_is_available=true",
     "fresh_process_evidence": [
       "python -m pytest backend/tests/test_manual_factor_service_wsl_output.py -q -> 7 passed",
       "Fresh-process register_manual_factor.py register-candidate --target dev -> catalog 24; exact retry and conflicting-code rollback verified",
       "Authorized fresh-process production registration -> catalog 1547; ID206 entire row unchanged; official_offline eligible=true with exact code_text hash 3907bb458a8c433ecadb219b549e707bdbd00aaa9a1586900a1ace6e539fbfc9",
       "Fresh process loaded tracked ManualFactorService.register_candidate at HEAD57913be6a558c2e911e496184639e9cb2a223265; DEV ID32 insert/replay/conflict rollback and Composer official_offline read passed; X:/AIstock_factor_research/september-reassessment-20261023/catalog-delivery/dev-tail-registration.json; service and CLI source unchanged by merge-blocker repair; no production write or service control"
     ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/manual_factor_candidate_registration_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/manual_factor_candidate_registration_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-library/factors/price_volume_roc5_divergence_corr20?source=manual&expected_is_available=true",
-    "attribution_review": {
-      "cli": "register-candidate -> factor_research.configure -> ManualFactorService.register_candidate; no API request",
-      "backend": "quantevolver router template/validate/save/full-pipeline imports the same manual_factor_service module; file-level backend-main attribution retained",
-      "evidence_boundary": "CLI DEV evidence is not backend activation or production registration; existing factor_lifecycle_detail smoke checks catalog visibility only"
-    }
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2047",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "1d41744eae43fa47",
+    "recorded_at": "2026-10-23T15:44:45.338186Z",
+    "runtime_contract_digest": "5dd4352c6c4d2a9778c2c4ce9147cc818510a25e63a7ccf9b0b6ca9a25432899",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "f7358e9f8bffb76cd669ed405a74fc193e8eac1d",
+    "source_merge_commit": "59146e1906742a993759af9b77381ac1910b542f",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6646",
+    "validation_evidence": [
+      "validation-receipt: id=3a36b64ef22afdb2 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`passed`",
+      "validation-receipt: id=d640fbd0304784e0 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=b2c019c8b21e6b74 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=c62632292949f17d commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=ruff plan=direct status=passed command=`ruff check --select F scripts/ci_change_classifier.py backend/tests/scripts/test_ci_change_classifier.py noxfile.py backend/services/manual_factor_service.py scripts/register_manual_factor.py backend/tests/test_manual_factor_service_wsl_output.py` result=`passed`",
+      "validation-receipt: id=5cc51a1ac8a06b51 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+      "validation-receipt: id=cecf4f5db833a9a5 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+      "validation-receipt: id=2292a5331e12354e commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_change_classifier.py::test_manual_factor_registration_has_direct_ci_execution backend/tests/test_validation_module_ownership.py backend/tests/test_validation_catalog_integrity.py -q -p no:cacheprovider` result=`passed`",
+      "validation-receipt: id=a24bec108a83dac4 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/manual_factor_service.py scripts/register_manual_factor.py backend/tests/test_manual_factor_service_wsl_output.py tests/aistock_validation/bugs/20261021_BUG-2047-factor-candidate-catalog-registration-cannot-avoid-classification-and-fi.json backend/tests/scripts/test_ci_change_classifier.py tests/aistock_validation/catalog/file_ownership.yaml noxfile.py docs/operations/manual_factor_candidate_registration_runbook.md` result=`passed`",
+      "validation-receipt: id=aa50abc3034a2aa4 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2047 --changed-file tests/aistock_validation/catalog/file_ownership.yaml --changed-file noxfile.py --changed-file backend/tests/scripts/test_ci_change_classifier.py --module validation` result=`passed`"
+    ],
+    "validation_evidence_digest": "573ab1eec69bbbe4fa406aa10e704e04e56614efe4c07b2c1e80bdf80efcc2cd"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "factor_library"
   ],
@@ -195,6 +242,17 @@
     "fingerprint": "d3201ed28f5e17907e8a46cd",
     "source_event_id": "FE-20261021-d3201ed28f5e"
   },
+  "validation_evidence": [
+    "validation-receipt: id=3a36b64ef22afdb2 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=nox plan=platform_api_backend status=passed command=`python -m nox -s platform_api_backend` result=`passed`",
+    "validation-receipt: id=d640fbd0304784e0 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=b2c019c8b21e6b74 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=c62632292949f17d commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=ruff plan=direct status=passed command=`ruff check --select F scripts/ci_change_classifier.py backend/tests/scripts/test_ci_change_classifier.py noxfile.py backend/services/manual_factor_service.py scripts/register_manual_factor.py backend/tests/test_manual_factor_service_wsl_output.py` result=`passed`",
+    "validation-receipt: id=5cc51a1ac8a06b51 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "validation-receipt: id=cecf4f5db833a9a5 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+    "validation-receipt: id=2292a5331e12354e commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_ci_change_classifier.py::test_manual_factor_registration_has_direct_ci_execution backend/tests/test_validation_module_ownership.py backend/tests/test_validation_catalog_integrity.py -q -p no:cacheprovider` result=`passed`",
+    "validation-receipt: id=a24bec108a83dac4 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/manual_factor_service.py scripts/register_manual_factor.py backend/tests/test_manual_factor_service_wsl_output.py tests/aistock_validation/bugs/20261021_BUG-2047-factor-candidate-catalog-registration-cannot-avoid-classification-and-fi.json backend/tests/scripts/test_ci_change_classifier.py tests/aistock_validation/catalog/file_ownership.yaml noxfile.py docs/operations/manual_factor_candidate_registration_runbook.md` result=`passed`",
+    "validation-receipt: id=aa50abc3034a2aa4 commit=f7358e9f8bffb76cd669ed405a74fc193e8eac1d kind=workflow_smoke plan=direct status=passed command=`python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2047 --changed-file tests/aistock_validation/catalog/file_ownership.yaml --changed-file noxfile.py --changed-file backend/tests/scripts/test_ci_change_classifier.py --module validation` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "light",
     "ci_premerge_plans": [],
