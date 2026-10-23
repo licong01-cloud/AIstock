@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2077",
-  "closed_at": null,
+  "closed_at": "2026-10-23T15:17:34Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -29,19 +29,19 @@
   "expected": "对精确三条原实验提供基于冻结配置及封存SHA的登记修复和无派发证明，原结果、状态、参数语义保持；生产执行须DEV通过及独立明确授权。原F2 CLI用该证明续接created同ID。",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261023_BUG-2077-qe-l2-created.json",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
       "backend/tests/quantevolver/test_qe_l2_registration_recovery.py",
       "docs/operations/qe_l2_registration_recovery_20261023.md",
-      "scripts/qe_l2_registration_recovery.py"
+      "scripts/qe_l2_registration_recovery.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2077-qe-l2-created.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261023_BUG-2077-qe-l2-created.json",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
       "backend/tests/quantevolver/test_qe_l2_registration_recovery.py",
       "docs/operations/qe_l2_registration_recovery_20261023.md",
-      "scripts/qe_l2_registration_recovery.py"
+      "scripts/qe_l2_registration_recovery.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2077-qe-l2-created.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -63,8 +63,8 @@
   },
   "first_seen_at": "2026-10-23T08:53:59.162582Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "af1c6dfd17fc4b148e1f8abd915242510eb14b81",
+  "fixed_at": "2026-10-23T15:17:34Z",
   "github_issue_number": 6636,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6636",
   "last_seen_at": "2026-10-23T08:53:59.162582Z",
@@ -72,6 +72,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6638",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -88,6 +89,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -97,7 +99,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2077",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3abc8fabfabd4729",
+    "recorded_at": "2026-10-23T15:21:02.439559Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "99a248dc9d73d8b17c40f6f25c33ac7f06d49aa3",
+    "source_merge_commit": "af1c6dfd17fc4b148e1f8abd915242510eb14b81",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6638",
+    "validation_evidence": [
+      "rtk pytest backend/tests/quantevolver/test_qe_l2_registration_recovery.py -q -> 11 passed",
+      "python -m nox -s l0 -> passed",
+      "python -m nox -s validation_module_registry_l0 -> passed"
+    ],
+    "validation_evidence_digest": "4b18a88a9f75098732ff8e4672e791c409aabca988649899f9b40e878bf8c9c6"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "quantevolver"
   ],
@@ -106,6 +131,11 @@
     "fingerprint": "6b3827fb18e5ca24b2106d5e",
     "source_event_id": "FE-20261023-6b3827fb18e5"
   },
+  "validation_evidence": [
+    "rtk pytest backend/tests/quantevolver/test_qe_l2_registration_recovery.py -q -> 11 passed",
+    "python -m nox -s l0 -> passed",
+    "python -m nox -s validation_module_registry_l0 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
