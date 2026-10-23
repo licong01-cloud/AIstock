@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import json
+from pathlib import Path
 import shutil
 
 import pytest
@@ -153,6 +154,188 @@ def fixture(tmp_path):
         ],
     }
     return service, values, pending
+
+
+def test_combined_fact_paths_are_bounded_and_pin_verified(tmp_path):
+    from backend.services.dataset_release.monthly_minute_adoption import validate_fact_amendment
+
+    path = 'components/factor_h5_static_candidate_v2/sector_data.h5'
+    value = tmp_path / path
+    value.parent.mkdir(parents=True)
+    value.write_bytes(b'authoritative missing rows')
+    old = {path: {'path': path, 'sha256': 'a' * 64, 'size': 3}}
+    new = {path: {'path': path, **file_pin(value)}}
+    extra = {'files': {path: {'before': old[path], 'after': new[path]}},
+             'evidence': {}, 'stock_dates': 8702, 'existing_finite_values_unchanged': True,
+             'database_write': False, 'active_profile_write': False, 'runtime_action': False}
+    assert validate_fact_amendment(extra, old, new, tmp_path) == {path}
+    extra['files']['stock_pools/stock_universe.txt'] = extra['files'][path]
+    with pytest.raises(ValueError, match='fact amendment'):
+        validate_fact_amendment(extra, old, new, tmp_path)
+
+
+def _assembly_fixture(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from scripts import dataset_release_minute_coverage_correction as module
+
+    base, work, target = [tmp_path / n for n in ('base', 'component', 'successor')]
+    components = {}
+    for prefix in ('components/minute_bin_candidate/', 'minute_bin/qlib/'):
+        for relative, raw in [('instruments/all.txt', b'old'), ('features/000001.sz/close.1min.bin', b'old quote')]:
+            path = base / (prefix + relative)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(raw)
+            components[prefix + relative] = {'path': prefix + relative, **file_pin(path)}
+        _canonical(base / prefix / 'meta_export.json', {})
+        name = prefix + 'meta_export.json'
+        components[name] = {'path': name, **file_pin(base / name)}
+    _canonical(base / 'minute_bin/materialization_receipt.json', {})
+    name = 'minute_bin/materialization_receipt.json'
+    components[name] = {'path': name, **file_pin(base / name)}
+    _canonical(base / 'unchanged.json', {'fact': 1})
+    components['unchanged'] = {'path': 'unchanged.json', **file_pin(base / 'unchanged.json')}
+    manifest = {'components': components, 'source_contract': {}, 'revision': 'r1', 'release_id': 'release'}
+    manifest['dataset_manifest_sha256'] = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+    _canonical(base / 'qe_dataset_manifest.json', manifest)
+    profile_path = tmp_path / 'profile.json'
+    _canonical(profile_path, {'generation': 'v1', 'controller_paths': {'candidate_root': str(base)},
+        'node_bindings': {}, 'components': {'dataset_manifest_file_sha256': file_pin(base / 'qe_dataset_manifest.json')['sha256']}})
+    relative = 'features/000001.sz/close.1min.bin'
+    path = work / relative
+    path.parent.mkdir(parents=True)
+    path.write_bytes(b'correct quotes')
+    _canonical(work / 'source.json', {'frozen_source': True})
+    _canonical(work / 'component-amendment.json', {
+        'predecessor_profile': {'sha256': file_pin(profile_path)['sha256']},
+        'files': {relative: {'before': file_pin(base / 'components/minute_bin_candidate' / relative), 'after': file_pin(path)}},
+        'source_ref': {'path': str(work / 'source.json'), **file_pin(work / 'source.json')}, 'fields': ['close'], 'filled_cells': 2})
+    monkeypatch.setattr(module, 'build_minute_quote_catalog', lambda _: SimpleNamespace(payload=b'catalog', calendar_sha256='a' * 64))
+    return SimpleNamespace(profile=profile_path, component=work, output=target), base, module
+
+
+def test_resume_retains_completed_files_and_never_overwrites_predecessor(tmp_path, monkeypatch):
+    args, base, module = _assembly_fixture(tmp_path, monkeypatch)
+    before = (base / 'components/minute_bin_candidate/features/000001.sz/close.1min.bin').read_bytes()
+    real_copy, calls = module.shutil.copyfile, []
+
+    def fail_once(source, destination):
+        calls.append(source)
+        if len(calls) == 2:
+            raise OSError('injected interruption')
+        return real_copy(source, destination)
+
+    monkeypatch.setattr(module.shutil, 'copyfile', fail_once)
+    with pytest.raises(OSError, match='interruption'):
+        module.assemble(args)
+    repaired = args.output / 'components/minute_bin_candidate/features/000001.sz/close.1min.bin'
+    inode = repaired.stat().st_ino
+    result = module.assemble(args)
+    assert repaired.stat().st_ino == inode
+    assert (base / 'components/minute_bin_candidate/features/000001.sz/close.1min.bin').read_bytes() == before
+    assert (args.output / 'unchanged.json').stat().st_ino == (base / 'unchanged.json').stat().st_ino
+    assert module.assemble(args) == result
+
+
+def test_existing_unrelated_candidate_is_not_adopted(tmp_path, monkeypatch):
+    args, _, module = _assembly_fixture(tmp_path, monkeypatch)
+    args.output.mkdir()
+    _canonical(args.output / '.minute-assembly-inputs.json', {'another': 'task'})
+    with pytest.raises(ValueError, match='another assembly'):
+        module.assemble(args)
+    _canonical(args.output / 'release_closure_receipt.json', {'sealed': True})
+    with pytest.raises(ValueError, match='immutable'):
+        module.assemble(args)
+    from scripts.dataset_release_combined_correction import prepare
+    with pytest.raises(ValueError, match='immutable'):
+        prepare(args)
+
+
+def test_real_quotes_reduce_suspension_explanations_without_changing_population(tmp_path):
+    service, values, _ = fixture(tmp_path)
+    candidate = values['candidate_root']
+    window_path = candidate / 'reports/minute-full-window-validation.json'
+    window = json.loads(window_path.read_bytes())
+    window['consumer_coverage']['suspension_explained_days'] = 3
+    _canonical(window_path, window)
+    manifest = json.loads((candidate / 'qe_dataset_manifest.json').read_bytes())
+    manifest['components']['reports/minute-full-window-validation.json'].update(file_pin(window_path))
+    manifest.pop('dataset_manifest_sha256')
+    manifest['dataset_manifest_sha256'] = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+    _canonical(candidate / 'qe_dataset_manifest.json', manifest)
+    path = candidate / 'provenance/minute-nodes.json'
+    proof = json.loads(path.read_bytes())
+    proof['dataset_manifest_sha256'] = manifest['dataset_manifest_sha256']
+    for node in proof['nodes'].values():
+        node.update(manifest=manifest['dataset_manifest_sha256'], manifest_file_sha256=_sha(candidate / 'qe_dataset_manifest.json'))
+        node['consumer_coverage']['suspension_explained_days'] = 1
+    _canonical(path, proof)
+    profile = json.loads(values['profile_candidate'].read_bytes())
+    profile['components'].update(dataset_manifest_sha256=manifest['dataset_manifest_sha256'],
+                                 dataset_manifest_file_sha256=_sha(candidate / 'qe_dataset_manifest.json'))
+    _canonical(values['profile_candidate'], profile)
+    values.update(target_profile_sha256=_sha(values['profile_candidate']), dataset_manifest_sha256=manifest['dataset_manifest_sha256'],
+                  dataset_manifest_file_sha256=_sha(candidate / 'qe_dataset_manifest.json'),
+                  node_manifest_file_sha256={k:_sha(candidate / 'qe_dataset_manifest.json') for k in proof['nodes']})
+    for reference in values['evidence_refs']:
+        reference['sha256'] = _sha(candidate / reference['relative_path'])
+    assert service.adopt_existing_successor(**values)['status'] == 'READY_TO_ACTIVATE'
+
+
+def test_direct_active_predecessor_does_not_retire_an_unrelated_operation(tmp_path):
+    from backend.services.dataset_release.monthly_minute_adoption import validate_minute_adoption
+
+    _, values, _ = fixture(tmp_path)
+    candidate = values['candidate_root']
+    evidence = {r['schema_version']: json.loads((candidate / r['relative_path']).read_bytes())
+                for r in values['evidence_refs']}
+    repair, proof, window = [evidence[k] for k in (AMENDMENT, READBACK, WINDOW)]
+    physical = json.loads(Path(repair['predecessor_profile']['path']).read_bytes())
+    proof['logical_predecessor_profile_sha256'] = repair['predecessor_profile']['sha256']
+    proof.pop('supersedes_operation_id')
+    window['active_manifest_sha256'] = physical['components']['dataset_manifest_sha256']
+    _canonical(candidate / 'reports/minute-full-window-validation.json', window)
+    manifest = json.loads((candidate / 'qe_dataset_manifest.json').read_bytes())
+    pin = manifest['components']['reports/minute-full-window-validation.json']
+    pin.update(file_pin(candidate / pin['path']))
+    manifest.pop('dataset_manifest_sha256')
+    manifest['dataset_manifest_sha256'] = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+    _canonical(candidate / 'qe_dataset_manifest.json', manifest)
+    proof['dataset_manifest_sha256'] = manifest['dataset_manifest_sha256']
+    for node in proof['nodes'].values():
+        node.update(manifest=manifest['dataset_manifest_sha256'], manifest_file_sha256=_sha(candidate / 'qe_dataset_manifest.json'))
+    args = dict(predecessor_root=Path(physical['controller_paths']['candidate_root']), predecessor_profile=physical,
+                predecessor_profile_sha256=repair['predecessor_profile']['sha256'], candidate=candidate,
+                profile=json.loads(values['profile_candidate'].read_bytes()), manifest=manifest,
+                evidence=evidence, required_nodes=('controller', 'wsl2-5080', 'rdagent-node1'))
+    assert validate_minute_adoption(**args) is None
+    proof['supersedes_operation_id'] = 'dmr_' + 'f' * 32
+    with pytest.raises(ValueError, match='unrelated operation'):
+        validate_minute_adoption(**args)
+
+
+@pytest.mark.parametrize('failure', ['hash', 'predecessor', 'finite', 'database'])
+def test_combined_fact_drift_is_rejected(tmp_path, failure):
+    from backend.services.dataset_release.monthly_minute_adoption import validate_fact_amendment
+
+    path = 'factor_bundle/static_factors.parquet'
+    value = tmp_path / path
+    value.parent.mkdir(parents=True)
+    value.write_bytes(b'fact')
+    old = {path: {'path': path, 'sha256': 'a' * 64, 'size': 2}}
+    new = {path: {'path': path, **file_pin(value)}}
+    extra = {'files': {path: {'before': dict(old[path]), 'after': dict(new[path])}},
+             'evidence': {}, 'stock_dates': 1, 'existing_finite_values_unchanged': True,
+             'database_write': False, 'active_profile_write': False, 'runtime_action': False}
+    if failure == 'hash':
+        value.write_bytes(b'drift')
+    elif failure == 'predecessor':
+        extra['files'][path]['before']['sha256'] = 'b' * 64
+    elif failure == 'finite':
+        extra['existing_finite_values_unchanged'] = False
+    else:
+        extra['database_write'] = True
+    with pytest.raises(ValueError, match='fact amendment'):
+        validate_fact_amendment(extra, old, new, tmp_path)
 
 
 def test_successor_retains_history_is_idempotent_and_does_not_activate(tmp_path):

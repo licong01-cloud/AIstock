@@ -1417,6 +1417,16 @@ class MonthlyReleaseService:
                         if prior.get("status") == ReleaseState.ACTIVATED_VERIFIED.value and intent_path.is_file():
                             if _read_json(intent_path, label="minute activated predecessor").get("new_profile_ref", {}).get("sha256") == expected_predecessor:
                                 continue
+                        marker = child / 'receipts' / 'superseded.json'
+                        if prior.get('status') == ReleaseState.CANCELLED.value and marker.is_file():
+                            replacement = _read_json(marker, label='superseded correction')
+                            successor_id = str(replacement.get('successor_operation_id') or '')
+                            successor_state = self.store.read_state(successor_id)
+                            successor_intent = self.store.operation_root(successor_id) / 'receipts' / 'activation.json'
+                            if (successor_state.get('status') == ReleaseState.ACTIVATED_VERIFIED.value
+                                    and successor_intent.is_file() and _read_json(successor_intent,
+                                        label='activated correction successor').get('new_profile_ref', {}).get('sha256') == expected_predecessor):
+                                continue
                     if late_financing:
                         prior = self.store.read_state(str(existing["operation_id"]))
                         intent_path = self.store.operation_root(str(existing["operation_id"])) / "receipts" / "activation.json"
@@ -1490,7 +1500,8 @@ class MonthlyReleaseService:
                 "node_roots": actual_node_roots,
                 "target_roots": {"controller": str(candidate), **actual_node_roots},
                 "required_consumers": list(REQUIRED_CONSUMERS),
-                "actions": {component: (ComponentAction.SELECTIVE_REBUILD.value if (quote_only and component == "minute") or (late_financing and component == "factor") or (minute_repair and component in {"minute", "factor"})
+                "actions": {component: (ComponentAction.SELECTIVE_REBUILD.value if (quote_only and component == "minute") or (late_financing and component == "factor") or (minute_repair and (component in {"minute", "factor"} or (
+                                        component == "day" and any(p.startswith('components/daily_bin_candidate/') for p in typed_evidence[MINUTE_AMENDMENT].get('additional_fact_amendment', {}).get('files', {})))))
                                         else ComponentAction.REUSE.value) for component in COMPONENTS},
                 "adoption_ref": _content_ref(
                     root / "receipts" / "adoption.json", ref_id="receipts/adoption.json"

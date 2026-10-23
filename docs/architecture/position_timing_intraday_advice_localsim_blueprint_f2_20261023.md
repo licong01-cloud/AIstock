@@ -1,7 +1,7 @@
 # 分钟级交易时机建议与 LocalSIM 执行适配 F2 蓝图
 
-> 版本：v1.2；日期：2026-10-23；Feature tier：F2。
-> 状态：`PHASE1_TIMING_SOURCE_IMPLEMENTED_CONSUMERS_PENDING`；本模块核心、API、页面提醒及冻结文件决策回放已实施，见[详细设计与验收](position_timing_intraday_phase1_f2_detailed_design_20261023.md)。用户后端重启/运行核验、LocalSIM/Advisory消费接入和经济评价仍未完成。
+> 版本：v1.3；更新日期：2026-10-24；Feature tier：F2。
+> 状态：`TIMING_RUNTIME_VERIFIED_RESEARCH_IMPLEMENTED_CONSUMERS_PENDING`；本模块核心、API、页面提醒及冻结文件决策回放已实施，见[阶段一详细设计](position_timing_intraday_phase1_f2_detailed_design_20261023.md)。用户已完成后端重启，加载身份/API核验通过；多日历史研究与比较能力见[研究详细设计](position_timing_intraday_research_f2_detailed_design_20261023.md)。LocalSIM/Advisory消费接入和账户经济评价仍未完成。
 > 源码核查基线：`029e8e4a8a9b18446edca7f439bf333152a5565b`（本任务独立工作树起点）。
 > 唯一开发规范：`../standards/aistock_development_standard_v1.5_20260523.md`。
 > 范围：独立分钟择时核心、LocalSIM 分钟模拟执行适配、荐股可嵌入提醒；不接实盘，不适配 MiniQMT。
@@ -31,7 +31,7 @@
 
 ### 2.1 核查事实，不把存在文件等同于上线
 
-以下现状核查来自蓝图初稿时源码基线；实施增量见§7。本轮仅执行功能测试和冻结fixture决策回放，没有查询数据库、读取实时行情或确认生产模块激活状态。
+以下源码语义来自蓝图初稿时核查；后续实施及运行核验见§7。初版仅有功能fixture回放，本次增补真实冻结文件研究；均未查询数据库或读取实时行情。API运行核验与消费者接入、经济评价分别报告。
 
 | 资产 | 已核实的源码语义 | 复用/缺口 |
 |---|---|---|
@@ -82,7 +82,7 @@ LocalSIM 接口扩展未交付时，核心回放和提醒仍可先验收；整�
 
 ### 3.1 最小共同输入输出
 
-命名为蓝图提案，第一阶段详细设计将其固化为实际 schema；不声称这些 API 已存在。
+下表是语义摘要；实际schema与已实现API以阶段一详细设计和contracts.py为准，不把LocalSIM尚未完成的消费适配称为已上线接口。
 
 | 对象 | 最小内容与含义 |
 |---|---|
@@ -215,7 +215,7 @@ F2详细设计已固化schema、规则参数、时间/成交代理、提醒状�
 
 回滚：停止新计划引用新策略，保留旧研究和提醒记录；在途模拟计划由LocalSIM owner按既有生命周期处理，不把清理文件当取消订单。提醒故障只使本组件UNAVAILABLE，不影响原荐股页面。
 
-本轮 `code_change=true; functional_fixture_replay=true; economic_experiment_started=false; database_read=false; database_write=false; dataset_mutation=false; user_runtime_action=false; backend_restart=pending_user`。前端依赖只安装于独立worktree，Playwright仅启动隔离测试前端；无行情采样、模型训练、生产迁移或用户服务进程操作。
+当前 `code_change=true; real_history_decision_replay=true; account_economic_experiment_started=false; database_read=false; database_write=false; dataset_mutation=false`。阶段一用户重启后的加载身份/API核验已通过；本次只新增离线研究文件，不改API/核心/线上默认值，`backend_restart_required=false; runtime_action=false`。无行情采样、模型训练、生产迁移或用户服务进程操作。
 
 ### 6.2 风险与处置
 
@@ -267,8 +267,12 @@ F2详细设计已固化schema、规则参数、时间/成交代理、提醒状�
 | F-011 | 本文§2.3/§5 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md | DESIGN_VERIFIED | none |
 | F-012 | 本文§6.1/§6.2/§6.4 | artifact:docs/analysis/position_timing_intraday_blueprint_review_20261023.md | DESIGN_VERIFIED | none |
 
-## 7. 2026-10-23 实施增量与下一步
+## 7. 截至2026-10-24实施增量与下一步
 
 本模块已实现纯核心B0/C1/C2、严格分钟/日级输入、独立不可变状态、五个API、可导入组件及现有页面挂载、prepare/run/inspect/exact retry决策回放。实际证据见[实施验收记录](../analysis/position_timing_intraday_phase1_implementation_20261023.md)。功能回放仅使用标注的合成fixture，不代表R8历史研究或实盘采样，不给出收益优劣结论。
 
-源码合入后由用户重启后端，再只读核验加载身份/API；可将[LocalSIM接入包](../handoff/position_timing_intraday_localsim_integration_request_20261023.md)转交模拟盘窗口。纯SDK无需等待后端重启才可被其离线消费；LocalSIM产品接入和匹配成交代理的D0/1/3/5经济验证由owner完成。荐股挂载/真实来源resolver亦由对应窗口接入，本窗口没有跨模块修改，也不解除TWAP-only。以上接入与经济验证完成前，不宣称完整阶段或双消费产品交付。
+阶段一源码PR #6611已合入，用户重启后于2026-10-23完成只读核验：运行加载commit `1a53df8becf909b307f402f0945cd19aa0aa3393`包含源码合入，8个相关模块文件一致，health/五路由/只读合同核验通过。证据：[核验回执](https://github.com/licong01-cloud/AIstock/pull/6611#issuecomment-6356504087)。这不是实际盘中数据新鲜度、荐股来源桥接或经济有效性证明。
+
+后续研究能力已增加：显式candidate/计划/费用绑定、逐消费文件SHA核验、多日三规则×四延迟决策回放、全计划消费包，以及LocalSIM结果导入/匹配比较。详细证据与真实数据研究身份见[研究实施记录](../analysis/position_timing_intraday_research_implementation_20261023.md)。预声明的3股×4日×买卖两侧24计划属于工程机制人口，不是全市场alpha研究；不训练模型、不调参、不声称已获得超额收益。只产生机会与后续执行槽，不能当成成交。
+
+下一步可将更新的[LocalSIM接入包](../handoff/position_timing_intraday_localsim_integration_request_20261023.md)转交模拟盘窗口，消费真实研究包并返回全计划账户结果，再由择时比较器分析成本后改善、完成率、延迟与MDD。纯SDK和离线研究无需后端重启。荐股挂载/真实来源resolver亦由对应窗口接入，本窗口没有跨模块修改，也不解除TWAP-only。以上接入与经济验证完成前，不宣称完整阶段或双消费产品交付；研究本身不等待未来自然日。

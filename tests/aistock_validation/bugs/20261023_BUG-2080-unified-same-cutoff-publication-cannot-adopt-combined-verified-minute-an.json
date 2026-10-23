@@ -1,0 +1,237 @@
+{
+  "actual": "September active release requires combining already independently validated physical minute files, 14 daily pre-close references, 8702 sector H5 facts and matching static cells while preserving the late-financing correction and unchanged pins. Existing adoption accepts only narrow financing/minute/catalog proof types and cannot register one complete mixed correction without intermediate activation or rebuilding. Add minimal typed combined correction support and assembly under existing API; preserve exact active predecessor/CAS, immutable releases, unchanged bytes, finite fact preservation and no database/runtime writes. Reuse previously completed exact-key and full-window coverage receipts, no new full-market audit or re-export.",
+  "allowed_write_scope": [
+    "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json",
+    "backend/services/dataset_release/monthly_minute_adoption.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "scripts/dataset_release_margin_detail_correction.py",
+    "scripts/dataset_release_minute_coverage_correction.py",
+    "scripts/dataset_release_combined_correction.py",
+    "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+    "backend/tests/dataset_release/test_monthly_minute_adoption.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2080",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-23T15:27:05.662584Z",
+  "description": "September active release requires combining already independently validated physical minute files, 14 daily pre-close references, 8702 sector H5 facts and matching static cells while preserving the late-financing correction and unchanged pins. Existing adoption accepts only narrow financing/minute/catalog proof types and cannot register one complete mixed correction without intermediate activation or rebuilding. Add minimal typed combined correction support and assembly under existing API; preserve exact active predecessor/CAS, immutable releases, unchanged bytes, finite fact preservation and no database/runtime writes. Reuse previously completed exact-key and full-window coverage receipts, no new full-market audit or re-export.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261023-050295cc17a6",
+      "timestamp": "2026-10-23T15:27:05.662584Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_minute_adoption.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "scripts/dataset_release_combined_correction.py",
+      "scripts/dataset_release_margin_detail_correction.py",
+      "scripts/dataset_release_minute_coverage_correction.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_minute_adoption.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "scripts/dataset_release_combined_correction.py",
+      "scripts/dataset_release_margin_detail_correction.py",
+      "scripts/dataset_release_minute_coverage_correction.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json",
+      "backend/services/dataset_release/monthly_minute_adoption.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "scripts/dataset_release_margin_detail_correction.py",
+      "scripts/dataset_release_minute_coverage_correction.py",
+      "scripts/dataset_release_combined_correction.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-10-23T15:27:05.662584Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6644,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6644",
+  "last_seen_at": "2026-10-23T15:27:05.662584Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "Fresh-process pytest RED to GREEN; minute adoption and interrupted file-only assembly tests passed; formal combined candidate sealed without database writes, model training or service control.",
+      "X:/AIstock_dataset_candidates/data_repair_staging/september-finalization-20261023/offline-adoption-validation.json; sealed fresh-process formal DERIVE/profile/closure PASS, no runtime control",
+      "X:/AIstock_dataset_candidates/data_repair_staging/september-finalization-20261023/offline-adoption-validation.json: actual sealed candidate and three-node readback PASS; no DB/profile/runtime writes"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "not_required",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Unified same-cutoff publication cannot adopt combined verified minute and industry fact corrections",
+  "trigger_condition": {
+    "fingerprint": "050295cc17a64945bec42c69",
+    "source_event_id": "FE-20261023-050295cc17a6"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from pathlib import Path, PurePosixPath
 
 from .canonical import canonical_json_bytes
@@ -66,6 +67,33 @@ def pins(manifest):
     return result
 
 
+def validate_fact_amendment(extra, before, after, candidate):
+    """Allow exact already-verified fact deltas, never arbitrary component edits."""
+    require(isinstance(extra, dict) and extra.get('existing_finite_values_unchanged') is True
+            and all(extra.get(k) is False for k in ('database_write', 'active_profile_write', 'runtime_action')),
+            'fact amendment safety')
+    files = extra.get('files')
+    require(isinstance(files, dict) and bool(files), 'fact amendment files')
+    allowed = {
+        prefix + filename for prefix in ('components/factor_h5_static_candidate_v2/', 'factor_bundle/')
+        for filename in ('sector_data.h5', 'static_factors.parquet')
+    } | {'components/sector_context_candidate_v1/component_receipt.json'}
+    for relative, entry in files.items():
+        require(relative in allowed or re.fullmatch(
+            r'(components/daily_bin_candidate|daily_bin/qlib)/features/[0-9]{6}\.(sz|sh)/prev_close\.day\.bin', relative),
+            'fact amendment path')
+        require(entry.get('before') == before.get(relative) and entry.get('after') == after.get(relative)
+                and relative in after and file_pin(candidate / relative) == {
+                    k: after[relative][k] for k in ('sha256', 'size')}, 'fact amendment pin')
+    for relative, pin in extra.get('evidence', {}).items():
+        require(relative.startswith('reports/combined-facts/') and '..' not in PurePosixPath(relative).parts
+                and '\\' not in relative and ':' not in relative and pin == after.get(relative)
+                and file_pin(candidate / relative) == {k: pin[k] for k in ('sha256', 'size')},
+                'fact amendment evidence')
+    require(isinstance(extra.get('stock_dates'), int) and extra['stock_dates'] > 0, 'fact amendment count')
+    return set(files) | set(extra.get('evidence', {}))
+
+
 def validate_minute_adoption(
     *,
     predecessor_root,
@@ -93,19 +121,15 @@ def validate_minute_adoption(
         == physical_profile["components"]["dataset_manifest_sha256"],
         "physical lineage",
     )
-    # Reuse the existing strict financing proof on its own actual predecessor.
-    validate_late_financing_adoption(
-        predecessor_root=predecessor_root,
-        predecessor_profile=predecessor_profile,
-        candidate=base,
-        profile=physical_profile,
-        manifest=old,
-        evidence={
-            FINANCING_SCHEMA: read(base / "reports/late-financing-amendment.json"),
-            FINANCING_READBACK: read(base / "provenance/late-financing-readback.json"),
-        },
-        required_nodes=required_nodes,
-    )
+    direct = (base.absolute() == predecessor_root.absolute()
+              and profile_ref['sha256'] == predecessor_profile_sha256)
+    if not direct:
+        validate_late_financing_adoption(
+            predecessor_root=predecessor_root, predecessor_profile=predecessor_profile,
+            candidate=base, profile=physical_profile, manifest=old,
+            evidence={FINANCING_SCHEMA: read(base / 'reports/late-financing-amendment.json'),
+                      FINANCING_READBACK: read(base / 'provenance/late-financing-readback.json')},
+            required_nodes=required_nodes)
     before, after = pins(old), pins(manifest)
     allowed_manifest = {
         "revision",
@@ -123,7 +147,7 @@ def validate_minute_adoption(
     source = dict(manifest["source_contract"])
     amendment = source.pop("minute_coverage_amendment", None)
     require(
-        source == old["source_contract"]
+        source == {k: v for k, v in old['source_contract'].items() if k != 'minute_coverage_amendment'}
         and isinstance(amendment, dict)
         and amendment["predecessor_manifest_sha256"] == old["dataset_manifest_sha256"],
         "source lineage",
@@ -143,6 +167,18 @@ def validate_minute_adoption(
         "release_closure_path",
         "release_closure_sha256",
     }
+    extra = repair.get('additional_fact_amendment')
+    if extra is not None:
+        allowed.add('sector_context_pins')
+        old_sector = physical_profile['components']['sector_context_pins']
+        new_sector = profile['components']['sector_context_pins']
+        require(set(old_sector) == set(new_sector) and all(
+            new_sector[k] == v for k, v in old_sector.items()
+            if k not in {'sector_data_sha256', 'receipt_sha256'}), 'industry authority changed')
+        require(new_sector['sector_data_sha256'] == after[
+            'components/factor_h5_static_candidate_v2/sector_data.h5']['sha256']
+            and new_sector['receipt_sha256'] == after[
+                'components/sector_context_candidate_v1/component_receipt.json']['sha256'], 'industry profile pin')
     require(
         set(profile["components"]) == set(physical_profile["components"])
         and all(profile["components"][k] == v for k, v in physical_profile["components"].items() if k not in allowed),
@@ -190,6 +226,8 @@ def validate_minute_adoption(
             "reports/monthly_consumer_layout_receipt.json",
         }
     )
+    if extra is not None:
+        mutable.update(validate_fact_amendment(extra, before, after, candidate))
     require(
         set(before) <= set(after)
         and set(after) - set(before) <= mutable
@@ -229,7 +267,17 @@ def validate_minute_adoption(
         and set(proof["nodes"]) == set(required_nodes),
         "node proof identity",
     )
+    observed_coverage = None
     for node in proof["nodes"].values():
+        coverage = node.get('consumer_coverage', {})
+        original_coverage = window['consumer_coverage']
+        require({k: v for k, v in coverage.items() if k != 'suspension_explained_days'}
+                == {k: v for k, v in original_coverage.items() if k != 'suspension_explained_days'}
+                and set(coverage) == set(original_coverage)
+                and isinstance(coverage.get('suspension_explained_days', 0), int)
+                and 0 <= coverage.get('suspension_explained_days', 0) <= original_coverage.get('suspension_explained_days', 0)
+                and (observed_coverage is None or observed_coverage == coverage), 'consumer population/coverage drift')
+        observed_coverage = coverage
         require(
             node.get("status") == "PASS"
             and node.get("dataset_identity_complete") is True
@@ -238,9 +286,16 @@ def validate_minute_adoption(
             and node["stock_dates_verified"] == len(dates)
             and node["field_cells_verified"] == repair["checked_cells"]
             and node["qrun_sha256"] == window["consumer_qrun_sha256"]
-            and node["consumer_coverage"] == window["consumer_coverage"],
+            and coverage == observed_coverage,
             "node exact readback",
         )
+        if extra is not None:
+            require(node.get('fact_amendment_files') == {
+                p: item['after']['sha256'] for p, item in extra['files'].items()
+            } and node.get('fact_stock_dates_verified') == extra['stock_dates'], 'node fact readback')
+    if direct:
+        require(proof.get('supersedes_operation_id') is None, 'direct successor supersedes an unrelated operation')
+        return None
     operation = proof["supersedes_operation_id"]
     require(
         isinstance(operation, str)

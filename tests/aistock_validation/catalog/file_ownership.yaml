@@ -1339,6 +1339,20 @@ rules:
     layer: data_pipeline
     risk_level: high
     ownership_reason: The tushare sync engine, dataset specs, audited adj-factor history reconciler, sync entrypoints, and direct tests form the local_data ingestion boundary that materializes every tushare dataset (including sw_index_member takedown fidelity), and must select the local_data focused plan instead of generic platform/scripts/tests catch-alls.
+  - rule_id: local_data_report_rc_raw_history
+    priority: 97
+    include:
+      - backend/services/report_rc_data.py
+      - backend/services/report_rc_data_delivery.py
+      - backend/db/migrations/add_report_rc_raw_v1.sql
+      - scripts/prepare_report_rc_history.py
+      - scripts/export_report_rc_history.py
+      - backend/tests/test_report_rc_data.py
+    primary_module: local_data
+    impact_modules: [advisory.model_first]
+    layer: data_pipeline
+    risk_level: high
+    ownership_reason: Bounded report_rc raw capture, immutable research files and explicit DEV persistence are shared source preparation, not Advisory signal or display deduplication.
   - rule_id: local_data_daily_basic_operator
     priority: 96
     include:
