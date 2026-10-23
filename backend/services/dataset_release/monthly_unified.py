@@ -1569,7 +1569,7 @@ class MonthlyReleaseService:
                 "node_roots": actual_node_roots,
                 "target_roots": {"controller": str(candidate), **actual_node_roots},
                 "required_consumers": list(REQUIRED_CONSUMERS),
-                "actions": {component: (ComponentAction.SELECTIVE_REBUILD.value if (quote_only and component == "minute") or (late_financing and component == "factor") or (minute_repair and (component in {"minute", "factor"} or (
+                "actions": {component: (ComponentAction.SELECTIVE_REBUILD.value if (suspension_repair and component == "suspend") or (quote_only and component == "minute") or (late_financing and component == "factor") or (minute_repair and (component in {"minute", "factor"} or (
                                         component == "day" and any(p.startswith('components/daily_bin_candidate/') for p in typed_evidence[MINUTE_AMENDMENT].get('additional_fact_amendment', {}).get('files', {})))))
                                         else ComponentAction.REUSE.value) for component in COMPONENTS},
                 "adoption_ref": _content_ref(

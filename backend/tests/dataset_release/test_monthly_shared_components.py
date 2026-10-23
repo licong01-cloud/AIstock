@@ -59,6 +59,30 @@ def signed_manifest(value):
     return value
 
 
+def test_suspension_adoption_route_marks_only_suspension_changed_and_is_idempotent(tmp_path, monkeypatch):
+    from backend.tests.dataset_release.test_monthly_unified_v2 import Pipeline, _adoptable_successor, _service
+    from backend.services.dataset_release import monthly_suspension_adoption
+
+    service = _service(tmp_path, Pipeline())
+    args = _adoptable_successor(tmp_path, service)
+    before = service.active_profile.read_bytes()
+    seen = []
+    monkeypatch.setattr(monthly_suspension_adoption, "validate_suspension_adoption", lambda **kw: seen.append(kw))
+    args["evidence_refs"] = []
+    for name, schema in (("repair", SCHEMA), ("readback", READBACK)):
+        relative = "reports/suspension-" + name + ".json"
+        path = args["candidate_root"] / relative
+        write(path, {"schema_version": schema, "status": "PASS"})
+        args["evidence_refs"].append({"relative_path": relative, "sha256": file_pin(path)["sha256"], "schema_version": schema})
+    result = service.adopt_existing_successor(**args)
+    assert result["status"] == "READY_TO_ACTIVATE" and len(seen) == 1
+    actions = service.store.read_plan(result["operation_id"])["actions"]
+    assert actions["suspend"] == "SELECTIVE_REBUILD"
+    assert set(v for k, v in actions.items() if k != "suspend") == {"REUSE"}
+    assert service.adopt_existing_successor(**args)["operation_id"] == result["operation_id"]
+    assert service.active_profile.read_bytes() == before
+
+
 @pytest.fixture
 def correction(tmp_path):
     old, new = tmp_path / "old", tmp_path / "new"
