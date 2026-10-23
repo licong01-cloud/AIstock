@@ -306,3 +306,35 @@ def test_directional_limits_allow_opposite_side(side, price, filled):
     bar = session.market.bars[2].model_copy(update={key: Decimal(price) for key in ("open", "high", "low", "close")})
     session.step(bar)
     assert session.order.filled_quantity == filled
+
+
+def test_campaign_discovers_owned_daily_inputs_without_inventing_price_preferences(tmp_path):
+    from backend.services.simulation_execution.localsim.timing_campaign import inspect_selection_history
+    from backend.services.simulation_execution.localsim.timing_store import publish
+
+    def artifact(name, day, *, package="selected", cutoff="2026-09-18", weight="0.5"):
+        folder = tmp_path / name / "selection"
+        publish(folder / "completion.json", {"consumer_scope": "LOCALSIM", "status": "SIGNAL_COMMITTED",
+                "clocks": {"target_trade_date": day, "data_cutoff": cutoff}})
+        publish(folder / "projection.json", {
+            "manifest_sha256_by_package": {package: "a" * 64},
+            "runtime_config": {"point_in_time_context": {"effective_trade_date": day, "cutoff_date": cutoff}},
+            "aggregate_results": [{"symbol": "000001.SZ", "target_weight": weight, "reference_price": "10"}]})
+
+    artifact("first", "2026-09-21")
+    artifact("other-package", "2026-09-22", package="other")
+    artifact("outside-candidate", "2026-10-08")
+    result = inspect_selection_history(tmp_path, package_id="selected", manifest_sha256="a" * 64,
+                                      trade_dates=["2026-09-21", "2026-09-22"])
+    assert result["missing_trade_dates"] == ["2026-09-22"]
+    assert result["excluded_dates_beyond_candidate"] == ["2026-10-08"]
+    assert result["targets_without_entry_band"] == 1
+    assert result["days"][0]["targets"][0]["reference_price"] == "10"
+    assert result["days"][0]["targets"][0]["suggested_entry_price_band"] is None
+    artifact("conflict", "2026-09-21", weight="0.7")
+    assert inspect_selection_history(tmp_path, package_id="selected", manifest_sha256="a" * 64,
+                                     trade_dates=["2026-09-21"])["conflicting_trade_dates"] == ["2026-09-21"]
+    artifact("bad-clock", "2026-09-22", cutoff="2026-09-22")
+    with pytest.raises(ValueError, match="SELECTION_CLOCK_CONFLICT"):
+        inspect_selection_history(tmp_path, package_id="selected", manifest_sha256="a" * 64,
+                                  trade_dates=["2026-09-22"])
