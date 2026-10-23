@@ -2661,7 +2661,9 @@ def main(argv: list[str] | None = None) -> int:
             except (OSError, ValueError):
                 payload["nightly_plan_status"] = {}
         transport_path = Path(args.nightly_status_json).resolve().with_name("artifact-transport.json")
-        if transport_path.is_file():
+        # A reused runner workspace may retain an earlier attempt's diagnostic.
+        # Current download outcomes, rather than file existence, admit its use.
+        if payload.get("artifact_transport_outcome") == "failure" and transport_path.is_file():
             try:
                 # A transport diagnostic is tiny; never read an unbounded foreign
                 # artifact as a control receipt or infer any executed test here.

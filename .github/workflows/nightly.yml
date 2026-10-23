@@ -1289,6 +1289,7 @@ jobs:
               "codeIntelligence": "${CODE_INTELLIGENCE_RESULT}"
             },
             "run_id": "${{ github.run_id }}",
+            "artifact_transport_outcome": "${{ steps.exhausted_nightly_transport.outcome }}",
             "nightly_l3_execution": {
               "run_id": "${{ github.run_id }}",
               "head_commit": "${{ github.sha }}",
