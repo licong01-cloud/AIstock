@@ -28,12 +28,18 @@
   ],
   "expected": "Verified historical activation ancestors do not block the sole exact successor; unrelated or live competing operations remain conflicts.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261023_BUG-2083-same-cutoff-successor-adoption-rejects-verified-historical-activation-an.json",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_minute_adoption.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261023_BUG-2083-same-cutoff-successor-adoption-rejects-verified-historical-activation-an.json",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py",
@@ -111,11 +117,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "X:/AIstock_dataset_candidates/data_repair_staging/september-finalization-20261023/BUG-2083-fresh-process.json: isolated import and exact durable activation chain readback PASS; no data/profile/database/runtime writes",
+      "X:/AIstock_dataset_candidates/data_repair_staging/september-finalization-20261023/BUG-2083-fresh-process.json"
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
