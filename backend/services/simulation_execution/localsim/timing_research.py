@@ -311,11 +311,17 @@ def run(request_path: Path, expected_sha256: str) -> dict:
     checked_file(FileRef(path=str(request_path.resolve()), sha256=expected_sha256))
     request = read_json(request_path)
     verified, consumption, cost, children = study_inputs(Path(request["bundle"]))
-    if (request["source_identity"] != source_identity()
-            or request["study_manifest_sha256"] != verified["manifest_sha256"]
+    source_matches = request["source_identity"] == source_identity()
+    if (request["study_manifest_sha256"] != verified["manifest_sha256"]
             or request["cost_policy"] != consumption["cost_policy"]
             or request["execution_contract_sha256"] != consumption["execution_contract_sha256"]):
         raise ValueError("LOCALSIM_TIMING_FROZEN_REQUEST_CHANGED")
+    initials = {}
+    for plan_id, item in request["accounts"].items():
+        account = read_json(checked_file(FileRef.model_validate(item)))
+        if account.get("preparation"):
+            checked_file(FileRef.model_validate(account["preparation"]))
+        initials[plan_id] = account
     root = request_path.parent
     complete_path = root / "complete.json"
     if complete_path.exists():
@@ -325,8 +331,38 @@ def run(request_path: Path, expected_sha256: str) -> dict:
         for item in complete["files"]:
             checked_file(FileRef.model_validate(item))
         results = EconomicResults.model_validate_json(checked_file(FileRef.model_validate(complete["results"])).read_text())
+        if (results.producer_source_commit != request["producer_source_commit"]
+                or results.release_identity != request["release_identity"]
+                or results.study_manifest_sha256 != request["study_manifest_sha256"]
+                or results.cost_policy_file_sha256 != request["cost_policy"]["sha256"]
+                or results.execution_contract_sha256 != request["execution_contract_sha256"]):
+            raise ValueError("LOCALSIM_TIMING_COMPLETE_RESULT_IDENTITY_CONFLICT")
         summarize(consumption, results)
-        return {**complete, "status": "ALREADY_MATERIALIZED"}
+        cases = {c["case_id"]: c for c in consumption["cases"] if c["applicable"]}
+        for row in results.rows:
+            case = cases[row.case_id]
+            initial_ref = request["accounts"][case["plan_id"]]
+            initial = initials[case["plan_id"]]
+            case_root = root / "cases" / row.case_id
+            receipt = read_json(checked_file(FileRef(path=str(case_root / "account_receipt.json"),
+                                                     sha256=row.account_receipt_sha256)))
+            recorded_row = EconomicRow.model_validate({**receipt["row_fields"],
+                                                       "account_receipt_sha256": row.account_receipt_sha256})
+            if (row.initial_account_sha256 != initial_ref["sha256"]
+                    or row.initial_nav_cny != Decimal(initial["initial_nav_cny"])
+                    or row.target_notional_cny != Decimal(initial["target_notional_cny"])
+                    or receipt["initial_account"] != initial_ref or receipt["case"] != case
+                    or receipt["study_request_identity"] != request["identity"]
+                    or recorded_row != row
+                    or read_json(case_root / "row.json") != payload(row)):
+                raise ValueError("LOCALSIM_TIMING_COMPLETE_ACCOUNT_CLOSURE_CONFLICT")
+        # A complete immutable result may be read back by a newer consumer.
+        # It retains its original producer identity; no changed source may
+        # resume an unfinished computation or manufacture a new result.
+        return {**complete, "status": "ALREADY_MATERIALIZED", "source_identity_match": source_matches,
+                "computation_performed": False, "producer_source_commit": results.producer_source_commit}
+    if not source_matches:
+        raise ValueError("LOCALSIM_TIMING_FROZEN_REQUEST_CHANGED")
     started = wall_time.monotonic()
     rows, files = [], []
     for case in consumption["cases"]:

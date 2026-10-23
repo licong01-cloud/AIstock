@@ -348,6 +348,8 @@ class TimingExecution:
         return fills
 
     def cancel(self, reason: str = "PLAN_EXPIRED") -> None:
+        if self.order.status == OrderStatus.CANCELLED:
+            return  # The confirmed cancellation is already the durable outcome.
         self.facade.invalidate(reason)
         if self.order.status not in (OrderStatus.CANCELLED, OrderStatus.FILLED, OrderStatus.REJECTED):
             self.order, event = self.backend._oms.cancel_order(self.order, reason)

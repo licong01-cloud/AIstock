@@ -359,3 +359,62 @@ def test_campaign_discovers_owned_daily_inputs_without_inventing_price_preferenc
     with pytest.raises(ValueError, match="SELECTION_CLOCK_CONFLICT"):
         inspect_selection_history(tmp_path, package_id="selected", manifest_sha256="a" * 64,
                                   trade_dates=["2026-09-22"])
+
+
+def test_confirmed_cancel_retry_does_not_create_another_state_transition():
+    backend, session = execution()
+    session.cancel("USER_CANCELLED")
+    before = session.snapshot()
+    session.cancel("USER_CANCELLED")
+    assert session.snapshot() == before
+    assert not backend._ledger.fills
+
+
+@pytest.mark.parametrize("corrupt", ["initial", "preparation"])
+def test_completed_run_readback_checks_full_account_closure_without_recomputing(tmp_path, monkeypatch, corrupt):
+    from backend.services.simulation_execution.localsim import timing_research as consumer
+    from backend.services.simulation_execution.localsim.timing_store import publish
+    from backend.services.position_timing.intraday.contracts import payload
+    from backend.services.position_timing.intraday.replay import PlanEvent
+    from backend.services.position_timing.intraday.research import CostContract
+
+    backend, session = execution()
+    plan, market = session.facade.plan, session.market
+    decision = session.facade.evaluate(market, session.feedback(at("09:31:10")), at("09:31:10"))
+    cost = CostContract(open_rate="0.000095", close_rate="0.000595", minimum_cny="5")
+    cost_path, prep_path, initial_path = (tmp_path / name for name in ("cost.json", "prep.json", "initial.json"))
+    publish(cost_path, payload(cost))
+    publish(prep_path, {"role": "FUNCTIONAL_CLOSURE_FIXTURE_NOT_SELL_INITIALIZATION"})
+    initial = {"portfolio_id": backend.portfolio_id, "package_id": backend.package_id,
+               "origin_initial_cash_cny": "100000", "cash_cny": "100000", "positions": {},
+               "initial_nav_cny": "100000.00", "initial_mark_raw": "10", "target_notional_cny": "10000.00",
+               "preparation": consumer.ref(prep_path)}
+    publish(initial_path, initial)
+    case = {"case_id": "a" * 64, "plan_id": plan.plan_id, "delay_seconds": 0,
+            "policy_id": "FIRST_OBSERVABLE_V1", "symbol": plan.symbol, "side": "BUY",
+            "trade_date": str(plan.target_trade_date), "target_quantity": 1000, "applicable": True}
+    consumption = {"cost_policy": consumer.ref(cost_path), "execution_contract_sha256": "c" * 64, "cases": [case]}
+    children = {(case["trade_date"], case["policy_id"]): (
+        {(plan.symbol, case["trade_date"]): market}, [PlanEvent(available_at=plan.valid_from, plan=plan)], [decision])}
+    monkeypatch.setattr(consumer, "study_inputs", lambda _: ({"manifest_sha256": "b" * 64}, consumption, cost, children))
+    request = {"identity": "d" * 64, "bundle": "FUNCTIONAL_INSPECT_STUB", "source_identity": consumer.source_identity(),
+               "study_manifest_sha256": "b" * 64, "cost_policy": consumption["cost_policy"],
+               "execution_contract_sha256": "c" * 64, "accounts": {plan.plan_id: consumer.ref(initial_path)},
+               "valuation_contract": "FUNCTIONAL_TEST", "producer_source_commit": "1" * 40,
+               "release_identity": "FUNCTIONAL_ONLY", "operations": {"database_read": False}}
+    request_path = tmp_path / "request.json"
+    publish(request_path, request)
+    request_ref = consumer.ref(request_path)
+    first = consumer.run(request_path, request_ref["sha256"])
+    monkeypatch.setattr(consumer, "source_identity", lambda: {"changed": True})
+    monkeypatch.setattr(consumer, "run_case", lambda **_: pytest.fail("completed results must never recompute"))
+    retry = consumer.run(request_path, request_ref["sha256"])
+    assert retry["status"] == "ALREADY_MATERIALIZED" and not retry["source_identity_match"]
+    assert not retry["computation_performed"] and retry["results"] == first["results"]
+    unfinished = tmp_path / "unfinished" / "request.json"
+    publish(unfinished, request)
+    with pytest.raises(ValueError, match="FROZEN_REQUEST_CHANGED"):
+        consumer.run(unfinished, consumer.ref(unfinished)["sha256"])
+    (initial_path if corrupt == "initial" else prep_path).write_text("{}", encoding="utf-8")
+    with pytest.raises(Exception, match="RESEARCH_SOURCE_IDENTITY_MISMATCH"):
+        consumer.run(request_path, request_ref["sha256"])
