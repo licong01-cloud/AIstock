@@ -31,15 +31,24 @@
   ],
   "expected": "Keep source calendar and unclassified stock facts independently from sector aggregation; preserve 131 sectors and normal C-010 missing-feature propagation; real missing dates, duplicate identities and invalid projections still fail closed.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/risk_l2_database_inference.py",
+      "backend/services/hmm_risk/stock_fact_repository.py",
+      "backend/tests/hmm_risk/test_risk_l2_database_inference.py",
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md",
+      "tests/aistock_validation/bugs/20261023_BUG-2082-p1-hmm-database-classification-na-erases-stock-dates-and-raises-false-ca.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/hmm_risk/stock_fact_repository.py",
       "backend/services/hmm_risk/risk_l2_database_inference.py",
-      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "backend/services/hmm_risk/stock_fact_repository.py",
       "backend/tests/hmm_risk/test_risk_l2_database_inference.py",
-      "docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md"
+      "backend/tests/hmm_risk/test_stock_fact_repository.py",
+      "docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md",
+      "tests/aistock_validation/bugs/20261023_BUG-2082-p1-hmm-database-classification-na-erases-stock-dates-and-raises-false-ca.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/hmm_risk/stock_fact_repository.py",
@@ -144,11 +153,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "PowerShell here-string | python -; isolated imports at HEAD d5dbc667e3d5c2f6c90c4debb494f2210b3951f2 with explicit task PYTHONPATH -> passed: backend.services.hmm_risk.stock_fact_repository, backend.services.hmm_risk.risk_l2_database_inference, backend.routers.hmm_risk, backend.routers.health; all __file__ under task worktree; database_connected=false; services_started=false",
+      "Historical read-only full database preflight at source HEAD 3dcdc16592dd55313dd569dd77686c2d259ec929 -> PASS; source blobs identical after main sync; F:/Dev/AIstock_runtime/hmm_l2_live_authority/BUG-2082/database-preflight-01/summary.json; 264 source days, calendar_gap_count=0, 131 sectors, 119 available and 12 typed unavailable; fits=0 inference_calls=0 database_write=false; not presented as a final-HEAD rerun or post-restart evidence",
+      "Isolated python fresh-process imports with explicit task PYTHONPATH -> passed: backend.services.hmm_risk.stock_fact_repository, backend.services.hmm_risk.risk_l2_database_inference, backend.routers.hmm_risk, backend.routers.health; each __file__ resolves under own task worktree; runtime source blobs unchanged from source preflight commit 3dcdc16592dd55313dd569dd77686c2d259ec929; database_connected=false; services_started=false"
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
