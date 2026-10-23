@@ -6,6 +6,7 @@
     "backend/services/dataset_release/monthly_shared_components.py",
     "backend/tests/services/test_suspend_d_coverage.py",
     "backend/tests/dataset_release/test_monthly_shared_components.py",
+    "scripts/verify_suspension_day_authority.py",
     "tests/aistock_validation/bugs/20261023_BUG-2071-suspension-authority-cannot-resolve-verified-afternoon-cross-session-pro.json"
   ],
   "assigned_agent": null,
@@ -17,7 +18,7 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-23T03:55:57.176741Z",
-  "description": "LocalSIM lsreplay_7b2428f51b4b61d5 blocks before 2026-01-09 with SUSPENSION_DAY_UNRESOLVED.",
+  "description": "603056.SH/2026-01-09的数据库及继承冻结文件均保存13:00-9:30，并非导出交换时间。公司2026-003公告证明当日下午停牌；2026-010确认实际2026-01-14复牌。共享authority只支持全天公告裁决，无法表达有权威依据的盘中有效区间。本修复保留原始事件，仅增加精确股票/日期/源时段匹配的盘中裁决；不把倒置时间通用化、不修改LocalSIM计划或历史数据。",
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -26,7 +27,19 @@
       "timestamp": "2026-10-23T03:55:57.176741Z"
     }
   ],
-  "evidence_uris": [],
+  "evidence_uris": [
+    "https://static.cninfo.com.cn/finalpage/2026-01-09/1224926625.PDF",
+    "https://static.cninfo.com.cn/finalpage/2026-01-14/1224932970.PDF",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-2071-suspension-20261023-r1/diagnosis-dev-readback.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-2071-suspension-20261023-r1/suspension_day_authority.json",
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-2071-suspension-20261023-r1/consumer-readback.json"
+  ],
+  "design_compliance_review": {
+    "no_partial_delivery": "源码及必要回归完成；生产运行态与LocalSIM接续明确待办，不宣称原回放已恢复。",
+    "no_silent_success": "未经权威确认的倒置时段、零长度、重复及冲突事件继续UNRESOLVED。",
+    "no_business_drift": "保留原始时段及历史文件，不改LocalSIM/策略/股票池，不把下午停牌改成全天，不推断次日实际复牌。",
+    "no_added_human_gate": "复用现有authority、DEV验证及发布流程；未增加审批、全历史扫描或研究门禁。"
+  },
   "expected": "Shared authority and monthly export represent officially verified intraday suspension without guessing reverse intervals; frozen inputs remain immutable.",
   "file_scope_contract": {
     "added_files": [],
@@ -163,17 +176,23 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "RED: exact afternoon authority reproduction failed before code change. GREEN: final focused suspension/monthly matrix 90 passed; includes full-day, intraday, resumed, same-day S/R, zero-length, unknown reverse ranges, exact disclosure and frozen-authority isolation. Fresh AIstock process read production only and validated production event copies in existing DEV transaction with rollback. Receipt SHA256 29bbe677f4fbf9bf0aa6978b872a90dde9bcf6a75541eaaabdd7dcc10bed25a7. All 17333 frozen suspension rows before 2026-01-09 retain identical semantic decisions; authority identity intentionally changes. No production, candidate, profile, replay or process writes."
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "health_ref": "http://127.0.0.1:8001/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/suspend_d/status",
+    "inference_basis": "actual_git_scope_shared_authority_backend_only_no_monthly_producer_change",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
     "provisional": true,
-    "runtime_impact": "worker_scheduler",
+    "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
+    "target_id": "backend-main",
     "target_ids": [
-      "backend-main",
-      "worker-scheduler"
+      "backend-main"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",

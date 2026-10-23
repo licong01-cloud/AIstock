@@ -7,6 +7,87 @@ import pytest
 from backend.services import suspend_d_coverage as coverage
 
 
+def _afternoon_authority():
+    from backend.data_service.suspension_day_authority import POLICY, SCHEMA
+
+    return {"schema_version": SCHEMA, "policy": POLICY, "entries": [{
+        "ts_code": "603056.SH", "trade_date": "2026-01-09", "state": "INTRADAY_SUSPENDED",
+        "announcement_id": "2026-003", "disclosure_date": "2026-01-09",
+        "source_url": "https://static.cninfo.com.cn/finalpage/2026-01-09/1224926625.PDF",
+        "source_content_sha256": "5841c3a2fa73d5bc29cc8d49eb8ae86c89e5248d8f1b8c1895883a0966a8dcb3",
+        "source_file_size": 81790, "historical_publication_time_proven": False,
+        "provider_suspend_timing": "13:00-9:30", "effective_suspend_timing": "13:00-15:00",
+    }]}
+
+
+@pytest.mark.parametrize("timing", ["13:00-9:30", "13:00-15:00"])
+def test_official_afternoon_resolution_preserves_raw_cross_session_marker(timing):
+    from backend.data_service.suspension_day_authority import full_day_keys, project_suspension_days
+
+    row = dict(ts_code="603056.SH", trade_date="2026-01-09", suspend_type="S", suspend_timing=timing)
+    result = project_suspension_days([row], authority=_afternoon_authority())[0]
+    assert result["state"] == "INTRADAY_SUSPENDED"
+    assert result["basis"] == "OFFICIAL_DISCLOSURE"
+    assert result["effective_suspend_timing"] == "13:00-15:00"
+    assert result["announcement_id"] == "2026-003"
+    assert not full_day_keys([row], authority=_afternoon_authority())
+    assert row["suspend_timing"] == timing
+
+
+@pytest.mark.parametrize("events", [
+    [("S", "09:30-09:30")], [("S", "14:00-9:30")], [("R", "13:00-9:30")],
+    [("S", "13:00-9:30"), ("S", "13:00-9:30")],
+    [("S", "13:00-9:30"), ("R", None)], [("S", None)],
+])
+def test_afternoon_resolution_does_not_hide_changed_or_ambiguous_events(events):
+    from backend.data_service.suspension_day_authority import project_suspension_days
+
+    rows = [dict(ts_code="603056.SH", trade_date="2026-01-09", suspend_type=kind, suspend_timing=timing)
+            for kind, timing in events]
+    assert project_suspension_days(rows, authority=_afternoon_authority())[0]["state"] == "UNRESOLVED"
+
+
+def test_cross_session_timing_is_not_generally_inferred_or_borrowed_from_new_authority():
+    from backend.data_service.suspension_day_authority import POLICY, SCHEMA, project_suspension_days
+
+    row = dict(ts_code="603056.SH", trade_date="2026-01-09", suspend_type="S", suspend_timing="13:00-9:30")
+    empty = {"schema_version": SCHEMA, "policy": POLICY, "entries": []}
+    assert project_suspension_days([row], authority=empty)[0]["state"] == "UNRESOLVED"
+    for change in ({"ts_code": "000001.SZ"}, {"trade_date": "2026-01-08"}):
+        assert project_suspension_days([{**row, **change}], authority=_afternoon_authority())[0]["state"] == "UNRESOLVED"
+
+
+@pytest.mark.parametrize("timing", ["13:00-13:00", "15:00-13:00", "08:00-15:00"])
+def test_official_intraday_authority_rejects_invalid_effective_span(timing):
+    from backend.data_service.suspension_day_authority import load_authority
+
+    authority = _afternoon_authority()
+    authority["entries"][0]["effective_suspend_timing"] = timing
+    with pytest.raises(ValueError, match="intraday"):
+        load_authority(authority)
+
+
+def test_monthly_frozen_afternoon_export_and_reader_share_the_same_authority(tmp_path):
+    import json
+    from types import SimpleNamespace
+    import pandas as pd
+    from backend.data_service.suspension_day_authority import project_suspension_days
+    from backend.services.dataset_release.monthly_shared_components import _build_suspend
+
+    day = dt.date(2026, 1, 9)
+    raw = dict(ts_code="603056.SH", trade_date=day, suspend_type="S", suspend_timing="13:00-9:30")
+    parquet, meta, keys, count = _build_suspend(root=tmp_path, rows=[raw], pit_rows=[], calendar=(day,),
+        profile=SimpleNamespace(start_date=day, universe_key="pit"), cutoff=day,
+        suspension_authority=_afternoon_authority())
+    frame, receipt = pd.read_parquet(parquet), json.loads(meta.read_bytes())
+    assert count == 1 and keys == {("603056.SH", day)}
+    assert frame.iloc[0].suspend_timing == "13:00-9:30"
+    assert receipt["raw_provider_events"][0]["suspend_timing"] == "13:00-9:30"
+    result = project_suspension_days(frame.to_dict("records"), authority=receipt["suspension_day_authority"])[0]
+    assert result["state"] == "INTRADAY_SUSPENDED"
+    assert result["effective_suspend_timing"] == "13:00-15:00"
+
+
 def test_disclosure_resolves_mixed_events_without_deleting_raw_records():
     from backend.data_service.suspension_day_authority import project_suspension_days
 
