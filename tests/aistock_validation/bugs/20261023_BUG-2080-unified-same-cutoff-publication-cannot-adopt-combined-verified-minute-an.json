@@ -1,7 +1,14 @@
 {
   "actual": "September active release requires combining already independently validated physical minute files, 14 daily pre-close references, 8702 sector H5 facts and matching static cells while preserving the late-financing correction and unchanged pins. Existing adoption accepts only narrow financing/minute/catalog proof types and cannot register one complete mixed correction without intermediate activation or rebuilding. Add minimal typed combined correction support and assembly under existing API; preserve exact active predecessor/CAS, immutable releases, unchanged bytes, finite fact preservation and no database/runtime writes. Reuse previously completed exact-key and full-window coverage receipts, no new full-market audit or re-export.",
   "allowed_write_scope": [
-    "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json"
+    "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json",
+    "backend/services/dataset_release/monthly_minute_adoption.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "scripts/dataset_release_margin_detail_correction.py",
+    "scripts/dataset_release_minute_coverage_correction.py",
+    "scripts/dataset_release_combined_correction.py",
+    "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+    "backend/tests/dataset_release/test_monthly_minute_adoption.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2080",
@@ -24,9 +31,26 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json",
+      "backend/services/dataset_release/monthly_minute_adoption.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "scripts/dataset_release_margin_detail_correction.py",
+      "scripts/dataset_release_minute_coverage_correction.py",
+      "scripts/dataset_release_combined_correction.py"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json",
+      "backend/services/dataset_release/monthly_minute_adoption.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "scripts/dataset_release_margin_detail_correction.py",
+      "scripts/dataset_release_minute_coverage_correction.py",
+      "scripts/dataset_release_combined_correction.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -62,15 +86,25 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
-    "persistence_basis": "not_required",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "Fresh-process pytest RED to GREEN; minute adoption and interrupted file-only assembly tests passed; formal combined candidate sealed without database writes, model training or service control."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "not_required",
-    "provisional": true,
-    "runtime_impact": "none",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": null,
-    "target_ids": []
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
