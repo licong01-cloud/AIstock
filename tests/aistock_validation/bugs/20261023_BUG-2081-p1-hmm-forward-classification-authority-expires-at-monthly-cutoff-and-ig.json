@@ -8,7 +8,9 @@
     "tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json",
     "docs/standards/aistock_runtime_targets_v1.yaml",
     "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-    "docs/operations/hmm_observed_industry_authority_runbook.md"
+    "docs/operations/hmm_observed_industry_authority_runbook.md",
+    "noxfile.py",
+    "backend/tests/test_noxfile_validation_env.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2081",
@@ -38,6 +40,18 @@
       "actor": "Codex",
       "note": "Caller audit confirms exact CLI-only source role. 31 direct/source-role tests passed; fresh-process CLI help and pinned authority/source identity readback passed. Build-02 target coverage 4918/4918 is independent of full DB preflight BLOCKED (calendar internal gap; observed pre-10/13 classification unavailability); no authority/DB/runtime activation or writes. DESIGN-COMPLIANCE-001 four checks passed for delivery scope; business preflight not claimed complete.",
       "timestamp": "2026-10-23T16:48:09.938612+00:00"
+    },
+    {
+      "action": "expand_scope",
+      "actor": "Codex",
+      "timestamp": "2026-10-23T16:52:23.784539+00:00",
+      "note": "PR #6651 CI 39989995354 exposed missing HMM direct-neighbor mapping for build_observed_industry_authority.py. Add exact existing-test override and changed-files selector regressions; preserve fail-closed behavior. Earlier bare slice 29 passed was isolation smoke only; direct business tests separately passed."
+    },
+    {
+      "action": "ci_neighbor_mapping_verified",
+      "actor": "Codex",
+      "timestamp": "2026-10-23T16:53:05.363393+00:00",
+      "note": "Exact CLI neighbor override added; selector 15 passed, including CLI/service/mixed dedup and missing-test fail-closed. With actual 10-file classifier summary, hmm_risk_pr_slice ran 46 tests including all 17 authority contracts. No classifier rules relaxed or business/authority source changed."
     }
   ],
   "evidence_uris": [
@@ -56,7 +70,9 @@
       "tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json",
       "docs/standards/aistock_runtime_targets_v1.yaml",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-      "docs/operations/hmm_observed_industry_authority_runbook.md"
+      "docs/operations/hmm_observed_industry_authority_runbook.md",
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py"
     ],
     "added_files": [
       "backend/services/hmm_risk/observed_industry_authority.py",
@@ -71,7 +87,9 @@
       "tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json",
       "docs/standards/aistock_runtime_targets_v1.yaml",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
-      "docs/operations/hmm_observed_industry_authority_runbook.md"
+      "docs/operations/hmm_observed_industry_authority_runbook.md",
+      "noxfile.py",
+      "backend/tests/test_noxfile_validation_env.py"
     ],
     "changed_files_source": "git_finish",
     "ownership": {

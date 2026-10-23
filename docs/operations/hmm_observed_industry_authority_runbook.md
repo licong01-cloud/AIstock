@@ -6,6 +6,8 @@
 
 runtime catalog 的 `offline-hmm-observed-industry-authority` 仅覆盖该精确服务文件；不覆盖同目录其他模块、未来 consumer 或路由。脚本沿用既有离线 operator 规则。混入后端文件时仍按 backend-main 检查，显式 `runtime_impact=none` 不能降级推断。
 
+CI 的 HMM PR slice 将构建 CLI 精确映射到 `backend/tests/hmm_risk/test_observed_industry_authority.py`，并保留缺失测试时的硬失败。复验必须提供真实 changed-files classifier summary（`AISTOCK_CI_CLASSIFIER_SUMMARY`）；没有该输入的默认 slice 只跑隔离 smoke，不能单独证明新增构建器的直接测试已执行。最终相同输入路径执行隔离 smoke 和候选直接合同，共 46 项通过。
+
 因此本源码包不需要 backend-main 的 HTTP identity、business-smoke 或用户重启收据。不得填写无关 health/HTTP 200 充当业务证明。将来新增 API/worker 消费该 Python 模块时，必须重新审核 catalog 归属并走真实运行态合同。本 runbook 不授权服务控制或产物激活。
 
 ## 独立证据
