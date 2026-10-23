@@ -28,6 +28,7 @@ from backend.services.canonical_equity_pit import (
     CanonicalPitAuthorityResolver, PitConsumerBinding, require_dataset_runtime_pit_policy,
 )
 from .canonical import canonical_json_bytes, ensure_sha256
+from .errors import CanonicalizationError
 from .monthly_error_diagnostics import monthly_error_diagnostics, monthly_error_message
 
 UTC = timezone.utc
@@ -1158,6 +1159,55 @@ class MonthlyReleaseService:
             "runtime_action_performed": False,
         }
 
+    def _verified_adoption_ancestors(
+        self, product_profile: str, target_cutoff: date, active_sha256: str,
+    ) -> set[str]:
+        """Find exact activated ancestors using only durable same-release history.
+
+        Called under the product/active locks. This reads operation metadata only;
+        it neither rebuilds data nor changes historical requests or receipts.
+        """
+        activations: list[tuple[str, str, str]] = []
+        for child in self.store.operations.iterdir():
+            request_path = child / "request.json"
+            if not request_path.is_file():
+                continue
+            request = _read_json(request_path, label="adoption ancestor request")
+            if (request.get("product_profile") != product_profile
+                    or request.get("target_cutoff") != target_cutoff.isoformat()):
+                continue
+            operation_id = str(request["operation_id"])
+            if self.store.read_state(operation_id).get("status") != ReleaseState.ACTIVATED_VERIFIED.value:
+                continue
+            receipt = child / "receipts" / "activation.json"
+            if not receipt.is_file():
+                continue
+            intent = _read_json(receipt, label="adoption ancestor activation")
+            try:
+                old_sha = ensure_sha256(intent.get("old_profile_ref", {}).get("sha256"), field="old_profile_ref")
+                new_sha = ensure_sha256(intent.get("new_profile_ref", {}).get("sha256"), field="new_profile_ref")
+            except (CanonicalizationError, TypeError, AttributeError):
+                continue  # Incomplete history cannot establish an indirect link.
+            activations.append((operation_id, old_sha, new_sha))
+
+        # Reverse reachability is independent of directory order. A visited set
+        # bounds traversal even if an old profile was activated more than once.
+        ancestors = {active_sha256}
+        pending = activations
+        verified: set[str] = set()
+        while pending:
+            remaining = []
+            for operation_id, old_sha, new_sha in pending:
+                if new_sha in ancestors:
+                    ancestors.add(old_sha)
+                    verified.add(operation_id)
+                else:
+                    remaining.append((operation_id, old_sha, new_sha))
+            if len(remaining) == len(pending):
+                break
+            pending = remaining
+        return verified
+
     def adopt_existing_successor(
         self,
         *,
@@ -1390,6 +1440,9 @@ class MonthlyReleaseService:
                 raise MonthlyReleaseConflict("active changed while adopting successor")
             if supersession:
                 verify_pending_predecessor(self, supersession, expected_predecessor, target_profile_hash)
+            activated_ancestors = self._verified_adoption_ancestors(
+                product_profile, target_cutoff, expected_predecessor,
+            ) if minute_repair or late_financing or quote_only else set()
             for child in self.store.operations.iterdir():
                 request_path = child / "request.json"
                 if not request_path.is_file():
@@ -1411,6 +1464,8 @@ class MonthlyReleaseService:
                 ):
                     if supersession and existing.get("operation_id") == supersession["operation_id"]:
                         continue
+                    if existing.get("operation_id") in activated_ancestors:
+                        continue
                     if minute_repair:
                         prior = self.store.read_state(str(existing["operation_id"]))
                         intent_path = child / "receipts" / "activation.json"
@@ -1421,6 +1476,8 @@ class MonthlyReleaseService:
                         if prior.get('status') == ReleaseState.CANCELLED.value and marker.is_file():
                             replacement = _read_json(marker, label='superseded correction')
                             successor_id = str(replacement.get('successor_operation_id') or '')
+                            if successor_id in activated_ancestors:
+                                continue
                             successor_state = self.store.read_state(successor_id)
                             successor_intent = self.store.operation_root(successor_id) / 'receipts' / 'activation.json'
                             if (successor_state.get('status') == ReleaseState.ACTIVATED_VERIFIED.value
