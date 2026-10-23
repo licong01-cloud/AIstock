@@ -32,23 +32,23 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json",
       "backend/services/dataset_release/monthly_minute_adoption.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "scripts/dataset_release_combined_correction.py",
       "scripts/dataset_release_margin_detail_correction.py",
       "scripts/dataset_release_minute_coverage_correction.py",
-      "scripts/dataset_release_combined_correction.py"
+      "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json",
       "backend/services/dataset_release/monthly_minute_adoption.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "scripts/dataset_release_combined_correction.py",
       "scripts/dataset_release_margin_detail_correction.py",
       "scripts/dataset_release_minute_coverage_correction.py",
-      "scripts/dataset_release_combined_correction.py"
+      "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -59,7 +59,15 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "tests/aistock_validation/bugs/20261023_BUG-2080-unified-same-cutoff-publication-cannot-adopt-combined-verified-minute-an.json",
+      "backend/services/dataset_release/monthly_minute_adoption.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "scripts/dataset_release_margin_detail_correction.py",
+      "scripts/dataset_release_minute_coverage_correction.py",
+      "scripts/dataset_release_combined_correction.py"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
@@ -88,7 +96,9 @@
     "backend_restart_owner": "user",
     "backend_restart_required": true,
     "fresh_process_evidence": [
-      "Fresh-process pytest RED to GREEN; minute adoption and interrupted file-only assembly tests passed; formal combined candidate sealed without database writes, model training or service control."
+      "Fresh-process pytest RED to GREEN; minute adoption and interrupted file-only assembly tests passed; formal combined candidate sealed without database writes, model training or service control.",
+      "X:/AIstock_dataset_candidates/data_repair_staging/september-finalization-20261023/offline-adoption-validation.json; sealed fresh-process formal DERIVE/profile/closure PASS, no runtime control",
+      "X:/AIstock_dataset_candidates/data_repair_staging/september-finalization-20261023/offline-adoption-validation.json: actual sealed candidate and three-node readback PASS; no DB/profile/runtime writes"
     ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
