@@ -4,7 +4,11 @@
     "backend/services/manual_factor_service.py",
     "scripts/register_manual_factor.py",
     "backend/tests/test_manual_factor_service_wsl_output.py",
-    "tests/aistock_validation/bugs/20261021_BUG-2047-factor-candidate-catalog-registration-cannot-avoid-classification-and-fi.json"
+    "tests/aistock_validation/bugs/20261021_BUG-2047-factor-candidate-catalog-registration-cannot-avoid-classification-and-fi.json",
+    "noxfile.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "docs/operations/manual_factor_candidate_registration_runbook.md",
+    "tests/aistock_validation/catalog/file_ownership.yaml"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2047",
@@ -22,12 +26,43 @@
       "actor": "issue_flow",
       "note": "Promoted from IC-20261021-d3201ed28f5e",
       "timestamp": "2026-10-21T03:28:56.941360Z"
+    },
+    {
+      "action": "expand_scope",
+      "actor": "Codex",
+      "timestamp": "2026-10-23",
+      "note": "User-authorized Issue #6523 merge blocker repair: exact direct CI ownership/execution mappings and regression, plus backend-main runbook and identity/business smoke contract; no runtime catalog or inference rule weakening, no production writes/process control."
+    },
+    {
+      "action": "expand_scope",
+      "actor": "Codex",
+      "timestamp": "2026-10-23",
+      "note": "Use existing DIRECT_BACKEND_PLAN_KEYS_BY_FILE for the two exact unmapped paths; preserve existing ownership and inference semantics."
+    },
+    {
+      "action": "merge_blocker_validation",
+      "actor": "Codex",
+      "timestamp": "2026-10-23T15:27:27.476535+00:00",
+      "note": "Direct mapping via existing classifier table; platform_api_backend 54 passed including original 7; classifier 145 passed; explicit 8-file L0 blocking=0; Ruff F, compileall and workflow smoke passed. Runtime contract missing-field/downgrade negatives passed. Read-only live business probe connection refused on catalog origin 127.0.0.1:8001; backend activation remains pending, no service control, DB writes or QE start. DESIGN-COMPLIANCE-001 four checks passed for source scope; no partial runtime claim, silent fallback, business semantic change or extra approval gate."
+    },
+    {
+      "action": "scope_refinement",
+      "actor": "Codex",
+      "note": "Use exact catalog ownership to route the CLI and direct test to the existing service executor. Canonical workflow intentionally imports merged classifier code and task-local catalog data. Preserve classifier logic; discard constant-table edit."
+    },
+    {
+      "action": "merge_blocker_source_ready",
+      "actor": "Codex",
+      "timestamp": "2026-10-23T15:31:48.972166+00:00",
+      "note": "Final exact ownership catalog entries route CLI/test to platform_api_backend; no classifier or runtime inference source/rule changes. Canonical finish and pre_pr_gate passed with zero blockers. Final catalog/routing matrix 19 passed; platform API executor 54 passed. Backend runtime remains pending; live origin refused connection. No production writes, QE start or service control."
     }
   ],
   "evidence_uris": [
     "X:/AIstock_factor_research/qe-catalog-registration-20261021/technical-review.json",
     "X:/AIstock_factor_research/qe-catalog-registration-20261021/dev-registration.json",
-    "X:/AIstock_factor_research/qe-catalog-registration-20261021/production-registration.json"
+    "X:/AIstock_factor_research/qe-catalog-registration-20261021/production-registration.json",
+    "X:/AIstock_factor_research/september-reassessment-20261023/catalog-delivery/status.md",
+    "X:/AIstock_factor_research/september-reassessment-20261023/catalog-delivery/dev-tail-registration.json"
   ],
   "expected": "Explicit fresh-process CLI registers only authorized candidate code through ManualFactorService, with insert-only/idempotent SQL, no filesystem/code execution/classification/metrics/rating side effects. Existing save callers stay unchanged.",
   "file_scope_contract": {
@@ -127,18 +162,27 @@
     "fresh_process_evidence": [
       "python -m pytest backend/tests/test_manual_factor_service_wsl_output.py -q -> 7 passed",
       "Fresh-process register_manual_factor.py register-candidate --target dev -> catalog 24; exact retry and conflicting-code rollback verified",
-      "Authorized fresh-process production registration -> catalog 1547; ID206 entire row unchanged; official_offline eligible=true with exact code_text hash 3907bb458a8c433ecadb219b549e707bdbd00aaa9a1586900a1ace6e539fbfc9"
+      "Authorized fresh-process production registration -> catalog 1547; ID206 entire row unchanged; official_offline eligible=true with exact code_text hash 3907bb458a8c433ecadb219b549e707bdbd00aaa9a1586900a1ace6e539fbfc9",
+      "Fresh process loaded tracked ManualFactorService.register_candidate at HEAD57913be6a558c2e911e496184639e9cb2a223265; DEV ID32 insert/replay/conflict rollback and Composer official_offline read passed; X:/AIstock_factor_research/september-reassessment-20261023/catalog-delivery/dev-tail-registration.json; service and CLI source unchanged by merge-blocker repair; no production write or service control"
     ],
-    "inference_basis": "planned_scope",
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/manual_factor_candidate_registration_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/factor-library/factors/price_volume_roc5_divergence_corr20?source=manual&expected_is_available=true",
+    "attribution_review": {
+      "cli": "register-candidate -> factor_research.configure -> ManualFactorService.register_candidate; no API request",
+      "backend": "quantevolver router template/validate/save/full-pipeline imports the same manual_factor_service module; file-level backend-main attribution retained",
+      "evidence_boundary": "CLI DEV evidence is not backend activation or production registration; existing factor_lifecycle_detail smoke checks catalog visibility only"
+    }
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P2",
