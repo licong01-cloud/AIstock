@@ -299,7 +299,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\postrestart-20261023-fact-export\\BUG-2070.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -350,7 +350,8 @@
     "validation-receipt: id=f4f4c126f9ddb3d3 commit=332f04bbc09bda22ceb61cce7fa6c1e0bcf0aadb kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_catalog_integrity validation_module_registry_l0 guardrail_changed_files --force-venv-backend none -- --changed-only` result=`passed all 3 sessions; catalog findings=0; ownership unmapped=0; blocking=0`",
     "validation-receipt: id=af4368a64347fecf commit=332f04bbc09bda22ceb61cce7fa6c1e0bcf0aadb kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s validation_catalog_integrity validation_module_registry_l0 guardrail_changed_files --force-venv-backend none -- --changed-only` result=`passed all 3 sessions; catalog findings=0; ownership unmapped=0; blocking=0`",
     "validation-receipt: id=9729d149a0efb7f8 commit=332f04bbc09bda22ceb61cce7fa6c1e0bcf0aadb kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py::test_blocked_actual_audit_prevents_materialization_and_seal backend/tests/dataset_release/test_monthly_postgres_source.py::test_monthly_adapter_registry_identity_pins_sector_publication_policy -q --tb=short` result=`2 passed; 323 related cases passed before final targeted corrections`",
-    "validation-receipt: id=4a10d47e176e437f commit=332f04bbc09bda22ceb61cce7fa6c1e0bcf0aadb kind=ruff plan=direct status=passed command=`ruff check backend/services/dataset_release/monthly_minute_coverage.py backend/services/dataset_release/monthly_minute_repair.py backend/services/dataset_release/monthly_postgres_source.py backend/services/dataset_release/monthly_build_bridge.py backend/services/dataset_release/monthly_mature_build_runner.py scripts/dataset_release_minute_coverage_correction.py scripts/dataset_release_margin_detail_correction.py` result=`passed all checks`"
+    "validation-receipt: id=4a10d47e176e437f commit=332f04bbc09bda22ceb61cce7fa6c1e0bcf0aadb kind=ruff plan=direct status=passed command=`ruff check backend/services/dataset_release/monthly_minute_coverage.py backend/services/dataset_release/monthly_minute_repair.py backend/services/dataset_release/monthly_postgres_source.py backend/services/dataset_release/monthly_build_bridge.py backend/services/dataset_release/monthly_mature_build_runner.py scripts/dataset_release_minute_coverage_correction.py scripts/dataset_release_margin_detail_correction.py` result=`passed all checks`",
+    "python scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-2070 --target worker-scheduler -> passed; runtime_identity_match=true"
   ],
   "verification_budget": {
     "budget": "standard",
