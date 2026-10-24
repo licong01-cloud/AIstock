@@ -28,12 +28,18 @@
   ],
   "expected": "Exact retired ancestors do not block any authorized typed immutable successor; live or unproven conflicts stay blocked.",
   "file_scope_contract": {
-    "added_files": [],
-    "changed_files": [
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261024_BUG-2086-monthly-successor-adoption-rejects-cancelled-ancestor-already-retired-by.json",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_existing_adoption.py"
     ],
-    "changed_files_source": "planned_intake",
+    "added_files": [],
+    "changed_files": [
+      "tests/aistock_validation/bugs/20261024_BUG-2086-monthly-successor-adoption-rejects-cancelled-ancestor-already-retired-by.json",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_existing_adoption.py"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_unified.py",
@@ -111,11 +117,19 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Fresh Python process RED: exact typed adoption rejects proven retired ancestor with target-cutoff conflict; GREEN: 11 direct chain and fail-closed cases pass. No DB, data file, active profile or service changes.",
+      "X:/AIstock_temp/DATA_PREPARATION/non-report-closure-20261024/retired-lineage-readback.json: fresh isolated Python imports persistent fix, verifies exact four-operation production lineage read-only; no DB, operation or profile writes."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
