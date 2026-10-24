@@ -3936,6 +3936,7 @@ HMM_RISK_PR_NEIGHBOR_OVERRIDES = {
     "backend/routers/hmm_risk.py": "backend/tests/hmm_risk/test_rotation_l1_api.py",
     "backend/services/hmm_risk/b3_mixed_dimension.py": "backend/tests/hmm_risk/test_b3_training.py",
     "scripts/hmm_risk/aggregate_transition_dwell_evidence.py": "backend/tests/hmm_risk/test_b3_evidence_aggregation.py",
+    "scripts/hmm_risk/build_observed_industry_authority.py": "backend/tests/hmm_risk/test_observed_industry_authority.py",
     "scripts/hmm_risk/build_rotation_l1_input_bundle.py": "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
     "scripts/hmm_risk/prepare_state_model_set.py": "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
     "scripts/hmm_risk/repair_b3_stock_fact_gaps.py": "backend/tests/hmm_risk/test_stock_fact_gap_repair.py",

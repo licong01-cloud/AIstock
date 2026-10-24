@@ -378,11 +378,22 @@ def test_verified_activation_ancestry_allows_next_correction_without_rewriting_h
     direct = _activation_history(service, "dmr_" + "2" * 32, "b" * 64,
                                  values["predecessor_profile_sha256"])
     cancelled = _activation_history(service, "dmr_" + "3" * 32, "a" * 64, "b" * 64)
+    # Model the real pending-candidate retirement, not a previously activated
+    # operation with only an unauthenticated successor ID.
+    (cancelled / "receipts/activation.json").unlink()
+    retired = json.loads((cancelled / "request.json").read_bytes())
+    retired["target_profile_sha256"] = "c" * 64
+    _canonical(cancelled / "request.json", retired)
+    successor = json.loads((base / "request.json").read_bytes())
+    successor["supersedes_pending_operation"] = {
+        "operation_id": retired["operation_id"], "physical_profile_sha256": "c" * 64}
+    _canonical(base / "request.json", successor)
     _canonical(cancelled / "state.json", {"status": "CANCELLED"})
-    _canonical(cancelled / "receipts/superseded.json", {"successor_operation_id": "dmr_" + "1" * 32})
-    if kind != "minute":
-        # Pending minute supersession is not a financing adoption contract.
-        _canonical(cancelled / "request.json", {"product_profile": "other"})
+    _canonical(cancelled / "receipts/superseded.json", {
+        "schema_version": "aistock_monthly_pending_successor_v1",
+        "operation_id": retired["operation_id"], "successor_operation_id": "dmr_" + "1" * 32,
+        "physical_predecessor_profile_sha256": "c" * 64,
+        "logical_predecessor_profile_sha256": "a" * 64, "target_profile_sha256": "b" * 64})
     saved = {p: p.read_bytes() for root in (base, direct, cancelled) for p in root.rglob("*.json")}
     active = service.active_profile.read_bytes()
     result = service.adopt_existing_successor(**values)
