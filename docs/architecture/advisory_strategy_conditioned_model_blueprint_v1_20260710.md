@@ -1,9 +1,9 @@
-# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.41
+# AIstock 荐股策略条件化模型体系 F2 架构蓝图 v5.43
 
 > 初始日期：2026-07-10
 > 修订日期：2026-10-24
 
-> 2026-10-24最新断点：用户要求恢复单线重排序并批准更新蓝图。report_rc delivery-v2 已完成全量只读验收：文件消费PASS、NON_VINTAGE探索READY；548,991原始/标准化行、823自然日/853页面可追溯，原52,400条Top50身份不变。范围内30,500行有12,427行存在报告日期配对（40.7443%），不是D时可得的有效信号覆盖。仅将研报恢复为重排序的唯一新增输入候选；下一项是§6.3.29/§16.0 P10的无收益标签信号合同、时钟假设及有效覆盖审查，尚未执行。历史PIT、信号可交易性、经济确认与生产接入均未成立；累计225实际研究fit＋1旧index不变，不继承旧六fit预算。
+> 2026-10-24最新断点：P10输入审查与P11唯一EPS修正重排序F1均完成。原305D/30,500开发行保留，6,831可算；一次六fit后101共同D原生增量−7.644913bps、matched增量−2.156612bps，两包均负、三折仅一正，INNER_NOT_SUPPORTED。精确候选停止，无outer/确认/激活；累计231实际研究fit＋1旧index。24直接节点、跨节点输入逐bit对齐、十stage/6STARTED/6FINISHED及结果读回通过；数据仍NON_VINTAGE。源码合入与经济结果分态，不启动备用候选或后端重启。
 
 > 2026-10-23 P9历史断点：用户另行授权的P9[分钟级留一同群同步F1](advisory_intraday_peer_synchrony_top10_5td_v1_f1_design_20261023.md)完成一次六fit内层研究。305D/30,500原行保留，30,417可算；100共同D相对原生+15.682701bps、描述性95%[-22.066937,51.997402]、两折正，按事前产品门INNER_SUPPORTED；相对matched−2.223706bps，不证明同步特征本身增值。累计225实际研究fit＋1旧index，0经济确认/激活/outer。当时report_rc全方向DEFERRED_BY_USER，数据窗口完成不自动恢复；本次用户批准的有限恢复见§6.3.29，P9结果及停止边界不改。
 
@@ -17,7 +17,7 @@
 
 > 现行方向（2026-10-24）：唯一主线为原两包Top50→Top10、T开盘至T+4收盘、既有成本后的原生Top10增量。report_rc同机构同预测期盈利预测变化仅作为唯一新增输入候选；先冻结信号定义、时钟假设、UNKNOWN处理并审查有效覆盖，才决定单一F1/一次有界实验。文件验收不替代这些审查，也不默认延续新表示→六fit循环。NON_VINTAGE允许明确限制的探索，不冒称历史PIT或独立确认；价格区间、Exit/仓位、公告、QE/HMM及平台研究不并行。
 
-> 当前进展：P9单次研究、P8查重和P7当时输入评审均已完成，P4/P5/P6原结论不改。report_rc原始文件及配对追溯验收完成；信号合同、有效覆盖、F1与收益实验尚未完成。累计225fit＋1旧index，0经济确认/激活；本次仅更新蓝图与研究顺序，不训练、不读取收益标签、不改其它owner、业务服务或数据。
+> 当前进展：P10与P11顺序任务完成，单一候选按事前停止分支结束；文件消费PASS及探索输入支持不改，经济未支持。累计231fit＋1旧index，0经济确认/激活。P4～P9原结论保留；本轮只Advisory离线，无生产写库/数据切换/服务控制。后续重排序新立项先有不同且可追溯的信息假设，不重开EPS同族搜索。
 
 > 2026-10-19用户调整：#6330、公告标题设计#6341已合入并清理；[公告标题方向](advisory_announcement_title_value_v1_f1_design_20261019.md)改为`DEFERRED_BY_USER / 待执行`，不作为主线前置、不继续补采或等待。随后完成[独立Top50→Top10同日中心化排序](advisory_group_centered_rank_5td_v1_f1_design_20261019.md)：只读已有两包文件，固定五会话、两Ridge对照，检验去除日期共同项是否改善原Top10；不预测买价或决定弃权。旧M1/M5/P0-I已做过排名，此次是不同人口/政策下的明确学习合同测试，不冒称全新信息或独立OOS。该精确候选已停止，源码/真实研究/经济确认分态，结果见§6.3.12/§16.0。
 
@@ -268,13 +268,13 @@ H0 的权威详细设计为
 | 模型质量升级 | `0 ACTIVATED SELECTOR CHALLENGERS` | M5A/M5B/M5C及P0-D至P0-L均未证明可以替换Selection；P0-D只作为experimental shadow；历史M4实现开盘分布参考而非盈利区间，当前Program未配置该角色 |
 | 长期趋势模型 | `NOT_STARTED` | 长期趋势原生多 Alpha 父包尚未形成可训练输入 |
 | 旧研究族状态 | `P0-D..P0-L FROZEN` | 研究事实完整但无可激活winner；不以同族新变体继续消耗相同开发证据 |
-| 新路线实现状态 | `P9_RESEARCH_COMPLETE / REPORT_INPUT_ACCEPTED / ECONOMIC_CONFIRMED_0` | P9 INNER_SUPPORTED但新增同步价值及盈利未确认；P8/P7及P4～P6原结论保留。累计225fit＋1旧index；本次仅恢复研报重排序输入论证，0新F1/模型源码/fit |
-| 研报文件与信号准备 | `FILE_CONSUMPTION_PASS / NON_VINTAGE_EXPLORATION_READY / SIGNAL_NOT_READY` | §6.3.29固定manifest全量验收，原52,400身份保留；40.7443%为范围内报告日期配对存在率。时钟/股本口径未解决，信号定义及有效覆盖待P10；不是历史PIT、已可交易信号或生产数据发布 |
+| 新路线实现状态 | `P11_RESEARCH_COMPLETE_INNER_NOT_SUPPORTED / ECONOMIC_CONFIRMED_0` | §6.3.30 EPS修正候选完成一次六fit；原生−7.644913bps、matched−2.156612bps，停止自身。累计231fit＋1旧index；P4～P9原结论不改，不冒称生产可用 |
+| 研报文件与信号准备 | `FILE_PASS / PROXY_INPUT_SUPPORTED / NON_VINTAGE` | §6.3.29文件验收与§6.3.30 P10均完成；6,831/30,500行可算，18检查通过，不是历史PIT/可交易或经济确认 |
 | 固定5TD日频交付 | `SOURCE_MERGED_ROUTE_RESTART_VERIFIED / PRODUCTION_COMPUTED_NOT_VERIFIED` | #5722只读DB来源与#5732 API已合入；43合同、原次日EOD及两个Program本地ASGI真实DB读回完成，用户重启后health/identity与路由200通过。生产接口仍为NOT_CONFIGURED、无DB读，未宣称生产COMPUTED或盈利；仅路由验收不等于模型已启用 |
 | 已有模型的可用价值 | `ENGINEERING_AND_DIAGNOSTIC_VALUE / NO_CONFIRMED_PROFIT_MODEL` | 基线选股、通用输入/回放/API可以复用；OPEN_DISTRIBUTION仅为价格分布参考，liability相关性仅为负担诊断。没有确认的Advisory盈利型模型，不等于所有QE包无Alpha，也不等于源码和统计诊断毫无价值 |
 | 共享选股优化与连续回放 | `SOURCE_MERGED_20D_REPLAYS_COMPLETED_OUTCOMES_READBACK` | #6038无包白名单，原短窗口评分等价结论不变；两包各20D回放及原生结算已完成，见§16.0。结算目标数/总耗时不是单日推理SLA；不声称全年性能或其它消费者已验。源码优化#6300已加载，旧时间戳阻断只影响正式闭环 |
 | 共享三模式来源 | `SOURCE_MERGED_RUNTIME_IDENTITY_LOADED / PRODUCTION_CONTINUATION_NOT_VERIFIED` | #6356/#6453及124定向回归、两包文件/数据库跨界与恢复已完成；10-21 runtime merge adb13c9d3f4dc5de271b3b6ee3468d94a663d541包含#6453。只证明加载身份，未启动生产三模式任务或代LocalSIM验收；不再要求重复重启 |
-| 后续研究优先级 | `P10_LABEL_FREE_SIGNAL_REVIEW_NEXT / P5_CONFIRMATION_NOT_ADVANCED` | 唯一下一项为研报重排序的信号合同、时钟假设及有效覆盖审查，不重复文件验收；支持时才登记一个F1及有限拟合预算。不自动确认P4/P9或恢复价格/Exit/公告；新数据文件不恢复旧窗口独立性 |
+| 后续研究优先级 | `EXACT_EPS_CANDIDATE_STOPPED / NO_AUTOMATIC_NEXT_TRIAL` | P10/P11完成；仍只保留重排序主问题，下一次先定义真正不同且可追溯的信息假设并查重，不自动换EPS预测期/滞后/模型、择包或重启确认/其它方向 |
 | Admission v2上游依赖 | `BASELINE_STAGE_DECOUPLED / OPTIONAL_SECTOR_SOURCE_NOT_READY` | G2-A v1.2 17/39结构停止，没有完整accepted OOF；仅R2 sector阶段受阻，R0/R1使用真实基础source不需等待 |
 | 系统级上游Alpha | `TWO_NEW_SINGLE_ALPHA_PACKAGES_DELIVERED / QE_OWNS_FURTHER_ALPHA_RESEARCH` | 历史rolling LSTM四vintage检查点不改判；当前已有两个正式LSTM/TCN单Alpha包及公开冻结预测，Advisory直接消费。新父分数只读305D已可产，不以Advisory估值/失败模型代替QE alpha结论，不再宣称尚无新包 |
 | QE因子分析运行态 | `HISTORICAL_QE_OWNER_SNAPSHOT_NOT_CURRENT_BLOCKER` | #4352等旧记录保留历史，当前未代QE验证其运行状态；不再以旧restart pending阻断Advisory，不构成本窗口工作项 |
@@ -357,7 +357,7 @@ PR #3346 已于 2026-08-12 合入 `main`，merge commit 为 `034ccd36dd94441ec8c
 
 ### 1.4 方向一致性复核
 
-2026-10-24现行复核：§6.3.29及§16.0只恢复重排序输入论证这一条线，复用已验收report_rc版本及原Top50身份。文件消费PASS与NON_VINTAGE探索READY不等于信号、收益或生产READY。下一项P10仅审查事前信号定义、时钟假设及有效覆盖；不继承旧六fit预算、不重做文件验收、不将已有量价/排名候选换名重跑，也不将历史EPS修订包装成D已知信息。P4～P9、已消费窗口及所有历史负结果保持原结论。
+2026-10-24现行复核：§6.3.29文件验收、§6.3.30 P10输入审查及P11唯一六fit均完成，不重复。6,831/30,500输入支持后实际发生90/111成熟D原生干预，主增量仍−7.644913bps、两包负；按事前合同停止此候选。不能把阴性归咎于未执行或没有换股，也不证明研报/机器学习全方向无价值。实际累计231fit＋1旧index；PIT、同股本口径与独立确认未成立，旧研究不改判。
 
 2026-10-21历史复核：§6.3.4定义固定5TD Top10主问题，§6.10定义有限选择/确认；§16.0记录B0～B3/U1/C1停止。§6.3.17分别记录C0有限OOF导航与C1真实组合结果，不能将前者+10.529017配对统计冒充后者收益；C1相对原生−0.375507bps未确认。B4/B5未启动，不补旧确认、不换周期/权重/包救结果。源码/API可用不等于盈利，模型未配置不是原策略包门禁；下列早期复核只适用于各自日期。
 
@@ -1397,6 +1397,8 @@ P8当时用户已暂缓report_rc全方向，覆盖§6.3.26历史条件下一步�
 
 ### 6.3.29 重排序单线恢复与研报输入验收（2026-10-24）
 
+本节保留v5.41文件验收与当时P10待执行合同；其后输入审查及新授权状态由§6.3.30接续，以下“尚未执行/0新预算”是该历史检查点。
+
 用户先要求对实际交付面板只读验收，再要求恢复重排序主线并批准本次蓝图修订。恢复范围是“同机构、同预测期盈利预测变化能否改善原Top50内5TD Top10成本后增量”的输入论证；不是恢复研报全方向、生产业务接入或自动开始拟合。公告、价格预测、Exit/仓位、QE/HMM及流水线/启动脚本不进入本轮研究队列。
 
 **已完成输入验收，不能重复记作下一任务。** 数据owner的[原始面板F1设计](../design/report_rc_history_source_f1_20261023.md)与本次消费验收分态。版本根为 `X:/AIstock_dataset_candidates/research_source_candidates/report_rc/20230701-20250930-capture-20261023-v1/delivery-v2`，manifest SHA256为 `4d1bd7f24ef29295eae450f47c664a84b2e36efbc4e0ebdc141619e0acbc4222`，标准化版本 `report_rc_preserve_occurrences_v2`。本会话已独立全量核验，以下结论不是仅复用owner声明或抽样：
@@ -1422,6 +1424,24 @@ P10交付可审查的“推进/停止及原因”结论。若信息差异、明�
 若P10不支持推进，则停止此候选并记录具体原因，不自动换时钟/预测期/模型或转入第二方向。当前新增fit预算为0，不继承P6/P9六fit授权；本次不训练、不读收益/outer/sealed、不写库或改生产配置/数据集/服务。已消费开发窗口不会因新数据版本恢复独立性，兼容预测、成熟输入和未消费证据仍属于后续确认合同；不以长期等待或完备生产数据库作为本次输入探索的前置条件。累计225实际研究fit＋1旧index、0经济确认/激活保持。
 
 本节对应F-292～F-294：文件验收与范围调整已完成，信号审查/模型实验保持未执行；文档审查按事实、研究合同与边界、跨章节一致性三轮同窗口自审，不冒称独立外审或模型验收。
+
+### 6.3.30 P10输入支持与唯一EPS修正F1（2026-10-24）
+
+用户随后授权一个长任务顺序规划/实施/研究、多轮审核修复后直接提交合入，后端重启仍由用户。P10与[下一年度同机构EPS修正代理F1](advisory_report_revision_top10_5td_v1_f1_design_20261024.md)均已完成；设计#6670先合入424265b65，producer d9df06412完成一次三折两臂六fit。设计冻结时225fit＋1，当前累计231fit＋1旧index。
+
+P10合同在读取本候选数值前冻结：下一自然年Q4、同股票/字面机构、假设可见的最新报告日与紧邻前一报告日，当前年龄90自然日内、间隔365日内；`2*(新EPS−旧EPS)/(abs(新EPS)+abs(旧EPS))`取有效机构中位数。两个已知零为0，最新缺失/冲突不跳过，不猜机构别名或股本口径。探索时钟`max(report_date, provider_create_time日期)+1自然日<=D`不代表真实公开时钟；实际captured_at仍2026-10-23，历史捕获覆盖0，历史PIT未成立。
+
+信号合同SHA99992ed7de9ad750c3981cd84dad393f07cea1afa5a46fb4af6a23e4042aef84；screen_rows SHA ff88c5976452678cfdefd5b5991b9c0a06e223ada5690c442ee968042c35a4b9。原52,400身份全部保留，开发305D/30,500行中6,831（22.3967%）可算：TCN3,195、LSTM3,636。首窗两包分别1,971/2,232可用、173/179非恒定D、126/130边界机会D；三折边界机会TCN28/37/35D，LSTM26/42/40D。18项事前支持标准全通过，不能称为实际换股或收益。12合成项、不同实现全量支持统计及固定128stock-D抽查通过；250有效机构对时钟/前值/引用通过。134.2707秒、采样峰值997,376,000bytes，0收益/fit/SQL。
+
+新F1仅原八日频/native字段与新增一个EPS代理对比；UNKNOWN原槽保留，全部原Top50参加评价。成熟H投影、训练内编码、固定Ridge100、三折两臂共同支持、最多六fit、先冻结预测后评价、原5TD/费用/native主终点均在F1事前冻结。matched仅解释，所有终态结束预算；不翻符号/换预测期/择包补救。此输入支持不恢复开发窗口独立性，不进入自动outer、盈利确认或生产持久化/激活。
+
+对应F-292～294；不重做文件验收、不修改数据owner/QE/HMM/LocalSIM、价格/Exit/公告/流水线或启动脚本。实现及实际经济结果见下述回执；代码交付与收益/生产验收分态。
+
+**P11一次真实研究终态。** run `advreportrevisiontop10_24550edf4d65fadf24da1cb7`，result SHA256 `6af4833aa1a6ef16f45f9395a08847bc718a5a97a2b3d8293c9a161b3f07fb73`。24直接合同节点、两L0/ownership/Ruff通过；输入5数值/4精确列全30,500行跨节点逐bit相同，6,831支持、23,669 UNKNOWN，原人口不删。三折共同成熟训练4,153/4,695/5,729行、174/214/257D；共6STARTED/6FINISHED、十stage链完整读回，无中断重拟合。全研究110.879157秒、峰值1,005,666,304bytes、终态30,846,507bytes。
+
+原评价126D/12,600行，111成熟D、101三臂两包共同完整D（90.9910%）；原生/matched/candidate净均值103.774553/98.286253/96.129640bps。主增量**−7.644913bps**，95%[-23.560736,+6.395927]、MDE80=21.529874；三折−17.846256/+9.354378/−17.932795，两包TCN−9.797404/LSTM−5.492423。matched增量−2.156612bps，三折皆负，只作解释。原生干预90/111成熟D，matched64/111D；尾部差+8.758772bps，未知槽各326、额外UNKNOWN0。按预声明INNER_NOT_SUPPORTED，主均值非正且仅一折正，不因区间/系数事后增门或翻符号。
+
+确认价值评审结论为不推进：本候选没有经济支持，且当前NON_VINTAGE/已消费305D不能提供独立确认。无新增文件交付缺陷，不要求数据owner重采或先生产入库解决阴性；0final/outer/封存/激活/服务操作。仅此精确候选停止，不泛化成研报或ML排序全方向无效，也不在长任务剩余时间自动启动第二候选。后续先形成真正不同且可追溯的单一信息问题，继续原Top50→Top10主目标。
 
 ## 7. 荐股产品行为
 
@@ -1986,7 +2006,7 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 
 ## 10. Design Acceptance Index
 
-索引保留历史合同和已完成能力，不以编号出现即视为当前待办。历史专门研究（含F-195～197、F-261/263/268～270/272/282/285）按原结果关闭；现行产品验证规则由F-286～290定义，F-292～294记录本次输入验收与单线恢复。实际唯一队列为§16.0：P9已完成，P10无收益标签信号审查为唯一下一项，模型实验为条件后续。历史单模型预算、Top5或分钟输入限制不得误套新研究。未实现研究项保持设计状态。
+索引保留历史合同和已完成能力，不以编号出现即视为当前待办。历史专门研究（含F-195～197、F-261/263/268～270/272/282/285）按原结果关闭；现行产品验证规则由F-286～290定义，F-292～294记录本次输入验收与单线恢复。实际唯一队列为§16.0：P9、P10输入及§6.3.30 P11一次六fit均完成；精确EPS候选阴性停止，不自动启动备用研究。历史单模型预算、Top5或分钟输入限制不得误套新研究。未实现研究项保持设计状态。
 
 | ID | 验收要求 |
 |---|---|
@@ -2158,8 +2178,8 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-290 | 先基础收益/Top10，后价格条件/Exit；弱信号OOF收缩组合、市场残差及更新只按诊断触发，不要求每成员独立盈利；公告暂缓，QE/HMM/LocalSIM与用户重启边界保持 |
 | F-291 | §6.3.18～19/D0、D1源码研究及E0导航已完成；原生Top10为产品主端点、matched为信息对照。六fit后INNER_NOT_SUPPORTED停止；E0零fit不升格matched，outer/封存金融不读，不将源码或局部正均值当经济成果 |
 | F-292 | §6.3.29固定manifest研报文件验收与原Top50身份追溯；FILE_CONSUMPTION_PASS/NON_VINTAGE_EXPLORATION_READY不升级为历史PIT、信号或经济确认 |
-| F-293 | §6.3.29/16.0唯一下一项P10先冻结信号定义、时钟假设、UNKNOWN处理及有效覆盖审查合同；不重做文件验收、不筛人口或读取收益选规则，当前fit预算0 |
-| F-294 | 页首/§1.2/1.4/16.0一致记录225fit＋1旧index及研报有限恢复；支持时才一个F1/一个候选/一次有界实验，不自动继承旧预算或并行价格/Exit/公告，生产另行确认 |
+| F-293 | §6.3.29/6.3.30/16.0 P10先冻结唯一EPS代理/时钟/UNKNOWN再检查原人口；18支持判据通过，0收益标签/fit，输入不升级经济证据 |
+| F-294 | 页首/§1.2/1.4/16.0一致记录231fit＋1旧index；P10支持后单一F1六fit实际完成、原生负值按原合同停止，不恢复其它方向或生产接入 |
 
 
 ## 11. Design Acceptance Matrix
@@ -2334,8 +2354,8 @@ H0不是当前主动任务，也不与N3并行占用开发、审核或算力。�
 | F-290 | §3/5.3/6.3.16/6.3.17/6.12/16.0 | artifact: 多时段/成熟更新/锚定组合F1 ownership、真实结果及0SQL边界 | CURRENT_SCOPE_VERIFIED_FUTURE_ROLES_NOT_STARTED | approved_by_user: 只写Advisory精确范围、无QE/LocalSIM/DB/服务控制；生产原基线不变 |
 | F-291 | §6.3.18～19/16.0；成交量条件化Top10 F1；两个Advisory研究叶 | backend/tests/advisory_model_first/test_volume_conditioned_pressure_top10_5td_v1.py；18项/真实6fit与fresh-process恢复；artifact: docs/analysis/advisory_e0_control_navigation_20261021.md | SOURCE_AND_RESEARCH_VERIFIED_E0_NO_CONTROL_PROMOTION | none |
 | F-292 | §6.3.29验收对象/方法/结果；数据owner F1只作为交付合同引用 | artifact: 指定delivery-v2 manifest、schema、quality、原始/标准化及覆盖Parquet；本会话全量行/页面/配对和原六列身份独立只读核验结果见§6.3.29 | FILE_ACCEPTED_EXPLORATORY_ONLY | approved_by_user: 仅文件消费与NON_VINTAGE探索；历史PIT/时钟/股本口径未解决，未训练、未读取收益或生产入库 |
-| F-293 | §6.3.29 P10三项合同及§16.0唯一下一项 | artifact: 本文冻结任务范围、待决定项及停止分支；后续输入审查结果尚不存在 | PLANNED_NOT_EXECUTED | approved_by_user: 本次交付蓝图；信号公式/假设/有效覆盖待审，0新增fit预算；不以文件PASS替代信号验收 |
-| F-294 | 页首/§1.2/1.4/6.3.29/16.0 | artifact: 本文版本化差异、三轮同窗口自审、diff --check及F2文档验证 | BLUEPRINT_SCOPE_UPDATED_MODEL_NOT_STARTED | approved_by_user: 仅研报重排序输入论证恢复；P4～P9及旧负结果不改，模型/经济/生产均未验收，不含独立外审 |
+| F-293 | §6.3.30及report_revision F1的Feasibility | artifact: X:/AIstock_temp/ADVISORY/p10-report-revision-20261024/signal_contract.json、screen_receipt.json、audit_receipt.json；12合成项、18支持检查及128stock-D抽查通过 | INPUT_REVIEW_COMPLETE_SUPPORTS_ONE_F1 | approved_by_user: 0新fit/收益，NON_VINTAGE，不冒称历史PIT或已实现模型改序 |
+| F-294 | §6.3.30、report_revision F1及其三研究叶/直接测试 | artifact: 一次真实六fit、十stage读回、research_audit_receipt、24直接节点、同窗口多轮审查与F1/F2 | RESEARCH_COMPLETE_INNER_NOT_SUPPORTED | approved_by_user: 累计231＋1，停止自身；NON_VINTAGE/独立确认限制保留，0经济确认/生产激活，无独立外审 |
 
 
 ## 12. Verification Plan
@@ -2634,7 +2654,7 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 
 ### 16.0 当前唯一任务队列与真实断点（2026-10-24 接续）
 
-本节是2026-10-24唯一队列。主目标固定原两包Top50→Top10、T开盘至T+4收盘、既有成本后的原生增量；价格/Exit/仓位等后置。用户已要求恢复重排序并批准本次蓝图更新，report_rc仅作为唯一新增输入候选。§6.3.29文件验收已完成，下一项P10只做无收益标签信号合同、时钟假设和有效覆盖审查，尚未执行；不是生产接入或自动fit授权。P9一次六fit研究已完成，INNER_SUPPORTED但未确认同步增值或盈利；P4/P5/P6/P7/P8及其它历史结论保留。累计225fit＋1旧index，0新增fit/经济确认/激活；不自动换方向、升格matched或追加六fit。
+本节是2026-10-24唯一队列。原两包Top50→Top10、T开盘至T+4收盘及原费用后增量固定。文件验收、P10无标签输入及P11单一六fit研究已顺序完成：6,831/30,500可算，101共同D原生−7.644913bps、matched−2.156612bps，两包负且仅一折正。INNER_NOT_SUPPORTED，精确候选停止；累计231fit＋1旧index、0经济确认/激活。不自动outer、择包/翻符号/调整EPS规则或开启备用方向。后续仍以重排序为主，先有不同且可追溯的单一信息假设再立项；不为当前阴性要求重采同版数据。
 
 | 优先级 | 具体任务及交付 | 完成条件与分支 |
 |---|---|---|
@@ -2660,15 +2680,15 @@ blueprint_revision_v5_21 = docs only; zero fit / research run / DB operation / r
 | P7 / 已完成输入评审与零fit合同 | §6.3.26；已有report_rc接入查重、2固定日期查询1成功/1超时；9月发布收据与原预测元数据核对；完整输入需求已交付 | RESEARCH_CONTRACT_NOT_ADVANCED_CURRENT_INPUTS，0新F1/源码/fit/标签读取；单日结构支持不等于历史修正对或可训练面板，不把超时当来源无效 |
 | P8 / 已完成查重停止分支 | §6.3.27；原Top10净替换标签/可分动作已有；完整配对与中心化条件等价，边界损失不等价反例保留；10项合成代数PASS | PROPOSAL_NOT_ADVANCED_AFTER_DEDUP；0F1/fit/真实payload，经济NOT_TESTED；不临时转为边界权重、SPO、swap门槛或分钟同步实验 |
 | P9 / 已完成一次六fit内层研究 | §6.3.28/F1；15直接项、305D/30,500原行/30,417可算，首窗对齐；100共同D对原生+15.682701bps/两折正 | INNER_SUPPORTED但对matched−2.223706bps；同步增量及盈利未确认。累计225＋1旧index，0outer/封存/启用，不自动追加实验 |
-| report_rc / 文件验收已完成 | §6.3.29指定delivery-v2：548,991行/823日/853页面，9文件全量身份通过；原52,400身份一致，范围内配对存在率40.7443% | FILE_CONSUMPTION_PASS/NON_VINTAGE_EXPLORATION_READY；SIGNAL_NOT_READY、历史PIT未成立。无需重复采集/文件验收或先生产入库 |
-| P10 / 唯一下一项，未执行 | 固定研报修正信号定义、预测期/新鲜度、时钟假设及UNKNOWN规则；按原包/日期审查有效覆盖、截面变异与可参与重排的候选数量 | 无收益标签/0fit，交付一次推进或停止及原因；输入支持不是已实现的改序/收益，不以40.7443%替代有效覆盖，不用收益选规则，不删除原人口或自动切第二方向 |
-| 条件后续 / 尚未立项 | 仅P10支持时登记一个F1、一个候选、一次有界重排序实验，冻结模型/对照/预算/成本/窗口/主要经济目标和停止条件，复用既有基线与评价能力 | 当前预算0，不继承P9六fit；原生Top10为主比较，matched只解释新增输入；NON_VINTAGE/已消费窗口不升级独立确认，生产入库及业务接入另行确认 |
+| report_rc / 文件验收已完成 | §6.3.29指定delivery-v2：548,991行/823日/853页面，9文件全量身份通过；原52,400身份一致，范围内配对存在率40.7443% | FILE_CONSUMPTION_PASS/NON_VINTAGE_EXPLORATION_READY；P10代理输入支持另见下一行、历史PIT未成立。无需重复采集/文件验收或先生产入库 |
+| P10 / 已完成输入审查 | §6.3.30：唯一预测期/时钟/配对/90日年龄/365日间隔及对称EPS公式事前冻结；原52,400保留，6,831/30,500可算，18检查通过 | SUPPORTS_ONE_F1；12合成项及全支持统计/128stock-D抽查通过，0收益/fit，历史捕获覆盖0，不是历史PIT或经济支持 |
+| P11 / 已完成一次六fit，候选停止 | §6.3.30/report_revision F1；24直接节点、30,500输入逐bit对齐、十stage/六claims读回；101共同D原生−7.644913、matched−2.156612bps | INNER_NOT_SUPPORTED；两包负、仅一折正，90/111成熟D有原生干预，非未执行。累计231＋1，0outer/确认/启用，不换参数/时钟/预测期补救 |
 | B4 / 本候选不启动 | 仅未来确实值得确认的新candidate才冻结并一次读取真正未消费历史 | 本轮sealed收益未读；禁止将已消费outer改称确认，不等待自然天数抢救当前失败 |
 | B5 / 本候选不启动 | 仅确认通过的新角色才做最小集成，再逐项研究价格条件集合/退出价值 | 不先造多角色平台；LocalSIM由其owner实施、重启用户所有；未配置角色不阻原包日频 |
 | 条件辅线 | 直接影响日频基线或本次研究的正确性BUG/可复现性能阻塞 | 仅本模块精确修复；共享三模式生产行为若业务需要再按已有接口验证，不为已加载源码重复重启，不代LocalSIM操作 |
 | 暂缓 / 零主动工时 | 公告、旧失败补证/归档、全历史重跑、通用治理/ModelOps、UI重设计 | 不作为B0～B3前置，不因长任务尚有时间自动启动 |
 
-下面是已完成断点与历史状态清单，不是第二条任务队列。[2026-10-19复盘报告](../analysis/advisory_research_retrospective_and_direction_20261019.md)中的R1诊断及后继cohort已结束；中心化、联合风险、序列压力、多时段、成熟更新、成交量条件化、E2、先导—滞后、流价协动、股本变化及分钟同群同步候选均已完成本轮，各自原因不混同。最新累计225fit＋1旧index、另列统计估计与确定性窗口，0经济确认/启用；181/189/195/201/207/213/219为之前历史检查点，不与当前计数混用。
+下面是已完成断点与历史状态清单，不是第二条任务队列。[2026-10-19复盘报告](../analysis/advisory_research_retrospective_and_direction_20261019.md)中的R1诊断及后继cohort已结束；中心化、联合风险、序列压力、多时段、成熟更新、成交量条件化、E2、先导—滞后、流价协动、股本变化、分钟同群同步及EPS修正代理候选均已完成本轮，各自原因不混同。最新累计231fit＋1旧index、另列统计估计与确定性窗口，0经济确认/启用；181/189/195/201/207/213/219/225为之前历史检查点，不与当前计数混用。
 
 父分数、风险校准、原槽hurdle、市场开盘条件、D时钟人口、跨包共识及T同业开盘均已实际评价并停止各自精确候选，不再列待prepare/fit。共识SOURCE #5908已合入，唯一run `advgp5consensus_c3989aba8da8d9c840f443c9`实际2fit/81成熟D四臂完成，candidate−base−85.139922bps/区间跨0，candidate−matched严格0/0干预，历史检查点152研究fit+1旧index。其后同业新信息run `advgp5sectoropen_1dd5fb95043f1e5ccbc86d01`六fit/81成熟D四臂完成，candidate−base/matched−2.967762/−3.621983bps、两区间跨0且干预不足，该同业检查点158研究fit+1旧index/0经济确认或启用；序列压力后162、多时段后181、D1后195、E2后201均为历史检查点，先导—滞后后207为历史检查点，流价协动后213亦为历史检查点，股本变化后的历史检查点为219，当前P9完成后为225。旧设计SOURCE_LOCAL_PASS/fit0仅为登记时快照，不覆盖本节当前事实；开发阴性不能证明全局无效。
 
