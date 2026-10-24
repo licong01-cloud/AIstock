@@ -31,18 +31,31 @@
   "evidence_uris": [],
   "expected": "Explicit backend-only restart opens a fresh tab and returns success only after the newly launched backend is ready; unknown port owners and failed launches return nonzero; closing its new tab terminates its owned process tree.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/platform_api/test_backend_lifecycle.py",
+      "backend/tests/platform_api/test_windows_launcher.py",
+      "docs/operations/windows_runtime_startup.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "scripts/backend_lifecycle.py",
+      "start_backend.bat",
+      "tests/aistock_validation/bugs/20261024_BUG-2091-backend-only-restart-lacks-fresh-tab-readiness-and-process-tree-lifecycl.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [
       "scripts/backend_lifecycle.py",
       "backend/tests/platform_api/test_backend_lifecycle.py"
     ],
     "changed_files": [
-      "start_backend.bat",
+      "backend/tests/platform_api/test_backend_lifecycle.py",
       "backend/tests/platform_api/test_windows_launcher.py",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
       "docs/operations/windows_runtime_startup.md",
-      "docs/standards/aistock_runtime_targets_v1.yaml"
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "scripts/backend_lifecycle.py",
+      "start_backend.bat",
+      "tests/aistock_validation/bugs/20261024_BUG-2091-backend-only-restart-lacks-fresh-tab-readiness-and-process-tree-lifecycl.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "start_backend.bat",
@@ -182,25 +195,28 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
+    "database_readback_ref": "not_required",
     "fresh_process_evidence": [
       "python scripts/backend_lifecycle.py --help -> passed in a fresh CLI process; persistent lifecycle source imported without service control. cmd.exe /d /c start_backend.bat --check and --check-env -> passed. Direct Windows regression uses disposable process trees and an isolated 8011 HTTP application; real 8001 restart and business acceptance remain pending user execution."
     ],
-    "inference_basis": "planned_scope",
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ],
-    "operator_runbook_ref": "docs/operations/windows_runtime_startup.md",
-    "health_ref": "http://127.0.0.1:8001/api/v1/health",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/openapi.json",
-    "database_readback_ref": "not_required",
-    "runtime_identity_match": "pending"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
