@@ -3,10 +3,17 @@
   "allowed_write_scope": [
     "backend/data_service/suspension_day_authority.py",
     "backend/data_service/suspension_day_authority_v3.json",
-    "backend/tests/test_suspension_day_authority.py",
+    "backend/tests/services/test_suspend_d_coverage.py",
     "tests/aistock_validation/bugs/20261024_BUG-2090-historical-suspension-provider-clocks-contradict-exchange-intraday-notic.json"
   ],
   "assigned_agent": null,
+  "design_compliance_review": {
+    "rule": "DESIGN-COMPLIANCE-001",
+    "no_partial_completion": "PASS: all three unresolved source-clock keys have exact reviewed resolutions; all prior authority entries preserved; backend runtime remains pending user restart.",
+    "no_silent_errors": "PASS: original provider clocks and unknown first-publication time retained; unrelated malformed intervals remain UNRESOLVED.",
+    "business_semantics_preserved": "PASS: no parser widening, guessed interval inversion, full-day inference, PIT or consumer business changes; exact exchange notice text mirrored on public sources.",
+    "no_unapproved_gates": "PASS: shared authority v3 uses existing loader and publication contract; no new framework, approval or research gate."
+  },
   "bug_id": "BUG-2090",
   "closed_at": null,
   "closure_requirements": [
@@ -29,19 +36,25 @@
   ],
   "expected": "Exact-key reviewed authority preserves raw clocks and resolves effective intervals; unrelated malformed keys remain unresolved.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "tests/aistock_validation/bugs/20261024_BUG-2090-historical-suspension-provider-clocks-contradict-exchange-intraday-notic.json",
+      "backend/data_service/suspension_day_authority.py",
+      "backend/tests/services/test_suspend_d_coverage.py"
+    ],
     "added_files": [
-      "backend/data_service/suspension_day_authority_v3.json",
-      "backend/tests/test_suspension_day_authority.py"
+      "backend/data_service/suspension_day_authority_v3.json"
     ],
     "changed_files": [
-      "backend/data_service/suspension_day_authority.py"
+      "tests/aistock_validation/bugs/20261024_BUG-2090-historical-suspension-provider-clocks-contradict-exchange-intraday-notic.json",
+      "backend/data_service/suspension_day_authority.py",
+      "backend/tests/services/test_suspend_d_coverage.py"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/data_service/suspension_day_authority.py",
         "backend/data_service/suspension_day_authority_v3.json",
-        "backend/tests/test_suspension_day_authority.py"
+        "backend/tests/services/test_suspend_d_coverage.py"
       ],
       "impacted_modules": [
         "local_data",
@@ -74,7 +87,7 @@
           "rule_id": "local_data_pipeline"
         },
         {
-          "file": "backend/tests/test_suspension_day_authority.py",
+          "file": "backend/tests/services/test_suspend_d_coverage.py",
           "impact_modules": [],
           "primary_module": "tests.backend",
           "risk_level": "medium",
@@ -95,13 +108,13 @@
     "planned_files": [
       "backend/data_service/suspension_day_authority.py",
       "backend/data_service/suspension_day_authority_v3.json",
-      "backend/tests/test_suspension_day_authority.py"
+      "backend/tests/services/test_suspend_d_coverage.py"
     ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": [
       "backend/data_service/suspension_day_authority.py",
       "backend/data_service/suspension_day_authority_v3.json",
-      "backend/tests/test_suspension_day_authority.py"
+      "backend/tests/services/test_suspend_d_coverage.py"
     ]
   },
   "first_seen_at": "2026-10-24T18:20:45.924071Z",
@@ -127,11 +140,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "rtk pytest -q backend/tests/services/test_suspend_d_coverage.py -k 'exact_notice or previously_approved' -> 4 passed; exact source clocks retained, prior v2 entries unchanged; X:/AIstock_temp/DATA_PREPARATION/BUG-2089-suspension-facts/intraday-notice-readback.json",
+      "X:/AIstock_temp/DATA_PREPARATION/BUG-2089-suspension-facts/intraday-notice-readback.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",

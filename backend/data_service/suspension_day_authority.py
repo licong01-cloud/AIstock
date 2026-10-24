@@ -15,7 +15,7 @@ import re
 from typing import Any, Iterable, Mapping
 
 # Keep the legacy payload unchanged for processes awaiting the user-owned restart.
-DEFAULT_PATH = Path(__file__).with_name("suspension_day_authority_v2.json")
+DEFAULT_PATH = Path(__file__).with_name("suspension_day_authority_v3.json")
 SCHEMA = "aistock_suspension_day_authority_v1"
 POLICY = "provider_events_with_disclosure_resolution_v1"
 
