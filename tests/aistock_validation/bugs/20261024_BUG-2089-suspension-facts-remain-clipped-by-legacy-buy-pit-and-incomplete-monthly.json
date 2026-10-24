@@ -12,7 +12,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2089",
-  "closed_at": null,
+  "closed_at": "2026-10-24T19:52:43.404719Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -221,10 +221,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\BUG-2089-suspension-facts\\postrestart-worker-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2089",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "e6f10ca3089965f3af6baea16a4624d73dc9637d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-24T19:49:11.027755Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "b0ea783366043cd3c609fa272c29681eed4227c826f51a90a3fefe0f48f181c6",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d84da1f535e4b15053bd9c972bdac15010cad727c73fd6f5c0f69c12b1934bf2",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -258,7 +280,7 @@
     ],
     "validation_evidence_digest": "922ab31ac6e5d94f4ef8ab56d1a272ec995cbb72b6d401dc87bfe3afb9885f7b"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -271,7 +293,8 @@
     "validation-receipt: id=9d5d023240770d12 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/dataset_release/test_direct_monthly.py backend/tests/dataset_release/test_monthly_construction_facts.py backend/tests/dataset_release/test_monthly_shared_components.py` result=`106 passed`",
     "validation-receipt: id=af6356cec404d5e4 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=nox plan=l0 status=passed command=`nox -s l0` result=`passed`",
     "validation-receipt: id=ef0f8fd3de066c55 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=ruff plan=direct status=passed command=`ruff check changed files` result=`passed`",
-    "validation-receipt: id=c6fa5ce26629dbc6 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/dataset_release/test_monthly_shared_components.py -k 'prefix or materializes_missing or amendment_can_follow'` result=`7 passed`"
+    "validation-receipt: id=c6fa5ce26629dbc6 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/dataset_release/test_monthly_shared_components.py -k 'prefix or materializes_missing or amendment_can_follow'` result=`7 passed`",
+    "post-restart-verify canonical worker-scheduler passed; observed identity 5da386d93f928d9314781f66e40016a72809f8ef; one backend listener and one supervised monthly worker; registry synced to current catalog"
   ],
   "verification_budget": {
     "budget": "standard",
