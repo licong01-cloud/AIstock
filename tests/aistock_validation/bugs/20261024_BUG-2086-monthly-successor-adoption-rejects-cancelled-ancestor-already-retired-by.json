@@ -132,7 +132,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\non-report-closure-20261024\\bug2086-post-restart-verification.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -175,7 +175,8 @@
     "source_event_id": "FE-20261024-9194b0b7d204"
   },
   "validation_evidence": [
-    "python -m pytest backend/tests/dataset_release/test_monthly_minute_adoption.py::test_verified_activation_ancestry_allows_next_correction_without_rewriting_history -q --tb=short -x -> 2 passed"
+    "python -m pytest backend/tests/dataset_release/test_monthly_minute_adoption.py::test_verified_activation_ancestry_allows_next_correction_without_rewriting_history -q --tb=short -x -> 2 passed",
+    "canonical post-restart-verify worker-scheduler -> runtime identity and supervised-worker business smoke passed; official successor adoption and authorized CAS activation -> ACTIVATED_VERIFIED"
   ],
   "verification_budget": {
     "budget": "standard",
