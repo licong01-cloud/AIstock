@@ -1719,6 +1719,9 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
 def qe_read_backend(session: nox.Session) -> None:
     """Run QE read-path and authoritative factor-metric contract regressions."""
     targets = [
+        "backend/tests/quantevolver/test_qe_l2_risk_consumer.py",
+        "backend/tests/unified_engine/test_qe_l2_risk_strategy.py",
+        "backend/tests/unified_engine/test_qe_terminal_interval_executor.py",
         "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
