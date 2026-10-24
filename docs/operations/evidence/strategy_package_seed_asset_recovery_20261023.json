@@ -1,0 +1,4211 @@
+{
+  "schema_version": "BUG-2076-original-seed-recovery-evidence-v1",
+  "date": "2026-10-23",
+  "package_id": "pkg_ma_8ec5e389fa2c5e484a1ac7e9",
+  "old_manifest_sha256": "f5b008d09fa1c36a1f3604333dee62fa66ba3c692fa07239b57e5690debb6016",
+  "semantic_sha256": "f04a67b0cbbbafbf70ad6c259f62e0001e3158543d907ea37ccc829c525ac02a",
+  "ready": false,
+  "parent_unchanged": true,
+  "counts": {
+    "seed_receipts": 38,
+    "original_weights_verified": 38,
+    "unique_weight_hashes": 38,
+    "complete_seed_closures": 5,
+    "blocked_seed_closures": 33,
+    "parent_pinned_assets_verified": 37
+  },
+  "limits": [
+    "原工作区两个节点当前缺失不等于所有历史备份不存在",
+    "DEV合成fixture仅验证治理链路",
+    "LSTM真实模型加载与预处理仍未通过",
+    "生产资产写入与激活未执行"
+  ],
+  "original_parent_assets": [
+    {
+      "asset_ref": "aistock-package-asset://blobs/c8feec1206a3403984085d5fbd46814fbb121422be8aa55b8bfd3a7395cd0036?kind=factor_code&logical_name=BVPS20DayChange",
+      "sha256": "c8feec1206a3403984085d5fbd46814fbb121422be8aa55b8bfd3a7395cd0036",
+      "size_bytes": 2739
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/b8db506d52e2ffd7493daa14b02cf6b8e0e7b67043b1cec34c3ed78c29347253?kind=factor_code&logical_name=ChipWinnerRateEliteBuyIntensity",
+      "sha256": "b8db506d52e2ffd7493daa14b02cf6b8e0e7b67043b1cec34c3ed78c29347253",
+      "size_bytes": 2126
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/80b05029ecd1f8cf3db29fa574b1dead0e803a6b7270214983955cc1ab834337?kind=factor_code&logical_name=Industry_Volatility_Liquidity_Cross_Factor",
+      "sha256": "80b05029ecd1f8cf3db29fa574b1dead0e803a6b7270214983955cc1ab834337",
+      "size_bytes": 2203
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/048817bac0e9fa5d8af68a23c027f16ae7db319a4b5d03666b4828ffb674a2d8?kind=factor_code&logical_name=LargeOrder_Cost_Interaction",
+      "sha256": "048817bac0e9fa5d8af68a23c027f16ae7db319a4b5d03666b4828ffb674a2d8",
+      "size_bytes": 2198
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/c1928d96d3960114ae83352556b0113626f518e31d4f3f5ebb10f704eab97436?kind=factor_code&logical_name=Profit_Growth_Chip_Cost_Ratio_Factor",
+      "sha256": "c1928d96d3960114ae83352556b0113626f518e31d4f3f5ebb10f704eab97436",
+      "size_bytes": 2061
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/12d7aba69e94e99e96c9b7346df758984e688b782defb0a64e6e944f37817e39?kind=factor_code&logical_name=RevenueGrowthPriceRatio",
+      "sha256": "12d7aba69e94e99e96c9b7346df758984e688b782defb0a64e6e944f37817e39",
+      "size_bytes": 1831
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/97a5a9227c753aeb2e46641739e4591f9c9649ac475ec4ff06e458c8771c7210?kind=factor_code&logical_name=RevenueYOY_Momentum",
+      "sha256": "97a5a9227c753aeb2e46641739e4591f9c9649ac475ec4ff06e458c8771c7210",
+      "size_bytes": 689
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/df5711da5d4a52ee0d4648c8587a3095356bef8347af3ebd0937a618b4197cc6?kind=factor_code&logical_name=dynamic_flow_volatility_sentiment",
+      "sha256": "df5711da5d4a52ee0d4648c8587a3095356bef8347af3ebd0937a618b4197cc6",
+      "size_bytes": 3442
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/c7110876e4bbff5fc7d522abbb4c5d045d045e2b02eb871ec6e56739b4e99b19?kind=factor_code&logical_name=industry_stock_momentum_diff_10d",
+      "sha256": "c7110876e4bbff5fc7d522abbb4c5d045d045e2b02eb871ec6e56739b4e99b19",
+      "size_bytes": 2486
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/20245878d0c9966cda61a830670a4018cb5bbb7e0fff1ddb6a07f10b9de555ef?kind=factor_code&logical_name=m_atr_compression",
+      "sha256": "20245878d0c9966cda61a830670a4018cb5bbb7e0fff1ddb6a07f10b9de555ef",
+      "size_bytes": 999
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/6cf69748f751741fac1f433230187e5766f31ccabcedf4e56c7f1be7e9c72a9f?kind=factor_code&logical_name=m_free_turnover_ind_neutral",
+      "sha256": "6cf69748f751741fac1f433230187e5766f31ccabcedf4e56c7f1be7e9c72a9f",
+      "size_bytes": 891
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/bfaff755633007803a64f3b9d2c986a2b7d33f8f6ea12bcbf999c91956df592c?kind=factor_code&logical_name=m_free_turnover_rate",
+      "sha256": "bfaff755633007803a64f3b9d2c986a2b7d33f8f6ea12bcbf999c91956df592c",
+      "size_bytes": 1000
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/e4c7b951415bf1b6726d49cf2a9f824a41125a4aad44f7f273b413b0243d0f92?kind=factor_code&logical_name=m_ind_neutral_rev_5d",
+      "sha256": "e4c7b951415bf1b6726d49cf2a9f824a41125a4aad44f7f273b413b0243d0f92",
+      "size_bytes": 1356
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/338dd1201afb3e0be0f8689ba7f5bfc38693f7a51aacccdfc5bc87c3054e7173?kind=factor_code&logical_name=m_ind_pb_rel_mom",
+      "sha256": "338dd1201afb3e0be0f8689ba7f5bfc38693f7a51aacccdfc5bc87c3054e7173",
+      "size_bytes": 1278
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/009f4641ee826af6fbfbbd23f764569b505e8d767a7e28c71f6e893119ec7d95?kind=factor_code&logical_name=m_ind_rel_turnover",
+      "sha256": "009f4641ee826af6fbfbbd23f764569b505e8d767a7e28c71f6e893119ec7d95",
+      "size_bytes": 1473
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/39e12f33a65da2d5671cb5d6d96bfbfc17d66417d086a1b917cdbfe6f70cf0b2?kind=factor_code&logical_name=m_intraday_range_60d_min_ratio",
+      "sha256": "39e12f33a65da2d5671cb5d6d96bfbfc17d66417d086a1b917cdbfe6f70cf0b2",
+      "size_bytes": 982
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/f2265458baeafdf1e477526a4ec17336596cfa6af2294fd224dd8386576ea245?kind=factor_code&logical_name=m_intraday_range_ratio_5d",
+      "sha256": "f2265458baeafdf1e477526a4ec17336596cfa6af2294fd224dd8386576ea245",
+      "size_bytes": 532
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/2d451498e0a1bcea496532263d4f16c39fa81ac0a2cc30322422dfdba290dc00?kind=factor_code&logical_name=m_profit_yoy_change",
+      "sha256": "2d451498e0a1bcea496532263d4f16c39fa81ac0a2cc30322422dfdba290dc00",
+      "size_bytes": 692
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/06b3cab0354568f51904875a88e369f9f32584beb2a125676830129bf16eac3f?kind=factor_code&logical_name=m_tech_atr_ratio_14d",
+      "sha256": "06b3cab0354568f51904875a88e369f9f32584beb2a125676830129bf16eac3f",
+      "size_bytes": 1010
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/2b926e0a4767df48ba85b7b74f884b0d1539c7e736df01afdcabd55539dcfb2c?kind=factor_code&logical_name=m_turnover_abnormal_20d",
+      "sha256": "2b926e0a4767df48ba85b7b74f884b0d1539c7e736df01afdcabd55539dcfb2c",
+      "size_bytes": 1178
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/3980592c374315c8835753afce9dab907b4a923547db8bcbf071fe7c9760b5d2?kind=factor_code&logical_name=m_turnover_accel",
+      "sha256": "3980592c374315c8835753afce9dab907b4a923547db8bcbf071fe7c9760b5d2",
+      "size_bytes": 1176
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/628dbc2b35eb448e494ed6119cde48e241cd6d6f9de5e6ec36124bfe12eb6bf7?kind=factor_code&logical_name=m_turnover_breakout_ratio",
+      "sha256": "628dbc2b35eb448e494ed6119cde48e241cd6d6f9de5e6ec36124bfe12eb6bf7",
+      "size_bytes": 690
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/70e7a3e3275ef1f425ba8ab3701117faa23361ba27c87f0750465247cc0be09d?kind=factor_code&logical_name=m_turnover_percentile_250d",
+      "sha256": "70e7a3e3275ef1f425ba8ab3701117faa23361ba27c87f0750465247cc0be09d",
+      "size_bytes": 1399
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/f76f64f9d7d9e0981ad2e8b57ab2060d3ef237d861a67245c78800f5b54d562c?kind=factor_code&logical_name=m_turnover_zscore_60d",
+      "sha256": "f76f64f9d7d9e0981ad2e8b57ab2060d3ef237d861a67245c78800f5b54d562c",
+      "size_bytes": 955
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/01740358f3aadffd784248b72ac9e930589cea8f6f1fbcfbf8ce8e66cb315f15?kind=factor_code&logical_name=m_volume_contraction",
+      "sha256": "01740358f3aadffd784248b72ac9e930589cea8f6f1fbcfbf8ce8e66cb315f15",
+      "size_bytes": 842
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/d4aa0c9869c0d3d048c20c95366e815fb17746782a5a7fdbe818c9e9115e5b58?kind=factor_code&logical_name=neg_Composite_Factor_Multi_Dim",
+      "sha256": "d4aa0c9869c0d3d048c20c95366e815fb17746782a5a7fdbe818c9e9115e5b58",
+      "size_bytes": 2600
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/3245940839d70ef35a2d509ab7e201a168bb4bf369522e217d32ed420799b5f7?kind=factor_code&logical_name=neg_PriceMomentum20D",
+      "sha256": "3245940839d70ef35a2d509ab7e201a168bb4bf369522e217d32ed420799b5f7",
+      "size_bytes": 2253
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/8b038df1675e7a0f85cb08c7fd20a2bfe78e62875fd082ddc64068288d8bc14b?kind=factor_code&logical_name=neg_TurnoverVolatilityEnhancement",
+      "sha256": "8b038df1675e7a0f85cb08c7fd20a2bfe78e62875fd082ddc64068288d8bc14b",
+      "size_bytes": 2662
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/2ca8ce5162a7b67099c58325554710a6419a69052c733d38d0b91e3a6179aaab?kind=factor_code&logical_name=neg_high_amount_turnover_momentum_5d",
+      "sha256": "2ca8ce5162a7b67099c58325554710a6419a69052c733d38d0b91e3a6179aaab",
+      "size_bytes": 3788
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/92b837396c83c0f296374496a47dbb81752ac7fc9cdd6e308cb394902453dccf?kind=factor_code&logical_name=neg_momentum_price_volume",
+      "sha256": "92b837396c83c0f296374496a47dbb81752ac7fc9cdd6e308cb394902453dccf",
+      "size_bytes": 2062
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/24811a50aab2fbc4c47a1072540ef01cac7989f8a3b955a1cde863e693d54783?kind=factor_code&logical_name=neg_volatility_breakout_momentum_v2",
+      "sha256": "24811a50aab2fbc4c47a1072540ef01cac7989f8a3b955a1cde863e693d54783",
+      "size_bytes": 3489
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/e287263e499bdedc9b01594b0f970470c22941e1ebca2a7bde105652d0c5daa4?kind=factor_code&logical_name=quality_capex_efficiency",
+      "sha256": "e287263e499bdedc9b01594b0f970470c22941e1ebca2a7bde105652d0c5daa4",
+      "size_bytes": 3015
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/ab9bc09faeefc29da77304f2d4e42cc77aea02033dbc975f1b483587518b01f6?kind=factor_code&logical_name=revenue_growth_elg_flow_momentum_product",
+      "sha256": "ab9bc09faeefc29da77304f2d4e42cc77aea02033dbc975f1b483587518b01f6",
+      "size_bytes": 2734
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/3bde7a5534d0934dadd764277d462a21c676b51f7b175d3fbaf1d396396bcb26?kind=factor_schema&logical_name=alpha158_schema",
+      "sha256": "3bde7a5534d0934dadd764277d462a21c676b51f7b175d3fbaf1d396396bcb26",
+      "size_bytes": 1506
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/5f255fc454f02ace754c7c6bfbd8362b37696f18eb1729a488f942ebe0396620?kind=model_weight&logical_name=__seed_LGBModel_conservative_v1__",
+      "sha256": "5f255fc454f02ace754c7c6bfbd8362b37696f18eb1729a488f942ebe0396620",
+      "size_bytes": 654568
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/9c65fe85fa1e3e31a544c2f59608f6c295de9b7943c4b04aadef3fc34aac87fc?kind=model_weight&logical_name=__seed_LSTM_10D_hs64_d02__",
+      "sha256": "9c65fe85fa1e3e31a544c2f59608f6c295de9b7943c4b04aadef3fc34aac87fc",
+      "size_bytes": 698687
+    },
+    {
+      "asset_ref": "aistock-package-asset://blobs/fab0d14c023dd1101925983a1b6ab413b6feb59ca356833036b17916ac4c2b99?kind=model_code&logical_name=model.py",
+      "sha256": "fab0d14c023dd1101925983a1b6ab413b6feb59ca356833036b17916ac4c2b99",
+      "size_bytes": 932
+    }
+  ],
+  "original_parent_factors": [
+    {
+      "factor_id": "BVPS20DayChange",
+      "sha256": "c8feec1206a3403984085d5fbd46814fbb121422be8aa55b8bfd3a7395cd0036",
+      "asset_ref": "aistock-package-asset://blobs/c8feec1206a3403984085d5fbd46814fbb121422be8aa55b8bfd3a7395cd0036?kind=factor_code&logical_name=BVPS20DayChange"
+    },
+    {
+      "factor_id": "ChipWinnerRateEliteBuyIntensity",
+      "sha256": "b8db506d52e2ffd7493daa14b02cf6b8e0e7b67043b1cec34c3ed78c29347253",
+      "asset_ref": "aistock-package-asset://blobs/b8db506d52e2ffd7493daa14b02cf6b8e0e7b67043b1cec34c3ed78c29347253?kind=factor_code&logical_name=ChipWinnerRateEliteBuyIntensity"
+    },
+    {
+      "factor_id": "Industry_Volatility_Liquidity_Cross_Factor",
+      "sha256": "80b05029ecd1f8cf3db29fa574b1dead0e803a6b7270214983955cc1ab834337",
+      "asset_ref": "aistock-package-asset://blobs/80b05029ecd1f8cf3db29fa574b1dead0e803a6b7270214983955cc1ab834337?kind=factor_code&logical_name=Industry_Volatility_Liquidity_Cross_Factor"
+    },
+    {
+      "factor_id": "LargeOrder_Cost_Interaction",
+      "sha256": "048817bac0e9fa5d8af68a23c027f16ae7db319a4b5d03666b4828ffb674a2d8",
+      "asset_ref": "aistock-package-asset://blobs/048817bac0e9fa5d8af68a23c027f16ae7db319a4b5d03666b4828ffb674a2d8?kind=factor_code&logical_name=LargeOrder_Cost_Interaction"
+    },
+    {
+      "factor_id": "Profit_Growth_Chip_Cost_Ratio_Factor",
+      "sha256": "c1928d96d3960114ae83352556b0113626f518e31d4f3f5ebb10f704eab97436",
+      "asset_ref": "aistock-package-asset://blobs/c1928d96d3960114ae83352556b0113626f518e31d4f3f5ebb10f704eab97436?kind=factor_code&logical_name=Profit_Growth_Chip_Cost_Ratio_Factor"
+    },
+    {
+      "factor_id": "RevenueGrowthPriceRatio",
+      "sha256": "12d7aba69e94e99e96c9b7346df758984e688b782defb0a64e6e944f37817e39",
+      "asset_ref": "aistock-package-asset://blobs/12d7aba69e94e99e96c9b7346df758984e688b782defb0a64e6e944f37817e39?kind=factor_code&logical_name=RevenueGrowthPriceRatio"
+    },
+    {
+      "factor_id": "RevenueYOY_Momentum",
+      "sha256": "97a5a9227c753aeb2e46641739e4591f9c9649ac475ec4ff06e458c8771c7210",
+      "asset_ref": "aistock-package-asset://blobs/97a5a9227c753aeb2e46641739e4591f9c9649ac475ec4ff06e458c8771c7210?kind=factor_code&logical_name=RevenueYOY_Momentum"
+    },
+    {
+      "factor_id": "dynamic_flow_volatility_sentiment",
+      "sha256": "df5711da5d4a52ee0d4648c8587a3095356bef8347af3ebd0937a618b4197cc6",
+      "asset_ref": "aistock-package-asset://blobs/df5711da5d4a52ee0d4648c8587a3095356bef8347af3ebd0937a618b4197cc6?kind=factor_code&logical_name=dynamic_flow_volatility_sentiment"
+    },
+    {
+      "factor_id": "industry_stock_momentum_diff_10d",
+      "sha256": "c7110876e4bbff5fc7d522abbb4c5d045d045e2b02eb871ec6e56739b4e99b19",
+      "asset_ref": "aistock-package-asset://blobs/c7110876e4bbff5fc7d522abbb4c5d045d045e2b02eb871ec6e56739b4e99b19?kind=factor_code&logical_name=industry_stock_momentum_diff_10d"
+    },
+    {
+      "factor_id": "m_atr_compression",
+      "sha256": "20245878d0c9966cda61a830670a4018cb5bbb7e0fff1ddb6a07f10b9de555ef",
+      "asset_ref": "aistock-package-asset://blobs/20245878d0c9966cda61a830670a4018cb5bbb7e0fff1ddb6a07f10b9de555ef?kind=factor_code&logical_name=m_atr_compression"
+    },
+    {
+      "factor_id": "m_free_turnover_ind_neutral",
+      "sha256": "6cf69748f751741fac1f433230187e5766f31ccabcedf4e56c7f1be7e9c72a9f",
+      "asset_ref": "aistock-package-asset://blobs/6cf69748f751741fac1f433230187e5766f31ccabcedf4e56c7f1be7e9c72a9f?kind=factor_code&logical_name=m_free_turnover_ind_neutral"
+    },
+    {
+      "factor_id": "m_free_turnover_rate",
+      "sha256": "bfaff755633007803a64f3b9d2c986a2b7d33f8f6ea12bcbf999c91956df592c",
+      "asset_ref": "aistock-package-asset://blobs/bfaff755633007803a64f3b9d2c986a2b7d33f8f6ea12bcbf999c91956df592c?kind=factor_code&logical_name=m_free_turnover_rate"
+    },
+    {
+      "factor_id": "m_ind_neutral_rev_5d",
+      "sha256": "e4c7b951415bf1b6726d49cf2a9f824a41125a4aad44f7f273b413b0243d0f92",
+      "asset_ref": "aistock-package-asset://blobs/e4c7b951415bf1b6726d49cf2a9f824a41125a4aad44f7f273b413b0243d0f92?kind=factor_code&logical_name=m_ind_neutral_rev_5d"
+    },
+    {
+      "factor_id": "m_ind_pb_rel_mom",
+      "sha256": "338dd1201afb3e0be0f8689ba7f5bfc38693f7a51aacccdfc5bc87c3054e7173",
+      "asset_ref": "aistock-package-asset://blobs/338dd1201afb3e0be0f8689ba7f5bfc38693f7a51aacccdfc5bc87c3054e7173?kind=factor_code&logical_name=m_ind_pb_rel_mom"
+    },
+    {
+      "factor_id": "m_ind_rel_turnover",
+      "sha256": "009f4641ee826af6fbfbbd23f764569b505e8d767a7e28c71f6e893119ec7d95",
+      "asset_ref": "aistock-package-asset://blobs/009f4641ee826af6fbfbbd23f764569b505e8d767a7e28c71f6e893119ec7d95?kind=factor_code&logical_name=m_ind_rel_turnover"
+    },
+    {
+      "factor_id": "m_intraday_range_60d_min_ratio",
+      "sha256": "39e12f33a65da2d5671cb5d6d96bfbfc17d66417d086a1b917cdbfe6f70cf0b2",
+      "asset_ref": "aistock-package-asset://blobs/39e12f33a65da2d5671cb5d6d96bfbfc17d66417d086a1b917cdbfe6f70cf0b2?kind=factor_code&logical_name=m_intraday_range_60d_min_ratio"
+    },
+    {
+      "factor_id": "m_intraday_range_ratio_5d",
+      "sha256": "f2265458baeafdf1e477526a4ec17336596cfa6af2294fd224dd8386576ea245",
+      "asset_ref": "aistock-package-asset://blobs/f2265458baeafdf1e477526a4ec17336596cfa6af2294fd224dd8386576ea245?kind=factor_code&logical_name=m_intraday_range_ratio_5d"
+    },
+    {
+      "factor_id": "m_profit_yoy_change",
+      "sha256": "2d451498e0a1bcea496532263d4f16c39fa81ac0a2cc30322422dfdba290dc00",
+      "asset_ref": "aistock-package-asset://blobs/2d451498e0a1bcea496532263d4f16c39fa81ac0a2cc30322422dfdba290dc00?kind=factor_code&logical_name=m_profit_yoy_change"
+    },
+    {
+      "factor_id": "m_tech_atr_ratio_14d",
+      "sha256": "06b3cab0354568f51904875a88e369f9f32584beb2a125676830129bf16eac3f",
+      "asset_ref": "aistock-package-asset://blobs/06b3cab0354568f51904875a88e369f9f32584beb2a125676830129bf16eac3f?kind=factor_code&logical_name=m_tech_atr_ratio_14d"
+    },
+    {
+      "factor_id": "m_turnover_abnormal_20d",
+      "sha256": "2b926e0a4767df48ba85b7b74f884b0d1539c7e736df01afdcabd55539dcfb2c",
+      "asset_ref": "aistock-package-asset://blobs/2b926e0a4767df48ba85b7b74f884b0d1539c7e736df01afdcabd55539dcfb2c?kind=factor_code&logical_name=m_turnover_abnormal_20d"
+    },
+    {
+      "factor_id": "m_turnover_accel",
+      "sha256": "3980592c374315c8835753afce9dab907b4a923547db8bcbf071fe7c9760b5d2",
+      "asset_ref": "aistock-package-asset://blobs/3980592c374315c8835753afce9dab907b4a923547db8bcbf071fe7c9760b5d2?kind=factor_code&logical_name=m_turnover_accel"
+    },
+    {
+      "factor_id": "m_turnover_breakout_ratio",
+      "sha256": "628dbc2b35eb448e494ed6119cde48e241cd6d6f9de5e6ec36124bfe12eb6bf7",
+      "asset_ref": "aistock-package-asset://blobs/628dbc2b35eb448e494ed6119cde48e241cd6d6f9de5e6ec36124bfe12eb6bf7?kind=factor_code&logical_name=m_turnover_breakout_ratio"
+    },
+    {
+      "factor_id": "m_turnover_percentile_250d",
+      "sha256": "70e7a3e3275ef1f425ba8ab3701117faa23361ba27c87f0750465247cc0be09d",
+      "asset_ref": "aistock-package-asset://blobs/70e7a3e3275ef1f425ba8ab3701117faa23361ba27c87f0750465247cc0be09d?kind=factor_code&logical_name=m_turnover_percentile_250d"
+    },
+    {
+      "factor_id": "m_turnover_zscore_60d",
+      "sha256": "f76f64f9d7d9e0981ad2e8b57ab2060d3ef237d861a67245c78800f5b54d562c",
+      "asset_ref": "aistock-package-asset://blobs/f76f64f9d7d9e0981ad2e8b57ab2060d3ef237d861a67245c78800f5b54d562c?kind=factor_code&logical_name=m_turnover_zscore_60d"
+    },
+    {
+      "factor_id": "m_volume_contraction",
+      "sha256": "01740358f3aadffd784248b72ac9e930589cea8f6f1fbcfbf8ce8e66cb315f15",
+      "asset_ref": "aistock-package-asset://blobs/01740358f3aadffd784248b72ac9e930589cea8f6f1fbcfbf8ce8e66cb315f15?kind=factor_code&logical_name=m_volume_contraction"
+    },
+    {
+      "factor_id": "neg_Composite_Factor_Multi_Dim",
+      "sha256": "d4aa0c9869c0d3d048c20c95366e815fb17746782a5a7fdbe818c9e9115e5b58",
+      "asset_ref": "aistock-package-asset://blobs/d4aa0c9869c0d3d048c20c95366e815fb17746782a5a7fdbe818c9e9115e5b58?kind=factor_code&logical_name=neg_Composite_Factor_Multi_Dim"
+    },
+    {
+      "factor_id": "neg_PriceMomentum20D",
+      "sha256": "3245940839d70ef35a2d509ab7e201a168bb4bf369522e217d32ed420799b5f7",
+      "asset_ref": "aistock-package-asset://blobs/3245940839d70ef35a2d509ab7e201a168bb4bf369522e217d32ed420799b5f7?kind=factor_code&logical_name=neg_PriceMomentum20D"
+    },
+    {
+      "factor_id": "neg_TurnoverVolatilityEnhancement",
+      "sha256": "8b038df1675e7a0f85cb08c7fd20a2bfe78e62875fd082ddc64068288d8bc14b",
+      "asset_ref": "aistock-package-asset://blobs/8b038df1675e7a0f85cb08c7fd20a2bfe78e62875fd082ddc64068288d8bc14b?kind=factor_code&logical_name=neg_TurnoverVolatilityEnhancement"
+    },
+    {
+      "factor_id": "neg_high_amount_turnover_momentum_5d",
+      "sha256": "2ca8ce5162a7b67099c58325554710a6419a69052c733d38d0b91e3a6179aaab",
+      "asset_ref": "aistock-package-asset://blobs/2ca8ce5162a7b67099c58325554710a6419a69052c733d38d0b91e3a6179aaab?kind=factor_code&logical_name=neg_high_amount_turnover_momentum_5d"
+    },
+    {
+      "factor_id": "neg_momentum_price_volume",
+      "sha256": "92b837396c83c0f296374496a47dbb81752ac7fc9cdd6e308cb394902453dccf",
+      "asset_ref": "aistock-package-asset://blobs/92b837396c83c0f296374496a47dbb81752ac7fc9cdd6e308cb394902453dccf?kind=factor_code&logical_name=neg_momentum_price_volume"
+    },
+    {
+      "factor_id": "neg_volatility_breakout_momentum_v2",
+      "sha256": "24811a50aab2fbc4c47a1072540ef01cac7989f8a3b955a1cde863e693d54783",
+      "asset_ref": "aistock-package-asset://blobs/24811a50aab2fbc4c47a1072540ef01cac7989f8a3b955a1cde863e693d54783?kind=factor_code&logical_name=neg_volatility_breakout_momentum_v2"
+    },
+    {
+      "factor_id": "quality_capex_efficiency",
+      "sha256": "e287263e499bdedc9b01594b0f970470c22941e1ebca2a7bde105652d0c5daa4",
+      "asset_ref": "aistock-package-asset://blobs/e287263e499bdedc9b01594b0f970470c22941e1ebca2a7bde105652d0c5daa4?kind=factor_code&logical_name=quality_capex_efficiency"
+    },
+    {
+      "factor_id": "revenue_growth_elg_flow_momentum_product",
+      "sha256": "ab9bc09faeefc29da77304f2d4e42cc77aea02033dbc975f1b483587518b01f6",
+      "asset_ref": "aistock-package-asset://blobs/ab9bc09faeefc29da77304f2d4e42cc77aea02033dbc975f1b483587518b01f6?kind=factor_code&logical_name=revenue_growth_elg_flow_momentum_product"
+    }
+  ],
+  "original_parent_alpha158": {
+    "enabled": true,
+    "aliases": [
+      "RESI5",
+      "WVMA5",
+      "RSQR5",
+      "KLEN",
+      "RSQR10",
+      "CORR5",
+      "CORD5",
+      "CORR10",
+      "ROC60",
+      "RESI10",
+      "VSTD5",
+      "RSQR60",
+      "CORR60",
+      "WVMA60",
+      "STD5",
+      "RSQR20",
+      "CORD60",
+      "CORD10",
+      "CORR20",
+      "KLOW"
+    ],
+    "alias_count": 20,
+    "loader_class": "qlib.contrib.data.loader.Alpha158DL",
+    "asset_ref": "aistock-package-asset://blobs/3bde7a5534d0934dadd764277d462a21c676b51f7b175d3fbaf1d396396bcb26?kind=factor_schema&logical_name=alpha158_schema",
+    "sha256": "3bde7a5534d0934dadd764277d462a21c676b51f7b175d3fbaf1d396396bcb26",
+    "size_bytes": 1506,
+    "source_uri": "qe-workspace://node/wsl2-5080/tasks/qe_20260603_000500_8936/loops/Loop9/conf.yaml"
+  },
+  "source_read_attempts": {
+    "nodes": [
+      "wsl2-5080",
+      "rdagent-node1"
+    ],
+    "lstm_missing": [
+      "conf.yaml",
+      "model.py",
+      "mlruns-params paired fitted dataset"
+    ],
+    "responses": "missing/404",
+    "registered_local_root_readback": {
+      "windows_seed_directories_checked": 66,
+      "wsl_seed_directories_checked": 99,
+      "existing_target_directories": 0,
+      "scope": "33 exact LSTM task/Loop coordinates in registered Windows and local Ubuntu workspace roots; no global scan"
+    }
+  },
+  "dev_actual_candidate": {
+    "database": "aistock_dev",
+    "status": "blocked_no_write",
+    "reason": "seed_recovery_incomplete",
+    "package_count_before": 6,
+    "package_count_after": 6
+  },
+  "dev_governance_integration": {
+    "evidence_type": "DEV synthetic governance integration; not production model verification",
+    "production_write": false,
+    "dev_transaction_migration": "F:\\Dev\\AIstock_worktrees\\BUG-2076-alpha-seed-20261023\\backend\\migrations\\strategy_pkg_multi_alpha_combine_source_type_20260629.sql",
+    "dev_migration_rollback_with_transaction": true,
+    "database": "aistock_dev",
+    "passed": true,
+    "new_status": "DRAFT",
+    "package_id": "pkg_sr_79ac0d7c0909081292c144a0",
+    "model_weight_rows": 38,
+    "asset_rows": 40,
+    "idempotent": true,
+    "parent_unchanged": true,
+    "package_count_before": 6,
+    "rolled_back": true,
+    "package_count_after": 6
+  },
+  "production_assets_written": false,
+  "production_package_created": false,
+  "activated": false,
+  "services_restarted": false,
+  "receipts": [
+    {
+      "index": 1,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_fc5d506390b8f70651a790e6",
+      "seed_index": 0,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_fc5d506390b8f70651a790e6",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260603_000500_8936",
+        "loop_id": "Loop9",
+        "loop_index": 9,
+        "source_uri": "aistock-prediction-store://runs/qear_run_fc5d506390b8f70651a790e6/model_params",
+        "sha256": "9c65fe85fa1e3e31a544c2f59608f6c295de9b7943c4b04aadef3fc34aac87fc",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "c6738e709b03be03d28d781c1cb13ec4b58c4649f8afdf9e72759b56c3dfeb34"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260603_000500_8936_L9",
+        "source_task_id": "qe_20260603_000500_8936",
+        "source_loop_id": "qe_20260603_000500_8936_Loop9",
+        "source_loop_index": 9,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_fc5d506390b8f70651a790e6"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "9c65fe85fa1e3e31a544c2f59608f6c295de9b7943c4b04aadef3fc34aac87fc",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_fc5d506390b8f70651a790e6/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "4bc5453457d94a9b0d97d2fe380c8d099fb2a40af203c928cfb39b164ffddfbd"
+    },
+    {
+      "index": 2,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_9a1defd5a1e2257a7255b78d",
+      "seed_index": 1,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_9a1defd5a1e2257a7255b78d",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260603_000500_8936",
+        "loop_id": "Loop10",
+        "loop_index": 10,
+        "source_uri": "aistock-prediction-store://runs/qear_run_9a1defd5a1e2257a7255b78d/model_params",
+        "sha256": "fea8532dff09a258326510847348028554ebdbc1d25de0039f11ccc3f401dae8",
+        "size_bytes": 698715,
+        "archive_manifest_sha256": "b43113091f0709101254d6ba7e5421f7b1f05a2ac16b3661f1a57b4f984157ac"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260603_000500_8936_L10",
+        "source_task_id": "qe_20260603_000500_8936",
+        "source_loop_id": "qe_20260603_000500_8936_Loop10",
+        "source_loop_index": 10,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_9a1defd5a1e2257a7255b78d"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "fea8532dff09a258326510847348028554ebdbc1d25de0039f11ccc3f401dae8",
+          "size_bytes": 698715,
+          "source_uri": "aistock-prediction-store://runs/qear_run_9a1defd5a1e2257a7255b78d/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "8500d63279838001e853035cdc0b9f9bf9f37d04d02729a9355c0aab580a2a18"
+    },
+    {
+      "index": 3,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_a897779cf0a3c30e41a37efc",
+      "seed_index": 2,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_a897779cf0a3c30e41a37efc",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260603_000500_8936",
+        "loop_id": "Loop11",
+        "loop_index": 11,
+        "source_uri": "aistock-prediction-store://runs/qear_run_a897779cf0a3c30e41a37efc/model_params",
+        "sha256": "4a0b22fb10c63ffbaf3ef37f5d2f6d4f20bfb4faff4a0b53cd75db9a807c23ce",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "abad390487e9b3258b70517914c72354ac6e9fe9bc5717c8b0e20cbb9af94299"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260603_000500_8936_L11",
+        "source_task_id": "qe_20260603_000500_8936",
+        "source_loop_id": "qe_20260603_000500_8936_Loop11",
+        "source_loop_index": 11,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_a897779cf0a3c30e41a37efc"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "4a0b22fb10c63ffbaf3ef37f5d2f6d4f20bfb4faff4a0b53cd75db9a807c23ce",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_a897779cf0a3c30e41a37efc/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "a260816dadee0e6cf32d6b85c29e920063b7f7120a7f884a007b4a9e7d19b3d5"
+    },
+    {
+      "index": 4,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_2ab298df84dcf5a024dc6bd5",
+      "seed_index": 3,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_2ab298df84dcf5a024dc6bd5",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260603_000500_8936",
+        "loop_id": "Loop12",
+        "loop_index": 12,
+        "source_uri": "aistock-prediction-store://runs/qear_run_2ab298df84dcf5a024dc6bd5/model_params",
+        "sha256": "24d8d4cc85c56c15c190d9f4e83fe940478ae29971f7b2e18c303e1acadc96a7",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "c2a1c7c34664d775cfe78af9c1d1cdbb19df1a90e02ad655f201ec6206222932"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260603_000500_8936_L12",
+        "source_task_id": "qe_20260603_000500_8936",
+        "source_loop_id": "qe_20260603_000500_8936_Loop12",
+        "source_loop_index": 12,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_2ab298df84dcf5a024dc6bd5"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "24d8d4cc85c56c15c190d9f4e83fe940478ae29971f7b2e18c303e1acadc96a7",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_2ab298df84dcf5a024dc6bd5/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "375d8b3f6e9d767164c168fa60f42ea4696b91dabda2489ab3dc6403408bc735"
+    },
+    {
+      "index": 5,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_21afc18b61dddd3a53f2fdac",
+      "seed_index": 4,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_21afc18b61dddd3a53f2fdac",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260605_022858_c36b",
+        "loop_id": "Loop5",
+        "loop_index": 5,
+        "source_uri": "aistock-prediction-store://runs/qear_run_21afc18b61dddd3a53f2fdac/model_params",
+        "sha256": "c49e7743244df1771dfdab86c739f623be3def2a3106c6be86f76c522a9cb155",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "f78154763ea79ca763057c29bc4a13ac50c25c1b0217733cc254963599c72928"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260605_022858_c36b_L5",
+        "source_task_id": "qe_20260605_022858_c36b",
+        "source_loop_id": "qe_20260605_022858_c36b_Loop5",
+        "source_loop_index": 5,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_21afc18b61dddd3a53f2fdac"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "c49e7743244df1771dfdab86c739f623be3def2a3106c6be86f76c522a9cb155",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_21afc18b61dddd3a53f2fdac/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "8899d5821b00f5a2d73c5f3a78fd7ba8b44679dd1487473300a1940121578106"
+    },
+    {
+      "index": 6,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_1099a628e0322a96d46faf93",
+      "seed_index": 5,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_1099a628e0322a96d46faf93",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260605_022858_c36b",
+        "loop_id": "Loop6",
+        "loop_index": 6,
+        "source_uri": "aistock-prediction-store://runs/qear_run_1099a628e0322a96d46faf93/model_params",
+        "sha256": "1b5d1d0b47b750ec0021f1fa792b24aa220128354a17588785d490e46431da35",
+        "size_bytes": 698715,
+        "archive_manifest_sha256": "625eec2dd8525ea43fa597a56fb52dee4808a5ea05f8f9102e35893dbad74a5e"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260605_022858_c36b_L6",
+        "source_task_id": "qe_20260605_022858_c36b",
+        "source_loop_id": "qe_20260605_022858_c36b_Loop6",
+        "source_loop_index": 6,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_1099a628e0322a96d46faf93"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "1b5d1d0b47b750ec0021f1fa792b24aa220128354a17588785d490e46431da35",
+          "size_bytes": 698715,
+          "source_uri": "aistock-prediction-store://runs/qear_run_1099a628e0322a96d46faf93/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "31e3bc2046bc7197de6e1792a8265b624cb46e017b7c1a087103e4fcbb2a9f52"
+    },
+    {
+      "index": 7,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_4ebb5ff58e47f5065bb82829",
+      "seed_index": 6,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_4ebb5ff58e47f5065bb82829",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260605_022858_c36b",
+        "loop_id": "Loop8",
+        "loop_index": 8,
+        "source_uri": "aistock-prediction-store://runs/qear_run_4ebb5ff58e47f5065bb82829/model_params",
+        "sha256": "a29236ac862ac9e534880e416f1e1de366c53749bc0399733714175deb211c40",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "13499a892ce6f63d63719410c11131b25ab7458060838fc2b665a2aa05217c6b"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260605_022858_c36b_L8",
+        "source_task_id": "qe_20260605_022858_c36b",
+        "source_loop_id": "qe_20260605_022858_c36b_Loop8",
+        "source_loop_index": 8,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_4ebb5ff58e47f5065bb82829"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "a29236ac862ac9e534880e416f1e1de366c53749bc0399733714175deb211c40",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_4ebb5ff58e47f5065bb82829/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "c3fcedbcb5c30f94a154c1fea51d2bbb259e9ff3cc8aab5b6248dea546bfd703"
+    },
+    {
+      "index": 8,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_a8ae1bdd6146ea632d3dcae7",
+      "seed_index": 7,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_a8ae1bdd6146ea632d3dcae7",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260605_022858_c36b",
+        "loop_id": "Loop7",
+        "loop_index": 7,
+        "source_uri": "aistock-prediction-store://runs/qear_run_a8ae1bdd6146ea632d3dcae7/model_params",
+        "sha256": "c6dc5d7c21793f044c665fe3ca8e54bda609ef63736a9253a502ff26303e2ba1",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "690029c0c3bf252fc5a47ab2c3b2fe9be8995d4e44232eb4f65c346b94c1c740"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260605_022858_c36b_L7",
+        "source_task_id": "qe_20260605_022858_c36b",
+        "source_loop_id": "qe_20260605_022858_c36b_Loop7",
+        "source_loop_index": 7,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_a8ae1bdd6146ea632d3dcae7"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "c6dc5d7c21793f044c665fe3ca8e54bda609ef63736a9253a502ff26303e2ba1",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_a8ae1bdd6146ea632d3dcae7/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "b040e19c8e14906c05e5b45551e6701569b51f6cb108d63f5dd6995521d07c49"
+    },
+    {
+      "index": 9,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_eaf48dfbe26a95bf58a4bb3b",
+      "seed_index": 8,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_eaf48dfbe26a95bf58a4bb3b",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260605_144921_a309",
+        "loop_id": "Loop5",
+        "loop_index": 5,
+        "source_uri": "aistock-prediction-store://runs/qear_run_eaf48dfbe26a95bf58a4bb3b/model_params",
+        "sha256": "4bdaea069596c932d48b8bfd714c38eec1fc2c66d535cd1d313177a0c5fd4d75",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "fef01f2e99e25cfd17e2c910059f3d0487cf2ad50d26c5faaffa642d1693f581"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260605_144921_a309_L5",
+        "source_task_id": "qe_20260605_144921_a309",
+        "source_loop_id": "qe_20260605_144921_a309_Loop5",
+        "source_loop_index": 5,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_eaf48dfbe26a95bf58a4bb3b"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "4bdaea069596c932d48b8bfd714c38eec1fc2c66d535cd1d313177a0c5fd4d75",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_eaf48dfbe26a95bf58a4bb3b/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "48e7edad42fe64f53ca4dcd424b1a6dbb2d8a2f35dfcd428301705f69502b5ad"
+    },
+    {
+      "index": 10,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_9487b5f53ff0913f5f09bf47",
+      "seed_index": 9,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_9487b5f53ff0913f5f09bf47",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260605_144921_a309",
+        "loop_id": "Loop6",
+        "loop_index": 6,
+        "source_uri": "aistock-prediction-store://runs/qear_run_9487b5f53ff0913f5f09bf47/model_params",
+        "sha256": "ed0925d77cacbfd171f3ab145874f868abd213b671a72de36318d7f88f58bc96",
+        "size_bytes": 698715,
+        "archive_manifest_sha256": "443eb15b86b479f92fdcc076324bf9d96a69525daa26936dbb58b6e8650a86b0"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260605_144921_a309_L6",
+        "source_task_id": "qe_20260605_144921_a309",
+        "source_loop_id": "qe_20260605_144921_a309_Loop6",
+        "source_loop_index": 6,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_9487b5f53ff0913f5f09bf47"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "ed0925d77cacbfd171f3ab145874f868abd213b671a72de36318d7f88f58bc96",
+          "size_bytes": 698715,
+          "source_uri": "aistock-prediction-store://runs/qear_run_9487b5f53ff0913f5f09bf47/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "01d144cef6ccaffb3c57d14f1b5f11e40e910d397af7e23c088a1bbbef765dc4"
+    },
+    {
+      "index": 11,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_6687739da093e3284a26e306",
+      "seed_index": 10,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_6687739da093e3284a26e306",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260605_144921_a309",
+        "loop_id": "Loop7",
+        "loop_index": 7,
+        "source_uri": "aistock-prediction-store://runs/qear_run_6687739da093e3284a26e306/model_params",
+        "sha256": "21319e21e92100cc1e9322bd4a1074bbdc74cb0c63d0e3b93b62335ba9bba437",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "084146f281cb281ef27ab839cdc679a8baa1a0153c6075739a8d065e378df91c"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260605_144921_a309_L7",
+        "source_task_id": "qe_20260605_144921_a309",
+        "source_loop_id": "qe_20260605_144921_a309_Loop7",
+        "source_loop_index": 7,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_6687739da093e3284a26e306"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "21319e21e92100cc1e9322bd4a1074bbdc74cb0c63d0e3b93b62335ba9bba437",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_6687739da093e3284a26e306/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "f5002d6db12c652eb64b3cd9bf6ca1dabebecd016b855f3632f62cfd2d8ce424"
+    },
+    {
+      "index": 12,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_c478082a3afbb4a1d98b8865",
+      "seed_index": 11,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_c478082a3afbb4a1d98b8865",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260605_144921_a309",
+        "loop_id": "Loop8",
+        "loop_index": 8,
+        "source_uri": "aistock-prediction-store://runs/qear_run_c478082a3afbb4a1d98b8865/model_params",
+        "sha256": "e72787db8a52996d57e3a74dc6a3e1c32de307b2ca8ac5dc38bf1a742bcb7b0b",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "7b3fdde8d48a18e28983f3b318a264cb08609693b0cb933e866be67ef04107bd"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260605_144921_a309_L8",
+        "source_task_id": "qe_20260605_144921_a309",
+        "source_loop_id": "qe_20260605_144921_a309_Loop8",
+        "source_loop_index": 8,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_c478082a3afbb4a1d98b8865"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "e72787db8a52996d57e3a74dc6a3e1c32de307b2ca8ac5dc38bf1a742bcb7b0b",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_c478082a3afbb4a1d98b8865/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "3875e885c919eb80f61cdb40cb59fac156efd6e6ed7c40aacbde16692425a032"
+    },
+    {
+      "index": 13,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_b7323fab9f5255541a025982",
+      "seed_index": 12,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_b7323fab9f5255541a025982",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260606_172831_3d5c",
+        "loop_id": "Loop1",
+        "loop_index": 1,
+        "source_uri": "aistock-prediction-store://runs/qear_run_b7323fab9f5255541a025982/model_params",
+        "sha256": "135b46828e6448a9fd9d08cd96bb085247cf9ad4bb224e4e566cd3698ca3399a",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "768132520f3eee0d40d93de0968ebb8a04391381a02640abf2617bb56a99970b"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260606_172831_3d5c_L1",
+        "source_task_id": "qe_20260606_172831_3d5c",
+        "source_loop_id": "qe_20260606_172831_3d5c_Loop1",
+        "source_loop_index": 1,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_b7323fab9f5255541a025982"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "135b46828e6448a9fd9d08cd96bb085247cf9ad4bb224e4e566cd3698ca3399a",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_b7323fab9f5255541a025982/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "487f42ab430ebf5bf4d6d20a9c09ded6bb0b654d84c09cc5bc7b0115394af483"
+    },
+    {
+      "index": 14,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_59126620bc7dcf0b175c2071",
+      "seed_index": 13,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_59126620bc7dcf0b175c2071",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260606_172831_3d5c",
+        "loop_id": "Loop2",
+        "loop_index": 2,
+        "source_uri": "aistock-prediction-store://runs/qear_run_59126620bc7dcf0b175c2071/model_params",
+        "sha256": "93028bc36d8703c1e0000a3055bbf68186f67a8ed868b6f0259097fc959e9431",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "2db12ef1536347aa6542dd3337e08184a5b1d294527eafa03b4e3eaa85b3c677"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260606_172831_3d5c_L2",
+        "source_task_id": "qe_20260606_172831_3d5c",
+        "source_loop_id": "qe_20260606_172831_3d5c_Loop2",
+        "source_loop_index": 2,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_59126620bc7dcf0b175c2071"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "93028bc36d8703c1e0000a3055bbf68186f67a8ed868b6f0259097fc959e9431",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_59126620bc7dcf0b175c2071/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "6b921a11e032f75f9eedc4b7f15d615d48c4c6da7333cbf0374b4aef0f6def6e"
+    },
+    {
+      "index": 15,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_f485b00a928d3b70b7360f19",
+      "seed_index": 14,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_f485b00a928d3b70b7360f19",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260606_172831_3d5c",
+        "loop_id": "Loop3",
+        "loop_index": 3,
+        "source_uri": "aistock-prediction-store://runs/qear_run_f485b00a928d3b70b7360f19/model_params",
+        "sha256": "d6fb282105f832ff4f54c72671e3109af8ea6d5c2bce7a2203d7c84abe042bc4",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "2bea89b9509fb16ab721840abd1227eb213b3b766ba0ca9044eb777e031cf4ee"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260606_172831_3d5c_L3",
+        "source_task_id": "qe_20260606_172831_3d5c",
+        "source_loop_id": "qe_20260606_172831_3d5c_Loop3",
+        "source_loop_index": 3,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_f485b00a928d3b70b7360f19"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "d6fb282105f832ff4f54c72671e3109af8ea6d5c2bce7a2203d7c84abe042bc4",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_f485b00a928d3b70b7360f19/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "41289846593d9ec27e2bd91d681d9fbf7930400094910cbbef08ddb088b79c20"
+    },
+    {
+      "index": 16,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_eb749aa2cd9c5e221148830d",
+      "seed_index": 15,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_eb749aa2cd9c5e221148830d",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260606_172831_3d5c",
+        "loop_id": "Loop4",
+        "loop_index": 4,
+        "source_uri": "aistock-prediction-store://runs/qear_run_eb749aa2cd9c5e221148830d/model_params",
+        "sha256": "fd7c39b2b2e1eaf44aa5acf0ef31d8246cf1d3cf8bea5c140a3d2aae151ab93f",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "2cda7c7bce5aa6b8f8d79c34c9b512e491eebcca89924d2d1ff95ec5815afe13"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260606_172831_3d5c_L4",
+        "source_task_id": "qe_20260606_172831_3d5c",
+        "source_loop_id": "qe_20260606_172831_3d5c_Loop4",
+        "source_loop_index": 4,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_eb749aa2cd9c5e221148830d"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "fd7c39b2b2e1eaf44aa5acf0ef31d8246cf1d3cf8bea5c140a3d2aae151ab93f",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_eb749aa2cd9c5e221148830d/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "54bd65a4c0f98abeb5dd672159399f915616870c255920dba1dc4e66cfb50b58"
+    },
+    {
+      "index": 17,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_a34f16978092d3ecedf05b2b",
+      "seed_index": 16,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_a34f16978092d3ecedf05b2b",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260607_093306_1f70",
+        "loop_id": "Loop1",
+        "loop_index": 1,
+        "source_uri": "aistock-prediction-store://runs/qear_run_a34f16978092d3ecedf05b2b/model_params",
+        "sha256": "c05c544a23626ac7f9a3090a8f6c59dbc40a527f62a465020394317ca8e87c68",
+        "size_bytes": 698699,
+        "archive_manifest_sha256": "e128e27413d5cb620f40ad538bb0c084fa04f1727af9a120592a036ea7ebf207"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260607_093306_1f70_L1",
+        "source_task_id": "qe_20260607_093306_1f70",
+        "source_loop_id": "qe_20260607_093306_1f70_Loop1",
+        "source_loop_index": 1,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_a34f16978092d3ecedf05b2b"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "c05c544a23626ac7f9a3090a8f6c59dbc40a527f62a465020394317ca8e87c68",
+          "size_bytes": 698699,
+          "source_uri": "aistock-prediction-store://runs/qear_run_a34f16978092d3ecedf05b2b/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "d08f51def88989038a46adcf825f166dec120302c7321eb46773d9ba8576042a"
+    },
+    {
+      "index": 18,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_6b24a283dc4ff3bd6e9d68d1",
+      "seed_index": 17,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_6b24a283dc4ff3bd6e9d68d1",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260607_093306_1f70",
+        "loop_id": "Loop3",
+        "loop_index": 3,
+        "source_uri": "aistock-prediction-store://runs/qear_run_6b24a283dc4ff3bd6e9d68d1/model_params",
+        "sha256": "49ae3ac30b9d1eed3fbb500ab8089dbb63d38628c20144c1dfb4088c3511558b",
+        "size_bytes": 698715,
+        "archive_manifest_sha256": "b72648fdeef17cb03f5aea4ff440e1370498074c2d69f60f31e4774c83f16df1"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260607_093306_1f70_L3",
+        "source_task_id": "qe_20260607_093306_1f70",
+        "source_loop_id": "qe_20260607_093306_1f70_Loop3",
+        "source_loop_index": 3,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_6b24a283dc4ff3bd6e9d68d1"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "49ae3ac30b9d1eed3fbb500ab8089dbb63d38628c20144c1dfb4088c3511558b",
+          "size_bytes": 698715,
+          "source_uri": "aistock-prediction-store://runs/qear_run_6b24a283dc4ff3bd6e9d68d1/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "23a5b4ee816e2b1341c65dc5c93458e69686fe059ce4b7c966dc071449112158"
+    },
+    {
+      "index": 19,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_433114f81a72801452c926a0",
+      "seed_index": 18,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_433114f81a72801452c926a0",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260607_093306_1f70",
+        "loop_id": "Loop4",
+        "loop_index": 4,
+        "source_uri": "aistock-prediction-store://runs/qear_run_433114f81a72801452c926a0/model_params",
+        "sha256": "22f748aeee86740976fffd1f3a1bffa8ab4c97662bb59a7b08c3fd49c90bd589",
+        "size_bytes": 698715,
+        "archive_manifest_sha256": "8f88414674645aeaa21937a5c0236a5bbdfd787593aa786f484a03ab087c6669"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260607_093306_1f70_L4",
+        "source_task_id": "qe_20260607_093306_1f70",
+        "source_loop_id": "qe_20260607_093306_1f70_Loop4",
+        "source_loop_index": 4,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_433114f81a72801452c926a0"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "22f748aeee86740976fffd1f3a1bffa8ab4c97662bb59a7b08c3fd49c90bd589",
+          "size_bytes": 698715,
+          "source_uri": "aistock-prediction-store://runs/qear_run_433114f81a72801452c926a0/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "35be30904d27dfa4d136507ce7869acdc5f8ed231698c6fd301778dc569dbf2e"
+    },
+    {
+      "index": 20,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_eda52a9488df4aa8553e634b",
+      "seed_index": 19,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_eda52a9488df4aa8553e634b",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260607_093306_1f70",
+        "loop_id": "Loop2",
+        "loop_index": 2,
+        "source_uri": "aistock-prediction-store://runs/qear_run_eda52a9488df4aa8553e634b/model_params",
+        "sha256": "b3f7a6d10d1367cb9c95f8d466371713100563830d066be808a0e5733f19adf5",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "30eaf265352f23d22eead3b8f10e4c46e7712dc0b4a4f1f5337b92a2bf4f5139"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260607_093306_1f70_L2",
+        "source_task_id": "qe_20260607_093306_1f70",
+        "source_loop_id": "qe_20260607_093306_1f70_Loop2",
+        "source_loop_index": 2,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_eda52a9488df4aa8553e634b"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "b3f7a6d10d1367cb9c95f8d466371713100563830d066be808a0e5733f19adf5",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_eda52a9488df4aa8553e634b/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "9d79379453ebb702fe4a141367056c462b007bb572c95bd5ad2e21da5f5645e2"
+    },
+    {
+      "index": 21,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_e573090215b24806664ebde8",
+      "seed_index": 20,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_e573090215b24806664ebde8",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260609_025155_87ee",
+        "loop_id": "Loop1",
+        "loop_index": 1,
+        "source_uri": "aistock-prediction-store://runs/qear_run_e573090215b24806664ebde8/model_params",
+        "sha256": "842378b6d1df1e49dd5f3bfc1d402c8d7845e48f5bc0998e4732b31413eb2b5e",
+        "size_bytes": 698715,
+        "archive_manifest_sha256": "49ec6788f7b750d5dd2b23b64d50c35b96f61d53000b5a5aa0fa7db6f1ec7ac7"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260609_025155_87ee_L1",
+        "source_task_id": "qe_20260609_025155_87ee",
+        "source_loop_id": "qe_20260609_025155_87ee_Loop1",
+        "source_loop_index": 1,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_e573090215b24806664ebde8"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "842378b6d1df1e49dd5f3bfc1d402c8d7845e48f5bc0998e4732b31413eb2b5e",
+          "size_bytes": 698715,
+          "source_uri": "aistock-prediction-store://runs/qear_run_e573090215b24806664ebde8/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "ace7bc4b8bbdb6027e3869e504e3afc6ab5609d9e0557c2154d44bde30d32964"
+    },
+    {
+      "index": 22,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_b524652839421fb0d80d72a4",
+      "seed_index": 21,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_b524652839421fb0d80d72a4",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260609_025155_87ee",
+        "loop_id": "Loop3",
+        "loop_index": 3,
+        "source_uri": "aistock-prediction-store://runs/qear_run_b524652839421fb0d80d72a4/model_params",
+        "sha256": "8689cf2da67651c1661dcab34a88546a76bb22af94611dcfb8099436d272d032",
+        "size_bytes": 698715,
+        "archive_manifest_sha256": "007952c4f8fbdbd137e235e31e5810d17a6a26f5da04e888b4ee16e8bde77d3e"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260609_025155_87ee_L3",
+        "source_task_id": "qe_20260609_025155_87ee",
+        "source_loop_id": "qe_20260609_025155_87ee_Loop3",
+        "source_loop_index": 3,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_b524652839421fb0d80d72a4"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "8689cf2da67651c1661dcab34a88546a76bb22af94611dcfb8099436d272d032",
+          "size_bytes": 698715,
+          "source_uri": "aistock-prediction-store://runs/qear_run_b524652839421fb0d80d72a4/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "cf9606a9e0f2d4c764af7980770c66e2785c6889171817765aaa95df34e0d111"
+    },
+    {
+      "index": 23,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_25c421dd28515128f9d89486",
+      "seed_index": 22,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_25c421dd28515128f9d89486",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260609_025155_87ee",
+        "loop_id": "Loop4",
+        "loop_index": 4,
+        "source_uri": "aistock-prediction-store://runs/qear_run_25c421dd28515128f9d89486/model_params",
+        "sha256": "0998d7e64ea5cd16f0655aaa57e22936ca04643ebfe15eebf9ae7608ac21572a",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "11b725f9d2fd8a9e7ee09011bdd186c53fc6fd68a5bc5cf74c4eb622cef6a1a7"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260609_025155_87ee_L4",
+        "source_task_id": "qe_20260609_025155_87ee",
+        "source_loop_id": "qe_20260609_025155_87ee_Loop4",
+        "source_loop_index": 4,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_25c421dd28515128f9d89486"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "0998d7e64ea5cd16f0655aaa57e22936ca04643ebfe15eebf9ae7608ac21572a",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_25c421dd28515128f9d89486/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "6f1fc06567272671c18fc438681b5d322d9721f8fcf5284302941abd7e50e677"
+    },
+    {
+      "index": 24,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_dcf9b2f0bca2979fb3f92acf",
+      "seed_index": 23,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_dcf9b2f0bca2979fb3f92acf",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260609_025155_87ee",
+        "loop_id": "Loop2",
+        "loop_index": 2,
+        "source_uri": "aistock-prediction-store://runs/qear_run_dcf9b2f0bca2979fb3f92acf/model_params",
+        "sha256": "00ca14640d2f293b4c8ecf7e55f9c08cd696bd618604c8abbc3b643fe096abb5",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "72d772eaebc6a732b1f754ddcf08504740850bb9a6b0892003bad896c2a194f9"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260609_025155_87ee_L2",
+        "source_task_id": "qe_20260609_025155_87ee",
+        "source_loop_id": "qe_20260609_025155_87ee_Loop2",
+        "source_loop_index": 2,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_dcf9b2f0bca2979fb3f92acf"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "00ca14640d2f293b4c8ecf7e55f9c08cd696bd618604c8abbc3b643fe096abb5",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_dcf9b2f0bca2979fb3f92acf/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "ad27d0f252506a53863cdeca81aa809910b9481023af17a77e92fa71542efea9"
+    },
+    {
+      "index": 25,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_150bfa41e8a6a2d1664b3b07",
+      "seed_index": 24,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_150bfa41e8a6a2d1664b3b07",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260609_154050_0451",
+        "loop_id": "Loop5",
+        "loop_index": 5,
+        "source_uri": "aistock-prediction-store://runs/qear_run_150bfa41e8a6a2d1664b3b07/model_params",
+        "sha256": "5c1c23541da839dd2a2e14fdb4a48260da54ebd4d0eb0e2510dfb2fec57bc043",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "430f27f9bd2b9e86603e6b14da560f9e29b42078615db0d821d9ebb55f7b7dce"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260609_154050_0451_L5",
+        "source_task_id": "qe_20260609_154050_0451",
+        "source_loop_id": "qe_20260609_154050_0451_Loop5",
+        "source_loop_index": 5,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_150bfa41e8a6a2d1664b3b07"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "5c1c23541da839dd2a2e14fdb4a48260da54ebd4d0eb0e2510dfb2fec57bc043",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_150bfa41e8a6a2d1664b3b07/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "2f43bdc7d2ef96189d8a837b47d31fded6328223e0d5b7897bccb06e100a6bc5"
+    },
+    {
+      "index": 26,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_a5e4e0c0e5caa938e93df68d",
+      "seed_index": 25,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_a5e4e0c0e5caa938e93df68d",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260609_154050_0451",
+        "loop_id": "Loop6",
+        "loop_index": 6,
+        "source_uri": "aistock-prediction-store://runs/qear_run_a5e4e0c0e5caa938e93df68d/model_params",
+        "sha256": "9d6c107b949120e098408bef0e4998119568f9691ebeca8d4e4e89cb16c1c5d8",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "c2637f790783a0e82ca9693a250a7d443c322a753d1fb074ebeabe218b34d791"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260609_154050_0451_L6",
+        "source_task_id": "qe_20260609_154050_0451",
+        "source_loop_id": "qe_20260609_154050_0451_Loop6",
+        "source_loop_index": 6,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_a5e4e0c0e5caa938e93df68d"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "9d6c107b949120e098408bef0e4998119568f9691ebeca8d4e4e89cb16c1c5d8",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_a5e4e0c0e5caa938e93df68d/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "9a73c2638973813eba5ddbcd61c7745a76bfd22bd3a1d207ada0534a2f0a859a"
+    },
+    {
+      "index": 27,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_bdfd65618510eeb5d940f205",
+      "seed_index": 26,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_bdfd65618510eeb5d940f205",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260609_154050_0451",
+        "loop_id": "Loop7",
+        "loop_index": 7,
+        "source_uri": "aistock-prediction-store://runs/qear_run_bdfd65618510eeb5d940f205/model_params",
+        "sha256": "15fdf2d9280eb1d89ab348fee8813fdc33226d2f1ccb8c20c4658521a8126e3d",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "fec2859e1e601b2faf6211d1679d996e19a23e922e7fde2ed4cbfad82535125b"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260609_154050_0451_L7",
+        "source_task_id": "qe_20260609_154050_0451",
+        "source_loop_id": "qe_20260609_154050_0451_Loop7",
+        "source_loop_index": 7,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_bdfd65618510eeb5d940f205"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "15fdf2d9280eb1d89ab348fee8813fdc33226d2f1ccb8c20c4658521a8126e3d",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_bdfd65618510eeb5d940f205/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "845f3c76da4dcbb1f6d414fd3b248390c4056843ac029cb69344385be1e3c797"
+    },
+    {
+      "index": 28,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_7d96269f3e2fba256ab904a3",
+      "seed_index": 27,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_7d96269f3e2fba256ab904a3",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260609_154050_0451",
+        "loop_id": "Loop8",
+        "loop_index": 8,
+        "source_uri": "aistock-prediction-store://runs/qear_run_7d96269f3e2fba256ab904a3/model_params",
+        "sha256": "931c3071ebaca140937a4413941fee0e7bb4d54d87b5f21323003caa8b25617d",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "bb62910cef1672f187329369fe58750e6c14898b660b9945b7661f8fd91040a4"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260609_154050_0451_L8",
+        "source_task_id": "qe_20260609_154050_0451",
+        "source_loop_id": "qe_20260609_154050_0451_Loop8",
+        "source_loop_index": 8,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_7d96269f3e2fba256ab904a3"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "931c3071ebaca140937a4413941fee0e7bb4d54d87b5f21323003caa8b25617d",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_7d96269f3e2fba256ab904a3/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "21c03720de323126657d0d8304c682d2387025c51e5ba061c3c365eb82a68804"
+    },
+    {
+      "index": 29,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_16bbe11ea1794c462ccab2b3",
+      "seed_index": 28,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_16bbe11ea1794c462ccab2b3",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260609_154050_0451",
+        "loop_id": "Loop9",
+        "loop_index": 9,
+        "source_uri": "aistock-prediction-store://runs/qear_run_16bbe11ea1794c462ccab2b3/model_params",
+        "sha256": "43b631874fd01ae973c5cae7292675f959bc6701f9c186845bade121d3d26a5f",
+        "size_bytes": 698715,
+        "archive_manifest_sha256": "cc65771fdcbec2c9cac199c47045c8d38a440954e1bf4f1d7093aabb64a9c2f7"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260609_154050_0451_L9",
+        "source_task_id": "qe_20260609_154050_0451",
+        "source_loop_id": "qe_20260609_154050_0451_Loop9",
+        "source_loop_index": 9,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_16bbe11ea1794c462ccab2b3"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "43b631874fd01ae973c5cae7292675f959bc6701f9c186845bade121d3d26a5f",
+          "size_bytes": 698715,
+          "source_uri": "aistock-prediction-store://runs/qear_run_16bbe11ea1794c462ccab2b3/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "8eb97dba51a37382e663644015a0b6d0bcba26819fc0b38d8c18634b56171463"
+    },
+    {
+      "index": 30,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_adfecf69242b697021d6d56d",
+      "seed_index": 29,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_adfecf69242b697021d6d56d",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260609_154050_0451",
+        "loop_id": "Loop10",
+        "loop_index": 10,
+        "source_uri": "aistock-prediction-store://runs/qear_run_adfecf69242b697021d6d56d/model_params",
+        "sha256": "a8226dd399d188fa92ec25b4b92e4ea7a38d4b7460b5d920ebcb56e7e3cb1b7d",
+        "size_bytes": 698699,
+        "archive_manifest_sha256": "c1b85365972a9b953b561918dba0a41d65b744354a27ddead62adfa89fbd51cc"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260609_154050_0451_L10",
+        "source_task_id": "qe_20260609_154050_0451",
+        "source_loop_id": "qe_20260609_154050_0451_Loop10",
+        "source_loop_index": 10,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_adfecf69242b697021d6d56d"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "a8226dd399d188fa92ec25b4b92e4ea7a38d4b7460b5d920ebcb56e7e3cb1b7d",
+          "size_bytes": 698699,
+          "source_uri": "aistock-prediction-store://runs/qear_run_adfecf69242b697021d6d56d/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "7017006a90ccaa6075f26291336a2d5b27d866e30e857fa902659603510feb68"
+    },
+    {
+      "index": 31,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_3ed05fccaa8a6cd0062e0d7a",
+      "seed_index": 30,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_3ed05fccaa8a6cd0062e0d7a",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260617_110835_5b1b",
+        "loop_id": "Loop2",
+        "loop_index": 2,
+        "source_uri": "aistock-prediction-store://runs/qear_run_3ed05fccaa8a6cd0062e0d7a/model_params",
+        "sha256": "9a4e6308a13fcec6ea19e0a1b458cecfc9e24338d0344a225909f1b6c370d2ee",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "b0a4790fa21d124063bfc5c540c0d4944fb0efc0bd9cce7bcbe4b2513f02abf3"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260617_110835_5b1b_L2",
+        "source_task_id": "qe_20260617_110835_5b1b",
+        "source_loop_id": "qe_20260617_110835_5b1b_Loop2",
+        "source_loop_index": 2,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_3ed05fccaa8a6cd0062e0d7a"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "9a4e6308a13fcec6ea19e0a1b458cecfc9e24338d0344a225909f1b6c370d2ee",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_3ed05fccaa8a6cd0062e0d7a/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "066d4ef82e0b0518d2c147160d30535dab721d5491b8f8fed83a5186b5ad282f"
+    },
+    {
+      "index": 32,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_e262916978fa9f7844422584",
+      "seed_index": 31,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_e262916978fa9f7844422584",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260617_110835_5b1b",
+        "loop_id": "Loop1",
+        "loop_index": 1,
+        "source_uri": "aistock-prediction-store://runs/qear_run_e262916978fa9f7844422584/model_params",
+        "sha256": "3f4b55028b225c29c959dd53f332a1e3bf20759fc3bba73daee47343d6fcde14",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "860a6d1fc0b3ad69992264e5b6db3aa9e45f5481cfbd3daf363b7b34afd4bfe0"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260617_110835_5b1b_L1",
+        "source_task_id": "qe_20260617_110835_5b1b",
+        "source_loop_id": "qe_20260617_110835_5b1b_Loop1",
+        "source_loop_index": 1,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_e262916978fa9f7844422584"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "3f4b55028b225c29c959dd53f332a1e3bf20759fc3bba73daee47343d6fcde14",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_e262916978fa9f7844422584/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "cbc96f7f0ad897d14502117460643543a8e2613ac331586f3de45b13e3071406"
+    },
+    {
+      "index": 33,
+      "leg_id": "a1_plus3_LSTM_h20",
+      "seed_run_id": "qear_run_880feffe3961738b775f4573",
+      "seed_index": 32,
+      "status": "blocked",
+      "original_weight_binding": {
+        "seed_run_id": "qear_run_880feffe3961738b775f4573",
+        "leg_id": "a1_plus3_LSTM_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260617_110835_5b1b",
+        "loop_id": "Loop3",
+        "loop_index": 3,
+        "source_uri": "aistock-prediction-store://runs/qear_run_880feffe3961738b775f4573/model_params",
+        "sha256": "d01449894a0a21d9162fdf93261a61f82556a102898b125ca88963feb2421fb3",
+        "size_bytes": 698687,
+        "archive_manifest_sha256": "345f01940efc8d526cd10be22b02d208092bbcd7ffeda9896b70e0b661b82590"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260617_110835_5b1b_L3",
+        "source_task_id": "qe_20260617_110835_5b1b",
+        "source_loop_id": "qe_20260617_110835_5b1b_Loop3",
+        "source_loop_index": 3,
+        "source_factor_names": [
+          "neg_momentum_price_volume",
+          "m_turnover_percentile_250d",
+          "neg_high_amount_turnover_momentum_5d",
+          "industry_stock_momentum_diff_10d",
+          "neg_Composite_Factor_Multi_Dim",
+          "m_intraday_range_60d_min_ratio",
+          "m_ind_pb_rel_mom",
+          "m_ind_neutral_rev_5d",
+          "m_turnover_abnormal_20d",
+          "m_turnover_accel",
+          "m_turnover_zscore_60d",
+          "m_atr_compression",
+          "m_free_turnover_ind_neutral",
+          "dynamic_flow_volatility_sentiment",
+          "neg_volatility_breakout_momentum_v2",
+          "ChipWinnerRateEliteBuyIntensity",
+          "LargeOrder_Cost_Interaction",
+          "m_ind_rel_turnover",
+          "m_turnover_breakout_ratio",
+          "m_volume_contraction",
+          "neg_PriceMomentum20D",
+          "m_free_turnover_rate",
+          "Industry_Volatility_Liquidity_Cross_Factor",
+          "m_intraday_range_ratio_5d",
+          "neg_TurnoverVolatilityEnhancement",
+          "m_tech_atr_ratio_14d"
+        ],
+        "source_factor_count": 26,
+        "source_run_id": "qear_run_880feffe3961738b775f4573"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "d01449894a0a21d9162fdf93261a61f82556a102898b125ca88963feb2421fb3",
+          "size_bytes": 698687,
+          "source_uri": "aistock-prediction-store://runs/qear_run_880feffe3961738b775f4573/model_params"
+        },
+        "training_config": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_conf_yaml_missing"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 26
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "blocked",
+          "error_type": "StrategyPackageValidationError",
+          "reason": "seed_recovery_schema_requires_original_config"
+        },
+        "preprocessor": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_preprocessor_missing"
+        },
+        "model_code": {
+          "status": "blocked",
+          "error_type": "DataUnavailableError",
+          "reason": "strategy_package_model_code_missing"
+        }
+      },
+      "raw_receipt_sha256": "a4ee4c6e73e8a19dea534cbfbbbb1cb7fa6bd84b2f95c4305a8fa3bb319bd23e"
+    },
+    {
+      "index": 34,
+      "leg_id": "new_FUNDGROWTH_h20",
+      "seed_run_id": "qe_20260622_035058_ec76_L5",
+      "seed_index": 0,
+      "status": "verified",
+      "original_weight_binding": {
+        "seed_run_id": "qe_20260622_035058_ec76_L5",
+        "leg_id": "new_FUNDGROWTH_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260622_035058_ec76",
+        "loop_id": "Loop5",
+        "loop_index": 5,
+        "source_uri": "aistock-prediction-store://runs/qe_20260622_035058_ec76_L5/model_params",
+        "sha256": "5f255fc454f02ace754c7c6bfbd8362b37696f18eb1729a488f942ebe0396620",
+        "size_bytes": 654568,
+        "archive_manifest_sha256": "8485b0909d899996663e32705b4bd6a70ea9e02cdcde986e38f3203e14f3e53a"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260622_035058_ec76_L5",
+        "source_task_id": "qe_20260622_035058_ec76",
+        "source_loop_id": "qe_20260622_035058_ec76_Loop5",
+        "source_loop_index": 5,
+        "source_factor_names": [
+          "RevenueYOY_Momentum",
+          "revenue_growth_elg_flow_momentum_product",
+          "m_profit_yoy_change",
+          "Profit_Growth_Chip_Cost_Ratio_Factor",
+          "RevenueGrowthPriceRatio",
+          "quality_capex_efficiency",
+          "BVPS20DayChange"
+        ],
+        "source_factor_count": 7,
+        "source_run_id": "qear_run_65eddeb1399d446d8f51b64c"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "5f255fc454f02ace754c7c6bfbd8362b37696f18eb1729a488f942ebe0396620",
+          "size_bytes": 654568,
+          "source_uri": "aistock-prediction-store://runs/qe_20260622_035058_ec76_L5/model_params"
+        },
+        "training_config": {
+          "status": "verified",
+          "sha256": "5d047c1b40984b60b471267e7b01b24b811a7aaead0490fd93254703695ba70e",
+          "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_035058_ec76/loops/Loop5/conf.yaml"
+        },
+        "config_parse": {
+          "status": "verified"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 7
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "verified"
+        },
+        "preprocessor": {
+          "status": "verified",
+          "sha256": "964cb7f1bf2c99718873fc908fa1b32148cb35c4159cdbc857c7e2c934bb0807",
+          "size_bytes": 1926,
+          "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_035058_ec76/loops/Loop5/fitted-dataset"
+        },
+        "model_code": {
+          "status": "verified",
+          "required": true,
+          "assets": [
+            {
+              "module_name": "qe_custom_loaders",
+              "relative_path": "qe_custom_loaders.py",
+              "asset_ref": "aistock-package-asset://blobs/f3ee708fbc109e505b8100f341be67cbf13549e5bcc77cf2fa02592d8757e1e1?kind=model_code&logical_name=qe_custom_loaders.py",
+              "sha256": "f3ee708fbc109e505b8100f341be67cbf13549e5bcc77cf2fa02592d8757e1e1",
+              "size_bytes": 9977,
+              "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_035058_ec76/loops/Loop5/qe_custom_loaders.py",
+              "required": true
+            }
+          ]
+        },
+        "freeze": {
+          "status": "verified"
+        },
+        "runtime_self_check": {
+          "status": "verified",
+          "receipt": {
+            "package_id": "pkg_mal_07232ccfef4aaccec9a89fc7",
+            "manifest_sha256": "e18e78715e686cb73eb49130cfb6e62cc609a34facb0a6588272fb2a647ea796",
+            "origin": "package_asset",
+            "model_kind": "lgb",
+            "model_expected_features": 7,
+            "dynamic_factor_count": 7,
+            "alpha158_alias_count": 0,
+            "factor_order_count": 7,
+            "feature_count_delta": 0,
+            "model_probe_backend": "wsl"
+          }
+        }
+      },
+      "raw_receipt_sha256": "a64eee1ecb07871a87660cadc9726dca58ca5379e4fd9d5b416cb030700de86f"
+    },
+    {
+      "index": 35,
+      "leg_id": "new_FUNDGROWTH_h20",
+      "seed_run_id": "qe_20260622_035058_ec76_L6",
+      "seed_index": 1,
+      "status": "verified",
+      "original_weight_binding": {
+        "seed_run_id": "qe_20260622_035058_ec76_L6",
+        "leg_id": "new_FUNDGROWTH_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260622_035058_ec76",
+        "loop_id": "Loop6",
+        "loop_index": 6,
+        "source_uri": "aistock-prediction-store://runs/qe_20260622_035058_ec76_L6/model_params",
+        "sha256": "3ba3a2783afece5fd2e91813181b1fa3baad75943e66d50d082e121e91a78cf0",
+        "size_bytes": 611875,
+        "archive_manifest_sha256": "21a69b955b0fca0d631a1a087784dd6a82d98a6ed57b9cddd995f739bda75239"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260622_035058_ec76_L6",
+        "source_task_id": "qe_20260622_035058_ec76",
+        "source_loop_id": "qe_20260622_035058_ec76_Loop6",
+        "source_loop_index": 6,
+        "source_factor_names": [
+          "RevenueYOY_Momentum",
+          "revenue_growth_elg_flow_momentum_product",
+          "m_profit_yoy_change",
+          "Profit_Growth_Chip_Cost_Ratio_Factor",
+          "RevenueGrowthPriceRatio",
+          "quality_capex_efficiency",
+          "BVPS20DayChange"
+        ],
+        "source_factor_count": 7,
+        "source_run_id": "qear_run_6bc3b98a333037845d4327d8"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "3ba3a2783afece5fd2e91813181b1fa3baad75943e66d50d082e121e91a78cf0",
+          "size_bytes": 611875,
+          "source_uri": "aistock-prediction-store://runs/qe_20260622_035058_ec76_L6/model_params"
+        },
+        "training_config": {
+          "status": "verified",
+          "sha256": "1c79ccb1bb331ccf332626941145f6cc144ad4106cd93ddba423e937c703369a",
+          "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_035058_ec76/loops/Loop6/conf.yaml"
+        },
+        "config_parse": {
+          "status": "verified"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 7
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "verified"
+        },
+        "preprocessor": {
+          "status": "verified",
+          "sha256": "964cb7f1bf2c99718873fc908fa1b32148cb35c4159cdbc857c7e2c934bb0807",
+          "size_bytes": 1926,
+          "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_035058_ec76/loops/Loop6/fitted-dataset"
+        },
+        "model_code": {
+          "status": "verified",
+          "required": true,
+          "assets": [
+            {
+              "module_name": "qe_custom_loaders",
+              "relative_path": "qe_custom_loaders.py",
+              "asset_ref": "aistock-package-asset://blobs/f3ee708fbc109e505b8100f341be67cbf13549e5bcc77cf2fa02592d8757e1e1?kind=model_code&logical_name=qe_custom_loaders.py",
+              "sha256": "f3ee708fbc109e505b8100f341be67cbf13549e5bcc77cf2fa02592d8757e1e1",
+              "size_bytes": 9977,
+              "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_035058_ec76/loops/Loop6/qe_custom_loaders.py",
+              "required": true
+            }
+          ]
+        },
+        "freeze": {
+          "status": "verified"
+        },
+        "runtime_self_check": {
+          "status": "verified",
+          "receipt": {
+            "package_id": "pkg_mal_c2c4eeb5eb9265286c747d96",
+            "manifest_sha256": "885205fab3ace4ca5d917fff62aaa9558bc0132654aacd5c6987390d091425a2",
+            "origin": "package_asset",
+            "model_kind": "lgb",
+            "model_expected_features": 7,
+            "dynamic_factor_count": 7,
+            "alpha158_alias_count": 0,
+            "factor_order_count": 7,
+            "feature_count_delta": 0,
+            "model_probe_backend": "wsl"
+          }
+        }
+      },
+      "raw_receipt_sha256": "33ee43dc139fe9f700653ffe08cc007b0e5c1eb493cd1b38fb26c82c0d15bf62"
+    },
+    {
+      "index": 36,
+      "leg_id": "new_FUNDGROWTH_h20",
+      "seed_run_id": "qe_20260622_171346_0e41_L1",
+      "seed_index": 2,
+      "status": "verified",
+      "original_weight_binding": {
+        "seed_run_id": "qe_20260622_171346_0e41_L1",
+        "leg_id": "new_FUNDGROWTH_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260622_171346_0e41",
+        "loop_id": "Loop1",
+        "loop_index": 1,
+        "source_uri": "aistock-prediction-store://runs/qe_20260622_171346_0e41_L1/model_params",
+        "sha256": "16f5f8d20c10a23213acb4bed366279655ea822e5ede160a08e1c905d6b0dc5c",
+        "size_bytes": 603373,
+        "archive_manifest_sha256": "f93633551178da625d9531eaa5cff9ae90545df086a016939e21065c58a1787a"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260622_171346_0e41_L1",
+        "source_task_id": "qe_20260622_171346_0e41",
+        "source_loop_id": "qe_20260622_171346_0e41_Loop1",
+        "source_loop_index": 1,
+        "source_factor_names": [
+          "RevenueYOY_Momentum",
+          "revenue_growth_elg_flow_momentum_product",
+          "m_profit_yoy_change",
+          "Profit_Growth_Chip_Cost_Ratio_Factor",
+          "RevenueGrowthPriceRatio",
+          "quality_capex_efficiency",
+          "BVPS20DayChange"
+        ],
+        "source_factor_count": 7,
+        "source_run_id": "qear_run_6be1bfc0da3f9235ffbc7d14"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "16f5f8d20c10a23213acb4bed366279655ea822e5ede160a08e1c905d6b0dc5c",
+          "size_bytes": 603373,
+          "source_uri": "aistock-prediction-store://runs/qe_20260622_171346_0e41_L1/model_params"
+        },
+        "training_config": {
+          "status": "verified",
+          "sha256": "2075c39e54a43d38b132b4697a467d142e5d88f9c96fc305a897254de802b038",
+          "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_171346_0e41/loops/Loop1/conf.yaml"
+        },
+        "config_parse": {
+          "status": "verified"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 7
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "verified"
+        },
+        "preprocessor": {
+          "status": "verified",
+          "sha256": "964cb7f1bf2c99718873fc908fa1b32148cb35c4159cdbc857c7e2c934bb0807",
+          "size_bytes": 1926,
+          "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_171346_0e41/loops/Loop1/fitted-dataset"
+        },
+        "model_code": {
+          "status": "verified",
+          "required": true,
+          "assets": [
+            {
+              "module_name": "qe_custom_loaders",
+              "relative_path": "qe_custom_loaders.py",
+              "asset_ref": "aistock-package-asset://blobs/f3ee708fbc109e505b8100f341be67cbf13549e5bcc77cf2fa02592d8757e1e1?kind=model_code&logical_name=qe_custom_loaders.py",
+              "sha256": "f3ee708fbc109e505b8100f341be67cbf13549e5bcc77cf2fa02592d8757e1e1",
+              "size_bytes": 9977,
+              "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_171346_0e41/loops/Loop1/qe_custom_loaders.py",
+              "required": true
+            }
+          ]
+        },
+        "freeze": {
+          "status": "verified"
+        },
+        "runtime_self_check": {
+          "status": "verified",
+          "receipt": {
+            "package_id": "pkg_mal_352c044a0eeca6f363317018",
+            "manifest_sha256": "2b7f8f633986c7a90c97792cc27f4a3397ce530efc922531aa9ea546e1677f48",
+            "origin": "package_asset",
+            "model_kind": "lgb",
+            "model_expected_features": 7,
+            "dynamic_factor_count": 7,
+            "alpha158_alias_count": 0,
+            "factor_order_count": 7,
+            "feature_count_delta": 0,
+            "model_probe_backend": "wsl"
+          }
+        }
+      },
+      "raw_receipt_sha256": "c89b8be66c3846e873b60aa39278192cbe01b92037c3f82e6d1b0fcc890db49a"
+    },
+    {
+      "index": 37,
+      "leg_id": "new_FUNDGROWTH_h20",
+      "seed_run_id": "qe_20260622_171346_0e41_L2",
+      "seed_index": 3,
+      "status": "verified",
+      "original_weight_binding": {
+        "seed_run_id": "qe_20260622_171346_0e41_L2",
+        "leg_id": "new_FUNDGROWTH_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260622_171346_0e41",
+        "loop_id": "Loop2",
+        "loop_index": 2,
+        "source_uri": "aistock-prediction-store://runs/qe_20260622_171346_0e41_L2/model_params",
+        "sha256": "47be154242ad7e8a0cc0f16368a7f2fd34b88694600fbe775fa9be17dc75c80d",
+        "size_bytes": 709991,
+        "archive_manifest_sha256": "537d8c99c3666ecc91250d69e74426807e943ec2418f0e5f6db862ecb343a933"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260622_171346_0e41_L2",
+        "source_task_id": "qe_20260622_171346_0e41",
+        "source_loop_id": "qe_20260622_171346_0e41_Loop2",
+        "source_loop_index": 2,
+        "source_factor_names": [
+          "RevenueYOY_Momentum",
+          "revenue_growth_elg_flow_momentum_product",
+          "m_profit_yoy_change",
+          "Profit_Growth_Chip_Cost_Ratio_Factor",
+          "RevenueGrowthPriceRatio",
+          "quality_capex_efficiency",
+          "BVPS20DayChange"
+        ],
+        "source_factor_count": 7,
+        "source_run_id": "qear_run_427d74447bd5641a55ae98e7"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "47be154242ad7e8a0cc0f16368a7f2fd34b88694600fbe775fa9be17dc75c80d",
+          "size_bytes": 709991,
+          "source_uri": "aistock-prediction-store://runs/qe_20260622_171346_0e41_L2/model_params"
+        },
+        "training_config": {
+          "status": "verified",
+          "sha256": "a2fc913eedbce6eac9b81033445194894d847aa166878d9b7342b03b4d1cf323",
+          "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_171346_0e41/loops/Loop2/conf.yaml"
+        },
+        "config_parse": {
+          "status": "verified"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 7
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "verified"
+        },
+        "preprocessor": {
+          "status": "verified",
+          "sha256": "964cb7f1bf2c99718873fc908fa1b32148cb35c4159cdbc857c7e2c934bb0807",
+          "size_bytes": 1926,
+          "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_171346_0e41/loops/Loop2/fitted-dataset"
+        },
+        "model_code": {
+          "status": "verified",
+          "required": true,
+          "assets": [
+            {
+              "module_name": "qe_custom_loaders",
+              "relative_path": "qe_custom_loaders.py",
+              "asset_ref": "aistock-package-asset://blobs/f3ee708fbc109e505b8100f341be67cbf13549e5bcc77cf2fa02592d8757e1e1?kind=model_code&logical_name=qe_custom_loaders.py",
+              "sha256": "f3ee708fbc109e505b8100f341be67cbf13549e5bcc77cf2fa02592d8757e1e1",
+              "size_bytes": 9977,
+              "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_171346_0e41/loops/Loop2/qe_custom_loaders.py",
+              "required": true
+            }
+          ]
+        },
+        "freeze": {
+          "status": "verified"
+        },
+        "runtime_self_check": {
+          "status": "verified",
+          "receipt": {
+            "package_id": "pkg_mal_c4d22ba5163a2b0cf0b0b847",
+            "manifest_sha256": "2507a7477c80a472208adfe7c4ec3f648d7e3fb7ade74d487d91a03be4dc132c",
+            "origin": "package_asset",
+            "model_kind": "lgb",
+            "model_expected_features": 7,
+            "dynamic_factor_count": 7,
+            "alpha158_alias_count": 0,
+            "factor_order_count": 7,
+            "feature_count_delta": 0,
+            "model_probe_backend": "wsl"
+          }
+        }
+      },
+      "raw_receipt_sha256": "643a23fe06557bd71a20e5c726769c547b1d5a999712b6c30ac20c09a601f04b"
+    },
+    {
+      "index": 38,
+      "leg_id": "new_FUNDGROWTH_h20",
+      "seed_run_id": "qe_20260622_171346_0e41_L3",
+      "seed_index": 4,
+      "status": "verified",
+      "original_weight_binding": {
+        "seed_run_id": "qe_20260622_171346_0e41_L3",
+        "leg_id": "new_FUNDGROWTH_h20",
+        "status": "verified_original_archive_bytes",
+        "task_id": "qe_20260622_171346_0e41",
+        "loop_id": "Loop3",
+        "loop_index": 3,
+        "source_uri": "aistock-prediction-store://runs/qe_20260622_171346_0e41_L3/model_params",
+        "sha256": "b157a6f3736467693c2b11adb0988c7db11873989310d99902ab8de2f1674249",
+        "size_bytes": 664529,
+        "archive_manifest_sha256": "00c65a777a96d1bbd779ec173bc009f5c4f79e6cedf34c3468c3fec015cef4e6"
+      },
+      "provenance": {
+        "source_experiment_id": "qe_20260622_171346_0e41_L3",
+        "source_task_id": "qe_20260622_171346_0e41",
+        "source_loop_id": "qe_20260622_171346_0e41_Loop3",
+        "source_loop_index": 3,
+        "source_factor_names": [
+          "RevenueYOY_Momentum",
+          "revenue_growth_elg_flow_momentum_product",
+          "m_profit_yoy_change",
+          "Profit_Growth_Chip_Cost_Ratio_Factor",
+          "RevenueGrowthPriceRatio",
+          "quality_capex_efficiency",
+          "BVPS20DayChange"
+        ],
+        "source_factor_count": 7,
+        "source_run_id": "qear_run_a3f0a804af12adcaf093b87b"
+      },
+      "checks": {
+        "provenance": {
+          "status": "verified"
+        },
+        "source_manifest": {
+          "status": "verified"
+        },
+        "weight": {
+          "status": "verified",
+          "sha256": "b157a6f3736467693c2b11adb0988c7db11873989310d99902ab8de2f1674249",
+          "size_bytes": 664529,
+          "source_uri": "aistock-prediction-store://runs/qe_20260622_171346_0e41_L3/model_params"
+        },
+        "training_config": {
+          "status": "verified",
+          "sha256": "736e49788f66e65b09a47b5da5f84035d076b1aa97ad3b1e184f274a9d224aad",
+          "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_171346_0e41/loops/Loop3/conf.yaml"
+        },
+        "config_parse": {
+          "status": "verified"
+        },
+        "factor_bindings": {
+          "status": "verified",
+          "factor_count": 7
+        },
+        "factor_references": {
+          "status": "verified"
+        },
+        "schema": {
+          "status": "verified"
+        },
+        "preprocessor": {
+          "status": "verified",
+          "sha256": "964cb7f1bf2c99718873fc908fa1b32148cb35c4159cdbc857c7e2c934bb0807",
+          "size_bytes": 1926,
+          "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_171346_0e41/loops/Loop3/fitted-dataset"
+        },
+        "model_code": {
+          "status": "verified",
+          "required": true,
+          "assets": [
+            {
+              "module_name": "qe_custom_loaders",
+              "relative_path": "qe_custom_loaders.py",
+              "asset_ref": "aistock-package-asset://blobs/f3ee708fbc109e505b8100f341be67cbf13549e5bcc77cf2fa02592d8757e1e1?kind=model_code&logical_name=qe_custom_loaders.py",
+              "sha256": "f3ee708fbc109e505b8100f341be67cbf13549e5bcc77cf2fa02592d8757e1e1",
+              "size_bytes": 9977,
+              "source_uri": "qe-workspace://node/rdagent-node1/tasks/qe_20260622_171346_0e41/loops/Loop3/qe_custom_loaders.py",
+              "required": true
+            }
+          ]
+        },
+        "freeze": {
+          "status": "verified"
+        },
+        "runtime_self_check": {
+          "status": "verified",
+          "receipt": {
+            "package_id": "pkg_mal_53827e37a0f0334499b6765a",
+            "manifest_sha256": "0dfa51b9d77bf9d39af67f2834fb6daf2b8db50d901a15e605caa1f4465e2041",
+            "origin": "package_asset",
+            "model_kind": "lgb",
+            "model_expected_features": 7,
+            "dynamic_factor_count": 7,
+            "alpha158_alias_count": 0,
+            "factor_order_count": 7,
+            "feature_count_delta": 0,
+            "model_probe_backend": "wsl"
+          }
+        }
+      },
+      "raw_receipt_sha256": "14ca1c9f8d68e02c985fc6bd963fcaf908c60b4015d1c3d370b111aef2a2a99d"
+    }
+  ],
+  "verification": {
+    "targeted_pytest": "11 passed plus 2 additional CLI isolation/transaction tests passed",
+    "ruff": "passed",
+    "py_compile": "passed",
+    "paper_v2_backend": {
+      "execution_mode": "ci",
+      "runner_enabled": false,
+      "requires_backend": false,
+      "requires_frontend": false,
+      "status": "delegated_to_PR_CI_or_nightly"
+    },
+    "l0": "passed, 0 findings",
+    "validation_module_registry_l0": "passed, 8 tests, 14 files mapped"
+  }
+}

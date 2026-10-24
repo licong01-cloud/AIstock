@@ -1050,6 +1050,7 @@ rules:
     include:
       - backend/services/strategy_package/**
       - scripts/strategy_package_asset_backfill.py
+      - scripts/recover_multi_alpha_seed_assets.py
       - backend/routers/strategy_package*.py
       - backend/tests/strategy_package/**
       - frontend/src/app/strategy-package-governance/**
