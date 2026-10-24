@@ -14,7 +14,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2081",
-  "closed_at": null,
+  "closed_at": "2026-10-24T05:12:04Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -44,14 +44,14 @@
     {
       "action": "expand_scope",
       "actor": "Codex",
-      "timestamp": "2026-10-23T16:52:23.784539+00:00",
-      "note": "PR #6651 CI 39989995354 exposed missing HMM direct-neighbor mapping for build_observed_industry_authority.py. Add exact existing-test override and changed-files selector regressions; preserve fail-closed behavior. Earlier bare slice 29 passed was isolation smoke only; direct business tests separately passed."
+      "note": "PR #6651 CI 39989995354 exposed missing HMM direct-neighbor mapping for build_observed_industry_authority.py. Add exact existing-test override and changed-files selector regressions; preserve fail-closed behavior. Earlier bare slice 29 passed was isolation smoke only; direct business tests separately passed.",
+      "timestamp": "2026-10-23T16:52:23.784539+00:00"
     },
     {
       "action": "ci_neighbor_mapping_verified",
       "actor": "Codex",
-      "timestamp": "2026-10-23T16:53:05.363393+00:00",
-      "note": "Exact CLI neighbor override added; selector 15 passed, including CLI/service/mixed dedup and missing-test fail-closed. With actual 10-file classifier summary, hmm_risk_pr_slice ran 46 tests including all 17 authority contracts. No classifier rules relaxed or business/authority source changed."
+      "note": "Exact CLI neighbor override added; selector 15 passed, including CLI/service/mixed dedup and missing-test fail-closed. With actual 10-file classifier summary, hmm_risk_pr_slice ran 46 tests including all 17 authority contracts. No classifier rules relaxed or business/authority source changed.",
+      "timestamp": "2026-10-23T16:53:05.363393+00:00"
     }
   ],
   "evidence_uris": [
@@ -63,16 +63,16 @@
   "expected": "A new HMM authority can bind the pinned official observation with conservative causal knowledge/eligibility boundaries independent of monthly dataset cutoff; complete read-only HMM database preflight reports real readiness and all typed historical NAs.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md",
       "backend/services/hmm_risk/observed_industry_authority.py",
-      "scripts/hmm_risk/build_observed_industry_authority.py",
       "backend/tests/hmm_risk/test_observed_industry_authority.py",
-      "tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json",
-      "docs/standards/aistock_runtime_targets_v1.yaml",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md",
       "docs/operations/hmm_observed_industry_authority_runbook.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "noxfile.py",
-      "backend/tests/test_noxfile_validation_env.py"
+      "scripts/hmm_risk/build_observed_industry_authority.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json"
     ],
     "added_files": [
       "backend/services/hmm_risk/observed_industry_authority.py",
@@ -80,16 +80,16 @@
       "backend/tests/hmm_risk/test_observed_industry_authority.py"
     ],
     "changed_files": [
-      "docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md",
       "backend/services/hmm_risk/observed_industry_authority.py",
-      "scripts/hmm_risk/build_observed_industry_authority.py",
       "backend/tests/hmm_risk/test_observed_industry_authority.py",
-      "tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json",
-      "docs/standards/aistock_runtime_targets_v1.yaml",
       "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/test_noxfile_validation_env.py",
+      "docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md",
       "docs/operations/hmm_observed_industry_authority_runbook.md",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
       "noxfile.py",
-      "backend/tests/test_noxfile_validation_env.py"
+      "scripts/hmm_risk/build_observed_industry_authority.py",
+      "tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -164,8 +164,8 @@
   },
   "first_seen_at": "2026-10-23T15:28:54.149866Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "65a4befee53f910cf0d721b2e4252cfa0b43ee3b",
+  "fixed_at": "2026-10-24T05:12:04Z",
   "github_issue_number": 6645,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6645",
   "last_seen_at": "2026-10-23T15:28:54.149866Z",
@@ -173,6 +173,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6651",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -201,6 +202,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -210,7 +212,36 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2081",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b07e6a6b401bdd33",
+    "recorded_at": "2026-10-24T05:15:00.045203Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "530c38129f77d488d9b40141f41ecb9852b8a42a",
+    "source_merge_commit": "65a4befee53f910cf0d721b2e4252cfa0b43ee3b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6651",
+    "validation_evidence": [
+      "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_observed_industry_builder_role_is_exact_and_cannot_downgrade_backend backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_repository_runtime_catalog_preserves_representative_roles backend/tests/hmm_risk/test_observed_industry_authority.py -q -p no:cacheprovider -> passed",
+      "python -m nox -s hmm_risk_pr_slice -> passed",
+      "ruff check --select F backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+      "git diff --check -> passed",
+      "python -m pytest backend/tests/test_noxfile_validation_env.py -k \"observed_authority_pr_slice or hmm_risk_pr_targets\" -q -p no:cacheprovider -> passed",
+      "python -m nox -s guardrail_changed_files validation_catalog_integrity -- --changed-only -> passed",
+      "python -m nox -s l0 -- docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md backend/services/hmm_risk/observed_industry_authority.py scripts/hmm_risk/build_observed_industry_authority.py backend/tests/hmm_risk/test_observed_industry_authority.py tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json docs/standards/aistock_runtime_targets_v1.yaml backend/tests/scripts/test_aistock_issue_workflow_fast.py docs/operations/hmm_observed_industry_authority_runbook.md noxfile.py backend/tests/test_noxfile_validation_env.py -> passed",
+      "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2081 --changed-file docs/standards/aistock_runtime_targets_v1.yaml --changed-file backend/tests/scripts/test_aistock_issue_workflow_fast.py --changed-file noxfile.py --changed-file backend/tests/test_noxfile_validation_env.py --module validation -> passed",
+      "ruff check --select F noxfile.py backend/tests/test_noxfile_validation_env.py -> passed"
+    ],
+    "validation_evidence_digest": "2f152ba35b3d278382f20abc6d68dfaa6278e55c3ce27cd095ea3a89618ab4b6"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "hmm.risk"
   ],
@@ -219,6 +250,17 @@
     "fingerprint": "812e202f4e044cb264953dca",
     "source_event_id": "FE-20261023-812e202f4e04"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_observed_industry_builder_role_is_exact_and_cannot_downgrade_backend backend/tests/scripts/test_aistock_issue_workflow_fast.py::test_repository_runtime_catalog_preserves_representative_roles backend/tests/hmm_risk/test_observed_industry_authority.py -q -p no:cacheprovider -> passed",
+    "python -m nox -s hmm_risk_pr_slice -> passed",
+    "ruff check --select F backend/tests/scripts/test_aistock_issue_workflow_fast.py -> passed",
+    "git diff --check -> passed",
+    "python -m pytest backend/tests/test_noxfile_validation_env.py -k \"observed_authority_pr_slice or hmm_risk_pr_targets\" -q -p no:cacheprovider -> passed",
+    "python -m nox -s guardrail_changed_files validation_catalog_integrity -- --changed-only -> passed",
+    "python -m nox -s l0 -- docs/architecture/hmm_evolution_phase2_l2_dual_input_detailed_design_20261021.md backend/services/hmm_risk/observed_industry_authority.py scripts/hmm_risk/build_observed_industry_authority.py backend/tests/hmm_risk/test_observed_industry_authority.py tests/aistock_validation/bugs/20261023_BUG-2081-p1-hmm-forward-classification-authority-expires-at-monthly-cutoff-and-ig.json docs/standards/aistock_runtime_targets_v1.yaml backend/tests/scripts/test_aistock_issue_workflow_fast.py docs/operations/hmm_observed_industry_authority_runbook.md noxfile.py backend/tests/test_noxfile_validation_env.py -> passed",
+    "python scripts/aistock_issue_workflow.py workflow-smoke --bug-id BUG-2081 --changed-file docs/standards/aistock_runtime_targets_v1.yaml --changed-file backend/tests/scripts/test_aistock_issue_workflow_fast.py --changed-file noxfile.py --changed-file backend/tests/test_noxfile_validation_env.py --module validation -> passed",
+    "ruff check --select F noxfile.py backend/tests/test_noxfile_validation_env.py -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
