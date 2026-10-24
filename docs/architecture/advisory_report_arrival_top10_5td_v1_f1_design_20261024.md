@@ -1,6 +1,6 @@
 # 研报出现频率变化 Top10 固定五交易日研究（F1）
 
-版本 v1.0；2026-10-24；Advisory / model_first。**P13 只交付设计；实现与真实研究尚未启动。** P12 无标签输入审查已完成，3,773/30,500 行支持，18 项检查通过。本设计冻结一个候选、一次最多六 fit 的后续实验，不将设计预算记作实际拟合；当前累计仍为231实际研究fit＋1旧index、0新增经济确认/激活。
+版本 v1.1；2026-10-24；Advisory / model_first。**P14 已完成离线实现、28项直接测试及一次六fit研究，结论 INNER_INCONCLUSIVE。** 原生Top10净增量+1.101690bps，仅一折正；matched增量−0.535244bps。P12输入支持与P13设计已完整保留，本候选预算结束；累计237实际研究fit＋1旧index、0经济确认/激活。实现完成不等于模型具有已确认的业务价值。
 
 ## Background / Goal / Feature Card
 
@@ -12,9 +12,9 @@ P11 的 EPS 修正候选已完成并按原合同停止。本候选使用报告�
 
 ## Scope / 本阶段与后续执行范围
 
-本阶段只新增本文、同步[蓝图](advisory_strategy_conditioned_model_blueprint_v1_20260710.md) v5.44，并执行设计审查、验证与独立文档 PR。P12 输入不重算、不重采；本轮0新fit、0收益标签读取、0模型源码修改。当前输入结果与 P11 阴性结果完整保留。
+P13已通过PR #6673合入本文与蓝图v5.44，当时0新fit、0收益标签读取、0源码修改。用户随后授权按设计开发；P14精确交付三份离线源码、一份直接测试、本文及[蓝图](advisory_strategy_conditioned_model_blueprint_v1_20260710.md) v5.45。P12盘点不重跑、不重采；仅按已批准合同在WSL重建输入并核对P12，然后执行唯一六fit。P11阴性结论不改。
 
-本文同时定义下一实现阶段必须完整交付的输入、模型、评价、身份恢复和测试合同；不是以设计代替已实现功能。设计合入不自动启动研究进程或改变生产行为，源码及一次真实研究作为下一阶段交付。后端重启仍归用户，本候选仅离线，设计与后续离线叶均不要求重启。
+本文冻结的输入、模型、评价、身份恢复和测试合同已按下方矩阵验收，真实结果见Research Result。此次源码及研究仅离线，不改变生产行为；后端重启仍归用户，本交付不要求重启。后续没有自动第七fit、outer确认或替代信息族研究。
 
 ## Input / 来源身份与无标签准备
 
@@ -79,7 +79,7 @@ P12证据根 `X:/AIstock_temp/ADVISORY/p12-report-information-inventory-20261024
 | 2 | 2025-05-30 | 2025-06-01..2025-07-31 |
 | 3 | 2025-07-31 | 2025-08-01..2025-09-30 |
 
-预留3折×2臂，**最多6真实监督fit**，没有候选/超参搜索或final模型。此设计阶段实际新增0；后续实现阶段需以该cap独立登记，不继承P11六fit。若另有Advisory研究改变累计数，登记时如实更新起点并记录原因，不能重置历史搜索记录。
+冻结3折×2臂，**最多6真实监督fit**，没有候选/超参搜索或final模型。P13设计阶段实际新增0；P14独立登记并完成全部6fit，起点231、终点237，不继承P11 claims或重置历史搜索记录。
 
 仅投影D和label_information_end(H)，筛D<=cutoff且H<=cutoff后才解码训练监督值。只接收AVAILABLE或合法CASH_ENTRY_NOT_EXECUTABLE，后者真实目标为0；UNKNOWN不伪零。同股D跨包的金融标签必须一致，两臂训练KEY、共同列编码、权重和日期完全一致。最小技术支持沿用现有训练合同（至少2行、至少2个D）；实际成熟数量在prepare/fit回执中报告，P12输入数量不能代替它。
 
@@ -99,15 +99,15 @@ SUPPORTED、NOT_SUPPORTED、INCONCLUSIVE或执行失败均结束本次预算。�
 
 ## Implementation Plan / 身份、原子阶段与资源
 
-后续实现精确叶建议为 `backend/services/advisory_model_first/report_arrival_top10_5td_inputs_v1.py`、`report_arrival_top10_5td_v1.py`、`report_arrival_top10_5td_pipeline_v1.py`，直接测试 `backend/tests/advisory_model_first/test_report_arrival_top10_5td_v1.py`。本文只登记方案，四文件不属于本轮写入范围。复用原八字段输入、成熟金融读取、同人口评分/评价及已有原子工件协议；不修改公共模块来迁就本候选。
+已交付精确叶 `backend/services/advisory_model_first/report_arrival_top10_5td_inputs_v1.py`、`report_arrival_top10_5td_v1.py`、`report_arrival_top10_5td_pipeline_v1.py`，直接测试 `backend/tests/advisory_model_first/test_report_arrival_top10_5td_v1.py`。四文件及两份设计文档是P14唯一源码范围。复用原八字段输入、成熟金融读取、同人口评分/评价及已有原子工件协议；公共模块保持原合同。
 
 输入叶只投影必需元数据列，在WSL训练环境独立重建计数并与P12的30,500开发行对齐：原身份、状态、整数计数、机构数量与事件ID集合精确一致，float64代理绝对容差<=1e-12且记录实际最大误差。未来追加不可见行只能改变完整快照诊断，不得改变当日数值、资格或排序。P12代理parquet不能不验来源就直接当训练真值。
 
 固定新schema/hypothesis/experiment_id、implementation闭包SHA、clean producer commit、环境、父binding/stage、原人口、信号合同和源文件内容哈希。复用P11代码能力不等于复用其EPS列、225旧计数、claim目录或CONTRACT身份；本候选基准起点231，发生新的真实研究后才累加。只按mtime/size不足，需拒绝同stat内容篡改。stage读取验证上游manifest及文件SHA，生成后重新核对源租约。源变化、中断、错误和资源超限保留失败回执，不能换目录掩盖同一候选的尝试。
 
-唯一study使用preregistered、prepared、每折fit/predict、每折evaluated及final汇总的既有原子发布合同；汇总不等于final模型。预登记3×2个排他STARTED/FINISHED fit claim，进入实际fit前独占领取。已有完整且同身份的阶段只读恢复，不追加fit；STARTED无完整可验证发布不自动重拟合，不能以缺模型当作尚未消耗预算。不得提供final训练、outer、sealed、end/cutoff>2025-09-30或非注册arm入口。
+唯一study发布preregistered、inner/prepared、六个fold/arm trained、inner/evaluated及evaluated共十个原子stage。每折两臂预测发布后才解码该折评价值，三折cohort统一发布inner/evaluated；最终汇总不等于final模型。预登记3×2个排他STARTED/FINISHED fit claim，进入实际fit前独占领取。已有完整且同身份的阶段只读恢复，不追加fit；STARTED无完整可验证发布不自动重拟合，不能以缺模型当作尚未消耗预算。不得提供final训练、outer、sealed、end/cutoff>2025-09-30或非注册arm入口。
 
-下一阶段临时/研究产物仅在明确登记的X盘任务根及唯一study目录，源数据与旧研究只读。固定WSL训练环境、最多2线程、无GPU、RSS<=2GiB、总时限1800秒、研究输出<=200MiB。P12已有资源证据不代替执行时检查；执行前仅只读核对公开QE running及WSL资源，不控制其它任务或服务。当前设计不调用这些运行接口。
+P14临时/研究产物仅在明确登记的X盘任务根及唯一study目录，源数据与旧研究只读。固定WSL训练环境、最多2线程、无GPU、RSS<=2GiB、总时限1800秒、研究输出<=200MiB。执行前只读核对公开QE running及WSL资源，不控制其它任务或服务；公开API可能读取其既有数据库，与本研究直接SQL=0分报。
 
 ## Verification Plan / 可合入标准
 
@@ -115,7 +115,7 @@ SUPPORTED、NOT_SUPPORTED、INCONCLUSIVE或执行失败均结束本次预算。�
 
 行为稳定后只运行直接小矩阵、changed-file lint/compile、ownership、必要L0、diff和F1/F2验证；大范围回归交必需CI。真实实验一次执行后，使用已发布cohort另实现重算主均值、折/包、干预、UNKNOWN与分类，核对fit记账和stage闭包；不因审计再读新收益源或重fit。至少两轮同窗口审核，不冒称独立外审。
 
-本阶段文档合入标准：P12哈希读回、下列设计验收项无未批准设计缺口、F1和蓝图F2校验、`git diff --check`、必需CI通过。设计阶段不执行实现测试，不将计划中的测试名当成通过证据；经济阴性也可按完整合同交付实现及结果，不以强求盈利无限续试。
+P14合入标准：P12哈希读回、下列设计验收项无未批准缺口、真实输入/拟合/结果审计、F1和蓝图F2校验、`git diff --check`及必需CI通过。经济未确认仍可按完整合同交付实现及结果，不以强求盈利无限续试。
 
 ## Design Acceptance Index
 
@@ -131,27 +131,51 @@ SUPPORTED、NOT_SUPPORTED、INCONCLUSIVE或执行失败均结束本次预算。�
 
 ## Design Acceptance Matrix
 
-本矩阵验收P13设计合同，不验收尚未实施的模型能力。下一阶段必须用真实代码/测试/运行结果更新相应行，不能复用DESIGN状态宣称功能完成。
+本矩阵按P14真实代码、测试、研究及审计验收；经济结论保持INNER_INCONCLUSIVE，不能由工程PASS升级。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-521 | 本文Background/Input/Feasibility | artifact: X:/AIstock_temp/ADVISORY/p12-report-information-inventory-20261024/delivery_receipt.json；11文件SHA读回 | DESIGN_AND_INPUT_PASS | none |
-| F-522 | 本文Contracts及原人口合同 | artifact: P12 input_validation_receipt.json、audit_receipt.json；13合成项、128stock-D/2534引用通过 | DESIGN_PASS | approved_by_user: 本轮仅设计，离线输入叶与跨节点验证尚未执行 |
-| F-523 | 本文Model | artifact: X:/AIstock_temp/ADVISORY/p13-report-arrival-design-20261024/review_receipt.md | DESIGN_PASS | approved_by_user: 预留最多六fit，实际0；源码/成熟训练数据尚未执行，不宣称模型完成 |
-| F-524 | 本文Evaluation | artifact: X:/AIstock_temp/ADVISORY/p13-report-arrival-design-20261024/review_receipt.md | DESIGN_PASS | approved_by_user: 评价未执行，经济NOT_TESTED，不允许预算外续试 |
-| F-525 | 本文Implementation Plan | artifact: X:/AIstock_temp/ADVISORY/p13-report-arrival-design-20261024/review_receipt.md | DESIGN_PASS | approved_by_user: stage/claim测试与真实运行由下一阶段实现 |
-| F-526 | 本文Verification Plan及精确四叶 | artifact: X:/AIstock_temp/ADVISORY/p13-report-arrival-design-20261024/validation_receipt.json | DESIGN_PASS | approved_by_user: 本轮文档校验，未运行模型测试或真实研究 |
-| F-527 | 蓝图§6.3.31/§16.0及本文Scope/Production Gates | artifact: X:/AIstock_temp/ADVISORY/p13-report-arrival-design-20261024/review_receipt.md | DESIGN_PASS | approved_by_user: 用户本次执行下一设计阶段；仅文档交付，不把既有合入授权扩大为生产写入/服务操作 |
+| F-521 | 本文Background/Input/Feasibility及输入叶screen_evidence | artifact: P12冻结delivery及P14 research_audit_receipt.json | IMPLEMENTED_PASS | none |
+| F-522 | backend/services/advisory_model_first/report_arrival_top10_5td_inputs_v1.py | artifact: backend/tests/advisory_model_first/test_report_arrival_top10_5td_v1.py；30,500身份/状态/计数/事件一致，浮点误差2.220446e-16 | IMPLEMENTED_PASS | none |
+| F-523 | backend/services/advisory_model_first/report_arrival_top10_5td_v1.py | artifact: 六model.json与六STARTED/FINISHED；共同训练2284/2659/3135行、174/214/257D及编码一致 | IMPLEMENTED_PASS | none |
+| F-524 | 本文Evaluation、模型summarize及pipeline evaluate_inner | artifact: P14 result.json及research_audit_receipt.json，101共同D/三折/两包/干预/UNKNOWN/分类复算 | RESEARCH_COMPLETE_INCONCLUSIVE | none |
+| F-525 | backend/services/advisory_model_first/report_arrival_top10_5td_pipeline_v1.py | artifact: P14 resource_receipt.json、producer_receipt.json及十stage哈希链审计 | IMPLEMENTED_PASS | none |
+| F-526 | 精确四叶及本文Verification Plan | artifact: X:/AIstock_temp/ADVISORY/p14-report-arrival-20261024/validation_receipt.json、review_receipt.md；28直接项与结果算术审计 | IMPLEMENTED_PASS | none |
+| F-527 | 蓝图§6.3.32/§16.0及本文Scope/Production Gates | artifact: P14 research_audit_receipt.json；237实际fit＋1旧index、0独立确认/激活 | BOUNDARIES_VERIFIED | none |
+
+## Research Result / P14一次执行与停止
+
+唯一study `advreportarrivaltop10_8c9aa73c92d78f5551e373e9`，根`X:/AIstock_temp/ADVISORY/p14-report-arrival-20261024/study`；clean producer `f17dd87bd256749865e9d0a644e16e7f5a06373a`，implementation闭包SHA `975f5cbd22a6a1902535292f9cc9c97f16115573177be559c5425319ea6c17fc`。运行前两公开QE running均0，WSL可用58,489,737,216bytes。一次prepare22.58秒、研究总27.70秒、RSS峰值705,630,208bytes，最终study输出3,563,611bytes；资源均在原预算内。
+
+WSL重新构造的30,500开发行原身份、状态、四整数计数及事件集合精确一致。float64最大绝对差2.220446049250313e-16，小于冻结1e-12；不是逐bit相同。3,773共同支持/26,727输入UNKNOWN保持，28,119唯一stock-D；三个扩展窗分别2,284/2,659/3,135成熟训练行、174/214/257D，两臂KEY与共同编码一致。六fit均正常收敛（matched各10、candidate各11迭代）；实际累计237fit＋1旧index。
+
+| 真实评价项 | 结果 |
+|---|---|
+| 原人口/共同日 | 126D、252包D、12,600原候选全部保留；111成熟D，三臂两包共同101D，覆盖90.9910% |
+| candidate / 原生 / matched平均净cohort | 104.876243 / 103.774553 / 105.411487 bps；固定十槽5TD，非账户NAV |
+| 主增量candidate−原生 | +1.101690bps；描述性95%区间[−13.618473,+13.253419]，MDE80约19.409764bps |
+| 对matched增量 | −0.535244bps；区间[−2.522859,+0.970346]，只作归因 |
+| 三折原生增量 | −7.210906 / −3.361202 / +11.033395bps，只有一折正 |
+| 两包原生增量 | TCN−13.105062 / LSTM+15.308442bps；不选择好包或改为包专属模型 |
+| 成熟D实际干预 | 对原生73/111D（65.7658%），对matched17/111D（15.3153%） |
+| 风险与UNKNOWN | 尾部差+3.904877bps，额外估值UNKNOWN=0；candidate/native估值UNKNOWN各326槽，与输入UNKNOWN另列 |
+| 新增代理系数 | 三折+41.209510 / +4.218274 / −0.885942；方向不稳定，仅解释 |
+
+**INNER_INCONCLUSIVE**：主点估计为正、风险和覆盖通过，但三折仅一折正，未达到原合同稳定性要求。没有将CI跨零、matched负值或系数改变作为事后新增产品门。支持/干预/六fit均真实执行；结果不支持继续此精确候选的outer或生产接入，也不证明全部研报信息无价值。P11阴性保持，预算终止，不增加第七fit、替代窗、符号或新信息族。
+
+独立算术实现只读取已发布模型/预测/cohort，复算101共同日主均值、三折、两包、干预、尾部、UNKNOWN和分类，并核对十stage、六STARTED/六FINISHED及来源租约。`evaluated/result.json` SHA `0c31f53aa1dd02a0f84731ecef98d7556d13b0d3cbb652c5a1fb186116243489`；审计位于任务根`research_audit_receipt.json`。审计0新fit/0新收益源解码；这是同窗口另一实现自审，不是独立外审或OOS。
+
+启动前一次Git预检因Windows工作树指针不能由Linux Git直接解释而失败，当时没有study/claim/producer登记；改为调用该工作树所属Windows Git后才执行上述唯一研究。未重启服务，也未覆盖任何已有研究阶段。
 
 ## Non-goals / Risks / Production Gates
 
-仅Advisory离线重排序设计；不改QE/HMM/Selection/StrategyPackage/LocalSIM、价格/Exit/仓位、LLM正文、公告、流水线或启动脚本。0DB/DDL/DML、0数据采集/切换、0模型激活、0服务控制；production_ddl_gate=noop、dependency_gate=noop、backend_restart_required=false，BUG close-sync不适用。生产持久化和业务接入不在本轮。
+仅Advisory离线重排序实现和一次研究；不改QE/HMM/Selection/StrategyPackage/LocalSIM、价格/Exit/仓位、LLM正文、公告、流水线或启动脚本。0直接SQL/DDL/DML、0数据采集/切换、0模型激活、0服务控制；production_ddl_gate=noop、dependency_gate=noop、backend_restart_required=false，BUG close-sync不适用。生产持久化和业务接入不在本轮。
 
 主要风险是12.37%稀疏支持、供应商历史重构/补录/删除、字面机构漂移、报告日集中财报季、计数未包含方向以及父模型已经吸收信息。三折是同一反复消费开发窗，支持数量不是独立样本量；低相关不证明新Alpha；历史首发时钟未知使正向探索也不能直接确认生产价值。保留负结果和失败，不要求数据owner为阴性重采同版。
 
 ## DESIGN-COMPLIANCE-001 / 四项逐条审查
 
-1. 禁止简化交付：当前交付完整F1设计和蓝图同步，明确源码/真实fit/收益验收未执行；不把设计预算或P12输入PASS当模型成果。
+1. 禁止简化交付：完整三研究叶/直接测试/真实六fit及算术审计按七项索引验收，蓝图同步；工程完成与INNER_INCONCLUSIVE经济结论分报。
 2. 禁止静默错误：缺记录、缺时钟、输入资格、未成熟、原子阶段与内容身份均有明确UNKNOWN/失败分支；未运行不写成功。
 3. 禁止改变业务逻辑：原Top50、固定Top10/5TD、成本、native主终点和三分类保持；P11阴性不改判，不并行评级/正文/价格方向。
-4. 禁止私增门禁审批：只用已有输入身份、成熟监督、不可变fit预算与CI流程；不要求先生产入库、补PIT或另造平台才允许有限探索。设计合入与下一实施阶段分开是本次任务范围，不增加额外审批流程。
+4. 禁止私增门禁审批：只用已有输入身份、成熟监督、不可变fit预算与CI流程；按用户既有授权实施和合入，不要求先生产入库、补PIT或另造平台才允许有限探索，不增加额外审批流程。
