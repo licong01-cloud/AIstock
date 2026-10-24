@@ -7,6 +7,34 @@ import pytest
 from backend.services import suspend_d_coverage as coverage
 
 
+@pytest.mark.parametrize("symbol,day,raw,effective", [
+    ("600955.SH", "2021-09-15", "09:00-10:00", "09:30-10:00"),
+    ("605567.SH", "2021-10-13", "09:00-10:00", "09:30-10:00"),
+    ("688607.SH", "2021-02-01", "09:33-09:43,11:10-11:10", "09:33-09:43,11:00-11:10"),
+])
+def test_exact_notice_retains_raw_clock_and_proves_effective_session(symbol, day, raw, effective):
+    from backend.data_service.suspension_day_authority import project_suspension_days
+
+    rows = [dict(ts_code=symbol, trade_date=day, suspend_type="S", suspend_timing=raw)]
+    resolution = project_suspension_days(rows)[0]
+    assert resolution["state"] == "INTRADAY_SUSPENDED"
+    assert resolution["effective_suspend_timing"] == effective
+    assert rows[0]["suspend_timing"] == raw
+    assert resolution["historical_publication_time_proven"] is False
+    rows[0]["ts_code"] = "000001.SZ"
+    assert project_suspension_days(rows)[0]["state"] == "UNRESOLVED"
+
+
+def test_new_authority_does_not_rewrite_previously_approved_entries():
+    import json
+    from backend.data_service import suspension_day_authority as public
+
+    old = json.loads(public.DEFAULT_PATH.with_name("suspension_day_authority_v2.json").read_bytes())
+    current = public.load_authority()
+    assert all(entry in current["entries"] for entry in old["entries"])
+    assert len(current["entries"]) == len(old["entries"]) + 3
+
+
 def _afternoon_authority():
     from backend.data_service.suspension_day_authority import POLICY, SCHEMA
 
