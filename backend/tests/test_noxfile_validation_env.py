@@ -629,6 +629,27 @@ def test_hmm_risk_pr_targets_default_to_smoke_without_classifier_summary(
     assert noxfile._hmm_risk_pr_test_targets() == list(noxfile.HMM_RISK_PR_SMOKE_TESTS)
 
 
+@pytest.mark.parametrize("changed_files", [
+    ["scripts/hmm_risk/build_observed_industry_authority.py"],
+    ["backend/services/hmm_risk/observed_industry_authority.py"],
+    ["scripts/hmm_risk/build_observed_industry_authority.py",
+     "backend/services/hmm_risk/observed_industry_authority.py",
+     "backend/tests/hmm_risk/test_observed_industry_authority.py"],
+])
+def test_observed_authority_pr_slice_executes_direct_contract_once(monkeypatch, tmp_path, changed_files):
+    direct = "backend/tests/hmm_risk/test_observed_industry_authority.py"
+    _configure_hmm_pr_targets(monkeypatch, tmp_path, changed_files=changed_files,
+                              existing_paths=[*changed_files, direct])
+    assert noxfile._hmm_risk_pr_test_targets() == [*noxfile.HMM_RISK_PR_SMOKE_TESTS, direct]
+
+
+def test_observed_authority_pr_slice_rejects_missing_direct_contract(monkeypatch, tmp_path):
+    cli = "scripts/hmm_risk/build_observed_industry_authority.py"
+    _configure_hmm_pr_targets(monkeypatch, tmp_path, changed_files=[cli], existing_paths=[cli])
+    with pytest.raises(ValueError, match="mapped direct-neighbor test is missing"):
+        noxfile._hmm_risk_pr_test_targets()
+
+
 def test_hmm_risk_pr_targets_map_router_and_schema_to_direct_contracts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

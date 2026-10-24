@@ -1162,12 +1162,13 @@ class MonthlyReleaseService:
     def _verified_adoption_ancestors(
         self, product_profile: str, target_cutoff: date, active_sha256: str,
     ) -> set[str]:
-        """Find exact activated ancestors using only durable same-release history.
+        """Find activated ancestors and their proven retired pending branches.
 
         Called under the product/active locks. This reads operation metadata only;
         it neither rebuilds data nor changes historical requests or receipts.
         """
         activations: list[tuple[str, str, str]] = []
+        requests: dict[str, Mapping[str, Any]] = {}
         for child in self.store.operations.iterdir():
             request_path = child / "request.json"
             if not request_path.is_file():
@@ -1177,6 +1178,7 @@ class MonthlyReleaseService:
                     or request.get("target_cutoff") != target_cutoff.isoformat()):
                 continue
             operation_id = str(request["operation_id"])
+            requests[operation_id] = request
             if self.store.read_state(operation_id).get("status") != ReleaseState.ACTIVATED_VERIFIED.value:
                 continue
             receipt = child / "receipts" / "activation.json"
@@ -1206,6 +1208,34 @@ class MonthlyReleaseService:
             if len(remaining) == len(pending):
                 break
             pending = remaining
+        # A retired pending candidate is not a competing release. Require both
+        # directions of its exact supersession, rooted in an activated ancestor;
+        # a plain cancellation or unrelated marker never establishes lineage.
+        activation_refs = {operation: (old, new) for operation, old, new in activations}
+        for operation_id, request in requests.items():
+            if self.store.read_state(operation_id).get("status") != ReleaseState.CANCELLED.value:
+                continue
+            root = self.store.operation_root(operation_id)
+            marker = root / "receipts" / "superseded.json"
+            if not marker.is_file() or (root / "receipts" / "activation.json").exists():
+                continue
+            retired = _read_json(marker, label="retired adoption ancestor")
+            successor = retired.get("successor_operation_id")
+            if successor not in verified or successor not in activation_refs:
+                continue
+            supersession = requests[successor].get("supersedes_pending_operation")
+            old_sha, new_sha = activation_refs[successor]
+            try:
+                physical_sha = ensure_sha256(request.get("target_profile_sha256"), field="retired_profile")
+            except (CanonicalizationError, TypeError):
+                continue
+            if (retired.get("schema_version") == "aistock_monthly_pending_successor_v1"
+                    and retired.get("operation_id") == operation_id
+                    and retired.get("logical_predecessor_profile_sha256") == old_sha
+                    and retired.get("target_profile_sha256") == new_sha
+                    and retired.get("physical_predecessor_profile_sha256") == physical_sha
+                    and supersession == {"operation_id": operation_id, "physical_profile_sha256": physical_sha}):
+                verified.add(operation_id)
         return verified
 
     def adopt_existing_successor(
@@ -1483,18 +1513,6 @@ class MonthlyReleaseService:
                         intent_path = child / "receipts" / "activation.json"
                         if prior.get("status") == ReleaseState.ACTIVATED_VERIFIED.value and intent_path.is_file():
                             if _read_json(intent_path, label="minute activated predecessor").get("new_profile_ref", {}).get("sha256") == expected_predecessor:
-                                continue
-                        marker = child / 'receipts' / 'superseded.json'
-                        if prior.get('status') == ReleaseState.CANCELLED.value and marker.is_file():
-                            replacement = _read_json(marker, label='superseded correction')
-                            successor_id = str(replacement.get('successor_operation_id') or '')
-                            if successor_id in activated_ancestors:
-                                continue
-                            successor_state = self.store.read_state(successor_id)
-                            successor_intent = self.store.operation_root(successor_id) / 'receipts' / 'activation.json'
-                            if (successor_state.get('status') == ReleaseState.ACTIVATED_VERIFIED.value
-                                    and successor_intent.is_file() and _read_json(successor_intent,
-                                        label='activated correction successor').get('new_profile_ref', {}).get('sha256') == expected_predecessor):
                                 continue
                     if late_financing:
                         prior = self.store.read_state(str(existing["operation_id"]))
