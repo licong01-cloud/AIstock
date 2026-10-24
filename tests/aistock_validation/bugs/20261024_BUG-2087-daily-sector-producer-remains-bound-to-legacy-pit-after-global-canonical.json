@@ -139,11 +139,17 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/DATA_PREPARATION/non-report-closure-20261024/sector-fix-validation.json: isolated Python loaded tracked producer; existing DEV temporary fixtures rolled back; production SELECT-only preflight Oct20/23 changed universe_not_ready 1 to 0, other failure counts 0"
+    ],
     "inference_basis": "planned_scope",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/ingestion/jobs?limit=20",
+    "database_readback_ref": "X:/AIstock_temp/DATA_PREPARATION/non-report-closure-20261024/sector-fix-validation.json",
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
