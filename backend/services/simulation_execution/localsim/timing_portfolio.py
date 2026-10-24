@@ -228,14 +228,19 @@ def run_portfolio_day(*, backend, markets: dict[str, MarketView], events: list[P
 
 
 def attach_native_quantity_evidence(result: dict, *, targets, native, projection_ref: dict,
-                                    price_policy_sha256: str) -> None:
+                                    price_policy_sha256: str, unavailable=()) -> None:
     """Retain rejected requests in the denominator and report actual fees."""
     account, backend = result["account"], result["backend"]
+    account["parents"].extend(unavailable)
     by_key = {(d.symbol, d.side.value): d for d in native.trading_rule_decisions}
     for row in account["parents"]:
         decision = by_key[(row["symbol"], row["side"])]
         row.update(requested_quantity=decision.requested_quantity, legal_quantity=decision.legal_quantity,
-                   order_created=True, native_rule_reason=decision.reason_code)
+                   order_created=row.get("order_created", True), native_rule_reason=decision.reason_code)
+    actual = [(row["symbol"], row["side"]) for row in account["parents"]]
+    expected = {(intent.symbol, intent.side.value) for intent in native.order_intents}
+    if len(actual) != len(set(actual)) or set(actual) != expected:
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_INTENT_RESULT_POPULATION_CONFLICT")
     for decision in native.trading_rule_decisions:
         if decision.legal_quantity <= 0:
             account["parents"].append({"plan_id": "native_blocked_" + decision.decision_id,

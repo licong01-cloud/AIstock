@@ -94,9 +94,9 @@ candidate/费用/执行合同从 consumption.json 读取，不覆盖旧 artifact
 
 | 阶段 | 任务与完成标准 | 当前状态 |
 |---|---|---|
-| P1 | 核验最新 main、已有原生选股及择时合同；冻结价格偏好消费 schema，形成外部 owner 的精确输入要求 | 消费合同已交付，外部生产者待返回 |
+| P1 | 核验最新 main、已有原生选股及择时合同；冻结价格偏好消费 schema，形成外部 owner 的精确输入要求 | PR #6671 已交付；四个冻结文件完整 SHA 已核验，执行消费侧 UNKNOWN 兼容 |
 | P2 | 复用 TargetPositionEngine、RebalanceIntentService 和既有 LocalSIM 账本/OMS；实现多股票、跨日账户执行、共同计划和日事务恢复 | 实现及59项定向验证通过，真实首日数量规划通过 |
-| P3 | 合法价格计划返回后，冻结最新 LightGBM＋12 因子、12 个 1000 万元账户，运行 01-05 至 09-30 的连续研究 | 待外部合同 |
+| P3 | 合法价格计划返回后，冻结最新 LightGBM＋12 因子、12 个 1000 万元账户，运行 01-05 至 09-30 的连续研究 | 适配及定向验收后开始；不改变181日、9050原生目标 |
 | P4 | 比较同延迟 B0、费用/最低额、收益/回撤/等待/未成交；验证完整人口、前缀恢复和 exact retry | 待 P3 |
 | P5 | 多轮审核修复、直接回归、L0、F2 和最终 HEAD CI 全部通过；更新原 PR、合入、只清理本任务 | 待全范围验收 |
 
@@ -108,7 +108,11 @@ P1 缺口不得阻止 P2 中独立开发，但不得借合成功能测试宣称 
 
 当日目标需要 BUY/SELL 模板；可能仍被持有、但已离开当日目标的股票只需要 SELL 模板，不强制提供不会被消费的重新买入偏好。
 
-原 `PREDECLARED_MECHANISM_PLAN_NOT_PRODUCTION` 的 0.5% PREFERRED 工程政策不得自动扩大人口。owner 可以交付正式可复用构造器及适用性合同，也可以直接交付完整冻结模板；LocalSIM 不复制该构造算法、不修改核心参数、不用参考价猜测偏好。PRICE_TOUCH 缺合法 PREFERRED/HARD 时整批仍为输入阻断。
+原 `PREDECLARED_MECHANISM_PLAN_NOT_PRODUCTION` 的 0.5% PREFERRED 工程政策不得自动扩大人口。owner 可以交付正式可复用构造器及适用性合同，也可以直接交付完整冻结模板；LocalSIM 不复制该构造算法、不修改核心参数、不用参考价猜测偏好。
+
+2026-10-24 用户授权消费 PR #6671 的冻结共享价格计划。模板完整 SHA 为 `bce2563f61ee2c3ee64b74d723dfac57baa95e127ed87e137229e86d16b327a1`，policy_document 为 `58e2fddf837f890e7eecadeef08e2907273f7edc3ab9759d62ae51e892e5b779`，其 reference_audit 为 `fe6b1fcb12ffb868a68e95f3e122bbe7969fed533a017afabd3ae23bd02bfde6`。消费侧从已绑定审计建立日期/股票/方向的 UNKNOWN 声明，不在代码写股票或包 ID 白名单。逐一核验类型化原因、来源路径及 SHA；未声明 NONE、来源冲突、AVAILABLE 缺区间、审计人口不一致均 fail closed。整批来源核验按不可变 FileRef 去重，结束时再次读回核验，不能用进程级业务缓存代替。
+
+通用事件校验不再强制 PRICE_TOUCH；NONE 必须空区间，非 NONE 必须有合法区间。B0/C2 可正常消费已声明 NONE。C1 在实际原生意图需要该未知模板时保留 UNAVAILABLE 行、原生请求量/合法量、审计原因和来源实体，不创建非法 Plan、不发订单、不补造价格；仍计算原现金和剩余持仓终值。未使用的备用 SELL 不阻断账户日。本轮14条未知均为单修订 ACTIVE 模板；若未来 C1 的混合修订序列包含 UNKNOWN，需要显式新合同，当前保持失败关闭。估值缺口与计划价格缺口分别处理，不因接受 UNKNOWN 而放宽行情、估值或真实缺价校验。
 
 #### 连续账户和比较合同
 
@@ -139,6 +143,7 @@ P1 缺口不得阻止 P2 中独立开发，但不得借合成功能测试宣称 
 | F-009 | 无 DB/数据集/行情网络/服务操作，交付与运行/经济证据分离 |
 | F-010 | 最新加入策略绑定、12 个连续离线账户、1000 万元及年初日历；合法计划缺口不能伪造 |
 | F-011 | 连续消费者的价格模板整批校验、原生数量规划、多股票共享账户、确认时钟、日事务恢复及独立比较 |
+| F-012 | 审计 UNKNOWN/NONE 精确绑定；B0/C2 合法 NONE；C1 实需缺价保留 UNAVAILABLE；备用 SELL 不阻断且不改变人口 |
 
 ## Rollout / Rollback / Risks / Production Gates
 
@@ -159,7 +164,8 @@ database_read/write=false；dataset_mutation=false；live_market_network=false�
 | F-007 | localsim/timing_store.py/timing_research.py | artifact: X:/AIstock_temp/localsim-position-timing/recovery-proof-r1.json；retry-metrics-r3.json：原288行SHA不变 | PASS | - |
 | F-008 | localsim/timing_research.py及现有只读比较器 | artifact: X:/AIstock_temp/localsim-position-timing/compare-metrics-r1.json；36组matched B0，先inspect后读结果 | PASS | - |
 | F-009 | WSL离线验证及审计钩子 | artifact: X:/AIstock_temp/localsim-position-timing/native-quantity-validation-r2.json；数据库/数据集/行情/服务操作均false | PASS | - |
-| F-010 | localsim/timing_campaign.py；本报告第7节 | artifact: X:/AIstock_temp/localsim-position-timing/campaign-preflight-metrics-r1.json；181日/9050目标及12初态已冻结 | BLOCKED | 缺择时owner的合法全年价格偏好合同；12账户真实连续研究尚未启动，不能合入结项 |
+| F-010 | localsim/timing_campaign.py；本报告第7节 | artifact: X:/AIstock_temp/localsim-position-timing/campaign-preflight-metrics-r1.json；181日/9050目标及12初态已冻结 | BLOCKED | PR #6671 合同已返回；消费适配及12账户真实连续研究尚待完成，不能合入结项 |
 | F-011 | localsim/timing_campaign.py/timing_portfolio.py/runtime.py | artifact: X:/AIstock_temp/localsim-position-timing/direct-validation-r3.json；59项，12账户×2日恢复，真实首日50目标数量规划 | PASS | - |
+| F-012 | localsim/timing_campaign.py/timing_portfolio.py | pytest：74项直接回归通过；shared-price-inspection-r4.json：真实181日/73997事件及14 UNKNOWN整批通过 | PASS | - |
 
 F-011只验收消费能力、功能不变量与原生数量规划，不代替F-010真实历史模拟。F2完整范围仍不满足合入条件，PR保留草稿。源码、离线研究、运行激活和经济效果必须分别报告。

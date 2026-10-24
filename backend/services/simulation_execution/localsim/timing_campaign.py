@@ -22,6 +22,7 @@ from backend.services.position_timing.intraday.contracts import (
     CHINA, Contract, Plan, PlanDraft, Policy, PriceConstraint, Sha256, Timestamp, digest, payload,
 )
 from backend.services.position_timing.intraday.replay import FileRef, PlanEvent, implementation_identity
+from backend.services.position_timing.intraday.price_plans import Reason
 from backend.services.position_timing.intraday.research import ARMS, DELAYS, EXECUTION_CONTRACT, CostContract
 from backend.services.position_timing.intraday.research_inputs import CandidateReader, checked_file
 from backend.services.strategy_package.manifest import compute_manifest_json_sha256
@@ -52,16 +53,32 @@ class PriceTemplateEvent(Contract):
         PlanDraft(symbol=self.symbol, side=self.side, target_trade_date=self.trade_date,
                   source_ref=self.source_file.sha256, source_revision=str(self.revision),
                   valid_from=self.valid_from, valid_until=self.valid_until,
-                  price_constraint=self.price_constraint, policy_id="PRICE_TOUCH_V1")
+                  price_constraint=self.price_constraint)
         price = self.price_constraint
-        if (not price.intervals or price.source_sha256 != self.source_file.sha256
+        if ((price.mode == "NONE") != (not price.intervals) or price.source_sha256 != self.source_file.sha256
                 or not price.source_ref or self.source_available_at > self.available_at
+                or self.available_at.astimezone(CHINA).date() != self.trade_date
                 or self.available_at >= self.valid_until
                 or price.valid_from is None or price.valid_until is None
                 or price.valid_from > self.valid_from or price.valid_until < self.valid_until
                 or self.valid_from.astimezone(CHINA).time() < time(9, 30)
                 or self.valid_until.astimezone(CHINA).time() > time(14, 57)):
             raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_PROVENANCE_INVALID")
+        return self
+
+
+class AuditedUnknownReference(Contract):
+    availability: Literal["UNKNOWN"]
+    reason_code: Reason
+    symbol: str
+    trade_date: date
+    sides: tuple[Literal["BUY", "SELL"], ...] = Field(min_length=1, max_length=2)
+    source_file: FileRef
+
+    @model_validator(mode="after")
+    def unknown(self):
+        if self.reason_code == "REFERENCE_AVAILABLE" or len(set(self.sides)) != len(self.sides):
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_UNKNOWN_REASON_INVALID")
         return self
 
 
@@ -99,6 +116,9 @@ def inspect_price_templates(preflight_ref: FileRef, templates_ref: FileRef) -> d
             or policy.get("start_trade_date") != preflight["start_trade_date"]
             or policy.get("end_trade_date") != preflight["candidate_end_trade_date"]
             or policy.get("mode") != "CONFIRMED_FEEDBACK_CLOSED_LOOP"
+            or policy.get("selection_inventory_sha256", inventory_ref.sha256) != inventory_ref.sha256
+            or policy.get("producer_source_commit", templates.producer_source_commit) != templates.producer_source_commit
+            or policy.get("preflight", preflight_ref.model_dump()) != preflight_ref.model_dump()
             or not policy.get("applicability_statement")):
         raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_POLICY_SCOPE_UNDECLARED")
     expected_days = [row["trade_date"] for row in inventory["days"]]
@@ -110,11 +130,40 @@ def inspect_price_templates(preflight_ref: FileRef, templates_ref: FileRef) -> d
     if expected_days != native_dates:
         raise ValueError("LOCALSIM_TIMING_CAMPAIGN_CALENDAR_POPULATION_CONFLICT")
     all_refs = [preflight_ref, templates_ref, inventory_ref, templates.policy_document]
+    unknowns, audit = {}, None
+    if policy.get("reference_audit"):
+        audit_ref = FileRef.model_validate(policy["reference_audit"])
+        audit = read_json(checked_file(audit_ref))
+        all_refs.append(audit_ref)
+        if (audit.get("schema_version") != "position_timing_shared_price_reference_audit_v1"
+                or audit.get("price_policy_id") != templates.price_policy_id
+                or audit.get("outcomes_read") is not False):
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_REFERENCE_AUDIT_IDENTITY_CONFLICT")
+        for row in audit["unknown_references"]:
+            declaration = AuditedUnknownReference.model_validate(row)
+            for side in declaration.sides:
+                key = (str(declaration.trade_date), declaration.symbol, side)
+                if key in unknowns:
+                    raise ValueError("LOCALSIM_TIMING_CAMPAIGN_UNKNOWN_DECLARATION_DUPLICATED")
+                unknowns[key] = declaration
+            all_refs.append(declaration.source_file)
+    for document in (policy, audit or {}):
+        all_refs.extend(FileRef.model_validate(item) for item in document.get("source_files", []))
     for value in preflight["inputs"].values():
         item = FileRef.model_validate(value)
         checked_file(item)
         all_refs.append(item)
-    inspected, possible_holdings = {}, set()
+    # Verify each immutable source once per inspection, then again after parsing.
+    # The same candidate component can be named by thousands of day templates.
+    verified = {}
+    for item in all_refs:
+        if item.path in verified and verified[item.path] != item.sha256:
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_SOURCE_REFERENCE_CONFLICT")
+        if item.path not in verified:
+            checked_file(item)
+            verified[item.path] = item.sha256
+    inspected, possible_holdings, observed_unknowns = {}, set(), set()
+    counts = {"BUY": 0, "SELL": 0, "UNKNOWN": 0, "AVAILABLE": 0}
     for day, native in zip(templates.days, inventory["days"], strict=True):
         projection_ref = FileRef.model_validate(native["projection"])
         completion_ref = FileRef.model_validate(native["completion"])
@@ -133,8 +182,23 @@ def inspect_price_templates(preflight_ref: FileRef, templates_ref: FileRef) -> d
         for event in events:
             if event.trade_date != day.trade_date:
                 raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_EVENT_DAY_CONFLICT")
-            checked_file(event.source_file)
-            all_refs.append(event.source_file)
+            source = event.source_file
+            if source.path in verified and verified[source.path] != source.sha256:
+                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_SOURCE_REFERENCE_CONFLICT")
+            if source.path not in verified:
+                checked_file(source)
+                verified[source.path] = source.sha256
+                all_refs.append(source)
+            unknown_key = (str(event.trade_date), event.symbol, event.side)
+            declaration = unknowns.get(unknown_key)
+            is_unknown = event.price_constraint.mode == "NONE"
+            if (is_unknown != (declaration is not None)
+                    or declaration is not None and declaration.source_file != source):
+                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_UNKNOWN_REFERENCE_CONFLICT:" + repr(unknown_key))
+            if is_unknown:
+                observed_unknowns.add(unknown_key)
+            counts[event.side] += 1
+            counts["UNKNOWN" if is_unknown else "AVAILABLE"] += 1
             key = (event.symbol, event.side)
             prior = series.setdefault(key, [])
             if (not prior and (event.revision != 1 or event.lifecycle != "ACTIVE" or event.available_at > event.valid_from)
@@ -150,11 +214,19 @@ def inspect_price_templates(preflight_ref: FileRef, templates_ref: FileRef) -> d
         if not expected.issubset(series):
             missing = sorted(expected - set(series))
             raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_TEMPLATE_MISSING:" + repr(missing[:20]))
-        inspected[str(day.trade_date)] = {"series": series, "native": native}
+        inspected[str(day.trade_date)] = {"series": series, "native": native,
+                                          "unknown_references": {key[1:]: row for key, row in unknowns.items()
+                                                                 if key[0] == str(day.trade_date)}}
+    if (observed_unknowns != set(unknowns) or audit is not None and (
+            audit.get("counts") != counts or audit.get("trade_day_count") != len(inspected)
+            or audit.get("stock_count") != len(possible_holdings))):
+        raise ValueError("LOCALSIM_TIMING_CAMPAIGN_REFERENCE_AUDIT_POPULATION_CONFLICT")
+    for item in {(r.path, r.sha256): r for r in all_refs}.values():
+        checked_file(item)
     candidate.verify_pins()
     return {"preflight": preflight, "inventory": inventory, "templates": templates,
             "days": inspected, "source_refs": list({(r.path, r.sha256): r for r in all_refs}.values()),
-            "outcomes_read": False, "stage": "COMPLETE_SOURCE_BATCH_INSPECTED"}
+            "reference_counts": counts, "outcomes_read": False, "stage": "COMPLETE_SOURCE_BATCH_INSPECTED"}
 
 
 def campaign_source_identity() -> dict:
@@ -211,15 +283,33 @@ def freeze_continuous_campaign(*, preflight_ref: FileRef, templates_ref: FileRef
             "outcomes_read": False, "source_inspection_stage": inspected["stage"]}
 
 
-def build_timing_plan_events(*, intents, series, rule, source_commit, day, quantity_source):
+def build_timing_plan_events(*, intents, series, rule, source_commit, day, quantity_source,
+                             unknown_references=None):
     """Bind shared preference events to native quantities, without rule logic."""
     policy = Policy(policy_id=rule, source_commit=source_commit, allow_split=False)
-    events = []
+    events, unavailable = [], []
     for intent in intents:
         key = (intent.symbol, intent.side.value)
         if key not in series:
             raise ValueError("LOCALSIM_TIMING_CAMPAIGN_PRICE_TEMPLATE_MISSING:" + repr(key))
         plan_id = "lscp_" + digest([quantity_source, intent.intent_id])[:48]
+        unknown_templates = [t for t in series[key] if t.price_constraint.mode == "NONE"]
+        declaration = (unknown_references or {}).get(key)
+        if unknown_templates and (declaration is None or any(
+                t.source_file != declaration.source_file or t.trade_date != declaration.trade_date
+                or t.symbol != declaration.symbol or t.side not in declaration.sides for t in unknown_templates)):
+            raise ValueError("LOCALSIM_TIMING_CAMPAIGN_UNKNOWN_REFERENCE_CONFLICT")
+        if rule == "PRICE_TOUCH_V1" and unknown_templates:
+            if len(series[key]) != 1:
+                raise ValueError("LOCALSIM_TIMING_CAMPAIGN_C1_UNKNOWN_SERIES_UNSUPPORTED")
+            unavailable.append({"plan_id": plan_id, "symbol": intent.symbol, "side": intent.side.value,
+                                "target_quantity": intent.quantity, "filled_quantity": 0,
+                                "status": "UNAVAILABLE", "order_created": False,
+                                "reason_codes": ["PRICE_PLAN_REFERENCE_UNKNOWN", declaration.reason_code],
+                                "average_price_raw": None, "weighted_wait_seconds": "0",
+                                "price_reference_audit": payload(declaration),
+                                "price_template_events": payload(series[key])})
+            continue
         for template in series[key]:
             plan = Plan(plan_id=plan_id, revision=template.revision, source_kind="FROZEN_REPLAY",
                         source_ref=template.source_file.sha256, source_revision=str(template.revision),
@@ -229,7 +319,7 @@ def build_timing_plan_events(*, intents, series, rule, source_commit, day, quant
                         quantity_source_ref=quantity_source, price_constraint=template.price_constraint,
                         policy_id=rule, policy=policy, policy_sha256=digest(policy))
             events.append(PlanEvent(available_at=template.available_at, plan=plan))
-    return events
+    return events, unavailable
 
 
 def _campaign_day_summary(*, record, receipt_ref, request, initial, day_index, previous):
@@ -302,6 +392,7 @@ def summarize_continuous_campaign(accounts: list[dict]) -> list[dict]:
                          "legal_quantity": sum(p["legal_quantity"] for _, p in parents),
                          "partial_parent_count": sum(p["status"] == "PARTIAL" for _, p in parents),
                          "no_fill_parent_count": sum(p["status"] == "NO_FILL" for _, p in parents),
+                         "unavailable_parent_count": sum(p["status"] == "UNAVAILABLE" for _, p in parents),
                          "filled_quantity": filled, "mean_wait_seconds": str(waits / filled) if filled else None,
                          "fees_cny": str(sum((Decimal(d["fees_cny"]) if side == "ALL" else Decimal(d["fees_by_side_cny"][side])
                                              for d in account["day_summaries"]), Decimal(0))),
@@ -407,14 +498,16 @@ def run_continuous_campaign(request_ref: FileRef) -> dict:
                     prices[symbol] = Decimal(prior["marks_raw_cny"][symbol])
             backend, targets, native = compile_native_intents(projection=projection, manifest=manifest,
                                                               account=account, markets=markets, prices=prices, cost=cost)
-            events = build_timing_plan_events(intents=native.order_intents, series=day_input["series"],
+            events, unavailable = build_timing_plan_events(intents=native.order_intents, series=day_input["series"],
                                                rule=initial["rule"], source_commit=request["producer_source_commit"],
-                                               day=day, quantity_source=child_identity)
+                                               day=day, quantity_source=child_identity,
+                                               unknown_references=day_input["unknown_references"])
             result = run_portfolio_day(backend=backend, markets=markets, events=events, initial_marks=prices,
                                         delay_seconds=initial["delay_seconds"], run_id=store.run_id)
             attach_native_quantity_evidence(result, targets=targets, native=native,
                                              projection_ref=day_input["native"]["projection"],
-                                             price_policy_sha256=inspected["templates"].policy_document.sha256)
+                                             price_policy_sha256=inspected["templates"].policy_document.sha256,
+                                             unavailable=unavailable)
             commit_portfolio_day(store=store, result=result, input_identity=child_identity, day_index=0)
             summary = _read_campaign_day(path=path, store=store, request=request, initial=initial,
                                           day_index=day_index, previous=previous, child_identity=child_identity, cost=cost)

@@ -505,3 +505,146 @@ def test_unfinished_campaign_cannot_resume_with_changed_source(tmp_path, monkeyp
     monkeypatch.setattr(module, "campaign_source_identity", lambda: {"changed": True})
     with pytest.raises(ValueError, match="SOURCE_CHANGED"):
         module.run_continuous_campaign(module.FileRef.model_validate(frozen["request"]))
+
+
+def unknown_campaign_fixture(tmp_path, monkeypatch, problem=None):
+    module, preflight, templates_ref, Path = price_campaign_fixture(tmp_path, monkeypatch)
+    templates = module.read_json(Path(templates_ref.path))
+    events = module.read_json(Path(templates["days"][0]["events"]["path"]))
+    event = next(row for row in events if row["side"] == "SELL")
+    declaration = {"symbol": event["symbol"], "trade_date": event["trade_date"], "sides": ["SELL"],
+                   "availability": "UNKNOWN", "reason_code": "REFERENCE_NONFINITE",
+                   "source_file": event["source_file"]}
+    event["price_constraint"].update(mode="NONE", intervals=[])
+    audit = {"schema_version": "position_timing_shared_price_reference_audit_v1",
+             "price_policy_id": templates["price_policy_id"], "unknown_references": [declaration],
+             "counts": {"BUY": 2, "SELL": 2, "AVAILABLE": 3, "UNKNOWN": 1},
+             "stock_count": 2, "trade_day_count": 1, "outcomes_read": False}
+    if problem == "undeclared":
+        audit["unknown_references"] = []
+    elif problem == "source":
+        path = tmp_path / "other_source.json"
+        module.publish(path, {"role": "OTHER_FUNCTIONAL_SOURCE"})
+        declaration["source_file"] = module.ref(path)
+    elif problem == "reason":
+        declaration["reason_code"] = "REFERENCE_AVAILABLE"
+    elif problem == "untyped_reason":
+        declaration["reason_code"] = "IGNORE_MISSING_PRICE"
+    elif problem == "counts":
+        audit["counts"]["UNKNOWN"] = 0
+    elif problem == "duplicate":
+        audit["unknown_references"].append(dict(declaration))
+    elif problem == "unused_declaration":
+        audit["unknown_references"].append({**declaration, "symbol": "600519.SH"})
+    elif problem == "available_empty":
+        event["price_constraint"]["mode"] = "PREFERRED"
+    elif problem == "none_interval":
+        event["price_constraint"]["intervals"] = [{"lower": "9.8", "upper": "10.2"}]
+    elif problem == "unknown_with_interval":
+        event["price_constraint"].update(mode="PREFERRED", intervals=[{"lower": "9.8", "upper": "10.2"}])
+    event_path = tmp_path / "unknown_events.json"
+    audit_path = tmp_path / "reference_audit.json"
+    policy_path = tmp_path / "unknown_policy.json"
+    templates_path = tmp_path / "unknown_templates.json"
+    module.publish(event_path, events)
+    module.publish(audit_path, audit)
+    policy = module.read_json(Path(templates["policy_document"]["path"]))
+    policy["reference_audit"] = module.ref(audit_path)
+    if problem == "audit_scope":
+        policy["price_policy_id"] = "OTHER_POLICY"
+    module.publish(policy_path, policy)
+    templates["policy_document"] = module.ref(policy_path)
+    templates["days"][0]["events"] = module.ref(event_path)
+    module.publish(templates_path, templates)
+    return module, preflight, module.FileRef.model_validate(module.ref(templates_path))
+
+
+@pytest.mark.parametrize("problem", ["undeclared", "source", "reason", "untyped_reason", "counts", "duplicate",
+                                     "unused_declaration", "available_empty", "none_interval", "unknown_with_interval", "audit_scope"])
+def test_unknown_price_audit_must_match_exact_source_reason_and_population(tmp_path, monkeypatch, problem):
+    module, preflight, templates = unknown_campaign_fixture(tmp_path, monkeypatch, problem)
+    with pytest.raises(ValueError):
+        module.freeze_continuous_campaign(preflight_ref=preflight, templates_ref=templates,
+                                           output_root=tmp_path / "output", producer_commit="1" * 40)
+    assert not (tmp_path / "output").exists()
+
+
+def test_unused_unknown_sell_template_does_not_block_any_account_day(tmp_path, monkeypatch):
+    from backend.services.strategy_package.models import StrategyPackageManifest
+
+    module, preflight, templates = unknown_campaign_fixture(tmp_path, monkeypatch)
+    inspected = module.inspect_price_templates(preflight, templates)
+    assert inspected["reference_counts"]["UNKNOWN"] == 1
+    monkeypatch.setattr(StrategyPackageManifest, "model_validate", lambda value: None)
+    frozen = module.freeze_continuous_campaign(preflight_ref=preflight, templates_ref=templates,
+                                                output_root=tmp_path / "output", producer_commit="1" * 40)
+    request = module.FileRef.model_validate(frozen["request"])
+    completed = module.run_continuous_campaign(request)
+    results = module.read_json(module.Path(completed["results"]["path"]))
+    assert len(results["accounts"]) == 12
+    for row in results["comparisons"]:
+        assert row["unavailable_parent_count"] == 0
+        assert row["parent_count"] == (2 if row["side"] != "SELL" else 0)
+        assert (row["filled_parent_count"] + row["partial_parent_count"] + row["no_fill_parent_count"]
+                == row["parent_count"])
+    retry = module.run_continuous_campaign(request)
+    assert retry["status"] == "ALREADY_MATERIALIZED" and retry["results"] == completed["results"]
+
+
+@pytest.mark.parametrize("rule", ["FIRST_OBSERVABLE_V1", "PRICE_TOUCH_V1", "BOUNDED_REVERSION_V1"])
+def test_actual_unknown_sell_preserves_quantity_account_and_core_contract(tmp_path, rule):
+    from backend.services.position_timing.intraday.price_plans import PriceReference, PricePlanPolicy, build_price_plan
+    from backend.services.simulation_execution.localsim import timing_campaign as module
+    from backend.services.simulation_execution.localsim.timing_portfolio import attach_native_quantity_evidence
+    from backend.services.trading_core.models import PositionLot
+
+    _, markets = pair()
+    symbol = next(iter(markets))
+    source_path = tmp_path / "reference.json"
+    module.publish(source_path, {"role": "FUNCTIONAL_UNKNOWN_REFERENCE"})
+    source_ref = module.FileRef.model_validate(module.ref(source_path))
+    day = markets[symbol].trade_date
+    built = build_price_plan(PriceReference(symbol=symbol, trade_date=day, reference_price_raw=None,
+                                            source_file=source_ref, source_available_at=at("09:00:00"),
+                                            reason_code="REFERENCE_NONFINITE"), "SELL", PricePlanPolicy(), at("09:00:00"))
+    template = module.PriceTemplateEvent.model_validate(built.event)
+    declaration = module.AuditedUnknownReference(symbol=symbol, trade_date=day, sides=("SELL",),
+                                                  availability=built.availability, reason_code=built.reason_code,
+                                                  source_file=source_ref)
+    account = {**initial(), "cash_cny": "100000", "positions": {
+        symbol: PositionLot(portfolio_id="functional_campaign", symbol=symbol, quantity=1000,
+                            available_quantity=1000, avg_cost=10,
+                            trade_date=day - timedelta(days=3)).model_dump(mode="json")}}
+    projection = {"manifest_sha256_by_package": {"FUNCTIONAL_FIXTURE": "a" * 64},
+                  "runtime_config": {"point_in_time_context": {"effective_trade_date": str(day), "cutoff_date": "2026-09-18"}},
+                  "aggregate_results": [], "valid_no_candidate": True, "no_candidate_reason": "NO_ELIGIBLE_CANDIDATES"}
+    prices = {s: Decimal("10") for s in markets}
+    backend, targets, native = compile_native_intents(projection=projection, manifest=None, account=account,
+                                                      markets=markets, prices=prices, cost=cost())
+    assert len(native.order_intents) == 1 and native.order_intents[0].quantity == 1000
+    events, unavailable = module.build_timing_plan_events(
+        intents=native.order_intents, series={(symbol, "SELL"): [template]}, rule=rule,
+        source_commit="1" * 40, day=day, quantity_source="f" * 64,
+        unknown_references={(symbol, "SELL"): declaration})
+    result = run_portfolio_day(backend=backend, markets=markets, events=events, initial_marks=prices,
+                               delay_seconds=60, run_id="functional_campaign")
+    attach_native_quantity_evidence(result, targets=targets, native=native, projection_ref={},
+                                     price_policy_sha256="a" * 64, unavailable=unavailable)
+    parent = result["account"]["parents"][0]
+    assert parent["requested_quantity"] == parent["legal_quantity"] == 1000
+    if rule == "PRICE_TOUCH_V1":
+        assert parent["status"] == "UNAVAILABLE" and parent["filled_quantity"] == 0
+        assert parent["order_created"] is False and not backend._records and not backend._ledger.fills
+        assert parent["price_reference_audit"]["source_file"] == source_ref.model_dump()
+        assert "REFERENCE_NONFINITE" in parent["reason_codes"]
+        assert Decimal(result["account"]["terminal_nav_cny"]) == 110000
+        assert backend._ledger.positions[symbol].quantity == 1000
+    else:
+        assert parent["status"] == "FILLED" and parent["filled_quantity"] == 1000
+        assert len(result["sessions"]) == 1 and len(backend._ledger.fills) == 1
+        assert result["sessions"][0].feedback(at("14:57:00")).confirmed_quantity == 1000
+    store = TimingFileRepository(tmp_path / "journal", "functional_campaign")
+    commit_portfolio_day(store=store, result=result, input_identity="f" * 64, day_index=0)
+    assert store.latest()["checkpoint"]["account"]["parents"][0] == parent
+    assert commit_portfolio_day(store=store, result=result, input_identity="f" * 64,
+                                day_index=0)["status"] == "ALREADY_MATERIALIZED"
