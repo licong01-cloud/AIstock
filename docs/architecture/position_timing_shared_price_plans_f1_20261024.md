@@ -1,6 +1,6 @@
 # LocalSIM连续研究共享价格计划 F1 设计
 
-日期：2026-10-24；状态：DESIGN_VERIFIED_IMPLEMENTATION_IN_PROGRESS。
+日期：2026-10-24；状态：TIMING_PRICE_INPUT_IMPLEMENTED_CONSUMER_DELTA_DOCUMENTED。
 基线：05ee0a292820f3b5c424c278af3378883d9773a6；上位：[分钟蓝图](position_timing_intraday_advice_localsim_blueprint_f2_20261023.md)。
 
 ## Background / Scope / Non-goals
@@ -52,12 +52,12 @@ CLI `build --preflight <绝对路径> --preflight-sha256 <完整SHA> --templates
 
 ## Design Acceptance Matrix
 
-DESIGN_VERIFIED仅表示设计闭合；开发后回填真实证据。消费者修改不是本次实现验收条款。
+本矩阵验收择时构造器、完整模板及最小接口差异；LocalSIM差异处理仍由其owner完成，不以本表宣称连续账户已可启动。真实文件身份和核验见[交付记录](../analysis/position_timing_shared_price_plans_delivery_20261024.md)。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | price_plans.py公共合同 | artifact:docs/architecture/position_timing_shared_price_plans_f1_20261024.md | DESIGN_VERIFIED | none |
-| F-002 | price_plan_campaign.py输入适配 | artifact:docs/architecture/position_timing_shared_price_plans_f1_20261024.md | DESIGN_VERIFIED | none |
-| F-003 | price_plan_campaign.py人口/未知审计 | artifact:docs/architecture/position_timing_shared_price_plans_f1_20261024.md | DESIGN_VERIFIED | none |
-| F-004 | price_plan_campaign.py不可变输出 | artifact:docs/architecture/position_timing_shared_price_plans_f1_20261024.md | DESIGN_VERIFIED | none |
-| F-005 | 本设计边界/消费差异 | artifact:docs/architecture/position_timing_shared_price_plans_f1_20261024.md | DESIGN_VERIFIED | none |
+| F-001 | intraday/price_plans.py::build_price_plan/PricePlanPolicy | backend/tests/position_timing/test_intraday_price_plans.py | VERIFIED | none |
+| F-002 | intraday/price_plan_campaign.py::_context/_References | backend/tests/position_timing/test_intraday_price_plans.py；artifact:docs/analysis/position_timing_shared_price_plans_delivery_20261024.md | VERIFIED | none |
+| F-003 | intraday/price_plan_campaign.py::build | backend/tests/position_timing/test_intraday_price_plans.py；artifact:docs/analysis/position_timing_shared_price_plans_delivery_20261024.md | VERIFIED | none |
+| F-004 | intraday/price_plan_campaign.py::build/inspect | backend/tests/position_timing/test_intraday_price_plans.py；artifact:docs/analysis/position_timing_shared_price_plans_delivery_20261024.md | VERIFIED | none |
+| F-005 | 本设计及交付记录的UNKNOWN接口差异 | artifact:docs/analysis/position_timing_shared_price_plans_delivery_20261024.md | VERIFIED | none |
