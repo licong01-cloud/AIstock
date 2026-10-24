@@ -12,33 +12,38 @@ if not exist "%AISTOCK_BACKEND_PYTHON%" (
   echo ERROR: AIstock Python not found: %AISTOCK_BACKEND_PYTHON%
   exit /b 1
 )
-if /i "%~1"=="--check" (
+if /i "%~1"=="--check" if "%~2"=="" (
   echo Backend-only launcher prerequisites found. No tab or service started.
   exit /b 0
 )
-if /i "%~1"=="--child" goto child
-if /i "%~1"=="--check-env" goto child
-if not "%~1"=="" (
-  echo ERROR: Usage: start_backend.bat [--check or --check-env]
-  exit /b 1
-)
-where wt.exe >nul 2>nul
-if errorlevel 1 (
-  echo ERROR: Windows Terminal is required for a new backend tab.
-  exit /b 1
-)
-REM Dispatch immediately, before Conda activation, like the original tab launcher.
-REM -w 0 selects the most recently active Windows Terminal window.
-wt.exe -w 0 new-tab --title "AIstock Backend" --suppressApplicationTitle --startingDirectory "%AIROOT%." cmd.exe /d /k call "%~f0" --child
-if errorlevel 1 (
-  echo ERROR: Failed to create backend tab. No fallback window or retry was started.
-  exit /b 1
-)
-echo Backend tab requested. Check its output for readiness or errors.
-exit /b 0
+if /i "%~1"=="--child" if not "%~2"=="" if "%~3"=="" goto child
+if /i "%~1"=="--check-env" if "%~2"=="" goto child
+if not "%~2"=="" goto usage
+if "%~1"=="" goto dispatch
+if /i "%~1"=="--restart" goto dispatch
+:usage
+echo ERROR: Usage: start_backend.bat [--restart or --check or --check-env]
+exit /b 1
+
+:dispatch
+cd /d "%AIROOT%" || exit /b 1
+REM The caller waits for a nonce-bound fresh-process health/identity receipt.
+"%AISTOCK_BACKEND_PYTHON%" -X utf8 "%AIROOT%scripts\backend_lifecycle.py" %*
+exit /b %errorlevel%
 
 :child
 cd /d "%AIROOT%" || exit /b 1
+call :activate
+set "AISTOCK_ACTIVATION_EXIT=%errorlevel%"
+if /i "%~1"=="--check-env" goto check_env
+if not "%AISTOCK_ACTIVATION_EXIT%"=="0" (
+  "%AISTOCK_BACKEND_PYTHON%" -X utf8 "%AIROOT%scripts\backend_lifecycle.py" --fail "%~2"
+  exit /b 1
+)
+"%AISTOCK_BACKEND_PYTHON%" -X utf8 "%AIROOT%scripts\backend_lifecycle.py" --serve "%~2"
+exit /b %errorlevel%
+
+:activate
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 set "PYTHONUNBUFFERED=1"
@@ -66,18 +71,9 @@ if not "%AISTOCK_CONDA_EXIT%"=="0" (
   echo ERROR: AIstock Conda activation failed. Backend not started.
   exit /b 1
 )
-if /i "%~1"=="--check-env" goto check_env
-REM Bind without listening, then close: refuse an occupied port, never stop its owner.
-"%AISTOCK_BACKEND_PYTHON%" -X utf8 -c "import socket; s=socket.socket(); s.setsockopt(socket.SOL_SOCKET,socket.SO_EXCLUSIVEADDRUSE,1); s.bind(('0.0.0.0',8001)); s.close()"
-if errorlevel 1 (
-  echo ERROR: Port 8001 unavailable. Close the old backend tab first. No process was stopped.
-  exit /b 1
-)
-"%AISTOCK_BACKEND_PYTHON%" -X utf8 -m uvicorn backend.main:app --host 0.0.0.0 --port 8001
-set "AISTOCK_EXIT=%errorlevel%"
-echo Backend exited with code %AISTOCK_EXIT%.
-exit /b %AISTOCK_EXIT%
+exit /b 0
 
 :check_env
+if not "%AISTOCK_ACTIVATION_EXIT%"=="0" exit /b %AISTOCK_ACTIVATION_EXIT%
 "%AISTOCK_BACKEND_PYTHON%" -X utf8 -c "import os,sys; assert os.path.normcase(sys.prefix)==os.path.normcase(os.environ['CONDA_PREFIX']); print('AIstock environment ready: '+sys.prefix)"
 exit /b %errorlevel%
