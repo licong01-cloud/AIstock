@@ -1,11 +1,9 @@
 {
   "actual": "hmm_risk_backend timeout1800 duration1801.844",
   "allowed_write_scope": [
-    "noxfile.py",
-    "backend/tests/test_noxfile_validation_env.py",
-    "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_supervised.py",
-    "backend/tests/hmm_risk/test_rotation_l2_moneyflow_price_return_supervised.py",
-    "tests/aistock_validation/bugs/20261020_BUG-2031-hmm-nightly-full-regression-still-exceeds-1800-seconds-after-previous-fi.json"
+    "tests/aistock_validation/catalog/test_plans.yaml",
+    "tests/aistock_validation/bugs/20261020_BUG-2031-hmm-nightly-full-regression-still-exceeds-1800-seconds-after-previous-fi.json",
+    "backend/tests/scripts/test_nightly_adaptive_scheduler.py"
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2031",
@@ -264,5 +262,21 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "scope_expansion_reason": "Full coverage suite reaches80percent at1800s after prior fixture optimization; exact fresh-child node passes. Calibrate finite full-suite budget to3600s, retaining70percent branch coverage, real fresh child processes, numeric limits, and overall Nightly6300s cap. Complete Nightly receipt required for closure.",
+  "nightly_followup_evidence": {
+    "run_id": "39837282906",
+    "completed_progress_percent": 80,
+    "timeout_seconds": 1800,
+    "active_node": "backend/tests/hmm_risk/test_rotation_l2_moneyflow_supervised.py::test_child_fresh_process_reproduction_is_real",
+    "isolated_profiled_node_result": "1 passed in52.35s",
+    "rejected_optimization": "numeric conversion cache: unprofiled0.974s before vs1.083s after; reverted",
+    "acceptance": "Full coverage and real child processes retained; full completed session receipt still required"
+  },
+  "design_compliance_review": {
+    "scope": "Full-suite budget calibration only; full Nightly receipt pending",
+    "failure_semantics": "Finite3600s budget; coverage and failure exits retained",
+    "business_semantics": "No business source or fit thresholds changed",
+    "new_gates": "None"
   }
 }

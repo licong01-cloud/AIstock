@@ -8,6 +8,37 @@ import pytest
 from scripts import nightly_adaptive_scheduler as scheduler
 
 
+@pytest.mark.parametrize("full_run", [False, True])
+def test_retired_simulation_cannot_enter_nightly_from_changes_or_retry(monkeypatch, full_run):
+    retired = scheduler.RETIRED_SIMULATION_PLANS
+    keys = {*retired, "simulation_core_l2", "localsim_unattended_l3"}
+    plans = {key: dict(enabled=True, runner_enabled=True, nox_session=key, max_duration_seconds=300)
+             for key in keys}
+    monkeypatch.setattr(scheduler.issue_flow, "_plans_by_key", lambda: plans)
+    monkeypatch.setattr(scheduler.issue_flow, "select_validation", lambda _: {
+        "required_plans": list(keys), "ownership": {},
+    })
+    plan = scheduler.build_nightly_execution_plan(
+        ["backend/services/simulation_runtime/models.py"], full_run=full_run,
+        retry_context={"failed_sessions": list(keys)},
+    )
+    assert set(plan["selected_sessions"]) == {"simulation_core_l2", "localsim_unattended_l3"}
+    assert set(plan["excluded_retired_simulation_retry_sessions"]) == retired
+
+
+def test_exhausted_transport_cli_records_failure_without_fabricating_sessions(tmp_path):
+    import subprocess
+    import sys
+    proc = subprocess.run([sys.executable, str(scheduler.ROOT / "scripts/ci_failure_issue_summary.py"),
+                           "--artifact-transport-output", "tmp/validation/nightly_failure_issue/artifact-transport.json",
+                           "--run-id", "9001", "--commit", "a" * 40,
+                           "--download-outcome", "failure", "--retry-download-outcome", "failure"], cwd=tmp_path,
+                          capture_output=True, text=True, timeout=10)
+    assert proc.returncode == 1
+    assert (tmp_path / "tmp/validation/nightly_failure_issue/artifact-transport.json").is_file()
+    assert not list(tmp_path.rglob("session-results.json"))
+
+
 def test_nightly_adaptive_scheduler_baseline_without_changes_or_failures(tmp_path: Path) -> None:
     output = tmp_path / "scheduler.json"
     markdown = tmp_path / "scheduler.md"
@@ -604,7 +635,7 @@ def test_nightly_replaces_hmm_pr_slice_with_full_coverage_plan() -> None:
     assert "hmm_risk_pr_slice" not in plan["selected_sessions"]
     assert "hmm_risk_backend" in plan["selected_plan_keys"]
     assert "hmm_risk_backend" in plan["selected_sessions"]
-    assert plan["session_timeout_seconds"]["hmm_risk_backend"] == 1800
+    assert plan["session_timeout_seconds"]["hmm_risk_backend"] == 3600
     assert set(plan["session_timeout_seconds"]) == set(plan["selected_sessions"])
 
 
@@ -761,7 +792,7 @@ def test_nightly_workflow_wires_warning_only_adaptive_scheduler_job() -> None:
     assert "steps.download_nightly_l3.outcome == 'failure'" in workflow
     assert "id: retry_download_nightly_l3" in workflow
     assert "Materialize exhausted Nightly artifact transport receipt" in workflow
-    assert '"failure_kind": "artifact_transport"' in workflow
+    assert "--artifact-transport-output" in workflow
     assert "id: upload_nightly_failure_context" in workflow
     assert "steps.upload_nightly_failure_context.outcome == 'failure'" in workflow
     assert "id: upload_nightly_bug_promotion" in workflow

@@ -1,8 +1,7 @@
 {
   "actual": "duration182.438 timeout_seconds180",
   "allowed_write_scope": [
-    "noxfile.py",
-    "backend/tests/test_noxfile_validation_env.py",
+    "tests/aistock_validation/catalog/test_plans.yaml",
     "tests/aistock_validation/bugs/20261020_BUG-2032-advisory-nightly-full-regression-times-out-without-per-node-diagnostics.json"
   ],
   "assigned_agent": null,
@@ -258,5 +257,21 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
+  },
+  "nightly_followup_evidence": {
+    "run_id": "39837282906",
+    "completed_progress_percent": 37,
+    "timeout_seconds": 180,
+    "active_node": "backend/tests/advisory_model_first/test_economic_sector_path_price_pipeline_v1.py::test_prepare_zero_SQL_original_labels_unknown_retry_partial_and_tamper",
+    "isolated_profiled_node_result": "1 passed in7.97s;call2.47s;predecessor setup2.19s",
+    "finding": "Cumulative full-suite time; 89 publish_stage and178 read_stage calls in exact node setup. No fixed hang reproduced.",
+    "acceptance": "Keep all cases and numeric pool limits; require completed full session receipt"
+  },
+  "scope_expansion_reason": "Current full suite reaches37percent at180s; exact node passes. Preserve every test and subprocess numeric limits, calibrate finite full-regression budget to900s while Nightly total6300s remains unchanged. Complete Nightly receipt required before closure.",
+  "design_compliance_review": {
+    "scope": "Full-suite budget calibration only; completed full Nightly receipt pending",
+    "failure_semantics": "Finite900s budget and6300s Nightly cap retained",
+    "business_semantics": "All tests and numerical thread limits retained",
+    "new_gates": "None"
   }
 }
