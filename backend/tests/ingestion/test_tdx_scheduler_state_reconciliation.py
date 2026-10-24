@@ -689,6 +689,22 @@ def test_go_provider_population_includes_real_ipo_quotes_without_widening_buy_po
     assert scheduler._go_provider_codes(dt.date(2026, 10, 15), dt.date(2026, 10, 15)) == ["301569.SZ", "920162.BJ"]
 
 
+def test_go_default_population_ends_before_delisting_effective_day_but_keeps_quote_evidence():
+    scheduler = TDXScheduler.__new__(TDXScheduler)
+
+    def fetch(sql, params):
+        assert "delist_date>start_day" in sql
+        assert "delist_date>=start_day" not in sql
+        assert "k.trade_date BETWEEN start_day AND end_day" in sql
+        assert "k.volume_hand>0 OR k.volume_shares>0" in sql
+        assert "stock_universe" not in sql and "list_status='L'" not in sql
+        assert params == (dt.date(2026, 10, 23), dt.date(2026, 10, 23))
+        return [{"ts_code": "000001.SZ"}]
+
+    scheduler._fetchall = fetch
+    assert scheduler._go_provider_codes(dt.date(2026, 10, 23), dt.date(2026, 10, 23)) == ["000001.SZ"]
+
+
 def test_go_provider_population_excludes_b_shares_from_both_source_branches():
     scheduler = TDXScheduler.__new__(TDXScheduler)
 
