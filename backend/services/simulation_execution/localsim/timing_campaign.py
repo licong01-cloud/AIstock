@@ -257,7 +257,8 @@ def freeze_continuous_campaign(*, preflight_ref: FileRef, templates_ref: FileRef
     for row in preflight["initial_accounts"]:
         item = FileRef.model_validate(row)
         account = read_json(checked_file(item))
-        if (account["cash_cny"] != "10000000" or account["origin_initial_cash_cny"] != "10000000"
+        if (Decimal(account["cash_cny"]) != Decimal("10000000")
+                or Decimal(account["origin_initial_cash_cny"]) != Decimal("10000000")
                 or account["positions"] or account["fills"] or account["production_account_created"]
                 or account["manifest_sha256"] != preflight["manifest_sha256"]
                 or account["package_id"] != preflight["package_id"]):

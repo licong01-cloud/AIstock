@@ -266,7 +266,7 @@ def test_portfolio_cancel_handle_reaches_only_the_matching_native_parent():
     assert backend._ledger.cash_decimal == Decimal("100000")
 
 
-def price_campaign_fixture(tmp_path, monkeypatch, *, two_days=False):
+def price_campaign_fixture(tmp_path, monkeypatch, *, two_days=False, cash="10000000"):
     """Synthetic file-contract fixture; never a real annual study artifact."""
     from datetime import date
     from pathlib import Path
@@ -338,7 +338,7 @@ def price_campaign_fixture(tmp_path, monkeypatch, *, two_days=False):
         for delay in module.DELAYS:
             account = {"account_id": "functional_" + digest([rule, delay])[:24],
                        "package_id": "FUNCTIONAL_FIXTURE", "manifest_sha256": manifest_sha,
-                       "rule": rule, "delay_seconds": delay, "cash_cny": "10000000",
+                       "rule": rule, "delay_seconds": delay, "cash_cny": cash,
                        "origin_initial_cash_cny": "10000000", "positions": {}, "fills": [],
                        "production_account_created": False}
             initials.append(put("initials/" + account["account_id"] + ".json", account))
@@ -367,6 +367,20 @@ def test_entire_price_batch_is_inspected_before_freezing_account_request(tmp_pat
     assert frozen["account_count"] == 12
     assert frozen["status"] == "FROZEN"
     assert not list((tmp_path / "output").rglob("continuous_results.json"))
+
+
+@pytest.mark.parametrize("cash", ["10000000.00", "10000000.0", "10000001", "9999999.99"])
+def test_native_decimal_cash_representation_does_not_change_initial_capital(tmp_path, monkeypatch, cash):
+    module, preflight, templates, _ = price_campaign_fixture(tmp_path, monkeypatch, cash=cash)
+    if Decimal(cash) == Decimal("10000000"):
+        frozen = module.freeze_continuous_campaign(preflight_ref=preflight, templates_ref=templates,
+                                                    output_root=tmp_path / "output", producer_commit="1" * 40)
+        assert frozen["status"] == "FROZEN" and frozen["account_count"] == 12
+    else:
+        with pytest.raises(ValueError, match="INITIAL_ACCOUNT_CONFLICT"):
+            module.freeze_continuous_campaign(preflight_ref=preflight, templates_ref=templates,
+                                               output_root=tmp_path / "output", producer_commit="1" * 40)
+        assert not (tmp_path / "output").exists()
 
 
 @pytest.mark.parametrize("problem", [None, "missing_held_sell", "missing_current_buy"])

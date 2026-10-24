@@ -166,6 +166,6 @@ database_read/write=false；dataset_mutation=false；live_market_network=false�
 | F-009 | WSL离线验证及审计钩子 | artifact: X:/AIstock_temp/localsim-position-timing/native-quantity-validation-r2.json；数据库/数据集/行情/服务操作均false | PASS | - |
 | F-010 | localsim/timing_campaign.py；本报告第7节 | artifact: X:/AIstock_temp/localsim-position-timing/campaign-preflight-metrics-r1.json；181日/9050目标及12初态已冻结 | BLOCKED | PR #6671 合同已返回；消费适配及12账户真实连续研究尚待完成，不能合入结项 |
 | F-011 | localsim/timing_campaign.py/timing_portfolio.py/runtime.py | artifact: X:/AIstock_temp/localsim-position-timing/direct-validation-r3.json；59项，12账户×2日恢复，真实首日50目标数量规划 | PASS | - |
-| F-012 | localsim/timing_campaign.py/timing_portfolio.py | pytest：74项直接回归通过；shared-price-inspection-r4.json：真实181日/73997事件及14 UNKNOWN整批通过 | PASS | - |
+| F-012 | localsim/timing_campaign.py/timing_portfolio.py | pytest backend/tests/simulation_execution/test_localsim_timing_campaign.py -q；artifact: X:/AIstock_temp/localsim-position-timing/shared-price-inspection-r4.json：真实181日/73997事件及14 UNKNOWN整批通过 | PASS | - |
 
 F-011只验收消费能力、功能不变量与原生数量规划，不代替F-010真实历史模拟。F2完整范围仍不满足合入条件，PR保留草稿。源码、离线研究、运行激活和经济效果必须分别报告。
