@@ -53,25 +53,25 @@
   "expected": "Full available suspension facts remain readable after PIT exit; historical source additions are not discarded by month append; same-day event conflicts retain strict semantics.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261024_BUG-2089-suspension-facts-remain-clipped-by-legacy-buy-pit-and-incomplete-monthly.json",
       "backend/services/dataset_release/direct_monthly.py",
       "backend/services/dataset_release/monthly_shared_components.py",
       "backend/services/dataset_release/monthly_source_progress.py",
       "backend/services/dataset_release/monthly_suspension_adoption.py",
       "backend/tests/dataset_release/test_direct_monthly.py",
       "backend/tests/dataset_release/test_monthly_construction_facts.py",
-      "backend/tests/dataset_release/test_monthly_shared_components.py"
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "tests/aistock_validation/bugs/20261024_BUG-2089-suspension-facts-remain-clipped-by-legacy-buy-pit-and-incomplete-monthly.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261024_BUG-2089-suspension-facts-remain-clipped-by-legacy-buy-pit-and-incomplete-monthly.json",
       "backend/services/dataset_release/direct_monthly.py",
       "backend/services/dataset_release/monthly_shared_components.py",
       "backend/services/dataset_release/monthly_source_progress.py",
       "backend/services/dataset_release/monthly_suspension_adoption.py",
       "backend/tests/dataset_release/test_direct_monthly.py",
       "backend/tests/dataset_release/test_monthly_construction_facts.py",
-      "backend/tests/dataset_release/test_monthly_shared_components.py"
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "tests/aistock_validation/bugs/20261024_BUG-2089-suspension-facts-remain-clipped-by-legacy-buy-pit-and-incomplete-monthly.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -190,8 +190,8 @@
   },
   "first_seen_at": "2026-10-24T17:57:49.302967Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "e6f10ca3089965f3af6baea16a4624d73dc9637d",
+  "fixed_at": "2026-10-24T18:43:52Z",
   "github_issue_number": 6682,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6682",
   "last_seen_at": "2026-10-24T17:57:49.302967Z",
@@ -199,6 +199,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6685",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -221,6 +222,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -232,7 +234,31 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2089",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5ae3edd629b9f577",
+    "recorded_at": "2026-10-24T18:44:27.898492Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "58b017d0b0297ca74a18bd308b19cc99c016ff27",
+    "source_merge_commit": "e6f10ca3089965f3af6baea16a4624d73dc9637d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6685",
+    "validation_evidence": [
+      "validation-receipt: id=9d5d023240770d12 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/dataset_release/test_direct_monthly.py backend/tests/dataset_release/test_monthly_construction_facts.py backend/tests/dataset_release/test_monthly_shared_components.py` result=`106 passed`",
+      "validation-receipt: id=af6356cec404d5e4 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=nox plan=l0 status=passed command=`nox -s l0` result=`passed`",
+      "validation-receipt: id=ef0f8fd3de066c55 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=ruff plan=direct status=passed command=`ruff check changed files` result=`passed`",
+      "validation-receipt: id=c6fa5ce26629dbc6 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/dataset_release/test_monthly_shared_components.py -k 'prefix or materializes_missing or amendment_can_follow'` result=`7 passed`"
+    ],
+    "validation_evidence_digest": "922ab31ac6e5d94f4ef8ab56d1a272ec995cbb72b6d401dc87bfe3afb9885f7b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -241,6 +267,12 @@
     "fingerprint": "a6f9ca8788f93cc766f814aa",
     "source_event_id": "FE-20261024-a6f9ca8788f9"
   },
+  "validation_evidence": [
+    "validation-receipt: id=9d5d023240770d12 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/dataset_release/test_direct_monthly.py backend/tests/dataset_release/test_monthly_construction_facts.py backend/tests/dataset_release/test_monthly_shared_components.py` result=`106 passed`",
+    "validation-receipt: id=af6356cec404d5e4 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=nox plan=l0 status=passed command=`nox -s l0` result=`passed`",
+    "validation-receipt: id=ef0f8fd3de066c55 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=ruff plan=direct status=passed command=`ruff check changed files` result=`passed`",
+    "validation-receipt: id=c6fa5ce26629dbc6 commit=58b017d0b0297ca74a18bd308b19cc99c016ff27 kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/dataset_release/test_monthly_shared_components.py -k 'prefix or materializes_missing or amendment_can_follow'` result=`7 passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
