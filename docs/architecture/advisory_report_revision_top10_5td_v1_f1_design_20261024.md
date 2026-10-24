@@ -1,6 +1,6 @@
 # 下一年度同机构EPS修正代理 Top10 固定五交易日研究（F1）
 
-版本v1.0；2026-10-24；Advisory / model_first。P10无标签输入审查通过，本文件冻结唯一候选和新六fit预算；设计交付不等于实现、训练、盈利确认或生产接入。用户授权一个长任务按顺序完成、多轮审核修复后直接提交合入；后端重启由用户执行。
+版本v1.1；2026-10-24；Advisory / model_first。设计PR#6670合入424265b65cb22a4dfd4ab9d75e68f73a05badfb6。24直接合同节点和一次真实六fit研究完成，结果INNER_NOT_SUPPORTED：原生增量−7.644913bps、matched增量−2.156612bps。累计231实际研究fit＋1旧index；无outer、经济确认或生产接入。源码PR/CI/合入另报，后端重启由用户执行，本次离线源码无需重启。
 
 ## Background / Goal / Feature Card
 
@@ -43,7 +43,7 @@
 
 固定Ridge(alpha=100,solver=lsqr,tol=1e-6,max_iter=2000,fit_intercept=False)。训练内逐列median/IQR；IQR为0且非恒定用population std，否则scale1；训练全缺列停用，missing bit显式保留。编码后包/D中心化X/Y；D等权、D内包等权、包内监督行等权。平手沿原rank，不搜索参数、窗口、符号、预测期、时钟或包。
 
-每折两臂预测原子发布后，才读取该折成熟评价值。独占STARTED claim后fit；中断未发布fit不自动重拟合。源码commit、实现闭包、环境、父stage/binding、screen/规则/源身份固定。只读prepared/train_finance，拒绝outer及任何end/cutoff>2025-09-30；不提供final/sealed路径。六fit完成后累计231实际研究fit＋1旧index，当前设计时仍225＋1。
+每折两臂预测原子发布后，才读取该折成熟评价值。独占STARTED claim后fit；中断未发布fit不自动重拟合。源码commit、实现闭包、环境、父stage/binding、screen/规则/源身份固定。只读prepared/train_finance，拒绝outer及任何end/cutoff>2025-09-30；不提供final/sealed路径。本次六fit已完成，累计231实际研究fit＋1旧index；设计冻结时为225＋1。
 
 ## Evaluation / 经济终点及停止规则
 
@@ -90,14 +90,42 @@
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-501 | 本文Background/Feasibility | artifact: signal_contract、screen_receipt、screen_tests、audit_receipt位于本轮X证据根 | DESIGN_AND_INPUT_PASS | none |
-| F-502 | 本文Input/Scope | artifact: 冻结输入合同、原身份digest及128stock-D/250有效对审核 | DESIGN_COMPLETE_IMPLEMENTATION_PENDING | approved_by_user: 设计先独立合入，完整输入实现及跨节点验证随后完成 |
-| F-503 | 本文Model | artifact: 三折/两臂/成熟H/编码/新预算完整定义 | DESIGN_COMPLETE_IMPLEMENTATION_PENDING | approved_by_user: 尚未训练，当前实际225fit＋1旧index |
-| F-504 | 本文Evaluation | artifact: 主要原生净终点与支持/停止条件冻结 | DESIGN_COMPLETE_RESEARCH_PENDING | approved_by_user: 尚未读取收益，经济结果待唯一有界研究 |
-| F-505 | 本文Scope/Operations | artifact: 精确源码范围、WSL/身份/claims/资源约束 | DESIGN_COMPLETE_IMPLEMENTATION_PENDING | approved_by_user: 后续实现不能省略已冻结规则 |
-| F-506 | 本文Verification/Production Gates | artifact: 两轮设计自审、F1/F2/diff验证及阶段交付收据 | DESIGN_ONLY_NOT_PRODUCTION_READY | approved_by_user: 用户已授权后续实现与合入，运行/经济验收分态 |
+| F-502 | inputs.stock_context/read_panel/verify_screen_alignment | backend/tests/advisory_model_first/test_report_revision_top10_5td_v1.py；30,500原行/5数值列/4精确列跨节点逐bit对齐 | SOURCE_AND_REAL_INPUT_PASS | none |
+| F-503 | core.training/fit/predict | backend/tests/advisory_model_first/test_report_revision_top10_5td_v1.py；六真实fit、三折两臂共同KEY/编码/监督数审计 | SOURCE_AND_SIX_FITS_PASS | none |
+| F-504 | pipeline.finance/fit_pair及core.summarize | backend/tests/advisory_model_first/test_report_revision_top10_5td_v1.py；文末结果与独立算术读回 | RESEARCH_COMPLETE_INNER_NOT_SUPPORTED | none |
+| F-505 | pipeline.Study/preregister/run及inputs.sources | backend/tests/advisory_model_first/test_report_revision_top10_5td_v1.py；十stage及6STARTED/6FINISHED、源SHA/lease读回 | SOURCE_AND_REAL_STAGE_PASS | none |
+| F-506 | 本文Scope/Execution Result/Production Gates | artifact: 本轮X根validation_receipt.json、research_audit_receipt.json、review_receipt.md；24直接节点/三轮源码与结果自审 | OFFLINE_RESEARCH_COMPLETE_NOT_ACTIVATED | none |
 
 ## Non-goals / Risks / Production Gates / DESIGN-COMPLIANCE-001
 
 0生产DB/DDL/DML、0采集/数据集切换/服务控制/激活；production_ddl_gate=noop、dependency_gate=noop、backend_restart_required=false。仅Advisory离线；不改QE/HMM/Selection/StrategyPackage/LocalSIM、价格/Exit/仓位、LLM研报正文分析、流水线或启动脚本。用户另行确认生产持久化与业务接入。
 
-设计符合性逐项：只声明设计和输入审查完成，未用局部/mock替代模型交付；未知和异常不伪成功；原人口/5TD/费用/经济标准不改；不新增设计外审批或阻断。六fit失败或阴性均可真实结束；稀疏覆盖、机构选择、供应商修订、未验证股本/时区及反复消费窗口限制须随结果保留。
+设计符合性逐项：设计、源码及一次真实六fit研究完整完成，阴性按预声明停止分支交付，未用局部/mock替代模型交付；未知和异常不伪成功；原人口/5TD/费用/经济标准不改；不新增设计外审批或阻断。六fit失败或阴性均可真实结束；稀疏覆盖、机构选择、供应商修订、未验证股本/时区及反复消费窗口限制须随结果保留。
+
+## Execution Result / 唯一六fit研究及确认价值评审
+
+clean producer `d9df06412e9d8529ff1c57595f4acff2969cded0`；实现闭包SHA256 `28baf19d84dd22e67b65c563541fc20705e17a7e6e8a91379afd99b2c9a56c4f`。唯一run `advreportrevisiontop10_24550edf4d65fadf24da1cb7`，位于本轮X根/study/。result SHA256 `6af4833aa1a6ef16f45f9395a08847bc718a5a97a2b3d8293c9a161b3f07fb73`。WSL fresh import来自本树；运行前两项公开QE running查询各0，WSL可用59,713,118,208bytes/28CPU，本次2线程/noGPU，不控制其它任务。
+
+原305D/30,500行完整保留，28,119唯一stock-D，6,831可算/23,669 UNKNOWN。WSL重算与P10全开发期5个数值列、4个状态/trace/预测期列完全对齐；实际逐bit相同，不依赖事前1e-12容差掩盖偏差。prepare105.074377秒；全研究110.879157秒、峰值1,005,666,304bytes、终态目录30,846,507bytes。源/规则/screen身份终态回查通过。
+
+三折两臂成熟共同训练4,153/4,695/5,729行、174/214/257D，训练KEY与共同列median/scale一致；matched迭代10/10/10，candidate11/11/11。真实6STARTED/6FINISHED，十个stage链及每折原预测/未知槽/固定十槽全部读回通过；没有中断重拟合。直接测试24节点通过：首轮19通过，C盘临时路径相关失败移到明确X盘目录验证，reader超窗负例修正D/T一致性后通过；新增同stat内容篡改测试通过。不放宽研究路径约束，不重复全套测试。
+
+| 预声明评价项 | 实际结果 |
+|---|---|
+| 原评价 / 成熟 / 三臂两包共同完整 | 126D、252包D、12,600原行；111成熟D，101共同完整D，90.9910%覆盖 |
+| 原生 / matched / candidate均值 | 103.774553 / 98.286253 / 96.129640bps/5TD cohort |
+| candidate−原生主终点 | **−7.644913bps**；描述性95%[-23.560736,+6.395927]，MDE80=21.529874bps |
+| 三折原生增量 | −17.846256 / +9.354378 / −17.932795bps，仅一折正 |
+| candidate−matched解释项 | **−2.156612bps**；95%[-8.210800,+3.383289]；三折−5.498560/−0.820782/−1.293793 |
+| 两包原生增量 | TCN−9.797404、LSTM−5.492423bps，均负，未择包 |
+| 真实原生 / matched干预 | 90/111成熟D（81.0811%）/64/111成熟D（57.6577%），原生跨两季度 |
+| 尾部 / UNKNOWN | 最差10%cohort差+8.758772bps；原生与candidate未知槽各326，额外UNKNOWN=0 |
+| 编码后EPS代理系数 | −25.916002 / −25.734043 / −16.631537，仅描述，不翻符号重试 |
+
+`research_audit_receipt.json`用已发布cohort按两包等权、共同日等权另算主均值/三折/干预及分类，和运行回执一致，0新fit/新收益源读取。它是同窗口不同算术实现复核，不是独立外审或独立OOS。Ruff、语法、ownership4/4、两L0通过；一P2监督merge复杂度警告已核对精确KEY、one_to_one和<=30,500行边界。设计两轮、源码两轮、实际结果第三轮逐项自审，未改冻结规则。
+
+按事前合同 **INNER_NOT_SUPPORTED**，`supports_future_confirmation_design=false`、`proceed_outer=false`。主均值非正且仅一折正是停止原因；区间跨零不是新增门槛，matched负和系数负只作解释。该结果不能简单归因于“缺数据或没有发生重排”：支持与干预均够用，成本后增量未实现；也不证明全部研报信息或机器学习排序无效。
+
+本精确候选停止，不做final/outer/第七fit，不换预测期/滞后/模型、挑包或要求数据owner为阴性重采同版本。文件消费PASS、NON_VINTAGE探索READY保持，无新的数据交付缺陷。确认阶段不推进：经济支持本已未达标，且该305D重复消费，文件历史首次公开/股本口径未知，不能用已消费outer或新目录换取独立性。生产持久化不是本次问题的解决办法；不生成需要用户重启的部署。
+
+后续仍以重排序为唯一研究主线，但本轮没有自动备用候选。下一次立项须先提出真正不同、可追溯信息的单一业务假设，并与这次EPS修正及既有量价/同群研究查重；本实验不转为同族参数搜索或并行价格/Exit研究。保留可复用的原人口、时钟/配对验证、未知原槽、成熟训练与评价能力；源码可合入不代表模型应接入荐股。
