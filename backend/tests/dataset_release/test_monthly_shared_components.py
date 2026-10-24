@@ -84,7 +84,7 @@ def test_suspension_adoption_route_marks_only_suspension_changed_and_is_idempote
 
 
 @pytest.fixture
-def correction(tmp_path):
+def correction(tmp_path, request):
     old, new = tmp_path / "old", tmp_path / "new"
     raw = [{"ts_code": "603056.SH", "trade_date": "2026-01-09", "suspend_type": "S", "suspend_timing": "13:00-9:30"}]
     frame = pd.DataFrame(raw).assign(trade_date=lambda f: pd.to_datetime(f.trade_date))
@@ -101,6 +101,13 @@ def correction(tmp_path):
     pins = {p: {"path": p, **file_pin(old / p)} for p in (PARQUET, META, cal)}
     manifest = signed_manifest({"components": pins, "cutoff_trade_date": "2026-09-30", "release_id": "release",
         "revision": "base", "source_contract": {"original": True}})
+    if getattr(request, "param", False):
+        for relative in (SOURCE, REPORT):
+            write(old / relative, {"previous": True})
+            pins[relative] = {"path": relative, **file_pin(old / relative)}
+        manifest["source_contract"]["suspension_amendment"] = {
+            "predecessor_manifest_sha256": "f" * 64, "receipt_sha256": pins[REPORT]["sha256"]}
+        signed_manifest(manifest)
     write(old / "qe_dataset_manifest.json", manifest)
     source = {"captured_at": "2026-10-24T03:00:00+08:00", "authority": load_authority(),
         "authority_sha256": digest(load_authority()), "raw_provider_events": raw, "database_write": False}
@@ -136,6 +143,13 @@ def correction(tmp_path):
         "database_write": False, "active_profile_write": False, "runtime_action": False, "price_export_performed": False}
     return dict(predecessor_root=old, predecessor_profile=profile, candidate=new, profile=target_profile, manifest=successor,
         evidence={SCHEMA: report, READBACK: proof}, required_nodes=("controller", "wsl2-5080", "rdagent-node1"))
+
+
+@pytest.mark.parametrize("correction", [True], indirect=True)
+def test_suspension_amendment_can_follow_an_immutable_suspension_amendment(correction):
+    before = (correction["predecessor_root"] / "qe_dataset_manifest.json").read_bytes()
+    validate_suspension_adoption(**correction)
+    assert (correction["predecessor_root"] / "qe_dataset_manifest.json").read_bytes() == before
 
 
 @pytest.mark.parametrize("corruption", [None, "source", "bytes", "unrelated", "profile", "node", "missing_node", "policy", "proof_keys", "controller_path", "node_path"])
@@ -260,7 +274,7 @@ def test_suspend_export_resolves_only_disclosure_backed_mixed_events(tmp_path, s
         return
     parquet, meta, keys, _count = _build_suspend(**kwargs)
     frame = pd.read_parquet(parquet)
-    evidence = json.loads(meta.read_text())
+    evidence = json.loads(meta.read_text(encoding="utf-8"))
     assert len(frame) == 1 and keys == {(symbol, day)}
     assert frame["suspend_timing"].isna().all()
     assert len(evidence["raw_provider_events"]) == 2
@@ -382,6 +396,43 @@ def test_native_suspend_keeps_pinned_prefix_and_checks_only_new_month(tmp_path):
     assert readback["historical_values_validated"] == 0
     assert readback["row_count"] == 2
     assert readback["daily_row_counts"] == {"2026-08-31": 1, "2026-09-01": 1}
+    assert hashlib.sha256((old_root / "suspend.parquet").read_bytes()).hexdigest() == prefix.manifest["components"]["suspend_data"]["sha256"]
+
+
+@pytest.mark.parametrize("kind,expected", [("S", 1), ("R", 0), ("mixed", None)])
+def test_suspend_month_materializes_missing_historical_facts_outside_buy_pit(tmp_path, kind, expected):
+    old_root = tmp_path / "august"
+    old_root.mkdir()
+    old = pd.DataFrame([{"trade_date": pd.Timestamp("2026-05-08"), "ts_code": "000005.SZ",
+                         "suspend_type": "S", "suspend_timing": None}])
+    old.to_parquet(old_root / "suspend.parquet", index=False)
+    (old_root / "meta.json").write_text(json.dumps({"end": "2026-08-31", "row_count": 1,
+        "daily_row_counts": {"2026-05-08": 1, "2026-08-31": 0}}), encoding="utf-8")
+    def pin(name):
+        path = old_root / name
+        return {"path": name, "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "size": path.stat().st_size}
+    prefix = SimpleNamespace(root=old_root, cutoff=date(2026, 8, 31), manifest_sha256="a" * 64,
+        manifest={"components": {"suspend_data": pin("suspend.parquet"), "suspend_meta": pin("meta.json")}})
+    day = date(2026, 5, 8)
+    symbol = "000005.SZ" if kind == "R" else "601010.SH"
+    rows = [dict(ts_code=symbol, trade_date=day, suspend_type=k, suspend_timing=None)
+            for k in (("S", "R") if kind == "mixed" else (kind,))]
+    kwargs = dict(root=tmp_path / "september", rows=rows, pit_rows=[],
+        calendar=(day, date(2026, 8, 31), date(2026, 9, 1)),
+        profile=SimpleNamespace(start_date=date(2018, 8, 1), universe_key="pit"),
+        cutoff=date(2026, 9, 1), prefix=prefix)
+    if expected is None:
+        with pytest.raises(MonthlySharedComponentsError, match="unresolved suspension"):
+            _build_suspend(**kwargs)
+        assert not (kwargs["root"] / "components").exists()
+        return
+    parquet, meta, _keys, count = _build_suspend(**kwargs)
+    frame = pd.read_parquet(parquet)
+    assert len(frame[frame.ts_code.eq(symbol)]) == expected
+    assert count == 1
+    readback = json.loads(meta.read_bytes())
+    assert readback["raw_provider_events"] == [dict(r, trade_date=day.isoformat()) for r in rows]
+    assert readback["daily_row_counts"][day.isoformat()] == len(frame)
     assert hashlib.sha256((old_root / "suspend.parquet").read_bytes()).hexdigest() == prefix.manifest["components"]["suspend_data"]["sha256"]
 
 
