@@ -95,6 +95,15 @@ def test_month_source_requests_never_iterate_old_quote_partitions():
     assert params["start"] == date(2018, 8, 1)
 
 
+def test_month_source_keeps_sparse_suspension_history_without_historical_price_audit():
+    authority = _authority(monthly=True)
+    requests = list(authority._partition_requests(PRODUCTION_QUERY_SPECS["suspend_d"], date(2026, 9, 30),
+                    pit_snapshot=SimpleNamespace(spans=[SimpleNamespace(ts_code="000001.SZ")])))
+    assert requests[0][1]["start"] == date(2018, 8, 1)
+    assert requests[-1][1]["end"] == date(2026, 9, 30)
+    assert authority._refresh_audit_start(date(2026, 9, 30)) == date(2026, 9, 1)
+
+
 def test_construction_query_is_bounded_real_maximum_and_exact_anchors_not_default_full_export():
     query = PRODUCTION_QUERY_SPECS["adj_factor_construction"]
     assert query not in _authority(monthly=False)._database_query_specs()
