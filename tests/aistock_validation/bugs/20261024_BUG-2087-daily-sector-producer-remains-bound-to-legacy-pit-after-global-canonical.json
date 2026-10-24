@@ -127,8 +127,8 @@
   },
   "first_seen_at": "2026-10-24T15:08:11.577469Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f34b8e3593e070db56206e9610b061740c22df31",
+  "fixed_at": "2026-10-24T15:33:31Z",
   "github_issue_number": 6674,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6674",
   "last_seen_at": "2026-10-24T15:08:11.577469Z",
@@ -136,6 +136,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6677",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -161,6 +162,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -172,7 +174,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2087",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bac298d3220e894a",
+    "recorded_at": "2026-10-24T15:34:24.170761Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "667d75bc9822cac10025cfdddff8da5f1cd9aa08",
+    "source_merge_commit": "f34b8e3593e070db56206e9610b061740c22df31",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6677",
+    "validation_evidence": [
+      "PR #6677 CI verdict -> passed"
+    ],
+    "validation_evidence_digest": "3dbbda0a53d9f787aff84da773d2ef7af8cafa83b24299ff6f4b6d9fc7470f89"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -181,6 +204,9 @@
     "fingerprint": "2408bd7a1737f67c249807c8",
     "source_event_id": "FE-20261024-2408bd7a1737"
   },
+  "validation_evidence": [
+    "PR #6677 CI verdict -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
