@@ -7,15 +7,8 @@
     "tests/aistock_validation/bugs/20261024_BUG-2090-historical-suspension-provider-clocks-contradict-exchange-intraday-notic.json"
   ],
   "assigned_agent": null,
-  "design_compliance_review": {
-    "rule": "DESIGN-COMPLIANCE-001",
-    "no_partial_completion": "PASS: all three unresolved source-clock keys have exact reviewed resolutions; all prior authority entries preserved; backend runtime remains pending user restart.",
-    "no_silent_errors": "PASS: original provider clocks and unknown first-publication time retained; unrelated malformed intervals remain UNRESOLVED.",
-    "business_semantics_preserved": "PASS: no parser widening, guessed interval inversion, full-day inference, PIT or consumer business changes; exact exchange notice text mirrored on public sources.",
-    "no_unapproved_gates": "PASS: shared authority v3 uses existing loader and publication contract; no new framework, approval or research gate."
-  },
   "bug_id": "BUG-2090",
-  "closed_at": null,
+  "closed_at": "2026-10-24T19:52:04.233100Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -23,6 +16,13 @@
   ],
   "created_at": "2026-10-24T18:20:45.924071Z",
   "description": "Full sparse suspension population reveals three unresolved exact keys.",
+  "design_compliance_review": {
+    "business_semantics_preserved": "PASS: no parser widening, guessed interval inversion, full-day inference, PIT or consumer business changes; exact exchange notice text mirrored on public sources.",
+    "no_partial_completion": "PASS: all three unresolved source-clock keys have exact reviewed resolutions; all prior authority entries preserved; backend runtime remains pending user restart.",
+    "no_silent_errors": "PASS: original provider clocks and unknown first-publication time retained; unrelated malformed intervals remain UNRESOLVED.",
+    "no_unapproved_gates": "PASS: shared authority v3 uses existing loader and publication contract; no new framework, approval or research gate.",
+    "rule": "DESIGN-COMPLIANCE-001"
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -37,17 +37,19 @@
   "expected": "Exact-key reviewed authority preserves raw clocks and resolves effective intervals; unrelated malformed keys remain unresolved.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261024_BUG-2090-historical-suspension-provider-clocks-contradict-exchange-intraday-notic.json",
       "backend/data_service/suspension_day_authority.py",
-      "backend/tests/services/test_suspend_d_coverage.py"
+      "backend/data_service/suspension_day_authority_v3.json",
+      "backend/tests/services/test_suspend_d_coverage.py",
+      "tests/aistock_validation/bugs/20261024_BUG-2090-historical-suspension-provider-clocks-contradict-exchange-intraday-notic.json"
     ],
     "added_files": [
       "backend/data_service/suspension_day_authority_v3.json"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261024_BUG-2090-historical-suspension-provider-clocks-contradict-exchange-intraday-notic.json",
       "backend/data_service/suspension_day_authority.py",
-      "backend/tests/services/test_suspend_d_coverage.py"
+      "backend/data_service/suspension_day_authority_v3.json",
+      "backend/tests/services/test_suspend_d_coverage.py",
+      "tests/aistock_validation/bugs/20261024_BUG-2090-historical-suspension-provider-clocks-contradict-exchange-intraday-notic.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -119,8 +121,8 @@
   },
   "first_seen_at": "2026-10-24T18:20:45.924071Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "06e688bcf96c1c5215f5f9aca821795110bc4422",
+  "fixed_at": "2026-10-24T18:35:49Z",
   "github_issue_number": 6683,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6683",
   "last_seen_at": "2026-10-24T18:20:45.924071Z",
@@ -128,6 +130,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6684",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -153,9 +156,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\BUG-2089-suspension-facts\\postrestart-backend-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2090",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "06e688bcf96c1c5215f5f9aca821795110bc4422",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-24T19:49:11.407591Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3b9cf4192c59b0806b7372d1ba92517649ccfc45687f0e1d36da5643e50bf962",
+      "receipt_sha256": "af7f6f9be0bda2ebd95d22fc3d5736af7165b2b0253f311f210780159bee984d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ccdce589cd3f3f2e8d69d94344c62a5b282c615dbce314a5cb15a937b0f74774",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -165,7 +191,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2090",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2207d303de64f030",
+    "recorded_at": "2026-10-24T18:36:25.515434Z",
+    "runtime_contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "8d1ed926ed9edb51ed5a978be2c37aad9e2513fa",
+    "source_merge_commit": "06e688bcf96c1c5215f5f9aca821795110bc4422",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6684",
+    "validation_evidence": [
+      "validation-receipt: id=d6551263c25aa45e commit=8d1ed926ed9edb51ed5a978be2c37aad9e2513fa kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/services/test_suspend_d_coverage.py -k 'exact_notice or previously_approved'` result=`4 passed`",
+      "validation-receipt: id=184375825bdcd580 commit=8d1ed926ed9edb51ed5a978be2c37aad9e2513fa kind=nox plan=l0 status=passed command=`nox -s l0` result=`passed`",
+      "validation-receipt: id=a471066dde4cfbdb commit=8d1ed926ed9edb51ed5a978be2c37aad9e2513fa kind=ruff plan=direct status=passed command=`ruff check changed files` result=`passed`"
+    ],
+    "validation_evidence_digest": "30b7b9ac3edfb1f9f542119e55d81e3baa71c641f2bd1ac9e0fe2db6e87c5654"
+  },
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -174,6 +223,12 @@
     "fingerprint": "4a99dfb41149bd84f497392e",
     "source_event_id": "FE-20261024-4a99dfb41149"
   },
+  "validation_evidence": [
+    "validation-receipt: id=d6551263c25aa45e commit=8d1ed926ed9edb51ed5a978be2c37aad9e2513fa kind=pytest plan=direct status=passed command=`rtk pytest -q backend/tests/services/test_suspend_d_coverage.py -k 'exact_notice or previously_approved'` result=`4 passed`",
+    "validation-receipt: id=184375825bdcd580 commit=8d1ed926ed9edb51ed5a978be2c37aad9e2513fa kind=nox plan=l0 status=passed command=`nox -s l0` result=`passed`",
+    "validation-receipt: id=a471066dde4cfbdb commit=8d1ed926ed9edb51ed5a978be2c37aad9e2513fa kind=ruff plan=direct status=passed command=`ruff check changed files` result=`passed`",
+    "post-restart-verify backend-main passed; observed identity 5da386d93f928d9314781f66e40016a72809f8ef; local-data overview business smoke passed; registry synced to current catalog"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
