@@ -3,6 +3,7 @@
   "allowed_write_scope": [
     "backend/services/dataset_release/monthly_unified.py",
     "backend/tests/dataset_release/test_monthly_existing_adoption.py",
+    "backend/tests/dataset_release/test_monthly_minute_adoption.py",
     "tests/aistock_validation/bugs/20261024_BUG-2086-monthly-successor-adoption-rejects-cancelled-ancestor-already-retired-by.json"
   ],
   "assigned_agent": null,
