@@ -139,12 +139,15 @@ def validate_suspension_adoption(*, predecessor_root, predecessor_profile, candi
     require({k: v for k, v in old.items() if k not in excluded} == {k: v for k, v in manifest.items() if k not in excluded}, "suspension unrelated manifest semantics changed")
     source_contract = dict(manifest["source_contract"])
     amendment = source_contract.pop("suspension_amendment", None)
-    require(source_contract == old["source_contract"] and amendment == {
+    # A second correction replaces this release's amendment pin, not its
+    # immutable predecessor. The predecessor manifest retains the full chain.
+    old_source_contract = {k: v for k, v in old["source_contract"].items() if k != "suspension_amendment"}
+    require(source_contract == old_source_contract and amendment == {
         "predecessor_manifest_sha256": old["dataset_manifest_sha256"], "receipt_sha256": file_pin(candidate / REPORT)["sha256"]}, "suspension source lineage differs")
     before, after = [{p["path"]: p for p in m["components"].values()} for m in (old, manifest)]
     require(len(before) == len(old["components"]) and len(after) == len(manifest["components"])
             and set(after) == set(before) | {SOURCE, REPORT}
-            and all(after[p] == pin for p, pin in before.items() if p not in {PARQUET, META}), "suspension unrelated pins changed")
+            and all(after[p] == pin for p, pin in before.items() if p not in {PARQUET, META, SOURCE, REPORT}), "suspension unrelated pins changed")
     for relative in (PARQUET, META, SOURCE, REPORT):
         require(file_pin(candidate / relative) == {k: after[relative][k] for k in ("sha256", "size")}, "suspension correction pin drift")
     require(json.loads((candidate / REPORT).read_bytes()) == repair and repair["files"] == {

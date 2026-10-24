@@ -1197,11 +1197,12 @@ rules:
     priority: 90
     include:
       - scripts/start_ai_stock.py
+      - scripts/backend_lifecycle.py
     primary_module: platform.api
     impact_modules: [platform.config]
     layer: runtime_launcher
     risk_level: high
-    ownership_reason: API startup, readiness and process ownership are exercised by platform_api_backend, including test_windows_launcher.py.
+    ownership_reason: API startup, readiness and process ownership are exercised by platform_api_backend, including test_windows_launcher.py and test_backend_lifecycle.py.
   - rule_id: hmm_evolution_services
     priority: 90
     include:
