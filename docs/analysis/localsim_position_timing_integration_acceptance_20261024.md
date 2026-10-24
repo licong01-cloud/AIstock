@@ -6,12 +6,12 @@
 
 | 项目 | 当前结论 |
 |---|---|
-| 源码接入 | 唯一择时SDK、LocalSIM成交确认链已接入；新增连续账户消费CLI，待最终HEAD的CI读回 |
+| 源码接入 | 唯一择时SDK与连续账户适配已实现；审计UNKNOWN/NONE兼容通过78项直接验证；代码提交e6f66f07的CI通过1510项，22项跳过 |
 | 原288场景 | 已完成真实冻结输入下的账户模拟和原比较器验证；本轮只读重试通过，未重算 |
-| 年初12账户 | PR #6671 冻结价格计划已核验；UNKNOWN兼容及74项直接回归通过，开始冻结真实连续回放请求 |
-| 合入 | 完整F2仍因F-010未完成而失败；PR保留草稿，不把CI通过作为范围完成证明 |
+| 年初12账户 | 已执行79/181日、948/2172账户日；2026-05-08因601010.SH的11:30分钟记录七字段NaN而阻断，失败日经济写入为零 |
+| 合入 | F-010仍因真实冻结行情输入缺口未完成；PR #6659保留草稿，未合入，工作树/分支保留供接续 |
 | 运行态激活 | 未创建生产账户、未启动生产回放、未修改旧TWAP配置；离线工作无需重启 |
-| 经济效果 | 原样本仅作描述性比较，未证明超额收益，不自动晋升或启用生产 |
+| 经济效果 | 原288样本的描述性比较保留；181日完整结果尚未生成，不用79日替代人口或宣称经济有效 |
 
 原288场景producer commit固定为 `409f3ecf3f0d539415ca9e0e478a9cf452ed9e8b`，release为 `localsim_position_timing_v1-8c5a973d7179e3cd511e0498`。
 原源码保留于研究归档tag `research/localsim-position-timing-20261024-r1`；它不是生产发布或激活。
@@ -107,7 +107,7 @@ FILLED=215、PARTIAL=0、NO_FILL=73、UNAVAILABLE=0；没有丢掉未成交场�
 | 本轮288只读重试 | 107.69秒 | 385136KiB | ALREADY_MATERIALIZED，未重算，原SHA不变 |
 | 真实01-05原生数量规划 | 41.23秒 | 497004KiB | 50目标、50调仓意图；无OMS订单/成交，不是全年每日回放耗时 |
 
-原研究输出248,903,376字节，约237.37MiB，不含环境、缓存和冻结输入；没有复制大型模型或数据。全年真实回放尚未运行，端到端耗时、峰值内存及磁盘占用未测量，不以本表预测每天40秒。
+原研究输出248,903,376字节，约237.37MiB，不含环境、缓存和冻结输入；没有复制大型模型或数据。本轮连续运行实际执行至阻断耗时14,569.20秒（约4小时2分49秒），峰值RSS 1,585,472KiB（约1.51GiB）；79日已提交前缀共2,845个文件、2,526,595,722字节（约2.35GiB）。这些是至5月8日输入阻断的实测，不能当作181日总性能或据此承诺每天40秒。
 
 复杂度审查覆盖原固定研究的三处因果诊断集合，以及连续研究的父订单循环。连续输入最多615个不同股票，按日复用只读行情；终态订单不再推理。组合父订单receipt已移除重复的全组合现金/持仓明细，实际账户与经济事实只在日receipt及coordinator保存；原单计划完整receipt不变。计算量和内存边界见F2设计的ALGO-COMPLEXITY-001段，四处P2提示不等于真实年度性能已验收。
 
@@ -128,39 +128,15 @@ python -m backend.services.position_timing.intraday.research compare \
   --results-sha256 542bf38129337583b306aa1802b6158b1f4dd52b96e864333157cb13d9c10815
 ```
 
-## 7. 年初连续账户状态及共享价格计划交接
+## 7. 年初连续账户：接口通过，真实输入阻断
 
-按用户指定的加入顺序选择LightGBM＋12项因子，manifest `5de2ec91c088e5cf9a9cc25673498a4165857b761cb9e4a4456151a1e04f0dc9`。原15个唯一资产blob已验证，没有重训、替换处理器或复制权重。原500万元生产账户未修改。
+### 7.1 冻结身份与接口验收
 
-已找到193日原生选股，覆盖2026-01-05至10-23；本冻结candidate只支持其中181日（01-05至09-30）、9050目标，无缺日/冲突。10月12日数据在本次candidate范围外，不称为数据库缺失，不静默回退数据库。9050目标都没有价格偏好区间。
+选择最新加入的LightGBM＋12因子，manifest `5de2ec91c088e5cf9a9cc25673498a4165857b761cb9e4a4456151a1e04f0dc9`。15个唯一资产blob已验证，没有重训、替换处理器或复制权重；原500万元生产账户未修改。冻结193日原生选股中的181日（01-05至09-30），共9050个目标；10月数据不属于本candidate范围，不静默切换数据库。
 
-12份纯现金1000万元离线初态已冻结：
-`X:/AIstock_temp/localsim-position-timing/campaign/ece80148db48366428ee8f7b8df78ef12c0e0df0422fc5bfb6932ead3ba9ce5c/preflight.json`
-完整文件SHA：`c7270eabf6830df970d4207d25bae9661e5fab464a0e70f5a65cba78f6cc8ff7`。
-旧preflight仍为 `BLOCKED_PLAN_INPUT_CONTRACT`；没有手改它来伪造恢复或运行。合法新模板返回后，freeze CLI另写新不可变request，再运行12账户。
+原preflight完整SHA `c7270eabf6830df970d4207d25bae9661e5fab464a0e70f5a65cba78f6cc8ff7`，路径 `X:/AIstock_temp/localsim-position-timing/campaign/ece80148db48366428ee8f7b8df78ef12c0e0df0422fc5bfb6932ead3ba9ce5c/preflight.json`。其历史状态BLOCKED_PLAN_INPUT_CONTRACT未被手改。PR #6671返回后另冻新请求，不覆盖旧产物。
 
-原研究operator脚本 `research_studies/operator_inputs/20261023_real_smoke/build_inputs.py` 的SHA为 `5d99bd7438878190aaf711c20ff7d4937a71ec610499965a01fbcf71962773bd`，其中0.5% PREFERRED明确属于 `PREDECLARED_MECHANISM_PLAN_NOT_PRODUCTION` 的3股×4日样本，不能自动扩大为策略包原生偏好。
-
-消费schema已经冻结在 `timing_campaign.py::CampaignPriceTemplates / PriceTemplateEvent`，机器schema位于：
-`X:/AIstock_temp/localsim-position-timing/campaign-price-templates.schema.json` 和 `campaign-price-event.schema.json`。
-
-可直接转交：
-
-> LocalSIM已交付唯一核心的288场景结果，以及连续12账户消费能力。请为LightGBM＋12因子manifest `5de2ec91c088e5cf9a9cc25673498a4165857b761cb9e4a4456151a1e04f0dc9`，提供01-05至09-30、绑定原candidate完整文件SHA `f5af5cc0506e502300ef225805b51aaeb7ea1b1bc352fdc81f363f4933f5f8ed` 的合法价格偏好合同/冻结模板。优先返回符合上述两份JSON schema的不可变文件和完整文件SHA。外层需绑定producer commit、包/candidate/selection_inventory身份、price_policy_id和policy_document FileRef；policy_document须明确起止日期、CONFIRMED_FEEDBACK_CLOSED_LOOP及适用性说明，明确原0.5%工程政策是否允许扩大。每个日期提供PriceTemplateEvent文件：日期、股票、BUY/SELL、revision/lifecycle、available_at、valid_from/until、source_file及source_available_at、PREFERRED/HARD PriceConstraint；constraint.source_sha256必须绑定原始来源完整文件SHA。除当日目标外，还须覆盖可能因未成交继续持有的既往目标的SELL偏好。不得改原288人口/阈值/核心/比较器。数量、持仓、撮合、费用及全年运行由LocalSIM负责，不要求择时窗口创建账户或执行回放。若选择公共构造器形式，请先返回正式函数签名、冻结政策与适用性/来源/撤销合同，不将业务参考价直接解释成偏好。
-
-连续组合使用共同外生选股、价格模板、初态、费用和数据；真实成交不同后，持仓、净值和后续调仓数量会不同。其结果明确为 `COMMON_EXOGENOUS_TARGETS_FEEDBACK_DIVERGENT_QUANTITIES`，不能混称原288共同计划的纯延迟效应。BUY/SELL分别报告完成、等待、费用和条件成交价差；全账户净值/MDD只在ALL报告，不编造方向净值归因。
-
-owner返回后由LocalSIM执行（尚缺真实参数，不把下列占位符当作成功调用）：
-
-```bash
-python -m backend.services.simulation_execution.localsim.timing_campaign inspect --preflight <上文WSL路径> --preflight-sha256 c7270eabf6830df970d4207d25bae9661e5fab464a0e70f5a65cba78f6cc8ff7 --price-templates <owner文件> --price-templates-sha256 <完整文件SHA>
-python -m backend.services.simulation_execution.localsim.timing_campaign freeze --preflight <上文WSL路径> --preflight-sha256 c7270eabf6830df970d4207d25bae9661e5fab464a0e70f5a65cba78f6cc8ff7 --price-templates <owner文件> --price-templates-sha256 <完整文件SHA> --output-root /mnt/x/AIstock_temp/localsim-position-timing/continuous --producer-commit <已验证源码commit>
-python -m backend.services.simulation_execution.localsim.timing_campaign run --request <freeze回执路径> --request-sha256 <freeze回执完整SHA>
-```
-
-### 7.1 PR #6671 已返回，替代上文历史待办
-
-上文保留原缺口及交接历史，不再要求择时owner重新生产。已按用户授权同步 main，完整读回并核验下列四个不可变文件：
+共享根目录：`F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/intraday_v1/shared_price_plans/2d3cc6547769b19d4d7cf9d6161f3cf0c11eb00feb1684d0806bf5e3026d5167`。
 
 | 文件 | 完整文件SHA256 |
 |---|---|
@@ -169,17 +145,59 @@ python -m backend.services.simulation_execution.localsim.timing_campaign run --r
 | reference_audit.json | fe6b1fcb12ffb868a68e95f3e122bbe7969fed533a017afabd3ae23bd02bfde6 |
 | manifest.json | 4781d4fa7c27dd7f7c632090c32e87fb17a7d74dba225f607bcd638ddd2323bd |
 
-根目录：`F:/Dev/AIstock_model_artifacts/position_timing_advice_v1/intraday_v1/shared_price_plans/2d3cc6547769b19d4d7cf9d6161f3cf0c11eb00feb1684d0806bf5e3026d5167`。
+共享政策RAW_PREVCLOSE_PREFERRED_50BPS_V1经用户授权用于独立探索；采用owner冻结的raw昨日参考价、±0.5%偏好及0.01价格tick，不复制构造算法、不改核心参数。它不是模型价格预测或已获经济验证的生产默认。09:00历史可用性是政策假设，不冒称权威发布时间已核实。
 
-生产者唯一原生 inspect 与 LocalSIM 独立整批校验均通过，181日、9050 BUY、64947 SELL，73983 AVAILABLE、14 UNKNOWN。审计声明为002743.SZ/09-07非有限参考价一条，以及688496.SH/09-11至09-30冻结参考价跨度外13条；均为备用SELL，不能据此断言实际持仓或真实订单缺价。声明由policy绑定审计读取，不硬编码股票白名单。LocalSIM对未知来源及原因做精确绑定；C1实际需要缺价计划才保留UNAVAILABLE原生请求，无订单、无补价，B0/C2允许NONE。未使用的备用模板不会阻断账户日，估值/分钟缺口仍按原合同失败关闭。
+生产者原生inspect和LocalSIM整批来源核验均通过：181日、9050 BUY、64947 SELL，73983 AVAILABLE及14 UNKNOWN。14条审计未知为002743.SZ/09-07一条，以及688496.SH/09-11至09-30十三条，均为备用SELL。声明按日期、股票、方向、类型化原因及来源FileRef精确匹配，不在代码硬编码白名单。B0/C2允许合法NONE；C1在实际原生意图需要缺价模板时保留UNAVAILABLE和原因，不发订单、不补价。未使用备用模板不阻断账户日；行情和估值真缺价仍失败关闭。C1混合修订含UNKNOWN的未来合同不在本冻结单ACTIVE研究范围，当前仍拒绝。
 
-只读双端检查回执：`X:/AIstock_temp/localsim-position-timing/shared-price-inspection-r4.json`，完整SHA `cb12d3c921830662e2110cec15dfb1b5fb14cba321029ff21f6929c3111d13fa`，197.89秒、峰值764088KiB；其中生产者重构核验119.94秒。此为输入检查性能，不是账户每日回放性能。全程审计钩子阻止数据库/行情网络、子进程及任务输出目录外写入，outcomes_read=false。
+整批双端检查：`shared-price-inspection-r4.json`，完整SHA `cb12d3c921830662e2110cec15dfb1b5fb14cba321029ff21f6929c3111d13fa`；197.89秒、峰值764088KiB。这是来源/模板检查，不能证明未来实际所需的每根分钟记录完整，也不是每日账户回放性能。
 
-74项直接回归通过（32单计划、40连续消费者、2旧TWAP）。本轮初次新增断言曾错误假定手续费后两个目标均能全成，并误用核心状态字段；修正测试后失败节点单独通过，稳定版本74项整轮通过，原始XML保留于 `direct-tests-r4.xml`。两轮审核分别核对审计来源/人口失败关闭，以及C1不可用行、实际B0/C2确认、无订单账本日提交和exact retry。L0仍仅4条已审查P2复杂度提示，0阻断；未修改共享核心、数据或服务。
+实际冻结时另发现本消费侧把原生现金字符串10000000.00与10000000直接比较的问题，已改为Decimal金额比较，四个新增断言通过。未重写初始账户、来源回执或已冻结输入。完整直接验证为78个不同节点（32单计划＋44连续＋2旧TWAP）。代码producer为 `e6f66f07a7b10418b564b04beef8ae42c89add78`；其[CI 40071720197](https://github.com/licong01-cloud/AIstock/actions/runs/40071720197)通过1510项、跳过22项，无DEV数据库验证要求。代码CI收据为 `ci-receipt-r3.json`，完整SHA `8a2ad1760a215410c9dc92cee3f141df3f9ebf9c88200ca630e4af481cd9255b`；后续文档提交不重写原producer身份。
+
+### 7.2 实际连续运行与失败归因
+
+12个独立离线账户均从纯现金1000万元开始，三规则×0/60/180/300秒。原始9050目标、初态、费用及14:57共同终点不变；数量由原生目标/调仓服务按各账户真实反馈计算。成交分化后持仓、净值和后续数量会分化，年度比较为COMMON_EXOGENOUS_TARGETS_FEEDBACK_DIVERGENT_QUANTITIES，不冒充原288共同计划的纯延迟效应。
+
+新请求：`X:/AIstock_temp/localsim-position-timing/continuous/92bcea72a816607b478c23324b9578ad04b96bd7303a1af95a9f215cbb36e1d3/continuous_request.json`；完整SHA `a9ab2c0388702fbe746061b466083706d189dd2f7d4f29a6c4fba6c7a0a14668`。release为 `localsim_timing_campaign_v1_92bcea72a816607b478c2332`；执行合同SHA `c4d4f42a92f589adb50b3ee46e464314e3da8c901e93b244bef4d8d31be2a5d8`。12份初始账户FileRef保存在该请求及交付收据中。
+
+已完成2026-01-05至05-07的79个交易日，12账户均为79日，合计948个原子账户日；剩余102日、1224账户日尚未验收。05-08装载实际所需的98只股票时，97只通过，唯一失败对象为601010.SH。它已退出当日50目标，但仍是PRICE_TOUCH_V1＋300秒账户的真实持仓，不能因不在新目标或PIT选股范围就删除存量持仓。
+
+该股票05-08的11:30结束分钟（11:29—11:30）在冻结candidate中，open/high/low/close/volume/amount/factor均为NaN；按现有可见合同11:30:05已可见，早于共同终点14:57，不能解释为终点之后未使用的数据。原生入口经过D日交易状态与日级价格校验后，在RESEARCH_MINUTE_VALUES_INCOMPLETE处拒绝读取。当前可确认物理文件缺值；未查询数据库或权威行情源，故不能把更上游根因直接定性为数据库缺失，也未把它改写为审计模板UNKNOWN。
+
+失败日尚未发生订单、成交或账务提交，948个既有日journal与摘要保留不变，没有continuous_results.json。保留全部181日/9050目标和12账户，没有换股、缩期、补价格、删除持仓或回退数据库。未运行年度完整经济比较，也没有把后续未运行账户日伪造为NO_FILL/零收益。
+
+### 7.3 证据、恢复及消费命令
+
+以下文件均位于 `X:/AIstock_temp/localsim-position-timing/`，均为完整文件SHA：
+
+| 收据 | SHA256 | 结论 |
+|---|---|---|
+| continuous-freeze-r5.json | 401b382b95827e5f077ced6c9821958a5f1782af32a79c6d9e475c49c8b924ee | 新请求正式冻结，旧初态字节不变 |
+| continuous-run-r5.json | 7886e69780cfc25bce4ba7aa0606997166373844b15d66f313fef42c31247ff6 | 实际运行至05-08输入阻断 |
+| minute-gap-diagnosis-r6.json | c723f8bcd8fe5cd8384c01dd6b1bebe091f7b26fe56b4adcc11053516de328a8 | 98股票逐一调用原生入口，精确字段/分钟/文件SHA和实际持仓账户 |
+| real-prefix-validation-r6.json | 5226e4188a777bc091e162acd0612ee42aec58c6f08b2d8a92b5dec577d1b2a4 | 948账户日原生ledger独立复核通过，207.28秒 |
+| blocked-delivery-r6.json | e4667dbf36e6cc4813876c5d36ce18c36e834f7d73911548a2e3f3fb327a2b08 | 接口/回放/经济状态分开绑定，含初态FileRef与前缀空间 |
+
+复核包含journal hash、摘要前缀链接、跨日现金、持仓/T+1、原生成交/费用账本重放及现金非负。它只验收948日已确认前缀，不替代181日整批验收。完整结果尚不存在，年度completed-result exact retry不适用；原288结果只读exact retry仍为ALREADY_MATERIALIZED，完整SHA已重新确认不变。原288的FILLED=215、NO_FILL=73、PARTIAL/UNAVAILABLE=0及既有36组比较保留。
+
+正式运行入口保持不变，以下不是本轮额外重跑成功记录；输入缺口解决且身份合同闭合后才能接续：
+
+```bash
+python -m backend.services.simulation_execution.localsim.timing_campaign run \
+  --request /mnt/x/AIstock_temp/localsim-position-timing/continuous/92bcea72a816607b478c23324b9578ad04b96bd7303a1af95a9f215cbb36e1d3/continuous_request.json \
+  --request-sha256 a9ab2c0388702fbe746061b466083706d189dd2f7d4f29a6c4fba6c7a0a14668
+```
+
+不能原位修复已冻结candidate后沿用旧SHA，也不能静默换active profile。若需新candidate或共享计划身份，须由相应owner交付正式版本及兼容/迁移合同，LocalSIM再核验已提交前缀的受控接续；本轮没有改请求、断点、账户或失败状态来绕过校验。
+
+### 7.4 可直接交给数据准备窗口的提示词
+
+> 请只读核查冻结candidate（完整manifest SHA `f5af5cc0506e502300ef225805b51aaeb7ea1b1bc352fdc81f363f4933f5f8ed`）中601010.SH／2026-05-08的11:30结束分钟。其`components/minute_bin_candidate/features/601010.sh/`下open/high/low/close/volume/amount/factor七个1min.bin在该位置均为NaN，导致唯一原生CandidateReader报RESEARCH_MINUTE_VALUES_INCOMPLETE。精确绝对路径、七个完整文件SHA及上下文见 `X:/AIstock_temp/localsim-position-timing/minute-gap-diagnosis-r6.json`（完整SHA `c723f8bcd8fe5cd8384c01dd6b1bebe091f7b26fe56b4adcc11053516de328a8`）。请核对权威源、分钟时标、成交/停牌状态和导出链，区分实际缺数、导出遗漏及合法无成交。它是C1＋300秒账户的真实存量持仓，不是当日候选，也不是14条备用SELL模板UNKNOWN；不能按PIT删除持仓或造bar/补价。若需修复，请返回不可变的新版本候选、manifest/组件完整SHA、影响范围和独立读回；不覆盖原f5版本、不擅自激活或用数据库替代本研究。若权威源证实合法无成交而需读取合同变化，请明确交由择时/数据入口owner处理，不要求LocalSIM放宽真缺价。新candidate若改变冻结共享计划身份，须同时交付正式重绑定/迁移合同，禁止静默替换。12账户已完成79日、948个经济journal，05-08写入为零，全部前缀必须保留；本轮未操作生产DB或服务。
 
 ## 8. 多轮审核、回归及边界
 
-本轮59个定向节点已验证通过（文件分布：{'test_localsim_position_timing': 32, 'test_localsim_timing_campaign': 25, 'test_twap_policy_authority': 2}）。主轮55通过，新增恢复隔离断言的测试导入类名错误导致4个节点失败；纠正后仅重跑该4节点，全部通过，未重复整组。原始XML、失败节点复跑和最终源码文件SHA汇总于 `X:/AIstock_temp/localsim-position-timing/direct-validation-r3.json`；本地pytest metrics未设置HEAD字段，不冒称提交绑定证据，最终提交由CI收据绑定。资金/持仓不变量、取消、部分成交、T+1、方向性限制、四延迟、来源完整性、未来信息隔离、12账户×2日恢复及原生账本独立读回均有直接验证。旧TWAP定向2项通过。更大范围回归交由PR CI，以当前HEAD的稳定CI verdict和紧凑收据为准。
+前一阶段59个定向节点已验证通过（文件分布：{'test_localsim_position_timing': 32, 'test_localsim_timing_campaign': 25, 'test_twap_policy_authority': 2}）。主轮55通过，新增恢复隔离断言的测试导入类名错误导致4个节点失败；纠正后仅重跑该4节点，全部通过，未重复整组。原始XML、失败节点复跑和最终源码文件SHA汇总于 `X:/AIstock_temp/localsim-position-timing/direct-validation-r3.json`；本地pytest metrics未设置HEAD字段，不冒称提交绑定证据，最终提交由CI收据绑定。资金/持仓不变量、取消、部分成交、T+1、方向性限制、四延迟、来源完整性、未来信息隔离、12账户×2日恢复及原生账本独立读回均有直接验证。旧TWAP定向2项通过。更大范围回归交由PR CI，以当前HEAD的稳定CI verdict和紧凑收据为准。
+
+本轮新增审计UNKNOWN/NONE来源与人口审核，以及实际C1不可用、B0/C2确认、无订单日提交和exact retry审核；74个稳定节点通过后，原生现金格式修复另验证4个不同节点，总计78个。代码未因05-08真实缺值而放宽，完整F2仍明确BLOCKED；最终文档HEAD的CI以PR稳定CI verdict读回为准。
 
 审核第一轮修复部分成交确认时钟：等待available_at后才能继续使用该确认推理/执行；共享现金反馈也更新真实可见时间。第二轮修复普通股票分钟缺口被当作终值旧价的问题，并保留原生规则拦截请求的统计分母。第三轮核对日原子恢复、全部成交/费用/持仓经原生ledger重新读回，以及exact retry不重复成交。设计与报告中文乱码已修复。
 
@@ -191,7 +209,7 @@ Windows临时文件和依赖均在X盘；WSL直接读取F/X挂载。只在本任
 
 ## 9. DESIGN-COMPLIANCE-001逐项检查
 
-1. 禁止简化交付：接入、原288模拟、12账户真实连续研究分别报告；F-010未完成，不声称全部完成或请求合入。
+1. 禁止简化交付：接入、原288模拟、12账户真实连续研究分别报告；F-010因05-08冻结分钟缺值未完成，不声称全部完成、缩期经济有效或请求合入。
 2. 禁止静默错误：价格/数据/身份缺口显式阻断；未成交不删行，未知不填零；恢复保留已确认前缀。
 3. 禁止改变业务逻辑：核心参数、原288人口和费用、旧TWAP/release/账户不改；年初连续研究明确属于用户追加范围和独立闭环口径。
 4. 禁止私增审批：遵循既有跨owner边界和完整F2验收，不新增审批、不重复请求已有合入授权；满足全范围条件后可直接合入和本任务清理。
