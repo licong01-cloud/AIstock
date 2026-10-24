@@ -30,15 +30,17 @@
   "expected": "Exact retired ancestors do not block any authorized typed immutable successor; live or unproven conflicts stay blocked.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261024_BUG-2086-monthly-successor-adoption-rejects-cancelled-ancestor-already-retired-by.json",
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/tests/dataset_release/test_monthly_existing_adoption.py"
+      "backend/tests/dataset_release/test_monthly_existing_adoption.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "tests/aistock_validation/bugs/20261024_BUG-2086-monthly-successor-adoption-rejects-cancelled-ancestor-already-retired-by.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261024_BUG-2086-monthly-successor-adoption-rejects-cancelled-ancestor-already-retired-by.json",
       "backend/services/dataset_release/monthly_unified.py",
-      "backend/tests/dataset_release/test_monthly_existing_adoption.py"
+      "backend/tests/dataset_release/test_monthly_existing_adoption.py",
+      "backend/tests/dataset_release/test_monthly_minute_adoption.py",
+      "tests/aistock_validation/bugs/20261024_BUG-2086-monthly-successor-adoption-rejects-cancelled-ancestor-already-retired-by.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -97,8 +99,8 @@
   },
   "first_seen_at": "2026-10-24T04:43:25.292299Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "30ab07ad6b846e24184c3d080f15bf154d051e93",
+  "fixed_at": "2026-10-24T05:05:42Z",
   "github_issue_number": 6665,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6665",
   "last_seen_at": "2026-10-24T04:43:25.292299Z",
@@ -106,6 +108,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6667",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -129,6 +132,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -140,7 +144,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2086",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e01748de7bc0848e",
+    "recorded_at": "2026-10-24T05:06:25.431674Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "9894850989c3d9f8537773f648e516b82c4aa72c",
+    "source_merge_commit": "30ab07ad6b846e24184c3d080f15bf154d051e93",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6667",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_minute_adoption.py::test_verified_activation_ancestry_allows_next_correction_without_rewriting_history -q --tb=short -x -> 2 passed"
+    ],
+    "validation_evidence_digest": "3afcff43a68ad432ae9617ff41059c9dd387d52c7bfdb494a43bab359ad619f9"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -149,6 +174,9 @@
     "fingerprint": "9194b0b7d204f7b5ea1364bf",
     "source_event_id": "FE-20261024-9194b0b7d204"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_monthly_minute_adoption.py::test_verified_activation_ancestry_allows_next_correction_without_rewriting_history -q --tb=short -x -> 2 passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
