@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager, suppress
+from concurrent.futures import ThreadPoolExecutor
 from fnmatch import fnmatchcase
 import json
 import os
@@ -8,7 +9,10 @@ import shlex
 import socket
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import time
+from uuid import uuid4
+from xml.etree import ElementTree
 from pathlib import Path
 from urllib.error import URLError
 from urllib.parse import urlparse
@@ -174,6 +178,10 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
             extra_env["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"] = str(
                 Path(os.environ["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"]).with_name("advisory-modeling-test-failures.jsonl")
             )
+    if plan == "advisory_modeling_backend" and selected[:2] == (
+        "backend/tests/advisory_modeling", "backend/tests/advisory_model_first"
+    ) and _run_nightly_pytest_shards(session, selected[:2], selected[2:], _env(extra_env), workers=6):
+        return
     session.run(
         "python",
         "-m",
@@ -182,6 +190,110 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
         env=_env(extra_env),
         external=True,
     )
+
+
+def _pytest_file_shards(roots: tuple[str, ...], workers: int = 4) -> list[list[str]]:
+    """Assign every pytest file once, keeping module fixtures in one process."""
+    files = {path for root in roots for pattern in ("test_*.py", "*_test.py")
+             for path in (ROOT / root).rglob(pattern) if path.is_file()}
+    if not files:
+        raise RuntimeError("offline regression has no test files")
+    groups: list[list[str]] = [[] for _ in range(min(workers, len(files)))]
+    loads = [0] * len(groups)
+    for path in sorted(files, key=lambda p: (-p.stat().st_size, p.as_posix())):
+        index = min(range(len(groups)), key=lambda i: (loads[i], i))
+        groups[index].append(path.relative_to(ROOT).as_posix())
+        loads[index] += path.stat().st_size
+    return [sorted(group) for group in groups]
+
+
+def _run_nightly_pytest_shards(
+    session: nox.Session, roots: tuple[str, ...], args: tuple[str, ...], env: dict[str, str],
+    *, coverage_file: Path | None = None, workers: int = 4,
+) -> bool:
+    if os.environ.get(NIGHTLY_SESSION_RUNNER_ENV) != "1":
+        return False
+    plan = env["AISTOCK_TEST_PLAN"]
+    groups = _pytest_file_shards(roots, workers=workers)
+    # The complete Advisory matrix also exercises producers whose existing
+    # output contract requires X. Synthetic scratch must satisfy that contract.
+    scratch_parent = _offline_fixture_parent(plan)
+    artifact_root = Path(env["AISTOCK_TEST_METRICS_RECEIPT"]).parent if env.get("AISTOCK_TEST_METRICS_RECEIPT") else ROOT / "tmp" / "validation"
+    directory = ROOT / artifact_root / "nightly_shards" / plan / uuid4().hex
+    directory.mkdir(parents=True)
+    (directory / "assignment.json").write_text(json.dumps({"plan": plan, "groups": groups}), encoding="utf-8")
+
+    def execute(index: int, files: list[str]) -> dict:
+        worker_env = dict(env)
+        receipts = []
+        for key in ("AISTOCK_TEST_METRICS_RECEIPT", "AISTOCK_TEST_DIAGNOSTICS_RECEIPT", "AISTOCK_CI_TEST_COLLECTION_RECEIPT"):
+            if env.get(key):
+                destination = Path(env[key])
+                worker = destination.with_name(f"{destination.stem}.shard-{directory.name}-{index}{destination.suffix}")
+                worker_env[key] = str(worker)
+                receipts.append((destination, worker))
+        worker_args = list(args)
+        if coverage_file is not None:
+            worker_env["COVERAGE_FILE"] = str(directory / f".coverage.{index}")
+            # Enforce the original threshold on the union, never on a partial shard.
+            worker_args.extend(("--cov-report=", "--cov-fail-under=0", f"--junitxml={directory / f'shard-{index}.xml'}"))
+        log = directory / f"shard-{index}.log"
+        started = time.monotonic()
+        # A short sibling path satisfies repo-external artifact contracts and
+        # Windows CreateProcess cwd limits. Only this worker's new scratch is cleaned.
+        with TemporaryDirectory(prefix=f"aistock-pytest-{index}-", dir=scratch_parent) as temporary, log.open("w", encoding="utf-8") as output:
+            temporary_path = Path(temporary).resolve()
+            if temporary_path.parent != scratch_parent.resolve():
+                raise RuntimeError("offline fixture scratch escaped its owner directory")
+            worker_env.update(dict.fromkeys(("TEMP", "TMP", "TMPDIR"), str(temporary_path)))
+            worker_args.append(f"--basetemp={temporary_path / 'tests'}")
+            result = subprocess.run(
+                [sys.executable, "-m", "pytest", *files, *worker_args],
+                cwd=ROOT, env=worker_env, stdout=output, stderr=subprocess.STDOUT, check=False,
+            )
+        row = {"index": index, "files": files, "returncode": result.returncode,
+               "seconds": round(time.monotonic() - started, 3), "log": str(log)}
+        (directory / f"result-{index}.json").write_text(json.dumps(row), encoding="utf-8")
+        return {**row, "receipts": receipts}
+
+    with ThreadPoolExecutor(max_workers=len(groups)) as pool:
+        futures = [pool.submit(execute, index, files) for index, files in enumerate(groups)]
+        results = [future.result() for future in futures]
+    for result in results:
+        for destination, worker in result.pop("receipts"):
+            if worker.exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                with destination.open("ab") as output:
+                    output.write(worker.read_bytes())
+        print(f"{plan} shard={result['index']} files={len(result['files'])} "
+              f"exit={result['returncode']} seconds={result['seconds']}", flush=True)
+        if result["returncode"]:
+            print(Path(result["log"]).read_text(encoding="utf-8", errors="replace")[-8000:], flush=True)
+    (directory / "results.json").write_text(json.dumps({"plan": plan, "shards": results}, indent=2), encoding="utf-8")
+    if any(result["returncode"] for result in results):
+        session.error(f"{plan} offline shard failed; see {directory}")
+    if coverage_file is not None:
+        coverage_files = [directory / f".coverage.{index}" for index in range(len(groups))]
+        if not all(path.is_file() for path in coverage_files):
+            session.error("offline shard coverage receipt missing")
+        junit = ElementTree.Element("testsuites")
+        for index in range(len(groups)):
+            for suite in ElementTree.parse(directory / f"shard-{index}.xml").getroot():
+                junit.append(suite)
+        ElementTree.ElementTree(junit).write(coverage_file.parent / "junit.xml", encoding="utf-8", xml_declaration=True)
+        coverage_env = {**env, "COVERAGE_FILE": str(coverage_file)}
+        session.run(sys.executable, "-m", "coverage", "combine", "--keep", *map(str, coverage_files),
+                    env=coverage_env, external=True)
+        session.run(sys.executable, "-m", "coverage", "xml", "-o", str(coverage_file.parent / "coverage.xml"),
+                    env=coverage_env, external=True)
+        session.run(sys.executable, "-m", "coverage", "report", "--fail-under=70", env=coverage_env, external=True)
+    return True
+
+
+def _offline_fixture_parent(plan: str) -> Path:
+    if plan == "advisory_modeling_backend":
+        return Path("X:/") if os.name == "nt" else Path("/mnt/x")
+    return ROOT.parent
 
 
 def _nightly_shared_pytest_args(session_name: str, args: tuple[str, ...]) -> tuple[str, ...] | None:
@@ -842,6 +954,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_build_bridge.py",
         "backend/tests/dataset_release/test_monthly_build_executor.py",
         "backend/tests/dataset_release/test_monthly_build_resume.py",
+        "backend/tests/dataset_release/test_monthly_minute_coverage.py",
         "backend/tests/dataset_release/test_monthly_build_recovery.py",
         "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
         "backend/tests/dataset_release/test_monthly_supervised_build.py",
@@ -866,6 +979,9 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_remote_deploy.py",
         "backend/tests/dataset_release/test_runtime_release_registration.py",
         "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+        "backend/tests/dataset_release/test_monthly_late_publication.py",
+        "backend/tests/dataset_release/test_monthly_existing_adoption.py",
+        "backend/tests/dataset_release/test_monthly_minute_adoption.py",
         "backend/tests/dataset_release/test_monthly_worker_composition.py",
         "backend/tests/dataset_release/test_monthly_production.py",
         "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
@@ -1243,6 +1359,10 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "compileall",
         "backend/services/tushare_sync_engine.py",
         "backend/services/tushare_dataset_specs.py",
+        "backend/services/report_rc_data.py",
+        "backend/services/report_rc_data_delivery.py",
+        "scripts/prepare_report_rc_history.py",
+        "scripts/export_report_rc_history.py",
         "scripts/repair_stk_limit_pre_close.py",
         "backend/services/adj_factor_history_reconciler.py",
         "backend/services/suspend_d_coverage.py",
@@ -1283,6 +1403,7 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/test_stock_universe_pit_service.py",
         "backend/tests/test_stock_universe_pit_spans.py",
         "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_report_rc_data.py",
         "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
         "backend/tests/scripts/test_repair_local_sync_incident.py",
         "backend/tests/test_sw_industry_history_store.py",
@@ -1710,6 +1831,9 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
 def qe_read_backend(session: nox.Session) -> None:
     """Run QE read-path and authoritative factor-metric contract regressions."""
     targets = [
+        "backend/tests/quantevolver/test_qe_l2_risk_consumer.py",
+        "backend/tests/unified_engine/test_qe_l2_risk_strategy.py",
+        "backend/tests/unified_engine/test_qe_terminal_interval_executor.py",
         "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
@@ -3222,6 +3346,7 @@ def platform_api_backend(session: nox.Session) -> None:
         session,
         "backend/tests/platform_api",
         "backend/tests/test_pg_pool_audit.py",
+        "backend/tests/test_manual_factor_service_wsl_output.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -3926,6 +4051,7 @@ HMM_RISK_PR_NEIGHBOR_OVERRIDES = {
     "backend/routers/hmm_risk.py": "backend/tests/hmm_risk/test_rotation_l1_api.py",
     "backend/services/hmm_risk/b3_mixed_dimension.py": "backend/tests/hmm_risk/test_b3_training.py",
     "scripts/hmm_risk/aggregate_transition_dwell_evidence.py": "backend/tests/hmm_risk/test_b3_evidence_aggregation.py",
+    "scripts/hmm_risk/build_observed_industry_authority.py": "backend/tests/hmm_risk/test_observed_industry_authority.py",
     "scripts/hmm_risk/build_rotation_l1_input_bundle.py": "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
     "scripts/hmm_risk/prepare_state_model_set.py": "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
     "scripts/hmm_risk/repair_b3_stock_fact_gaps.py": "backend/tests/hmm_risk/test_stock_fact_gap_repair.py",
@@ -4037,6 +4163,13 @@ def hmm_risk_backend(session: nox.Session) -> None:
     coverage_xml = evidence_dir / "coverage.xml"
     coverage_data = evidence_dir / ".coverage"
     junit_xml = evidence_dir / "junit.xml"
+    shard_env = _env({
+        "AISTOCK_TEST_PLAN": "hmm_risk_backend", **HMM_TEST_NUMERIC_ENV,
+        "AISTOCK_TEST_DIAGNOSTICS_RECEIPT": (
+            str(Path(os.environ["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"]).with_name("hmm-risk-test-failures.jsonl"))
+            if os.environ.get("AISTOCK_TEST_DIAGNOSTICS_RECEIPT") else ""
+        ),
+    })
     session.run(
         sys.executable,
         "-m",
@@ -4046,6 +4179,11 @@ def hmm_risk_backend(session: nox.Session) -> None:
         "scripts/hmm_risk",
         external=True,
     )
+    if _run_nightly_pytest_shards(session, ("backend/tests/hmm_risk",), (
+        "-m", "not integration", "--cov=backend.services.hmm_risk", "--cov=backend.db.init_hmm_risk_schema",
+        "--cov-branch", "--durations=10", "-q", "-p", "no:cacheprovider",
+    ), shard_env, coverage_file=coverage_data):
+        return
     session.run(
         sys.executable,
         "-m",

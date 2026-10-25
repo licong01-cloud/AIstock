@@ -315,7 +315,19 @@ def test_provider_previous_close_preserves_ex_rights_semantics_and_pit_entry_na(
         assert rows[0]["prev_close_yuan"] == 10.0
 
 
-@pytest.mark.parametrize("fault", [None, "duplicate", "unknown_industry", "date_gap"])
+@pytest.mark.parametrize(
+    "fault",
+    [
+        None,
+        "duplicate",
+        "unknown_industry",
+        "date_gap",
+        "classification_na",
+        "partial_na",
+        "invalid_na",
+        "duplicate_na",
+    ],
+)
 def test_database_stock_facts_use_official_projection_and_canonical_l2_collection(case, monkeypatch, fault):
     request, bundle, connection, *_ = case
     frozen, _, _ = core.model_source(request)
@@ -333,6 +345,25 @@ def test_database_stock_facts_use_official_projection_and_canonical_l2_collectio
         data[-1] = {**data[-1], "l2_code": "unregistered"}
     elif fault == "date_gap":
         data = data[:2]
+    elif fault in {"classification_na", "partial_na", "invalid_na", "duplicate_na"}:
+        for row in data:
+            if row["trade_date"] == days[-1] and (fault != "partial_na" or row["symbol"] == "000001.SZ"):
+                row.update(
+                    l1_code=None,
+                    l2_code=None,
+                    industry_pit_resolution={
+                        "status": "unavailable",
+                        "canonical_symbol": row["symbol"],
+                        "trade_date": row["trade_date"].isoformat(),
+                        "l1_code": None,
+                        "l2_code": None,
+                        "reason_code": "classification_authority_unavailable",
+                    },
+                )
+        if fault == "invalid_na":
+            data[-1]["l2_code"] = frozen["catalog"][0]
+        elif fault == "duplicate_na":
+            data.append(dict(data[-1]))
     adapter = object()
     monkeypatch.setattr(core.reader, "_industry_adapter", lambda *a, **k: adapter)
     monkeypatch.setattr(core.reader, "_canonical_sector_codes", lambda a: ([], frozen["catalog"]))
@@ -342,6 +373,7 @@ def test_database_stock_facts_use_official_projection_and_canonical_l2_collectio
     class Reader:
         def __init__(self, active, spec, **kwargs):
             assert active is connection and kwargs["industry_pit_adapter"].adapter is adapter
+            assert kwargs["preserve_unavailable_classification"] is True
             assert spec.universe_key == request["source"]["universe_key"]
             assert spec.circ_mv_history_start == db.SOURCE_START
 
@@ -362,18 +394,35 @@ def test_database_stock_facts_use_official_projection_and_canonical_l2_collectio
 
     def collect(day, rows, **kw):
         assert kw["levels"] == ("L2",) and kw["eligibility"] is frozen["eligibility"]
-        assert [r["l1_code"] for r in rows] == ["a", "b"]
+        expected = (
+            []
+            if day == days[-1] and fault == "classification_na"
+            else ["a"]
+            if day == days[-1] and fault == "partial_na"
+            else ["a", "b"]
+        )
+        assert [r["l1_code"] for r in rows] == expected
         seen.append(day)
 
     monkeypatch.setattr(db, "PostgresStockFactReader", Reader)
     monkeypatch.setattr(db, "_collect_domains", collect)
-    if fault:
+    if fault in {"duplicate", "unknown_industry", "date_gap", "invalid_na", "duplicate_na"}:
         with pytest.raises(FormalStateError):
             db._aggregates(request, connection, frozen, plan)
     else:
-        window, _, _, identity = db._aggregates(request, connection, frozen, plan)
+        window, _, reasons, identity = db._aggregates(request, connection, frozen, plan)
         assert list(window) == seen == days
         assert len(identity["source_facts_sha256"]) == 64
+        if fault in {"classification_na", "partial_na"}:
+            audit = identity["classification_unavailable"]
+            assert len(audit) == 1 and audit[0]["trade_date"] == days[-1].isoformat()
+            assert audit[0]["count"] == (2 if fault == "classification_na" else 1)
+            assert audit[0]["reason_counts"] == {"classification_authority_unavailable": audit[0]["count"]}
+            if fault == "classification_na":
+                assert all(
+                    reasons[(days[-1].isoformat(), code)] == "hmm_risk_industry_pit_classification_unavailable"
+                    for code in frozen["catalog"]
+                )
 
 
 def test_bounded_projection_preserves_dates_identity_and_real_transition():
@@ -481,6 +530,40 @@ def test_prepare_uses_one_original_feature_kernel_and_never_queries_target_day(c
     assert actual["model_identity"] == bundle["model_identity"]
     assert actual["rows"]["2026-08-28"][frozen["catalog"][0]]["features"] == [1.0] * 20
     assert connection.rollback_count == connection.close_count == 0  # Caller owns its transaction.
+
+
+def test_real_feature_kernel_preserves_full_na_catalog_without_filling_classification(case, monkeypatch):
+    request, bundle, connection, *_ = case
+    frozen, _, _ = core.model_source(request)
+    plan = db._read_plan(request, connection)
+    window = tuple(date.fromisoformat(d) for d in plan["calendar"] if plan["start"] <= d <= plan["end"])
+    benchmark = {day: 0.001 for day in window}
+    _, definition, _ = core.build_c010_feature_domain_panel(
+        [],
+        trading_dates=window,
+        csi300_returns=benchmark,
+        expected_sector_count=131,
+        direct_sector_level="L2",
+        canonical_sector_codes=frozen["catalog"],
+    )
+    frozen["feature_definition"] = definition
+    reasons = {
+        (observed, code): "hmm_risk_industry_pit_classification_unavailable"
+        for observed in plan["as_of"].values()
+        for code in frozen["catalog"]
+    }
+    monkeypatch.setattr(db, "_aggregates", lambda *a: (window, [], reasons, bundle["inference_identity"]))
+    monkeypatch.setattr(db, "_benchmark", lambda *a: benchmark)
+    with no_training_or_external_actions():
+        actual = db.prepare(request, "f" * 40, connection=connection)
+        db.validate_bundle(request, actual, actual["receipt_sha256"])
+    assert actual["inference_identity"]["source_dates"] == [d.isoformat() for d in window]
+    for rows in actual["rows"].values():
+        assert list(rows) == frozen["catalog"] and len(rows) == 131
+        assert all(
+            row["features"] is None and row["reason_code"] == "hmm_risk_industry_pit_classification_unavailable"
+            for row in rows.values()
+        )
 
 
 def test_cli_database_dispatch_preserves_file_default_and_children_cannot_read_db(case, tmp_path, monkeypatch):

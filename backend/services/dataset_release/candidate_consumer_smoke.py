@@ -492,10 +492,15 @@ def _load_raw_index_month(path: Path, *, cutoff: date, max_rows: int, checkpoint
     if tuple(raw.columns) != RAW_COLUMNS or pq.ParquetFile(parquet).metadata.num_rows > max_rows:
         raise CandidateConsumerSmokeError("raw index month storage/schema bound differs")
     checkpoint()
-    frame = pd.read_parquet(parquet)
+    start = cutoff.replace(day=1)
+    # Corrections may retain normalized historical facts in this shared file.
+    # Validate the requested month, not its already retained historical prefix.
+    frame = pd.read_parquet(parquet, filters=[
+        ("datetime", ">=", pd.Timestamp(start)),
+        ("datetime", "<=", pd.Timestamp(cutoff)),
+    ])
     if tuple(frame.columns) != INDEX_H5_COLUMNS or tuple(frame.index.names) != ("datetime", "instrument"):
         raise CandidateConsumerSmokeError("normalized index month schema differs")
-    start = cutoff.replace(day=1)
     dates = pd.to_datetime(frame.index.get_level_values("datetime"))
     if frame.empty or frame.index.has_duplicates or not np.isfinite(frame.to_numpy(dtype=float)).all() or any(not start <= day <= cutoff for day in dates.date):
         raise CandidateConsumerSmokeError("normalized index month dates/values differ")
