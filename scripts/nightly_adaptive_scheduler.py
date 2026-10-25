@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,13 @@ STATUS_FAILURE_MODULES = {
 BASELINE_NIGHTLY_PLAN_KEYS = ("l0",)
 CHANGE_FILE_ONLY_PLAN_KEYS = frozenset({"l0"})
 CHANGE_FILE_ONLY_SESSIONS = frozenset({"l0"})
+# miniQMT paper simulation is retired. Shared/LocalSIM and the independent
+# MiniQMT execution runtime remain eligible; historical failed receipts cannot
+# reintroduce the retired simulation lanes.
+RETIRED_SIMULATION_PLANS = frozenset({
+    "paper_v2_live", "miniqmt_sim_stub_l3", "miniqmt_sim_trading_hours_l5",
+    "simulation_dual_backend_l4",
+})
 CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".go", ".sql", ".sh", ".ps1")
 
 
@@ -186,8 +194,26 @@ def build_nightly_execution_plan(
         raise ValueError("unmapped executable code in Nightly change window: " + ", ".join(unmatched_code))
 
     plans = issue_flow._plans_by_key()
+    retired_plans = set(RETIRED_SIMULATION_PLANS) | {
+        key for key, plan in plans.items()
+        if str(plan.get("nox_session") or "") in RETIRED_SIMULATION_PLANS}
+    operational_plans = {key for key, plan in plans.items() if plan.get("execution_scope") == "operations"}
+    retired_sessions = set(RETIRED_SIMULATION_PLANS) | {
+        str(plan.get("nox_session") or "") for key, plan in plans.items()
+        if key in retired_plans}
+    operational_sessions = {str(plans[key].get("nox_session") or "") for key in operational_plans}
+    automation_denied = {key for key, plan in plans.items()
+                         if (plan.get("runtime_policy") or {}).get("allow_github_actions") is False}
+    denied_sessions = {str(plans[key].get("nox_session") or ""): key for key in automation_denied}
     retry_context = retry_context or {}
     retry_sessions = unique_values([str(item) for item in retry_context.get("failed_sessions") or []])
+    retired_retry_sessions = [session for session in retry_sessions if session in retired_sessions]
+    retry_sessions = [session for session in retry_sessions if session not in retired_sessions]
+    operational_retry_sessions = [session for session in retry_sessions if session in operational_sessions]
+    excluded_automation = {denied_sessions[session]: "not_executed: catalog allow_github_actions=false"
+                           for session in retry_sessions if session in denied_sessions}
+    retry_sessions = [session for session in retry_sessions
+                      if session not in operational_sessions and session not in denied_sessions]
     plan_keys = [] if full_run or not normalized else list(BASELINE_NIGHTLY_PLAN_KEYS)
     if full_run:
         plan_keys.extend(
@@ -207,6 +233,8 @@ def build_nightly_execution_plan(
     selected_sessions: list[str] = []
     nightly_plan_keys: list[str] = []
     for key in unique_values(plan_keys):
+        if key in operational_plans or key in retired_plans:
+            continue
         plan = plans.get(key) or {}
         if not full_run and plan.get("execution_scope") == "pr":
             replacement_key = str(plan.get("nightly_replacement_plan") or "").strip()
@@ -221,6 +249,11 @@ def build_nightly_execution_plan(
             ):
                 raise ValueError(f"Nightly replacement plan is invalid for PR-only plan {key}: {replacement_key}")
             key = replacement_key
+        if key in retired_plans:
+            continue
+        if key in automation_denied:
+            excluded_automation[key] = "not_executed: catalog allow_github_actions=false"
+            continue
         if key not in nightly_plan_keys:
             nightly_plan_keys.append(key)
 
@@ -236,6 +269,8 @@ def build_nightly_execution_plan(
         str(plan.get("nox_session") or "").strip(): key
         for key, plan in plans.items()
         if plan.get("execution_scope") != "pr"
+        and key not in retired_plans
+        and key not in automation_denied
         and plan.get("enabled", True)
         and plan.get("runner_enabled")
         and str(plan.get("nox_session") or "").strip()
@@ -249,6 +284,18 @@ def build_nightly_execution_plan(
             selected_plan_keys.append(retry_plan_key)
         if session not in selected_sessions:
             selected_sessions.append(session)
+    # Order only already selected full producers; never add unrelated plans.
+    producers = {
+        "validation_center_backend": {"validation_workflow_automation", "data_sync_autonomy_backend",
+                                      "validation_module_registry_l0", "validation_catalog_integrity"},
+        "mcp_gateway_manifest_quality": {"research_mcp_contract", "mcp_gateway_phase6_resource_monitor"},
+    }
+    for producer, consumers in producers.items():
+        if producer in selected_sessions:
+            consumer_positions = [index for index, session in enumerate(selected_sessions) if session in consumers]
+            if consumer_positions and min(consumer_positions) < selected_sessions.index(producer):
+                selected_sessions.remove(producer)
+                selected_sessions.insert(min(consumer_positions), producer)
     change_scoped_files = unique_values(
         [
             *[str(path) for path in retry_context.get("change_scoped_files") or []],
@@ -260,6 +307,14 @@ def build_nightly_execution_plan(
         for session in selected_sessions
         if session in CHANGE_FILE_ONLY_SESSIONS and change_scoped_files
     }
+    session_budgets: dict[str, int] = {}
+    for key in selected_plan_keys:
+        plan = plans[key]
+        budget = plan.get("max_duration_seconds")
+        if isinstance(budget, bool) or not isinstance(budget, int) or budget <= 0:
+            raise ValueError(f"Nightly plan requires a positive integer max_duration_seconds: {key}")
+        session = str(plan["nox_session"])
+        session_budgets[session] = max(budget, session_budgets.get(session, 0))
     return {
         "schema_version": "aistock_nightly_execution_plan_v1",
         "watermark": watermark,
@@ -268,6 +323,11 @@ def build_nightly_execution_plan(
         "changed_files_count": len(normalized),
         "full_run": full_run,
         "excluded_change_file_only_plans": sorted(CHANGE_FILE_ONLY_PLAN_KEYS) if full_run else [],
+        "excluded_operational_plans": sorted(operational_plans),
+        "excluded_operational_retry_sessions": operational_retry_sessions,
+        "excluded_retired_simulation_plans": sorted(retired_plans),
+        "excluded_retired_simulation_retry_sessions": retired_retry_sessions,
+        "excluded_automation_plans": excluded_automation,
         "excluded_pr_only_plans": (
             sorted(key for key, plan in plans.items() if plan.get("execution_scope") == "pr") if full_run else []
         ),
@@ -277,6 +337,7 @@ def build_nightly_execution_plan(
         "retry_source_head": retry_context.get("source_head"),
         "retry_recovery_kind": retry_context.get("recovery_kind"),
         "session_positional_args": session_positional_args,
+        "session_timeout_seconds": session_budgets,
         "impacted_modules": selection.get("impacted_modules") or [],
         "unmatched_code_files": unmatched_code,
         "advance_change_window_on_durable_receipt": True,
@@ -314,6 +375,8 @@ def collect_statuses(*, status_json: Path | None, inline_statuses: list[str] | N
 def recent_failure_modules_from_statuses(statuses: dict[str, str]) -> list[str]:
     modules: list[str] = []
     for key, value in statuses.items():
+        if key == "paper_v2_live":
+            continue  # A historical status must not revive the retired job.
         if value.strip().lower() in FAILURE_STATUSES:
             modules.extend(STATUS_FAILURE_MODULES.get(key, []))
     return unique_values(modules)
@@ -346,6 +409,32 @@ def code_intelligence_refs_from_artifact(path: Path | None) -> dict[str, Any]:
     return llm_provider_adapter.code_intelligence_refs_from_file(path)
 
 
+def exclude_retired_simulation_advice(advice: dict[str, Any]) -> dict[str, Any]:
+    """Apply retirement after provider advice, including legacy failure inputs.
+
+    Keep a visible deferred row for audit while removing retired plans from
+    every consumable plan list. This policy cannot be overridden by an LLM.
+    """
+    result = dict(advice)
+    queue = []
+    exclusions = {}
+    for original in advice.get("queue") or []:
+        item = dict(original)
+        key = str(item.get("plan_key") or "")
+        session = str(item.get("nox_session") or "")
+        if key in RETIRED_SIMULATION_PLANS or session in RETIRED_SIMULATION_PLANS:
+            reason = "not_executed: retired miniQMT paper simulation; LocalSIM remains active"
+            item.update(allowed=False, deferred_reason=reason)
+            exclusions[key] = reason
+        queue.append(item)
+    result["queue"] = queue
+    for field in ("deterministic_plan_keys", "advised_plan_keys", "executed_plan_keys"):
+        result[field] = [key for key in advice.get(field) or []
+                         if key not in RETIRED_SIMULATION_PLANS and key not in exclusions]
+    result["excluded_retired_simulation_plans"] = exclusions
+    return result
+
+
 def build_report(
     *,
     provider: str,
@@ -373,6 +462,7 @@ def build_report(
         invoke_llm=invoke_llm,
         fallback_on_llm_error=fallback_on_llm_error,
     )
+    advice = exclude_retired_simulation_advice(advice)
     gate = advice["deterministic_gate"]
     allowed = [item for item in advice["queue"] if item.get("allowed")]
     deferred = [item for item in advice["queue"] if not item.get("allowed")]
@@ -407,6 +497,7 @@ def build_report(
             "resource_budget_seconds": advice["resource_budget_seconds"],
         },
         "queue": advice["queue"],
+        "excluded_retired_simulation_plans": advice["excluded_retired_simulation_plans"],
         "deterministic_plan_keys": advice.get("deterministic_plan_keys") or [],
         "advised_plan_keys": advice.get("advised_plan_keys") or [],
         "executed_plan_keys": advice.get("executed_plan_keys") or [str(item["plan_key"]) for item in allowed],
@@ -445,6 +536,13 @@ def render_markdown(report: dict[str, Any]) -> str:
         "This warning-only job emits plan keys and gate evidence only. It does not create GitHub Issues, run shell commands, touch production services, or write BUG JSON.",
         "",
     ]
+    execution = report.get("nightly_execution") or {}
+    retired_exclusions = report.get("excluded_retired_simulation_plans") or {}
+    lines.extend(f"- {key}: `{reason}`" for key, reason in retired_exclusions.items())
+    retired_retries = execution.get("excluded_retired_simulation_retry_sessions") or []
+    if retired_retries:
+        lines.append(f"- retired retry sessions not executed: `{','.join(retired_retries)}`")
+    lines.extend(f"- {key}: `{reason}`" for key, reason in (execution.get("excluded_automation_plans") or {}).items())
     return "\n".join(lines)
 
 
@@ -453,6 +551,8 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
     input_refs = report.get("input_refs") if isinstance(report.get("input_refs"), dict) else {}
     return {
         "schema_version": report.get("schema_version"),
+        "head_commit": report.get("head_commit"),
+        "run_id": report.get("run_id"),
         "workflow_gate": report.get("workflow_gate"),
         "llm_gate": report.get("llm_gate"),
         "execution_mode": report.get("execution_mode"),
@@ -474,6 +574,10 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
             "resource_budget_seconds": queue.get("resource_budget_seconds"),
         },
         "queue": report.get("queue") or [],
+        "excluded_retired_simulation_plans": report.get("excluded_retired_simulation_plans") or {},
+        "excluded_retired_simulation_retry_sessions": (
+            report.get("nightly_execution") or {}
+        ).get("excluded_retired_simulation_retry_sessions") or [],
         "deterministic_plan_keys": report.get("deterministic_plan_keys") or [],
         "advised_plan_keys": report.get("advised_plan_keys") or [],
         "executed_plan_keys": report.get("executed_plan_keys") or [],
@@ -486,6 +590,7 @@ def public_scheduler_report(report: dict[str, Any]) -> dict[str, Any]:
         "production_gates": report.get("production_gates") or {},
         "shell_commands_allowed": False,
         "production_actions_allowed": False,
+        "nightly_execution_exclusions": (report.get("nightly_execution") or {}).get("excluded_automation_plans") or {},
         "error": report.get("error"),
     }
 
@@ -519,6 +624,8 @@ def _print_compact(report: dict[str, Any], *, as_json: bool, output: Path | None
         "allowed_plan_count": len(queue.get("allowed_plan_keys") or []),
         "artifact": str(output) if output else None,
     }
+    if report.get("error"):
+        compact["error"] = report["error"]
     if as_json:
         print(json.dumps(compact, ensure_ascii=False, sort_keys=True))
         return
@@ -644,6 +751,8 @@ def main(argv: list[str] | None = None) -> int:
                 "production_backend_dependency_gate": "noop",
             },
         }
+    report["head_commit"] = args.head_commit
+    report["run_id"] = os.environ.get("GITHUB_RUN_ID")
     _write_json(output, public_scheduler_report(report))
     _write_text(markdown_output, render_markdown(report))
     _print_compact(report, as_json=args.json, output=output)

@@ -460,22 +460,24 @@ def test_leaderboard_marks_open_active_episodes_from_latest_market_data() -> Non
     active_rows = {row["symbol"]: row for row in service.active_pool(program.program_id)}
     return_rows = {row["symbol"]: row for row in service.return_history(program.program_id)}
 
-    assert metrics["take_profit_count"] == 1
-    assert metrics["stop_loss_count"] == 1
-    assert metrics["win_rate"] == 0.5
-    assert metrics["avg_return_bps"] == pytest.approx(0.0)
-    assert metrics["median_return_bps"] == pytest.approx(0.0)
-    assert metrics["max_drawdown_bps"] == pytest.approx(-1000.0)
-    assert metrics["avg_holding_days"] == 2
-    assert metrics["metric_status"] == "READY"
-    assert metrics["metric_evaluable_count"] == 2
+    assert metrics["take_profit_count"] == 0
+    assert metrics["stop_loss_count"] == 0
+    assert metrics["win_rate"] is None
+    assert metrics["avg_return_bps"] is None
+    assert metrics["median_return_bps"] is None
+    assert metrics["max_drawdown_bps"] is None
+    assert metrics["avg_holding_days"] is None
+    assert metrics["unrealized"]["gross"]["win_rate"] == 0.5
+    assert metrics["unrealized"]["gross"]["avg_return_bps"] == pytest.approx(0.0)
+    assert metrics["metric_status"] == "UNREALIZED_ONLY"
+    assert metrics["metric_evaluable_count"] == 0
     assert metrics["open_mark_count"] == 2
     assert metrics["missing_open_mark_count"] == 0
     assert metrics["metric_mark_trade_date"] == "2026-06-02"
-    assert board_row["take_profit_count"] == 1
-    assert board_row["stop_loss_count"] == 1
-    assert board_row["win_rate"] == 0.5
-    assert board_row["metric_status"] == "READY"
+    assert board_row["take_profit_count"] == 0
+    assert board_row["stop_loss_count"] == 0
+    assert board_row["win_rate"] is None
+    assert board_row["metric_status"] == "UNREALIZED_ONLY"
     assert active_rows["000001.SZ"]["return_bps"] == pytest.approx(1000.0)
     assert active_rows["000001.SZ"]["win_rate_inclusion_status"] == "OPEN_MARK_TO_MARKET"
     assert return_rows["000002.SZ"]["still_active_mark_price"] == 18.0
@@ -507,8 +509,10 @@ def test_replay_uses_default_next_open_entry_basis_and_records_win_rate() -> Non
     episode = replay["episodes"][0]
     assert episode["entry_price_basis"] == PRICE_BASIS_NEXT_OPEN
     assert episode["effective_entry_date"] == "2026-06-02"
-    assert replay["summary"]["win_rate"] == 1.0
-    assert replay["summary"]["avg_return_bps"] == pytest.approx(1000.0)
+    assert episode["return_bps"] == pytest.approx(1000.0)  # holding mark, not a settled exit
+    assert replay["summary"]["win_rate"] is None
+    assert replay["summary"]["avg_return_bps"] is None
+    assert replay["summary"]["metric_evaluable_count"] == 0
 
 
 def test_replay_can_run_real_selection_service_when_fixture_candidates_are_absent() -> None:
@@ -552,7 +556,8 @@ def test_replay_can_run_real_selection_service_when_fixture_candidates_are_absen
     )
 
     assert len(replay["daily_reviews"]) == 2
-    assert replay["summary"]["win_rate"] == 1.0
+    assert replay["summary"]["win_rate"] is None
+    assert replay["summary"]["settled"]["gross"]["sample_count"] == 0
 
 
 def test_replay_hydrates_missing_active_market_marks_like_daily_review(monkeypatch) -> None:
@@ -947,7 +952,7 @@ def test_review_marks_active_holding_not_in_current_topk_instead_of_waiting_evid
     assert decision.review_status == "SUCCEEDED"
     assert decision.return_bps == pytest.approx(1000.0)
     assert decision.evidence_json["component_scores"]["active_holding_review"]["reason_code"] == "NOT_IN_CURRENT_TOPK"
-    assert first_review.metrics["win_rate"] == 1.0
+    assert first_review.metrics["win_rate"] is None  # HOLD mark is not a settled win.
 
     second_review = service.run_review(
         program.program_id,

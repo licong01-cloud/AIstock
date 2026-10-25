@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
+import pytest
+
 from scripts import aistock_validation_budget as audit
 
 
@@ -44,7 +46,7 @@ const second = 2; // inline comment still belongs to code
     assert audit._effective_sloc(source, ".ts") == 2
 
 
-def test_build_audit_counts_tracked_code_once_by_primary_owner(tmp_path: Path) -> None:
+def test_build_audit_counts_tracked_code_once_by_primary_owner(tmp_path: Path, monkeypatch) -> None:
     paths = [
         "backend/services/example.py",
         "backend/tests/test_example.py",
@@ -92,6 +94,18 @@ def test_build_audit_counts_tracked_code_once_by_primary_owner(tmp_path: Path) -
     assert rows["docs"]["production_sloc"] == 1
     assert report["totals"]["test_only_bucket_count"] == 1
     assert all(row["module_id"] != "__unmapped__" for row in report["modules"])
+    read_sloc = audit._read_sloc
+    def selected_only(root, path):
+        assert catalog.match_path(path).primary_module == "example"
+        return read_sloc(root, path)
+    monkeypatch.setattr(audit, "_read_sloc", selected_only)
+    selected = audit.build_audit(repo_root=tmp_path, catalog=catalog, tracked_paths=paths,
+                                module_ids=["example"], top_files=1)
+    assert selected["modules"] == [rows["example"]]
+    assert selected["totals"]["skipped_unselected_module_files"] == 2
+    with pytest.raises(ValueError, match="no executable tracked files"):
+        audit.build_audit(repo_root=tmp_path, catalog=catalog, tracked_paths=paths, module_ids=["missing"])
+    assert audit.main(["--module", "example", "--fail-test-only-owner", "tests.backend"]) == 2
 
 
 def test_test_path_detection_covers_helpers_and_language_conventions() -> None:
@@ -102,6 +116,31 @@ def test_test_path_detection_covers_helpers_and_language_conventions() -> None:
     assert not audit._is_test_path("backend/services/testing_policy.py")
 
 
+@pytest.mark.parametrize("path,layer,is_test", [
+    ("noxfile.py", "test_runner", False),
+    ("backend/tests/conftest.py", "test_runner", True),
+    ("support/fixture.py", "backend_test_helper", True),
+    ("support/new_fixture.py", "future_test_helper", True),
+    ("scripts/test_contract.py", "script", True),
+])
+def test_runner_role_is_not_assertion_code_but_test_paths_and_helpers_still_count(tmp_path, path, layer, is_test):
+    _write(tmp_path, path, "value = 1\n")
+    report = audit.build_audit(repo_root=tmp_path, catalog=_Catalog({path: ("validation.runner", layer)}), tracked_paths=[path])
+    assert report["totals"]["test_sloc"] == int(is_test)
+    assert report["totals"]["production_sloc"] == int(not is_test)
+
+
+def test_operational_role_split_preserves_real_owners_and_dr_fixtures():
+    catalog = audit.FileOwnershipCatalog()
+    for path in ("scripts/dr_snapshot_prod_db.py", "scripts/dr_cleanup_old_snapshots.py"):
+        owner = catalog.match_path(path)
+        assert owner.primary_module == "validation.dr" and owner.layer == "script"
+    owner = catalog.match_path("backend/tests/dr/conftest.py")
+    assert owner.primary_module == "validation.dr" and owner.layer == "backend_test"
+    owner = catalog.match_path("noxfile.py")
+    assert owner.primary_module == "validation.runner" and owner.layer == "test_runner"
+
+
 def test_only_github_workflow_yaml_counts_as_executable_source() -> None:
     assert audit._is_executable_source(".github/workflows/test.yml")
     assert audit._is_executable_source(".github/workflows/nightly.yaml")
@@ -109,12 +148,8 @@ def test_only_github_workflow_yaml_counts_as_executable_source() -> None:
 
 
 def test_max_ratio_validation_is_fail_closed(tmp_path: Path) -> None:
-    try:
+    with pytest.raises(ValueError, match="max_ratio"):
         audit.build_audit(repo_root=tmp_path, catalog=_Catalog({}), tracked_paths=[], max_ratio=0)  # type: ignore[arg-type]
-    except ValueError as exc:
-        assert "max_ratio" in str(exc)
-    else:
-        raise AssertionError("invalid max_ratio must fail closed")
 
 
 def test_cli_rejects_explicit_forbidden_test_only_owner(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -156,7 +191,8 @@ def test_cli_rejects_explicit_forbidden_test_only_owner(tmp_path: Path, monkeypa
     assert "forbidden test-only owners: tests.backend" in capsys.readouterr().err
 
 
-def test_repository_has_no_executable_tests_in_generic_backend_bucket() -> None:
+@pytest.fixture(scope="module")
+def repository_catalog():
     root = audit.REPO_ROOT_FOR_IMPORT
     registry = audit.ModuleRegistry(root / "tests/aistock_validation/catalog/module_registry.yaml")
     catalog = audit.FileOwnershipCatalog(
@@ -165,6 +201,11 @@ def test_repository_has_no_executable_tests_in_generic_backend_bucket() -> None:
     )
     registry.load()
     catalog.load()
+    return root, catalog
+
+
+def test_repository_has_no_executable_tests_in_generic_backend_bucket(repository_catalog) -> None:
+    root, catalog = repository_catalog
 
     offenders = [
         path
@@ -177,15 +218,8 @@ def test_repository_has_no_executable_tests_in_generic_backend_bucket() -> None:
     assert offenders == []
 
 
-def test_workflow_automation_has_an_honest_production_denominator() -> None:
-    root = audit.REPO_ROOT_FOR_IMPORT
-    registry = audit.ModuleRegistry(root / "tests/aistock_validation/catalog/module_registry.yaml")
-    catalog = audit.FileOwnershipCatalog(
-        root / "tests/aistock_validation/catalog/file_ownership.yaml",
-        module_registry=registry,
-    )
-    registry.load()
-    catalog.load()
+def test_workflow_automation_has_an_honest_production_denominator(repository_catalog) -> None:
+    root, catalog = repository_catalog
 
     assert catalog.match_path("scripts/aistock_issue_workflow.py").primary_module == (
         "validation.workflow_automation"
@@ -199,6 +233,7 @@ def test_workflow_automation_has_an_honest_production_denominator() -> None:
         tracked_paths=audit._git_tracked_paths(root),
         max_ratio=0.30,
         top_files=1,
+        module_ids=["validation.workflow_automation"],
     )
     workflow = next(
         row for row in report["modules"] if row["module_id"] == "validation.workflow_automation"

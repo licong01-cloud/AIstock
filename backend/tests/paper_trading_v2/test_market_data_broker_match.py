@@ -24,7 +24,7 @@ def test_miniqmt_realtime_enum_value_exists() -> None:
 
 def test_allowed_market_sources_matches_design_3_6_4() -> None:
     assert ALLOWED_MARKET_SOURCES == {
-        "local_sim": {MinuteDataSource.TDX_REALTIME, MinuteDataSource.DB_HISTORICAL},
+        "local_sim": {MinuteDataSource.TDX_REALTIME, MinuteDataSource.DB_HISTORICAL, MinuteDataSource.DATASET_FILES},
         "minqmt_sim": {MinuteDataSource.MINIQMT_REALTIME},
         "minqmt_live": {MinuteDataSource.MINIQMT_REALTIME},
     }
@@ -35,6 +35,7 @@ def test_allowed_market_sources_matches_design_3_6_4() -> None:
     [
         ("local_sim", MinuteDataSource.TDX_REALTIME),
         ("local_sim", MinuteDataSource.DB_HISTORICAL),
+        ("local_sim", MinuteDataSource.DATASET_FILES),
         ("minqmt_sim", MinuteDataSource.MINIQMT_REALTIME),
         ("minqmt_live", MinuteDataSource.MINIQMT_REALTIME),
     ],
@@ -49,8 +50,10 @@ def test_assert_broker_market_source_match_accepts_allowed_pairs(broker_id: str,
         ("local_sim", MinuteDataSource.MINIQMT_REALTIME),
         ("minqmt_sim", MinuteDataSource.TDX_REALTIME),
         ("minqmt_sim", MinuteDataSource.DB_HISTORICAL),
+        ("minqmt_sim", MinuteDataSource.DATASET_FILES),
         ("minqmt_live", MinuteDataSource.TDX_REALTIME),
         ("minqmt_live", MinuteDataSource.DB_HISTORICAL),
+        ("minqmt_live", MinuteDataSource.DATASET_FILES),
     ],
 )
 def test_assert_broker_market_source_match_rejects_cross_pairing(broker_id: str, source: MinuteDataSource) -> None:

@@ -1,0 +1,470 @@
+{
+  "actual": "BUILD fails unresolved suspension day 601238.SH/2026-09-15 despite approved authority; old snapshot cannot accept new disclosure evidence.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/services/dataset_release/monthly_prev_close_repair.py",
+    "backend/services/dataset_release/monthly_shared_components.py",
+    "backend/routers/monthly_dataset_releases.py",
+    "scripts/monthly_unified_dataset_release.py",
+    "backend/tests/dataset_release/test_monthly_unified_v2.py",
+    "backend/tests/dataset_release/test_monthly_shared_components.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
+    "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+    "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "backend/services/dataset_release/monthly_suspension_repair.py",
+    "tests/aistock_validation/bugs/20261017_BUG-1961-sealed-monthly-source-cannot-bind-approved-suspension-disclosures-withou.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1961",
+  "closed_at": "2026-10-25T07:41:46.141434Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-17T12:06:07.463921Z",
+  "description": "BUILD fails unresolved suspension day 601238.SH/2026-09-15 despite approved authority; old snapshot cannot accept new disclosure evidence.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261017-b299a9db76d1",
+      "timestamp": "2026-10-17T12:06:07.463921Z"
+    }
+  ],
+  "evidence_uris": [
+    "SOURCE manifest CAS 4661b5666dd190288d0e27b35efe5c2a03349d84549723fbeb0d305107cf5007: fresh-process formal partition reader verified all 255 September suspend_d rows; unresolved before=1 (601238.SH/2026-09-15), after approved disclosure=0. No DB/source/export/profile write.",
+    "RED: test_sealed_suspension_supplement_is_explicit_bound_and_never_runtime_fallback failed before implementation. GREEN: 138 passed, 1 skipped in final related matrix, plus sole failed route-count assertion corrected and nodeid passed (139 passed total). Ruff, compile and changed-only L0 passed.",
+    "Review rounds: (1) explicit frozen-CAS authority and exact month/source/predecessor binding; (2) active predecessor race recheck, source/checkpoint immutability and real resume; (3) independent tamper paths, all-route authentication and final diff. DESIGN-COMPLIANCE-001: no partial-ready claim, no silent fallback, unchanged suspension/selection economics, no new approval or research gate. Source merge is not runtime activation or September READY."
+  ],
+  "expected": "Explicit source-bound disclosure amendment resolves legitimate suspended day, keeps prior source and price exports unchanged, and rejects mismatched evidence.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_suspension_repair.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1961-sealed-monthly-source-cannot-bind-approved-suspension-disclosures-withou.json"
+    ],
+    "added_files": [
+      "backend/services/dataset_release/monthly_suspension_repair.py"
+    ],
+    "changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_suspension_repair.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1961-sealed-monthly-source-cannot-bind-approved-suspension-disclosures-withou.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/services/dataset_release/monthly_prev_close_repair.py",
+        "backend/services/dataset_release/monthly_shared_components.py",
+        "backend/routers/monthly_dataset_releases.py",
+        "scripts/monthly_unified_dataset_release.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py",
+        "backend/tests/dataset_release/test_monthly_shared_components.py",
+        "backend/tests/routers/test_monthly_dataset_releases.py",
+        "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+        "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+        "backend/services/dataset_release/monthly_suspension_repair.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "docs.operations"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_unified.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_prev_close_repair.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_shared_components.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/routers/monthly_dataset_releases.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "scripts/monthly_unified_dataset_release.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_unified_v2.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_shared_components.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/routers/test_monthly_dataset_releases.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+          "impact_modules": [],
+          "primary_module": "docs.operations",
+          "risk_level": "medium",
+          "rule_id": "docs_operations"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_suspension_repair.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "medium"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/services/dataset_release/monthly_prev_close_repair.py",
+        "backend/services/dataset_release/monthly_shared_components.py",
+        "backend/routers/monthly_dataset_releases.py",
+        "scripts/monthly_unified_dataset_release.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py",
+        "backend/tests/dataset_release/test_monthly_shared_components.py",
+        "backend/tests/routers/test_monthly_dataset_releases.py",
+        "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+        "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+        "backend/services/dataset_release/monthly_suspension_repair.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/routers/monthly_dataset_releases.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "backend/services/dataset_release/monthly_suspension_repair.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/routers/monthly_dataset_releases.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+      "backend/services/dataset_release/monthly_suspension_repair.py"
+    ]
+  },
+  "first_seen_at": "2026-10-17T12:06:07.463921Z",
+  "fix_branch": null,
+  "fix_commit": "96ca602853b499c57b42a785f4dd4ba7ea244417",
+  "fixed_at": "2026-10-17T12:25:34Z",
+  "github_issue_number": 6260,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6260",
+  "last_seen_at": "2026-10-17T12:06:07.463921Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6262",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "Fresh AIstock Python processes imported the tracked runtime binding/builder; real CAS test resolved the official 601238.SH day and emitted immutable source/authority lineage; source/predecessor/hash drift and conflicting disclosure rejected. The actual sealed September CAS partition was independently read via CASSealedPartitionReader: 255 rows, only old unresolved key resolved by approved announcement 2026-049. Runtime worker not yet reloaded; no database/source/export/profile write.",
+      "Fresh AIstock Python imported tracked monthly_suspension_repair and router, strict CAS real binding and actual sealed September partition readback passed; runtime activation pending user restart."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1961-remaining.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1961",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "96ca602853b499c57b42a785f4dd4ba7ea244417",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:29:48.541905Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "b547d5fcc1be5b286d0ec429a3647c41dd92c08d2b87799ac1ab496367c6b24a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6f493cafeccc908de893e1516650eb835a5e51bd10b20306c10963d048f2fa9f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1961",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bc3e1b355d84ba1d",
+    "recorded_at": "2026-10-17T12:26:19.434675Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "66d14daba29059f3a54f51632fa353cc0274338c",
+    "source_merge_commit": "96ca602853b499c57b42a785f4dd4ba7ea244417",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6262",
+    "validation_evidence": [
+      "python -m nox -s l0 -- --changed-only -> passed"
+    ],
+    "validation_evidence_digest": "5baf529a7bef4853bd57d04e990c5d8bf5d0cb8d03eaf076c233debe3ccbc663"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Sealed monthly SOURCE cannot bind approved suspension disclosures without losing completed exports",
+  "trigger_condition": {
+    "fingerprint": "b299a9db76d1aeca67c59454",
+    "source_event_id": "FE-20261017-b299a9db76d1"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -- --changed-only -> passed",
+    "Source merge independently confirmed; official current runtime identity/business smoke PASS; metadata-only close-sync; original validations retained; no new data scans, DB writes or service control"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

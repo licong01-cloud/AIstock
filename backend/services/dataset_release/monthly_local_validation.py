@@ -24,6 +24,7 @@ from .monthly_official_adapters import (
 )
 from .monthly_unified import REQUIRED_CONSUMERS
 from .monthly_worker import ProducerContext
+from .monthly_file_identity import file_sha256
 from .profile_contract import ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS
 from .monthly_shared_components import CORE_INDEX_COVERAGE_SCHEMA
 
@@ -64,11 +65,7 @@ def _is_link(path: Path) -> bool:
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return file_sha256(path)
 
 
 def _read_canonical(path: Path, *, label: str) -> dict[str, Any]:
@@ -601,6 +598,12 @@ class MonthlyCandidateLocalValidationExecutor:
             "release-lineage.json",
             *(f"consumer-contract-{name}.json" for name in REQUIRED_CONSUMERS),
         }
+        # BUILD owns B0 provenance, sealed by the same dataset manifest. It
+        # must survive LOCAL_VALIDATE; unpinned foreign entries still fail.
+        expected_names.update(
+            Path(relative).name for relative in manifest_paths
+            if Path(relative).parent.as_posix() == "provenance"
+        )
         if provenance.exists():
             if _is_link(provenance) or not provenance.is_dir():
                 raise MonthlyLocalValidationError("candidate provenance root is invalid")
