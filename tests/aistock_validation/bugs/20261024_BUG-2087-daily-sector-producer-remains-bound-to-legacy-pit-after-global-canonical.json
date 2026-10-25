@@ -10,7 +10,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2087",
-  "closed_at": null,
+  "closed_at": "2026-10-25T06:22:41.039431Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -161,10 +161,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\longtask-20261025\\postrestart-BUG-2087-r3.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2087",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "ea95df2dd4bc371f493e4b3b9f4594a1e35f89df3f833abe2fac32992a34bfa3",
+      "expected_identity": "f34b8e3593e070db56206e9610b061740c22df31",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T06:20:51.459467Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "f2bc4b6619991f3bf9f39b77b387b5a27d2a29ef612e7c4ee0d89ad9250cbf07",
+      "receipt_sha256": "d8f95dd0e5a676e4bd31dfbc077c38424475c2e50a08b7afb4df9cad12f34ab6",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1d188b14d824bfe795f0efbbc8faeb5cab3f53a768a49931c82fc40a2d439c89",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -195,7 +217,7 @@
     ],
     "validation_evidence_digest": "3dbbda0a53d9f787aff84da773d2ef7af8cafa83b24299ff6f4b6d9fc7470f89"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -205,7 +227,8 @@
     "source_event_id": "FE-20261024-2408bd7a1737"
   },
   "validation_evidence": [
-    "PR #6677 CI verdict -> passed"
+    "PR #6677 CI verdict -> passed",
+    "Four-day production build/readback 19668 rows and six defect counters zero; X:/AIstock_temp/DATA_PREPARATION/longtask-20261025/targeted-readback-071945.json; DEV sector-fix-validation.json reused -> passed"
   ],
   "verification_budget": {
     "budget": "standard",
