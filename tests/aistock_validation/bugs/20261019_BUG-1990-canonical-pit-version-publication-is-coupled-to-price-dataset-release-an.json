@@ -21,6 +21,13 @@
   ],
   "created_at": "2026-10-19T14:29:10.083761Z",
   "description": "Independent PIT version publication is missing from main; the old unmerged PR #6373 mixed the publisher with a v2-to-v3 default migration. Preserve current active canonical v2 and immutable task/data bindings. Later merged BUG-2005/#6409 and BUG-2050/#6540 already cover lifecycle-based exclusions and global activation; salvage only the independent read-only capture/file publisher. Also accept an explicit independently sealed PIT binding by policy identity instead of confusing fact-catalog storage names with eligibility policy. Preserve the existing strict legacy path for profiles without an explicit binding.",
+  "design_compliance_001": {
+    "no_business_logic_change": "Canonical v2 rule/digest/default and saved task identities unchanged. Fact catalogs remain facts, selection remains independent PIT.",
+    "no_new_approval": "Reuse existing file snapshots, singleton and validation/publishing workflow. No new runtime/approval or data gate.",
+    "no_silent_failure": "Reject changed digests, sample bindings, cutoff mismatch, malformed versions and unsafe DB sessions; publish atomically/create-exclusively.",
+    "no_unapproved_simplification": "Independent version files plus actual DB readback and real contract tests; no private/module PIT or v3 migration.",
+    "remaining_gaps": "Shared policy comparison requires one user-owned backend restart and read-only verification after source merge; no production migration/activation is requested."
+  },
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -31,8 +38,36 @@
   ],
   "evidence_uris": [],
   "expected": "One global new-task PIT default; independent immutable PIT versions; fact datasets reference policy snapshots without controlling quote visibility; no monthly rebuild prerequisite.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/canonical_pit_release.py",
+      "backend/tests/test_canonical_pit_release.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "scripts/manage_canonical_pit_release.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1990-canonical-pit-version-publication-is-coupled-to-price-dataset-release-an.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files": [
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/canonical_pit_release.py",
+      "backend/tests/test_canonical_pit_release.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/ci_change_classifier.py",
+      "scripts/manage_canonical_pit_release.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1990-canonical-pit-version-publication-is-coupled-to-price-dataset-release-an.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1"
+  },
   "first_seen_at": "2026-10-19T14:29:10.083761Z",
   "fix_branch": null,
+  "fix_summary": "Preserve active canonical v2, add read-only capture/list/offline verify of immutable PIT observations, reuse existing frozen snapshot/binding contracts and singleton; compare an explicit frozen binding by policy and cutoff, keep strict legacy behavior without one. No v3 default or consumer changes.",
   "fixed_at": null,
   "github_issue_number": 6371,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6371",
@@ -42,6 +77,11 @@
     "No database DDL/DML, PIT rebuild, activation, dataset/profile mutation, consumer/model changes, service/process control or experiments.",
     "Do not change active v2 policy to v3 or rewrite prior frozen identities."
   ],
+  "prior_unmerged_implementation": {
+    "disposition": "Retained until replacement source is reviewed/merged; stale v3 policy and consumer changes are not adopted.",
+    "head": "7cd29d994676604c926deb9bcc2943cbfcd63a32",
+    "pr": 6373
+  },
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -53,6 +93,29 @@
     "guardrail_changed_files"
   ],
   "risk_area": "bug",
+  "root_cause": "Independent publisher remained only in unmerged mixed-policy PR #6373. Shared publication validation also compared physical fact-catalog names instead of an explicit immutable policy binding.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "New process: 53 direct canonical policy/release/frozen consumer tests passed; actual DEV read-only capture verified 5343 securities/5662 spans through 2026-09-30, DEV live legacy generation zero unchanged. Production/active dataset/PIT writes and process control remain false.",
+      "Fresh Python direct canonical policy/PIT release/frozen consumer matrix 53 passed; actual read-only DEV capture 5343 symbols and 5662 spans, default pointer unchanged; no DB or active profile writes."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
   "status": "open",
@@ -64,6 +127,10 @@
     "fingerprint": "5b3955168afc50df7a0f330e",
     "source_event_id": "FE-20261019-5b3955168afc"
   },
+  "validation_evidence": [
+    "RED missing independent module; RED explicit policy binding rejected with physical-catalog mismatch. GREEN 53 related contract tests; Ruff and existing registry/catalog/changed-file checks passed.",
+    "Three self-review rounds: immutable atomic files and JSON identity; existing-policy/coverage/legacy compatibility; read-only DB targeting and source/frozen/activation states."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
@@ -177,43 +244,5 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  },
-  "prior_unmerged_implementation": {
-    "pr": 6373,
-    "head": "7cd29d994676604c926deb9bcc2943cbfcd63a32",
-    "disposition": "Retained until replacement source is reviewed/merged; stale v3 policy and consumer changes are not adopted."
-  },
-  "root_cause": "Independent publisher remained only in unmerged mixed-policy PR #6373. Shared publication validation also compared physical fact-catalog names instead of an explicit immutable policy binding.",
-  "fix_summary": "Preserve active canonical v2, add read-only capture/list/offline verify of immutable PIT observations, reuse existing frozen snapshot/binding contracts and singleton; compare an explicit frozen binding by policy and cutoff, keep strict legacy behavior without one. No v3 default or consumer changes.",
-  "runtime_contract": {
-    "schema_version": "aistock_bug_runtime_contract_v1",
-    "runtime_impact": "backend",
-    "target_id": "backend-main",
-    "target_ids": [
-      "backend-main"
-    ],
-    "backend_restart_required": true,
-    "backend_restart_owner": "user",
-    "persistence_basis": "git_tracked_source",
-    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
-    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
-    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "post_restart_effective_gate": "pending_user_restart",
-    "fresh_process_evidence": [
-      "New process: 53 direct canonical policy/release/frozen consumer tests passed; actual DEV read-only capture verified 5343 securities/5662 spans through 2026-09-30, DEV live legacy generation zero unchanged. Production/active dataset/PIT writes and process control remain false."
-    ],
-    "inference_basis": "actual_changed_files",
-    "provisional": false
-  },
-  "design_compliance_001": {
-    "no_unapproved_simplification": "Independent version files plus actual DB readback and real contract tests; no private/module PIT or v3 migration.",
-    "no_silent_failure": "Reject changed digests, sample bindings, cutoff mismatch, malformed versions and unsafe DB sessions; publish atomically/create-exclusively.",
-    "no_business_logic_change": "Canonical v2 rule/digest/default and saved task identities unchanged. Fact catalogs remain facts, selection remains independent PIT.",
-    "no_new_approval": "Reuse existing file snapshots, singleton and validation/publishing workflow. No new runtime/approval or data gate.",
-    "remaining_gaps": "Shared policy comparison requires one user-owned backend restart and read-only verification after source merge; no production migration/activation is requested."
-  },
-  "validation_evidence": [
-    "RED missing independent module; RED explicit policy binding rejected with physical-catalog mismatch. GREEN 53 related contract tests; Ruff and existing registry/catalog/changed-file checks passed.",
-    "Three self-review rounds: immutable atomic files and JSON identity; existing-policy/coverage/legacy compatibility; read-only DB targeting and source/frozen/activation states."
-  ]
+  }
 }
