@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-941",
-  "closed_at": "2026-10-25T18:02:21.491456Z",
+  "closed_at": "2026-10-25T18:03:33.974582Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -49,7 +49,12 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/.bug_id_allocator.json",
+      "tests/aistock_validation/bugs/20260801_BUG-941-bug-930-l2-801217-801768-801786-sw-sector-sw-daily-sector-data.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
