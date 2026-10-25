@@ -8,16 +8,20 @@ from decimal import Decimal
 from typing import Any, Literal, Protocol
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 from backend.services.simulation_data.trading_calendar import TradeCalendarProvider
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError, RuntimeConfigInvalidError
+from backend.data_service.frozen_dataset import FrozenDataset, freeze_dataset_binding
+from backend.services.simulation_data.frozen_file_adapters import FileTradingCalendar
 
 from .localsim_control import LocalSimControlPlaneService
+from .localsim_file_inputs import FILE_BINDING_KEY, FILE_SOURCE_ID
 from .localsim_product_authority import LocalSimProductAuthority
 from .localsim_replay import LocalSimHistoricalDayRunner, LocalSimReplayCoordinator
 from .localsim_runtime_profile import (
     LocalSimRuntimeProfileConfigRequestV1,
+    LocalSimRuntimeProfileConfigV1,
     LocalSimRuntimeProfileV1,
     LocalSimRuntimeProfileVersionV1,
 )
@@ -105,6 +109,14 @@ class LocalSimReplayCreateRequestV1(_LocalSimAccountInputsV1):
     start_trade_date: date
     end_trade_date: date
     historical_source_id: str
+    selection_input_source_mode: Literal["FILE_ONLY", "DATABASE_ONLY", "FILE_THEN_DATABASE"] | None = None
+
+    @model_serializer(mode="wrap")
+    def _legacy_json_compatible(self, handler):
+        result = handler(self)
+        if self.selection_input_source_mode is None:
+            result.pop("selection_input_source_mode", None)
+        return result
 
     @model_validator(mode="after")
     def _replay_window_is_valid(self) -> "LocalSimReplayCreateRequestV1":
@@ -242,30 +254,35 @@ class LocalSimHistoricalSourceResolutionV1:
     trading_days: tuple[date, ...]
     current_trading_date: date
     latest_completed_trade_date: date
+    file_binding: dict[str, Any] | None = None
 
 
 class LocalSimHistoricalSourceAuthorityProtocol(Protocol):
     def resolve(
-        self, *, historical_source_id: str, start_trade_date: date, end_trade_date: date
+        self, *, historical_source_id: str, start_trade_date: date, end_trade_date: date,
+        require_latest_completed: bool = True, file_binding: dict[str, Any] | None = None,
     ) -> LocalSimHistoricalSourceResolutionV1: ...
 
 
 class LocalSimMutationReadinessProtocol(Protocol):
     def require_ready(self) -> None: ...
 
+    def require_replay_recovery_ready(self) -> None: ...
+
 
 class LocalSimHistoricalSourceAuthority:
-    """Resolve the single completed-day DB source and global calendar snapshot."""
+    """Resolve explicit completed-day sources; frozen file retries ignore active pointers."""
 
     def __init__(self, *, calendar: Any | None = None, clock: Any | None = None) -> None:
         self.calendar = calendar or TradeCalendarProvider()
         self.clock = clock or (lambda: datetime.now(ZoneInfo("Asia/Shanghai")))
 
     def resolve(
-        self, *, historical_source_id: str, start_trade_date: date, end_trade_date: date
+        self, *, historical_source_id: str, start_trade_date: date, end_trade_date: date,
+        require_latest_completed: bool = True, file_binding: dict[str, Any] | None = None,
     ) -> LocalSimHistoricalSourceResolutionV1:
         source_id = str(historical_source_id or "").strip()
-        if source_id != LOCALSIM_HISTORICAL_SOURCE_ID:
+        if source_id not in {LOCALSIM_HISTORICAL_SOURCE_ID, FILE_SOURCE_ID}:
             raise DataUnavailableError(
                 "LocalSIM historical source is unsupported",
                 context={"reason_code": "LOCALSIM_HISTORICAL_SOURCE_UNSUPPORTED", "historical_source_id": source_id},
@@ -276,7 +293,18 @@ class LocalSimHistoricalSourceAuthority:
                 "LocalSIM replay cannot include the current or future trading date",
                 context={"reason_code": "LOCALSIM_REPLAY_CURRENT_DAY_SOURCE_FORBIDDEN"},
             )
-        days = tuple(self.calendar.list_trading_days(start_trade_date, end_trade_date))
+        if source_id == FILE_SOURCE_ID:
+            file_binding = file_binding or freeze_dataset_binding()
+            dataset = FrozenDataset(file_binding, consumer_scope="LOCALSIM", run_id="source-registration")
+            try:
+                days = tuple(FileTradingCalendar(dataset).list_trading_days(start_trade_date, end_trade_date))
+                dataset.assert_unchanged()
+            finally:
+                dataset.close()
+        else:
+            if file_binding is not None:
+                raise ValueError("database source cannot accept a file binding")
+            days = tuple(self.calendar.list_trading_days(start_trade_date, end_trade_date))
         if not days or days[0] != start_trade_date or days[-1] != end_trade_date:
             raise DataUnavailableError(
                 "LocalSIM replay range must start and end on covered trading dates",
@@ -288,7 +316,7 @@ class LocalSimHistoricalSourceAuthority:
                 "LocalSIM historical source has no completed trading day",
                 context={"reason_code": "LOCALSIM_REPLAY_COMPLETED_DAY_UNAVAILABLE"},
             )
-        if end_trade_date != latest_completed:
+        if require_latest_completed and end_trade_date != latest_completed:
             raise InvalidStateTransitionError(
                 "LocalSIM catch-up replay must end at the latest completed trading day",
                 context={
@@ -306,10 +334,11 @@ class LocalSimHistoricalSourceAuthority:
         }
         return LocalSimHistoricalSourceResolutionV1(
             historical_source_id=source_id,
-            historical_source_sha256=canonical_json_sha256(source_payload),
+            historical_source_sha256=file_binding["binding_hash"] if file_binding else canonical_json_sha256(source_payload),
             trading_days=days,
             current_trading_date=current_date,
             latest_completed_trade_date=latest_completed,
+            file_binding=file_binding,
         )
 
 
@@ -323,6 +352,7 @@ class LocalSimProductControlPlaneService:
         readiness: LocalSimMutationReadinessProtocol,
         historical_source_authority: LocalSimHistoricalSourceAuthorityProtocol | None = None,
         historical_day_callback: Any | None = None,
+        replay_recovery: Any | None = None,
     ) -> None:
         self.repository = repository
         self.control = control
@@ -330,6 +360,7 @@ class LocalSimProductControlPlaneService:
         self.readiness = readiness
         self.historical_source_authority = historical_source_authority or LocalSimHistoricalSourceAuthority()
         self.historical_day_callback = historical_day_callback or _unconfigured_historical_day_callback
+        self.replay_recovery = replay_recovery
 
     def create_account(
         self, request: LocalSimAccountCreateRequestV1, *, created_by: str
@@ -435,8 +466,32 @@ class LocalSimProductControlPlaneService:
         self, request: LocalSimReplayCreateRequestV1, *, created_by: str
     ) -> LocalSimControlResponseV1:
         self.readiness.require_ready()
+        if request.selection_input_source_mode is not None:
+            from .localsim_input_source_plan import request_identity
+            with self.repository.source_plan_creation(request_identity(request)):
+                return self._create_planned_replay(request, created_by=created_by)
+        return self._create_replay(request, created_by=created_by)
+
+    def _create_planned_replay(self, request, *, created_by):
+        from .localsim_input_source_plan import frozen_source_plan, request_identity
+        previous = self.repository.find_replay_by_source_request(request_identity(request))
+        if previous is not None:
+            release = self.repository.get_release(previous.release_id)
+            frozen_source_plan(release, job=previous)
+            return LocalSimControlResponseV1(account=self.repository.get_account(previous.simulation_account_id),
+                ledger_scope=self.repository.get_ledger_scope(previous.simulation_account_id), release=release,
+                binding=self.repository.get_binding(previous.binding_id), replay=previous)
+        return self._create_replay(request, created_by=created_by)
+
+    def _create_replay(self, request, *, created_by):
+        from .localsim_input_source_plan import (
+            PLAN_KEY, REQUEST_KEY, SOURCE_PLAN_ID, freeze_replay_plan, freeze_source_calendar, request_identity,
+        )
+        planned = request.selection_input_source_mode is not None
+        if planned and request.historical_source_id != SOURCE_PLAN_ID:
+            raise RuntimeConfigInvalidError("explicit input mode requires the LocalSIM source-plan source ID")
         source = self.historical_source_authority.resolve(
-            historical_source_id=request.historical_source_id,
+            historical_source_id=LOCALSIM_HISTORICAL_SOURCE_ID if planned else request.historical_source_id,
             start_trade_date=request.start_trade_date,
             end_trade_date=request.end_trade_date,
         )
@@ -446,8 +501,29 @@ class LocalSimProductControlPlaneService:
             execution_policy_version_id=request.execution_policy_version_id,
         )
         kwargs = self._account_bundle_kwargs(request=request, resolved=resolved, created_by=created_by)
+        profile = LocalSimRuntimeProfileConfigV1.model_validate(resolved.runtime_profile_version.config_json)
+        if profile.canonical_pit_authority_profile is None:
+            raise RuntimeConfigInvalidError(
+                "new LocalSIM replay requires an explicitly versioned canonical PIT profile",
+                context={"reason_code": "LOCALSIM_REPLAY_CANONICAL_PIT_PROFILE_REQUIRED"},
+            )
         kwargs["effective_to"] = request.end_trade_date
+        if source.file_binding is not None:
+            kwargs["release_metadata"][FILE_BINDING_KEY] = source.file_binding
         account, scope, release, binding = self.control.build_account_bundle(**kwargs)
+        if planned:
+            from dataclasses import replace
+            key = request_identity(request)
+            plan = freeze_replay_plan(mode=request.selection_input_source_mode, run_id="lsinput_" + key[:32],
+                manifest=self.authority.package_repository.get(request.package_id).current_manifest(),
+                runtime_config=release.release_config_json["metadata"]["selection_runtime_config"],
+                calendar=freeze_source_calendar(self.historical_source_authority.calendar, request.end_trade_date),
+                trading_days=source.trading_days)
+            kwargs["release_metadata"].update({PLAN_KEY: plan, REQUEST_KEY: {"request_hash": key}})
+            account, scope, release, binding = self.control.build_account_bundle(**kwargs)
+            from .localsim_input_source_plan import frozen_source_plan
+            frozen_source_plan(release)
+            source = replace(source, historical_source_id=SOURCE_PLAN_ID, historical_source_sha256=plan["plan_hash"])
         runner = LocalSimHistoricalDayRunner(
             historical_source_id=source.historical_source_id,
             historical_source_sha256=source.historical_source_sha256,
@@ -516,6 +592,23 @@ class LocalSimProductControlPlaneService:
             expected_version=expected_version,
         )
         return LocalSimControlResponseV1(replay=replay)
+
+    def inspect_replay_recovery(self, replay_job_id: str):
+        self.readiness.require_replay_recovery_ready()
+        return self._require_replay_recovery().inspect(replay_job_id)
+
+    def recover_replay(self, replay_job_id: str, request: Any) -> LocalSimControlResponseV1:
+        self.readiness.require_replay_recovery_ready()
+        replay = self._require_replay_recovery().recover(replay_job_id, request)
+        return LocalSimControlResponseV1(replay=replay)
+
+    def _require_replay_recovery(self):
+        if self.replay_recovery is None:
+            raise InvalidStateTransitionError(
+                "LocalSIM native replay recovery is unavailable",
+                context={"reason_code": "LOCALSIM_REPLAY_RECOVERY_UNCONFIGURED"},
+            )
+        return self.replay_recovery
 
     def _account_bundle_kwargs(self, *, request: Any, resolved: Any, created_by: str) -> dict[str, Any]:
         return {

@@ -1,0 +1,254 @@
+{
+  "actual": "RETRYABLE_FAILED/ADVISORY_HR_SOURCE_REVISION_MISMATCH; 0/20 days despite matching 279 window and native universe hash.",
+  "allowed_write_scope": [
+    "backend/services/advisory_historical_range/candidate_producer.py",
+    "backend/tests/advisory_historical_range/test_r2b_candidate_producer.py",
+    "tests/aistock_validation/bugs/20261014_BUG-1901-advisory-historical-replay-rejects-canonical-pit-v2-qualified-universe-r.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1901",
+  "closed_at": null,
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-14T09:24:29.340185Z",
+  "description": "RETRYABLE_FAILED/ADVISORY_HR_SOURCE_REVISION_MISMATCH; 0/20 days despite matching 279 window and native universe hash.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261014-ac4bc692af04",
+      "timestamp": "2026-10-14T09:24:29.340158Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/advisory-shared-kernel-replay-20261014-v2/findings.md"
+  ],
+  "expected": "Native qualified PIT identity matching frozen universe_key/hash/count can produce candidates; wrong namespace, key, date, count or hash still fails without publication.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_historical_range/candidate_producer.py",
+      "backend/tests/advisory_historical_range/test_r2b_candidate_producer.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1901-advisory-historical-replay-rejects-canonical-pit-v2-qualified-universe-r.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_historical_range/candidate_producer.py",
+      "backend/tests/advisory_historical_range/test_r2b_candidate_producer.py",
+      "tests/aistock_validation/bugs/20261014_BUG-1901-advisory-historical-replay-rejects-canonical-pit-v2-qualified-universe-r.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_historical_range/candidate_producer.py",
+        "backend/tests/advisory_historical_range/test_r2b_candidate_producer.py"
+      ],
+      "impacted_modules": [
+        "advisory.historical_range",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_historical_range/candidate_producer.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/tests/advisory_historical_range/test_r2b_candidate_producer.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_historical_range/candidate_producer.py",
+        "backend/tests/advisory_historical_range/test_r2b_candidate_producer.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_historical_range/candidate_producer.py",
+      "backend/tests/advisory_historical_range/test_r2b_candidate_producer.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_historical_range/candidate_producer.py",
+      "backend/tests/advisory_historical_range/test_r2b_candidate_producer.py"
+    ]
+  },
+  "first_seen_at": "2026-10-14T09:24:29.340185Z",
+  "fix_branch": null,
+  "fix_commit": null,
+  "fixed_at": null,
+  "github_issue_number": 6069,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6069",
+  "last_seen_at": "2026-10-14T09:24:29.340185Z",
+  "module": "advisory",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_r2b_candidate_producer.py -q",
+  "required_verification": [
+    "l0",
+    "advisory_historical_range_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-options",
+    "fresh_process_evidence": [
+      "powershell -NoProfile -File X:/AIstock_temp/advisory-shared-kernel-replay-20261014-v2/check_native_receipts.ps1 -RepositoryRoot F:/Dev/AIstock_worktrees/BUG-1901-advisory-historical-replay-rejects-canonical-pit-20261014 -> PASS; fresh source import validates real frozen 2026-01-05 LSTM window279 and all four native receipts including qualified PIT identity/4913 rows; no training, prediction, database writes or service control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "pending_user_restart",
+    "provisional": false,
+    "runtime_identity_match": "pending",
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "open",
+  "suspected_modules": [
+    "advisory"
+  ],
+  "title": "Advisory historical replay rejects canonical PIT v2 qualified universe receipt identity",
+  "trigger_condition": {
+    "fingerprint": "ac4bc692af044a2da02f63a4",
+    "source_event_id": "FE-20261014-ac4bc692af04"
+  },
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory",
+        "advisory_historical_range"
+      ],
+      "plans": [
+        "advisory_historical_range_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory",
+          "advisory_historical_range"
+        ],
+        "plans": [
+          "advisory_historical_range_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

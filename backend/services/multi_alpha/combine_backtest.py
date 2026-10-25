@@ -784,6 +784,7 @@ def _apply_pred_backtest_overrides_text(
             conf_path=conf_path,
             workspace=workspace,
             field="port_analysis_config.backtest",
+            parent_indent=port_indent,
         )
         backtest_end = _conf_block_end(lines, start=backtest_idx + 1, parent_indent=backtest_indent)
         backtest_child_indent = _infer_conf_child_indent(
@@ -831,6 +832,7 @@ def _apply_pred_backtest_overrides_text(
         end=port_end,
         conf_path=conf_path,
         workspace=workspace,
+        parent_indent=port_indent,
     )
     strategy_end = _conf_block_end(lines, start=strategy_idx + 1, parent_indent=strategy_indent)
     kwargs_idx, kwargs_indent = _find_conf_mapping_key(
@@ -841,6 +843,7 @@ def _apply_pred_backtest_overrides_text(
         conf_path=conf_path,
         workspace=workspace,
         field="port_analysis_config.strategy.kwargs",
+        parent_indent=strategy_indent,
     )
     kwargs_end = _conf_block_end(lines, start=kwargs_idx + 1, parent_indent=kwargs_indent)
     child_indent = _infer_conf_child_indent(lines, start=kwargs_idx + 1, end=kwargs_end, parent_indent=kwargs_indent)
@@ -892,6 +895,7 @@ def _apply_pred_backtest_overrides_text(
             conf_path=conf_path,
             workspace=workspace,
             field="task.dataset",
+            parent_indent=task_indent,
         )
         dataset_end = _conf_block_end(lines, start=dataset_idx + 1, parent_indent=dataset_indent)
         dataset_kwargs_idx, dataset_kwargs_indent = _find_conf_mapping_key(
@@ -902,6 +906,7 @@ def _apply_pred_backtest_overrides_text(
             conf_path=conf_path,
             workspace=workspace,
             field="task.dataset.kwargs",
+            parent_indent=dataset_indent,
         )
         dataset_kwargs_end = _conf_block_end(
             lines,
@@ -916,6 +921,7 @@ def _apply_pred_backtest_overrides_text(
             conf_path=conf_path,
             workspace=workspace,
             field="task.dataset.kwargs.segments",
+            parent_indent=dataset_kwargs_indent,
         )
         segments_end = _conf_block_end(lines, start=segments_idx + 1, parent_indent=segments_indent)
         segments_child_indent = _infer_conf_child_indent(
@@ -949,12 +955,21 @@ def _find_conf_mapping_key(
     conf_path: Path,
     workspace: Path,
     field: str | None = None,
+    parent_indent: int | None = None,
 ) -> tuple[int, int]:
+    # Search the requested mapping's direct children, not every descendant.
+    # In generated Qlib configs task.record[].kwargs.dataset is independent
+    # of task.dataset; nested handler kwargs must likewise remain untouched.
+    child_indent = 0 if parent_indent is None else _infer_conf_child_indent(
+        lines, start=start, end=end, parent_indent=parent_indent
+    )
     matches: list[tuple[int, int]] = []
     pattern = re.compile(rf"^(?P<indent>[ \t]*){re.escape(key)}\s*:(?P<rest>.*)$")
     for idx in range(start, end):
         match = pattern.match(lines[idx].rstrip("\r\n"))
         if match is None:
+            continue
+        if len(match.group("indent")) != child_indent:
             continue
         matches.append((idx, len(match.group("indent"))))
     if not matches:
@@ -1010,7 +1025,7 @@ def _replace_or_insert_conf_mapping_key(
     pattern = re.compile(rf"^(?P<indent>[ \t]*){re.escape(key)}\s*:.*$")
     matches: list[tuple[int, int]] = []
     for idx in range(start, end):
-        if _conf_line_indent(lines[idx]) <= parent_indent:
+        if _conf_line_indent(lines[idx]) != child_indent:
             continue
         match = pattern.match(lines[idx].rstrip("\r\n"))
         if match is not None:

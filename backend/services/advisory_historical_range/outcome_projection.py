@@ -168,6 +168,8 @@ class HistoricalRangeProjectionResultV1(BaseModel):
                 if isinstance(item, OutcomeCalculationResult)
                 else item.next_refresh_trade_date
                 for item in results
+                if map_historical_range_maturity(item)
+                in {HistoricalRangeOutcomeStatus.NOT_DUE, HistoricalRangeOutcomeStatus.MATURING}
             ]
             if any(item is None for item in scheduled):
                 raise ValueError("incomplete projection result lacks refresh date")
@@ -583,7 +585,12 @@ def _projection_result(
     )
     next_refresh = None
     if status in {HistoricalRangeOutcomeStatus.NOT_DUE, HistoricalRangeOutcomeStatus.MATURING}:
-        next_refresh = min(item.scheduled_maturity_ts.date() for item in calculated)
+        next_refresh = min(
+            item.scheduled_maturity_ts.date()
+            for item in calculated
+            if map_historical_range_maturity(item)
+            in {HistoricalRangeOutcomeStatus.NOT_DUE, HistoricalRangeOutcomeStatus.MATURING}
+        )
     return HistoricalRangeProjectionResultV1(
         projection_group=group,
         evaluation_window_type=evaluation_window_type,

@@ -14,6 +14,131 @@ from backend.services.hmm_risk.formal_state_executor import frozen_release_bindi
 from backend.services.hmm_risk.formal_state_model import FormalStateError
 
 
+def _effect_baseline_assets(tmp_path, monkeypatch, authority_end="2026-08-31"):
+    import json
+
+    from backend.tests.dataset_release.test_shared_sector_context import _code_map, _quote_availability
+
+    code_map = _code_map()
+    quote = _quote_availability(code_map, end=authority_end)
+    components = {}
+    for key, payload in (("sector_code_map", code_map), ("sector_quote_availability", quote)):
+        path = tmp_path / f"{key}.json"
+        path.write_text(json.dumps(payload), encoding="utf-8")
+        components[key] = {"path": path.name, "sha256": reader._sha256_file(path)}
+    membership = tmp_path / "membership.parquet"
+    membership.write_bytes(b"membership-read-boundary")
+    components["sector_membership_spans"] = {
+        "path": membership.name,
+        "sha256": reader._sha256_file(membership),
+    }
+    (tmp_path / "qe_dataset_manifest.json").write_text(json.dumps({"components": components}), encoding="utf-8")
+
+    result = {"release_root": tmp_path, "release_cutoff": date(2026, 8, 31)}
+
+    def assets(root, **kwargs):
+        assert root == tmp_path
+        assert kwargs["data_window_end"] == date(2026, 3, 30)
+        assert kwargs["frozen_release_binding"] == frozen_release_binding()
+        return result
+
+    monkeypatch.setattr(reader, "load_rotation_l1_direct_v2_source_assets", assets)
+    return code_map, membership, result
+
+
+@pytest.mark.parametrize("authority_end", ["2026-08-31", "2026-09-01"])
+def test_effect_baseline_checks_quote_authority_against_release_cutoff(tmp_path, monkeypatch, authority_end):
+    code_map, membership, _ = _effect_baseline_assets(tmp_path, monkeypatch, authority_end)
+
+    class MembershipBoundaryReached(Exception):
+        pass
+
+    def membership_read(path, *args, **kwargs):
+        assert path == membership
+        raise MembershipBoundaryReached
+
+    monkeypatch.setattr(subject.pd, "read_parquet", membership_read)
+    source = {
+        "candidate_root": str(tmp_path),
+        "security_identity_manifest": str(tmp_path / "security.json"),
+        "provider_absence_manifest": str(tmp_path / "absence.json"),
+    }
+    frozen = {"catalog": code_map["member_backed_codes"]}
+    if authority_end == "2026-09-01":
+        with pytest.raises(ValueError, match="exceeds release cutoff"):
+            subject.prepare_effect_baseline(frozen, source)
+    else:
+        # Authority metadata can extend beyond the evaluation period. Actual
+        # feature data remains bounded by the original 2026-03-30 as-of above.
+        with pytest.raises(MembershipBoundaryReached):
+            subject.prepare_effect_baseline(frozen, source)
+
+
+def test_effect_baseline_uses_release_bin_indices_with_bounded_source_dates(tmp_path, monkeypatch):
+    from backend.services.hmm_risk import formal_state_effect as effect
+    from backend.services.hmm_risk import rotation_l2_input as baseline
+
+    code_map, membership_path, assets = _effect_baseline_assets(tmp_path, monkeypatch)
+    release_calendar = list(pd.bdate_range("2018-08-01", "2026-08-31").date)
+    assets.update(
+        {
+            "qlib_root": tmp_path,
+            "instrument_universe_path": tmp_path / "stock_universe.txt",
+            "files": {
+                name: tmp_path / name for name in ("security_identity", "provider_absence", "suspend_data", "moneyflow")
+            },
+        }
+    )
+    membership = pd.DataFrame(
+        [{"instrument": "000001.SZ", "start_date": effect.START, "end_date": effect.END, "l2_code_id": 1}]
+    )
+    monkeypatch.setattr(subject.pd, "read_parquet", lambda path: membership.copy())
+    monkeypatch.setattr(baseline, "validate_membership_frame", lambda *_a, **_kw: None)
+    monkeypatch.setattr(reader, "_load_qlib_calendar", lambda *_: tuple(release_calendar))
+    monkeypatch.setattr(
+        effect, "calendar_contract", lambda *_: {"decisions": [effect.START.isoformat(), effect.END.isoformat()]}
+    )
+    monkeypatch.setattr(subject, "load_security_source_identity_manifest", lambda *_a, **_kw: object())
+    monkeypatch.setattr(subject, "load_provider_absence_manifest", lambda *_a, **_kw: object())
+    feature_path = tmp_path / "features/000001.sz/amount.day.bin"
+    feature_path.parent.mkdir(parents=True)
+    values = np.arange(len(release_calendar), dtype=np.float32) + 100
+    values[release_calendar.index(effect.END) + 1 :] = np.nan  # Tail numeric poison must remain unread.
+    np.concatenate((np.array([0], dtype=np.float32), values)).astype("<f4").tofile(feature_path)
+
+    class SourceBoundaryReached(Exception):
+        pass
+
+    def aggregate_read(**kwargs):
+        source_days = kwargs["source_days"]
+        assert len(source_days) == release_calendar.index(effect.END) - release_calendar.index(effect.START) + 25
+        assert source_days[-1] == date(2026, 3, 30)
+        assert kwargs["provider_path"] == assets["instrument_universe_path"]
+        assert kwargs["provider_catalog_path"] == assets["qlib_root"] / "instruments/all.txt"
+        expected = pd.DataFrame({"trade_date": [effect.START, source_days[-1]], "instrument": ["000001.SZ"] * 2})
+        result, _ = baseline._qlib_amount_frame(tmp_path, calendar=kwargs["calendar"], expected=expected)
+        assert result["amount_cny"].tolist() == [
+            float(values[release_calendar.index(day)]) for day in expected["trade_date"]
+        ]
+        assert list(kwargs["calendar"]) == release_calendar
+        raise SourceBoundaryReached
+
+    monkeypatch.setattr(baseline, "_daily_aggregates", aggregate_read)
+    frozen = {
+        "catalog": code_map["member_backed_codes"],
+        "security_identity_sha256": "a" * 64,
+        "provider_absence_sha256": "b" * 64,
+    }
+    source = {
+        "candidate_root": str(tmp_path),
+        "security_identity_manifest": str(tmp_path / "security.json"),
+        "provider_absence_manifest": str(tmp_path / "absence.json"),
+    }
+    assert membership_path.is_file()
+    with pytest.raises(SourceBoundaryReached):
+        subject.prepare_effect_baseline(frozen, source)
+
+
 def test_effect_source_and_parquet_reads_are_bounded_before_file_access(monkeypatch, tmp_path):
     from backend.services.hmm_risk import formal_state_effect as effect
 
@@ -239,6 +364,61 @@ def test_file_constructor_supplies_approved_frozen_binding_without_active_or_fit
             producer_commit="a" * 40,
         )
     assert not (tmp_path / "work").exists()
+
+
+def test_bounded_l2_constructor_passes_verified_suspension_to_quote_spool(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from backend.services.hmm_risk.formal_state_effect import CALENDAR_SHA
+
+    day, symbol, code = subject.SOURCE_START, "601028.SH", "801011.SI"
+    root = tmp_path / "dataset"
+    root.mkdir()
+    fact = root / "fact"
+    fact.write_bytes(b"frozen")
+    assets = {
+        "release_root": root,
+        "qlib_root": root,
+        "release_cutoff": date(2026, 9, 30),
+        "universe_key": "aistock_equity_pit_canonical_v2",
+        "instrument_universe_path": fact,
+        "files": {k: fact for k in ("security_identity", "provider_absence", "suspend_data", "suspend_manifest")},
+        "inventory": {"qlib": {"calendar_sha256": CALENDAR_SHA}},
+    }
+    authority = SimpleNamespace(evidence=lambda: {"manifest_sha256": "a" * 64})
+    monkeypatch.setattr(reader, "load_rotation_l1_direct_v2_source_assets", lambda *_a, **_kw: assets)
+    monkeypatch.setattr(reader, "_load_qlib_calendar", lambda _: (day,))
+    monkeypatch.setattr(reader, "_read_json_object", lambda _: {})
+    monkeypatch.setattr(subject, "load_security_source_identity_manifest", lambda *_a, **_kw: authority)
+    monkeypatch.setattr(subject, "load_provider_absence_manifest", lambda *_a, **_kw: authority)
+    monkeypatch.setattr(reader, "_SecurityResolutionIndex", lambda value: value)
+    monkeypatch.setattr(reader, "_industry_adapter", lambda *_a, **_kw: object())
+    monkeypatch.setattr(reader, "_IndustryProjectionIndex", lambda *_a, **_kw: object())
+    monkeypatch.setattr(reader, "_canonical_sector_codes", lambda _: ((), (code,)))
+    spans, suspended = {symbol: ((day, day),)}, frozenset({(day, symbol)})
+    monkeypatch.setattr(reader, "_parse_instrument_spans", lambda _: spans)
+    monkeypatch.setattr(reader, "_load_suspend_keys", lambda *_a, **_kw: suspended)
+
+    class SpoolReached(Exception):
+        pass
+
+    def spool(*_a, **kwargs):
+        assert kwargs["suspension_keys"] is suspended
+        assert kwargs["spans"] is spans
+        assert kwargs["window_start"] == kwargs["window_end"] == day
+        raise SpoolReached
+
+    monkeypatch.setattr(reader, "_spool_qlib_months", spool)
+    frozen = {
+        "industry_authority": {},
+        "catalog": [code],
+        "security_identity_sha256": "a" * 64,
+        "provider_absence_sha256": "a" * 64,
+    }
+    source = {k: str(root) for k in ("candidate_root", "security_identity_manifest", "provider_absence_manifest")}
+    source["work_parent"] = str(tmp_path / "work")
+    with pytest.raises(SpoolReached):
+        subject._bounded_l2_stock_facts(frozen, source, start=day, end=day)
 
 
 @pytest.mark.parametrize("fault", [None, "duplicate", "sector_missing", "calendar_missing", "nine_dimensions"])

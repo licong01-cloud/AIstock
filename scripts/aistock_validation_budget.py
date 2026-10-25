@@ -148,7 +148,9 @@ def build_audit(
             continue
         sloc = _read_sloc(repo_root, relative_path)
         ownership_layer = str(ownership.layer or "").lower()
-        is_test = _is_test_path(relative_path) or "test" in ownership_layer
+        # Runner orchestration is executable tooling, not its assertion suite.
+        # Test paths and every other test/helper layer retain conservative counting.
+        is_test = _is_test_path(relative_path) or ("test" in ownership_layer and ownership_layer != "test_runner")
         kind = "test" if is_test else "production"
         modules[module_id][f"{kind}_sloc"] += sloc
         modules[module_id][f"{kind}_files"] += 1

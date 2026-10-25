@@ -21,10 +21,8 @@ or on the self-hosted runner with the full dev DB.
 
 from __future__ import annotations
 
-import os
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import pytest
 
