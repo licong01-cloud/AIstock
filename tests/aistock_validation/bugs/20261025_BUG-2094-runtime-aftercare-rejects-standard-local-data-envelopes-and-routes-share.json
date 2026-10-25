@@ -1,5 +1,5 @@
 {
-  "actual": "post-restart-verify blocks already deployed fixes due to wrapper/schema/catalog incompatibility.",
+  "actual": "post-restart-verify blocks already deployed fixes due to wrapper/schema/catalog incompatibility. Follow-up readback of BUG-1660 exposed three additional shared helper anchors: artifact_ready_source, candidate_validator and canonical_stock_transformer; all are imported by the supervised monthly path, not exclusive legacy entry points.",
   "allowed_write_scope": [
     "scripts/aistock_runtime_semantics.py",
     "scripts/aistock_issue_workflow.py",
@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2094",
-  "closed_at": "2026-10-25T18:02:45Z",
+  "closed_at": null,
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -187,7 +187,7 @@
     ],
     "validation_evidence_digest": "f9aed1f2b5b3b6c045a404f3b25c3ae0e9a33288457fa859d207e9afa2c83afb"
   },
-  "status": "fixed",
+  "status": "in_progress",
   "suspected_modules": [
     "validation.workflow_automation"
   ],

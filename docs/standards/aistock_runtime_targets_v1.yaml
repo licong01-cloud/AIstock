@@ -293,6 +293,9 @@ targets:
           - backend/services/dataset_release/monthly_supervised_build.py
           - scripts/dataset_release_candidate_consumer_smoke.py
           - backend/services/dataset_release/candidate_consumer_smoke.py
+          - backend/services/dataset_release/artifact_ready_source.py
+          - backend/services/dataset_release/candidate_validator.py
+          - backend/services/dataset_release/canonical_stock_transformer.py
           - backend/services/dataset_release/monthly_repair_journal.py
           - backend/services/dataset_release/monthly_postgres_source.py
           - backend/services/dataset_release/monthly_frozen_source_audit.py
@@ -342,15 +345,12 @@ targets:
           - scripts/dataset_release_worker.py
           - scripts/dataset_release_source_stage.py
           - configs/datasets/migrations/pit_v2_initial_20260731_v1.yaml
-        # The four helpers shared with the supervised monthly build are not
+        # Helpers shared with the supervised monthly build are not
         # evidence of a legacy invocation by themselves. A legacy-owned source
         # must participate; mixed actual legacy calls retain their heartbeat.
         required_source_globs:
           - backend/services/dataset_release/a_share_limit_rule.py
-          - backend/services/dataset_release/artifact_ready_source.py
           - backend/services/dataset_release/build_processor.py
-          - backend/services/dataset_release/candidate_validator.py
-          - backend/services/dataset_release/canonical_stock_transformer.py
           - backend/services/dataset_release/index_contract.py
           - backend/services/dataset_release/index_sources.py
           - backend/services/dataset_release/minute_overlay.py
