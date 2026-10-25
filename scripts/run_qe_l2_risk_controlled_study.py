@@ -20,6 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 NODE = "rdagent-node1"
 SEEDS = (42, 2024, 2026)
+H1_GENERATION = "20260930-monthly-v2-unified-correction-4ab0b48642c3-margin1-facts1-suspend1"
+H1_MANIFEST = "ded1c29b48ba5a5d836b6d2c025c737a4293c8ded3e9fa6b1d78e179ebc13eae"
 
 
 def read(path):
@@ -36,6 +38,97 @@ def digest(value):
                                      separators=(",", ":"), default=str).encode()).hexdigest()
 
 
+def load_batch_inputs(evidence):
+    """Pure read/preflight: no DB, reservation, compose directory or worker call."""
+    from scripts.qe_l2_risk_admission import LEGACY_GENERATION, LEGACY_MANIFEST, physical_binding, validate_admission
+
+    approval = read(evidence / "user_approval_receipt.json")
+    if approval.get("status") != "APPROVED" or approval.get("contract") != "QE-L2-RISK-ENTRY-GATE-D1..D7":
+        raise ValueError("QE_L2_APPROVAL_MISSING")
+    shared = read(evidence / "shared_prediction_receipt.json")
+    assets = shared.get("assets", [])
+    if [a.get("seed") for a in assets] != list(SEEDS):
+        raise ValueError("QE_L2_SEEDS_CHANGED")
+    batch_path = evidence / "study_batch_receipt.json"
+    batch = read(batch_path) if batch_path.exists() else {
+        "schema_version": "qe_l2_controlled_batch_legacy", "batch_id": "qe_l2_entry_20261023",
+        "generation": LEGACY_GENERATION, "dataset_manifest_sha256": LEGACY_MANIFEST,
+        "release_id": "qe_hmm_full_v2_20260930", "cutoff": "2026-09-30"}
+    versioned = batch_path.exists()
+    if versioned and (
+            batch.get("schema_version") != "qe_l2_controlled_batch_v2"
+            or batch.get("status") != "APPROVED"
+            or batch.get("contract") != approval["contract"]
+            or batch.get("authorization_scope") != "qe_hmm_long_plan_h1"
+            or not isinstance(batch.get("batch_id"), str)
+            or re.fullmatch(r"qe_l2_h1_[a-z0-9_]{1,48}", batch["batch_id"]) is None
+            or batch.get("generation") != H1_GENERATION
+            or batch.get("dataset_manifest_sha256") != H1_MANIFEST
+            or batch.get("release_id") != "qe_hmm_full_v2_20260930"
+            or batch.get("cutoff") != "2026-09-30"
+            or not isinstance(batch.get("asset_admission_version"), str)
+            or not batch["asset_admission_version"]):
+        raise ValueError("QE_L2_BATCH_IDENTITY_INVALID")
+    if versioned and (
+            batch.get("shared_prediction_receipt_sha256") != hashlib.sha256(
+                (evidence / "shared_prediction_receipt.json").read_bytes()).hexdigest()
+            or batch.get("consumer_manifest_sha256") != {
+                str(seed): hashlib.sha256((evidence / f"consumer_manifest_seed{seed}.json").read_bytes()).hexdigest()
+                for seed in SEEDS}):
+        raise ValueError("QE_L2_BATCH_INPUT_DIGEST_MISMATCH")
+    common = None
+    for asset in assets:
+        manifest = read(evidence / f"consumer_manifest_seed{asset['seed']}.json")
+        validate_admission(manifest)
+        release = manifest.get("release_identity", {})
+        if (release.get("frozen_release_generation") != batch["generation"]
+                or release.get("dataset_manifest_sha256") != batch["dataset_manifest_sha256"]
+                or release.get("release_id") != batch["release_id"]
+                or release.get("cutoff") != batch["cutoff"]
+                or (versioned and manifest.get("asset_admission_version") != batch["asset_admission_version"])):
+            raise ValueError("QE_L2_BATCH_ASSET_IDENTITY_MISMATCH")
+        if (manifest["assets"]["prediction"]["sha256"] != asset.get("prediction_sha256")
+                or physical_binding(manifest["dataset_binding"]) != physical_binding(shared["dataset_binding"])):
+            raise ValueError("QE_L2_SHARED_PREDICTION_IDENTITY_MISMATCH")
+        population = {k: v for k, v in manifest.items() if k != "assets"}
+        population["assets"] = {k: v for k, v in manifest["assets"].items() if k != "prediction"}
+        if common is not None and population != common:
+            raise ValueError("QE_L2_SEED_INPUTS_DIFFER")
+        common = population
+    return approval, shared, batch
+
+
+def verify_batch_profile(batch, profile):
+    if (profile is None or profile.generation != batch["generation"]
+            or profile.raw.get("components", {}).get("dataset_manifest_sha256") != batch["dataset_manifest_sha256"]
+            or profile.release_id != batch["release_id"]
+            or str(profile.cutoff) != batch["cutoff"]):
+        raise ValueError("QE_L2_APPROVED_PROFILE_IDENTITY_CHANGED")
+
+
+def verify_batch_plan(evidence, plan, files):
+    """Re-read immutable inputs immediately before the existing single submit."""
+    _, shared, batch = load_batch_inputs(evidence)
+    seed, arm = plan["seed"], plan["arm"]
+    if seed not in SEEDS or arm not in ("B", "L"):
+        raise ValueError("QE_L2_BATCH_PLAN_INVALID")
+    task = f"{batch['batch_id']}_s{seed}_{arm.lower()}"
+    expected = read(evidence / f"consumer_manifest_seed{seed}.json")
+    asset = next(a for a in shared["assets"] if a["seed"] == seed)
+    if batch["schema_version"] == "qe_l2_controlled_batch_v2":
+        if files.get("qe_l2_risk_admission.py") != (ROOT / "scripts/qe_l2_risk_admission.py").read_text(encoding="utf-8"):
+            raise ValueError("QE_L2_WORKER_ADMISSION_SOURCE_MISMATCH")
+    if (plan["task_id"] != task or plan["experiment_id"] != hashlib.sha256(task.encode()).hexdigest()[:8]
+            or plan["prediction_sha256"] != asset["prediction_sha256"]
+            or json.loads(files["qe_l2_risk_manifest.json"]) != expected
+            or plan["custom_params"].get("qe_l2_study_manifest") != expected
+            or plan["custom_params"].get("qe_l2_risk_enabled") is not (arm == "L")
+            or ("batch_identity" in plan and plan["batch_identity"] != batch)
+            or (batch["schema_version"] == "qe_l2_controlled_batch_v2" and plan.get("batch_identity") != batch)):
+        raise ValueError("QE_L2_BATCH_PLAN_IDENTITY_MISMATCH")
+    return batch
+
+
 def compose(evidence):
     from backend.services.quantevolver.config_composer import ConfigComposer
     from backend.services.quantevolver.experiment_config_builders import build_config_from_custom_evo_loop
@@ -45,10 +138,7 @@ def compose(evidence):
     from backend.services.quantevolver.l2_risk_consumer import bind_execution_metadata
     import yaml
 
-    approval = read(evidence / "user_approval_receipt.json")
-    if approval["status"] != "APPROVED" or approval["contract"] != "QE-L2-RISK-ENTRY-GATE-D1..D7":
-        raise ValueError("QE_L2_APPROVAL_MISSING")
-    shared = read(evidence / "shared_prediction_receipt.json")
+    approval, shared, batch = load_batch_inputs(evidence)
     reference = read(evidence / "baseline_recipe_reference.json")
     output = evidence / "composed"
     output.mkdir(exist_ok=True)
@@ -56,8 +146,7 @@ def compose(evidence):
         raise ValueError("QE_L2_COMPOSE_DIRECTORY_NOT_EMPTY")
     cc = ConfigComposer()
     profile = load_active_qe_profile()
-    if profile is None or profile.generation != "20260930-monthly-v2-unified-correction-4ab0b48642c3":
-        raise ValueError("QE_L2_APPROVED_PROFILE_IDENTITY_CHANGED")
+    verify_batch_profile(batch, profile)
     plans, confs = [], {}
     for index, asset in enumerate(shared["assets"]):
         seed = asset["seed"]
@@ -80,13 +169,13 @@ def compose(evidence):
         if observed_binding != approved_binding or split != cfg.data_split:
             raise ValueError("QE_L2_COMPOSE_DATASET_IDENTITY_CHANGED")
         params["_qe_active_dataset_summary"] = {
-            "generation": "20260930-monthly-v2-unified-correction-4ab0b48642c3",
-            "release_id": "qe_hmm_full_v2_20260930", "cutoff": "2026-09-30"}
+            "generation": batch["generation"],
+            "release_id": batch["release_id"], "cutoff": batch["cutoff"]}
         # Original model/processor configuration is provenance only. --pred-backtest
         # strips every processor and never loads or fits the model.
         manifest = read(evidence / f"consumer_manifest_seed{seed}.json")
         for arm in ("B", "L"):
-            task = f"qe_l2_entry_20261023_s{seed}_{arm.lower()}"
+            task = f"{batch['batch_id']}_s{seed}_{arm.lower()}"
             expid = hashlib.sha256(task.encode()).hexdigest()[:8]
             runtime = deepcopy(params)
             runtime.update(qe_l2_study_manifest=manifest, qe_l2_risk_enabled=(arm == "L"),
@@ -144,7 +233,7 @@ def compose(evidence):
                     "data_split": cfg.data_split, "custom_params": runtime,
                     "workspace_path": result["wsl_workdir"], "wsl_command": command,
                     "files": sorted(files), "prediction_sha256": asset["prediction_sha256"],
-                    "status": "COMPOSED_PENDING_REMOTE_PREFLIGHT"}
+                    "batch_identity": batch, "status": "COMPOSED_PENDING_REMOTE_PREFLIGHT"}
             save_new(folder / "study_plan.json", plan)
             plans.append({"task_id": task, "experiment_id": expid, "seed": seed, "arm": arm})
         baseline, treatment = deepcopy(confs[seed, "B"]), deepcopy(confs[seed, "L"])
@@ -155,7 +244,7 @@ def compose(evidence):
         strategy["kwargs"].pop("qe_l2_manifest_file")
         if baseline != treatment:
             raise ValueError(f"QE_L2_UNAPPROVED_ARM_CONFIG_DIFFERENCE: seed={seed}")
-    save_new(output / "study_manifest.json", {"contract": approval["contract"], "plans": plans,
+    save_new(output / "study_manifest.json", {"contract": approval["contract"], "plans": plans, "batch_identity": batch,
               "status": "COMPOSED_6_ACCOUNTS_NOT_SUBMITTED", "arm_diff_check": "PASS"})
     print(json.dumps({"status": "COMPOSED", "plans": plans}, ensure_ascii=False))
 
@@ -181,6 +270,11 @@ async def submit_one(evidence, task):
     files = {name: (folder / name).read_text(encoding="utf-8") for name in plan["files"]}
     if {n: hashlib.sha256(c.encode()).hexdigest() for n, c in files.items()} != preflight["file_hashes"]:
         raise ValueError("QE_L2_SOURCE_CHANGED_AFTER_PREFLIGHT")
+    batch = verify_batch_plan(evidence, plan, files)
+    if batch["schema_version"] == "qe_l2_controlled_batch_v2":
+        from backend.services.quantevolver.qe_active_dataset_profile import load_active_qe_profile
+
+        verify_batch_profile(batch, load_active_qe_profile())
     expected_params = bind_execution_metadata(plan["custom_params"], yaml.safe_load(files["conf.yaml"]))
     if expected_params != plan["custom_params"]:
         raise ValueError("QE_L2_REGISTRATION_RUNTIME_CONTRACT_MISSING_REVIEW_FROZEN_PLAN")
