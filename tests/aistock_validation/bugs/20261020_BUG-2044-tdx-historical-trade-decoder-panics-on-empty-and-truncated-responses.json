@@ -1,0 +1,327 @@
+{
+  "actual": "Local /api/trade-history returns TDX response decode failed slice bounds out of range [6:2] for 2024 target days.",
+  "allowed_write_scope": [
+    "tdx-api-main/protocol/model_history_trade.go",
+    "tdx-api-main/protocol/model_history_trade_test.go",
+    "tests/aistock_validation/bugs/20261020_BUG-2044-tdx-historical-trade-decoder-panics-on-empty-and-truncated-responses.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2044",
+  "closed_at": "2026-10-25T07:32:38.409491Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T18:55:05.849657Z",
+  "description": "Local /api/trade-history returns TDX response decode failed slice bounds out of range [6:2] for 2024 target days.",
+  "design_compliance_review": {
+    "remaining_boundary": "production TDX has not been restarted or verified against this fix; no claim that empty history pages repair minute facts",
+    "requested_behavior": "empty/truncated responses are safe and valid responses preserve prior semantics",
+    "scope_and_non_goals": "only historical decoder/test/BUG record; no HMM/QE or ingestion policy change",
+    "verification": "RED-to-GREEN, protocol package pass, root compile pass, six live read-only empty-page responses"
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-2e0a31a334e6",
+      "timestamp": "2026-10-20T18:55:05.849657Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Empty or truncated history responses return correct empty/error results without panic; valid complete history records retain exact semantics.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "tdx-api-main/protocol/model_history_trade.go",
+      "tdx-api-main/protocol/model_history_trade_test.go",
+      "tests/aistock_validation/bugs/20261020_BUG-2044-tdx-historical-trade-decoder-panics-on-empty-and-truncated-responses.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "tdx-api-main/protocol/model_history_trade.go",
+      "tdx-api-main/protocol/model_history_trade_test.go",
+      "tests/aistock_validation/bugs/20261020_BUG-2044-tdx-historical-trade-decoder-panics-on-empty-and-truncated-responses.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "tdx-api-main/protocol/model_history_trade.go",
+        "tdx-api-main/protocol/model_history_trade_test.go"
+      ],
+      "impacted_modules": [
+        "local_data"
+      ],
+      "matched_rules": [
+        {
+          "file": "tdx-api-main/protocol/model_history_trade.go",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tdx_go"
+        },
+        {
+          "file": "tdx-api-main/protocol/model_history_trade_test.go",
+          "impact_modules": [],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tdx_go"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "tdx-api-main/protocol/model_history_trade.go",
+        "tdx-api-main/protocol/model_history_trade_test.go"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tdx-api-main/protocol/model_history_trade.go",
+      "tdx-api-main/protocol/model_history_trade_test.go"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tdx-api-main/protocol/model_history_trade.go",
+      "tdx-api-main/protocol/model_history_trade_test.go"
+    ]
+  },
+  "first_seen_at": "2026-10-20T18:55:05.849657Z",
+  "fix_branch": null,
+  "fix_commit": "1372e1c416062066d41126ef7706f7def7688dbf",
+  "fixed_at": "2026-10-20T19:37:44Z",
+  "github_issue_number": 6513,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6513",
+  "last_seen_at": "2026-10-20T18:55:05.849657Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6514",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "review_rounds": [
+    {
+      "focus": "count-only empty response and every truncated prefix",
+      "kind": "self_review",
+      "result": "RED reproduced original [6:2] panic; checked bounds and fields return errors without partial success",
+      "round": 1
+    },
+    {
+      "focus": "signed price delta scaling and cumulative overflow",
+      "kind": "self_review",
+      "result": "reused GetPriceChecked and guarded int64 multiplication/addition; valid two-record units and CST time unchanged",
+      "round": 2
+    },
+    {
+      "focus": "side effects and live empty response semantics",
+      "kind": "self_review",
+      "result": "fresh go probe read two external hosts for three historical keys; all six returned Count=0 without panic; no database, HTTP service or production binary mutation",
+      "round": 3
+    }
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:19080/api/kline-all/tdx?code=sh688526&type=minute1&start_date=2026-09-01&end_date=2026-09-30",
+    "fresh_process_evidence": [
+      "Fresh go run X:/AIstock_dataset_candidates/data_repair_staging/data-closure-20261021/tdx_history_probe.go loaded the tracked decoder; six bounded history requests across two hosts returned Count=0 without panic; database_write=false; no HTTP service or production binary change"
+    ],
+    "health_ref": "http://127.0.0.1:19080/api/health",
+    "identity_ref": "http://127.0.0.1:19080/api/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/tdx_go_runtime_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "tdx-go-backend"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-2044-remaining.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2044",
+      "business_smoke_semantic": {
+        "contract_id": "tdx_raw_kline_facts",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "bb10d9e10b41e22c2b7902733402f23150fd83af15367f0fc89787a88f71de78",
+      "expected_identity": "1372e1c416062066d41126ef7706f7def7688dbf",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:29:40.685123Z",
+      "mode": "read_only",
+      "observed_identity": "b222c628add6476222e754b945454f017ba89c40",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d3de153c11c47ed6cd272eee1afa3678db6b32ba9d27a0f5345b1168a342cbc4",
+      "receipt_sha256": "2a01342c984a9a6e9e701dbb52476a4a3566e7f771377e8675784a199931e2af",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "47238ee721848eaefb089295193e27a63cb845bd406cbca4c6786cafda95a84e",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "tdx-go-backend"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "tdx-go-backend",
+    "target_ids": [
+      "tdx-go-backend"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2044",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "f627d01f649d1bd2",
+    "recorded_at": "2026-10-20T19:38:23.249921Z",
+    "runtime_contract_digest": "bb10d9e10b41e22c2b7902733402f23150fd83af15367f0fc89787a88f71de78",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "b235a8097013db4b0d92f91de496f99e5752c756",
+    "source_merge_commit": "1372e1c416062066d41126ef7706f7def7688dbf",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6514",
+    "validation_evidence": [
+      "validation-receipt: id=b3a67e203d8c2c7b commit=b235a8097013db4b0d92f91de496f99e5752c756 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=b975bfd5cd717efa commit=b235a8097013db4b0d92f91de496f99e5752c756 kind=go plan=direct status=passed command=`go test ./protocol -count=1 -timeout=90s` result=`passed`",
+      "validation-receipt: id=9f67e058bf63eea6 commit=b235a8097013db4b0d92f91de496f99e5752c756 kind=go plan=direct status=passed command=`go test . -run ^$` result=`passed`"
+    ],
+    "validation_evidence_digest": "d3f188b439dd45b08c8bbee8072f07c2b978fa472d539279bf1d3e74f66eac37"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "TDX historical trade decoder panics on empty and truncated responses",
+  "trigger_condition": {
+    "fingerprint": "2e0a31a334e6200be749371a",
+    "source_event_id": "FE-20261020-2e0a31a334e6"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=b3a67e203d8c2c7b commit=b235a8097013db4b0d92f91de496f99e5752c756 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=b975bfd5cd717efa commit=b235a8097013db4b0d92f91de496f99e5752c756 kind=go plan=direct status=passed command=`go test ./protocol -count=1 -timeout=90s` result=`passed`",
+    "validation-receipt: id=9f67e058bf63eea6 commit=b235a8097013db4b0d92f91de496f99e5752c756 kind=go plan=direct status=passed command=`go test . -run ^$` result=`passed`",
+    "Source merge independently confirmed; official current runtime identity/business smoke PASS; metadata-only close-sync; original validations retained; no new data scans, DB writes or service control"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

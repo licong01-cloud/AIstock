@@ -143,6 +143,68 @@ def raw_price_li(adjusted: Any, factor: Decimal) -> Decimal | None:
     return nearest
 
 
+def frozen_component_pins(profile: dict, manifest: dict) -> dict:
+    """Resolve formal v4 consumer paths, retaining the v3 alias contract."""
+    components = manifest.get("components", {})
+    if profile.get("schema_version") != "aistock_active_dataset_profile_v4":
+        return components
+    try:
+        declarations = profile["components"]
+        sector = declarations["sector_context_pins"]
+        sector_root = sector["component_root"]
+        paths = {
+            "day_calendar": "components/daily_bin_candidate/calendars/day.txt",
+            "day_meta_export": "components/daily_bin_candidate/meta_export.json",
+            "day_selection_universe": "components/daily_bin_candidate/instruments/stock_universe.txt",
+            "factor_meta": "components/factor_h5_static_candidate_v2/meta.json",
+            "minute_calendar": "components/minute_bin_candidate/calendars/1min.txt",
+            "minute_meta_export": "components/minute_bin_candidate/meta_export.json",
+            "minute_provider_catalog": "components/minute_bin_candidate/instruments/all.txt",
+            "suspend_data": "components/suspend_d_daily_candidate_v2/suspend_d.parquet",
+            "suspend_meta": "components/suspend_d_daily_candidate_v2/meta.json",
+            "sector_membership_spans": f"{sector_root}/{sector['membership_file']}",
+            "sector_code_map": f"{sector_root}/{sector['code_map_file']}",
+        }
+        paths.update({name: f"components/factor_h5_static_candidate_v2/{name}.h5" for name in H5_FILES})
+        wanted = set(paths.values())
+        by_path = {}
+        for entry in components.values():
+            if not isinstance(entry, dict) or entry.get("path") not in wanted:
+                continue
+            path = entry["path"]
+            if path in by_path and entry != by_path[path]:
+                raise FrozenDatasetError("conflicting monthly component pins", component=path)
+            by_path[path] = entry
+        result = {key: deepcopy(by_path[path]) for key, path in paths.items()}
+        pit = manifest["st_pit_manifest"]
+        if manifest["cutoff_trade_date"] != profile["cutoff"] or pit["cutoff_trade_date"] != profile["cutoff"]:
+            raise FrozenDatasetError("monthly PIT cutoff differs from profile")
+        selection = pit["selection_universe"]
+        if any(result["day_selection_universe"][key] != selection[key] for key in ("sha256", "size")):
+            raise FrozenDatasetError("monthly selection universe differs from PIT manifest")
+        for key in ("day_pins", "minute_pins"):
+            if any(declarations[key][field] != pit[field] for field in ("universe_key", "rule_version")):
+                raise FrozenDatasetError("monthly consumer policy differs from PIT manifest", component=key)
+        for role, expected in (
+            ("day_calendar", declarations["day_pins"]["calendar_sha256"]),
+            ("day_meta_export", declarations["day_pins"]["meta_export_sha256"]),
+            ("minute_calendar", declarations["minute_pins"]["calendar_sha256"]),
+            ("minute_meta_export", declarations["minute_pins"]["meta_export_sha256"]),
+            ("minute_provider_catalog", declarations["minute_pins"]["instruments_sha256"]),
+            ("factor_meta", declarations["factor_meta_sha256"]),
+            ("suspend_data", declarations["suspend_pins"]["parquet_sha256"]),
+            ("suspend_meta", declarations["suspend_pins"]["metadata_sha256"]),
+            ("sector_membership_spans", sector["membership_sha256"]),
+            ("sector_code_map", sector["code_map_sha256"]),
+        ):
+            if result[role]["sha256"] != expected:
+                raise FrozenDatasetError("monthly component differs from profile pin", component=role)
+        result["sector_membership_spans"].update(start=sector["membership_start"], end=sector["membership_end"])
+    except (KeyError, TypeError) as exc:
+        raise FrozenDatasetError("monthly producer component identity is incomplete") from exc
+    return result
+
+
 def freeze_dataset_binding(profile_path: Path | str | None = None) -> dict[str, Any]:
     """Resolve active input once at command registration, never during exact retry."""
     value = profile_path or os.getenv("AISTOCK_ACTIVE_DATASET_PROFILE_PATH")
@@ -160,19 +222,21 @@ def freeze_dataset_binding(profile_path: Path | str | None = None) -> dict[str, 
     manifest = json.loads(inside(root, manifest_pin["path"]).read_text(encoding="utf-8-sig"))
     if manifest.get("release_id") != profile.get("release_id"):
         raise FrozenDatasetError("profile/manifest release mismatch")
+    declarations = frozen_component_pins(profile, manifest)
     required = ("day_calendar", "day_meta_export", "day_selection_universe", "factor_meta", "suspend_data",
                 "sector_membership_spans", "sector_code_map", "minute_calendar", "minute_meta_export", "minute_provider_catalog")
     files = {"manifest": manifest_pin}
     for key in required:
-        declared = manifest["components"].get(key)
+        declared = declarations.get(key)
         if not declared:
             raise FrozenDatasetError("required file component is absent", component=key)
         files[key] = content_pin(root, declared["path"], expected=declared["sha256"])
     factor_root = Path(files["factor_meta"]["path"]).parent
-    # Some repaired releases do not have producer pins for every H5. Record
+    # Some legacy repaired releases lack producer pins for every H5. Record
     # actual consumer-observed bytes, never mislabel a stale inventory as proof.
     for name in H5_FILES:
-        files[name] = content_pin(root, (factor_root / (name + ".h5")).as_posix())
+        expected = declarations[name]["sha256"] if profile["schema_version"] == "aistock_active_dataset_profile_v4" else None
+        files[name] = content_pin(root, (factor_root / (name + ".h5")).as_posix(), expected=expected)
     body = {"schema_version": SCHEMA, "profile": profile, "profile_sha256": hashlib.sha256(payload).hexdigest(),
             "files": files, "bin_stat_lease": _bin_lease(root, files)}
     if path.read_bytes() != payload:

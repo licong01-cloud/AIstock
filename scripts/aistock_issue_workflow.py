@@ -2017,11 +2017,46 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
                 raise WorkflowError(
                     f"runtime target {target_id} probe route {route_id} requires sources outside its route"
                 )
+            route_mode = route.get("probe_mode")
+            if route_mode == "http":
+                # HTTP business defaults belong to exact existing backend sources,
+                # never a broad backend/** fallback or a Worker route.
+                if target.get("runtime_kind") != "backend" or probe_mode != "http":
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route requires a backend HTTP target")
+                if any(
+                    any(character in path for character in "*?[\\")
+                    or Path(path).is_absolute()
+                    or ".." in Path(path).parts
+                    or not (root / path).is_file()
+                    or not any(_runtime_glob_matches(path, str(pattern)) for pattern in target["source_globs"])
+                    for path in route_globs
+                ):
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route requires exact target-owned sources")
+                runbook_error = _validate_operator_runbook_ref(route.get("operator_runbook_ref"), root=root)
+                if runbook_error:
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route {runbook_error}")
+                route_probes = route.get("probes")
+                if not isinstance(route_probes, dict):
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route probes must be a mapping")
+                for field in ("health_ref", "identity_ref", "business_smoke_ref"):
+                    error = _validate_runtime_probe_ref(
+                        field, route_probes.get(field), allowed_origins=flow._as_list(target.get("probe_origins"))
+                    )
+                    if error:
+                        raise WorkflowError(f"runtime target {target_id} HTTP probe route {error}")
+                smoke_path = urllib.parse.urlsplit(route_probes["business_smoke_ref"]).path
+                semantic = _business_smoke_semantic_contract(smoke_path)
+                contract_id = route.get("business_smoke_contract_id")
+                if (
+                    not contract_id or semantic is None or semantic[0] != contract_id
+                    or contract_id in {"health_ok", "openapi_document", "object_liveness", "research_pipeline_readiness_only"}
+                ):
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route requires a bound business semantic contract")
+                continue
             if not set(route_globs).issubset(set(flow._as_list(target.get("source_globs")))):
                 raise WorkflowError(
                     f"runtime target {target_id} probe route {route_id} contains sources outside its target"
                 )
-            route_mode = route.get("probe_mode")
             if route_mode not in {
                 _DATASET_RELEASE_WORKER_HEARTBEAT_MODE,
                 _MONTHLY_RELEASE_WORKER_PROCESS_MODE,
@@ -2537,6 +2572,10 @@ def _runtime_contract_digest(contract: dict[str, Any]) -> str:
         "local_probe": target.get("local_probe") or None,
         "probes": target.get("probes") or {},
     }
+    # Preserve legacy receipt digests, but bind new HTTP routes to their
+    # source-owned business contract as well as their endpoint references.
+    if target.get("business_smoke_contract_id"):
+        payload["business_smoke_contract_id"] = target["business_smoke_contract_id"]
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -2571,11 +2610,14 @@ def _select_runtime_probe_route(
         if partially_matched:
             return (
                 selected,
-                "runtime files mix routed and non-routed Worker sources: "
+                "runtime files mix routed and non-routed sources: "
                 + json.dumps(partially_matched, ensure_ascii=False),
             )
         return selected, None
     route = fully_matched[0]
+    if route.get("probe_mode") == "http":
+        selected["operator_runbook_ref"] = route["operator_runbook_ref"]
+        selected["business_smoke_contract_id"] = route["business_smoke_contract_id"]
     selected.update(
         {
             "probe_route_id": str(route.get("route_id")),
@@ -2677,11 +2719,22 @@ def build_runtime_contract(
                 if probe_route_error:
                     blocking.append(f"runtime target {target_id} {probe_route_error}")
                 probes = raw_target.get("probes") if isinstance(raw_target.get("probes"), dict) else {}
+                # HTTP routes provide defaults only. Keep explicit BUG references
+                # (including invalid/empty ones) subject to the normal strict gate.
+                http_route = raw_target.get("probe_route_id") and raw_target.get("probe_mode") == "http"
+                runbook = (
+                    explicit["operator_runbook_ref"]
+                    if http_route and "operator_runbook_ref" in explicit
+                    else raw_target.get("operator_runbook_ref")
+                )
                 target = {
                     **raw_target,
                     "target_id": target_id,
-                    "operator_runbook_ref": _resolve_runtime_ref(raw_target.get("operator_runbook_ref"), explicit),
-                    "probes": {key: _resolve_runtime_ref(value, explicit) for key, value in probes.items()},
+                    "operator_runbook_ref": _resolve_runtime_ref(runbook, explicit),
+                    "probes": {
+                        key: _resolve_runtime_ref(explicit[key] if http_route and key in explicit else value, explicit)
+                        for key, value in probes.items()
+                    },
                 }
                 if not target.get("operator_runbook_ref"):
                     blocking.append(f"runtime target {target_id} operator runbook ref is incomplete")
@@ -2729,6 +2782,10 @@ def build_runtime_contract(
                             f"runtime target {target_id} has no target-owned business-smoke "
                             f"semantic contract registered for endpoint path: {smoke_path}"
                         )
+                    elif smoke_ref and target.get("business_smoke_contract_id"):
+                        semantic = _business_smoke_semantic_contract(smoke_path)
+                        if semantic[0] != target["business_smoke_contract_id"]:
+                            blocking.append(f"runtime target {target_id} business smoke conflicts with its source-owned semantic contract")
                     if database_ref:
                         probe_error = _validate_runtime_probe_ref(
                             "database_readback_ref",
@@ -3516,6 +3573,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/ingestion/schedule$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/data-stats$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/local-data/schedules$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/local-data/targets$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/dispatch/nodes$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/tasks/[^/]+/.+$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/advisory/historical-range-options$"), "object_liveness", _validate_object_liveness),

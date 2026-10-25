@@ -518,7 +518,7 @@ def test_sync_by_period_uses_financial_raw_service_and_records_sparse_audit(monk
     assert audit_rows[1][12] == "empty_valid"
 
 
-def test_stock_st_events_success_hook_marks_dirty_and_ensures(monkeypatch):
+def test_stock_st_events_success_hook_preserves_published_state_and_ensures(monkeypatch):
     calls = []
 
     class _FakePitService:
@@ -544,9 +544,8 @@ def test_stock_st_events_success_hook_marks_dirty_and_ensures(monkeypatch):
     result = TushareSyncEngine()._run_stock_universe_pit_post_sync_hook("stock_st_events")
 
     assert result["ok"] is True
-    assert calls[0][0] == "mark_dirty"
-    assert calls[0][1]["source_dataset"] == "stock_st_events"
-    assert calls[1] == ("ensure", {"start_date": dt.date(2018, 8, 1), "strict": False})
+    assert calls == [("ensure", {"start_date": dt.date(2018, 8, 1), "strict": False})]
+    assert result["published_state_preserved_during_build"] is True
 
 
 def test_stock_basic_success_hook_also_ensures(monkeypatch):
@@ -575,9 +574,7 @@ def test_stock_basic_success_hook_also_ensures(monkeypatch):
     result = TushareSyncEngine()._run_stock_universe_pit_post_sync_hook("stock_basic")
 
     assert result["ok"] is True
-    assert calls[0][0] == "mark_dirty"
-    assert calls[0][1]["source_dataset"] == "stock_basic"
-    assert calls[1] == ("ensure", {"start_date": dt.date(2018, 8, 1), "strict": False})
+    assert calls == [("ensure", {"start_date": dt.date(2018, 8, 1), "strict": False})]
 
 
 @pytest.mark.parametrize("status", ["failed", "stale", "building"])
