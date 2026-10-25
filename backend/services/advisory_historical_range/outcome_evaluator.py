@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections import OrderedDict
+
 from collections.abc import Mapping
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
@@ -26,6 +28,7 @@ from backend.services.advisory_historical_range.outcome_projection import (
     HistoricalRangeAggregateCalculationResultV1,
     HistoricalRangeProjectionResultV1,
     RecommendationPathOutcomeEngine,
+    map_historical_range_maturity,
 )
 from backend.services.advisory_historical_range.outcome_source import (
     HistoricalRangeOutcomeSourceError,
@@ -444,10 +447,16 @@ class FrozenHistoricalRangeOutcomeInputFactory:
     ) -> None:
         self._subject_provider = subject_provider
         self._policy_provider = policy_provider
+        self._input_cache: OrderedDict[str, tuple[HistoricalRangeOutcomeSubjectInputV1, HistoricalRangeValuationPolicySetV1]] = OrderedDict()
 
     def _subject_and_policy(
         self, work_item: HistoricalRangeOutcomeWorkItemV1
     ) -> tuple[HistoricalRangeOutcomeSubjectInputV1, HistoricalRangeValuationPolicySetV1]:
+        key = canonical_json_sha256(work_item.model_dump(mode="json"))
+        cached = self._input_cache.get(key)
+        if cached is not None:
+            self._input_cache.move_to_end(key)
+            return cached
         subject = self._subject_provider.load(work_item)
         if (
             subject.source_artifact_ref_set_hash
@@ -457,6 +466,9 @@ class FrozenHistoricalRangeOutcomeInputFactory:
         policy = self._policy_provider.load(work_item.policy_bundle_hash)
         if policy.bundle.policy_bundle_hash != work_item.policy_bundle_hash:
             raise ValueError("policy provider returned a different frozen policy bundle")
+        self._input_cache[key] = (subject, policy)
+        if len(self._input_cache) > 256:
+            self._input_cache.popitem(last=False)
         return subject, policy
 
     def source_request(
@@ -751,11 +763,31 @@ class HistoricalRangeAggregateOutcomeEvaluator:
         children: tuple[HistoricalRangeOutcomeFactV1, ...],
         values: list[tuple[HistoricalRangeOutcomeFactV1, Any]],
     ) -> HistoricalRangeAggregateCalculationResultV1:
+        expected_refs = {child.outcome_artifact_ref.semantic_content_hash for child in children}
+        actual_refs = {child.outcome_artifact_ref.semantic_content_hash for child, _item in values}
+        if (
+            len(expected_refs) != len(children)
+            or len(values) != len(children)
+            or actual_refs != expected_refs
+            or any(
+                item.projection is not projection
+                or item.horizon_trading_days != work_item.horizon_trade_days
+                for _child, item in values
+            )
+        ):
+            raise HistoricalRangeOutcomeSourceError(
+                "ADVISORY_HR_OUTCOME_CHILD_CALCULATION_CONFLICT",
+                "aggregate requires exactly one matching calculation per frozen child",
+            )
+        # A child's outer status includes sibling projections (e.g. pending
+        # excess benchmark). Derive this cohort's status from this projection's
+        # calculation only, using the same native mapping as leaf results.
+        projection_statuses = [map_historical_range_maturity(item) for _child, item in values]
         counts = {status.value.lower(): 0 for status in HistoricalRangeOutcomeStatus}
-        for child in children:
-            counts[child.maturity_status.value.lower()] += 1
+        for status in projection_statuses:
+            counts[status.value.lower()] += 1
         counts["eligible_total"] = len(children)
-        statuses = {child.maturity_status for child in children}
+        statuses = set(projection_statuses)
         maturity = _aggregate_maturity(statuses) if statuses else HistoricalRangeOutcomeStatus.CENSORED
         numeric = [
             item.projection_value_decimal
@@ -779,9 +811,11 @@ class HistoricalRangeAggregateOutcomeEvaluator:
         }:
             maturity = HistoricalRangeOutcomeStatus.CENSORED
         next_dates = [
-            child.next_refresh_trade_date
-            for child in children
-            if child.next_refresh_trade_date is not None
+            item.next_refresh_trade_date
+            if isinstance(item, HistoricalRangeAggregateCalculationResultV1)
+            else item.scheduled_maturity_ts.date()
+            for (_child, item), status in zip(values, projection_statuses)
+            if status in {HistoricalRangeOutcomeStatus.NOT_DUE, HistoricalRangeOutcomeStatus.MATURING}
         ]
         next_refresh = min(next_dates) if maturity in {
             HistoricalRangeOutcomeStatus.NOT_DUE,
@@ -804,6 +838,7 @@ class HistoricalRangeAggregateOutcomeEvaluator:
             next_refresh_trade_date=next_refresh,
             child_outcome_refs=tuple(child.outcome_artifact_ref for child in children),
             maturity_coverage=counts,
+            reason_codes=tuple(sorted({reason for _child, item in values for reason in item.reason_codes})),
         )
 
 

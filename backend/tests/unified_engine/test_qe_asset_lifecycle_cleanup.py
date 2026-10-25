@@ -89,7 +89,7 @@ def test_x_validation_uses_short_grace_and_never_deletes_archive_rows(tmp_path: 
     )
     service = QEWorkspaceLifecycleService()
     plan = service.plan(request)
-    receipt = service.apply(plan)
+    receipt = service.apply(plan, refresh_request=lambda: request)
 
     assert plan.eligible is True
     assert receipt["workspace_status"] == "cleaned"
@@ -104,7 +104,7 @@ def test_partial_failure_receipt_is_retryable_and_does_not_guess(tmp_path: Path)
     extra.write_text("keep", encoding="utf-8")
     service = QEWorkspaceLifecycleService()
     plan = service.plan(request)
-    receipt = service.apply(plan)
+    receipt = service.apply(plan, refresh_request=lambda: request)
 
     assert receipt["workspace_status"] == "cleanup_incomplete"
     assert any(item["status"] == "unknown" for item in receipt["items"])
@@ -117,7 +117,7 @@ def test_cleanup_rechecks_file_identity_immediately_before_delete(tmp_path: Path
     plan = service.plan(request)
     Path(request.manifest[0].path).write_bytes(b"changed")
 
-    receipt = service.apply(plan)
+    receipt = service.apply(plan, refresh_request=lambda: request)
 
     assert receipt["workspace_status"] == "cleanup_incomplete"
     assert Path(request.manifest[0].path).exists()

@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1687",
-  "closed_at": null,
+  "closed_at": "2026-10-17T13:37:37.286873Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -32,12 +32,14 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/dataset_release/source_authority.py",
-      "backend/tests/dataset_release/test_source_authority.py"
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1687-monthly-source-incorrectly-couples-sector-publication-to-legacy-dual-ind.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/source_authority.py",
-      "backend/tests/dataset_release/test_source_authority.py"
+      "backend/tests/dataset_release/test_source_authority.py",
+      "tests/aistock_validation/bugs/20261002_BUG-1687-monthly-source-incorrectly-couples-sector-publication-to-legacy-dual-ind.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -126,8 +128,8 @@
   },
   "first_seen_at": "2026-10-02T18:53:15.744264Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "912b7ff2f7846f1de00d69a026fe2a35b37917b2",
+  "fixed_at": "2026-10-02T19:19:22Z",
   "github_issue_number": 5295,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5295",
   "last_seen_at": "2026-10-02T18:53:15.744264Z",
@@ -135,6 +137,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5297",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -157,9 +160,32 @@
       "backend-main",
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1687/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1687",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "912b7ff2f7846f1de00d69a026fe2a35b37917b2",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T13:36:57.998972Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2dc5d2fe6aaf42aa6320ca0da85c39a1ed12a54c4d61fce74cc973dcab918bd1",
+      "receipt_sha256": "cc46abe2caf5d79e55e6efbea4b3a94923d033e16084620ee95b5e625f44b344",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "24f6f34f1e9bd12e9d3aa2cacd3fba6b10d639123d0cff7bed60fcebebd9218c",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -169,7 +195,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -178,6 +204,9 @@
     "fingerprint": "0848a87fb8b4e81b6e1d754b",
     "source_event_id": "FE-20261002-0848a87fb8b4"
   },
+  "validation_evidence": [
+    "Current worker identity and business-smoke verified; merged source PR 5297 original validation retained."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

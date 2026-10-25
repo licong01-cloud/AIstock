@@ -1,5 +1,13 @@
 schema_version: aistock_module_registry_v1
 modules:
+  - module_id: advisory.ui
+    display_name: Advisory mocked UI
+    module_type: product_feature
+    risk_level: medium
+    description: Exact Advisory page and mocked browser contracts; no legacy Paper backend chain.
+    description_zh: 荐股页面与隔离模拟 API 的浏览器合同，不运行旧 Paper 后端或数据库测试链。
+    test_plans:
+      required_on_change: [advisory_mocked_ui]
   - module_id: advisory.model_first
     display_name: Advisory model-first WSL training
     module_type: data_pipeline
@@ -105,7 +113,7 @@ modules:
     api_routes: [/api/v1/quantevolver/*]
     test_plans:
       required_on_change: [l0, qe_read_backend]
-      recommended: [qe_read_l3, qe_data_contract_backend, qe_experiment_registry_ui]
+      recommended: [qe_read_l3, qe_data_contract_backend, qe_experiment_registry_ui, qe_best_loop_contract_ui, qe_terminal_poll_contract_ui, qe_read_performance_ui]
   - module_id: qe.custom_evolution
     display_name: QE custom evolution
     parent_module: qe
@@ -190,6 +198,7 @@ modules:
     ui_routes: [/simulation/localsim]
     test_plans:
       required_on_change: [l0, simulation_core_l2, localsim_successor_core_dev_db]
+      recommended: [localsim_control_plane_ui, localsim_workbench_ui]
   - module_id: simulation.layer_foundation
     display_name: Simulation data signal execution layer foundation
     parent_module: simulation_runtime

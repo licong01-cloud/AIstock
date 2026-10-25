@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -158,6 +158,16 @@ def test_production_factory_owns_managed_journal_callbacks() -> None:
         assert snapshot.identity is not None
         assert snapshot.identity.initial_repair_watermark == "repair-watermark-12"
         snapshot.assert_no_overlapping_repairs()
+
+
+def test_production_factory_binds_cutoff_and_rejects_different_journal() -> None:
+    from backend.services.dataset_release.monthly_repair_journal import ManagedRepairImpactJournal
+
+    snapshot = managed_monthly_snapshot(Connection, cutoff=date(2026, 9, 30))
+    assert snapshot._overlapping_repair_reader.__self__.source_cutoff == date(2026, 9, 30)
+    with pytest.raises(MonthlySnapshotError, match='cutoff differs'):
+        managed_monthly_snapshot(Connection, cutoff=date(2026, 9, 30),
+                                 journal=ManagedRepairImpactJournal(source_cutoff=date(2026, 8, 31)))
 
 
 @pytest.mark.parametrize("snapshot_id", ["0000000C-0016AC39-1", "000000af-000001bc-12"])

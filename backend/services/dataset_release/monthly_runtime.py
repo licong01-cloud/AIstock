@@ -180,7 +180,9 @@ class MonthlyRuntimeSettings:
         *,
         cutoff_resolver: Callable[[], date] | None = None,
     ) -> MonthlyReleaseService:
-        pipeline = registry.pipeline(artifact_roots=(self.artifact_root, self.controller_release_root))
+        pipeline = registry.pipeline(artifact_roots=(
+            self.artifact_root, self.controller_release_root, self.profile_candidate_root,
+        ))
         return self.service(pipeline=pipeline, cutoff_resolver=cutoff_resolver)
 
 

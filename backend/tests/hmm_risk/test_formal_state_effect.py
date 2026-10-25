@@ -223,6 +223,30 @@ def test_future_observation_change_does_not_change_earlier_predictions(inputs, p
     assert old == new
 
 
+def test_finite_inactive_continuation_is_diagnostic_not_prediction_gate(inputs, predicted, monkeypatch):
+    frozen, observations = copy.deepcopy(inputs)
+    for name in ("fit_entry", "select_restart", "preprocess_fit"):
+        monkeypatch.setattr(model_module, name, lambda *_a, **_kw: pytest.fail("refit/selection reached"))
+    code = "801207.SI"
+    obs = observations["sectors"][code]
+    slot = obs["positions"].index(observations["calendar"].index("2026-03-05"))
+    obs["values"][slot][19] = -0.007118292485459976
+    observations = reseal(observations)
+    before = canonical_sha256([frozen, observations])
+    changed = subject.predict(frozen, observations)
+    assert changed["predictions"] == predicted["predictions"]
+    diagnostics = changed["inactive_dimension_observation_receipts"]
+    nonzero = [r for r in diagnostics if r["inactive_feature_observed_non_zero"]]
+    assert len(nonzero) == 1
+    row = nonzero[0]
+    assert row["as_of_date"] == "2026-03-05" and row["trade_date"] == "2026-03-06"
+    assert row["raw_value_f64"] == -0.007118292485459976
+    assert row["preprocessed_value_f64"] == row["raw_value_f64"]
+    assert row["projection_sha256"] == frozen["models"][code]["projection"]["receipt_sha256"]
+    subject.verify_receipt(row)
+    assert canonical_sha256([frozen, observations]) == before
+
+
 def test_legitimate_observation_na_does_not_make_transition_only_prediction(inputs):
     frozen, observations = copy.deepcopy(inputs)
     code = frozen["catalog"][0]
@@ -350,6 +374,11 @@ def acceptance(inputs, predicted):
     params = {c: m["model_sha256"] for c, m in frozen["models"].items()}
     semantics = {c: [m["mapping"], m["utility_means"]] for c, m in frozen["models"].items()}
     identity = {
+        "frozen_model_set_sha256": frozen["receipt_sha256"],
+        "model_entry_sha256_by_sector": {c: canonical_sha256(m) for c, m in frozen["models"].items()},
+        "projection_sha256_by_sector": {c: m["projection"]["receipt_sha256"] for c, m in frozen["models"].items()},
+        "observation_sha256": observations["receipt_sha256"],
+        "inactive_dimension_observation_receipts": predicted["inactive_dimension_observation_receipts"],
         "source_calendar": observations["source_calendar"],
         "model_parameter_sha256_by_sector": params,
         "model_parameter_set_sha256": canonical_sha256(params),
@@ -392,6 +421,29 @@ def test_explicit_product_version_preserves_frozen_semantics_and_null_mapping(ac
     )
 
 
+@pytest.mark.parametrize("fault", ["missing", "duplicate", "value_hash", "projection", "flag"])
+def test_product_rejects_rehashed_inactive_observation_diagnostic_drift(acceptance, fault):
+    bad = copy.deepcopy(acceptance)
+    rows = bad["evaluation_input_identity"]["inactive_dimension_observation_receipts"]
+    if fault == "missing":
+        rows.pop()
+    elif fault == "duplicate":
+        rows.append(copy.deepcopy(rows[-1]))
+    else:
+        row = rows[0]
+        field, value = {
+            "value_hash": ("raw_value_float64_sha256", "f" * 64),
+            "projection": ("projection_sha256", "f" * 64),
+            "flag": ("inactive_feature_observed_non_zero", True),
+        }[fault]
+        row[field] = value
+        rows[0] = reseal(row)
+    bad["input_hash"] = canonical_sha256(bad["evaluation_input_identity"])
+    bad["acceptance_sha256"] = canonical_sha256({k: v for k, v in bad.items() if k != "acceptance_sha256"})
+    with pytest.raises(model_module.FormalStateError, match="inactive observation"):
+        subject.validate_acceptance(bad)
+
+
 @pytest.mark.parametrize(
     "fault", ["semantic", "rank", "utility", "effect", "mapping_pin", "catalog", "metric", "maturity"]
 )
@@ -422,7 +474,7 @@ def test_product_rejects_rehashed_projection_and_state_drift(acceptance, fault):
         rows_from_acceptance(bad)
 
 
-def test_hmm_product_writer_readback_and_api_keep_explicit_version(acceptance):
+def test_hmm_product_writer_readback_and_api_keep_explicit_version(acceptance, tmp_path):
     from backend.tests.hmm_risk.test_rotation_l2_prediction import _Cursor, _Connection
     from backend.services.hmm_risk.rotation_l2_prediction import (
         PREDICTION_COLUMNS,
@@ -432,19 +484,24 @@ def test_hmm_product_writer_readback_and_api_keep_explicit_version(acceptance):
 
     class ReadCursor(_Cursor):
         def execute(self, sql, params=None):
-            if "WHERE run_id=%s AND trade_date=%s" in sql:
-                self._rows = list(self.inserted)
+            if "SELECT DISTINCT trade_date" in sql:
+                assert params == (acceptance["run_id"],)
+                self._rows = sorted({(row[PREDICTION_COLUMNS.index("trade_date")],) for row in self.inserted})
                 return
-            if "SELECT max(trade_date)" in sql:
-                self.maximum = max(row[PREDICTION_COLUMNS.index("trade_date")] for row in self.inserted)
+            if "WHERE run_id=%s AND trade_date=%s" in sql:
+                assert params is not None
+                self._rows = [
+                    row
+                    for row in self.inserted
+                    if (row[PREDICTION_COLUMNS.index("run_id")], row[PREDICTION_COLUMNS.index("trade_date")]) == params
+                ]
                 return
             super().execute(sql, params)
 
-        def fetchone(self):
-            return (self.maximum,)
-
     cursor = ReadCursor()
-    repository = RotationL2PredictionRepository(conn_factory=lambda: _Connection(cursor))
+    repository = RotationL2PredictionRepository(
+        conn_factory=lambda: _Connection(cursor), surface_validation_store_root=tmp_path
+    )
     rows = [row for row in rows_from_acceptance(acceptance) if row["trade_date"] == subject.END]
     assert repository.write_rows(rows)["row_count"] == 131
     response = repository.read_date(subject.END, run_id=acceptance["run_id"])
@@ -454,6 +511,7 @@ def test_hmm_product_writer_readback_and_api_keep_explicit_version(acceptance):
     assert row["semantic_state"] == "neutral" and row["daily_rank_group"] == "fading"
     overview = repository.overview(run_id=acceptance["run_id"])
     assert overview["model_version"] == subject.VERSION and overview["research_surface_status"] == "NOT_AVAILABLE"
+    assert overview["available_trade_dates"] == [subject.END.isoformat()]
 
 
 def test_parent_prediction_is_sealed_before_first_label_access(inputs, monkeypatch):
@@ -499,6 +557,7 @@ def test_parent_prediction_is_sealed_before_first_label_access(inputs, monkeypat
         )
     )
     assert events == ["sealed", "labels"] and result["fits"] == 0
+    assert result["evaluation_input_identity"]["inactive_dimension_observation_receipts"]
 
 
 def test_model_extraction_authenticates_original_parameters_without_fitting(inputs, monkeypatch):
@@ -645,3 +704,93 @@ def test_two_processes_fail_closed_on_payload_or_refit_drift():
     bad = reseal({**repeat, "unexpected_numeric_drift": 1})
     with pytest.raises(model_module.FormalStateError, match="differ"):
         subject.close_effect_processes(repeat, bad)
+
+
+def test_neutral_rescore_preserves_masks_semantics_and_never_filters(acceptance, monkeypatch):
+    monkeypatch.setattr(subject, "NEUTRAL_SOURCE_ACCEPTANCE_SHA", acceptance["acceptance_sha256"])
+    monkeypatch.setattr(subject, "causal_filter", lambda *_a, **_k: pytest.fail("HMM filtering reached"))
+    monkeypatch.setattr(subject, "restore_model", lambda *_a, **_k: pytest.fail("HMM restore reached"))
+    scored = subject.neutral_rescore(acceptance)
+    assert scored["fits"] == 0 and not scored["target_accessed"]
+    for old, new in zip(acceptance["predictions"], scored["predictions"], strict=True):
+        for key in (
+            "availability",
+            "reason_code",
+            "hard_state",
+            "semantic_state",
+            "forecast_state",
+            "feature_eligible",
+            "structural_eligible",
+            "model_parameter_sha256",
+        ):
+            assert old[key] == new[key]
+        assert new["raw_score"] == (0.0 if old["availability"] == "available" else None)
+    assert {r["daily_rank_group"] for r in scored["predictions"] if r["availability"] == "available"} == {"neutral"}
+    with pytest.raises(model_module.FormalStateError):
+        subject.validate_acceptance({**acceptance, "contract_version": subject.NEUTRAL_VERSION})
+
+
+def test_neutral_mapping_not_hidden_index_and_source_pin_rejects_drift(acceptance, monkeypatch):
+    changed = copy.deepcopy(acceptance)
+    semantics = changed["evaluation_input_identity"]["semantic_mapping_and_utility_by_sector"]
+    for mapping, utility in semantics.values():
+        if mapping:
+            mapping["0"], mapping["1"] = mapping["1"], mapping["0"]
+            utility["0"], utility["1"] = utility["1"], utility["0"]
+    for row in changed["predictions"]:
+        if row["availability"] == "available":
+            row["hard_state"] = 0
+            row["feature_contributions"]["hard_state"] = 0
+    identity = changed["evaluation_input_identity"]
+    identity["semantic_mapping_sha256"] = canonical_sha256(semantics)
+    changed["input_hash"] = canonical_sha256(identity)
+    changed["acceptance_sha256"] = canonical_sha256({k: v for k, v in changed.items() if k != "acceptance_sha256"})
+    with pytest.raises(model_module.FormalStateError, match="approved sealed"):
+        subject.neutral_rescore(changed)
+    monkeypatch.setattr(subject, "NEUTRAL_SOURCE_ACCEPTANCE_SHA", changed["acceptance_sha256"])
+    assert all(
+        r["feature_contributions"]["neutral_hidden_state"] == 0
+        for r in subject.neutral_rescore(changed)["predictions"]
+        if r["availability"] == "available"
+    )
+
+
+def test_neutral_ties_stay_undefined_and_label_pin_and_repeat_fail_closed(acceptance, inputs, monkeypatch):
+    frozen, observations = inputs
+    labels = _labels(frozen, observations["source_calendar"])
+    baseline = receipt({"predictions": _baseline(frozen, observations["source_calendar"]), "tail_accessed": False})
+    source = copy.deepcopy(acceptance)
+    source["evaluation_input_identity"].update(
+        outcome_sha256=labels["receipt_sha256"], baseline_sha256=baseline["receipt_sha256"]
+    )
+    source["evaluation_input_identity"]["prediction_sha256"] = "c" * 64
+    source["input_hash"] = canonical_sha256(source["evaluation_input_identity"])
+    source["acceptance_sha256"] = canonical_sha256({k: v for k, v in source.items() if k != "acceptance_sha256"})
+    monkeypatch.setattr(subject, "NEUTRAL_SOURCE_ACCEPTANCE_SHA", source["acceptance_sha256"])
+    repeat = subject.neutral_effect_repeat(source, labels, baseline, numeric_environment={"fixture": True})
+    assert repeat["result"]["effect_status"] == "EVIDENCE_INSUFFICIENT"
+    assert repeat["result"]["metrics"]["same_score_days"] == 221
+    assert repeat["result"]["metrics"]["valid_ic_day_count"] == 0
+    assert subject.close_neutral_processes(repeat, copy.deepcopy(repeat))["completed_fits"] == 0
+    bad = copy.deepcopy(labels)
+    bad["outcomes"][subject.START.isoformat()][frozen["catalog"][0]] = 1
+    with pytest.raises(model_module.FormalStateError, match="identity"):
+        subject.neutral_effect_repeat(source, reseal(bad), baseline, numeric_environment={"fixture": True})
+    drift = reseal({**repeat, "fits": 1})
+    with pytest.raises(model_module.FormalStateError):
+        subject.close_neutral_processes(repeat, drift)
+
+
+def test_neutral_cli_requires_existing_labels_and_never_silently_rebuilds(tmp_path, monkeypatch):
+    import sys
+    from scripts.hmm_risk import run_formal_state_effect as cli
+
+    monkeypatch.setattr(cli, "read_json", lambda _path: {})
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_formal_state_effect", "run", "--source-acceptance", "sealed.json", "--output", str(tmp_path / "run")],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == 2 and not (tmp_path / "run").exists()

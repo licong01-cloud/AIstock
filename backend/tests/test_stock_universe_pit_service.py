@@ -50,6 +50,94 @@ def test_canonical_source_fingerprint_uses_builder_terminal_evidence_contract() 
 QE_SNAPSHOT_KEY = "shsz_st_pit_qe_dataset_test_20180801_20260630_v1"
 
 
+@pytest.mark.parametrize("source_ready", [False, True])
+def test_live_roll_requires_completed_prior_day_sources_and_uses_incremental_write(monkeypatch, source_ready) -> None:
+    service = StockUniversePitService(existing_schema_only=True)
+    state = {"status": "ready", "dirty": False, "start_date": dt.date(2018, 8, 1), "end_date": dt.date(2026, 10, 16)}
+    monkeypatch.setattr(service, "get_status_readonly", lambda **_kwargs: state)
+    calls = []
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def cursor(self): return self
+        def execute(self, *_args): pass
+        def fetchone(self): return (dt.date(2026, 10, 16),)
+    class Audit:
+        def require_success(self, **kwargs):
+            calls.append(kwargs)
+            if not source_ready:
+                raise RuntimeError("source waiting")
+    monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", Connection)
+    monkeypatch.setattr("backend.services.data_refresh_audit.DataRefreshAuditRepository", Audit)
+    monkeypatch.setattr(service, "compute_source_fingerprint", lambda **_kwargs: {"facts": 1})
+    monkeypatch.setattr(service, "_rebuild_st_pit_universe", lambda **kwargs: kwargs)
+    if not source_ready:
+        with pytest.raises(RuntimeError, match="source waiting"):
+            service.advance_canonical_trade_day(trade_date=dt.date(2026, 10, 19))
+    else:
+        result = service.advance_canonical_trade_day(trade_date=dt.date(2026, 10, 19))
+        assert result["live_source_end_date"] == dt.date(2026, 10, 16)
+        assert result["incremental_from"] == dt.date(2026, 10, 17)
+        assert result["write_mode"] == "incremental"
+        assert {row["dataset"] for row in calls} == {"stock_st", "stock_st_events"}
+    assert all(row["trade_date"] == dt.date(2026, 10, 16) for row in calls)
+
+
+def test_resolver_checks_exact_published_rolling_predecessor() -> None:
+    from types import SimpleNamespace
+    from backend.services.canonical_equity_pit import CanonicalPitAuthorityResolver
+    predecessor = {"source_digest": "old", "coverage_start": "2018-08-01", "coverage_end": "2026-10-20"}
+    class Connection:
+        def __enter__(self): return self
+        def __exit__(self, *_args): return False
+        def cursor(self, **_kwargs): return self
+        def execute(self, sql, params):
+            assert "status='ready' AND dirty=FALSE" in sql
+            assert params[1] == "current"
+        def fetchone(self): return {"last_build_summary": {"rolling_predecessors": [predecessor]}}
+    resolver = CanonicalPitAuthorityResolver(connection_factory=Connection)
+    current = SimpleNamespace(universe_key=CANONICAL_PIT_UNIVERSE_KEY, state_source_digest="current",
+                              coverage_start=dt.date(2018, 8, 1), coverage_end=dt.date(2026, 10, 21))
+    assert resolver.verifies_rolling_predecessor(current=current, source_digest="old",
+                                               coverage_start=dt.date(2018, 8, 1), coverage_end=dt.date(2026, 10, 20))
+    assert not resolver.verifies_rolling_predecessor(current=current, source_digest="unproven",
+                                                   coverage_start=dt.date(2018, 8, 1), coverage_end=dt.date(2026, 10, 20))
+
+
+def test_live_day_roll_is_noop_when_published_coverage_is_current(monkeypatch) -> None:
+    service = StockUniversePitService(existing_schema_only=True)
+    state = {"status": "ready", "dirty": False, "end_date": dt.date(2026, 10, 21)}
+    monkeypatch.setattr(service, "get_status_readonly", lambda **_kwargs: state)
+    monkeypatch.setattr(service, "resolve_default_end_date", lambda: dt.date(2026, 10, 21))
+    assert service.advance_canonical_trade_day()["reason"] == "already_current"
+
+
+def test_canonical_build_failure_does_not_poison_published_state(monkeypatch) -> None:
+    service = StockUniversePitService(existing_schema_only=True)
+    monkeypatch.setattr(service, "ensure_tables", lambda: None)
+    monkeypatch.setattr(service, "get_status", lambda **_kwargs: {"status": "ready", "dirty": False})
+    monkeypatch.setattr(service, "compute_source_fingerprint", lambda **_kwargs: {})
+    monkeypatch.setattr(service, "_set_building", lambda *_a, **_k: pytest.fail("must retain published state"))
+    monkeypatch.setattr(service, "_set_failed", lambda *_a, **_k: pytest.fail("must retain published state"))
+
+    class Connection:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_args):
+            return False
+        def cursor(self):
+            return self
+        def execute(self, *_args):
+            pass
+        def fetchone(self):
+            return (True,)
+
+    monkeypatch.setattr("backend.services.stock_universe_pit_service.get_conn", Connection)
+    monkeypatch.setattr(pit_builder, "build", lambda _args: (_ for _ in ()).throw(RuntimeError("source not ready")))
+    with pytest.raises(RuntimeError, match="source not ready"):
+        service.rebuild_canonical_pit_universe(start_date=dt.date(2018, 8, 1), end_date=dt.date(2026, 10, 21))
+
+
 @pytest.mark.parametrize("missing_schema", [False, True])
 def test_existing_schema_service_never_bootstraps(monkeypatch, missing_schema) -> None:
     service = StockUniversePitService(existing_schema_only=True)

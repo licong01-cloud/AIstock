@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 
 import pytest
 
@@ -186,3 +187,47 @@ def test_database_parameter_serializes_both_uuid_columns_only() -> None:
     assert _database_parameter("supersedes_prediction_id", value) == str(value)
     assert _database_parameter("run_id", value) is value
     assert _database_parameter("supersedes_prediction_id", None) is None
+
+
+class _OverviewCursor(_Cursor):
+    def __init__(self, dates: list[date]) -> None:
+        super().__init__()
+        self.dates = dates
+
+    def execute(self, sql: str, params: tuple | None = None) -> None:
+        normalized = " ".join(sql.split()).lower()
+        assert params == ("a" * 64,)
+        if normalized.startswith("select max(trade_date)"):
+            self._rows = [(max(self.dates) if self.dates else None,)]
+        elif normalized.startswith("select distinct trade_date"):
+            assert "order by trade_date" in normalized
+            self._rows = [(value,) for value in self.dates]
+        else:
+            raise AssertionError(f"unexpected overview SQL: {normalized}")
+
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
+
+def test_overview_exposes_run_scoped_historical_dates_without_recomputing(monkeypatch) -> None:
+    dates = [date(2026, 3, 30), date(2026, 3, 31)]
+    cursor = _OverviewCursor(dates)
+    repository = RotationL2PredictionRepository(conn_factory=lambda: _Connection(cursor))
+    called = []
+
+    def read_date(trade_date, *, run_id):
+        called.append((trade_date, run_id))
+        return {"rows": rows_from_acceptance(_acceptance()), "trade_date": trade_date.isoformat()}
+
+    monkeypatch.setattr(repository, "read_date", read_date)
+    overview = repository.overview(run_id="a" * 64)
+    assert overview["available_trade_dates"] == ["2026-03-30", "2026-03-31"]
+    assert overview["trade_date"] == "2026-03-31"
+    assert called == [(dates[-1], "a" * 64)]
+
+
+@pytest.mark.parametrize("dates", [[], [date(2026, 3, 31), date(2026, 3, 30)], [date(2026, 3, 31)] * 2])
+def test_overview_rejects_empty_or_corrupt_date_catalog(dates) -> None:
+    repository = RotationL2PredictionRepository(conn_factory=lambda: _Connection(_OverviewCursor(dates)))
+    with pytest.raises(RotationL2PredictionError):
+        repository.overview(run_id="a" * 64)

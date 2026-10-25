@@ -30,6 +30,7 @@ CANDIDATE_SOURCE_ROLES_V2 = frozenset(
         "hmm_frozen_evidence",
         "market_history",
         "fundamental_moneyflow",
+        "selection_input_plan",
     }
 )
 DECISION_MARK_SOURCE_ROLES_V1 = frozenset(
@@ -123,7 +124,7 @@ def _matches_program_day(
         return False
     if member.component_id not in {None, *component_ids}:
         return False
-    if member.source_role == "hmm_frozen_evidence":
+    if member.source_role in {"hmm_frozen_evidence", "selection_input_plan"}:
         selector = (member.bound_parameters or {}).get("selector")
         return isinstance(selector, dict) and str(selector.get("research_program_id") or "") == research_program_id
     return True

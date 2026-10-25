@@ -1,0 +1,327 @@
+{
+  "actual": "金额小数另起一行；多条技术警报悬浮覆盖持仓。",
+  "allowed_write_scope": [
+    "tests/aistock_validation/catalog/file_ownership.yaml",
+    "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+    "tests/aistock_validation/bugs/20261019_BUG-2001-localsim.json",
+    "frontend/src/app/DataAlertsToast.tsx"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2001",
+  "closed_at": "2026-10-19T19:49:27Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-19T19:24:42.801118Z",
+  "description": "金额小数另起一行；多条技术警报悬浮覆盖持仓。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261019-de29d2458769",
+      "timestamp": "2026-10-19T19:24:42.801102Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/LOCALSIM/BUG-1994/post-restart-20261020/post-restart-account-holdings.png"
+  ],
+  "expected": "金额完整单行；LocalSIM内以一条可关闭的人类可读提醒保留数据准备入口；左侧导航与其他页面行为不变。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "frontend/src/app/DataAlertsToast.tsx",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+      "tests/aistock_validation/bugs/20261019_BUG-2001-localsim.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "frontend/src/app/DataAlertsToast.tsx",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+      "tests/aistock_validation/bugs/20261019_BUG-2001-localsim.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "frontend/src/app/simulation/localsim/components/trading-workbench.module.css"
+      ],
+      "impacted_modules": [
+        "validation.module_quality",
+        "validation.guardrails",
+        "tests.validation_history",
+        "simulation.localsim_successor_core",
+        "simulation_runtime",
+        "platform.db",
+        "paper_v2",
+        "strategy_package"
+      ],
+      "matched_rules": [
+        {
+          "file": "tests/aistock_validation/catalog/file_ownership.yaml",
+          "impact_modules": [
+            "validation.guardrails",
+            "tests.validation_history"
+          ],
+          "primary_module": "validation.module_quality",
+          "risk_level": "high",
+          "rule_id": "validation_catalog_module_quality"
+        },
+        {
+          "file": "frontend/src/app/simulation/localsim/components/trading-workbench.module.css",
+          "impact_modules": [
+            "simulation_runtime",
+            "platform.db",
+            "paper_v2",
+            "strategy_package"
+          ],
+          "primary_module": "simulation.localsim_successor_core",
+          "risk_level": "critical",
+          "rule_id": "simulation_localsim_successor_core"
+        }
+      ],
+      "risk_levels": [
+        "high",
+        "critical"
+      ],
+      "suggested_scope": [
+        "tests/aistock_validation/catalog/file_ownership.yaml",
+        "frontend/src/app/simulation/localsim/components/trading-workbench.module.css"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "tests/aistock_validation/catalog/file_ownership.yaml",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css"
+    ]
+  },
+  "first_seen_at": "2026-10-19T19:24:42.801118Z",
+  "fix_branch": null,
+  "fix_commit": "6a9b84490024edf16dcd5b01449e08f2348150d7",
+  "fixed_at": "2026-10-19T19:49:27Z",
+  "github_issue_number": 6393,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6393",
+  "last_seen_at": "2026-10-19T19:24:42.801118Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "ownership_scope_note": "Classify existing DataAlertsToast in frontend_common; change presentation only on LocalSIM routes, preserve polling, server records and non-LocalSIM behavior.",
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6395",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_module_registry_l0"
+  ],
+  "review_evidence": [
+    "Review 1: all measured financial values fit one line at 1280/1440/1920; no formatter or metric semantics changed.",
+    "Review 2: LocalSIM collapses human alert summaries; other routes keep original alerts; navigation and dismissal send no acknowledgement or state writes.",
+    "CI review: corrected 390px document overflow with confined numeric scrolling and wrapping status badges; real 390/640/900 viewport overview and holding checks passed, sidebar remains 260px."
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "frontend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2001",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "096e41ffc71dcc02",
+    "recorded_at": "2026-10-19T19:53:55.690720Z",
+    "runtime_contract_digest": "d51ba2fa10c2b5f10e3eb2b0d26499735cf84f953e80ec8afe900a899b096ccb",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "ad164851988588aac09e9d87720d39b7038b1295",
+    "source_merge_commit": "6a9b84490024edf16dcd5b01449e08f2348150d7",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6395",
+    "validation_evidence": [
+      "npm exec --offline --call node X:/AIstock_temp/LOCALSIM/BUG-2001/verify-native-ui-r2.cjs -> passed 4 actual UI checks; no mocked API or injected styles; native-ui-receipt.json PASSED"
+    ],
+    "validation_evidence_digest": "ac6f6b15207ad45415af0e354d532f91e8172db29ad1f2ddcdfe94694dd794a8"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM资产金额断行且全局数据提醒遮挡持仓",
+  "trigger_condition": {
+    "fingerprint": "de29d2458769f66e412bb9cb",
+    "source_event_id": "FE-20261019-de29d2458769"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:simulation_runtime",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/DataAlertsToast.tsx",
+      "frontend/src/app/simulation/localsim/components/trading-workbench.module.css"
+    ],
+    "ui_issue": true,
+    "ui_route": "/simulation/localsim/workbench",
+    "ui_routes": [
+      "/simulation/localsim/workbench"
+    ],
+    "visual_acceptance_required": true
+  },
+  "ui_route": "/simulation/localsim/workbench",
+  "ui_verification_evidence": {
+    "alert_component_transport": "native GET body; isolated component CORS shim",
+    "business_api_mocked": false,
+    "component_receipt": "X:/AIstock_temp/LOCALSIM/BUG-2001/readability-alerts-receipt.json",
+    "narrow_receipt": "X:/AIstock_temp/LOCALSIM/BUG-2001/readability-narrow-receipt.json",
+    "protected_navigation_files_changed": false,
+    "type_check": "npm exec --offline --call node check-types.cjs passed",
+    "viewport_screenshots": [
+      "X:/AIstock_temp/LOCALSIM/BUG-2001/metrics-1280.png",
+      "X:/AIstock_temp/LOCALSIM/BUG-2001/metrics-1440.png",
+      "X:/AIstock_temp/LOCALSIM/BUG-2001/metrics-1920.png"
+    ]
+  },
+  "validation_evidence": [
+    "npm exec --offline --call node X:/AIstock_temp/LOCALSIM/BUG-2001/verify-native-ui-r2.cjs -> passed 4 actual UI checks; no mocked API or injected styles; native-ui-receipt.json PASSED"
+  ],
+  "verification_budget": {
+    "budget": "light_ui",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [],
+      "plans": [],
+      "required": false,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "validation_module_registry_l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-40%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light_ui",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [],
+        "plans": [],
+        "required": false,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "validation_module_registry_l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-40%"
+    }
+  }
+}

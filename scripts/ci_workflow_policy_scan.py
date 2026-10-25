@@ -90,6 +90,19 @@ _DB_CREATE_RE = re.compile(
 )
 
 
+def has_owned_wall_clock_trigger(text: str, filename: str, event_type: str) -> bool:
+    """Only the exact automatic event is a cron replacement, never arbitrary dispatch."""
+    return bool(
+        re.search(r"(?m)^  repository_dispatch:\n(?:    #[^\n]*\n)*    types: \["
+                  + re.escape(event_type) + r"\]\s*$", text)
+        and f"AIstock schedule {filename} {{0}}" in text
+        and "github.event.client_payload.cycle_date" in text
+        and "workflow_dispatch:" in text
+        and "scheduled-admission" in text
+        and not re.search(r"(?m)^  (?:schedule|push|pull_request|workflow_run):", text)
+    )
+
+
 def _workflow_job_blocks(text: str) -> list[str]:
     """Return individual top-level GitHub Actions job blocks without a YAML dependency."""
 
@@ -581,7 +594,8 @@ def build_contract_evidence(
             has_event_bound_base_preparation(workflow_text.get(name, ""), manual=name != "test.yml")
             for name in BASE_FETCH_RETRY_WORKFLOWS
         )
-        and "for index in range(max(1, int(attempts)))" in changed_files_text
+        and "for index in range(min(3, max(1, int(attempts))))" in changed_files_text
+        and "timeout=min(fetch_timeout, remaining)" in changed_files_text
         and '"--no-write-fetch-head"' in changed_files_text
         and 'f"--deepen={max(1, int(deepen_by))}"' in changed_files_text
         and '"merge-base"' in changed_files_text
@@ -621,8 +635,7 @@ def build_contract_evidence(
             and '"CodeQL verdict"' not in issue_workflow_text
         ),
         "codeql_daily_nightly_full_scan": bool(
-            "schedule:" in codeql_text
-            and "cron: '27 20 * * *'" in codeql_text
+            has_owned_wall_clock_trigger(codeql_text, "codeql.yml", "aistock_codeql")
             and "workflow_dispatch:" in codeql_text
             and "pull_request:" not in codeql_text
             and not re.search(r"(?m)^  push:\s*$", codeql_text)
@@ -676,7 +689,8 @@ def build_contract_evidence(
             and "CodeQL verdict" not in issue_workflow_text
         ),
         "code_intelligence_refresh_is_scheduled_or_manual_only": (
-            "schedule:" in code_intelligence_refresh_text
+            has_owned_wall_clock_trigger(code_intelligence_refresh_text, "code-intelligence-refresh.yml",
+                                         "aistock_code_intelligence")
             and "workflow_dispatch:" in code_intelligence_refresh_text
             and not re.search(r"(?m)^\s{2}push:\s*$", code_intelligence_refresh_text)
         ),
@@ -690,7 +704,9 @@ def build_contract_evidence(
             and code_intelligence_preflight_precedes_refresh_concurrency(code_intelligence_refresh_text)
         ),
         "nightly_code_intelligence_has_single_scheduled_owner": (
-            "schedule:" in code_intelligence_refresh_text
+            has_owned_wall_clock_trigger(code_intelligence_refresh_text, "code-intelligence-refresh.yml",
+                                         "aistock_code_intelligence")
+            and has_owned_wall_clock_trigger(nightly_text, "nightly.yml", "aistock_nightly")
             and "default: false" in nightly_code_intelligence_input
             and "if: github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence" in nightly_text
             and "if: github.event_name == 'schedule' || inputs.run_code_intelligence" not in nightly_text

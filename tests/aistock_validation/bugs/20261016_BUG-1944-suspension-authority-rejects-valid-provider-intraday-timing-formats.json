@@ -1,0 +1,316 @@
+{
+  "actual": "Eight September intraday keys are incorrectly unresolved.",
+  "allowed_write_scope": [
+    "backend/data_service/suspension_day_authority.py",
+    "backend/tests/services/test_suspend_d_coverage.py",
+    "tests/aistock_validation/bugs/20261016_BUG-1944-suspension-authority-rejects-valid-provider-intraday-timing-formats.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1944",
+  "closed_at": "2026-10-17T13:15:24.163183Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-16T17:48:09.462660Z",
+  "description": "Eight September intraday keys are incorrectly unresolved.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261016-2a9bbc60d09f",
+      "timestamp": "2026-10-16T17:48:09.462660Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Explicit valid intraday timing is parsed deterministically; unknown blank S/R remains unresolved and official full-day contradictions remain blocked.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/data_service/suspension_day_authority.py",
+      "backend/tests/services/test_suspend_d_coverage.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1944-suspension-authority-rejects-valid-provider-intraday-timing-formats.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/data_service/suspension_day_authority.py",
+      "backend/tests/services/test_suspend_d_coverage.py",
+      "tests/aistock_validation/bugs/20261016_BUG-1944-suspension-authority-rejects-valid-provider-intraday-timing-formats.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/data_service/suspension_day_authority.py",
+        "backend/tests/services/test_suspend_d_coverage.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/data_service/suspension_day_authority.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        },
+        {
+          "file": "backend/tests/services/test_suspend_d_coverage.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/data_service/suspension_day_authority.py",
+        "backend/tests/services/test_suspend_d_coverage.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/data_service/suspension_day_authority.py",
+      "backend/tests/services/test_suspend_d_coverage.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/data_service/suspension_day_authority.py",
+      "backend/tests/services/test_suspend_d_coverage.py"
+    ]
+  },
+  "first_seen_at": "2026-10-16T17:48:09.462660Z",
+  "fix_branch": null,
+  "fix_commit": "4c1196e53444955b418de05283fecb9c6ca1773c",
+  "fixed_at": "2026-10-16T18:03:24Z",
+  "github_extra": {
+    "review_rounds": [
+      "Semantic review: explicit timing proves intraday only; blank S/R, duplicate event types and official full-day contradictions remain unresolved.",
+      "Boundary review: single-hour and multiple ordered ranges accepted; overlapping, reversed, malformed and out-of-session bounds rejected.",
+      "DESIGN-COMPLIANCE-001: shared data-side parser only; all unknown states remain explicit, raw events and prices remain unchanged, replay and database untouched. No new platform or approval gate. Daily and monthly share this helper."
+    ]
+  },
+  "github_issue_number": 6200,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6200",
+  "last_seen_at": "2026-10-16T17:48:09.462660Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6203",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/suspend_d/status",
+    "fresh_process_evidence": [
+      "RED: four provider timing cases failed. GREEN: 153 direct daily tests passed in a fresh process. Read-only September production scan: 265 raw events, 263 keys, 228 full-day, 24 resumed, 11 intraday, zero unresolved; raw SHA256 0cc5897e9a597a22d18e3576bd2afcc7be5f14934e7967023674d3d1f6118908. Receipt X:/AIstock_dataset_candidates/data_repair_staging/BUG-1944-suspension-september-readback-20261017.json. No database, profile or runtime writes."
+    ],
+    "health_ref": "http://127.0.0.1:8001/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1944/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1944",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "22951ed02712f8a9b4ce5cf435fd0088b9185745593fb290b27a0a01dc1377f3",
+      "expected_identity": "4c1196e53444955b418de05283fecb9c6ca1773c",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T13:14:24.693482Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "a2134d7a2ef0f484fcb9324c28841b66686651bd9aeecd4f9b3dec38bf6a774e",
+      "receipt_sha256": "17b3ad4868880d7bdd1bc3d2a4303fe84c1d798acc6674b4fbccad41126cc9dc",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1bf0567b88b5de0f2809d007a710c84c2e9cc86f4128c038e92865734990cfc3",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1944",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "2a77782a1621ce92",
+    "recorded_at": "2026-10-16T18:04:00.644669Z",
+    "runtime_contract_digest": "22951ed02712f8a9b4ce5cf435fd0088b9185745593fb290b27a0a01dc1377f3",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "40f99ee536ec42eaa2eb4bb4f2d1ba2617438843",
+    "source_merge_commit": "4c1196e53444955b418de05283fecb9c6ca1773c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6203",
+    "validation_evidence": [
+      "validation-receipt: id=20f443f89f1c4dd7 commit=40f99ee536ec42eaa2eb4bb4f2d1ba2617438843 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-install` result=`passed`"
+    ],
+    "validation_evidence_digest": "167e596e1007bb8206af029452d6761f99af624107a0f075f82b4d1df176862d"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Suspension authority rejects valid provider intraday timing formats",
+  "trigger_condition": {
+    "fingerprint": "2a9bbc60d09f6def4fa0a52c",
+    "source_event_id": "FE-20261016-2a9bbc60d09f"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=20f443f89f1c4dd7 commit=40f99ee536ec42eaa2eb4bb4f2d1ba2617438843 kind=nox plan=l0 status=passed command=`python -m nox -s l0 --no-install` result=`passed`",
+    "Post-restart identity and target business smoke passed; source validation retained by source_merge_receipt 2a77782a1621ce92."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -5,7 +5,6 @@ since the E2E flow exercises the same archive plumbing.
 """
 from __future__ import annotations
 
-import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path

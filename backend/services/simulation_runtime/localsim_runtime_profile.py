@@ -6,7 +6,12 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+
+from backend.services.selection_center.canonical_pit_runtime import (
+    CANONICAL_PIT_RUNTIME_PROFILE_KEY,
+    validate_canonical_pit_runtime_profile,
+)
 
 from backend.services.trading_core.errors import RuntimeConfigInvalidError
 
@@ -66,7 +71,29 @@ class LocalSimHmmConfigV1(BaseModel):
         return self
 
 
-class LocalSimRuntimeProfileConfigV1(BaseModel):
+class _LocalSimPitProfile(BaseModel):
+    """An explicit new policy version; absent fields preserve legacy hashes."""
+
+    canonical_pit_authority_profile: dict[str, Any] | None = None
+
+    @model_serializer(mode="wrap")
+    def _preserve_legacy_shape(self, handler):
+        payload = handler(self)
+        if self.canonical_pit_authority_profile is None:
+            payload.pop(CANONICAL_PIT_RUNTIME_PROFILE_KEY, None)
+        return payload
+
+    @model_validator(mode="after")
+    def _validate_pit_profile(self):
+        if self.canonical_pit_authority_profile is not None:
+            validate_canonical_pit_runtime_profile({
+                CANONICAL_PIT_RUNTIME_PROFILE_KEY: self.canonical_pit_authority_profile,
+                "runtime_profile": {"risk_policy": self.risk_policy},
+            })
+        return self
+
+
+class LocalSimRuntimeProfileConfigV1(_LocalSimPitProfile):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: Literal["localsim_runtime_profile_config_v1"] = "localsim_runtime_profile_config_v1"
@@ -96,7 +123,7 @@ class LocalSimRuntimeProfileConfigV1(BaseModel):
         return self
 
 
-class LocalSimRuntimeProfileConfigRequestV1(BaseModel):
+class LocalSimRuntimeProfileConfigRequestV1(_LocalSimPitProfile):
     """Client-writable profile fields before server authority materialization."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -136,6 +163,7 @@ class LocalSimRuntimeProfileConfigRequestV1(BaseModel):
             runtime_variant_id=self.runtime_variant_id,
             runtime_variant_hash=self.runtime_variant_hash,
             runtime_variant_materialized_config=runtime_variant_materialized_config,
+            canonical_pit_authority_profile=self.canonical_pit_authority_profile,
             notes=self.notes,
             metadata=self.metadata,
         )

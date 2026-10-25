@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,7 +22,7 @@ from .factor_universe_mask_service import (
     OFFICIAL_FACTOR_UNIVERSE_KEY,
     FactorUniverseMaskService,
 )
-from .qe_eval_v2_qlib_reader import read_close_prices
+from .qe_eval_v2_qlib_reader import read_close_prices, read_trading_calendar
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +40,118 @@ HOLDING_PERIODS = {
     "10d": 11, # T+1 T+1110
     "20d": 21, # T+1 T+2120
 }
+
+SUPPORTED_HOLDING_DAYS = (1, 5, 10, 20, 40, 60, 120, 240)
+
+
+def _resolve_holding_periods(holding_periods: Sequence[int] | None) -> dict[str, int]:
+    """Return a request-owned mapping; never mutate the official defaults."""
+    if holding_periods is None:
+        return dict(HOLDING_PERIODS)
+    if (
+        not isinstance(holding_periods, Sequence)
+        or isinstance(holding_periods, (str, bytes))
+        or not holding_periods
+        or any(type(day) is not int or day not in SUPPORTED_HOLDING_DAYS for day in holding_periods)
+    ):
+        raise ValueError("holding_periods must be a non-empty sequence of 1/5/10/20/40/60/120/240 days")
+    return {f"{day}d": day + 1 for day in sorted(set(holding_periods))}
+
+
+def _label_maturity_mask(
+    dates: pd.DatetimeIndex, label_calendar: pd.DatetimeIndex, shift_n: int,
+) -> np.ndarray:
+    positions = label_calendar.get_indexer(dates)
+    return (positions >= 0) & (positions + shift_n < len(label_calendar))
+
+
+def _date_bounds(dates: pd.DatetimeIndex, mask: np.ndarray) -> tuple[str | None, str | None]:
+    selected = dates[mask]
+    if selected.empty:
+        return None, None
+    return str(selected[0].date()), str(selected[-1].date())
+
+
+def _research_horizon_support(
+    dates: pd.DatetimeIndex,
+    label_calendar: pd.DatetimeIndex,
+    shift_n: int,
+    factor_arr: np.ndarray,
+    return_arr: np.ndarray,
+    eligible: np.ndarray,
+    effective: np.ndarray,
+) -> dict[str, Any]:
+    """Separate date maturity, price gaps and factor/cross-section support."""
+    mature = _label_maturity_mask(dates, label_calendar, shift_n)
+    expected = eligible & mature[:, None]
+    price_valid = expected & np.isfinite(return_arr)
+    valid = price_valid & np.isfinite(factor_arr)
+    pair_counts = valid.sum(axis=1)
+    mature_start, mature_end = _date_bounds(dates, mature)
+    effective_start, effective_end = _date_bounds(dates, effective)
+    if not len(dates):
+        status = "no_dates"
+    elif not mature.any():
+        status = "unmatured"
+    elif not expected.any():
+        status = "no_eligible_samples"
+    elif not price_valid.any():
+        status = "price_missing"
+    elif not valid.any():
+        status = "factor_unavailable"
+    elif not effective.any():
+        status = "insufficient_cross_section"
+    else:
+        status = "ok"
+    return {
+        "status": status,
+        "holding_days": shift_n - 1,
+        "entry_offset": 1,
+        "exit_offset": shift_n,
+        "n_requested_days": len(dates),
+        "n_mature_days": int(mature.sum()),
+        "n_immature_days": int((~mature).sum()),
+        "n_missing_price_pairs": int((expected & ~np.isfinite(return_arr)).sum()),
+        "n_factor_missing_pairs": int((price_valid & ~np.isfinite(factor_arr)).sum()),
+        "n_valid_pairs": int(valid.sum()),
+        "n_insufficient_cross_section_days": int((mature & (pair_counts < 6)).sum()),
+        "mature_start": mature_start,
+        "mature_end": mature_end,
+        "effective_start": effective_start,
+        "effective_end": effective_end,
+    }
+
+
+def _common_research_support(
+    dates: pd.DatetimeIndex,
+    label_calendar: pd.DatetimeIndex,
+    holding_periods: dict[str, int],
+    factor_arr: np.ndarray,
+    fwd_arrs: dict[str, np.ndarray],
+    eligible: np.ndarray,
+    window_mask: np.ndarray,
+) -> dict[str, Any]:
+    mature = np.ones(len(dates), dtype=bool)
+    valid = eligible & np.isfinite(factor_arr)
+    for name, shift_n in holding_periods.items():
+        mature &= _label_maturity_mask(dates, label_calendar, shift_n)
+        # Slice one requested matrix at a time, not every computed horizon.
+        valid &= np.isfinite(fwd_arrs[name][window_mask])
+    valid &= mature[:, None]
+    effective = valid.sum(axis=1) >= 6
+    mature_start, mature_end = _date_bounds(dates, mature)
+    effective_start, effective_end = _date_bounds(dates, effective)
+    return {
+        "holding_periods": dict(holding_periods),
+        "n_mature_days": int(mature.sum()),
+        "n_effective_days": int(effective.sum()),
+        "n_valid_pairs": int(valid.sum()),
+        "mature_start": mature_start,
+        "mature_end": mature_end,
+        "effective_start": effective_start,
+        "effective_end": effective_end,
+        "scope": "common_support_only_not_a_replacement_for_individual_horizons",
+    }
 
 
 # ================================================================
@@ -597,6 +710,8 @@ def _compute_factor_metrics_impl(
     universe_metadata: Optional[dict[str, Any]] = None,
     evaluation_windows: Optional[dict[str, dict[str, Any]]] = None,
     include_horizon_metrics: bool = False,
+    holding_periods: Optional[dict[str, int]] = None,
+    label_calendar: Optional[pd.DatetimeIndex] = None,
 ) -> tuple[list, list]:
     """Compute all eval-window metrics for a single factor (thread-safe, read-only).
 
@@ -605,6 +720,10 @@ def _compute_factor_metrics_impl(
     factor_results = []
     factor_reports = []
     universe_metadata = universe_metadata or {}
+    requested_periods = holding_periods if holding_periods is not None else HOLDING_PERIODS
+    research_support = any(name not in HOLDING_PERIODS for name in requested_periods)
+    if research_support and label_calendar is None:
+        raise ValueError("Long-horizon research requires the original label_calendar")
     close_arr = close_unstacked.values
     h20_return_arr = fwd_arrs.get("20d")
     if h20_return_arr is None:
@@ -726,16 +845,24 @@ def _compute_factor_metrics_impl(
 
             if window_name == "full" or include_horizon_metrics:
                 horizon_metrics = {}
+                horizon_support = {}
+                if include_horizon_metrics:
+                    horizon_factor = f_arr_full[mask]
+                    horizon_eligible = eligible_full[mask] & ~suspended_full[mask]
                 for pname, p_arr in fwd_arrs.items():
+                    if pname not in HOLDING_PERIODS and (
+                        not include_horizon_metrics or pname not in requested_periods
+                    ):
+                        continue
                     if include_horizon_metrics:
+                        horizon_returns = p_arr[mask]
                         horizon_valid = (
-                            eligible_full[mask]
-                            & ~suspended_full[mask]
-                            & np.isfinite(f_arr_full[mask])
-                            & np.isfinite(p_arr[mask])
+                            horizon_eligible
+                            & np.isfinite(horizon_factor)
+                            & np.isfinite(horizon_returns)
                         )
-                        f_h = np.where(horizon_valid, f_arr_full[mask], np.nan)
-                        r_p = np.where(horizon_valid, p_arr[mask], np.nan)
+                        f_h = np.where(horizon_valid, horizon_factor, np.nan)
+                        r_p = np.where(horizon_valid, horizon_returns, np.nan)
                     else:
                         # Preserve the official writer's existing full-window
                         # behavior unless the read-only all-horizon view is
@@ -750,8 +877,9 @@ def _compute_factor_metrics_impl(
                     r_ranked_p = _rank_matrix(r_p)
                     ic_mp = _pearson_ic_from_matrices(f_ranked_h, r_ranked_p)
                     ic_mp_clean = ic_mp[~np.isnan(ic_mp)]
-                    result[f"rank_ic_{pname}"] = float(ic_mp_clean.mean()) if len(ic_mp_clean) > 0 else None
-                    if include_horizon_metrics:
+                    if pname in HOLDING_PERIODS:
+                        result[f"rank_ic_{pname}"] = float(ic_mp_clean.mean()) if len(ic_mp_clean) > 0 else None
+                    if include_horizon_metrics and pname in requested_periods:
                         pearson = _pearson_ic_from_matrices(
                             _robust_zscore_matrix(f_h), _robust_zscore_matrix(r_p)
                         )
@@ -777,8 +905,20 @@ def _compute_factor_metrics_impl(
                             ),
                             "n_effective_days": int(len(ic_mp_clean)),
                         }
+                        if research_support:
+                            horizon_support[pname] = _research_horizon_support(
+                                dates[mask], label_calendar, requested_periods[pname],
+                                horizon_factor, horizon_returns, horizon_eligible,
+                                horizon_valid.sum(axis=1) >= 6,
+                            )
                 if include_horizon_metrics:
                     result["horizon_metrics"] = horizon_metrics
+                    if research_support:
+                        result["horizon_support"] = horizon_support
+                        result["common_horizon_support"] = _common_research_support(
+                            dates[mask], label_calendar, requested_periods,
+                            horizon_factor, fwd_arrs, horizon_eligible, mask,
+                        )
             else:
                 for pname in HOLDING_PERIODS:
                     result[f"rank_ic_{pname}"] = None
@@ -831,14 +971,22 @@ def prepare_shared_context(
     load_suspend_d: bool = True,
     load_st_pit_mask: bool = True,
     universe_key: str = OFFICIAL_FACTOR_UNIVERSE_KEY,
+    *,
+    holding_periods: Optional[Sequence[int]] = None,
 ) -> dict[str, Any]:
     """One-time shared data preparation: load close prices + compute forward returns.
 
     Returns context dict for use with compute_single_factor_metrics().
+    Explicit holding_periods adds request metadata; defaults retain four horizons.
+    Long research requests use the complete frozen calendar (missing prices stay
+    NaN). Use include_horizon_metrics=True to obtain the requested research view.
     """
     import time
     t0 = time.time()
     calc_batch_id = str(uuid.uuid4())
+    requested_periods = _resolve_holding_periods(holding_periods)
+    computed_periods = dict(HOLDING_PERIODS)
+    computed_periods.update(requested_periods)
 
     logger.info("prepare_shared_context: loading close prices...")
     close_df = read_close_prices(
@@ -864,8 +1012,12 @@ def prepare_shared_context(
         set(requested_instruments) - observed_price_instruments
     )
 
+    if any(name not in HOLDING_PERIODS for name in requested_periods):
+        calendar = read_trading_calendar(qlib_bin_path, start_date=start_date, end_date=end_date)
+        close_unstacked = close_unstacked.reindex(index=calendar)
+
     fwd_ret_mats: dict[str, pd.DataFrame] = {}
-    for period_name, shift_n in HOLDING_PERIODS.items():
+    for period_name, shift_n in computed_periods.items():
         fwd_ret_mats[period_name] = close_unstacked.shift(-shift_n) / close_unstacked.shift(-1) - 1
 
     dates = close_unstacked.index
@@ -901,7 +1053,7 @@ def prepare_shared_context(
     logger.info(f"Shared context ready: {len(dates)} dates  {len(close_unstacked.columns)} instruments, "
                 f"{data_start} ~ {data_end}, {time.time()-t0:.1f}s")
 
-    return {
+    context = {
         "close_unstacked": close_unstacked,
         "fwd_ret_mats": fwd_ret_mats,
         "dates": dates,
@@ -922,6 +1074,13 @@ def prepare_shared_context(
             "missing_price_instruments": missing_price_instruments,
         },
     }
+    if holding_periods is not None:
+        context.update(
+            holding_periods=requested_periods,
+            computed_holding_periods=computed_periods,
+            label_calendar=dates.copy(),
+        )
+    return context
 
 
 def compute_single_factor_metrics(
@@ -941,8 +1100,9 @@ def compute_single_factor_metrics(
     ctx : dict from prepare_shared_context()
     evaluation_windows : optional explicit named daily windows. Defaults keep
         the official writer's existing five-window contract unchanged.
-    include_horizon_metrics : include h1/h5/h10/h20 IC summaries for every
-        requested window. The result is read-only and is not an official DB row.
+    include_horizon_metrics : include IC summaries for the context's requested
+        horizons (h1/h5/h10/h20 by default) for every window. Research-only; new
+        horizons are not real portfolio returns or official DB columns.
 
     Returns dict with keys: factor_name, metrics (dict of windowmetrics), reports.
     """
@@ -1028,6 +1188,8 @@ def compute_single_factor_metrics(
         universe_metadata=ctx.get("universe_metadata") or {},
         evaluation_windows=evaluation_windows,
         include_horizon_metrics=include_horizon_metrics,
+        holding_periods=ctx.get("holding_periods"),
+        label_calendar=ctx.get("label_calendar"),
     )
 
     # Sanitize NaN/Inf  None

@@ -9,11 +9,13 @@ receipt, then snapshots every release file exactly once into the common
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 import hashlib
+import json
 import os
 from pathlib import Path
+import re
 import stat
 from typing import Any, Mapping, Protocol, Sequence
 
@@ -28,10 +30,76 @@ from .monthly_incremental_baseline import (
 from .factor_materializer import FACTOR_H5_DATASETS
 from .monthly_official_adapters import StageWorkload
 from .monthly_worker import ProducerContext
+from .monthly_file_identity import file_sha256, remember_verified_file
 
 
 MONTHLY_BUILD_EVIDENCE_SCHEMA = "aistock_monthly_candidate_build_evidence_v1"
 _REPARSE_POINT = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x0400)
+
+
+def _seal_source_quality(root: Path, context: ProducerContext, compiled: CompiledMonthlyBuild) -> dict[str, Any] | None:
+    """Copy small pinned SOURCE warnings, not historical market data, to release."""
+    from .monthly_source_quality import (
+        accepted_parity_warning, acceptance_file_sha256, read_quality_evidence,
+        source_quality_report, validate_source_quality_acceptance,
+    )
+    path = compiled.source_bundle_path
+    before = path.stat()
+    if before.st_size > 64 * 1024 * 1024:
+        raise MonthlyCandidateFinalizerError("source quality bundle is unbounded")
+    raw = path.read_bytes()
+    after = path.stat()
+    if (before.st_size != after.st_size or before.st_mtime_ns != after.st_mtime_ns
+            or hashlib.sha256(raw).hexdigest() != compiled.source_bundle_sha256):
+        raise MonthlyCandidateFinalizerError("source quality bundle bytes differ")
+    bundle = json.loads(raw)
+    report = bundle.get("source_quality_report")
+    bound = context.plan.get("monthly_source_quality_inputs")
+    if report is None and bound is None:
+        return None
+    if not isinstance(report, Mapping) or report.get("acceptance") != bound:
+        raise MonthlyCandidateFinalizerError("source quality report differs from bound observations")
+    try:
+        acceptance = validate_source_quality_acceptance(bound, operation_id=context.operation_id,
+            predecessor_manifest_sha256=context.plan["predecessor"]["dataset_manifest_sha256"],
+            target_cutoff=date.fromisoformat(context.plan["target_cutoff"]), verify_evidence=False)
+        warnings = report["warnings"]
+        if not isinstance(warnings, list):
+            raise ValueError("quality warnings are invalid")
+        seen = set()
+        for warning in warnings:
+            key = warning["symbol"], warning["trade_date"]
+            if key in seen or accepted_parity_warning(acceptance, symbol=key[0],
+                    trade_date=date.fromisoformat(key[1]), mismatches=warning["mismatches"]) != warning:
+                raise ValueError("quality warning does not match accepted observations")
+            seen.add(key)
+        references = report["frozen_evidence_refs"]
+        if report != {**source_quality_report(acceptance, warnings), "frozen_evidence_refs": references}:
+            raise ValueError("quality report counts or semantics differ")
+        if not isinstance(references, list) or len(references) != len(acceptance["evidence_refs"]):
+            raise ValueError("quality evidence inventory differs")
+        release_refs = []
+        for index, (reference, original) in enumerate(zip(references, acceptance["evidence_refs"], strict=True)):
+            expected_name = f"source-quality-evidence-{index}.json"
+            if reference != {"path": expected_name, "sha256": original["sha256"], "size": original["size"]}:
+                raise ValueError("quality frozen evidence pin differs")
+            proof = read_quality_evidence({**reference, "path": str(path.parent / expected_name)})
+            relative = f"reports/source_quality/{expected_name}"
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("xb") as handle:
+                handle.write(proof)
+            release_refs.append({**reference, "path": relative})
+        authority = _write_exclusive(root / "reports/source_quality/source-quality-acceptance.json", acceptance)
+        if _sha256(authority) != acceptance_file_sha256(acceptance):
+            raise ValueError("quality acceptance seal differs")
+        sealed = _write_exclusive(root / "reports/monthly_source_quality.json", {
+            **report, "frozen_evidence_refs": release_refs})
+        return {"path": sealed.relative_to(root).as_posix(), "sha256": _sha256(sealed),
+                "size": sealed.stat().st_size, "quality_status": report["quality_status"],
+                "quality_warning_count": len(warnings)}
+    except (KeyError, TypeError, ValueError, OSError) as exc:
+        raise MonthlyCandidateFinalizerError(f"source quality closure failed: {exc}") from exc
 
 
 class MonthlyCandidateFinalizerError(RuntimeError):
@@ -49,6 +117,7 @@ class SharedReleaseComponents:
     source_contract: Mapping[str, Any]
     source_rows_read: int = 0
     computed_rows: int = 0
+    verified_output_files: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not self.required_files or len(set(self.required_files)) != len(
@@ -66,6 +135,8 @@ class SharedReleaseComponents:
             raise MonthlyCandidateFinalizerError(
                 "shared component workload is invalid"
             )
+        if not isinstance(self.verified_output_files, Mapping):
+            raise MonthlyCandidateFinalizerError("shared verified file pins are invalid")
 
 
 class MonthlySharedComponentBuilder(Protocol):
@@ -116,11 +187,7 @@ def _plain_file(root: Path, path: Path, *, label: str) -> Path:
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return file_sha256(path)
 
 
 def _write_exclusive(path: Path, value: Mapping[str, Any]) -> Path:
@@ -298,12 +365,24 @@ class UnifiedMonthlyCandidateFinalizer:
         }
         if not required_stage_refs.issubset(stage_refs):
             raise MonthlyCandidateFinalizerError("candidate stage evidence is incomplete")
+        native_month = validation_result.get("validation_scope") == "month_delta"
+        output_pins = validation_result.get("verified_output_files", {}) if native_month else {}
+        if native_month and (
+            validation_result.get("source_bundle_sha256") != compiled.source_bundle_sha256
+            or not isinstance(output_pins, Mapping) or not output_pins
+        ):
+            raise MonthlyCandidateFinalizerError("native month writer authority is incomplete")
         sidecars = self.shared_components.execute(
             context=context,
             staging_root=root,
             compiled=compiled,
             validation_result=validation_result,
         )
+        output_pins = dict(output_pins)
+        for relative, pin in sidecars.verified_output_files.items():
+            if relative in output_pins and pin != output_pins[relative]:
+                raise MonthlyCandidateFinalizerError("shared layout and physical writer pins disagree")
+            output_pins[relative] = pin
         required_files = tuple(
             _plain_file(root, path, label="shared component")
             for path in sidecars.required_files
@@ -336,7 +415,8 @@ class UnifiedMonthlyCandidateFinalizer:
             raise MonthlyCandidateFinalizerError(
                 "monthly source contract must fail closed against fabrication"
             )
-        baseline_authority = build_monthly_incremental_baseline(
+        quality_ref = _seal_source_quality(root, context, compiled)
+        baseline_authority = None if native_month else build_monthly_incremental_baseline(
             release_id=str(context.plan.get("release_id") or ""),
             release_digest=str(compiled.physical_plan.get("release_digest") or ""),
             profile=str(compiled.physical_plan.get("build_inputs", {}).get("profile") or ""),
@@ -350,7 +430,7 @@ class UnifiedMonthlyCandidateFinalizer:
             source_stage_receipt_ref=compiled.source_stage_receipt_ref.as_dict(),
             source_bundle_sha256=compiled.source_bundle_sha256,
         )
-        baseline_path = _write_exclusive(
+        baseline_path = None if native_month else _write_exclusive(
             root / MONTHLY_INCREMENTAL_BASELINE_PATH,
             baseline_authority,
         )
@@ -372,7 +452,8 @@ class UnifiedMonthlyCandidateFinalizer:
                 "component_artifact_manifest_ref": validation_result.get(
                     "component_artifact_manifest_ref"
                 ),
-                "incremental_baseline_authority": {
+                "validation_scope": "month_delta" if native_month else "legacy_full",
+                "incremental_baseline_authority": None if native_month else {
                     "path": baseline_path.relative_to(root).as_posix(),
                     "sha256": _sha256(baseline_path),
                     "size": baseline_path.stat().st_size,
@@ -383,6 +464,7 @@ class UnifiedMonthlyCandidateFinalizer:
                 "database_read_performed": False,
                 "database_write_performed": False,
                 "runtime_action_performed": False,
+                **({"source_quality": quality_ref} if quality_ref is not None else {}),
             },
         )
 
@@ -396,6 +478,39 @@ class UnifiedMonthlyCandidateFinalizer:
                 "shared component inventory is incomplete"
             )
         component_rows: dict[str, dict[str, Any]] = {}
+        # Actual writers already digested newly serialized bytes. Keep those
+        # pins under their unchanged file signatures; consumer hardlinks share
+        # the same physical file and must not trigger a second large read.
+        cached: dict[tuple[Any, ...], str] = {}
+        writer_signatures: dict[Path, tuple[int, int, int, int]] = {}
+        writer_inodes: dict[tuple[int, int], tuple[int, int, int, int]] = {}
+
+        def signature(path: Path) -> tuple[int, int, int, int]:
+            current = path.stat()
+            return current.st_dev, current.st_ino, current.st_size, current.st_mtime_ns
+
+        def cache_key(path: Path, value: tuple[int, int, int, int]) -> tuple[Any, ...]:
+            return value if value[1] else (str(path), *value)
+
+        for relative, pin in output_pins.items():
+            if not isinstance(relative, str) or "\\" in relative or ":" in relative or "\x00" in relative or not isinstance(pin, Mapping):
+                raise MonthlyCandidateFinalizerError("native month writer pin is invalid")
+            path = _plain_file(root, root / relative, label="native month writer output")
+            current = signature(path)
+            if (
+                path.relative_to(root).as_posix() != relative
+                or list(current) != pin.get("signature") or current[2] != pin.get("size")
+                or not isinstance(pin.get("sha256"), str)
+                or re.fullmatch(r"[0-9a-f]{64}", pin["sha256"]) is None
+            ):
+                raise MonthlyCandidateFinalizerError("native month writer output changed before sealing")
+            key = cache_key(path, current)
+            if key in cached and cached[key] != pin["sha256"]:
+                raise MonthlyCandidateFinalizerError("native month writer hardlink pins disagree")
+            cached[key] = pin["sha256"]
+            writer_signatures[path] = current
+            if current[1]:
+                writer_inodes[current[:2]] = current
         for path in sorted(all_files, key=lambda item: item.relative_to(root).as_posix()):
             relative = path.relative_to(root).as_posix()
             name = _component_name(relative)
@@ -403,11 +518,25 @@ class UnifiedMonthlyCandidateFinalizer:
                 raise MonthlyCandidateFinalizerError(
                     "candidate component names are ambiguous"
                 )
+            before = signature(path)
+            if (
+                path in writer_signatures and before != writer_signatures[path]
+                or before[:2] in writer_inodes and before != writer_inodes[before[:2]]
+            ):
+                raise MonthlyCandidateFinalizerError("native month writer output changed during sealing")
+            key = cache_key(path, before)
+            if key not in cached:
+                cached[key] = _sha256(path)
+            if signature(path) != before:
+                raise MonthlyCandidateFinalizerError("candidate file changed during manifest sealing")
             component_rows[name] = {
                 "path": relative,
-                "sha256": _sha256(path),
-                "size": path.stat().st_size,
+                "sha256": cached[key],
+                "size": before[2],
             }
+            remember_verified_file(path, cached[key], expected_signature=before)
+        if any(signature(path) != expected for path, expected in writer_signatures.items()):
+            raise MonthlyCandidateFinalizerError("native month writer output changed before manifest publication")
         deployment_content = hashlib.sha256(
             canonical_json_bytes(component_rows)
         ).hexdigest()
@@ -443,6 +572,7 @@ class UnifiedMonthlyCandidateFinalizer:
             "st_pit_manifest": st_pit,
             "source_contract": source_contract,
             "components": component_rows,
+            **({"source_quality": quality_ref} if quality_ref is not None else {}),
         }
         manifest["dataset_manifest_sha256"] = _manifest_identity(manifest)
         _write_exclusive(manifest_path, manifest)

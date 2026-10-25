@@ -58,6 +58,9 @@ class ShaOverrideStore(PackageAssetStore):
     def exists(self, uri: str) -> bool:
         return uri in self.overrides or self.delegate.exists(uri)
 
+    def materialize_file(self, uri: str, target: Path, *, sha256: str, size_bytes: int) -> None:
+        self.delegate.materialize_file(uri, target, sha256=sha256, size_bytes=size_bytes)
+
 
 def _manifest(label: str = "complete"):
     base = make_manifest()

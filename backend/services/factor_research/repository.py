@@ -161,3 +161,103 @@ class ResearchRepository:
                         (status, status, factor, factor, query, f"%{query}%", f"%{query}%", limit + 1, offset))
             rows = cur.fetchall()
         return {"tasks": [dict(r) for r in rows[:limit]], "next_offset": offset + limit if len(rows) > limit else None}
+
+    @staticmethod
+    def _memory_conditions(expression):
+        # Expressions/keys are code-owned, never request-provided SQL identifiers.
+        from .memory import CONDITION_FIELDS
+        return "jsonb_build_object(" + ",".join(f"'{k}',{expression}->'{k}'" for k in CONDITION_FIELDS) + ")"
+
+    @classmethod
+    def _memory_records_sql(cls):
+        p = "r.payload_json"
+        contexts = [p, f"{p}->'context_json'", f"{p}#>'{{request,task,context_json}}'",
+                    f"{p}#>'{{request,task_update,context_json}}'", "a.payload_json", "a.payload_json->'context_json'",
+                    "a.payload_json#>'{experience_note,conditions}'",
+                    "a.payload_json#>'{execution,spec,comparison}'"]
+        return """SELECT r.task_id,r.record_id,r.task_revision AS revision,r.record_type,
+            r.related_record_id,r.summary,r.payload_json->'experience_note' AS note,
+            r.payload_json->'factor_names' AS factor_names,
+            jsonb_build_object('summary',r.payload_json#>'{assistance,summary}',
+              'adopted_reason',r.payload_json#>'{assistance,adopted_reason}',
+              'source_refs',r.payload_json#>'{assistance,source_refs}') AS assistance_summary,
+            jsonb_build_array(%s) AS contexts,
+            jsonb_build_object('attempt_record_id',a.record_id) AS context_refs
+            FROM public.factor_research_records r
+            LEFT JOIN public.factor_research_records a ON a.task_id=r.task_id
+              AND a.attempt_id=r.attempt_id AND a.record_type='attempt'
+            """ % ",".join(cls._memory_conditions(e) for e in contexts)
+
+    def _memory_rows(self, cur):
+        queries = [
+            ("""SELECT t.task_id,NULL AS record_id,t.revision,t.title,t.objective,t.completed_summary,
+                t.factor_names,t.context_json->'hypothesis_note' AS hypothesis_note,
+                jsonb_build_array(%s) AS contexts FROM public.factor_research_tasks t
+                """ % self._memory_conditions("t.context_json"), "t.task_id"),
+            (self._memory_records_sql(), "r.record_id"),
+        ]
+        for query, key in queries:
+            after = "00000000-0000-0000-0000-000000000000"
+            first = True
+            while True:
+                cur.execute(query + f" WHERE (%s OR {key}>%s::uuid) ORDER BY {key} LIMIT 256", (first, after))
+                rows = cur.fetchall()
+                if not rows:
+                    break
+                yield from rows
+                after, first = str(rows[-1]["record_id"] or rows[-1]["task_id"]), False
+
+    def _memory_component(self, cur, task_id, record_id, *, max_records=512):
+        """Bounded metadata traversal; branches retained and incomplete context disclosed."""
+        pending, seen, graph, reasons = {record_id}, set(), {}, []
+        while pending:
+            frontier, pending = sorted(pending - seen), set()
+            if not frontier:
+                break
+            cur.execute("""SELECT record_id,related_record_id,record_type FROM public.factor_research_records
+                WHERE task_id=%s AND (record_id=ANY(%s::uuid[]) OR
+                  (record_type='correction' AND related_record_id=ANY(%s::uuid[])))
+                ORDER BY record_id LIMIT %s""", (task_id, frontier, frontier, max_records + 1))
+            rows = cur.fetchall()
+            seen.update(frontier)
+            for row in rows:
+                rid = str(row["record_id"])
+                if rid not in graph and len(graph) >= max_records:
+                    reasons.append("relations_truncated_use_show")
+                    break
+                parent = str(row["related_record_id"]) if row["related_record_id"] else None
+                graph[rid] = parent
+                pending.add(rid)
+                if parent:
+                    pending.add(parent)
+            if reasons:
+                break
+        outside = sorted({p for p in graph.values() if p and p not in graph})
+        if outside and not reasons:
+            cur.execute("SELECT record_id,task_id FROM public.factor_research_records WHERE record_id=ANY(%s::uuid[])", (outside,))
+            owners = {str(r["record_id"]): str(r["task_id"]) for r in cur.fetchall()}
+            for rid in outside:
+                reasons.append("cross_task_relation" if rid in owners else "dangling_relation")
+        for start in graph:
+            path, node = set(), start
+            while node in graph:
+                if node in path:
+                    reasons.append("relation_cycle")
+                    break
+                path.add(node)
+                node = graph[node]
+        if record_id not in graph:
+            reasons.append("record_unavailable")
+        cur.execute(self._memory_records_sql() + " WHERE r.task_id=%s AND r.record_id=ANY(%s::uuid[]) ORDER BY r.task_revision,r.record_id",
+                    (task_id, sorted(graph)))
+        return cur.fetchall(), sorted(set(reasons))
+
+    def memory_search(self, value, *, target):
+        from .memory import attach_relations, search_rows, validate_query
+        spec = validate_query(value)
+        if target not in {"dev", "production"}:
+            raise ResearchError("invalid_request", "Explicit database target required")
+        with self.cursor() as cur:
+            cur.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
+            result = search_rows(self._memory_rows(cur), spec, target)
+            return attach_relations(result, lambda task, record: self._memory_component(cur, task, record), target)

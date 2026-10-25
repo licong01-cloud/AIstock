@@ -83,6 +83,18 @@ def build_backtest_runtime_contract(
     custom_params = daily_strategy.get("custom_params") if isinstance(daily_strategy, dict) else None
     if not isinstance(custom_params, dict):
         custom_params = {}
+    profile = (runtime_config or {}).get("runtime_profile")
+    selection = profile.get("selection") if isinstance(profile, dict) else None
+    if isinstance(selection, dict) and selection.get("daily_strategy_id") and selection.get("top_k") is not None:
+        # Explicit frozen runtime choices own operation; source context is evidence.
+        # A snapshot also holds execution audit results outside runtime_profile.
+        # Validate the selection input without merging those results as config.
+        requested = parse_selection_runtime_profile({"runtime_profile": {"selection": selection}}).selection
+        custom_params = {**requested.daily_strategy_params, "topk": requested.top_k}
+        custom_params.setdefault("n_drop", 0)
+        custom_params.pop("strategy_class", None)
+        daily_strategy = {**daily_strategy, "strategy_id": requested.daily_strategy_id}
+        custom_params["strategy_id"] = requested.daily_strategy_id
     strategy_config = manifest.strategy_config or {}
     strategy_marker = str(
         custom_params.get("strategy_class")
@@ -235,7 +247,7 @@ def _portfolio_strategy_params(
     )
     params = dict(defaults)
     topk = custom_params.get("topk") or _runtime_topk(manifest)
-    n_drop = custom_params.get("n_drop") or _runtime_n_drop(manifest)
+    n_drop = custom_params.get("n_drop") if "n_drop" in custom_params else _runtime_n_drop(manifest)
     if topk is None:
         raise RuntimeConfigInvalidError(
             "runtime profile selection.top_k is required for alpha-core StrategyPackage contracts",

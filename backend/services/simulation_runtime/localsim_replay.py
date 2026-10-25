@@ -7,7 +7,11 @@ from datetime import UTC, date, datetime
 from typing import Any, Callable, Sequence
 
 from backend.services.simulation_data.daily_context import SimulationBrokerBackend
-from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
+from backend.services.trading_core.errors import (
+    ArtifactGenerationFailedError,
+    DataUnavailableError,
+    InvalidStateTransitionError,
+)
 
 from .models import SimulationReleaseBinding, StrategyRuntimeRelease, canonical_json_sha256
 from .successor_models import (
@@ -259,7 +263,20 @@ class LocalSimReplayCoordinator:
             try:
                 self.historical_day_runner(current, trade_date)
             except Exception as exc:
-                retryable = isinstance(exc, DataUnavailableError)
+                error_context = getattr(exc, "context", {}) or {}
+                retryable = isinstance(exc, DataUnavailableError) or (
+                    isinstance(exc, ArtifactGenerationFailedError)
+                    and error_context.get("reason_code") == "SIMULATION_SELECTION_INFERENCE_TIMEOUT"
+                    and error_context.get("thread_isolated") is True
+                )
+                failure_context = {"message": str(exc)[:1000], "trade_date": trade_date.isoformat()}
+                # Persist bounded operational facts, never provider stdout or environment contents.
+                for key in (
+                    "reason_code", "failure_stage", "thread_isolated", "started_at",
+                    "elapsed_seconds", "timeout_seconds",
+                ):
+                    if key in error_context:
+                        failure_context[key] = error_context[key]
                 self.repository.transition_replay_job(
                     replay_job_id=current.replay_job_id,
                     expected_version=current.version,
@@ -268,7 +285,7 @@ class LocalSimReplayCoordinator:
                             LocalSimReplayStatus.FAILED_RETRYABLE if retryable else LocalSimReplayStatus.FAILED_TERMINAL
                         ),
                         "failure_code": type(exc).__name__,
-                        "failure_context": {"message": str(exc)[:1000], "trade_date": trade_date.isoformat()},
+                        "failure_context": failure_context,
                     },
                     updated_at=self._now(),
                 )
@@ -290,6 +307,66 @@ class LocalSimReplayCoordinator:
                 updated_at=self._now(),
             )
         return current
+
+    @staticmethod
+    def is_recoverable_selection_timeout(job: LocalSimReplayJobV1) -> bool:
+        context = job.failure_context or {}
+        return (
+            job.status is LocalSimReplayStatus.FAILED_TERMINAL
+            and job.failure_code == "ArtifactGenerationFailedError"
+            and job.next_trade_date is not None
+            and job.live_release_id is None
+            and job.live_binding_id is None
+            and (
+                (
+                    context.get("reason_code") == "SIMULATION_SELECTION_INFERENCE_TIMEOUT"
+                    and context.get("thread_isolated") is True
+                )
+                or (
+                    "reason_code" not in context
+                    and context.get("message")
+                    == "simulation scheduler selection inference timed out; tick remains non-blocking"
+                )
+            )
+        )
+
+    def recover_selection_timeout(self, *, replay_job_id: str, expected_version: int) -> LocalSimReplayJobV1:
+        job = self.repository.get_replay_job(replay_job_id)
+        if job.version != expected_version or not self.is_recoverable_selection_timeout(job):
+            raise InvalidStateTransitionError(
+                "LocalSIM replay terminal failure is not a recoverable selection timeout",
+                context={"reason_code": "LOCALSIM_REPLAY_TIMEOUT_RECOVERY_INVALID"},
+            )
+        return self.repository.transition_replay_job(
+            replay_job_id=job.replay_job_id,
+            expected_version=job.version,
+            update={"status": LocalSimReplayStatus.FAILED_RETRYABLE},
+            updated_at=self._now(),
+        )
+
+    @staticmethod
+    def is_recoverable_historical_submit_window(job: LocalSimReplayJobV1) -> bool:
+        context = job.failure_context or {}
+        return (
+            job.status is LocalSimReplayStatus.FAILED_TERMINAL
+            and job.failure_code == "RuntimeConfigInvalidError"
+            and context.get("reason_code") == "SIMULATION_SUBMIT_OUTSIDE_TRADING_WINDOW"
+            and job.next_trade_date is not None
+            and context.get("trade_date") == job.next_trade_date.isoformat()
+            and job.live_release_id is None and job.live_binding_id is None
+        )
+
+    def recover_historical_submit_window(self, *, replay_job_id: str, expected_version: int) -> LocalSimReplayJobV1:
+        job = self.repository.get_replay_job(replay_job_id)
+        if job.version != expected_version or not self.is_recoverable_historical_submit_window(job):
+            raise InvalidStateTransitionError(
+                "LocalSIM terminal failure is not a historical submit-window rejection",
+                context={"reason_code": "LOCALSIM_REPLAY_WINDOW_RECOVERY_INVALID"},
+            )
+        return self.repository.transition_replay_job(
+            replay_job_id=job.replay_job_id, expected_version=job.version,
+            update={"status": LocalSimReplayStatus.FAILED_RETRYABLE}, updated_at=self._now(),
+        )
 
     def mark_ready_for_live(self, *, replay_job_id: str, expected_version: int) -> LocalSimReplayJobV1:
         job = self.repository.get_replay_job(replay_job_id)

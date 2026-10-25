@@ -92,3 +92,30 @@ def test_cli_emits_structured_failure(
     payload = json.loads(capsys.readouterr().err)
     assert payload["status"] == "FAILED"
     assert payload["reason_code"] == "MONTHLY_HMM_AUTHORITY_BOOTSTRAP_FAILED"
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--verify-only"],
+        ["--verify-only", "--authority-path", "authority.json", "--output-root", "new"],
+        ["--rebind-from-authority", "authority.json"],
+        [
+            "--rebind-from-authority",
+            "authority.json",
+            "--expected-previous-authority-sha256",
+            "a" * 64,
+            "--expected-producer-sha256",
+            "b" * 64,
+            "--output-root",
+            "new",
+            "--authority-id",
+            "v2",
+            "--backtest-lag-trade-days",
+            "2",
+        ],
+    ],
+)
+def test_cli_rejects_incomplete_or_mixed_modes(arguments: list[str], capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main([*arguments, "--producer-script", "producer.py"]) == 2
+    assert json.loads(capsys.readouterr().err)["status"] == "FAILED"

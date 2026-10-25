@@ -375,6 +375,7 @@ class QEExecutionReservationRepository:
         node_capacity: int,
         allow_same_task_backtest_parallelism: bool = False,
         allow_same_task_parallel_training: bool = False,
+        allow_durable_prediction_replay_parallelism: bool = False,
         owner_id: str,
         lease_seconds: int,
         claim_source: SourceClaim,
@@ -397,6 +398,9 @@ class QEExecutionReservationRepository:
                     ),
                     allow_same_task_parallel_training=(
                         allow_same_task_parallel_training
+                    ),
+                    allow_durable_prediction_replay_parallelism=(
+                        allow_durable_prediction_replay_parallelism
                     ),
                 )
                 existing = self._find_source_reservation(cur, spec.source_kind, spec.source_execution_id)
@@ -710,6 +714,70 @@ class QEExecutionReservationRepository:
                     )
                 self._assert_reservation_identity(existing, spec)
                 return dict(existing)
+
+    def release_deleted_evolution_reservation(
+        self,
+        spec: QEExecutionReservationSpec,
+        *,
+        expected_row_version: int,
+        expected_fencing_token: int,
+        post_grace_seconds: int,
+    ) -> dict[str, Any] | None:
+        """Release a deleted source after a fresh authoritative not_reserved receipt.
+
+        The caller must first verify that the node has neither a receipt nor a
+        process for this exact loop. Source absence, expired ownership and the
+        inspected revision are checked together under the admission locks. Keep
+        the terminal row: removing its identity would break once-only replay.
+        """
+        if spec.source_kind != "qe_evolution_loop":
+            raise QEExecutionReservationError(
+                "deleted-source recovery only applies to QE evolution reservations",
+                reason_code="qe_execution_reservation_source_kind_invalid",
+            )
+        _validate_positive("expected_row_version", expected_row_version)
+        _validate_positive("expected_fencing_token", expected_fencing_token)
+        _validate_positive("post_grace_seconds", post_grace_seconds)
+        with self._connection_provider() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                self._acquire_identity_and_node_locks(cur, spec)
+                cur.execute(
+                    """
+                    UPDATE infra.qe_execution_reservation AS reservation
+                    SET status = 'released', remote_status = 'not_reserved',
+                        release_reason_code = 'qe_execution_source_deleted',
+                        released_at = clock_timestamp(), lease_expires_at = NULL,
+                        fencing_token = fencing_token + 1,
+                        row_version = row_version + 1, updated_at = clock_timestamp()
+                    WHERE reservation_id = %s
+                      AND source_kind = %s AND source_execution_id = %s
+                      AND node_id = %s AND qe_task_id = %s AND qe_loop_id = %s
+                      AND submission_intent_hash = %s
+                      AND row_version = %s AND fencing_token = %s
+                      AND status = ANY(%s)
+                      AND (lease_expires_at IS NULL OR lease_expires_at <= clock_timestamp())
+                      AND (remote_status IS DISTINCT FROM 'post_pending'
+                           OR updated_at <= clock_timestamp() - make_interval(secs => %s))
+                      AND NOT EXISTS (
+                          SELECT 1 FROM qe_evolution_tasks AS task
+                          WHERE task.task_id = reservation.qe_task_id
+                      )
+                      AND NOT EXISTS (
+                          SELECT 1 FROM qe_evolution_loops AS loop
+                          WHERE loop.task_id = reservation.qe_task_id
+                      )
+                    RETURNING reservation.*
+                    """,
+                    (
+                        spec.reservation_id, spec.source_kind, spec.source_execution_id,
+                        spec.node_id, spec.qe_task_id, spec.qe_loop_id,
+                        spec.submission_intent_hash, expected_row_version,
+                        expected_fencing_token, list(ACTIVE_RESERVATION_STATUSES),
+                        post_grace_seconds,
+                    ),
+                )
+                row = cur.fetchone()
+                return dict(row) if row is not None else None
 
     def list_active_reservations(self, *, node_id: str | None = None) -> list[dict[str, Any]]:
         params: tuple[Any, ...]
@@ -1099,23 +1167,62 @@ class QEExecutionReservationRepository:
         requested_node_capacity: int,
         allow_same_task_backtest_parallelism: bool,
         allow_same_task_parallel_training: bool,
+        allow_durable_prediction_replay_parallelism: bool = False,
     ) -> int:
-        """Allow WSL=2 only for one homogeneous, explicitly proven QE task.
+        """Apply the existing WSL execution-mode safety proof under the node lock.
 
         The caller holds the node advisory lock, so this cohort proof and the
         following reservation insert are serialized against every QE source.
         Missing loop metadata, mixed modes, incompatible model policy, and
-        cross-task work all fail closed to one slot.
+        cross-task training fail closed to one slot. Durable combination attempts
+        are pure prediction replay and may share slots across parent runs.
         """
         if requested_node_capacity <= 1:
             return requested_node_capacity
         if not (
             allow_same_task_backtest_parallelism
             or allow_same_task_parallel_training
+            or allow_durable_prediction_replay_parallelism
         ):
             return requested_node_capacity
-        if allow_same_task_backtest_parallelism and allow_same_task_parallel_training:
+        if sum((allow_same_task_backtest_parallelism, allow_same_task_parallel_training,
+                allow_durable_prediction_replay_parallelism)) > 1:
             return 1
+        if allow_durable_prediction_replay_parallelism:
+            if spec.source_kind != "multi_alpha_durable_attempt":
+                return 1
+            cur.execute(
+                """
+                SELECT COUNT(*) AS eligible_count
+                FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+                WHERE attempt.attempt_id = %s AND attempt.node_id = %s
+                  AND attempt.qe_task_id = %s AND attempt.qe_loop_id = %s
+                  AND attempt.submission_intent_hash = %s
+                """,
+                (spec.source_execution_id, spec.node_id, spec.qe_task_id,
+                 spec.qe_loop_id, spec.submission_intent_hash),
+            )
+            if int(cur.fetchone()["eligible_count"]) != 1:
+                return 1
+            cur.execute(
+                """
+                SELECT COUNT(*) AS incompatible_count
+                FROM infra.qe_execution_reservation AS reservation
+                LEFT JOIN strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
+                  ON reservation.source_kind = 'multi_alpha_durable_attempt'
+                 AND attempt.attempt_id = reservation.source_execution_id
+                 AND attempt.node_id = reservation.node_id
+                 AND attempt.qe_task_id = reservation.qe_task_id
+                 AND attempt.qe_loop_id = reservation.qe_loop_id
+                 AND attempt.submission_intent_hash = reservation.submission_intent_hash
+                WHERE reservation.node_id = %s
+                  AND reservation.status = ANY(%s)
+                  AND NOT (reservation.source_kind = 'multi_alpha_durable_attempt'
+                           AND attempt.attempt_id IS NOT NULL)
+                """,
+                (spec.node_id, list(ACTIVE_RESERVATION_STATUSES)),
+            )
+            return 1 if int(cur.fetchone()["incompatible_count"]) else requested_node_capacity
         if allow_same_task_parallel_training:
             cur.execute(
                 """

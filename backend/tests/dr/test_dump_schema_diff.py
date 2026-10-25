@@ -18,9 +18,16 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
 
+from backend.tests.data_quality import conftest as dev_fixtures
+
+# Explicit module bindings let pytest reuse sibling DEV fixtures without a parent override.
+dev_conn = dev_fixtures.dev_conn
+dev_db_creds = dev_fixtures.dev_db_creds
 
 # Match ``CREATE TABLE [IF NOT EXISTS] [ONLY] schema.table`` on a single line.
 # The table identifier may be quoted with double quotes.
@@ -80,9 +87,7 @@ def _extract_tables_from_dump(latest_dump, pg_restore_runner) -> set[tuple[str, 
                 "custom-format dump schema diff needs pg_restore (PATH or "
                 "canonical docker container); neither found on this host."
             )
-        with latest_dump.path.open("rb") as fh:
-            content = fh.read()
-        proc = pg_restore_runner(["--list"], stdin_bytes=content)
+        proc = pg_restore_runner(["--list"], dump_path=latest_dump.path)
         if proc.returncode != 0:
             pytest.skip(
                 f"pg_restore --list failed on custom dump "
@@ -113,6 +118,27 @@ def test_pg_restore_table_line_regex_accepts_catalog_oid_format() -> None:
         "market",
         "kline_weekly_qfq",
     )
+
+
+@pytest.mark.parametrize("strict,missing,extra", [(True, False, False), (True, False, True), (True, True, True), (False, True, False)])
+def test_schema_subset_contract(strict, missing, extra, monkeypatch, capsys) -> None:
+    import sys
+
+    module = sys.modules[__name__]
+    monkeypatch.setattr(module, "_extract_tables_from_dump", lambda *args: {("public", "kept")})
+    monkeypatch.setattr(module, "_strict_schema_diff", lambda: strict)
+    rows = ([] if missing else [("public", "kept")]) + ([("public", "extra")] if extra else [])
+    conn = MagicMock()
+    conn.cursor.return_value.__enter__.return_value.fetchall.return_value = rows
+    dump = SimpleNamespace(path=Path("fixture.dump"))
+    if missing:
+        with pytest.raises(AssertionError if strict else pytest.xfail.Exception):
+            test_dev_db_contains_every_dump_table(dump, None, conn)
+    else:
+        test_dev_db_contains_every_dump_table(dump, None, conn)
+    conn.cursor.return_value.__enter__.return_value.execute.assert_called_once()
+    if extra and not missing:
+        assert "1 table(s) not in dump" in capsys.readouterr().out
 
 
 def test_dump_declares_at_least_one_user_table(latest_dump, pg_restore_runner) -> None:
@@ -147,38 +173,6 @@ def test_dev_db_contains_every_dump_table(
             (list(USER_SCHEMAS),),
         )
         dev_tables = {(r[0], r[1]) for r in cur.fetchall()}
-    missing_on_dev = sorted(dump_tables - dev_tables)
-    failure_message = (
-        f"{len(missing_on_dev)} table(s) declared in dump "
-        f"{latest_dump.path.name} are missing on dev DB; first 10: "
-        f"{missing_on_dev[:10]}. Either (a) dev DB had a regressive drop, "
-        f"or (b) the dump was taken from a different deployment."
-    )
-    if missing_on_dev and not _strict_schema_diff():
-        pytest.xfail(f"{failure_message} Set DR_SCHEMA_DIFF_STRICT=1 to make this blocking.")
-    assert not missing_on_dev, failure_message
-
-
-def test_dev_db_extra_tables_are_allowed(
-    latest_dump, pg_restore_runner, dev_conn,
-) -> None:
-    """dev DB MAY have tables that the dump does NOT (Phase 3 / T12 additions
-    landed after the dump was taken). This test asserts the *direction* of
-    the diff is exactly one-way: dev superset-of dump.
-    """
-    dump_tables = {
-        t for t in _extract_tables_from_dump(latest_dump, pg_restore_runner)
-        if t[0] in USER_SCHEMAS
-    }
-    if not dump_tables:
-        pytest.skip("dump declared no user-schema tables; nothing to diff.")
-    with dev_conn.cursor() as cur:
-        cur.execute(
-            "SELECT table_schema, table_name FROM information_schema.tables "
-            "WHERE table_schema = ANY(%s)",
-            (list(USER_SCHEMAS),),
-        )
-        dev_tables = {(r[0], r[1]) for r in cur.fetchall()}
     extra_on_dev = dev_tables - dump_tables
     # This is informational only — never a fail. We report it so the
     # reviewer can spot-check that "extra" is in expected Phase 3 territory.
@@ -189,50 +183,14 @@ def test_dev_db_extra_tables_are_allowed(
             f"{latest_dump.path.name}; first 10: {sample}. "
             f"This is the expected forward direction (Phase 3 / T12 / etc.)."
         )
-    # The real assertion: the direction is one-way only (dump ⊆ dev).
-    # That's already covered by ``test_dev_db_contains_every_dump_table``;
-    # this test pairs with it to surface the asymmetric tolerance
-    # explicitly so future readers see the intentional design.
-    subset_ok = dump_tables.issubset(dev_tables) or len(dump_tables) == 0
+    # One query proves dump subset-of DEV and reports tolerated extra tables.
+    missing_on_dev = sorted(dump_tables - dev_tables)
     failure_message = (
-        "dump tables are not a subset of dev tables; "
-        "see test_dev_db_contains_every_dump_table for the diff."
+        f"{len(missing_on_dev)} table(s) declared in dump "
+        f"{latest_dump.path.name} are missing on dev DB; first 10: "
+        f"{missing_on_dev[:10]}. Either (a) dev DB had a regressive drop, "
+        f"or (b) the dump was taken from a different deployment."
     )
-    if not subset_ok and not _strict_schema_diff():
+    if missing_on_dev and not _strict_schema_diff():
         pytest.xfail(f"{failure_message} Set DR_SCHEMA_DIFF_STRICT=1 to make this blocking.")
-    assert subset_ok, failure_message
-
-
-# Reuse the dev DB fixture from the data_quality tree without re-implementing
-# it. pytest will auto-discover ``conftest.py`` in sibling directories only
-# if they share an ancestor, so we import the helper functions directly.
-@pytest.fixture
-def dev_conn():
-    """Per-test dev DB connection. Skip when creds / DB unreachable.
-
-    Re-implemented here (small duplication) rather than importing from
-    backend/tests/data_quality/conftest.py because pytest fixture discovery
-    is scoped per-directory; a parent conftest would be cleaner but
-    would change other tests' resolution semantics.
-    """
-    import psycopg2
-    from .conftest import _resolve_backup_dir  # noqa: F401 - shared sentinel
-    from backend.tests.data_quality.conftest import _dev_db_creds  # type: ignore
-
-    creds = _dev_db_creds()
-    if creds is None:
-        pytest.skip(
-            "dev DB credentials missing or unsafe; DR schema-diff test "
-            "skipped. Set TDX_DB_DEV_* env to enable."
-        )
-    try:
-        conn = psycopg2.connect(connect_timeout=3, **creds)
-    except Exception as exc:  # noqa: BLE001 - skip with reason on any failure
-        pytest.skip(f"dev DB unreachable: {exc}")
-    try:
-        yield conn
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
+    assert not missing_on_dev, failure_message

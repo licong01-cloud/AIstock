@@ -58,6 +58,7 @@ class MinuteExecutionEngine:
         algo, state = self.adapter.create_state(order, algo_code, config)
         market_state_aware = bool(getattr(algo, "HANDLES_MARKET_STATE", False))
         limit_state_aware = bool(getattr(algo, "HANDLES_LIMIT_STATE", False))
+        zero_volume_aware = bool(getattr(algo, "HANDLES_ZERO_VOLUME", False))
         if not minute_bars:
             raise DataUnavailableError(
                 "minute bars are required for paper trading",
@@ -109,7 +110,7 @@ class MinuteExecutionEngine:
                 order_id=current_order.order_id,
             )
             if step_fill is None:
-                if market_state_aware and getattr(algo, "_last_no_fill_reason", None):
+                if (market_state_aware or zero_volume_aware) and getattr(algo, "_last_no_fill_reason", None):
                     events.append(self._no_fill_event(current_order, algo, bar.bar_time))
                 continue
             if max_participation_rate is not None:
@@ -223,7 +224,8 @@ class MinuteExecutionEngine:
         self._restore_algo_state(state, execution_state)
         self._restore_persisted_plan(algo, execution_state)
         market_state_aware = bool(getattr(algo, "HANDLES_MARKET_STATE", False))
-        self._validate_bars(order, new_bars, require_executable=not market_state_aware)
+        zero_volume_aware = bool(getattr(algo, "HANDLES_ZERO_VOLUME", False))
+        self._validate_bars(order, new_bars, require_executable=not (market_state_aware or zero_volume_aware))
         if execution_state.order_id != order.order_id:
             raise ExecutionAlgoError(
                 "execution state order_id does not match order",
@@ -262,7 +264,10 @@ class MinuteExecutionEngine:
             if current_order.status == OrderStatus.FILLED:
                 processed_time = bar.bar_time
                 continue
-            if not market_state_aware:
+            observed_zero_volume = zero_volume_aware and not bar.is_suspended and bar.volume == 0
+            if observed_zero_volume:
+                self.risk_engine.validate_order_market_data(order=current_order, minute_bars=[bar])
+            elif not market_state_aware:
                 try:
                     self.risk_engine.validate_order_execution_context(
                         order=current_order,
@@ -294,7 +299,7 @@ class MinuteExecutionEngine:
             )
             processed_time = bar.bar_time
             if step_fill is None:
-                if market_state_aware and getattr(algo, "_last_no_fill_reason", None):
+                if (market_state_aware or zero_volume_aware) and getattr(algo, "_last_no_fill_reason", None):
                     events.append(
                         self._no_fill_event(
                             current_order,

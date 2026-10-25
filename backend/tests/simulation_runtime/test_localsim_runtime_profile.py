@@ -71,6 +71,46 @@ def _config() -> dict[str, object]:
     }
 
 
+def test_canonical_profile_is_explicit_and_survives_materialization() -> None:
+    from backend.services.canonical_equity_pit import CANONICAL_PIT_AUTHORITY_ID
+    from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_POINTER_PROFILE_SCHEMA
+
+    payload = _config()
+    pointer = {"schema_version": CANONICAL_PIT_POINTER_PROFILE_SCHEMA, "authority_id": CANONICAL_PIT_AUTHORITY_ID}
+    payload["canonical_pit_authority_profile"] = pointer
+    requested = LocalSimRuntimeProfileConfigRequestV1.model_validate(payload)
+    materialized = requested.materialize(runtime_variant_materialized_config=None)
+    assert requested.model_dump(mode="json")["canonical_pit_authority_profile"] == pointer
+    assert materialized.model_dump(mode="json")["canonical_pit_authority_profile"] == pointer
+
+
+def test_legacy_profile_serialization_and_hashes_do_not_change() -> None:
+    from backend.services.simulation_runtime.models import canonical_json_sha256
+
+    requested = LocalSimRuntimeProfileConfigRequestV1.model_validate(_config())
+    materialized = requested.materialize(runtime_variant_materialized_config=None)
+    assert "canonical_pit_authority_profile" not in requested.model_dump(mode="json")
+    assert "canonical_pit_authority_profile" not in materialized.model_dump(mode="json")
+    # Captured before BUG-2009: existing durable profile hashes must round-trip.
+    assert canonical_json_sha256(requested.model_dump(mode="json")) == "4cd4af4dbf635184df5b6232f3572069278e82fee27d986495300548feb0bf73"
+    assert canonical_json_sha256(materialized.model_dump(mode="json")) == "43c431cc2f259ee3a43881d10a10d4e6cd3111c61ee9ebceb9cc7e63e453d489"
+
+
+@pytest.mark.parametrize("model", [LocalSimRuntimeProfileConfigRequestV1, LocalSimRuntimeProfileConfigV1])
+def test_canonical_profile_cannot_rename_a_legacy_risk_policy(model) -> None:
+    from backend.services.canonical_equity_pit import CANONICAL_PIT_AUTHORITY_ID, LEGACY_PIT_UNIVERSE_KEY
+    from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_POINTER_PROFILE_SCHEMA
+
+    payload = _config()
+    payload.pop("schema_version")
+    payload["risk_policy"] = {"enabled": True, "providers": ["st_pit"], "st_universe_key": LEGACY_PIT_UNIVERSE_KEY}
+    payload["canonical_pit_authority_profile"] = {
+        "schema_version": CANONICAL_PIT_POINTER_PROFILE_SCHEMA, "authority_id": CANONICAL_PIT_AUTHORITY_ID,
+    }
+    with pytest.raises(RuntimeConfigInvalidError, match="cannot be mixed"):
+        model.model_validate(payload)
+
+
 def test_profile_and_version_are_package_scoped_append_only_and_idempotent() -> None:
     service, repository = _service()
     profile = service.create_profile(

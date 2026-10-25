@@ -1,15 +1,14 @@
 """Best-effort realtime Research Pipeline ingestion hooks.
 
 The QE runtime may call this module after its own completion transaction has
-committed. Recording is feature-flagged off by default and failures must never
-propagate back into QE loop processing.
+committed. Only an explicitly opted-in HMM research loop is recorded; failures
+must never propagate back into QE loop processing. No environment switch.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 from collections.abc import Mapping
 from typing import Any
 
@@ -18,7 +17,6 @@ from psycopg2.extras import RealDictCursor
 from backend.db.pg_pool import get_conn
 
 from .hmm_backtest_recorder import (
-    HMM_RECORDING_ENABLED_ENV,
     HMMBacktestRecorder,
     as_dict,
     as_list,
@@ -46,8 +44,8 @@ def _json_mapping(value: Any) -> dict[str, Any]:
     if isinstance(value, str) and value.strip():
         try:
             loaded = json.loads(value)
-        except Exception:
-            return {}
+        except json.JSONDecodeError as exc:
+            raise ValueError("hmm_research_record_invalid_json: expected object") from exc
         return dict(loaded) if isinstance(loaded, Mapping) else {}
     return {}
 
@@ -103,12 +101,11 @@ def _is_hmm_research_loop(metadata: Mapping[str, Any]) -> bool:
         return False
 
     research_domain = str(metadata.get("research_domain") or metadata.get("domain") or "").strip().lower()
-    pipeline_type = str(
-        metadata.get("research_pipeline_type")
-        or metadata.get("pipeline_type")
-        or metadata.get("pipeline")
-        or ""
-    ).strip().lower()
+    pipeline_type = (
+        str(metadata.get("research_pipeline_type") or metadata.get("pipeline_type") or metadata.get("pipeline") or "")
+        .strip()
+        .lower()
+    )
     if research_domain != "hmm":
         return False
     return pipeline_type in {"", "hmm_research"}
@@ -121,16 +118,14 @@ class ResearchPipelineRealtimeIngestion:
         self,
         *,
         recorder: HMMBacktestRecorder | None = None,
-        enabled: bool | None = None,
+        enabled: bool = True,
     ) -> None:
         self._recorder = recorder
         self._enabled = enabled
 
     @property
     def enabled(self) -> bool:
-        if self._enabled is not None:
-            return self._enabled
-        return env_truthy(os.getenv(HMM_RECORDING_ENABLED_ENV))
+        return self._enabled
 
     def record_hmm_backtest_completed(
         self,
@@ -251,10 +246,11 @@ def safe_record_hmm_backtest_completed(
     loop_id: str,
     loop_index: int | None = None,
     experiment_id: str | None = None,
+    enabled: bool = True,
 ) -> dict[str, Any]:
     """Record one HMM QE loop without raising into the QE runtime path."""
 
-    if not env_truthy(os.getenv(HMM_RECORDING_ENABLED_ENV)):
+    if not enabled:
         return {"recorded": False, "skipped_reason": "disabled"}
 
     try:

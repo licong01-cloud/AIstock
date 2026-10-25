@@ -33,6 +33,10 @@ python scripts/monthly_unified_dataset_release.py receipts --operation-id dmr_<3
 - RD-Agent 节点必须一次性配置稳定的 `QE_DATASET_RELEASE_REGISTRY_ROOTS=<release-parent>/.aistock-release-registry`；每月 DEPLOY 只新增 create-exclusive manifest 登记，不修改 API 环境变量、不重启节点；
 - 源码合入、数据库修复、candidate 部署、profile 激活、运行态读回分别报告；
 - 不启动训练、实验或服务，不把 `status=completed` 当作数据验收成功。
+- 经用户明确接受、证据钉住的有限值来源差异可以通过 `bind-quality` 在原 operation 的 SOURCE 封存前绑定；
+  按精确股票/日期/字段/实际值输出 `ACCEPTED_WITH_WARNINGS`，不要求 Tushare 历史分钟权限、不修改数据。
+  警告和证据必须进入 candidate manifest；不可豁免缺行、重复、NaN、新键/值漂移，也不可自动继承到下月。
+  不重写既存 `monthly_repair_inputs`，只恢复原 operation。细节见运行手册 4.1。
 - worker 的 HMM 派生 authority 只能由 `scripts/dataset_release_hmm_authority.py` 从已批准、已绑定精确
   dataset manifest 的完整窗口系数产物 create-exclusive 封存；不得从数据库运行态选择模型或手填 preset。
   固定模型未变时复用同一 authority，模型或 preset 变更时重新封存并更新一次稳定环境路径。

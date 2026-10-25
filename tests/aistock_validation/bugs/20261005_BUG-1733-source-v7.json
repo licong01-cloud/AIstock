@@ -1,0 +1,656 @@
+{
+  "actual": "历史分区重扫20h14，无SOURCE收据，外层错误无cause，v7启动预检失败",
+  "allowed_write_scope": [
+    "noxfile.py",
+    "docs/standards/aistock_runtime_targets_v1.yaml",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "backend/services/dataset_release/monthly_source_audit.py",
+    "backend/tests/dataset_release/test_monthly_source_audit.py",
+    "backend/services/dataset_release/monthly_repair_inputs.py",
+    "backend/services/dataset_release/api_models.py",
+    "backend/routers/monthly_dataset_releases.py",
+    "scripts/monthly_unified_dataset_release.py",
+    "backend/tests/dataset_release/test_monthly_repair_inputs.py",
+    "backend/tests/routers/test_monthly_dataset_releases.py",
+    "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+    "backend/services/dataset_release/monthly_postgres_source.py",
+    "backend/services/dataset_release/monthly_preparation_source.py",
+    "backend/services/dataset_release/monthly_source_progress.py",
+    "backend/services/dataset_release/monthly_error_diagnostics.py",
+    "backend/services/dataset_release/monthly_frozen_source_audit.py",
+    "backend/services/dataset_release/monthly_preparation_artifacts.py",
+    "backend/services/dataset_release/monthly_preparation_composition.py",
+    "backend/services/dataset_release/monthly_snapshot.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/services/dataset_release/monthly_build_bridge.py",
+    "backend/services/dataset_release/monthly_mature_build_runner.py",
+    "backend/services/dataset_release/build_stage.py",
+    "backend/services/dataset_release/artifact_ready_build_source.py",
+    "backend/services/dataset_release/source_authority.py",
+    "backend/services/dataset_release/artifact_ready_source.py",
+    "backend/services/dataset_release/monthly_construction_facts.py",
+    "backend/services/dataset_release/candidate_consumer_smoke.py",
+    "backend/services/dataset_release/monthly_legacy_prefix.py",
+    "backend/services/dataset_release/monthly_legacy_factor.py",
+    "backend/services/dataset_release/monthly_legacy_index.py",
+    "backend/services/dataset_release/monthly_legacy_validation.py",
+    "backend/services/dataset_release/monthly_candidate_finalizer.py",
+    "backend/services/dataset_release/monthly_shared_components.py",
+    "backend/services/dataset_release/monthly_preparation_shared.py",
+    "backend/services/dataset_release/monthly_consumer_layout.py",
+    "backend/services/dataset_release/qlib_bounded_update.py",
+    "backend/tests/dataset_release/test_monthly_unified_v2.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
+    "backend/tests/dataset_release/test_monthly_preparation_composition.py",
+    "backend/tests/dataset_release/test_monthly_delta_regressions.py",
+    "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+    "backend/tests/dataset_release/test_qlib_bounded_update.py",
+    "backend/tests/dataset_release/test_monthly_build_bridge.py",
+    "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+    "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+    "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+    "backend/tests/dataset_release/test_monthly_construction_facts.py",
+    "backend/tests/dataset_release/test_candidate_consumer_smoke.py",
+    "backend/tests/dataset_release/test_monthly_legacy_factor.py",
+    "backend/tests/dataset_release/test_monthly_legacy_index.py",
+    "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+    "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
+    "backend/tests/dataset_release/test_monthly_shared_components.py",
+    "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+    "tests/aistock_validation/bugs/20261005_BUG-1733-source-v7.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1733",
+  "closed_at": "2026-10-06T01:58:53.343241Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "continuation_review_20261006": {
+    "active_profile_sha256": "56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f",
+    "active_profile_write": false,
+    "approved_monthly_repair_input_file": "X:/AIstock_dataset_candidates/data_repair_receipts/daily_basic_1736_20261006/monthly-repair-inputs-20260930-v2.json",
+    "candidate_write": false,
+    "database_read": true,
+    "database_read_scope": "read-only genuine QFQ construction facts for two symbols, three returned rows, and September margin_detail per-date counts (20 observed dates, cutoff absent); no full-history business audit",
+    "database_write": false,
+    "design_compliance_review": {
+      "actual_delivery_vs_source_separated": true,
+      "approved_scope_preserved": true,
+      "no_unapproved_simplification": true,
+      "remaining_runtime_data_acceptance_explicit": true
+    },
+    "direct_test_command": "rtk pytest backend/tests/dataset_release/test_monthly_legacy_build_stage.py backend/tests/dataset_release/test_monthly_legacy_validation.py backend/tests/dataset_release/test_monthly_legacy_factor.py backend/tests/dataset_release/test_monthly_legacy_index.py backend/tests/dataset_release/test_monthly_shared_components.py backend/tests/dataset_release/test_monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_candidate_finalizer.py -q",
+    "direct_test_result": "550 passed, 3 skipped in final changed-task compiler/SOURCE/native-writer/consumer/finalizer/API/runtime-catalog matrix; follow-up synthetic credential and runtime route 5 passed; L0, guardrail_changed_files, validation_catalog_integrity PASS (22 catalog tests); changed-file Ruff/diff-check PASS. Not a production monthly run or ten-hour measurement.",
+    "fresh_process_metadata_readback": {
+      "database_read": false,
+      "database_write": false,
+      "historical_sector_values_read": 0,
+      "inherited_sector_physical_rows": 3339006,
+      "market_rows": 1233,
+      "membership_rows": 5258,
+      "membership_symbols": 5117,
+      "predecessor_manifest_sha256": "2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc"
+    },
+    "live_operation_readback": "FAILED/SOURCE/attempt242; six checkpoints false; no resume/new task issued",
+    "monthly_export_started": false,
+    "real_repair_writer_readback": "X:/AIstock_dataset_candidates/data_repair_receipts/daily_basic_1736_20261006/monthly-exact-repair-writer-readback-20261006.json",
+    "remaining_integration": [
+      "正式bridge已发送native/source输入并取消旧baseline admission；仍需真实完整正式pipeline集成验收，不提前恢复月更。",
+      "shared sector/suspend native分支已只QA新月并继承旧sidecar；股票池由冻结完整PIT metadata构建，需继续闭合完整SOURCE裁短与pipeline，不能以组件PASS冒充发布成功。",
+      "正式consumer smoke已兼容raw8/normalized月事实并接通12指数；仍需真实WSL Qlib监督进程和正式attempt/fence读回，而非fixture通过。",
+      "SOURCE已接通新月transport与真实MAX/边界构造事实；仍须正式全链实际验证，不能以SQL抽验或fixture PASS代替SOURCE收据。",
+      "v18实际与v16/v17分叉，必须精确组合已批准修复到唯一9月successor，不能继承整个v18 factor组件或丢掉旧修复；margin_detail/2026-09-30必须明确延期，不伪造provider absence或强行标READY。",
+      "完整正式链审核、L0/CI/PR/合入、用户重启后运行身份验证，以及同一个operation真实计时与三端发布仍未完成。"
+    ],
+    "review_round_19": "新增真正的9月Qlib校验：12字段逐值对比sealed CSV，读取新月物理范围；拒绝数值漂移、额外尾部、跨来源和跨前驱。不是仅检查metadata或人工填写PASS。",
+    "review_round_20": "修复last_end_dates将未追加的历史股票统一延长至新cutoff的错误；只更新实际追加股票，保留原有退市股票结束日，旧provider字节不变。",
+    "review_round_21": "正式native finalize/validate收据分支已经接通，保留正式QE/HMM smoke且精确绑定attempt fence；不伪造历史CSV、Merkle或现代index schema。增量factor同时封存共享证券身份和仅新月alias校验，不创建HMM私有资产。",
+    "review_round_22": "finalizer复用actual writer SHA并按物理hardlink去重，native路径不再生成历史CAS baseline准入。发现校验后/封存中变更的竞争问题，已增加签名复查与RED→GREEN测试。",
+    "review_round_23": "shared sector native分支已接通正式summarizer：实际writer inherited_rows/month_rows经CAS component authority绑定后按H5物理行范围读新增月，旧membership/market小型sidecar按前驱manifest读回继承，不再重扫旧sector值。跨月仅合并交易日相邻且相同行业的span，真实行业变更保留；映射漂移、物理边界错误、缺日期均拒绝。",
+    "review_round_24": "验证停发行业quote NaN与membership是独立语义：合法NaN保留股票、已有moneyflow和文件字节；伪造零quote被拒绝。used_l2_code_id_count新增month_delta/release范围说明，避免把本月统计误报为全历史统计。",
+    "review_round_25": "正式consumer layout复用实际writer SHA并将真实读取产生的pins传给finalizer，硬链接不触发第二次大型Bin/H5读取。RED复现重复读取和stale writer问题，修复后定向通过；人工复核发现summary return错位已修正并增加真实receipt file_count/digest断言。校验后改写、hash不一致继续拒绝，不新增历史fingerprint或Merkle准入。",
+    "review_round_26": "正式compile入口不再读取旧CAS/Merkle baseline或强制FULL_REBUILD，绑定controller前驱与SOURCE字节身份并发送native追加输入。REUSE/INCREMENTAL均生成新月尾部；历史修订不被静默降级或全量重导。编译定向2 PASS，真实月更仍未恢复。",
+    "review_round_27": "factor_partition_plan增加显式构建start；9月native producer只要求9月backing，不先要求2018年以来全部分区，global profile.start_date不变。RED→GREEN通过；历史复现默认完整计划保留。",
+    "review_round_28": "发现并修复native日线只追加000300.SH、与正式12指数consumer契约不一致的问题。复用本次冻结12指数CSV；官方000985.CSI/932000.CSI可进入provider而不进入股票池，未知CSI及分钟指数不放行。完整prepare/write/finalize/value-readback小规模12指数链通过。",
+    "review_round_29": "正式data-owned smoke兼容真实raw8固定H5及同一冻结月normalized Parquet，核对新月key/数值/单位；历史缺失pre_close/return不造数、不要求历史重导。显式raw-month reader合同、月范围、真实return来源及物理读取上限；typed receipt validator通过，值漂移/越界拒绝。未修改HMM/QE业务源码。",
+    "review_round_30": "native suspend继承manifest钉住的旧Parquet/metadata，只处理新月停牌事实，旧行不按新PIT重筛且不重审。新月键、daily counts和scope明示；RED→GREEN通过，人工Ruff复核修正builder前驱变量名称。共享组件10 PASS。",
+    "review_round_31": "正式SOURCE与private preparation已改为新自然月行情分区；refresh ledger也只读取/检查新月日期。旧PIT/classification属于小型权威metadata而非历史行情QA。旧SOURCE inventory不再与month graph比较，避免将省略旧月份误判为历史修复或删行。",
+    "review_round_32": "共享SQL allowlist增加仅月更启用的adj_factor_construction：同一只读snapshot查询真实cutoff最大因子行及不可变前缀精确边界日期，不传输或重验完整历史序列。MAX使用NULLS LAST；重复、范围越界、同snapshot最大值与新月事实冲突均拒绝。原历史复现默认路径不启用此查询。",
+    "review_round_33": "SOURCE monthly moneyflow请求也按共享security-source identity加入历史代码并登记authority/source-code-membership digest。RED复现只查302132漏300114，GREEN证明资金流查询包含来源代码但daily_basic/PIT股票池仍用规范代码，没有HMM私有映射。",
+    "review_round_34": "正式数据库只读SQL抽验返回000001.SZ/2026-08-31 adj=139.008、2026-09-30 adj=142.0699及302132.SZ/2026-09-30 adj=6.0592；transaction READ ONLY/REPEATABLE READ，rollback，无DML。此项不是完整SOURCE或发布验收。",
+    "review_round_35": "真实manifest/inventory发现v18基于v15，而非连续继承v16/v17：v18 moneyflow仍为88467d29...，v16/v17为b2d687e1...；v18 daily_basic为e5cb005d...，v17为efd2e9f7...且含额外历史事实。禁止直接采用整个v18 factor组件；唯一9月successor须组合批准的moneyflow/causal-basic修复与38日字段修复，尚未闭合该组合输入。",
+    "review_round_36": "正式repair-inputs API/CLI采用同一operation writer lock，只有SOURCE封存前能绑定具体immutable候选与receipt SHA；重复同内容幂等，不同输入拒绝，无ACTIVATE/READY/数据库写入。SOURCE bundle绑定输入，BUILD拒绝plan与seal不同；不引入历史baseline gate或隐式latest候选选择。",
+    "review_round_37": "因子月追加区分logical predecessor与physical repair prefix：daily_basic/moneyflow使用v17，static使用v18；原active v15仍为逻辑前驱。逐文件writer明确记录两个身份，validator按SOURCE绑定验证物理来源；因子滚动moneyflow seed也读取批准前缀，防止新月再丢旧alias数据。",
+    "review_round_38": "真实X盘私有副本验证发现modify_coordinates会反复重建不变的全历史date/instrument索引，已改为只写values block及连续physical runs。RED→GREEN测试禁止modify_coordinates；新实现38日精确回读1.186秒、幂等空操作1.378秒，不把此数字冒充月更<=10h验收。原慢验证副本仍由本轮前台验证进程持有，未擅自终止或改写其文件。",
+    "review_round_39": "真实v17 daily_basic私有副本完成38日null-only合并：dv_ratio=130823、dv_ttm=126548、turnover_rate_f=4913；8824819历史行数保持不变（包括新增因果事实），已有有限值与上游NA保留。比v18单独修复计数多的合法provider事实来自v17额外源行；未扩大PIT股票池。active profile SHA仍56b47410...cc6f。margin_detail9月仅20日，09-30依然无事实，延期尚须正式SOURCE语义接通，不伪造absence。",
+    "review_round_40": "正式v2输入只读验证PASS：继承v17 moneyflow/causal-basic与v18 static字段修复、38日精确null-only修复；显式margin_detail截止日延期authority=d30474348d7ba38d29280360fa640790ce2fc057819736cbfe04794920aabfd7。SQL与refresh ledger仅对该dataset停止于09-29，逻辑月范围仍至09-30，实际观测行数/min/max及typed延期独立保存，不伪造provider absence。",
+    "review_round_41": "正式factor构建定向验证2 PASS：融资原始H5可真实止于09-29且不生成09-30行；其他组件仍至cutoff。物理修复前缀身份与SOURCE绑定不一致时拒绝，logical前驱仍为active v15。fresh-process正式worker配置preflight PASS/SOURCE7，同一BUILD监督scope；未claim operation、未打开数据库、未启动worker。",
+    "review_round_42": "修正运行态目录中月更控制面与其子worker被分成两个部署目标的过时登记：backend.main lifespan负责MonthlyReleaseWorkerSupervisor.start，既有monthly-process probe同时检查backend identity与child supervision，统一归属现有worker-scheduler target；仍必须由用户重启父后端并完成两进程读回，不标记non-runtime、不控制进程。普通后端及其他worker分类保持不变，10项定向分类/route测试PASS。新增9个定向测试文件加入现有qlib_data_backend执行列表，不改变模块ownership。",
+    "review_round_43": "最终changed-task矩阵550 PASS/3 SKIP；后续仅修正注释与测试中的合成凭据表示，凭据脱敏和runtime route定向5 PASS。L0、staged guardrail/ownership、catalog integrity PASS；catalog integrity22测试PASS。正式finish closure_ready=true/ready_for_pr，但该状态仅表示源PR就绪，数据月更和十小时目标仍未验收。两个本轮X盘私有验证H5在进程正常结束、独占打开成功后按精确文件删除，均可从immutable来源重建，未删除任何candidate文件。",
+    "runtime_action": false,
+    "state": "IN_PROGRESS_NOT_READY",
+    "ten_hour_requirement_measured": false
+  },
+  "created_at": "2026-10-05T16:26:24.544709Z",
+  "description": "历史分区重扫20h14，无SOURCE收据，外层错误无cause，v7启动预检失败",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261005-9934efdd5f25",
+      "timestamp": "2026-10-05T16:26:24.544691Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "仅新增月份数据检查与增量构建，复用已验前驱，启动合同闭合，可查看进度及底层报错；实际月更<=10h",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/api_models.py",
+      "backend/services/dataset_release/artifact_ready_build_source.py",
+      "backend/services/dataset_release/artifact_ready_source.py",
+      "backend/services/dataset_release/build_stage.py",
+      "backend/services/dataset_release/candidate_consumer_smoke.py",
+      "backend/services/dataset_release/monthly_build_bridge.py",
+      "backend/services/dataset_release/monthly_candidate_finalizer.py",
+      "backend/services/dataset_release/monthly_construction_facts.py",
+      "backend/services/dataset_release/monthly_consumer_layout.py",
+      "backend/services/dataset_release/monthly_error_diagnostics.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_legacy_factor.py",
+      "backend/services/dataset_release/monthly_legacy_index.py",
+      "backend/services/dataset_release/monthly_legacy_prefix.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_artifacts.py",
+      "backend/services/dataset_release/monthly_preparation_composition.py",
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_repair_inputs.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_snapshot.py",
+      "backend/services/dataset_release/monthly_source_audit.py",
+      "backend/services/dataset_release/monthly_source_progress.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/qlib_bounded_update.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+      "backend/tests/dataset_release/test_candidate_consumer_smoke.py",
+      "backend/tests/dataset_release/test_monthly_build_bridge.py",
+      "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
+      "backend/tests/dataset_release/test_monthly_construction_facts.py",
+      "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+      "backend/tests/dataset_release/test_monthly_delta_regressions.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/tests/dataset_release/test_monthly_legacy_factor.py",
+      "backend/tests/dataset_release/test_monthly_legacy_index.py",
+      "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_repair_inputs.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_source_audit.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_qlib_bounded_update.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1733-source-v7.json"
+    ],
+    "added_files": [
+      "backend/services/dataset_release/monthly_error_diagnostics.py",
+      "backend/services/dataset_release/monthly_source_progress.py",
+      "backend/tests/dataset_release/test_monthly_delta_regressions.py"
+    ],
+    "changed_files": [
+      "backend/routers/monthly_dataset_releases.py",
+      "backend/services/dataset_release/api_models.py",
+      "backend/services/dataset_release/artifact_ready_build_source.py",
+      "backend/services/dataset_release/artifact_ready_source.py",
+      "backend/services/dataset_release/build_stage.py",
+      "backend/services/dataset_release/candidate_consumer_smoke.py",
+      "backend/services/dataset_release/monthly_build_bridge.py",
+      "backend/services/dataset_release/monthly_candidate_finalizer.py",
+      "backend/services/dataset_release/monthly_construction_facts.py",
+      "backend/services/dataset_release/monthly_consumer_layout.py",
+      "backend/services/dataset_release/monthly_error_diagnostics.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_legacy_factor.py",
+      "backend/services/dataset_release/monthly_legacy_index.py",
+      "backend/services/dataset_release/monthly_legacy_prefix.py",
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_artifacts.py",
+      "backend/services/dataset_release/monthly_preparation_composition.py",
+      "backend/services/dataset_release/monthly_preparation_shared.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_repair_inputs.py",
+      "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_snapshot.py",
+      "backend/services/dataset_release/monthly_source_audit.py",
+      "backend/services/dataset_release/monthly_source_progress.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/qlib_bounded_update.py",
+      "backend/services/dataset_release/source_authority.py",
+      "backend/tests/dataset_release/test_artifact_ready_build_source.py",
+      "backend/tests/dataset_release/test_candidate_consumer_smoke.py",
+      "backend/tests/dataset_release/test_monthly_build_bridge.py",
+      "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
+      "backend/tests/dataset_release/test_monthly_construction_facts.py",
+      "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+      "backend/tests/dataset_release/test_monthly_delta_regressions.py",
+      "backend/tests/dataset_release/test_monthly_legacy_build_stage.py",
+      "backend/tests/dataset_release/test_monthly_legacy_factor.py",
+      "backend/tests/dataset_release/test_monthly_legacy_index.py",
+      "backend/tests/dataset_release/test_monthly_legacy_prefix.py",
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_repair_inputs.py",
+      "backend/tests/dataset_release/test_monthly_shared_components.py",
+      "backend/tests/dataset_release/test_monthly_source_audit.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_qlib_bounded_update.py",
+      "backend/tests/routers/test_monthly_dataset_releases.py",
+      "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+      "backend/tests/scripts/test_monthly_unified_dataset_release.py",
+      "docs/standards/aistock_runtime_targets_v1.yaml",
+      "noxfile.py",
+      "scripts/monthly_unified_dataset_release.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1733-source-v7.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_postgres_source.py",
+        "backend/services/dataset_release/monthly_source_progress.py",
+        "backend/services/dataset_release/monthly_error_diagnostics.py",
+        "backend/services/dataset_release/monthly_frozen_source_audit.py",
+        "backend/services/dataset_release/monthly_preparation_artifacts.py",
+        "backend/services/dataset_release/monthly_snapshot.py",
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py",
+        "backend/tests/dataset_release/test_monthly_postgres_source.py",
+        "backend/tests/dataset_release/test_monthly_delta_regressions.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_postgres_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_preparation_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_snapshot.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_unified.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_build_bridge.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_delta_regressions.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_postgres_source.py",
+        "backend/services/dataset_release/monthly_source_progress.py",
+        "backend/services/dataset_release/monthly_error_diagnostics.py",
+        "backend/services/dataset_release/monthly_frozen_source_audit.py",
+        "backend/services/dataset_release/monthly_preparation_artifacts.py",
+        "backend/services/dataset_release/monthly_snapshot.py",
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py",
+        "backend/tests/dataset_release/test_monthly_postgres_source.py",
+        "backend/tests/dataset_release/test_monthly_delta_regressions.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_source_progress.py",
+      "backend/services/dataset_release/monthly_error_diagnostics.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_preparation_artifacts.py",
+      "backend/services/dataset_release/monthly_snapshot.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_delta_regressions.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_source_progress.py",
+      "backend/services/dataset_release/monthly_error_diagnostics.py",
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_preparation_artifacts.py",
+      "backend/services/dataset_release/monthly_snapshot.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_delta_regressions.py"
+    ]
+  },
+  "first_seen_at": "2026-10-05T16:26:24.544709Z",
+  "fix_branch": null,
+  "fix_commit": "6272c856c034fdf1d5f44e484de2ba622db2c759",
+  "fixed_at": "2026-10-05T22:21:36Z",
+  "github_issue_number": 5502,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5502",
+  "implementation_state": "PARTIALLY_IMPLEMENTED_NOT_READY_FOR_COMPLETION",
+  "last_seen_at": "2026-10-05T16:26:24.544709Z",
+  "measured_end_to_end_hours": null,
+  "module": "local_data",
+  "monthly_duration_requirement_hours": 10,
+  "monthly_duration_requirement_met": false,
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5556",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "related_bug_ids": [
+    "BUG-1735"
+  ],
+  "remaining_work": [
+    "以真实前驱manifest为依据闭合legacy immutable prefix与新增月增量构建，禁止将仅9月输出当作完整候选",
+    "正式bridge已生成monthly_legacy_predecessor/source_bundle_sha256，日线/分钟线/factor/index及data-owned consumer/finalizer已接通native月增量；仍须闭合SOURCE有界构造事实及批准修复继承，再执行真实全链验收，不能以103项定向PASS报告月更完成",
+    "已接通正式因子producer和legacy index本月追加；H5/Parquet仅本月源事实计算与读回，滚动种子来自真实短尾/原始复权边界，保留旧存储精度、列顺序和合法NaN；仍需交付必要authority/alias收据、接通正式验证与finalizer，并明确已有历史修复输入，不得保留旧强制全量退路",
+    "接入已有Qlib writer前明确每只股票的旧/新QFQ基准，对真实变化股票定向重建或按正式转换处理，禁止盲目拼接；仅物理准备不等于复权一致性验收",
+    "9月daily_basic/static导出必须按实际源事实逐字段闭合；纳入已授权38日/字段修复，不重新扫描或重审无关历史",
+    "BUILD/shared consumer阶段的业务校验仅新增月；仅维持必须的文件身份绑定",
+    "完成真实月更计时验证<=10h；当前尚无该证据"
+  ],
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_results": [
+    "第1轮：发现 v7 启动兼容问题，拆为 BUG-1735 / PR #5511 已合入；此项不是原20小时失败的已确认根因。",
+    "第2轮：发现只缩小SOURCE日期但仍全量BUILD会丢历史，已撤回该危险修改；未提交或激活不完整候选。",
+    "第3轮：SOURCE业务审计仅目标自然月，历史repair范围不扩大月审计；74项定向测试通过，另3项凭据脱敏用例通过。该结果不等于全月构建PASS或10小时达标。",
+    "第4轮：RED复现daily_basic历史修复将此前无关day/minute/index/benchmark追加升级为SELECTIVE_REBUILD且依赖记录顺序；按源数据依赖限定重建范围。PIT人口修订仍覆盖股票组件，schema重建优先级不下降。",
+    "第5轮：RED复现private SOURCE自有observer分支缺少partition上下文；统一安全异常包装，保留private observer/counters及取消语义，不记录driver凭据或SQL内容。19项定向回归GREEN，changed-file Ruff通过；实际月更尚未恢复。",
+    "第6轮：legacy前缀复制不读取历史内容做校验或哈希；将明确修改的文件提前私有复制，其余文件同盘hardlink、跨盘copy fallback。复查发现copyfile覆盖竞争风险，改为create-exclusive写入。11项原语测试通过、1项Windows symlink能力用例跳过；真实v15 manifest身份只读闭合。原语未接入发布执行，不是CANDIDATE_READY。",
+    "第7轮：8项RED复现旧provider目录不能映射共享月更目录，新增一一目录映射并拒绝逃逸、重复和大小写重叠，GREEN。日线/分钟线追加准备只读取manifest和小型meta pin，显式将writer会改写的feature、calendar和instruments私有复制；不使用旧metadata内CSV绝对路径。",
+    "第8轮：复查补足all.txt/features目录身份和scope枚举取消点；真实追加模拟证明旧feature/calendar/instruments未改变。原语定向矩阵30 PASS、1项Windows symlink能力用例SKIP，Ruff/diff-check PASS。尚未执行真实月更、未激活、未证明10小时达标。",
+    "第9轮：真实读回发现legacy index H5是fixed/raw 8列，不是新版归一化index schema；不得假装两者可原样追加。先处理体量最大的Bin路径。既有逐股票writer增加真实manifest继承绑定，新文件SHA在实际写入时生成，取消额外历史feature内容哈希遍历。",
+    "第10轮：按共享QLIB_STOCK_VALUE_CONTRACT复核QFQ重锚定；仅OHLC/factor按old/new缩放、volume反向缩放，raw prev_close/limit价格/amount/flags保持不变。修正极端倍率、CSV symbol混用、发布目录内目标路径及copy fallback覆盖竞争；heartbeat/checkpoint按2秒节流避免每MB做外部回调。",
+    "第11轮：共享月追加适配器实际调用已有writer，写出原生12字段日线/分钟Bin；单股票240根分钟追加及历史前缀保留通过，无09:00/13:00标签，不使用历史CSV路径、不生成专用代码。直接相关矩阵52 PASS、2项平台link能力用例SKIP，Ruff/diff-check PASS；正式月更仍未恢复。",
+    "第12轮：正式BUILD runner增加inherited_month native writer调度，绑定durable predecessor与sealed月输入，不伪造WSL child收据；实际写12字段Bin、前驱未变，原本full-export writer不被调用。复查修正case-sensitive文件名、NTFS ADS路径、重复输入及写入期间漂移，并增加完成股票数/feature数/实际速率。直接相关矩阵83 PASS、2项平台能力SKIP，Ruff/diff-check PASS；prepare/finalize/validation尚未整体支持此模式，不能恢复正式operation。",
+    "第13轮：fresh process使用真实durable plan只读加载活动v15前驱manifest，身份2225e1ea28f099f4972b6a465e4aa093d3767592e2651484b79700586bf358fc闭合，不读取历史组件内容、不查询数据库。实时operation仍FAILED/SOURCE/attempt242、target不存在，backend仍旧c3e4b3ace5c269e00a6c5747af1a23923679c357；active profile SHA保持56b4741044aa98750468b2d5b2b9ae888cf2abf9ba4df00e36019ebc3dd0cc6f。",
+    "第14轮：正式prepare支持已绑定legacy输入，复用共享canonical transformer仅生成本月CSV，真实边界事实确定QFQ基准；native finalize绑定实际writer收据及输出stat signature，不要求或伪造旧CSV lineage。真实12字段日线与240分钟标签链路通过，foreign/source/prefix/preparation/target收据拒绝，补足源读取取消点和provider catalog普通文件约束。",
+    "第15轮：metadata-only只读复核发现真实v15 daily_pv为float64，sector_data字段集合相同但列顺序不同。新增月H5/Parquet追加保持旧存储精度和顺序，新月schema严格匹配正式producer；QFQ转换保留float64精度，raw amount与无关事实不变，禁止target覆盖或进入sealed SOURCE。无需旧历史业务复验、补零或前填。",
+    "第16轮：滚动种子先反向读取必要尾部，稀疏或无事实股票使用既有H5 instrument索引定位；未生成不存在的行。native BUILD/factor定向矩阵19 PASS，SOURCE定向矩阵55 PASS，Ruff/diff-check PASS；修正无旧SOURCE收据被凭空标记11组SCHEMA_CHANGE的规划错误，真实schema变化/移除/PIT变化仍保持分类。尚未完成官方bridge/index/factor/validation接线、未提交PR、未恢复月更，不证明10小时达标。",
+    "第17轮：正式BUILD factor stage复用FactorPartitionProducer仅计算新增自然月，真实H5短尾按同一sealed raw adj_factor边界重锚后进入滚动公式，禁止用旧normalized factor乘新denominator伪造来源事实；新IPO不搜索旧无索引H5。原生7个H5及静态Parquet追加链路通过，保留float64价格精度、原始amount、合法NaN和旧候选字节。",
+    "第18轮：正式index stage保留旧8列raw H5/成交量股数/成交额千元合同；新增月normalized Parquet及12字段benchmark CSV复用正式转换，不伪造旧pre_close/pct_chg。新月12指数覆盖缺失直接停止，不调用provider fallback。因子新增行/Parquet新行组逐值读回，写入漂移在发布前拒绝；仅月业务QA，不重审历史。缺少旧SOURCE收据不再凭空生成NEW_SECURITY_HISTORY或历史PIT修复，真实有对比证据的修复仍保留。定向矩阵79 PASS、Ruff/diff-check PASS。operation仍FAILED/SOURCE/attempt242，active profile SHA不变，尚未提交PR/合入/恢复真实月更，也未证明10小时达标。"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "Fresh pytest process: native month prepare/writer/finalize/value validation, factor/index writer QA and finalizer matrix: 40 passed. This is isolated file-only development evidence, not a deployed monthly SOURCE or real September release PASS.",
+      "Fresh Python process: build_monthly_worker_runtime(project_root=task worktree).preflight_receipt() -> PASS; SOURCE7, shared_build_execution_scope=true, operation_claimed/database_opened/runtime_action=false"
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1733/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1733",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "f8f66ca7414d47c99d9948234ed37cdc9e50e5ab914aa7eb0558002c9d9fdd9e",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "6272c856c034fdf1d5f44e484de2ba622db2c759",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-06T01:58:25.886824Z",
+      "mode": "read_only",
+      "observed_identity": "6272c856c034fdf1d5f44e484de2ba622db2c759",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c835cfc23e34e2a7572caf9a978e5e00a3820db7b1e4a2e93dc0c41f201da3eb",
+      "receipt_sha256": "e80db07a764bc1bb5614adbcd1ddbd8c3f3d9c58da61bcce35e344d2bfb3b3c5",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "b0060f477629dcdbe88283381998c11e8f1dc74f7a27f48926a6dadbbb25ee13",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "scope_limitations": [
+    "当前正式BUILD缺少legacy前驱的增量复用桥接；尚未解除强制全量构建退路，不能报告月更修复完成。",
+    "尚未完成BUILD/共享消费验证范围的全部增量改造；本轮未运行生产数据校验、月更恢复或数据导出。",
+    "原失败的底层driver异常未持久保存，不能事后编造错误原因。新增诊断仅对后续实际失败有效。"
+  ],
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1733",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "772ae34984fdd7e4",
+    "recorded_at": "2026-10-05T22:22:10.947670Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "e544d41f98e5abcb64b1d5b0fe7b91f345cadba2",
+    "source_merge_commit": "6272c856c034fdf1d5f44e484de2ba622db2c759",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5556",
+    "validation_evidence": [
+      "rtk pytest backend/tests/dataset_release/test_monthly_repair_inputs.py backend/tests/dataset_release/test_monthly_legacy_factor.py backend/tests/dataset_release/test_monthly_postgres_source.py -q -> passed within final 550 passed, 3 skipped changed-task matrix; follow-up credential/route 5 passed",
+      "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity -> passed"
+    ],
+    "validation_evidence_digest": "c055245f9f4476e50c5a7f7536b77bca49356cdc9e3b342e6d64a26a6b053d07"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "月更重扫历史且丢失底层异常，SOURCE v7 启动合同不兼容",
+  "trigger_condition": {
+    "fingerprint": "9934efdd5f25e0d2fd49a69d",
+    "source_event_id": "FE-20261005-9934efdd5f25"
+  },
+  "validation_evidence": [
+    "rtk pytest backend/tests/dataset_release/test_monthly_repair_inputs.py backend/tests/dataset_release/test_monthly_legacy_factor.py backend/tests/dataset_release/test_monthly_postgres_source.py -q -> passed within final 550 passed, 3 skipped changed-task matrix; follow-up credential/route 5 passed",
+    "python -m nox -s l0 guardrail_changed_files validation_catalog_integrity -> passed",
+    "CI run 37381580519 success; targeted matrix 550 passed 3 skipped; formal restart receipt passed at 2026-10-06T01:58:26Z"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

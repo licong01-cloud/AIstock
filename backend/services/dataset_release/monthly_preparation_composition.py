@@ -84,8 +84,11 @@ class MonthlyPrivatePreparationExecutor:
     def __call__(
         self, context: ProducerContext, snapshot: PreparationSourceSnapshot,
         audit: Mapping[str, Any], identity: MonthlySnapshotIdentity,
-        *, checkpoint: Callable[[], None] = lambda: None,
+        *, checkpoint: Callable[[], None] | None = None,
     ) -> Mapping[str, Any]:
+        if checkpoint is None:
+            checkpoint = getattr(context, "checkpoint", lambda: None)
+        checkpoint()
         snapshot_id = f"postgres:{identity.snapshot_id}"
         if (
             context.stage != "SOURCE" or context.operation_id != snapshot.operation_id
@@ -103,7 +106,7 @@ class MonthlyPrivatePreparationExecutor:
                          if domains[name]["status"] == "ELIGIBLE")
         if selected:
             bundle = normalize_preparation_artifacts(
-                ArtifactReadySourceBuilder(self.profile, self.cas), snapshot=snapshot,
+                ArtifactReadySourceBuilder(self.profile, self.cas, month_start=snapshot.official_cutoff.replace(day=1)), snapshot=snapshot,
                 audit=audit, components=selected, checkpoint=checkpoint,
             )
             source = ArtifactReadyPreparationBuildSource(

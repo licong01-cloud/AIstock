@@ -22,14 +22,18 @@ test("QE evolution terminal task detail is read-only, accurate, and observable",
     }
   });
 
-  const listResp = await request.get(`${apiBase}/quantevolver/evolution/tasks`);
-  expect(listResp.ok(), `task list failed: ${listResp.status()}`).toBeTruthy();
-  const listPayload = await listResp.json();
-  const tasks = Array.isArray(listPayload.data) ? listPayload.data : listPayload.tasks || [];
-  const listedTask = tasks.find((item: any) => item.task_id === taskId);
+  let listedTask: any;
+  for (let offset = 0; offset < 1000 && !listedTask; offset += 50) {
+    const listResp = await request.get(`${apiBase}/quantevolver/evolution/tasks?limit=50&offset=${offset}`);
+    expect(listResp.ok(), `task list failed: ${listResp.status()}`).toBeTruthy();
+    const listPayload = await listResp.json();
+    const tasks = Array.isArray(listPayload.data) ? listPayload.data : listPayload.tasks || [];
+    listedTask = tasks.find((item: any) => item.task_id === taskId);
+    if (tasks.length < 50) break;
+  }
   expect(listedTask, `target task ${taskId} must be present in task list`).toBeTruthy();
 
-  const detailResp = await request.get(`${apiBase}/quantevolver/evolution/tasks/${taskId}`);
+  const detailResp = await request.get(`${apiBase}/quantevolver/evolution/tasks/${taskId}/loops/comparison`);
   expect(detailResp.ok(), `detail failed: ${detailResp.status()} ${await detailResp.text()}`).toBeTruthy();
   const detailPayload = await detailResp.json();
   const detail = detailPayload.data || detailPayload;
@@ -42,6 +46,15 @@ test("QE evolution terminal task detail is read-only, accurate, and observable",
 
   await page.goto("/quantevolver/evolution");
   const taskCell = page.getByText(taskId, { exact: true }).first();
+  await expect(page.getByRole("button", { name: "下一页", exact: true })).toBeVisible({ timeout: 120_000 });
+  for (let pageIndex = 0; pageIndex < 20 && !(await taskCell.isVisible()); pageIndex++) {
+    const next = page.getByRole("button", { name: "下一页", exact: true });
+    if (await next.isDisabled()) break;
+    await Promise.all([
+      page.waitForResponse(response => response.url().includes("/evolution/tasks?") && response.ok()),
+      next.click(),
+    ]);
+  }
   await expect(taskCell).toBeVisible({ timeout: 120_000 });
   await expect(page.getByText(`${detail.current_loop}/${detail.max_loops}`).first()).toBeVisible();
 
@@ -56,9 +69,9 @@ test("QE evolution terminal task detail is read-only, accurate, and observable",
     await expect(page.getByText(`LOOP ${loop.loop_index}`).first()).toBeVisible({ timeout: 60_000 });
   }
 
-  const loopsWithIc = detail.loops.filter((loop: any) => loop?.status === "completed" && loop?.metrics_json?.IC != null);
+  const loopsWithIc = detail.loops.filter((loop: any) => loop?.status === "completed" && loop?.metrics_summary?.ic != null);
   if (loopsWithIc.length > 0) {
-    const expectedIc = Number(loopsWithIc[0].metrics_json.IC).toFixed(4);
+    const expectedIc = Number(loopsWithIc[0].metrics_summary.ic).toFixed(4);
     await expect(page.getByText(new RegExp(`IC:\\s*${escapeRegExp(expectedIc)}`)).first()).toBeVisible({ timeout: 60_000 });
   }
 
@@ -99,7 +112,7 @@ test("QE dashboard stops automatic polling when task list has no active task", a
   let listHits = 0;
   let detailHits = 0;
 
-  await page.route(/\/api\/v1\/quantevolver\/evolution\/tasks$/, async route => {
+  await page.route(/\/api\/v1\/quantevolver\/evolution\/tasks(?:\?.*)?$/, async route => {
     listHits += 1;
     await route.fulfill({
       status: 200,
@@ -107,7 +120,7 @@ test("QE dashboard stops automatic polling when task list has no active task", a
       body: JSON.stringify({ status: "success", data: [task] }),
     });
   });
-  await page.route(new RegExp(`/api/v1/quantevolver/evolution/tasks/${mockTaskId}$`), async route => {
+  await page.route(new RegExp(`/api/v1/quantevolver/evolution/tasks/${mockTaskId}/loops/comparison$`), async route => {
     detailHits += 1;
     await route.fulfill({
       status: 200,
@@ -125,15 +138,11 @@ test("QE dashboard stops automatic polling when task list has no active task", a
       }),
     });
   });
-  await page.route(new RegExp(`/api/v1/quantevolver/evolution/tasks/${mockTaskId}/loops/Loop1/enhanced-metrics$`), async route => {
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify({
-        status: "success",
-        data: { summary: { IC: 0.123456, Rank_IC: 0.234567 } },
-      }),
-    });
+  await page.route(new RegExp(`/api/v1/quantevolver/evolution/tasks/${mockTaskId}/loops/1/(config|metrics|analysis)$`), async route => {
+    const kind = route.request().url().split("/").pop();
+    const data = kind === "config" ? { config_json: detail.loops[0].config_json }
+      : kind === "metrics" ? { metrics_json: detail.loops[0].metrics_json } : { agent_analysis: null };
+    await route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ status: "success", data }) });
   });
   await page.route(/\/api\/v1\/qe-archive\/source-status$/, async route => {
     await route.fulfill({

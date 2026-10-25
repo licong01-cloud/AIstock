@@ -29,11 +29,20 @@ from backend.services.strategy_package.selection_computation import parse_select
 _QUERY_VERSION = "v1"
 
 
-def _program_pit_universe_key(program: HistoricalRangeFrozenProgramV1) -> str:
+def program_pit_universe_key(program: HistoricalRangeFrozenProgramV1) -> str:
+    """Resolve the frozen mark-state universe without reading an active pointer."""
     binding = program.admitted_package_projection.canonical_pit_binding
-    if binding is None:
-        return SELECTION_PIT_UNIVERSE_KEY
-    return binding.frozen_universe_key
+    if binding is not None:
+        return binding.frozen_universe_key
+    if program.selection_input_source_plan is not None:
+        from .task_input_sources import validate_program_source_plan
+
+        plan = validate_program_source_plan(program=program)
+        universe_key = plan["native_policy"]["universe_key"]
+        if not isinstance(universe_key, str) or not universe_key.strip():
+            raise ValueError("planned decision marks require a frozen native PIT universe key")
+        return universe_key
+    return SELECTION_PIT_UNIVERSE_KEY
 
 
 def _query_contract_hash(frozen_programs: tuple[HistoricalRangeFrozenProgramV1, ...]) -> str:
@@ -61,6 +70,14 @@ class HistoricalRangeSourceRequirementPlanner:
         code_release_hash: str,
         code_release_manifest: Mapping[str, Any] | None = None,
     ) -> HistoricalRangeSourceRequirementPlanV1:
+        from .task_input_sources import validate_program_source_plan
+
+        planned = request.selection_input_source_mode is not None
+        for program in frozen_programs:
+            if (program.selection_input_source_plan is not None) != planned:
+                raise ValueError("source-mode request and frozen Program plans must agree")
+            if planned:
+                validate_program_source_plan(program=program, date_plan=date_plan, request=request)
         requirements: dict[str, HistoricalRangeSourceRequirementV1] = {}
         release_manifest = dict(code_release_manifest or {"code_release_hash": code_release_hash})
         if code_release_manifest is not None and canonical_json_sha256(release_manifest) != code_release_hash:
@@ -110,7 +127,7 @@ class HistoricalRangeSourceRequirementPlanner:
                 for window in component.day_windows
                 if window.decision_trade_date == trade_date
             )
-            calendar_id = self._add(
+            calendar_id = code_id if planned else self._add(
                 requirements,
                 source_role="trading_calendar",
                 dataset_id="market.trading_calendar",
@@ -125,9 +142,9 @@ class HistoricalRangeSourceRequirementPlanner:
                 missing_reason_code="ADVISORY_HR_TRADING_CALENDAR_UNAVAILABLE",
                 decision_trade_date=trade_date,
             )
-            # Decision marks are one canonical market/state source per date.  They
-            # deliberately do not inherit a package/component lookback or the
-            # positive PIT universe used by candidate inference.
+            # Quotes remain unfiltered by candidate membership and have no
+            # package/component lookback. State membership uses the Program's
+            # frozen PIT identity, including its explicitly planned native inputs.
             self._add(
                 requirements,
                 source_role="decision_mark_daily_market",
@@ -145,8 +162,8 @@ class HistoricalRangeSourceRequirementPlanner:
                 dependencies=(calendar_id,),
             )
             for program in frozen_programs:
-                pit_universe_key = _program_pit_universe_key(program)
-                universe_id = self._add(
+                pit_universe_key = program_pit_universe_key(program)
+                universe_id = package_requirement_ids[program.package_id] if planned else self._add(
                     requirements,
                     source_role="pit_universe",
                     dataset_id="market.stock_universe_pit",
@@ -185,8 +202,8 @@ class HistoricalRangeSourceRequirementPlanner:
                     dependencies=(calendar_id, universe_id),
                 )
                 runtime_profile = parse_selection_runtime_profile_for_computation(program.runtime_config)
-                provider_dependencies = (universe_id, calendar_id, package_requirement_ids[program.package_id])
-                if runtime_profile.risk_policy.enabled and "st_pit" in runtime_profile.risk_policy.providers:
+                provider_dependencies = tuple(dict.fromkeys((universe_id, calendar_id, package_requirement_ids[program.package_id])))
+                if not planned and runtime_profile.risk_policy.enabled and "st_pit" in runtime_profile.risk_policy.providers:
                     self._add(
                         requirements,
                         source_role="st_risk",
@@ -203,7 +220,7 @@ class HistoricalRangeSourceRequirementPlanner:
                         decision_trade_date=trade_date,
                         dependencies=provider_dependencies,
                     )
-                if runtime_profile.tradability.exclude_suspended:
+                if not planned and runtime_profile.tradability.exclude_suspended:
                     self._add(
                         requirements,
                         source_role="suspend",
@@ -220,7 +237,7 @@ class HistoricalRangeSourceRequirementPlanner:
                         decision_trade_date=trade_date,
                         dependencies=(calendar_id,),
                     )
-                if runtime_profile.industry_blacklist:
+                if not planned and runtime_profile.industry_blacklist:
                     self._add(
                         requirements,
                         source_role="industry",
@@ -269,6 +286,20 @@ class HistoricalRangeSourceRequirementPlanner:
                         decision_trade_date=trade_date,
                         dependencies=provider_dependencies,
                     )
+                if planned:
+                    source_plan = program.selection_input_source_plan
+                    self._add(requirements, source_role="selection_input_plan",
+                        dataset_id="consumer.selection_input_plan", query_template_id="frozen_artifact_identity",
+                        parameters={"content_hash": source_plan["plan_hash"], "row_count": 1,
+                                    "identity_kind": "FROZEN_PLAN_DECLARATION_NOT_MARKET_CONTENT",
+                                    "source_run_id": source_plan["run_id"],
+                                    "selector": {"research_program_id": program.research_program_id}},
+                        partition_ref=f"selection-input-plan:{program.research_program_id}:{date_text}",
+                        required_for=HistoricalRangeRequirementPurpose.DAY_EXECUTION,
+                        missing_reason_code="ADVISORY_HR_SELECTION_INPUT_PLAN_UNAVAILABLE",
+                        package_id=program.package_id, decision_trade_date=trade_date,
+                        dependencies=(package_requirement_ids[program.package_id],))
+                    continue
                 warmup = date_plan.per_program_input_warmup_ranges[program.research_program_id]
                 warmup_by_component = {item.component_id: item for item in warmup.components}
                 for component in program.admitted_package_projection.components:

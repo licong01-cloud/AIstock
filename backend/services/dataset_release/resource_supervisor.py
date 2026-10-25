@@ -403,6 +403,8 @@ class ResourceSupervisor:
         self.resource_gate = resource_gate
         self._wsl_telemetry_path: Path | None = None
         self._wsl_expected_control_group: str | None = None
+        self._wsl_telemetry_counter = -1
+        self._wsl_telemetry_progress_at: float | None = None
         if self.resource_gate is not None:
             self.resource_gate.bind_owned_probe(self._owned_runtime_snapshot)
         self._closed = False
@@ -557,8 +559,26 @@ class ResourceSupervisor:
                 attempt_id=self.attempt_id,
                 fence=self.fence,
                 expected_control_group=self._wsl_expected_control_group,
-                policy=self.policy,
             )
+            # Guest UTC is audit metadata, not a Windows timeout clock.
+            # The telemetry file is in this execution's create-exclusive root;
+            # subsequent liveness requires counter progress on our local clock.
+            sampled_at = self._monotonic()
+            if wsl_snapshot.counter < self._wsl_telemetry_counter:
+                raise ResourceTelemetryUnavailable("WSL resource telemetry counter rolled back")
+            if (
+                self._wsl_telemetry_progress_at is not None
+                and sampled_at < self._wsl_telemetry_progress_at
+            ):
+                raise ResourceTelemetryUnavailable("WSL resource telemetry local clock rolled back")
+            if wsl_snapshot.counter > self._wsl_telemetry_counter:
+                self._wsl_telemetry_counter = wsl_snapshot.counter
+                self._wsl_telemetry_progress_at = sampled_at
+            assert self._wsl_telemetry_progress_at is not None
+            if sampled_at - self._wsl_telemetry_progress_at >= max(
+                5.0, self.policy.enforcement_sample_seconds * 5,
+            ):
+                raise ResourceTelemetryUnavailable("WSL resource telemetry counter stalled")
         return OwnedRuntimeSnapshot(
             windows_job_commit_bytes=int(accounting.current_commit_bytes),
             windows_job_peak_commit_bytes=int(accounting.peak_commit_bytes),
@@ -667,6 +687,8 @@ class ResourceSupervisor:
             self._current_wsl_execution_id = str(execution_id)
             self._wsl_telemetry_path = execution_root / "wsl_resource_telemetry.json"
             self._wsl_expected_control_group = None
+            self._wsl_telemetry_counter = -1
+            self._wsl_telemetry_progress_at = None
             checkpoint_path_wsl = f"{wsl.execution_root_wsl.rstrip('/')}/resource_checkpoint.requested.json"
             merged_env = dict(child_environment)
             merged_env[RESOURCE_CHECKPOINT_ENV] = checkpoint_path_wsl
@@ -1103,8 +1125,6 @@ def _read_wsl_runtime_telemetry(
     attempt_id: str,
     fence: int,
     expected_control_group: str | None,
-    policy: ResourcePolicy,
-    now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
 ) -> WslRuntimeSnapshot:
     try:
         _assert_plain_path_node(path)
@@ -1124,7 +1144,6 @@ def _read_wsl_runtime_telemetry(
         control_group = str(payload["control_group"])
         if observed.tzinfo is None or not isinstance(events, dict):
             raise ValueError("invalid timestamp/events")
-        age = (now().astimezone(timezone.utc) - observed.astimezone(timezone.utc)).total_seconds()
         snapshot = WslRuntimeSnapshot(
             memory_current_bytes=int(payload["memory_current_bytes"]),
             memory_peak_bytes=int(payload["memory_peak_bytes"]),
@@ -1145,16 +1164,16 @@ def _read_wsl_runtime_telemetry(
     if (
         payload.get("schema_version") != "dataset_release_wsl_resource_telemetry_v1"
         or payload.get("attempt_id") != attempt_id
-        or int(payload.get("fence", 0)) != fence
+        or type(payload.get("fence")) is not int
+        or payload["fence"] != fence
         or not control_group.startswith("/")
         or (expected_control_group is not None and control_group != expected_control_group)
-        or not -5 <= age <= max(5.0, policy.enforcement_sample_seconds * 5)
         or snapshot.counter <= 0
         or snapshot.memory_high_bytes != 0
         or snapshot.memory_max_bytes != 0
         or snapshot.swap_max_bytes != 0
     ):
-        raise ResourceTelemetryUnavailable("WSL resource telemetry identity/unlimited/freshness mismatch")
+        raise ResourceTelemetryUnavailable("WSL resource telemetry identity/unlimited mismatch")
     return snapshot
 
 

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import csv
+from datetime import date
+import hashlib
 import math
 from pathlib import Path
 import struct
@@ -13,6 +15,8 @@ from backend.services.dataset_release.qlib_bounded_update import (
     rewrite_feature_values,
     sha256_file,
 )
+from backend.services.dataset_release.canonical import canonical_json_bytes
+from backend.services.dataset_release.monthly_legacy_prefix import load_legacy_prefix
 
 
 F32 = struct.Struct("<f")
@@ -85,6 +89,196 @@ def test_bounded_writer_appends_private_features_and_preserves_baseline(tmp_path
     assert receipt["calendar_append_count"] == 3
     assert receipt["baseline_mutated"] is False
     assert instruments.read_bytes() == (target / "instruments" / "all.txt").read_bytes()
+
+
+def _bound_prefix(baseline):
+    metadata = b"{}\n"
+    (baseline / "meta_export.json").write_bytes(metadata)
+    manifest = {
+        "release_id": "qe_hmm_full_v2_20260831",
+        "cutoff_trade_date": "2026-08-31",
+        "components": {"day_meta_export": {"path": "meta_export.json", "sha256": hashlib.sha256(metadata).hexdigest(), "size": len(metadata)}},
+    }
+    identity = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+    manifest["dataset_manifest_sha256"] = identity
+    payload = canonical_json_bytes(manifest) + b"\n"
+    (baseline / "qe_dataset_manifest.json").write_bytes(payload)
+    return load_legacy_prefix(
+        baseline, expected_manifest_sha256=identity,
+        expected_file_sha256=hashlib.sha256(payload).hexdigest(),
+        expected_cutoff=date(2026, 8, 31), expected_release_id=manifest["release_id"],
+    )
+
+
+def test_monthly_bound_prefix_uses_existing_writer_without_history_hash_rechecks(tmp_path, monkeypatch):
+    import backend.services.dataset_release.qlib_bounded_update as writer
+    baseline, csv_dir, calendar, instruments = _fixture(tmp_path)
+    prefix = _bound_prefix(baseline)
+    original = writer.sha256_file
+    def metadata_only(path):
+        if path.suffix == ".bin":
+            pytest.fail("a second historical content hash pass was requested")
+        return original(path)
+    monkeypatch.setattr(writer, "sha256_file", metadata_only)
+    target = tmp_path / "new"
+    receipt = extend_qlib_dataset(
+        baseline_root=baseline, target_root=target, csv_dir=csv_dir,
+        new_calendar_path=calendar, frequency="day", instruments_all_path=instruments,
+        allowed_fields=("close",), expected_instruments=("sh600000",),
+        inherited_prefix=prefix,
+    )
+    feature = target / "features/sh600000/close.day.bin"
+    assert _values(feature)[1:4] == pytest.approx([10.0, 11.0, 12.0])
+    row = receipt["feature_receipts"][0]
+    assert row["predecessor_manifest_sha256"] == prefix.manifest_sha256
+    assert row["predecessor_sha256"] is None
+    assert row["target_sha256"] == hashlib.sha256(feature.read_bytes()).hexdigest()
+    assert receipt["historical_content_revalidated"] is False
+
+
+def test_qfq_new_anchor_rescales_ohlc_factor_volume_not_raw_limits_or_amount(tmp_path):
+    baseline, csv_dir, calendar, instruments = _fixture(tmp_path)
+    fields = ("open", "high", "low", "close", "factor", "volume", "amount", "prev_close", "up_limit_price", "down_limit_price", "limit_up", "limit_down")
+    values = dict.fromkeys(fields, 10.0)
+    values.update(factor=1.0, volume=100.0, amount=1200.0, limit_up=0.0, limit_down=0.0)
+    for field in fields:
+        _feature(baseline / f"features/sh600000/{field}.day.bin", start=0, values=[values[field], values[field]])
+    with (csv_dir / "sh600000.csv").open("w", newline="") as output:
+        rows = csv.DictWriter(output, fieldnames=("datetime", *fields))
+        rows.writeheader()
+        rows.writerow({"datetime": "2026-09-01", **values})
+    target = tmp_path / "new"
+    result = extend_qlib_dataset(
+        baseline_root=baseline, target_root=target, csv_dir=csv_dir,
+        new_calendar_path=calendar, frequency="day", instruments_all_path=instruments,
+        allowed_fields=fields, expected_instruments=("sh600000",),
+        qfq_basis_changes={"sh600000": (2.0, 4.0)},
+    )
+    for field in ("open", "high", "low", "close"):
+        assert _values(target / f"features/sh600000/{field}.day.bin")[1:3] == pytest.approx([5.0, 5.0])
+    assert _values(target / "features/sh600000/factor.day.bin")[1:3] == pytest.approx([0.5, 0.5])
+    assert _values(target / "features/sh600000/volume.day.bin")[1:3] == pytest.approx([200.0, 200.0])
+    for field in ("amount", "prev_close", "up_limit_price", "down_limit_price", "limit_up", "limit_down"):
+        assert _values(target / f"features/sh600000/{field}.day.bin")[1:3] == pytest.approx([values[field], values[field]])
+    assert _values(target / "features/sh600000/close.day.bin")[3] == pytest.approx(10.0)
+    assert _values(baseline / "features/sh600000/close.day.bin")[1:3] == pytest.approx([10.0, 10.0])
+    assert result["qfq_basis_changed_instrument_count"] == 1
+
+
+def test_changed_basis_rejects_a_partial_feature_contract(tmp_path):
+    baseline, csv_dir, calendar, instruments = _fixture(tmp_path)
+    with pytest.raises(QlibBoundedUpdateError, match="QFQ"):
+        extend_qlib_dataset(
+            baseline_root=baseline, target_root=tmp_path / "new", csv_dir=csv_dir,
+            new_calendar_path=calendar, frequency="day", instruments_all_path=instruments,
+            allowed_fields=("close",), expected_instruments=("sh600000",),
+            qfq_basis_changes={"sh600000": (2.0, 4.0)},
+        )
+    assert not (tmp_path / "new").exists()
+
+
+@pytest.mark.parametrize("old,new", [(0, 1), (-1, 1), (float("nan"), 1), (1, float("inf")), (1e-300, 1e300), (1e300, 1e-300)])
+def test_invalid_qfq_scale_is_rejected_before_any_copy(tmp_path, old, new):
+    from backend.services.dataset_release.stock_schema import QLIB_STOCK_FIELDS
+    baseline, csv_dir, calendar, instruments = _fixture(tmp_path)
+    with pytest.raises(QlibBoundedUpdateError, match="QFQ"):
+        extend_qlib_dataset(
+            baseline_root=baseline, target_root=tmp_path / "new", csv_dir=csv_dir,
+            new_calendar_path=calendar, frequency="day", instruments_all_path=instruments,
+            allowed_fields=QLIB_STOCK_FIELDS, expected_instruments=("sh600000",),
+            qfq_basis_changes={"sh600000": (old, new)},
+        )
+    assert not (tmp_path / "new").exists()
+
+
+def test_canonical_date_symbol_csv_is_consumed_without_a_private_symbol_mapping(tmp_path):
+    baseline, csv_dir, calendar, instruments = _fixture(tmp_path)
+    original = csv_dir / "sh600000.csv"
+    # Formal shared canonical CSV producer uses date/symbol, not datetime.
+    original.rename(csv_dir / "600000.SH.csv")
+    with (csv_dir / "600000.SH.csv").open("w", newline="") as output:
+        rows = csv.DictWriter(output, fieldnames=("date", "symbol", "close"))
+        rows.writeheader()
+        rows.writerow({"date": "2026-09-01", "symbol": "600000.SH", "close": 12.0})
+    result = extend_qlib_dataset(
+        baseline_root=baseline, target_root=tmp_path / "new", csv_dir=csv_dir,
+        new_calendar_path=calendar, frequency="day", instruments_all_path=instruments,
+        allowed_fields=("close",), expected_instruments=("600000.SH",), datetime_field="date",
+    )
+    assert result["instrument_csv_count"] == 1
+    assert _values(tmp_path / "new/features/600000.sh/close.day.bin") == pytest.approx([2.0, 12.0])
+
+
+def test_canonical_csv_symbol_mismatch_never_produces_success(tmp_path):
+    baseline, csv_dir, calendar, instruments = _fixture(tmp_path)
+    with (csv_dir / "sh600000.csv").open("w", newline="") as output:
+        rows = csv.DictWriter(output, fieldnames=("date", "symbol", "close"))
+        rows.writeheader()
+        rows.writerow({"date": "2026-09-01", "symbol": "000001.SZ", "close": 12.0})
+    with pytest.raises(QlibBoundedUpdateError, match="symbol"):
+        extend_qlib_dataset(
+            baseline_root=baseline, target_root=tmp_path / "new", csv_dir=csv_dir,
+            new_calendar_path=calendar, frequency="day", instruments_all_path=instruments,
+            allowed_fields=("close",), expected_instruments=("sh600000",), datetime_field="date",
+        )
+
+
+def test_manifest_bound_prefix_rejects_drift_before_cloning(tmp_path):
+    baseline, csv_dir, calendar, instruments = _fixture(tmp_path)
+    prefix = _bound_prefix(baseline)
+    (baseline / "meta_export.json").write_bytes(b"unexpected metadata")
+    with pytest.raises(QlibBoundedUpdateError, match="metadata"):
+        extend_qlib_dataset(
+            baseline_root=baseline, target_root=tmp_path / "new", csv_dir=csv_dir,
+            new_calendar_path=calendar, frequency="day", instruments_all_path=instruments,
+            allowed_fields=("close",), expected_instruments=("sh600000",), inherited_prefix=prefix,
+        )
+    assert not (tmp_path / "new").exists()
+
+
+def test_monthly_cancellation_before_copy_preserves_source_and_creates_no_target(tmp_path):
+    baseline, csv_dir, calendar, instruments = _fixture(tmp_path)
+    class Cancelled(RuntimeError):
+        pass
+    def cancel():
+        raise Cancelled("operator cancellation")
+    with pytest.raises(Cancelled):
+        extend_qlib_dataset(
+            baseline_root=baseline, target_root=tmp_path / "new", csv_dir=csv_dir,
+            new_calendar_path=calendar, frequency="day", instruments_all_path=instruments,
+            allowed_fields=("close",), expected_instruments=("sh600000",), checkpoint=cancel,
+        )
+    assert not (tmp_path / "new").exists()
+    assert _values(baseline / "features/sh600000/close.day.bin")[1:] == pytest.approx([10.0, 11.0])
+
+
+def test_bound_prefix_cannot_target_a_sibling_inside_the_active_release(tmp_path):
+    baseline, csv_dir, calendar, instruments = _fixture(tmp_path)
+    prefix = _bound_prefix(baseline)
+    # Point the valid manifest at a nested provider, as in a real release.
+    from dataclasses import replace
+    root = tmp_path / "release"
+    root.mkdir()
+    baseline.rename(root / "day")
+    baseline = root / "day"
+    import json
+    manifest_path = baseline / "qe_dataset_manifest.json"
+    manifest = json.loads(manifest_path.read_bytes())
+    manifest["components"]["day_meta_export"]["path"] = "day/meta_export.json"
+    manifest.pop("dataset_manifest_sha256")
+    identity = hashlib.sha256(canonical_json_bytes(manifest)).hexdigest()
+    manifest["dataset_manifest_sha256"] = identity
+    payload = canonical_json_bytes(manifest) + b"\n"
+    (root / "qe_dataset_manifest.json").write_bytes(payload)
+    prefix = replace(prefix, root=root, manifest=manifest, manifest_sha256=identity, manifest_file_sha256=hashlib.sha256(payload).hexdigest())
+    target = root / "wrong-sibling"
+    with pytest.raises(QlibBoundedUpdateError, match="immutable release"):
+        extend_qlib_dataset(
+            baseline_root=baseline, target_root=target, csv_dir=csv_dir,
+            new_calendar_path=calendar, frequency="day", instruments_all_path=instruments,
+            allowed_fields=("close",), expected_instruments=("sh600000",), inherited_prefix=prefix,
+        )
+    assert not target.exists()
 
 
 def test_writer_rejects_historical_calendar_insertion(tmp_path: Path) -> None:

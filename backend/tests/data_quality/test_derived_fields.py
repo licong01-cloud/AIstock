@@ -25,7 +25,7 @@ import pytest
 psycopg2 = pytest.importorskip("psycopg2")
 from psycopg2.extras import RealDictCursor  # noqa: E402  after importorskip
 
-from ._reference import (
+from ._reference import (  # noqa: E402 - all dependent imports stay after optional psycopg2 gate.
     CASH_LEDGER_ENTRY_TYPES,
     RESET_AUDIT_RESET_TYPES,
     REGIME_VALUES,
@@ -35,7 +35,7 @@ from ._reference import (
     synthesize_cash_ledger_entry_type,
     synthesize_reset_audit_reset_type,
 )
-from .conftest import skip_if_missing_columns
+from .conftest import skip_if_missing_columns  # noqa: E402 - preserve importorskip before fixture import.
 
 
 def test_module_collected_smoke():

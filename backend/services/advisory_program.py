@@ -15,7 +15,6 @@ from copy import deepcopy
 from dataclasses import asdict, dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from math import isfinite
-from statistics import mean, median
 from typing import Any, Callable, Iterable, Mapping, Protocol
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -24,6 +23,16 @@ import psycopg2.extras
 
 from backend.db.pg_pool import get_conn
 from backend.services.advisory_quality import generate_quality_report
+from backend.services.advisory_historical_range.program_performance import (
+    ProgramPerformanceMarketReader,
+    compare_program_outcomes,
+    cost_contract,
+    episode_performance,
+    fixed_five_day_outcomes,
+    net_return,
+    performance_metrics,
+    reporting_cutoff,
+)
 from backend.services.advisory_universe import (
     AdvisoryUniverseContractError,
     AdvisoryUniverseResolver,
@@ -2016,8 +2025,32 @@ class AdvisoryProgramService:
         }
 
     def return_history(self, program_id: str) -> list[dict[str, Any]]:
+        return self.return_snapshot(program_id)["returns"]
+
+    def return_snapshot(self, program_id: str, *, buy_cost_bps: float | None = None,
+                        sell_cost_bps: float | None = None) -> dict[str, Any]:
+        """Bind rows and metrics to one episode read and one reporting clock."""
         program = self.repository.get_program(program_id)
-        return self._enrich_display_names([episode_to_dict(row) for row in self._episodes_for_metrics(program)])
+        cost = cost_contract(buy_cost_bps, sell_cost_bps)
+        now = self._now_provider()
+        episodes = self._episodes_for_metrics(program, now=now)
+        rows = []
+        for episode in episodes:
+            row = episode_to_dict(episode)
+            view = episode_performance(row, now=now)
+            row.update(view)
+            gross = view["realized_gross_return_bps"]
+            row["realized_net_return_bps"] = net_return(gross, cost) if gross is not None and cost is not None else None
+            row["cost_drag_bps"] = gross - row["realized_net_return_bps"] if row["realized_net_return_bps"] is not None else None
+            row["return_bps"] = view["realized_gross_return_bps"] if view["performance_state"] == "SETTLED" else view["unrealized_gross_return_bps"]
+            row["is_win"] = row["return_bps"] > 0 if row["return_bps"] is not None else None
+            row["realized_inclusion_status"] = "INCLUDED" if view["performance_state"] == "SETTLED" else "EXCLUDED"
+            if episode.status == EPISODE_STATUS_EXITED and view["performance_state"] != "SETTLED":
+                row["planned_exit_price"] = row["exit_price"]
+                row["exit_price"] = None
+                row["win_rate_inclusion_status"] = WIN_EXCLUDED
+            rows.append(row)
+        return {"returns": self._enrich_display_names(rows), "metrics": compute_program_metrics(program, episodes, now=now, cost=cost)}
 
     def _enrich_display_names(self, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         if not rows:
@@ -2066,7 +2099,83 @@ class AdvisoryProgramService:
         return self._program_metrics(program)
 
     def _program_metrics(self, program: AdvisoryProgram) -> dict[str, Any]:
-        return compute_program_metrics(program, self._episodes_for_metrics(program))
+        now = self._now_provider()
+        return compute_program_metrics(program, self._episodes_for_metrics(program, now=now), now=now)
+
+    def performance_comparison(
+        self, *, start_date: date, end_date: date, program_ids: list[str] | None = None,
+        buy_cost_bps: float | None = None, sell_cost_bps: float | None = None,
+        benchmark_instrument: str = "000300.SH",
+    ) -> dict[str, Any]:
+        if start_date > end_date:
+            raise RuntimeConfigInvalidError("performance start_date must not exceed end_date")
+        if end_date > date.max - timedelta(days=21):
+            raise RuntimeConfigInvalidError("end_date does not leave room for the five-session calendar tail")
+        cost = cost_contract(buy_cost_bps, sell_cost_bps)
+        programs = ([self.repository.get_program(identity) for identity in dict.fromkeys(program_ids)]
+                    if program_ids else [row for row in self.repository.list_programs(include_archived=False)
+                                         if row.status in ACTIVE_PROGRAM_STATUSES])
+        now = self._now_provider()
+        cutoff = reporting_cutoff(now)
+        rows = []
+        for program in programs:
+            bindings = self.repository.list_binding_versions(program.program_id)
+            for episode in self.repository.all_latest_episodes(program.program_id):
+                if not start_date <= episode.effective_entry_date <= end_date:
+                    continue
+                row = episode_to_dict(episode)
+                matches = [binding for binding in bindings if binding.effective_from_trade_date is not None
+                           and binding.effective_from_trade_date <= episode.effective_entry_date
+                           and (binding.effective_to_trade_date is None or episode.effective_entry_date < binding.effective_to_trade_date)
+                           and binding.activation_status in {BINDING_STATUS_ACTIVE, BINDING_STATUS_RETIRED}]
+                row["entry_binding_identity"] = ({
+                    "status": "EXACT_HISTORICAL_INTERVAL", "binding_version_id": matches[0].binding_version_id,
+                    "package_ids": matches[0].package_ids, "package_set_hash": matches[0].package_set_hash,
+                } if len(matches) == 1 else {"status": "UNRESOLVED_HISTORICAL_BINDING"})
+                rows.append(row)
+        conn_factory = getattr(self.repository, "_conn_factory", None)
+        if conn_factory is None:
+            raise DataUnavailableError("program performance comparison requires the read-only daily database source")
+        benchmark = benchmark_instrument.strip().upper()
+        if not benchmark:
+            raise RuntimeConfigInvalidError("benchmark_instrument is required")
+        try:
+            market = ProgramPerformanceMarketReader(conn_factory).load(
+                symbols=sorted({row["symbol"] for row in rows}), start=start_date, end=end_date,
+                cutoff=cutoff, benchmark=benchmark,
+            )
+        except psycopg2.Error as exc:
+            raise DataUnavailableError("performance market source unavailable", context={
+                "reason_code": "ADVISORY_PERFORMANCE_MARKET_SOURCE_UNAVAILABLE", "sqlstate": exc.pgcode,
+            }) from exc
+        outcomes = fixed_five_day_outcomes(rows, market, cutoff=cutoff, cost=cost)
+        response = compare_program_outcomes(
+            outcomes, program_ids=[program.program_id for program in programs],
+            calendar=[row["cal_date"] for row in market["calendar"] if row["is_trading"]],
+            start=start_date, end=end_date, cost=cost, benchmark=benchmark,
+        )
+        response.update(reported_at=now.isoformat(), metric_as_of_trade_date=cutoff.isoformat())
+        for metrics, program in zip(response["programs"], programs, strict=True):
+            metrics["program_name"] = program.program_name
+            versions = []
+            offset = 0
+            while True:
+                page = self.repository.list_versions(program.program_id, limit=100, offset=offset)
+                versions.extend(row for row in page if start_date <= row.trade_date <= end_date
+                                and row.version_status == LIST_VERSION_STATUS_PUBLISHED)
+                if len(page) < 100 or page[-1].trade_date < start_date:
+                    break
+                offset += 100
+            metrics["daily_list_changes"] = [{
+                "trade_date": row.trade_date.isoformat(), "list_version_id": row.list_version_id,
+                "binding_version_id": row.binding_version_id, "entered_count": row.entered_count,
+                "held_count": row.held_count, "exited_count": row.exited_count,
+                "changed_count": row.changed_count, "turnover_rate": row.turnover_rate,
+                "paired_list_rotation_count": min(row.entered_count, row.exited_count),
+                "rotation_basis": "PAIRED_ENTER_EXIT_COUNTS_NOT_EXECUTED_TRADES",
+                "basis": "RECOMMENDATION_LIST_CHANGES_NOT_EXECUTED_TRADES",
+            } for row in sorted(versions, key=lambda item: item.trade_date)]
+        return response
 
     def prepare_forward_selection(
         self,
@@ -2107,6 +2216,8 @@ class AdvisoryProgramService:
         market_by_symbol: Mapping[str, AdvisoryMarketMark],
         active_episodes: list[AdvisoryEpisode],
     ) -> AdvisoryReviewResult:
+        if any(mark.trade_date != target_trade_date for mark in market_by_symbol.values()):
+            raise RuntimeConfigInvalidError("forward settlement market marks must match target_trade_date")
         return self._evaluate_review(
             program=program,
             trade_date=target_trade_date,
@@ -2114,6 +2225,7 @@ class AdvisoryProgramService:
             market_by_symbol=market_by_symbol,
             active_episodes=active_episodes,
             preview=False,
+            execution_trade_date=target_trade_date,
             episode_identity_allocator=lambda candidate: _forward_episode_id(
                 program_id=program.program_id,
                 target_trade_date=target_trade_date,
@@ -2185,9 +2297,11 @@ class AdvisoryProgramService:
             )
         return marks
 
-    def _episodes_for_metrics(self, program: AdvisoryProgram) -> list[AdvisoryEpisode]:
+    def _episodes_for_metrics(self, program: AdvisoryProgram, *, now: datetime | None = None) -> list[AdvisoryEpisode]:
+        cutoff = reporting_cutoff(now or self._now_provider())
         episodes = self.repository.all_latest_episodes(program.program_id)
-        return self._with_latest_open_episode_metric_marks(program, episodes)
+        episodes = self._with_settled_episode_metric_prices(episodes, cutoff=cutoff)
+        return self._with_latest_open_episode_metric_marks(program, episodes, cutoff=cutoff)
 
     def run_review_from_selection(
         self,
@@ -2812,14 +2926,19 @@ class AdvisoryProgramService:
         self,
         program: AdvisoryProgram,
         episodes: list[AdvisoryEpisode],
+        *,
+        cutoff: date | None = None,
     ) -> list[AdvisoryEpisode]:
-        active = [row for row in episodes if row.status == EPISODE_STATUS_ACTIVE and row.entry_price > 0]
+        active = [row for row in episodes if row.entry_price > 0 and (row.status == EPISODE_STATUS_ACTIVE
+                  or (cutoff is not None and row.effective_exit_date is not None and row.effective_exit_date > cutoff))]
         if not active:
             return episodes
         try:
-            marks = self._load_latest_open_episode_metric_marks(active)
-        except Exception:
-            return episodes
+            marks = self._load_latest_open_episode_metric_marks(active, cutoff=cutoff)
+        except Exception as exc:
+            logger.warning("Advisory metric marks unavailable (%s)", type(exc).__name__)
+            return [replace(row, return_bps=None, evidence_json={**row.evidence_json, "metric_mark_read_status": "MARK_SOURCE_UNAVAILABLE"})
+                    if row in active else row for row in episodes]
         if not marks:
             return episodes
         return [
@@ -2828,7 +2947,7 @@ class AdvisoryProgramService:
         ]
 
     def _load_latest_open_episode_metric_marks(
-        self, episodes: list[AdvisoryEpisode]
+        self, episodes: list[AdvisoryEpisode], *, cutoff: date | None = None,
     ) -> dict[str, AdvisoryMetricMarketMark]:
         conn_factory = getattr(self.repository, "_conn_factory", None)
         if conn_factory is None:
@@ -2849,14 +2968,16 @@ class AdvisoryProgramService:
                     active.episode_id,
                     active.symbol,
                     k.trade_date,
-                    COALESCE(NULLIF(k.close_li, 0), NULLIF(k.open_li, 0)) / %s::float AS mark_price,
+                    NULLIF(k.close_li, 0) / %s::float AS mark_price,
                     COALESCE(NULLIF(k.high_li, 0), NULLIF(k.close_li, 0), NULLIF(k.open_li, 0)) / %s::float AS high_price,
                     COALESCE(NULLIF(k.low_li, 0), NULLIF(k.close_li, 0), NULLIF(k.open_li, 0)) / %s::float AS low_price
                 FROM active
                 JOIN market.kline_daily_raw k
                   ON k.ts_code = active.symbol
                  AND k.trade_date >= active.effective_entry_date
-                WHERE COALESCE(NULLIF(k.close_li, 0), NULLIF(k.open_li, 0)) IS NOT NULL
+                 AND k.trade_date >= %s
+                 AND k.trade_date <= %s
+                WHERE k.close_li > 0
             ),
             latest AS (
                 SELECT DISTINCT ON (episode_id)
@@ -2887,7 +3008,9 @@ class AdvisoryProgramService:
         with conn_factory() as conn:
             with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
                 cur.execute(
-                    sql, [*values, MARKET_PRICE_UNIT_DIVISOR, MARKET_PRICE_UNIT_DIVISOR, MARKET_PRICE_UNIT_DIVISOR]
+                    sql, [*values, MARKET_PRICE_UNIT_DIVISOR, MARKET_PRICE_UNIT_DIVISOR, MARKET_PRICE_UNIT_DIVISOR,
+                          min(row.effective_entry_date for row in episodes),
+                          cutoff or reporting_cutoff(self._now_provider())]
                 )
                 rows = cur.fetchall()
         marks: dict[str, AdvisoryMetricMarketMark] = {}
@@ -2906,6 +3029,77 @@ class AdvisoryProgramService:
                 observation_count=int(row.get("observation_count") or 0),
             )
         return marks
+
+    def _with_settled_episode_metric_prices(self, episodes: list[AdvisoryEpisode], *, cutoff: date) -> list[AdvisoryEpisode]:
+        """Reconcile legacy planned reference prices without altering the ledger."""
+        due = [row for row in episodes if row.status == EPISODE_STATUS_EXITED
+               and row.effective_exit_date is not None and row.effective_entry_date <= row.effective_exit_date <= cutoff]
+        conn_factory = getattr(self.repository, "_conn_factory", None)
+        if not due or conn_factory is None:
+            return episodes
+        placeholders = ", ".join("(%s::text, %s::text, %s::date, %s::date)" for _ in due)
+        values = [value for row in due for value in (row.episode_id, row.symbol, row.effective_entry_date, row.effective_exit_date)]
+        symbols = sorted({row.symbol for row in due})
+        start_date = min(row.effective_entry_date for row in due)
+        end_date = max(row.effective_exit_date for row in due)
+        source_error = None
+        try:
+            with conn_factory() as conn:
+                with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                    cur.execute(f"""
+                        WITH due(episode_id, symbol, entry_date, exit_date) AS (VALUES {placeholders}),
+                        priced AS MATERIALIZED (
+                            SELECT ts_code, trade_date, open_li, close_li
+                            FROM market.kline_daily_raw
+                            WHERE ts_code = ANY(%s) AND trade_date BETWEEN %s AND %s
+                        ), suspended AS MATERIALIZED (
+                            SELECT ts_code, trade_date FROM market.suspend_d
+                            WHERE ts_code = ANY(%s) AND trade_date BETWEEN %s AND %s
+                              AND COALESCE(TRIM(suspend_type), 'S') = 'S'
+                        )
+                        SELECT due.episode_id, entry.open_li AS entry_open, entry.close_li AS entry_close,
+                               exit.open_li AS exit_open, exit.close_li AS exit_close,
+                               EXISTS (SELECT 1 FROM suspended s WHERE s.ts_code = due.symbol
+                                   AND s.trade_date IN (due.entry_date, due.exit_date)) AS suspended
+                        FROM due
+                        LEFT JOIN priced entry ON entry.ts_code = due.symbol AND entry.trade_date = due.entry_date
+                        LEFT JOIN priced exit ON exit.ts_code = due.symbol AND exit.trade_date = due.exit_date
+                        """, [*values, symbols, start_date, end_date, symbols, start_date, end_date])
+                    price_rows = cur.fetchall()
+                    prices = {str(row["episode_id"]): dict(row) for row in price_rows}
+                    if len(prices) != len(price_rows):
+                        raise DataUnavailableError("duplicate settlement market identity")
+        except Exception as exc:
+            logger.warning("Advisory settlement metric source unavailable (%s)", type(exc).__name__)
+            prices = {}
+            source_error = getattr(exc, "pgcode", None) or type(exc).__name__
+        due_ids = {row.episode_id for row in due}
+        result = []
+        for row in episodes:
+            if row.episode_id not in due_ids:
+                result.append(row)
+                continue
+            price = prices.get(row.episode_id, {})
+            entry = _li_price(price.get("entry_open" if row.entry_price_basis == PRICE_BASIS_NEXT_OPEN else "entry_close"))
+            exit_price = _li_price(price.get("exit_open" if row.exit_price_basis == PRICE_BASIS_NEXT_OPEN else "exit_close"))
+            reason = ("SETTLEMENT_SOURCE_UNAVAILABLE" if source_error else "SUSPENDED" if price.get("suspended") else "SETTLEMENT_MARKET_DATA_MISSING"
+                      if not entry or not exit_price or not _li_price(price.get("exit_close")) else None)
+            evidence = {**row.evidence_json, "metric_settlement": {
+                "trade_date": row.effective_exit_date.isoformat(), "source": "market.kline_daily_raw",
+                "recorded_entry_price": row.entry_price, "recorded_exit_price": row.exit_price,
+                "recorded_max_drawdown_bps": row.max_drawdown_bps,
+                "entry_price_basis": row.entry_price_basis, "exit_price_basis": row.exit_price_basis,
+                "reason_code": reason, "execution_evidence_level": "REFERENCE_HYPOTHETICAL",
+                "source_error_code": source_error,
+            }}
+            if reason:
+                result.append(replace(row, return_bps=None, is_win=None, win_rate_inclusion_status=WIN_EXCLUDED, evidence_json=evidence))
+            else:
+                gross = (exit_price / entry - 1) * 10000
+                result.append(replace(row, entry_price=entry, exit_price=exit_price, return_bps=gross,
+                                      is_win=gross > 0, win_rate_inclusion_status=WIN_INCLUDED, evidence_json=evidence,
+                                      max_drawdown_bps=row.max_drawdown_bps if entry == row.entry_price else None))
+        return result
 
     def _build_list_version(
         self,
@@ -3047,6 +3241,7 @@ class AdvisoryProgramService:
         active_episodes: list[AdvisoryEpisode],
         preview: bool,
         episode_identity_allocator: Callable[[AdvisoryTransitionCandidateV1], str] | None = None,
+        execution_trade_date: date | None = None,
     ) -> AdvisoryReviewResult:
         """Project current Advisory inputs through the shared lifecycle engine.
 
@@ -3059,8 +3254,9 @@ class AdvisoryProgramService:
         transition_candidates: list[AdvisoryTransitionCandidateV1] = []
 
         def candidate_port(evidence: AdvisoryCandidate) -> AdvisoryTransitionCandidateV1:
-            entry_price = _price_for_basis(market_by_symbol.get(evidence.symbol), evidence, program.entry_price_basis)
-            exit_price = _price_for_basis(market_by_symbol.get(evidence.symbol), evidence, program.exit_price_basis)
+            price_candidate = None if execution_trade_date is not None else evidence
+            entry_price = _price_for_basis(market_by_symbol.get(evidence.symbol), price_candidate, program.entry_price_basis)
+            exit_price = _price_for_basis(market_by_symbol.get(evidence.symbol), price_candidate, program.exit_price_basis)
             return AdvisoryTransitionCandidateV1(
                 symbol=evidence.symbol,
                 rank=evidence.rank,
@@ -3135,12 +3331,12 @@ class AdvisoryProgramService:
                 active_rank_by_symbol={item.symbol: evidence_by_symbol[item.symbol].rank for item in active_episodes},
             ),
             episode_identity_allocator=episode_identity_allocator or (lambda _candidate: f"advep_{uuid4().hex}"),
-            effective_entry_date=lambda candidate: self._effective_trade_date(
+            effective_entry_date=lambda candidate: execution_trade_date or self._effective_trade_date(
                 trade_date,
                 program.entry_price_basis,
                 candidate=evidence_by_symbol[candidate.symbol],
             ),
-            effective_exit_date=lambda _episode: self._effective_trade_date(trade_date, program.exit_price_basis),
+            effective_exit_date=lambda _episode: execution_trade_date or self._effective_trade_date(trade_date, program.exit_price_basis),
             defer_stop_before_effective_entry=True,
             historical_mode=False,
             entry_mark_unavailable_action=TRANSITION_ACTION_WAITING,
@@ -3279,7 +3475,13 @@ class AdvisoryProgramService:
                     exit_basis=program.exit_price_basis,
                     exit_reason=decision.reason_code,
                     calendar_provider=self.calendar_provider,
+                    effective_exit_date=execution_trade_date,
                 )
+                if execution_trade_date is not None:
+                    exited = replace(exited, evidence_json={**exited.evidence_json, "reference_execution": {
+                        "trade_date": execution_trade_date.isoformat(), "price": decision.exit_price,
+                        "price_basis": program.exit_price_basis, "execution_evidence_level": "REFERENCE_HYPOTHETICAL",
+                    }})
                 snapshots.append(exited)
                 decisions.append(
                     self._decision(
@@ -3312,7 +3514,7 @@ class AdvisoryProgramService:
 
         latest = _latest_by_episode_id(snapshots)
         status_program = replace(program, last_review_status=review_status, latest_review_trade_date=trade_date)
-        metrics = compute_program_metrics(status_program, latest)
+        metrics = compute_program_metrics(status_program, latest, now=self._now_provider())
         return AdvisoryReviewResult(
             status_program, trade_date, review_status, decisions, latest, metrics, preview=preview
         )
@@ -3896,52 +4098,11 @@ def _candidate_reference_trade_date_from_selection(
     return fallback
 
 
-def compute_program_metrics(program: AdvisoryProgram, episodes: Iterable[AdvisoryEpisode]) -> dict[str, Any]:
-    rows = list(episodes)
-    evaluable = [
-        row
-        for row in rows
-        if row.return_bps is not None and row.win_rate_inclusion_status in {WIN_INCLUDED, WIN_OPEN_MARK}
-    ]
-    returns = [float(row.return_bps) for row in evaluable if row.return_bps is not None]
-    wins = [row for row in evaluable if row.return_bps is not None and row.return_bps > 0]
-    drawdowns = [float(row.max_drawdown_bps) for row in rows if row.max_drawdown_bps is not None]
-    holding_days = [row.holding_trading_days for row in rows]
-    metric_exit_reasons = [_metric_count_exit_reason(row, program=program) for row in rows]
-    open_marked = [
-        row
-        for row in rows
-        if row.status == EPISODE_STATUS_ACTIVE
-        and row.return_bps is not None
-        and row.win_rate_inclusion_status == WIN_OPEN_MARK
-    ]
-    missing_open_marks = [row for row in rows if row.status == EPISODE_STATUS_ACTIVE and row.return_bps is None]
-    mark_trade_dates = [
-        str((row.evidence_json.get("open_mark_to_market") or {}).get("trade_date"))
-        for row in open_marked
-        if isinstance(row.evidence_json.get("open_mark_to_market"), dict)
-        and (row.evidence_json.get("open_mark_to_market") or {}).get("trade_date")
-    ]
-    return {
-        "enabled_since": program.enabled_since.isoformat() if program.enabled_since else None,
-        "entered_episode_count": len(rows),
-        "active_count": sum(1 for row in rows if row.status == EPISODE_STATUS_ACTIVE),
-        "take_profit_count": sum(
-            1 for reason in metric_exit_reasons if reason in {EXIT_TAKE_PROFIT, EXIT_TRAILING_TAKE_PROFIT}
-        ),
-        "stop_loss_count": sum(1 for reason in metric_exit_reasons if reason == EXIT_STOP_LOSS),
-        "win_rate": (len(wins) / len(evaluable)) if evaluable else None,
-        "avg_return_bps": mean(returns) if returns else None,
-        "median_return_bps": median(returns) if returns else None,
-        "max_drawdown_bps": min(drawdowns) if drawdowns else None,
-        "avg_holding_days": mean(holding_days) if holding_days else None,
-        "last_review_status": program.last_review_status,
-        "metric_status": "READY" if returns else "WAITING_MARKET_DATA" if missing_open_marks else "NO_EPISODES",
-        "metric_evaluable_count": len(evaluable),
-        "open_mark_count": len(open_marked),
-        "missing_open_mark_count": len(missing_open_marks),
-        "metric_mark_trade_date": max(mark_trade_dates) if mark_trade_dates else None,
-    }
+def compute_program_metrics(
+    program: AdvisoryProgram, episodes: Iterable[AdvisoryEpisode], *, now: datetime | None = None,
+    cost: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    return performance_metrics(program_to_dict(program), [episode_to_dict(row) for row in episodes], now=now or _utcnow(), cost=cost)
 
 
 def program_to_dict(program: AdvisoryProgram) -> dict[str, Any]:
@@ -4189,21 +4350,6 @@ def _episode_with_metric_mark(
     )
 
 
-def _metric_count_exit_reason(episode: AdvisoryEpisode, *, program: AdvisoryProgram) -> str | None:
-    if episode.exit_reason:
-        return episode.exit_reason
-    if episode.status != EPISODE_STATUS_ACTIVE or episode.return_bps is None:
-        return None
-    if episode.win_rate_inclusion_status != WIN_OPEN_MARK:
-        return None
-    return _metric_exit_reason(
-        return_bps=float(episode.return_bps),
-        max_runup_bps=_coalesce_float(episode.max_runup_bps, float(episode.return_bps)),
-        holding_days=int(episode.holding_trading_days or 0),
-        program=program,
-    )
-
-
 def _metric_exit_reason(
     *,
     return_bps: float,
@@ -4320,13 +4466,14 @@ def _episode_exited(
     exit_basis: str,
     exit_reason: str,
     calendar_provider: AdvisoryTradingCalendarProvider | Any | None = None,
+    effective_exit_date: date | None = None,
 ) -> AdvisoryEpisode:
     return_bps = (float(exit_price) / episode.entry_price - 1.0) * 10000.0
     return replace(
         episode,
         status=EPISODE_STATUS_EXITED,
         exit_signal_date=trade_date,
-        effective_exit_date=_effective_date(trade_date, exit_basis, calendar_provider=calendar_provider),
+        effective_exit_date=effective_exit_date or _effective_date(trade_date, exit_basis, calendar_provider=calendar_provider),
         exit_price=exit_price,
         exit_price_basis=exit_basis,
         exit_reason=exit_reason,

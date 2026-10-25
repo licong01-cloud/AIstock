@@ -6,7 +6,7 @@ from datetime import date
 from functools import lru_cache
 from typing import Any, NoReturn
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
 from backend.services.dataset_release.managed_consumer_task import (
@@ -29,9 +29,54 @@ from backend.services.position_timing.service import (
     PositionTimingServiceError,
     build_position_timing_service,
 )
+from backend.services.position_timing.intraday.contracts import ClaimRequest, EvaluationRequest, PlanWrite, SafeId, Sha256
+from backend.services.position_timing.intraday.service import IntradayService, build_intraday_service
+from backend.services.position_timing.intraday.store import IntradayError
 
 
 router = APIRouter(prefix="/position-timing", tags=["position-timing"])
+
+
+@lru_cache(maxsize=1)
+def get_intraday_service() -> IntradayService:
+    return build_intraday_service()
+
+
+def _intraday_call(operation):
+    try:
+        return operation()
+    except IntradayError as exc:
+        raise HTTPException(status_code=exc.status, detail={"error_code": exc.code}) from exc
+    except (OSError, PositionTimingArtifactError) as exc:
+        raise HTTPException(status_code=500, detail={"error_code": "INTRADAY_ARTIFACT_IO_ERROR"}) from exc
+
+
+@router.put("/intraday/plans/{plan_id}")
+def put_intraday_plan(plan_id: SafeId, request: PlanWrite, service: IntradayService = Depends(get_intraday_service)):
+    return _intraday_call(lambda: service.put_plan(plan_id, request))
+
+
+@router.post("/intraday/evaluations")
+def evaluate_intraday(request: EvaluationRequest, service: IntradayService = Depends(get_intraday_service)):
+    return _intraday_call(lambda: service.evaluate_batch(request))
+
+
+@router.get("/intraday/plans/{plan_id}/status")
+def intraday_status(plan_id: SafeId, service: IntradayService = Depends(get_intraday_service)):
+    return _intraday_call(lambda: service.status(plan_id))
+
+
+@router.get("/intraday/alerts")
+def intraday_alerts(
+    plan_ids: list[SafeId] = Query(default=[], max_length=500), offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=50), service: IntradayService = Depends(get_intraday_service),
+):
+    return _intraday_call(lambda: service.alerts(plan_ids, offset, limit))
+
+
+@router.post("/intraday/alerts/{opportunity_id}/claim")
+def claim_intraday(opportunity_id: Sha256, request: ClaimRequest, service: IntradayService = Depends(get_intraday_service)):
+    return _intraday_call(lambda: service.claim(opportunity_id, request))
 
 
 class ManagedDatasetPreparationRequest(BaseModel):

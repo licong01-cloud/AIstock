@@ -6,11 +6,12 @@
 from __future__ import annotations
 
 import logging
+import asyncio
 from datetime import date
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, BackgroundTasks, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictBool
 
 from ..services.hmm_training_service import HMMTrainingService
 from ..db.pg_pool import get_conn
@@ -85,6 +86,21 @@ class CronUpdateRequest(BaseModel):
     cron_enabled: bool = False
 
 
+class CoefficientExtensionRequest(BaseModel):
+    snapshot_id: str
+    signal_presets: List[str]
+    coefficient_start: date
+    enabled: StrictBool = True
+
+
+class DailyCoefficientSubscriptionRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+
+    snapshot_id: str
+    signal_presets: List[str]
+    enabled: StrictBool
+
+
 class RollingTrainingPreviewRequest(BaseModel):
     as_of_date: Optional[date] = None
     train_window_years: float = 3.0
@@ -134,6 +150,7 @@ class DailyCoefficientJobResponse(BaseModel):
 # Helper: convert DB row values to strings for Pydantic serialization
 # ---------------------------------------------------------------------------
 
+
 def _stringify_row(row: Dict[str, Any]) -> Dict[str, Any]:
     """Convert datetime / non-string values to strings for Pydantic models."""
     out = dict(row)
@@ -155,6 +172,7 @@ def _http_error(exc: Exception) -> HTTPException:
 # ---------------------------------------------------------------------------
 # 超参版本 CRUD
 # ---------------------------------------------------------------------------
+
 
 @router.post("/configs", response_model=ConfigResponse, summary="创建超参版本")
 def create_config(req: ConfigCreateRequest):
@@ -183,6 +201,7 @@ def delete_config(config_id: str):
 # ---------------------------------------------------------------------------
 # 训练任务
 # ---------------------------------------------------------------------------
+
 
 @router.post(
     "/configs/{config_id}/trigger-training",
@@ -252,6 +271,7 @@ def list_jobs(config_id: str):
 # ---------------------------------------------------------------------------
 # 快照
 # ---------------------------------------------------------------------------
+
 
 @router.get(
     "/configs/{config_id}/snapshots",
@@ -380,6 +400,7 @@ def delete_snapshot(snapshot_id: str):
 # 滚动训练计划
 # ---------------------------------------------------------------------------
 
+
 @router.put("/configs/{config_id}/cron", summary="更新滚动训练计划")
 def update_cron(config_id: str, req: CronUpdateRequest):
     try:
@@ -393,6 +414,7 @@ def update_cron(config_id: str, req: CronUpdateRequest):
 # 辅助端点
 # ---------------------------------------------------------------------------
 
+
 @router.get("/snapshots/{snapshot_id}/model-path", summary="解析模型文件路径")
 def get_model_path(snapshot_id: str):
     path = service.resolve_model_path(snapshot_id)
@@ -404,13 +426,78 @@ def get_model_path(snapshot_id: str):
 # Keep main.py unchanged while exposing the independent research API beside
 # the existing /hmm-training prefix.  Rebinding happens only after every
 # training route above has been registered on the original router.
+@router.post("/configs/{config_id}/coefficient-extension")
+def configure_coefficient_extension(config_id: str, req: CoefficientExtensionRequest):
+    try:
+        result = service.configure_coefficient_extension(
+            config_id,
+            snapshot_id=req.snapshot_id,
+            signal_presets=req.signal_presets,
+            coefficient_start=req.coefficient_start.isoformat(),
+            enabled=req.enabled,
+        )
+        if req.enabled:
+            if _completion_scheduler is None or not _completion_scheduler.request_completion_check(
+                _HMM_COMPLETION_CALLBACK_ID
+            ):
+                logger.error("HMM_COMPLETION_DISPATCH_NOT_REGISTERED config=%s", config_id)
+        return result
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/configs/{config_id}/coefficient-extension")
+def get_coefficient_extension(config_id: str):
+    try:
+        return service.get_coefficient_extension(config_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.post("/configs/{config_id}/daily-coefficient-subscription")
+def configure_daily_coefficient_subscription(config_id: str, req: DailyCoefficientSubscriptionRequest):
+    try:
+        result = service.configure_daily_coefficient_subscription(config_id, **req.model_dump())
+        if req.enabled:
+            if _completion_scheduler is None or not _completion_scheduler.request_completion_check(
+                _HMM_COMPLETION_CALLBACK_ID
+            ):
+                logger.error("HMM_COMPLETION_DISPATCH_NOT_REGISTERED config=%s", config_id)
+        return result
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+@router.get("/configs/{config_id}/daily-coefficient-subscription")
+def get_daily_coefficient_subscription(config_id: str):
+    try:
+        return service.get_daily_coefficient_subscription(config_id)
+    except Exception as exc:
+        raise _http_error(exc) from exc
+
+
+def coefficient_readiness_status():
+    """Inspect dispatch wiring without querying inputs or creating a job."""
+    binding = (
+        _completion_scheduler.completion_callback_status(_HMM_COMPLETION_CALLBACK_ID) if _completion_scheduler else {}
+    )
+    if not all(binding.get(key) for key in ("registered", "owner_running", "loop_running")):
+        raise HTTPException(status_code=503, detail={"reason_code": "hmm_completion_dispatch_unavailable", **binding})
+    return {
+        "schema_version": "hmm_completion_dispatch_status_v1",
+        "status": "ready",
+        "dispatch_binding_status": "ready",
+        **binding,
+    }
+
+
 _training_router = router
 from . import hmm_evolution as _hmm_evolution  # noqa: E402
 
 router = APIRouter()
 router.include_router(_training_router)
 router.include_router(_hmm_evolution.router)
-
+router.add_api_route("/runtime-contracts/hmm-database-daily-dispatch", coefficient_readiness_status, methods=["GET"])
 
 
 # ---------------------------------------------------------------------------
@@ -418,6 +505,8 @@ router.include_router(_hmm_evolution.router)
 # ---------------------------------------------------------------------------
 
 _scheduler = None  # module-level reference for startup/shutdown
+_completion_scheduler = None
+_HMM_COMPLETION_CALLBACK_ID = "hmm_coefficient_readiness"
 
 
 async def rolling_training_tick() -> None:
@@ -453,9 +542,91 @@ async def rolling_training_tick() -> None:
             logger.exception("滚动训练异常: config=%s", config_id)
 
 
+async def coefficient_extension_tick() -> None:
+    """Nonblocking release reconciliation, independent of rolling training."""
+    try:
+        results = await asyncio.to_thread(HMMTrainingService().reconcile_coefficient_extensions)
+        for result in results:
+            if result.get("status") in {"FAILED", "BLOCKED"}:
+                logger.error(
+                    "HMM 自动延伸未完成: config=%s job=%s status=%s reason=%s",
+                    result.get("config_id"),
+                    result.get("job_id"),
+                    result.get("status"),
+                    result.get("reason_code") or result.get("error_message"),
+                )
+    except Exception:
+        logger.exception("HMM 自动延伸调度失败")
+
+
+async def coefficient_readiness_tick(
+    *, source_modes: tuple[str, ...] = ("qe_frozen_file", "database_daily")
+) -> List[Dict[str, Any]]:
+    """Public hook for an existing scheduler owner; never starts a scheduler."""
+    if not source_modes or set(source_modes) - {"qe_frozen_file", "database_daily"}:
+        raise ValueError("unknown HMM readiness source mode")
+    svc = HMMTrainingService()
+    combined: List[Dict[str, Any]] = []
+    for source_mode, reconcile in (
+        ("qe_frozen_file", svc.reconcile_coefficient_extensions),
+        ("database_daily", svc.reconcile_daily_coefficient_subscriptions),
+    ):
+        if source_mode not in source_modes:
+            continue
+        try:
+            results = await asyncio.to_thread(reconcile)
+            combined.extend(results)
+            for result in results:
+                if result.get("status") in {"FAILED", "BLOCKED"}:
+                    logger.error(
+                        "HMM readiness incomplete: %s",
+                        {
+                            key: result.get(key)
+                            for key in ("config_id", "job_id", "status", "reason_code", "error_message")
+                        },
+                    )
+        except Exception as exc:
+            logger.exception("HMM readiness reconciliation failed: %s", reconcile.__name__)
+            combined.append(
+                {
+                    "source_mode": source_mode,
+                    "status": "BLOCKED",
+                    "reason_code": getattr(exc, "reason_code", "hmm_coefficient_readiness_failed"),
+                }
+            )
+    return combined
+
+
+async def _coefficient_completion_callback() -> bool:
+    results = await coefficient_readiness_tick(source_modes=("qe_frozen_file", "database_daily"))
+    # Both the outer hook and the per-subscription handler type orchestration
+    # errors as BLOCKED. Neither may consume the unchanged completion watermark.
+    # Typed data/identity blocks and durable FAILED jobs retain their HMM policy.
+    return not any(
+        result.get("status") == "BLOCKED"
+        and result.get("reason_code")
+        in {
+            "hmm_coefficient_readiness_failed",
+            "hmm_daily_subscription_failed",
+            "hmm_coefficient_extension_orchestration_failed",
+        }
+        for result in results
+    )
+
+
 def init_hmm_scheduler() -> None:
-    """Initialize APScheduler and add rolling_training_tick as a periodic job."""
-    global _scheduler
+    """Bind completion dispatch independently of the legacy training scheduler."""
+    global _scheduler, _completion_scheduler
+    try:
+        from ..ingestion.tdx_scheduler import scheduler as completion_owner
+        from ..services.hmm_data_source.daily_input import REQUIRED_DAILY_DATASETS
+
+        completion_owner.register_completion_callback(
+            _HMM_COMPLETION_CALLBACK_ID, datasets=REQUIRED_DAILY_DATASETS, callback=_coefficient_completion_callback
+        )
+        _completion_scheduler = completion_owner
+    except Exception:
+        logger.exception("HMM_COMPLETION_DISPATCH_REGISTRATION_FAILED")
     try:
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -467,6 +638,15 @@ def init_hmm_scheduler() -> None:
             id="hmm_rolling_training_tick",
             replace_existing=True,
         )
+        _scheduler.add_job(
+            coefficient_extension_tick,
+            "interval",
+            minutes=1,
+            id="hmm_coefficient_extension_tick",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
         _scheduler.start()
         logger.info("HMM 滚动训练调度器已启动（每分钟检查）")
     except ImportError:
@@ -477,7 +657,10 @@ def init_hmm_scheduler() -> None:
 
 def shutdown_hmm_scheduler() -> None:
     """Shutdown the APScheduler instance."""
-    global _scheduler
+    global _scheduler, _completion_scheduler
+    if _completion_scheduler is not None:
+        _completion_scheduler.unregister_completion_callback(_HMM_COMPLETION_CALLBACK_ID)
+        _completion_scheduler = None
     if _scheduler is not None:
         try:
             _scheduler.shutdown(wait=False)

@@ -9,13 +9,43 @@ import pytest
 
 from backend.services.simulation_execution.localsim.models import (
     LocalSimEconomicReceiptV1,
+    LocalSimExecutionStateV1,
     LocalSimProjectionOutboxV1,
 )
 from backend.services.simulation_execution.localsim.projection import (
     LocalSimProjectionCommitRequest,
     LocalSimProjector,
+    derive_local_sim_projection_state_contract,
+    local_sim_projection_paper_error,
 )
 from backend.services.trading_core.models import AccountSnapshot
+
+
+@pytest.mark.parametrize("classification,failed", [
+    ("MARKET_STATE_RESIDUAL_AT_CLOSE", False), ("SUSPENDED_AT_CLOSE", False),
+    ("SCHEDULE_RESIDUAL_AT_CLOSE", True), ("MARKET_DATA_INTEGRITY_FAILURE", True),
+])
+def test_market_residual_success_preserves_unfilled_facts_and_real_failures(classification: str, failed: bool) -> None:
+    state = LocalSimExecutionStateV1(
+        run_id="run-1", binding_id="bind-1", trade_date="2026-09-17", plan_id="plan-1",
+        intent_id="intent-1", algo_instance_id="algo-1", portfolio_id="paper-1", order_id="order-1",
+        symbol="688498.SH", side="BUY", total_quantity=588, filled_quantity=388, remaining_quantity=200,
+        algo_code="TWAP", order_status="PARTIALLY_FILLED", schedule_version="twap-v1",
+        runtime_status="FAILED_TERMINAL" if classification == "MARKET_DATA_INTEGRITY_FAILURE" else "EXPIRED_WITH_RESIDUAL",
+        terminal_reason="CLOSED", residual_classification=classification,
+        causality_cursor=datetime(2026, 9, 17, 9, 30), idempotency_key="test",
+    )
+    contract = derive_local_sim_projection_state_contract(
+        execution_states=(state,), historical_residual=None, intraday_status="RUNNING",
+        failed_status="FAILED_TERMINAL", succeeded_status="SUCCEEDED",
+    )
+    assert contract["terminal_failure"] is failed
+    assert contract["final_status"] == ("FAILED_TERMINAL" if failed else "SUCCEEDED")
+    assert contract["nonfilled_terminal_states"][0].remaining_quantity == 200
+    error = local_sim_projection_paper_error(
+        historical_residual=None, nonfilled_terminal_states=contract["nonfilled_terminal_states"], terminal_failure=failed,
+    )
+    assert (error is not None) is failed
 
 
 class _RuntimeRepository:

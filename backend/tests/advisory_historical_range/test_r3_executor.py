@@ -513,6 +513,23 @@ def test_future_candidate_prefetch_failure_does_not_fail_current_day(tmp_path) -
     assert attempts.count(future_date) == 2
 
 
+def test_native_batch_prefetch_is_one_call_and_keeps_private_day_artifact_writer(tmp_path):
+    store, batch, run, claim, _, _, candidate_ref, _, _ = _sealed_execution_context(tmp_path)
+    future = date(2026, 6, 4)
+    request = SimpleNamespace(resolved_request=SimpleNamespace(date_plan=SimpleNamespace(ordered_trade_dates=(claim.decision_trade_date, future))))
+    calls = []
+    def produce_dates(**kwargs):
+        calls.append(kwargs)
+        return {day: SimpleNamespace(candidate_artifact_ref=candidate_ref) for day in kwargs["decision_trade_dates"]}
+    executor = HistoricalRangeDayExecutor(repository=_Repository(batch=batch, run=run, claim=claim), artifact_store=store,
+                                         candidate_producer=SimpleNamespace(produce_dates=produce_dates), decision_mark_provider=SimpleNamespace())
+    assert executor._produce_prefetched_candidates(request_payload=request, claim=claim, candidate_prefetch_per_program=2) == candidate_ref
+    assert len(calls) == 1 and calls[0]["decision_trade_dates"] == (claim.decision_trade_date, future)
+    assert executor._produce_prefetched_candidates(request_payload=request, claim=claim.model_copy(update={"decision_trade_date": future, "ordinal": 2}),
+                                                  candidate_prefetch_per_program=2) == candidate_ref
+    assert len(calls) == 1  # Native executor doesn't redo a completed own-run day.
+
+
 def test_candidate_prefetch_consumes_a_complete_chunk_before_refill(tmp_path) -> None:
     store, batch, run, claim, _request_payload, _candidate_payload, candidate_ref, _mark_set, _mark_ref = (
         _sealed_execution_context(tmp_path)

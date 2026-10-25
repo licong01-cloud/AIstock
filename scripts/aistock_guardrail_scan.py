@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import fnmatch
 import hashlib
 import json
@@ -203,54 +204,131 @@ def iter_files(paths: Iterable[Path], root: Path, suffixes: set[str], skip_parts
     return sorted(set(files), key=lambda item: _path_key(item, root))
 
 
+def _rule_finding(rule: CompiledRule, path_key: str, line: int) -> Finding:
+    return Finding(
+        rule_id=rule.rule_id, title=rule.title, severity=rule.severity, category=rule.category,
+        effect=rule.effect, file=path_key, line=line, message=rule.title, remediation=rule.remediation,
+        baseline_policy=rule.baseline_policy,
+        fingerprint=hashlib.sha256(f"{rule.rule_id}:{path_key}:{line}".encode("utf-8")).hexdigest()[:16],
+    )
+
+
+def _scope_nodes(node: ast.AST) -> Iterable[ast.AST]:
+    """Keep resource evidence in one lexical scope, excluding obviously dead statements."""
+    yield node
+    for field, value in ast.iter_fields(node):
+        if isinstance(node, ast.If) and isinstance(node.test, ast.Constant):
+            if field == ("body" if not node.test.value else "orelse"):
+                continue
+        for child in value if isinstance(value, list) else [value]:
+            if not isinstance(child, ast.AST) or isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                continue
+            yield from _scope_nodes(child)
+            if isinstance(child, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+                break
+
+
+def _explicit_timeout(call: ast.Call) -> bool:
+    return any(k.arg == "timeout" and not (isinstance(k.value, ast.Constant) and k.value.value is None) for k in call.keywords)
+
+
+def _bounded_process(call: ast.Call, nodes: list[ast.AST], parents: dict[ast.AST, ast.AST], helpers: dict[str, ast.FunctionDef]) -> bool:
+    assignment = parents.get(call)
+    target = assignment.targets[0] if isinstance(assignment, ast.Assign) and len(assignment.targets) == 1 else getattr(assignment, "target", None)
+    if not isinstance(target, ast.Name):
+        return False
+    name = target.id
+    if any(isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store) and n.id == name and n.lineno > call.lineno for n in nodes):
+        return False  # Do not borrow another process's deadline or cleanup after rebinding.
+    waits = [n for n in nodes if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+             and isinstance(n.func.value, ast.Name) and n.func.value.id == name and n.func.attr in {"wait", "communicate"}]
+    if not waits or any(not _explicit_timeout(n) for n in waits):
+        return False
+    for wait in waits:
+        parent = parents.get(wait)
+        while parent is not None and not isinstance(parent, (ast.If, ast.For, ast.While, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            if isinstance(parent, ast.Try):
+                for handler in parent.handlers:
+                    caught = ast.unparse(handler.type) if handler.type else ""
+                    if not ("TimeoutExpired" in caught or caught in {"Exception", "BaseException"}):
+                        continue
+                    handler_calls = [n for n in _scope_nodes(handler) if isinstance(n, ast.Call)]
+                    cleanup_lines: list[int] = []
+                    for cleanup in handler_calls:
+                        if isinstance(cleanup.func, ast.Attribute) and isinstance(cleanup.func.value, ast.Name):
+                            if cleanup.func.value.id == name and cleanup.func.attr in {"kill", "terminate"}:
+                                cleanup_lines.append(cleanup.lineno)
+                        elif isinstance(cleanup.func, ast.Name) and cleanup.func.id in helpers:
+                            helper = helpers[cleanup.func.id]
+                            if (not cleanup.args or not isinstance(cleanup.args[0], ast.Name) or cleanup.args[0].id != name
+                                    or not helper.args.args or any((isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store) and n.id == cleanup.func.id)
+                                                                 or (isinstance(n, ast.arg) and n.arg == cleanup.func.id) for n in nodes)):
+                                continue
+                            param = helper.args.args[0].arg
+                            if any(isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+                                   and isinstance(n.func.value, ast.Name) and n.func.value.id == param
+                                   and n.func.attr in {"kill", "terminate"} for n in _scope_nodes(helper)):
+                                cleanup_lines.append(cleanup.lineno)
+                    if any(n in waits and n.lineno > killed for n in handler_calls for killed in cleanup_lines):
+                        return True
+            parent = parents.get(parent)
+    return False
+
+
+def _resource_timeout_lines(text: str) -> set[int] | None:
+    """Recognize explicit local contracts; unprovable source keeps advisory warnings."""
+    try:
+        tree = ast.parse(text.lstrip("\ufeff"))
+    except (SyntaxError, ValueError):
+        return None  # Preserve the original regex candidate path on invalid Python.
+    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+    modules = {"requests": "requests", "subprocess": "subprocess"}
+    functions: dict[str, tuple[str, str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            modules.update({a.asname or a.name: a.name for a in node.names if a.name in modules.values()})
+        elif isinstance(node, ast.ImportFrom) and node.module in {"requests", "subprocess"}:
+            functions.update({a.asname or a.name: (node.module, a.name) for a in node.names})
+    helpers = {n.name: n for n in tree.body if isinstance(n, ast.FunctionDef)}
+    scopes = [tree, *(n for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)))]
+    lines: set[int] = set()
+    for scope in scopes:
+        nodes = list(_scope_nodes(scope))
+        for call in (n for n in nodes if isinstance(n, ast.Call)):
+            target = (modules.get(call.func.value.id), call.func.attr) if isinstance(call.func, ast.Attribute) and isinstance(call.func.value, ast.Name) else functions.get(getattr(call.func, "id", ""))
+            if target and target[0] == "requests" and target[1] in {"get", "post", "put", "delete", "patch"}:
+                if not _explicit_timeout(call):
+                    lines.add(call.lineno)
+            elif target == ("subprocess", "Popen") and not _bounded_process(call, nodes, parents, helpers):
+                lines.add(call.lineno)
+    return lines
+
+
 def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path) -> list[Finding]:
     findings: list[Finding] = []
     for file_path in files:
         path_key = _path_key(file_path, root)
+        text: str | None = None
         for rule in rules:
             if not _matches(path_key, rule.include_globs) or _matches(path_key, rule.exclude_globs):
                 continue
             if rule.checker_type == "path_regex":
                 for pattern in rule.patterns:
                     if pattern.search(path_key):
-                        fingerprint = hashlib.sha256(f"{rule.rule_id}:{path_key}:1".encode("utf-8")).hexdigest()[:16]
-                        findings.append(
-                            Finding(
-                                rule_id=rule.rule_id,
-                                title=rule.title,
-                                severity=rule.severity,
-                                category=rule.category,
-                                effect=rule.effect,
-                                file=path_key,
-                                line=1,
-                                message=rule.title,
-                                remediation=rule.remediation,
-                                baseline_policy=rule.baseline_policy,
-                                fingerprint=fingerprint,
-                            )
-                        )
+                        findings.append(_rule_finding(rule, path_key, 1))
                 continue
-            text = file_path.read_text(encoding="utf-8", errors="ignore")
+            if text is None:
+                text = file_path.read_text(encoding="utf-8", errors="ignore")
+            if rule.rule_id == "RESOURCE-TIMEOUT-001" and rule.checker_type == "regex" and file_path.suffix == ".py":
+                resource_lines = _resource_timeout_lines(text)
+                if resource_lines is not None:
+                    findings.extend(_rule_finding(rule, path_key, line) for line in sorted(resource_lines))
+                    continue
             if rule.checker_type in {"regex", "regex_and_python_loop_contains"}:
                 for pattern in rule.patterns:
                     for match in pattern.finditer(text):
                         line = text.count("\n", 0, match.start()) + 1
-                        fingerprint = hashlib.sha256(f"{rule.rule_id}:{path_key}:{line}".encode("utf-8")).hexdigest()[:16]
-                        findings.append(
-                            Finding(
-                                rule_id=rule.rule_id,
-                                title=rule.title,
-                                severity=rule.severity,
-                                category=rule.category,
-                                effect=rule.effect,
-                                file=path_key,
-                                line=line,
-                                message=rule.title,
-                                remediation=rule.remediation,
-                                baseline_policy=rule.baseline_policy,
-                                fingerprint=fingerprint,
-                            )
-                        )
+                        findings.append(_rule_finding(rule, path_key, line))
             if rule.checker_type == "regex_and_python_loop_contains":
                 max_following_lines = int(rule.checker_options.get("max_following_lines") or 8)
                 loop_patterns = rule.checker_options.get("loop_patterns") or ()
@@ -269,24 +347,7 @@ def scan_files(files: Iterable[Path], rules: Iterable[CompiledRule], root: Path)
                             break
                         if any(pattern.search(inner_line) for pattern in loop_patterns):
                             line = inner_index + 1
-                            fingerprint = hashlib.sha256(
-                                f"{rule.rule_id}:{path_key}:{line}".encode("utf-8")
-                            ).hexdigest()[:16]
-                            findings.append(
-                                Finding(
-                                    rule_id=rule.rule_id,
-                                    title=rule.title,
-                                    severity=rule.severity,
-                                    category=rule.category,
-                                    effect=rule.effect,
-                                    file=path_key,
-                                    line=line,
-                                    message=rule.title,
-                                    remediation=rule.remediation,
-                                    baseline_policy=rule.baseline_policy,
-                                    fingerprint=fingerprint,
-                                )
-                            )
+                            findings.append(_rule_finding(rule, path_key, line))
                             break
     return findings
 

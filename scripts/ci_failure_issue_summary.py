@@ -11,7 +11,7 @@ import time
 import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 DEFAULT_REPO = "licong01-cloud/AIstock"
 GITHUB_TRANSPORT_MARKERS = (
@@ -547,6 +547,91 @@ def _last_green_payload(summary: dict[str, Any], *, status: str, previous_succes
     }
 
 
+NIGHTLY_RESEARCH_WORKFLOW = "AIstock Nightly L3 + DR"
+MAX_NIGHTLY_RECEIPT_CANDIDATES = 5
+NIGHTLY_EXECUTION_STEPS = {
+    "Nightly L3 (paper_v2 + qe_archive + qe_read)": "Run selected Nightly sessions once",
+    "DR snapshot prod DB": "Run dr_snapshot_prod_db.py",
+    "DR validation (dump validity + schema diff + retention)": "nox -s dr_validate",
+    "Paper v2 live catch-up (skip realtime by default)": "nox -s paper_v2_live",
+    "Code intelligence daily graph refresh and summary": "Reconcile CodeGraph and Understand Anything",
+}
+
+
+def nightly_required_failure_jobs(summary: dict[str, Any]) -> list[str]:
+    """Consume structured stage failures as well as real Actions job names."""
+    names = {"runner_preflight": "Nightly L3 (paper_v2 + qe_archive + qe_read)",
+             "nightly_l3": "Nightly L3 (paper_v2 + qe_archive + qe_read)",
+             "dr_snapshot": "DR snapshot prod DB",
+             "dr_validate": "DR validation (dump validity + schema diff + retention)",
+             "code_intelligence": "Code intelligence daily graph refresh and summary",
+             "paper_v2_live": "Paper v2 live catch-up (skip realtime by default)"}
+    statuses = summary.get("nightly_statuses")
+    if isinstance(statuses, dict) and statuses:
+        return [names.get(key, key) for key, status in statuses.items() if status in NIGHTLY_FAILURE_STATUSES]
+    return [str(job.get("job_name") or "") for job in summary.get("failed_jobs") or [] if isinstance(job, dict)]
+
+
+def nightly_success_receipt_eligibility(
+    *, repo: str, run_id: str, source_head: str,
+    run_provider: Callable[..., dict[str, Any]] = _run,
+    required_job_names: Sequence[str] = (),
+) -> dict[str, Any]:
+    """A successful workflow envelope is not proof that L3 actually executed.
+
+    Read exact-run artifact/step indexes, never archives or whole history.
+    Real L3 receipts are source-bound; deferred/manual DR-only runs have none.
+    Errors/expiration mean unknown, not recovery, and never become PR gates.
+    """
+    def rejected(reason: str) -> dict[str, Any]:
+        return {"eligible": False, "reason": reason, "blocking_for_issue_workflow": False}
+    if not run_id.isdecimal() or len(source_head) != 40 or any(c not in "0123456789abcdef" for c in source_head):
+        return rejected("invalid_run_identity")
+    result = _github_read_with_transport_retry(
+        ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/artifacts?per_page=20"],
+        timeout=10, attempts=1, provider=run_provider,
+    )
+    if not result.get("ok"):
+        return rejected("receipt_index_unavailable")
+    try:
+        payload = json.loads(str(result.get("stdout") or "{}"))
+        artifacts = payload.get("artifacts")
+        if not isinstance(artifacts, list):
+            return rejected("invalid_receipt_index")
+        expected_name = f"nightly-l3-results-{run_id}"
+        for artifact in artifacts:
+            if not isinstance(artifact, dict) or artifact.get("name") != expected_name:
+                continue
+            identity = artifact.get("workflow_run") or {}
+            if not isinstance(identity, dict):
+                return rejected("invalid_artifact_identity")
+            if (artifact.get("expired") is False and int(artifact.get("size_in_bytes") or 0) > 0
+                    and str(identity.get("id")) == run_id and identity.get("head_sha") == source_head):
+                required = set(required_job_names) | {"Nightly L3 (paper_v2 + qe_archive + qe_read)"}
+                if not required.issubset(NIGHTLY_EXECUTION_STEPS):
+                    return rejected("unrecognized_failure_job_contract")
+                jobs_result = _github_read_with_transport_retry(
+                    ["gh", "api", f"repos/{repo}/actions/runs/{run_id}/jobs?per_page=100"],
+                    timeout=10, attempts=1, provider=run_provider,
+                )
+                if not jobs_result.get("ok"):
+                    return rejected("receipt_index_unavailable")
+                jobs = json.loads(str(jobs_result.get("stdout") or "{}")).get("jobs")
+                if not isinstance(jobs, list):
+                    return rejected("invalid_execution_index")
+                executed = {job.get("name") for job in jobs if isinstance(job, dict)
+                            and job.get("conclusion") == "success"
+                            and any(isinstance(step, dict) and step.get("name") == NIGHTLY_EXECUTION_STEPS.get(job.get("name"))
+                                    and step.get("conclusion") == "success" for step in job.get("steps") or [])}
+                if not required.issubset(executed):
+                    return rejected("required_validation_step_not_executed")
+                return {"eligible": True, "reason": "source_bound_l3_receipt",
+                        "artifact_name": expected_name, "blocking_for_issue_workflow": False}
+        return rejected("no_live_source_bound_l3_receipt")
+    except (ValueError, TypeError, AttributeError):
+        return rejected("invalid_receipt_index")
+
+
 def locate_last_green_run(
     summary: dict[str, Any],
     *,
@@ -624,6 +709,7 @@ def locate_last_green_run(
     if not isinstance(runs, list):
         return _last_green_payload(summary, status="unavailable", warning="gh run list JSON root was not a list")
     current_number = _run_id_number(current_run_id)
+    receipt_checks = 0
     for run in runs:
         if not isinstance(run, dict):
             continue
@@ -638,6 +724,19 @@ def locate_last_green_run(
             continue
         if str(run.get("databaseId") or "") == current_run_id:
             continue
+        if workflow == NIGHTLY_RESEARCH_WORKFLOW:
+            if receipt_checks >= MAX_NIGHTLY_RECEIPT_CANDIDATES:
+                break
+            receipt_checks += 1
+            receipt = nightly_success_receipt_eligibility(
+                repo=repo, run_id=str(run.get("databaseId") or ""),
+                source_head=str(run.get("headSha") or ""), run_provider=run_provider,
+                required_job_names=nightly_required_failure_jobs(summary),
+            )
+            if not receipt["eligible"]:
+                if receipt["reason"] == "receipt_index_unavailable":
+                    return _last_green_payload(summary, status="unavailable", warning=receipt["reason"])
+                continue
         return _last_green_payload(summary, status="found", previous_success=run)
     return _last_green_payload(summary, status="not_found", warning="no previous successful run found in the last 50 branch runs")
 
@@ -993,6 +1092,17 @@ def build_agent_handoff(
         "needs_bug_json": handoff_mode["needs_bug_json"],
         "infra_action": handoff_mode.get("infra_action"),
         "workflow_entrypoints": workflow_entrypoints,
+        "registry_intake": (
+            {
+                "status": "awaiting_local_registry_intake",
+                "owner_role": "local_pipeline_intake",
+                "claim_status": "unclaimed_until_explicit_owner_ack",
+                "repair_module": build_failure_event(summary)["module_guess"],
+                "next_command": workflow_entrypoints["promote"],
+            }
+            if handoff_mode["needs_bug_json"]
+            else None
+        ),
         "next_commands": next_commands,
         "allowed_write_scope": suspected_files,
         "required_verification": required_verification,
@@ -1409,12 +1519,81 @@ def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if str(row.get("error") or "").strip():
             group["errors"].append(str(row["error"]).strip())
     failed_stages = _nightly_failed_keys(_nightly_statuses_from_payload(payload))
-    if not groups and failed_stages == ["nightly_l3"]:
+    execution = payload.get("nightly_l3_execution")
+    if not groups and "nightly_l3" in failed_stages and isinstance(execution, dict):
+        bound = (
+            re.fullmatch(r"[0-9a-f]{40}", str(payload.get("commit") or "")) is not None
+            and execution.get("head_commit") == payload["commit"]
+            and str(payload.get("run_id") or "").isdigit()
+            and str(execution.get("run_id")) == str(payload["run_id"])
+        )
+        stage = next((name for name in ("workspace", "environment", "plan")
+                      if execution.get(name) in {"failure", "cancelled"}), None)
+        if not bound:
+            kind = "invalid_execution_diagnostic"
+        elif stage:
+            kind = f"{stage}_preparation_failed"
+        elif execution.get("sessions") == "cancelled":
+            kind = "sessions_interrupted"
+        elif execution.get("sessions") in {"failure", "success"}:
+            kind = "artifact_transport"
+        else:
+            kind = "sessions_not_started"
+        groups["validation.runner"] = {
+            "sessions": [], "failure_kinds": [kind],
+            "errors": [f"Nightly infrastructure: {kind}; no executed test failure was inferred"],
+            "infrastructure": True,
+        }
+    if not groups and "nightly_l3" in failed_stages and (failed_stages == ["nightly_l3"] or "nightly_plan_status" in payload):
+        kind, error = "missing_session_receipt", "Nightly L3 failed without a durable session result"
+        plan_status = payload.get("nightly_plan_status")
+        if plan_status is not None:
+            bound = (
+                isinstance(plan_status, dict)
+                and plan_status.get("schema_version") == "aistock_public_scheduler_status_v1"
+                and re.fullmatch(r"[0-9a-f]{40}", str(payload.get("commit") or "")) is not None
+                and plan_status.get("head_commit") == payload["commit"]
+                and bool(payload.get("run_id"))
+                and str(payload["run_id"]).isdigit()
+                and str(plan_status.get("run_id") or "") == str(payload["run_id"])
+            )
+            if not bound:
+                kind, error = "invalid_plan_diagnostic", "Nightly scheduler diagnostic artifact is not bound to this run/head"
+            elif plan_status.get("workflow_gate") == "blocked" and isinstance(plan_status.get("error"), str) and plan_status["error"].strip():
+                root = str(Path(__file__).resolve().parents[1])
+                if root not in sys.path:
+                    sys.path.insert(0, root)
+                from backend.infra.deepseek_config import redact_secret_text
+
+                kind, error = "plan_generation_failed", redact_secret_text(plan_status["error"])[:2000]
         groups["validation.runner"] = {
             "sessions": [],
-            "failure_kinds": ["missing_session_receipt"],
-            "errors": ["Nightly L3 failed without a durable session result"],
+            "failure_kinds": [kind],
+            "errors": [error],
         }
+    transport = payload.get("nightly_artifact_transport")
+    if transport is not None:
+        valid_transport = (
+            isinstance(transport, dict)
+            and transport.get("schema_version") == "aistock_nightly_artifact_transport_v1"
+            and re.fullmatch(r"[0-9a-f]{40}", str(payload.get("commit") or "")) is not None
+            and transport.get("head_commit") == payload.get("commit")
+            and str(payload.get("run_id") or "").isdigit()
+            and transport.get("run_id") == str(payload.get("run_id"))
+            and transport.get("artifact_name") == f"nightly-l3-results-{payload.get('run_id')}"
+            and type(transport.get("download_attempts")) is int
+            and transport["download_attempts"] == 2
+            and transport.get("download_outcome") == "failure"
+            and transport.get("retry_download_outcome") == "failure"
+            and transport.get("failure_kind") == "artifact_transport"
+            and transport.get("executed_test_failure_inferred") is False
+        )
+        kind = "artifact_transport" if valid_transport else "invalid_transport_diagnostic"
+        group = groups.setdefault("validation.runner", {
+            "sessions": [], "failure_kinds": [], "errors": [], "infrastructure": True,
+        })
+        group["failure_kinds"].append(kind)
+        group["errors"].append(f"Nightly infrastructure: {kind}; session coverage is unavailable")
     normalized_groups: list[dict[str, Any]] = []
     for module, details in sorted(groups.items()):
         sessions = sorted(set(details["sessions"]))
@@ -1425,6 +1604,7 @@ def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "session_count": len(sessions),
                 "failure_kinds": sorted(set(details["failure_kinds"])),
                 "errors": _unique(details["errors"]),
+                **({"infrastructure": True} if details.get("infrastructure") else {}),
             }
         )
     return normalized_groups
@@ -1494,10 +1674,12 @@ def _nightly_group_summaries(summary: dict[str, Any]) -> list[dict[str, Any]]:
         # membership changes between Nightly runs.  Session identities remain
         # in the title/body, but they must not be part of the dedupe identity.
         group_kind = "overflow" if group.get("overflow") else "module"
+        if group.get("infrastructure"):
+            group_kind = "infrastructure:" + ",".join(failure_kinds)
         group_source = f"module={module}|group_kind={group_kind}"
         group_hash = hashlib.sha256(group_source.encode("utf-8")).hexdigest()[:16]
         scoped["nightly_fingerprint"] = f"nightly-group-{group_hash}"
-        if not multiple_groups and summary.get("nightly_fingerprint") != scoped["nightly_fingerprint"]:
+        if not multiple_groups and not group.get("infrastructure") and summary.get("nightly_fingerprint") != scoped["nightly_fingerprint"]:
             scoped["nightly_legacy_fingerprint"] = summary.get("nightly_fingerprint")
         scoped["fingerprint_source"] = group_source
         scoped["fingerprint"] = f"ci-{group_hash}"
@@ -1740,7 +1922,7 @@ def summarize_nightly_status(
         )
     )
     failed_sessions = _failed_nightly_sessions(payload)
-    failure_groups = _nightly_failure_groups(payload)
+    failure_groups = _nightly_failure_groups({**payload, "commit": effective_commit, "run_id": effective_run_id})
     job = _nightly_job_from_statuses(
         statuses,
         run_url=effective_run_url,
@@ -2085,6 +2267,28 @@ def render_issue_markdown(summary: dict[str, Any], *, github_issue_number: int |
     if infra_action:
         handoff_prelude.append(f"- infra_action: `{infra_action.get('workflow_gate')}`")
         handoff_prelude.extend([f"- {item}" for item in infra_action.get("next_actions") or []])
+    intake = handoff.get("registry_intake")
+    if intake:
+        lines.extend(
+            [
+                "",
+                "## Local Registry Intake",
+                "",
+                f"- intake_status: `{intake['status']}`",
+                f"- intake_owner_role: `{intake['owner_role']}`",
+                f"- claim_status: `{intake['claim_status']}`",
+                f"- repair_module: `{intake['repair_module']}`",
+                "- Evidence binding: the run, commit and fingerprint in Failure Summary above.",
+                "- An Issue, a successful publisher step or a deferred registry PR is NOT a registered BUG, an owner claim or a repair.",
+                "- The local pipeline intake owner uses local credentials for the command below, records takeover and its registration result on this exact Issue in the same flow, then hands the BUG and Context Pack to the affected module owner.",
+                "- Takeover tracking is traceability, NOT a separate approval, precondition or manual gate.",
+                "- Do not expand Actions permissions, add a PR gate, create duplicate Issues, or blindly repeat a full module matrix.",
+                "",
+                "```bash",
+                intake["next_command"],
+                "```",
+            ]
+        )
     bug_linkage_line = (
         "- BUG ID: not applicable for infra-only issue unless `triage-ci-issue` later reclassifies it."
         if handoff.get("needs_bug_json") is False
@@ -2275,6 +2479,40 @@ def persist_candidate_history(summary: dict[str, Any], *, history_dir: str | Non
     return target
 
 
+def materialize_artifact_transport_failure(
+    output: Path, *, run_id: str, head_commit: str,
+    download_outcome: str, retry_download_outcome: str,
+) -> dict[str, Any] | None:
+    """Persist exhausted transport separately from executed-test receipts."""
+    outcomes = {"failure", "success", "skipped", "cancelled"}
+    if download_outcome not in outcomes or retry_download_outcome not in outcomes:
+        raise ValueError("Unknown Nightly artifact download outcome")
+    if download_outcome != "failure" or retry_download_outcome != "failure":
+        return None
+    if not re.fullmatch(r"[0-9]+", run_id):
+        raise ValueError("Nightly artifact transport requires a numeric run id")
+    if not re.fullmatch(r"[0-9a-f]{40}", head_commit):
+        raise ValueError("Nightly artifact transport requires a full source HEAD")
+    if output.name != "artifact-transport.json":
+        raise ValueError("Transport diagnostics must not replace test/plan receipts")
+    receipt = {
+        "schema_version": "aistock_nightly_artifact_transport_v1",
+        "run_id": run_id,
+        "head_commit": head_commit,
+        "failure_kind": "artifact_transport",
+        "artifact_name": f"nightly-l3-results-{run_id}",
+        "download_attempts": 2,
+        "download_outcome": download_outcome,
+        "retry_download_outcome": retry_download_outcome,
+        "executed_test_failure_inferred": False,
+    }
+    output.parent.mkdir(parents=True, exist_ok=True)
+    # Exclusive creation avoids replacing an artifact from another attempt.
+    with output.open("x", encoding="utf-8") as stream:
+        stream.write(json.dumps(receipt, indent=2) + "\n")
+    return receipt
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Summarize AIstock CI/Nightly failures for actionable GitHub Issues.")
     parser.add_argument("--repo", default=DEFAULT_REPO)
@@ -2288,6 +2526,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--severity", default="P1", choices=["P0", "P1", "P2", "P3"])
     parser.add_argument("--manual-summary")
     parser.add_argument("--nightly-status-json", help="Parse compact Nightly job result JSON instead of Actions logs.")
+    parser.add_argument("--artifact-transport-output", type=Path)
+    parser.add_argument("--download-outcome")
+    parser.add_argument("--retry-download-outcome")
     parser.add_argument("--source-name")
     parser.add_argument("--branch")
     parser.add_argument("--commit")
@@ -2369,7 +2610,22 @@ def build_stdout_payload(summary: dict[str, Any], args: argparse.Namespace, *, c
 
 
 def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.artifact_transport_output:
+        try:
+            receipt = materialize_artifact_transport_failure(
+                args.artifact_transport_output, run_id=str(args.run_id or ""),
+                head_commit=str(args.commit or ""), download_outcome=args.download_outcome,
+                retry_download_outcome=args.retry_download_outcome,
+            )
+        except (OSError, ValueError) as exc:
+            parser.error(f"Cannot record Nightly transport failure: {exc}")
+        if receipt:
+            print(f"Nightly artifact_transport: {args.artifact_transport_output}")
+            return 1
+        print("Nightly artifact transport recovered or did not run")
+        return 0
     if args.log_file:
         log_text = Path(args.log_file).read_text(encoding="utf-8")
         job = parse_job_log(log_text, job_name=args.job_name)
@@ -2398,6 +2654,26 @@ def main(argv: list[str] | None = None) -> int:
             session_results = json.loads(session_results_path.read_text(encoding="utf-8-sig"))
             if isinstance(session_results, (list, dict)):
                 payload["nightly_session_results"] = session_results
+        plan_status_path = session_results_path.with_name("scheduler-status.json")
+        if plan_status_path.is_file():
+            try:
+                payload["nightly_plan_status"] = json.loads(plan_status_path.read_text(encoding="utf-8-sig"))
+            except (OSError, ValueError):
+                payload["nightly_plan_status"] = {}
+        transport_path = Path(args.nightly_status_json).resolve().with_name("artifact-transport.json")
+        # A reused runner workspace may retain an earlier attempt's diagnostic.
+        # Current download outcomes, rather than file existence, admit its use.
+        if payload.get("artifact_transport_outcome") == "failure" and transport_path.is_file():
+            try:
+                # A transport diagnostic is tiny; never read an unbounded foreign
+                # artifact as a control receipt or infer any executed test here.
+                with transport_path.open("rb") as stream:
+                    content = stream.read(8193)
+                if len(content) > 8192:
+                    raise ValueError("oversized transport diagnostic")
+                payload["nightly_artifact_transport"] = json.loads(content.decode("utf-8"))
+            except (OSError, ValueError):
+                payload["nightly_artifact_transport"] = {}
         summary = summarize_nightly_status(
             payload,
             repo=args.repo,

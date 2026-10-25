@@ -115,7 +115,9 @@ def build_economic_daily_feature_core_v1(*, candidates, raw_daily, market_daily,
             or not roster.instrument.map(lambda v: isinstance(v, str) and re.fullmatch(r"\d{6}\.(SH|SZ|BJ)", v) is not None).all()):
         _fail("daily core must preserve the complete original Top20 order")
     for column in ("combined_score", *(f"norm__{value}" for value in component_roles.values())):
-        roster[column] = roster[column].map(lambda value: _number(value, required=True))
+        # Empty projections otherwise keep object dtype after map, which breaks
+        # np.isclose. Coercion follows the same strict finite-number validation.
+        roster[column] = roster[column].map(lambda value: _number(value, required=True)).astype(float)
     expected = sum(roster[f"norm__{leg}"] * weight for leg, weight in weights.items())
     if not np.isclose(roster.combined_score, expected, atol=1e-8, rtol=0).all():
         _fail("daily core combined score disagrees with frozen legs")

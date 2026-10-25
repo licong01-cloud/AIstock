@@ -105,7 +105,7 @@ $mutexName = 'Global\AIstockGitObjectMirror-' + $mutexHash
 $mutex = [Threading.Mutex]::new($false, $mutexName)
 $lockAcquired = $false
 try {
-  $lockAcquired = $mutex.WaitOne([TimeSpan]::FromSeconds(30))
+  $lockAcquired = $mutex.WaitOne([TimeSpan]::FromSeconds(5))
   if (-not $lockAcquired) {
     throw "Timed out waiting for Git mirror maintenance lock: $resolvedMirror"
   }
@@ -126,14 +126,43 @@ try {
   if ($LASTEXITCODE -eq 0 -and $registeredRepository -and $registeredRepository.Trim() -ne $Repository) {
     throw "Git object mirror repository mismatch: $($registeredRepository.Trim())"
   }
+  # Readers may still hold objects from an older main. Never auto-prune/repack them.
+  if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+    try {
+      $previousManifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+      $currentMirrorSha = Invoke-Git -WorkingDirectory $resolvedMirror -Arguments @('rev-parse', '--verify', 'refs/heads/main^{commit}')
+      if ($registeredRepository -eq $Repository -and
+          $previousManifest.schema_version -eq 'aistock_git_object_mirror_v1' -and
+          $previousManifest.repository -eq $Repository -and
+          $previousManifest.mirror_root -eq $resolvedMirror -and
+          $previousManifest.object_directory -eq (Join-Path $resolvedMirror 'objects') -and
+          $previousManifest.main_sha -eq $mainSha -and $currentMirrorSha -eq $mainSha) {
+        Write-Result @{
+          status = 'ready'; main_sha = $mainSha; mirror_root = $resolvedMirror
+          manifest_path = $manifestPath; refreshed = $false
+          network_accessed = $false; process_control_performed = $false
+        }
+        exit 0
+      }
+    } catch {
+      # A missing/invalid receipt cannot grant reuse; rebuild it from the verified source.
+    }
+  }
   Invoke-Git -WorkingDirectory $resolvedMirror -Arguments @('config', 'aistock.repository', $Repository) | Out-Null
   Invoke-Git -WorkingDirectory $resolvedMirror -Arguments @(
-    'fetch', '--quiet', '--force', '--no-tags', '--no-write-fetch-head', $resolvedSource,
+    '-c', 'gc.auto=0', '-c', 'maintenance.auto=false',
+    'fetch', '--quiet', '--no-tags', '--no-write-fetch-head', $resolvedSource,
     'refs/heads/main:refs/heads/main'
   ) | Out-Null
   $mirrorMainSha = Invoke-Git -WorkingDirectory $resolvedMirror -Arguments @('rev-parse', '--verify', 'refs/heads/main^{commit}')
   if ($mirrorMainSha -ne $mainSha) {
     throw "Git object mirror main mismatch: expected=$mainSha observed=$mirrorMainSha"
+  }
+  $sourceAfter = Invoke-Git -WorkingDirectory $resolvedSource -Arguments @('rev-parse', '--verify', 'refs/heads/main^{commit}')
+  $originAfter = Invoke-Git -WorkingDirectory $resolvedSource -Arguments @('rev-parse', '--verify', 'refs/remotes/origin/main^{commit}')
+  if ($sourceAfter -ne $mainSha -or $originAfter -ne $mainSha -or
+      (Invoke-Git -WorkingDirectory $resolvedSource -Arguments @('status', '--short'))) {
+    throw 'Source changed during mirror refresh; do not publish a readiness manifest'
   }
   Invoke-Git -WorkingDirectory $resolvedMirror -Arguments @('fsck', '--connectivity-only', '--no-dangling') | Out-Null
   $manifest = [ordered]@{
@@ -152,6 +181,7 @@ try {
   Write-Result @{
     schema_version = 'aistock_git_object_mirror_maintenance_v1'
     status = 'ready'
+    refreshed = $true
     source_root = $resolvedSource
     repository = $Repository
     main_sha = $mirrorMainSha

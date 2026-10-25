@@ -1,0 +1,326 @@
+{
+  "actual": "MonthlyConsumerLayoutError: consumer hardlink source/target is invalid at monthly_consumer_layout.py:352; native writer contains stock_universe.txt, benchmark.txt, meta_export.json but no index.txt",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_consumer_layout.py",
+    "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+    "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
+    "tests/aistock_validation/bugs/20261015_BUG-1932-monthly-consumer-layout-collides-with-native-writer-authority-files.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1932",
+  "closed_at": "2026-10-16T01:51:15.029488Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-15T19:01:23.203692Z",
+  "description": "MonthlyConsumerLayoutError: consumer hardlink source/target is invalid at monthly_consumer_layout.py:352; native writer contains stock_universe.txt, benchmark.txt, meta_export.json but no index.txt",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261015-2984805df616",
+      "timestamp": "2026-10-15T19:01:23.203692Z"
+    }
+  ],
+  "evidence_uris": [
+    "dmr_63a313d97fd046a38d5a876265565014:BUILD271"
+  ],
+  "expected": "发布打包复用已验证文件，股票池采用本轮冻结PIT，benchmark采用本轮共享冻结authority，元数据按发布身份生成，无同名冲突，不修改writer原件",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_consumer_layout.py",
+      "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
+      "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1932-monthly-consumer-layout-collides-with-native-writer-authority-files.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_consumer_layout.py",
+      "backend/tests/dataset_release/test_monthly_candidate_finalizer.py",
+      "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1932-monthly-consumer-layout-collides-with-native-writer-authority-files.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_consumer_layout.py",
+        "backend/tests/dataset_release/test_monthly_consumer_layout.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_consumer_layout.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_consumer_layout.py",
+        "backend/tests/dataset_release/test_monthly_consumer_layout.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_consumer_layout.py",
+      "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+      "backend/tests/dataset_release/test_monthly_candidate_finalizer.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_consumer_layout.py",
+      "backend/tests/dataset_release/test_monthly_consumer_layout.py",
+      "backend/tests/dataset_release/test_monthly_candidate_finalizer.py"
+    ]
+  },
+  "first_seen_at": "2026-10-15T19:01:23.203692Z",
+  "fix_branch": null,
+  "fix_commit": "e19c334baebf342d1b763155fd2cc1c164d03a08",
+  "fix_summary": "Skip only the explicitly layout-owned day stock pool/benchmark/metadata and minute metadata after regular-file/link checks; publish the pinned current PIT stock pool and frozen shared benchmark matching the same release calendar, generate new layout metadata, retain all writer data and provider catalog bytes. Add native/legacy immutable hardlink and authority rejection regressions; extend only the finalizer fixture to model the existing frozen benchmark producer contract.",
+  "fixed_at": "2026-10-15T19:13:22Z",
+  "github_issue_number": 6164,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6164",
+  "last_seen_at": "2026-10-15T19:01:23.203692Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6165",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_evidence": [
+    "Round 1: traced real BUILD271 source and target collision, predecessor benchmark cutoff and absence of index.txt; no database or market gap inference.",
+    "Round 2: verified exclusions cannot bypass symlink checks, pool hashes remain enforced, missing or inconsistent frozen benchmark fails closed, output remains create-exclusive and writer bytes/inodes are unchanged.",
+    "Round 3: aligned benchmark start with the shared producer's frozen calendar, resolved the narrow-calendar integration regression, checked finalizer fixture and shared-builder readback; no re-export, activation, historical business scan or consumer-source change.",
+    "DESIGN-COMPLIANCE-001: complete fix for native writer collisions; missing authority/errors still fail closed; PIT selection and quote catalogs remain distinct; no new gate or business-semantic change."
+  ],
+  "risk_area": "bug",
+  "root_cause": "Consumer packaging hardlinked every native writer file before create-exclusive publication of layout-owned metadata. Native outputs contain predecessor stock_universe.txt, benchmark.txt and meta_export.json but do not guarantee legacy index.txt; the frozen shared producer already emits the current benchmark under stock_pools. No price source data loss.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "RED: fresh pytest native-writer layout reproduces BUILD271 hardlink collision while legacy layout passes. GREEN: native and legacy layouts publish the current frozen PIT/benchmark plus fresh metadata; writer bytes and inodes remain unchanged and data hardlinks are retained. Direct layout and frozen shared-builder regression: 15 passed.",
+      "Fresh AIstock Python process calls production _benchmark_source on retained BUILD271 staging without writes: validated 000300.SH / 2018-08-01 / 2026-09-30. No database read, candidate mutation or process control.",
+      "Fresh AIstock process validated production _benchmark_source against retained BUILD271 staging for 000300.SH 2018-08-01..2026-09-30 without writes; fresh targeted pytest reproduces native writer collision before fix and passes all 47 related cases after fix with writer hashes/inodes unchanged."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_dataset_candidates\\data_repair_staging\\BUG-1932-post-restart-20261016.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1932",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "031ba7eac33f55d48367c1145361ad313016fc7986c723e2773dfe8bf5289fe6",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "e19c334baebf342d1b763155fd2cc1c164d03a08",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-16T01:50:33.155668Z",
+      "mode": "read_only",
+      "observed_identity": "e19c334baebf342d1b763155fd2cc1c164d03a08",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "eb361b705230bd71369a9bf8670c33f997a48fce320d97875e00d8a825fa2652",
+      "receipt_sha256": "833da95b1e5f4aa1f464951f24a5b8ac264916be2bf28a06c36b818df5cadad3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "60aeae9a19049cae07baf9e8ead858886f11553154f1a57f734393de3470f4d3",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1932",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "db267f752d0f8904",
+    "recorded_at": "2026-10-15T19:13:58.784245Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "1fb308b7a1e7ca5b78f5e2aac6ae007926cc344d",
+    "source_merge_commit": "e19c334baebf342d1b763155fd2cc1c164d03a08",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6165",
+    "validation_evidence": [
+      "validation-receipt: id=ee4a83903525e6f7 commit=1fb308b7a1e7ca5b78f5e2aac6ae007926cc344d kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_candidate_finalizer.py backend/tests/dataset_release/test_monthly_shared_components.py -q` result=`47 passed`",
+      "validation-receipt: id=12699c45688740a8 commit=1fb308b7a1e7ca5b78f5e2aac6ae007926cc344d kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_candidate_finalizer.py tests/aistock_validation/bugs/20261015_BUG-1932-monthly-consumer-layout-collides-with-native-writer-authority-files.json` result=`passed`",
+      "validation-receipt: id=8e4646ee63cbca1e commit=1fb308b7a1e7ca5b78f5e2aac6ae007926cc344d kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_candidate_finalizer.py` result=`passed`",
+      "validation-receipt: id=79cdedf02d07d360 commit=1fb308b7a1e7ca5b78f5e2aac6ae007926cc344d kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`"
+    ],
+    "validation_evidence_digest": "72d0f0f5b1516e62b16a2bbf72979f026dab9e3029e23ae18e9d7595cf62bf5b"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly consumer layout collides with native writer authority files",
+  "trigger_condition": {
+    "fingerprint": "2984805df616183f90458286",
+    "source_event_id": "FE-20261015-2984805df616"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=ee4a83903525e6f7 commit=1fb308b7a1e7ca5b78f5e2aac6ae007926cc344d kind=pytest plan=direct status=passed command=`pytest backend/tests/dataset_release/test_monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_candidate_finalizer.py backend/tests/dataset_release/test_monthly_shared_components.py -q` result=`47 passed`",
+    "validation-receipt: id=12699c45688740a8 commit=1fb308b7a1e7ca5b78f5e2aac6ae007926cc344d kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_candidate_finalizer.py tests/aistock_validation/bugs/20261015_BUG-1932-monthly-consumer-layout-collides-with-native-writer-authority-files.json` result=`passed`",
+    "validation-receipt: id=8e4646ee63cbca1e commit=1fb308b7a1e7ca5b78f5e2aac6ae007926cc344d kind=ruff plan=direct status=passed command=`python -m ruff check backend/services/dataset_release/monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_consumer_layout.py backend/tests/dataset_release/test_monthly_candidate_finalizer.py` result=`passed`",
+    "validation-receipt: id=79cdedf02d07d360 commit=1fb308b7a1e7ca5b78f5e2aac6ae007926cc344d kind=diff_check plan=direct status=passed command=`git diff --check` result=`passed`",
+    "post-restart-verify BUG-1932 worker-scheduler e19c334baebf342d1b763155fd2cc1c164d03a08 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

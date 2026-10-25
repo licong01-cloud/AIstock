@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -26,6 +27,44 @@ PG_DUMP_HEADER_RE = re.compile(rb"^--\s*PostgreSQL database dump", re.MULTILINE)
 CREATE_TABLE_RE = re.compile(rb"\bCREATE\s+TABLE\b", re.IGNORECASE)
 COPY_FROM_RE = re.compile(rb"\bCOPY\s+\S+\s*\([^)]*\)\s+FROM\s+stdin", re.IGNORECASE)
 PG_RESTORE_TABLE_DATA_RE = re.compile(rb"TABLE DATA", re.IGNORECASE)
+
+
+@pytest.mark.parametrize("direct", [True, False], ids=["local", "docker"])
+def test_pg_restore_file_input_contract(direct, tmp_path, monkeypatch) -> None:
+    from . import conftest as fixtures
+
+    monkeypatch.setattr(fixtures.shutil, "which", lambda name: "pg_restore.exe" if direct else None)
+    monkeypatch.setattr(fixtures, "_docker_pg_container", lambda: "aistock-pg-dev")
+    stream = MagicMock()
+    stream.__enter__.return_value = stream
+    stream.read.side_effect = AssertionError("dump must not be materialized in Python")
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: stream)
+    run = MagicMock(return_value=fixtures.subprocess.CompletedProcess([], 0, b"TABLE", b""))
+    monkeypatch.setattr(fixtures.subprocess, "run", run)
+    runner = fixtures.pg_restore_runner.__wrapped__()
+    path = tmp_path / "fixture.dump"
+    assert runner(["--list"], dump_path=path).returncode == 0
+    command, = run.call_args.args
+    options = run.call_args.kwargs
+    assert options["capture_output"] is True
+    assert options["timeout"] == (60 if direct else 120)
+    assert "input" not in options
+    if direct:
+        assert command == ["pg_restore.exe", "--list", str(path)]
+        assert "stdin" not in options
+    else:
+        assert command == ["docker", "exec", "-i", "aistock-pg-dev", "pg_restore", "--list"]
+        assert options["stdin"] is stream
+        stream.__exit__.assert_called_once()
+    runner(["--list"], stdin_bytes=b"corrupt")
+    assert run.call_args.kwargs["input"] == b"corrupt"
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        runner(["--list"], stdin_bytes=b"corrupt", dump_path=path)
+    # The real consumer must pass the path and still reject pg_restore failure.
+    test_dump_structural_integrity(fixtures.DumpInfo(path, False, True, 2048), runner)
+    run.return_value = fixtures.subprocess.CompletedProcess([], 1, b"", b"corrupt dump")
+    with pytest.raises(AssertionError, match="dump is unreadable"):
+        test_dump_structural_integrity(fixtures.DumpInfo(path, False, True, 2048), runner)
 
 
 def test_dr_backup_directory_smoke(dr_backup_dir: Path) -> None:
@@ -62,9 +101,7 @@ def test_dump_structural_integrity(latest_dump, pg_restore_runner) -> None:
                 "canonical docker container DR_PG_CONTAINER / "
                 "{aistock-pg, aistock-pg-dev, timescaledb}); neither found."
             )
-        with latest_dump.path.open("rb") as fh:
-            content = fh.read()
-        proc = pg_restore_runner(["--list"], stdin_bytes=content)
+        proc = pg_restore_runner(["--list"], dump_path=latest_dump.path)
         assert proc.returncode == 0, (
             f"pg_restore --list failed (rc={proc.returncode}); "
             f"dump is unreadable. stderr={proc.stderr[:500]!r}"

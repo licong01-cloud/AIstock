@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import date
+import hashlib
 import math
 from typing import Any, Mapping, Sequence
 
@@ -17,6 +18,7 @@ from backend.services.hmm_risk.contracts import ALL_CORE_FEATURES, canonical_jso
 from backend.services.hmm_risk.formal_state_model import (
     FormalStateError,
     causal_filter,
+    preprocess_apply,
     project_validation,
     receipt,
     restore_model,
@@ -57,6 +59,76 @@ CONTRACT = {
     "hac_is_gate": False,
     "validation_basis": BASIS,
 }
+
+NEUTRAL_VERSION = "hmm_risk_l2_neutral_centered_effect_v1"
+NEUTRAL_CONTRACT = {
+    **CONTRACT,
+    "version": NEUTRAL_VERSION,
+    "score_formula": "frozen_utility[hard_state]-frozen_utility[mapping_neutral_state]",
+    "validation_basis": "POST_CALIBRATION_RETROSPECTIVE_DEVELOPMENT_RESCORED",
+}
+NEUTRAL_SOURCE_ACCEPTANCE_SHA = "309b770ccf8ae11477412970e07e222cac3fd275d9de88e020d57e503625d1b7"
+
+
+def neutral_rescore(original: Mapping[str, Any]) -> dict[str, Any]:
+    """Rescore sealed hard states; never restores, filters or fits a model."""
+    validate_acceptance(original)
+    if original["acceptance_sha256"] != NEUTRAL_SOURCE_ACCEPTANCE_SHA:
+        raise fail("neutral score requires the approved sealed source", reason="identity_mismatch")
+    semantics = original["evaluation_input_identity"]["semantic_mapping_and_utility_by_sector"]
+    rows = []
+    for old in original["predictions"]:
+        row = dict(old)
+        row["outcome_status"] = "PENDING_EVALUATION"
+        row["feature_contributions"] = None
+        if old["availability"] == "available":
+            mapping, utility = semantics[row["sector_code"]]
+            neutral = [state for state, name in mapping.items() if name == "neutral"]
+            if len(neutral) != 1:
+                raise fail("neutral mapping must be unique")
+            center = utility[neutral[0]]
+            score = utility[str(row["hard_state"])] - center
+            if not math.isfinite(score):
+                raise fail("neutral-centered score is not finite")
+            row["raw_score"] = score
+            row["feature_contributions"] = {
+                "hard_state": row["hard_state"],
+                "frozen_utility_mean": old["raw_score"],
+                "neutral_hidden_state": int(neutral[0]),
+                "neutral_utility_mean": center,
+                "centered_utility": score,
+                "semantic_state": row["semantic_state"],
+                "model_parameter_sha256": row["model_parameter_sha256"],
+            }
+        rows.append(row)
+    by_day = {}
+    for row in rows:
+        by_day.setdefault(row["trade_date"], []).append(row)
+    for day_rows in by_day.values():
+        raw = {r["sector_code"]: r["raw_score"] for r in day_rows if r["availability"] == "available"}
+        scores, groups = _score_and_states(raw) if len(raw) >= 2 else ({}, {})
+        for row in day_rows:
+            code = row["sector_code"]
+            if row["availability"] == "available" and code not in scores:
+                raise fail("rescore cannot change the frozen prediction population")
+            row["rotation_score"] = scores.get(code)
+            row["daily_rank_group"] = groups.get(code)
+            if row["feature_contributions"] is not None:
+                row["feature_contributions"].update(average_rank_score=scores[code], daily_rank_group=groups[code])
+    return receipt(
+        {
+            "schema_version": NEUTRAL_VERSION + "_predictions",
+            "contract": NEUTRAL_CONTRACT,
+            "source_acceptance_sha256": original["acceptance_sha256"],
+            "model_set_sha256": original["model_hash"],
+            "observation_sha256": original["input_hash"],
+            "predictions": rows,
+            "fits": 0,
+            "selection_performed": False,
+            "target_accessed": False,
+            "tail_accessed": False,
+        }
+    )
 
 
 def fail(message: str, *, reason: str = "input_invalid") -> FormalStateError:
@@ -290,6 +362,7 @@ def predict(frozen: Mapping[str, Any], observations: Mapping[str, Any]) -> dict[
     positions = {day: i for i, day in enumerate(dates)}
     scores_by_day = {day: {} for day in schedule["decisions"]}
     raw_rows = {}
+    inactive_receipts = []
     for code in frozen["catalog"]:
         item = frozen["models"][code]
         obs = observations["sectors"][code]
@@ -299,6 +372,10 @@ def predict(frozen: Mapping[str, Any], observations: Mapping[str, Any]) -> dict[
         all_positions = item["prefix_positions"] + available_positions
         raw = np.asarray(item["prefix_values"] + obs["values"], dtype=np.float64)
         processed = project_validation(raw, frozen["preprocess"], item["projection"])
+        inactive = item["projection"]["inactive_feature_indices"]
+        full_processed = preprocess_apply(raw, frozen["preprocess"]) if inactive else None
+        observation_slots = {p: i for i, p in enumerate(all_positions)}
+        entry_hash = canonical_sha256(item) if inactive else None
         posterior = causal_filter(restore_model(item["model"]), all_positions, processed, len(dates))
         if not np.array_equal(posterior[: len(prefix)], np.asarray(item["prefix_posterior"])):
             raise fail(f"prefix changed after observation continuation: {code}", reason="prefix_mismatch")
@@ -306,6 +383,36 @@ def predict(frozen: Mapping[str, Any], observations: Mapping[str, Any]) -> dict[
         for day in schedule["decisions"]:
             as_of = schedule["as_of"][day]
             p = positions[as_of]
+            if inactive and p in observation_slots:
+                slot = observation_slots[p]
+                for index in inactive:
+                    raw_value = float(raw[slot, index])
+                    transformed_value = float(full_processed[slot, index])
+                    inactive_receipts.append(
+                        receipt(
+                            {
+                                "schema_version": "hmm_risk_inactive_dimension_observation_receipt_v1",
+                                "model_set_id": frozen["receipt_sha256"],
+                                "model_entry_sha256": entry_hash,
+                                "projection_sha256": item["projection"]["receipt_sha256"],
+                                "family": "autocycle_all_core",
+                                "level": "L2",
+                                "sector_code": code,
+                                "trade_date": day,
+                                "as_of_date": as_of,
+                                "input_manifest_source_sha256": observations["receipt_sha256"],
+                                "feature_index": index,
+                                "feature_name": ALL_CORE_FEATURES[index],
+                                "raw_value_f64": raw_value,
+                                "preprocessed_value_f64": transformed_value,
+                                "raw_value_float64_sha256": _float64_sha256(raw_value),
+                                "preprocessed_value_float64_sha256": _float64_sha256(transformed_value),
+                                "raw_value_is_finite": True,
+                                "preprocessed_value_is_finite": True,
+                                "inactive_feature_observed_non_zero": raw_value != 0.0,
+                            }
+                        )
+                    )
             structural = observations["structural_membership"][as_of][code]
             if type(structural) is not bool:
                 raise fail("structural population is not boolean")
@@ -383,12 +490,17 @@ def predict(frozen: Mapping[str, Any], observations: Mapping[str, Any]) -> dict[
             "model_set_sha256": frozen["receipt_sha256"],
             "observation_sha256": observations["receipt_sha256"],
             "predictions": predictions,
+            "inactive_dimension_observation_receipts": inactive_receipts,
             "fits": 0,
             "selection_performed": False,
             "target_accessed": False,
             "tail_accessed": False,
         }
     )
+
+
+def _float64_sha256(value: float) -> str:
+    return hashlib.sha256(np.asarray(value, dtype="<f8").tobytes()).hexdigest()
 
 
 def composite_outcomes(
@@ -458,12 +570,17 @@ def evaluate(
     sealed: Mapping[str, Any],
     labels: Mapping[str, Any],
     baseline: Sequence[Mapping[str, Any]],
+    *,
+    score_version: str = VERSION,
 ) -> dict[str, Any]:
+    if score_version not in (VERSION, NEUTRAL_VERSION):
+        raise fail("unknown score contract")
+    score_contract = CONTRACT if score_version == VERSION else NEUTRAL_CONTRACT
     verify_receipt(sealed)
     verify_receipt(labels)
     if (
-        sealed.get("schema_version") != VERSION + "_predictions"
-        or sealed.get("contract") != CONTRACT
+        sealed.get("schema_version") != score_version + "_predictions"
+        or sealed.get("contract") != score_contract
         or sealed.get("target_accessed") is not False
         or sealed.get("tail_accessed") is not False
         or type(sealed.get("fits")) is not int
@@ -668,6 +785,102 @@ def evaluate(
     }
 
 
+def neutral_effect_repeat(
+    original: Mapping[str, Any],
+    labels: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+    *,
+    numeric_environment: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Labels must be an existing hash-pinned source; no label construction here."""
+    sealed = neutral_rescore(original)
+    identity = original["evaluation_input_identity"]
+    verify_receipt(labels, identity["outcome_sha256"])
+    verify_receipt(baseline, identity["baseline_sha256"])
+    if baseline.get("tail_accessed") is not False:
+        raise fail("baseline crosses the approved boundary")
+    result = evaluate(sealed, labels, baseline["predictions"], score_version=NEUTRAL_VERSION)
+    original_daily = {r["trade_date"]: r["rank_ic"] for r in original["metrics"]["daily"]}
+    paired = {
+        date.fromisoformat(r["trade_date"]): r["rank_ic"] - original_daily[r["trade_date"]]
+        for r in result["metrics"]["daily"]
+        if r["rank_ic"] is not None and original_daily[r["trade_date"]] is not None
+    }
+    days = [date.fromisoformat(d) for d in calendar_contract(labels["calendar"])["maturity"]["20"]]
+    result["metrics"]["original_score_diagnostic"] = {
+        "overall": original["metrics"]["overall"],
+        "paired_delta_hac": _newey_west(days, paired, lag=19),
+        "promotion_gate": False,
+    }
+    result["metrics"]["same_score_days"] = sum(
+        len(
+            {r["raw_score"] for r in sealed["predictions"] if r["trade_date"] == d and r["availability"] == "available"}
+        )
+        == 1
+        for d in calendar_contract(labels["calendar"])["decisions"]
+    )
+    return receipt(
+        {
+            "schema_version": NEUTRAL_VERSION + "_repeat",
+            "contract": NEUTRAL_CONTRACT,
+            "source_acceptance_sha256": original["acceptance_sha256"],
+            "source_model_sha256": original["model_hash"],
+            "source_input_sha256": original["input_hash"],
+            "source_prediction_sha256": identity["prediction_sha256"],
+            "label_sha256": labels["receipt_sha256"],
+            "baseline_sha256": baseline["receipt_sha256"],
+            "sealed_prediction_sha256": sealed["receipt_sha256"],
+            "numeric_environment": dict(numeric_environment),
+            "result": result,
+            "fits": 0,
+            "selection_performed": False,
+            "tail_accessed": False,
+        }
+    )
+
+
+def close_neutral_processes(first: Mapping[str, Any], second: Mapping[str, Any]) -> dict[str, Any]:
+    for payload in (first, second):
+        verify_receipt(payload)
+        if (
+            payload.get("schema_version") != NEUTRAL_VERSION + "_repeat"
+            or payload.get("contract") != NEUTRAL_CONTRACT
+            or payload.get("source_acceptance_sha256") != NEUTRAL_SOURCE_ACCEPTANCE_SHA
+            or type(payload.get("fits")) is not int
+            or payload["fits"] != 0
+            or payload.get("selection_performed") is not False
+            or payload.get("tail_accessed") is not False
+        ):
+            raise fail("neutral repeat authority differs", reason="identity_mismatch")
+    if canonical_json_bytes(first) != canonical_json_bytes(second):
+        raise fail("neutral fresh processes differ", reason="repeat_mismatch")
+    return receipt(
+        {
+            "schema_version": NEUTRAL_VERSION + "_acceptance",
+            "contract": NEUTRAL_CONTRACT,
+            "evaluation_contract_hash": canonical_sha256(NEUTRAL_CONTRACT),
+            "source_acceptance_sha256": first["source_acceptance_sha256"],
+            "model_hash": first["source_model_sha256"],
+            "input_hash": first["source_input_sha256"],
+            "numeric_environment": first["numeric_environment"],
+            "label_sha256": first["label_sha256"],
+            "fresh_process_bitwise_equal": True,
+            "result": first["result"],
+            "planned_fits": 0,
+            "completed_fits": 0,
+            "execution_status": "COMPLETED",
+            "research_surface_status": "NOT_AVAILABLE",
+            "advisory_status": "NOT_AVAILABLE",
+            "validation_basis": NEUTRAL_CONTRACT["validation_basis"],
+            "selection_performed": False,
+            "tail_accessed": False,
+            "database_write": False,
+            "runtime_action": False,
+            "ready": False,
+        }
+    )
+
+
 def close_effect_processes(first: Mapping[str, Any], second: Mapping[str, Any]) -> dict[str, Any]:
     for payload in (first, second):
         verify_receipt(payload)
@@ -772,6 +985,45 @@ def validate_acceptance(acceptance: Mapping[str, Any]) -> None:
         or {code for code, (mapping, _) in semantics.items() if mapping is None} != UNMAPPED
     ):
         raise fail("effect identity/model/mapping differs", reason="identity_mismatch")
+    diagnostics = identity["inactive_dimension_observation_receipts"]
+    keys = []
+    for item in diagnostics:
+        verify_receipt(item)
+        code, day = item["sector_code"], item["trade_date"]
+        raw, transformed = item["raw_value_f64"], item["preprocessed_value_f64"]
+        if (
+            item["schema_version"] != "hmm_risk_inactive_dimension_observation_receipt_v1"
+            or code != "801207.SI"
+            or day not in schedule["decisions"]
+            or item["as_of_date"] != schedule["as_of"][day]
+            or item["family"] != "autocycle_all_core"
+            or item["level"] != "L2"
+            or type(item["feature_index"]) is not int
+            or item["feature_index"] != 19
+            or item["feature_name"] != ALL_CORE_FEATURES[19]
+            or item["model_set_id"] != identity["frozen_model_set_sha256"]
+            or item["model_entry_sha256"] != identity["model_entry_sha256_by_sector"][code]
+            or item["projection_sha256"] != identity["projection_sha256_by_sector"][code]
+            or item["input_manifest_source_sha256"] != identity["observation_sha256"]
+            or any(
+                isinstance(v, bool) or not isinstance(v, (float, int)) or not math.isfinite(v)
+                for v in (raw, transformed)
+            )
+            or item["raw_value_is_finite"] is not True
+            or item["preprocessed_value_is_finite"] is not True
+            or item["raw_value_float64_sha256"] != _float64_sha256(raw)
+            or item["preprocessed_value_float64_sha256"] != _float64_sha256(transformed)
+            or item["inactive_feature_observed_non_zero"] is not (raw != 0.0)
+        ):
+            raise fail("inactive observation diagnostic identity/value differs", reason="identity_mismatch")
+        keys.append((code, day))
+    expected = sorted(
+        (row["sector_code"], row["trade_date"])
+        for row in acceptance["predictions"]
+        if row["sector_code"] == "801207.SI" and row["feature_eligible"]
+    )
+    if keys != expected:
+        raise fail("inactive observation diagnostic denominator/order differs", reason="identity_mismatch")
     daily = {}
     for row in acceptance["predictions"]:
         if row["trade_date"] not in schedule["decisions"] or row["as_of_date"] != schedule["as_of"].get(

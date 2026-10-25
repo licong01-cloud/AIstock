@@ -1,0 +1,283 @@
+{
+  "actual": "Runs 37338983389 and 37345277014 retained a backend step after superseding runs were created; successors waited 308/306 seconds. Heavy and ordinary validation steps use always() without !cancelled(). Make substantive PR work cancellation-sensitive while preserving failure aggregation and lightweight teardown, no new merge gate or process control. Deduplicate the directly affected workflow policy test input loading to preserve the honest workflow test budget.",
+  "allowed_write_scope": [
+    ".github/workflows/test.yml",
+    "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    "backend/tests/scripts/test_ci_change_classifier.py",
+    "tests/aistock_validation/bugs/20261005_BUG-1737-cancelled-pr-ci-continues-heavy-steps-until-five-minute-forced-cancellat.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1737",
+  "closed_at": "2026-10-05T18:08:24Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-05T17:44:45.506197Z",
+  "description": "Runs 37338983389 and 37345277014 retained a backend step after superseding runs were created; successors waited 308/306 seconds. Heavy and ordinary validation steps use always() without !cancelled(). Make substantive PR work cancellation-sensitive while preserving failure aggregation and lightweight teardown, no new merge gate or process control. Deduplicate the directly affected workflow policy test input loading to preserve the honest workflow test budget.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261005-d9be86c90e06",
+      "timestamp": "2026-10-05T17:44:45.506197Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1737-cancelled-pr-ci-continues-heavy-steps-until-five-minute-forced-cancellat.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_change_classifier.py",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1737-cancelled-pr-ci-continues-heavy-steps-until-five-minute-forced-cancellat.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        ".github/workflows/test.yml",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+      ],
+      "impacted_modules": [
+        "validation.workflow_automation",
+        "validation.runner",
+        "validation.guardrails",
+        "validation.center",
+        "platform.config"
+      ],
+      "matched_rules": [
+        {
+          "file": ".github/workflows/test.yml",
+          "impact_modules": [
+            "validation.runner",
+            "validation.guardrails"
+          ],
+          "primary_module": "validation.workflow_automation",
+          "risk_level": "high",
+          "rule_id": "validation_workflow_automation_github_workflows"
+        },
+        {
+          "file": "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.center",
+            "platform.config"
+          ],
+          "primary_module": "validation.guardrails",
+          "risk_level": "high",
+          "rule_id": "ci_workflow_policy_test_owner"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        ".github/workflows/test.yml",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      ".github/workflows/test.yml",
+      "backend/tests/scripts/test_ci_workflow_policy_scan.py"
+    ]
+  },
+  "first_seen_at": "2026-10-05T17:44:45.506197Z",
+  "fix_branch": null,
+  "fix_commit": "5f5aa664e387c5fe099e4d3b82c3223f063a6c93",
+  "fixed_at": "2026-10-05T18:08:24Z",
+  "github_issue_number": 5516,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5516",
+  "last_seen_at": "2026-10-05T17:44:45.506197Z",
+  "module": "validation.workflow_automation",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5520",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "guardrail_changed_files",
+    "validation_workflow_automation"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1737",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "7987e486eee5a1a1",
+    "recorded_at": "2026-10-05T18:09:02.964435Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "89f74f885b1f73690d6dbc870ffe70a34f4ac42f",
+    "source_merge_commit": "5f5aa664e387c5fe099e4d3b82c3223f063a6c93",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5520",
+    "validation_evidence": [
+      "rtk pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_ci_test_plan_coverage.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1737matrix -> 144 passed",
+      "python -m nox -s guardrail_changed_files -> passed"
+    ],
+    "validation_evidence_digest": "868576a222ba4a5f8b2e73f2264c52b9dd5cdb6fb2ec791d78e82d61e1f6c803"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "validation.workflow_automation"
+  ],
+  "title": "Cancelled PR CI continues heavy steps until five-minute forced cancellation",
+  "trigger_condition": {
+    "fingerprint": "d9be86c90e065db5e8c96ad2",
+    "source_event_id": "FE-20261005-d9be86c90e06"
+  },
+  "validation_evidence": [
+    "rtk pytest backend/tests/scripts/test_ci_change_classifier.py backend/tests/scripts/test_ci_test_plan_coverage.py backend/tests/scripts/test_ci_workflow_policy_scan.py -q -p no:cacheprovider --no-cov --basetemp X:/AIstock-CI/tmp/bug1737matrix -> 144 passed",
+    "python -m nox -s guardrail_changed_files -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation.workflow_automation",
+        "validation_workflow_automation"
+      ],
+      "plans": [
+        "validation_workflow_automation"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "guardrail_changed_files"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation.workflow_automation",
+          "validation_workflow_automation"
+        ],
+        "plans": [
+          "validation_workflow_automation"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "guardrail_changed_files"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

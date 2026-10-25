@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
 import pytest
 
 from backend.services.trading_core.errors import DataUnavailableError, RiskRuleError
 from backend.services.trading_core.ledger import FeeModel, InMemoryLedger
-from backend.services.trading_core.models import Fill, OrderSide
+from backend.services.trading_core.models import Fill, OrderSide, PositionLot
 
 
 def make_fill(
@@ -82,3 +83,63 @@ def test_ledger_snapshot_requires_prices() -> None:
         snapshot_time=datetime(2024, 1, 2, 15, 0),
     )
     assert snapshot.nav == pytest.approx(ledger.cash + 10_200)
+
+
+def test_restored_order_fee_does_not_charge_the_minimum_again() -> None:
+    ledger = InMemoryLedger(portfolio_id="paper_1", initial_cash=20_000)
+    ledger.restore_order_fee_state(
+        order_id="ord_1", symbol="000001.SZ", side=OrderSide.BUY,
+        cumulative_notional=Decimal("1000"), charged_fee=Decimal("5"),
+    )
+    assert ledger.cash == 20_000
+    assert not ledger.positions and not ledger.fills and not ledger.cash_entries
+    ledger.apply_fill(make_fill(side=OrderSide.BUY, quantity=100, price=10))
+    assert ledger.cash_entries[0].fee == Decimal("0.00")
+    assert ledger.cash == 19_000
+
+
+def test_restored_fee_credits_actual_historical_charges_without_refunding() -> None:
+    ledger = InMemoryLedger(portfolio_id="paper_1", initial_cash=20_000)
+    ledger.restore_order_fee_state(
+        order_id="ord_1", symbol="000001.SZ", side=OrderSide.BUY,
+        cumulative_notional=Decimal("60000"), charged_fee=Decimal("10"),
+    )
+    ledger.apply_fill(make_fill(side=OrderSide.BUY, quantity=100, price=10))
+    assert ledger.cash_entries[0].fee == Decimal("0.00")
+
+
+@pytest.mark.parametrize("notional,fee", [("-1", "5"), ("1000", "-1"), ("NaN", "5")])
+def test_restored_order_fee_rejects_invalid_money(notional: str, fee: str) -> None:
+    ledger = InMemoryLedger(portfolio_id="paper_1", initial_cash=20_000)
+    with pytest.raises(ValueError):
+        ledger.restore_order_fee_state(
+            order_id="ord_1", symbol="000001.SZ", side=OrderSide.BUY,
+            cumulative_notional=Decimal(notional), charged_fee=Decimal(fee),
+        )
+
+
+def test_order_fee_restore_is_idempotent_and_rejects_conflicting_prefix() -> None:
+    ledger = InMemoryLedger(portfolio_id="paper_1", initial_cash=20_000)
+    history = dict(order_id="ord_1", symbol="000001.SZ", side=OrderSide.BUY,
+                   cumulative_notional=Decimal("1000"), charged_fee=Decimal("5"))
+    ledger.restore_order_fee_state(**history)
+    ledger.restore_order_fee_state(**history)
+    with pytest.raises(ValueError, match="LOCAL_SIM_ORDER_FEE_HISTORY_CONFLICT"):
+        ledger.restore_order_fee_state(**{**history, "charged_fee": Decimal("10")})
+    ledger.apply_fill(make_fill(side=OrderSide.BUY, quantity=100, price=10))
+    assert ledger.cash_entries[0].fee == 0
+
+
+def test_restored_sell_fee_does_not_charge_the_minimum_again() -> None:
+    ledger = InMemoryLedger(portfolio_id="paper_1", initial_cash=20_000)
+    ledger.positions["000001.SZ"] = PositionLot(
+        portfolio_id="paper_1", symbol="000001.SZ", quantity=100, available_quantity=100,
+        avg_cost=10, trade_date=datetime(2024, 1, 1).date(),
+    )
+    ledger.restore_order_fee_state(
+        order_id="ord_1", symbol="000001.SZ", side=OrderSide.SELL,
+        cumulative_notional=Decimal("1000"), charged_fee=Decimal("5"),
+    )
+    ledger.apply_fill(make_fill(side=OrderSide.SELL, quantity=100, price=10))
+    assert ledger.cash_entries[0].fee == 0
+    assert ledger.cash == 21_000

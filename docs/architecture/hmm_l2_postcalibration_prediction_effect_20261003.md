@@ -1,8 +1,8 @@
 # L2冻结HMM：校准后历史轮动效果与产品消费详细设计
 
-版本：v0.3。Feature tier：F2。当前状态：APPROVED_SOURCE_IMPLEMENTED_EFFECT_NOT_RUN。
+版本：v0.5（2026-10-04批准状态关联）。Feature tier：F2。当前状态：APPROVED_EFFECT_COMPLETED_BELOW_BINDING_MBE。
 
-2026-10-03用户明确批准PR #5326中的效果评估D1～D6精确合同，随后授权启动长任务。文档PR已合入a9ef958d2d3f19a46b8119d9f499a9fe3c7d418a，当前正在交付源码及直接契约验证；正式效果回放未运行。源码PR合入仍需独立授权；数据库写入、运行时激活和清理不由长任务自动授权。
+2026-10-03用户明确批准PR #5326中的效果评估D1～D6精确合同，随后授权启动长任务。文档PR已合入a9ef958d2d3f19a46b8119d9f499a9fe3c7d418a，源码#5345及后续消费者修复已合入；2026-10-04在BUG-1717合入源码e205d34e19bccdf1770a5df66187f4692754fb05上完成正式双fresh-process零fit回放，证据/coverage充分但IC未达MBE。本次只同步实际结果，不修改D1～D6；数据库写入、运行时激活和清理未执行。
 
 本文件属于父蓝图P1的一个完整业务任务包，不另设预检、adapter、指标、CLI或页面小阶段。终极目标仍是**申万二级行业轮动预测与风险预警**；本包直接回答已训练HMM能否在校准完成之后提供有用的L2轮动排序，不以结构合格、文档完成或历史证据整理替代预测效果。
 
@@ -15,7 +15,24 @@
 - 4个不足项为801033.SI、801045.SI、801204.SI、801743.SI的1～3日稀有状态证据，不是漏采、正常停牌错误或需要数据窗口补数的事实。
 - mapping使用2024-07-01..2025-03-31的5/10/20日future excess utility校准，结果水位为2025-04-30。该窗口只能说明开发期语义校准，不能再作为该mapping的历史预测验收。
 
-本轮只实际读取原compact研究结果、冻结交易日历和必要源码；未读取后续窗口收益/特征、tail outcome或两个大型child文件，没有运行新训练或预测实验。
+v0.1起草时只读取原compact研究结果、日历及必要源码；之后按批准合同完成模型恢复、后续观察与正式效果推断。2026-10-04当前文档修订只读取已完成的compact结果、day.txt和必要源码；没有新增fit、重新推断、读取tail或重建历史证据。
+
+### 当前正式结果（原合同未改变）
+
+结果：`F:/Dev/AIstock_runtime/hmm_formal_state/20261004-l2-postcalibration-effect-BUG1717/run/acceptance.json`。canonical SHA=`309b770ccf8ae11477412970e07e222cac3fd275d9de88e020d57e503625d1b7`；文件SHA=`935380bf2fa5d932acda997c77e8f28156bbb39e54382de64aec7fe883a723b9`；model hash=`b03bf297e97e1a88d89d2f867dd510c904c47df3e8a2afdd002b37ccafee055c`，seed47、preprocess/projection/mapping保持原身份。两process canonical payload一致，fits/selection=0，tail/database/runtime均false。
+
+| 实际结果 | 数值及边界 |
+|---|---|
+| 目录与预测 | 131×221=28,951行；27,980可用，971不可用；coverage=0.9664605713101447，充分 |
+| 不可用 | mapping不足884行（4行业×221）；C-010合法观察/价格域不足45/42行；不是新的共享漏采结论 |
+| 成熟证据 | 201/201有效IC日；原5D/10D/20D诊断不用于重选horizon |
+| HMM效果 | IC=0.009072776767716752<0.02；HAC95%区间[-0.06595213611309883,0.08409768964853234]，仅诊断；终态BELOW_BINDING_MBE |
+| 同标签基线 | IC=0.022023310723322743，coverage=1；HAC95%区间[-0.008045846833033308,0.0520924682796788]；不是原10D历史IC的替代 |
+| 共同交集差 | HMM-minus-baseline IC均值-0.0191879494731156，95%区间[-0.10198909371761304,0.06361319477138185]；不证明基线统计上更优 |
+| 固定两块 | 0.04515950184276828/-0.030397078783120854（105/96成熟日）；不能仅凭符号变化证明关系时变 |
+| 产品/场景 | validator及纯产品行readback实际通过，无DB访问；SQL/DEV/生产writer、真实API/UI、新产品激活及QE收益没有完成 |
+
+原effect-prepare错误和原formal/研究产物全部保持历史终态；当前结论是证据充分但排序效果不足，不是正常停牌、数据缺口或额外显著性门造成的失败。本候选依D6到此停止；2026-10-04用户将QE验证后置，唯一零fitscore改进及独立风险提案写入L2详细设计§8.2，未经精确批准不运行，不回写本结果。
 
 ## Scope（范围）
 
@@ -155,25 +172,25 @@ HMM行业内semantic_state与daily_rank_group是不同字段/展示含义；现�
 
 本文及父蓝图增量已完成设计审核，D1～D6于2026-10-03获用户明确批准，文档PR #5326已合入且长任务已启动。以已合入的A/B源码为基线，在一个HMM feature任务中完成必要模型读取、观察延续、推断/指标、产品版本适配及直接测试；代码最多三轮审核修复，零阻断可提前结束，否则报告真实阻断。源码/CI与独立合入授权闭合后，在指定validation worktree运行双process零fit，报告效果及是否值得进入已有L2产品/消费者验证，不再重跑5184 fits。任务启动不自动授权源码PR合入、生产写入、激活或清理。
 
-起草时只完成日历算术和源码可复用性核对；本次源码增加了后续窗口构造及预测效果入口，但正式模型效果仍未执行，不能把原l2-readback或合成测试当作效果通过。数据窗口仅负责真正共享源缺口，所有HMM特征/因果/效果验证由本窗口负责。
+起草时只完成日历算术和源码可复用性核对；随后源码及当前正式效果均已实际执行，当前完整负结果见上方“当前正式结果”。不能把原l2-readback或合成测试当作效果通过。数据窗口仅负责真正共享源缺口，所有HMM特征/因果/效果验证由本窗口负责，不因本模型IC不足要求补数。
 
 ## Verification Plan
 
-设计：F2 validator、git diff --check、三轮以内针对性自审；校准前后角色、日期算术、预测封闭先于标签、原训练不变、人口分母、产品旧版本隔离逐条检查。设计中的90%、0.02、lag19、硬状态均值排序均已明确批准，未实际运行。
+设计：F2 validator、git diff --check、三轮以内针对性自审；校准前后角色、日期算术、预测封闭先于标签、原训练不变、人口分母、产品旧版本隔离逐条检查。90%、0.02、lag19、硬状态均值排序均按原批准合同实际运行，不通过更改这些值制造成功。
 
 实施直接矩阵限`backend/tests/hmm_risk`：冻结模型hash恢复、seed/D5/fit poison；预处理仅train/旧projection；未来source/target poison与prefix不变；calendar20D成熟末端及内部NA；131目录/4项mapping缺失；停牌/停发保留moneyflow/单成员；合法NA与未知漏采；同分/全同分/空分母/HAC缺口；基线同源同标签同日期及交集覆盖；旧product版本不变/新版本writer-readback/身份冲突。只增加实际缺失合同节点，不复制整套矩阵。changed-files→ownership→HMM slice、Ruff、py_compile、registry/L0、fresh-process import；完整矩阵优先CI，不重复跑历史训练测试。
 
 ## Design Acceptance Matrix
 
-下表更新为**本次源码合同与直接测试矩阵**。D1～D6已获用户明确批准；110项聚焦测试实际通过，但不是正式效果、真实数据库或浏览器验收。F2格式PASS不能替代这些尚未执行的业务验证；本轮按批准计划先交付源码PR，正式零fit回放在源码合入后执行，真实持久化/激活仍按独立权限完成。
+下表同步当前源码与正式离线评价，原110项聚焦测试仅为其源交付时的实际记录，本轮没有重跑并冒充新HEAD测试。D1～D6已批准并执行；完整评价不等于效果合格或真实数据库/浏览器完成。F2格式PASS只验证文档，不替代产品验收。
 
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
-| F-001 | formal_state_effect.extract_frozen_models/validate_models | backend/tests/hmm_risk/test_formal_state_effect.py：原receipt认证、参数恢复、原前缀bitwise及fit/selection poison直接测试通过 | SOURCE_CONTRACT_VERIFIED_ONLY | 用户批准先交付源码；正式大文件模型恢复尚未运行 |
-| F-002 | formal_state_effect.predict/composite_outcomes；formal_state_executor.effect_repeat | backend/tests/hmm_risk/test_formal_state_effect.py：t-1、连续前缀、t+1标签、221/201成熟日历及标签后置通过 | SOURCE_CONTRACT_VERIFIED_ONLY | 用户批准先交付源码；正式新窗口回放尚未运行 |
-| F-003 | formal_state_input.prepare_effect_observations；stock_fact_observation显式目录 | backend/tests/hmm_risk/test_formal_state_input.py：20D定义、严格前置circ_mv、空停牌窗口metadata、全目录缺观察NaN测试通过 | SOURCE_CONTRACT_VERIFIED_ONLY | 用户批准先交付源码；真实v17完整新窗口构造尚未运行 |
-| F-004 | formal_state_effect.evaluate/validate_acceptance；rotation_l2固定基线 | backend/tests/hmm_risk/test_formal_state_effect.py：硬utility、全人口mask、合法NA、spread预测分组、HAC19和效果状态闭合通过 | SOURCE_CONTRACT_VERIFIED_ONLY | 用户批准先交付源码；真实Rank IC和覆盖结果尚未产生 |
-| F-005 | formal_state_executor.run_two_processes；rotation_l2_prediction；RotationL2Dashboard | backend/tests/hmm_risk/test_formal_state_effect.py；backend/tests/hmm_risk/test_rotation_l2_prediction.py：parent/request/version/writer/readback/API直接测试通过；frontend/tests/hmm-risk/hmm-risk.spec.ts：新增UI矩阵交CI | SOURCE_UNIT_VERIFIED_ONLY | 用户批准先交付源码；双真实process、SQL验证与真实API/UI尚未执行，不宣称产品完成 |
+| F-001 | formal_state_effect.extract_frozen_models/validate_models | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261004-l2-postcalibration-effect-BUG1717/run/acceptance.json；恢复原model_hash、前缀bitwise一致，原参数不变 | FROZEN_MODEL_RESTORE_VERIFIED | 无 |
+| F-002 | formal_state_effect.predict/composite_outcomes；formal_state_executor.effect_repeat | 同上artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261004-l2-postcalibration-effect-BUG1717/run/acceptance.json；221/201实际日历、原t-1/标签后置、tail_accessed=false | CAUSAL_REPLAY_VERIFIED | 无 |
+| F-003 | formal_state_input.prepare_effect_observations；stock_fact_observation显式目录 | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261004-l2-postcalibration-effect-BUG1717/request.json；20D/source identity/全131目录与正式acceptance闭合 | FILE_INPUT_VERIFIED | 无 |
+| F-004 | formal_state_effect.evaluate/validate_acceptance；rotation_l2固定基线 | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261004-l2-postcalibration-effect-BUG1717/run/acceptance.json；coverage 0.96646、201/201，IC 0.00907<0.02；匹配基线与paired差实际计算 | EFFECT_EVALUATION_COMPLETED_BELOW_MBE | 无 |
+| F-005 | formal_state_executor.run_two_processes；rotation_l2_prediction；RotationL2Dashboard | artifact: F:/Dev/AIstock_runtime/hmm_formal_state/20261004-l2-postcalibration-effect-BUG1717/run/acceptance.json；双process bitwise相同；纯validate_acceptance/rows_from_acceptance回读通过、DB poison；backend/tests/hmm_risk/test_rotation_l2_prediction.py为直接源码测试位置 | APPROVED_BY_USER_OFFLINE_RESULT_VERIFIED_PRODUCT_NOT_DEPLOYED | 用户批准原离线包；真实SQL/writer/API/UI未执行，新部署权限仍独立；不宣称产品完成 |
 | F-006 | effect CLI显式模式；Production Gates；实际文件runtime分类 | backend/tests/hmm_risk/test_formal_state_effect.py；backend/tests/hmm_risk/test_formal_state_executor.py：零fit、原入口默认、失败闭环与数据库poison导入通过 | SOURCE_CONTRACT_VERIFIED_ONLY | 无 |
 
 ## Rollout / Rollback
@@ -186,9 +203,9 @@ HMM行业内semantic_state与daily_rank_group是不同字段/展示含义；现�
 
 ## Production Gates
 
-本次源码交付：production_ddl_gate=not_authorized_not_executed；production_dml_gate=noop；backend/frontend dependency gates=noop；runtime_activation=noop；backend_restart_authority=false；database_write=false；dataset_write=false；active_profile_write=false；fit/selection/tail_access=0/false/false；cleanup未执行。已有L2表只接受delta版本，因此新增HMM拥有的显式版本约束迁移源码scripts/hmm_risk/extend_rotation_l2_effect_schema.sql；未在DEV或生产执行，真实持久化仍为独立阻断，不声明数据库兼容已验证。未来必须先在现有DEV验证，再单独授权目标DDL/DML；不得通过删除旧约束或改写旧行绕过版本合同。
+本次结果同步：production_ddl_gate=not_authorized_not_executed；production_dml_gate=noop；backend/frontend dependency gates=noop；runtime_activation=noop；backend_restart_authority=false；database_write=false；dataset_write=false；active_profile_write=false；fit/selection/tail_access=0/false/false；cleanup未执行。已有L2表只接受delta版本，因此新增HMM拥有的显式版本约束迁移源码scripts/hmm_risk/extend_rotation_l2_effect_schema.sql；未在DEV或生产执行，真实持久化仍为独立待办，不声明数据库兼容已验证。未来必须先在现有DEV验证，再单独授权目标DDL/DML；不得通过删除旧约束或改写旧行绕过版本合同。BUG-1717源码的用户重启与post-restart验证已完成，但不等于本新effect run已发布。
 
-## 源码交付与审核增量（不代替正式效果或运行态验收）
+## 源码交付与审核历史（v0.3当时记录，不覆盖当前正式结果）
 
 实施引用：formal_state_effect.py恢复原参数/前缀、硬状态utility及全人口评价；formal_state_input.py构造有界L2观察、标签和原delta对照；formal_state_executor.py及run_formal_state_model_set.py提供effect-prepare/effect-run/effect-child。原训练模式默认不变。必要strict-prior circ_mv只读取真实历史上下文，不重造训练request或A5资格。stock_fact_observation.py只增加显式冻结目录reindex：整个窗口缺观察或全无机会时保留NaN，不能补造聚合值或缩小131分母。
 
@@ -202,7 +219,7 @@ HMM行业内semantic_state与daily_rank_group是不同字段/展示含义；现�
 
 PR #5345首次CI扩展矩阵为229 passed/2 failed：新增effect-prepare合并CLI报错文案导致两个旧l2-readback/preflight提示合同断言失败，非模型或流水线故障。已在同一PR恢复旧模式原提示，并为effect-prepare保留独立校验；两个原失败节点及两个新模式校验共4 passed。未删除、放宽旧测试，未改变参数接受规则、模型合同或CI配置；最终CI结果以修复后的PR HEAD为准，首次CI失败不能记为全绿。
 
-完整HMM矩阵与mock UI交现有CI计划hmm_risk_pr_slice/hmm_risk_ui；本任务未启动用户或runner服务，未执行真实浏览器验收。SQL未执行、正式effect-prepare/effect-run未运行；没有任何真实新预测/IC、DB写入、runtime activation或QE收益结论。达到代码PR交付边界后等待独立合入授权，不绕过已合入源码要求读取正式新窗口。
+v0.3源码交付时，完整HMM矩阵与mock UI交现有CI计划hmm_risk_pr_slice/hmm_risk_ui；当时SQL、正式effect-prepare/effect-run和真实浏览器均未执行。此后源码及正式离线效果已经完成，当前真实预测/IC见上方结果，不沿用当时“尚未运行”状态。SQL、DB写入、runtime activation、新产品浏览器和QE收益仍未完成；本轮文档未启动用户或runner服务。
 
 ## 正式审核记录（v0.1起草时的设计审核历史，不代替实现/模型验收）
 
@@ -223,6 +240,10 @@ DESIGN-COMPLIANCE-001：
 | 禁止改变业务逻辑 | 新score/utility评价/日期是本次明确批准合同，旧D3～D6、seed/model hash、delta产品及QE资产保持原语义；仅L2研究 |
 | 禁止私增门禁审批 | §D5数值全部来自本次明确批准合同；无新HAC/power、每行业、最少股票数、资源/审批AND门；授权按现有动作边界处理 |
 
-以上只说明设计审核，不宣称实现、经济效果、QE或产品已通过。F2 PASS仅是文档格式与验收索引一致性检查。
+以上为起草时设计审核，不宣称当时实现、经济效果、QE或产品已通过。F2 PASS仅是文档格式与验收索引一致性检查。
+
+v0.4复审历史（2026-10-04）：三轮作者自审核对正式acceptance的221/201日期、131目录/27,980可用行、coverage与效果分离、同复合标签基线及paired区间；修复旧“尚未运行”当前态。原Contracts D1～D6逐字保持；当前COMPLETED/BELOW_BINDING_MBE不等于产品部署或QE增益。新R1/risk精确提案仅在L2详细设计§8.2，当时本文件不批准或实施它们。三份文档F2通过，原结果文件SHA不变；本轮未新增fit、tail、DB或进程操作。DESIGN-COMPLIANCE-001保持完整目录、不静默补值、原合同/旧版本不变、无新晋升门。
+
+v0.5关联状态：用户现已批准L2详细设计v1.3 §8.2的L2-R1/L2-RISK全部D1～D6；原本文件Contracts及旧结果不变。设计PR #5433尚未合入，新score/风险源码与0/2-fit实验未执行；不从新合同批准推导原HMM效果达标、产品部署、QE增益或服务授权。
 
 2026-10-03批准后复核（#5326合入前的历史记录）：当时仅同步批准及依赖交付状态，效果源码实施/两次零fit推断未启动，文档PR尚未获合入授权。D1～D6由用户明确批准；v0.1待批准/CI失败记录不表示当前状态。#5325根因已确认并完成测试隔离修复：CI同口径120 passed，生产环境校验和模型合同不变；最终head 9fb0b47726aff9f82aa79d91e5cee9684081b442的CI SUCCESS，按用户授权合入f49ebc600ac0cb4d52689443ed2bb304e29b01e4。此后#5326已合入a9ef958d2d3f19a46b8119d9f499a9fe3c7d418a，新效果源码状态以上方v0.3矩阵为准。没有激活、重启或验证用户后端运行态。

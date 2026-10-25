@@ -1,0 +1,328 @@
+{
+  "actual": "HistoricalRangeOutcomeSliceV1 raises ValidationError exhausted slice must omit cursor and non-exhausted slice must retain cursor; original parent and child now FAILED, TCN not submitted.",
+  "allowed_write_scope": [
+    "backend/services/advisory_historical_range/outcome_planner.py",
+    "backend/tests/advisory_historical_range/test_r4_outcome_planner.py",
+    "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+    "tests/aistock_validation/bugs/20261017_BUG-1956-advisory-outcome-planner-loses-continuation-on-fully-reused-seed-pages.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1956",
+  "closed_at": "2026-10-17T11:58:26.196762Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-17T10:05:13.049366Z",
+  "description": "Native outcome recovery failed because an entirely reused bounded seed page returned exhausted=false without a continuation cursor. Advance through validated scanned keys when all pending work fits, retain the last emitted key when truncated, and include the initial targeted cursor subject so remaining projection/horizon work cannot be omitted. Financial formulas, frozen source/policy/candidate identities and revision checks are unchanged. The existing producer hash includes outcome_planner.py: its new identity must be reported honestly and production continuation uses the existing explicit CALCULATION_CORRECTION protocol, never an old-identity bypass.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261017-46a34ea70dfc",
+      "timestamp": "2026-10-17T10:05:13.049347Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/source-correction-preflight.json; backend/logs/errors.log 2026-10-17 18:00:41"
+  ],
+  "expected": "Native bounded planner traverses reused/terminal pages, resumes from an auditable cursor and neither omits later pending subjects nor recalculates exact existing facts.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/advisory_historical_range/outcome_planner.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_planner.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1956-advisory-outcome-planner-loses-continuation-on-fully-reused-seed-pages.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/advisory_historical_range/outcome_planner.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_planner.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1956-advisory-outcome-planner-loses-continuation-on-fully-reused-seed-pages.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/advisory_historical_range/outcome_planner.py",
+        "backend/tests/advisory_historical_range/test_r4_outcome_planner.py",
+        "backend/tests/advisory_historical_range/test_r4_outcome_service.py"
+      ],
+      "impacted_modules": [
+        "advisory.historical_range",
+        "tests.backend"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/advisory_historical_range/outcome_planner.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/tests/advisory_historical_range/test_r4_outcome_planner.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/tests/advisory_historical_range/test_r4_outcome_service.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/advisory_historical_range/outcome_planner.py",
+        "backend/tests/advisory_historical_range/test_r4_outcome_planner.py",
+        "backend/tests/advisory_historical_range/test_r4_outcome_service.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/advisory_historical_range/outcome_planner.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_planner.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_service.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/advisory_historical_range/outcome_planner.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_planner.py",
+      "backend/tests/advisory_historical_range/test_r4_outcome_service.py"
+    ]
+  },
+  "first_seen_at": "2026-10-17T10:05:13.049366Z",
+  "fix_branch": null,
+  "fix_commit": "d8bbdf9c40481cdc8675a6b37dff4d5a480e462c",
+  "fixed_at": "2026-10-17T10:19:01Z",
+  "github_issue_number": 6241,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6241",
+  "last_seen_at": "2026-10-17T10:05:13.049366Z",
+  "module": "advisory",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6243",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/advisory_historical_range/test_r4_outcome_planner.py",
+  "required_verification": [
+    "l0",
+    "advisory_historical_range_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/advisory/historical-range-batches/ahrb_e7e25e1696d18d5ea0b4d9c37a7c3d24/operations?limit=50",
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/bug1956-native-planner-smoke.json -> READ_ONLY_PASS in 121.008338s using the actual 20-day frozen file inputs and original command bd6adc8b4d6bfd7d10d0f6b2cd9510ba1600cfd2267d793ff412c844771ac784. Two fully reused native pages retain strictly increasing cursors, no financial evaluation/claim/append/publication. Loaded planner source SHA256 548f43b9efde1f9f03e26aa326c7968c6bbb36440228d0fb5da089b2432479bc. Original producer 6fa5df375cf6439a0793306127659eb3d80fd130fe3514451cc03085e557a404 diagnosed explicitly under its own identity; new runtime derives 9de0ba10071c733452985d2e0c9c9cf0fb1c550ef24c28048ece4104d4682374. This is not runtime activation or a new production identity PASS."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/ADVISORY/offline-outcomes-20261017/bug1956-post-restart-r1.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1956",
+      "business_smoke_semantic": {
+        "contract_id": "advisory_historical_operation_status_readback",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "cd9c20d0a8445c1c522038a67d9a1c13fc9c336e0975013a997fa01d2b98b212",
+      "expected_identity": "d8bbdf9c40481cdc8675a6b37dff4d5a480e462c",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T11:57:57.693091Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8a51f3c8520ab915dbe4a50320bc04750f5d593efbac633fc3aba020fd5bd79d",
+      "receipt_sha256": "674045302301cb0147ae7a909e8b651e3f25793c6b6056a3756eb899f3c95900",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6917b9cdd8c925386490f3f6842d208e5879aca8971879dd0264fb3133f9bc6f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1956",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bd2dc5612dea3d48",
+    "recorded_at": "2026-10-17T10:19:43.156903Z",
+    "runtime_contract_digest": "cd9c20d0a8445c1c522038a67d9a1c13fc9c336e0975013a997fa01d2b98b212",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "99433932ea8fe4784f8573c6fee10f271a1da3ba",
+    "source_merge_commit": "d8bbdf9c40481cdc8675a6b37dff4d5a480e462c",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6243",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed",
+      "python -m pytest backend/tests/advisory_historical_range/test_r4_outcome_planner.py backend/tests/advisory_historical_range/test_r4_outcome_service.py -q -> 34 passed"
+    ],
+    "validation_evidence_digest": "3118c08942d911b25480396e41a365a9a9134264d0ced936feb95884fc47a6be"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "advisory"
+  ],
+  "title": "Advisory outcome planner loses continuation on fully reused seed pages",
+  "trigger_condition": {
+    "fingerprint": "46a34ea70dfc2b62192d1c47",
+    "source_event_id": "FE-20261017-46a34ea70dfc"
+  },
+  "validation_evidence": [
+    "RED: seven direct cases reproduced empty reused-page ValidationError and targeted same-subject cursor omission; GREEN: the same seven cases passed.",
+    "python -m pytest backend/tests/advisory_historical_range/test_r4_outcome_planner.py backend/tests/advisory_historical_range/test_r4_outcome_service.py -q --tb=short -p no:cacheprovider --basetemp X:/AIstock_temp/ADVISORY/bug1956-final-related -> 34 passed; native planner/application/artifact tests cover all-reused and later pending work without recalculating or changing preserved facts.",
+    "rtk ruff check (three changed Python files) -> passed; git diff --check -> passed; python -m nox -s l0 -> 0 findings, 0 blocking.",
+    "Review rounds 1/2: cursor truncation versus scanned skip progress; inclusive first targeted subject; cross-check immutable input/revision checks, native lease checkpoint and exact reuse; fixture duplicate hash corrected without relaxing uniqueness validation.",
+    "DESIGN-COMPLIANCE-001 (1) full scoped fix, not mock-only: real planner/application/artifact chain plus frozen-input read-only smoke; (2) no silent success: slice validation and source/producer/correction failures retained; (3) formulas, PIT, policies, candidate ordering and shared selection unchanged, producer identity changes under existing version protocol; (4) no new gate, approval, UI blocker or cross-module work. Source completion, runtime loading, original terminal failures and financial acceptance remain distinct.",
+    "Broader advisory_historical_range_backend regression delegated to required CI plan for the final PR HEAD; no UI journey, backend/database mutation, training or production replay requested.",
+    "python -m nox -s l0 -> passed",
+    "python -m pytest backend/tests/advisory_historical_range/test_r4_outcome_planner.py backend/tests/advisory_historical_range/test_r4_outcome_service.py -q -> 34 passed",
+    "canonical post-restart-verify backend-main -> passed; loaded runtime 0f68d56f2259d1e67d81d92d1852c6efdfa6bae7 contains source merge d8bbdf9c40481cdc8675a6b37dff4d5a480e462c"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory",
+        "advisory_historical_range"
+      ],
+      "plans": [
+        "advisory_historical_range_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory",
+          "advisory_historical_range"
+        ],
+        "plans": [
+          "advisory_historical_range_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

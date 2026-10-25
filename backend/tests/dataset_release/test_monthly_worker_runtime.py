@@ -7,6 +7,7 @@ import pytest
 
 from backend.services.dataset_release.monthly_runtime import MonthlyRuntimeConfigurationError
 from backend.services.dataset_release.monthly_worker_runtime import MonthlyWorkerRuntime
+from backend.services.dataset_release.monthly_postgres_source import POSTGRES_SOURCE_ADAPTER_VERSION
 
 
 def _never_run(*_args, **_kwargs):
@@ -44,12 +45,19 @@ def _runtime(version="6", *, installed=True, shared_scope=True):
     )
 
 
-def test_preflight_proves_source6_shared_execution_scope_without_running():
-    receipt = _runtime().preflight_receipt()
+@pytest.mark.parametrize("version", ["6", "7", POSTGRES_SOURCE_ADAPTER_VERSION])
+def test_preflight_proves_current_shared_execution_scope_without_running(version):
+    receipt = _runtime(version).preflight_receipt()
+    assert receipt["source_gate_contract"] == {
+        "source_gate_schema": "aistock_monthly_source_gate_v2",
+        "quality_warning_schema": "aistock_monthly_source_quality_warning_v1",
+        "quality_fields": ["quality_status", "quality_warning_count", "quality_warning_refs"],
+        "missing_data_waived": False,
+    }
     assert receipt["status"] == "PASS"
     assert receipt["source_preparation"] == {
         "adapter_id": "aistock.monthly.postgres_source",
-        "adapter_version": "6",
+        "adapter_version": version,
         "mode": "INDEPENDENT_UNPUBLISHED_PREPARATION",
         "shared_build_execution_scope": True,
         "publication_allowed": False,
@@ -65,7 +73,8 @@ def test_source5_remains_explicit_full_source_only():
 
 @pytest.mark.parametrize("version,installed,shared", [
     ("6", False, True), ("6", True, False), ("5", True, True),
-    ("7", False, True), (None, False, True), (6, True, True),
+    ("7", False, True), ("7", True, False), ("99", True, True), (None, False, True), (6, True, True),
+    (POSTGRES_SOURCE_ADAPTER_VERSION, False, True), (POSTGRES_SOURCE_ADAPTER_VERSION, True, False),
 ])
 def test_incomplete_or_unrecognized_source_contract_fails_closed(version, installed, shared):
     with pytest.raises(MonthlyRuntimeConfigurationError):

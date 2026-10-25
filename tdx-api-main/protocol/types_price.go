@@ -1,8 +1,34 @@
 package protocol
 
 import (
+	"errors"
 	"fmt"
 )
+
+// GetPriceChecked rejects incomplete/overflowing signed wire varints.
+func GetPriceChecked(bs []byte) ([]byte, Price, error) {
+	var value uint64
+	for i, b := range bs {
+		shift := uint(0)
+		mask := byte(0x3f)
+		if i > 0 {
+			shift = uint(6 + (i-1)*7)
+			mask = 0x7f
+		}
+		if shift >= 63 || uint64(b&mask) > (uint64(1<<63-1)>>shift) {
+			return nil, 0, errors.New("wire integer overflow")
+		}
+		value |= uint64(b&mask) << shift
+		if b&0x80 == 0 {
+			p := Price(value)
+			if bs[0]&0x40 != 0 {
+				p = -p
+			}
+			return bs[i+1:], p, nil
+		}
+	}
+	return nil, 0, errors.New("truncated wire integer")
+}
 
 // Price 价格，单位厘
 type Price int64
@@ -89,12 +115,11 @@ func DecodeK(bs []byte) ([]byte, K) {
 }
 
 func GetPrice(bs []byte) ([]byte, Price) {
-	for i := range bs {
-		if bs[i]&0x80 == 0 {
-			return bs[i+1:], getPrice(bs[:i+1])
-		}
+	rest, value, err := GetPriceChecked(bs)
+	if err != nil {
+		panic(err)
 	}
-	return bs, 0
+	return rest, value
 }
 
 /*
@@ -133,12 +158,11 @@ func getPrice(bs []byte) (data Price) {
 }
 
 func CutInt(bs []byte) ([]byte, int) {
-	for i := range bs {
-		if bs[i]&0x80 == 0 {
-			return bs[i+1:], getData(bs[:i+1])
-		}
+	rest, value, err := GetPriceChecked(bs)
+	if err != nil {
+		panic(err)
 	}
-	return bs, 0
+	return rest, int(value)
 }
 
 func getData(bs []byte) (data int) {
