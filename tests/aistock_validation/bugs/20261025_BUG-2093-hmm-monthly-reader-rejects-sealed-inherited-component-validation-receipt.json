@@ -100,17 +100,22 @@
   "risk_area": "bug",
   "runtime_contract": {
     "backend_restart_owner": "user",
-    "fresh_process_evidence": [],
-    "inference_basis": "planned_scope",
+    "fresh_process_evidence": [
+      "Native afa9158 inherited closure fresh-process PASS; module SHA40524336172cd2fe80eb6429c3fb72399ed5784b4c6d95dd2c06856aa1d49e92; 1964 physical hashes/stamps checked; 52.81s; receipt F:/Dev/AIstock/tmp/handoff/qe-hmm-mainline-long-plan-20261025/run_v1/h1_active_execution_20261025/inherited_closure_fresh_process_receipt.json; service control=false, dataset_write=false."
+    ],
+    "inference_basis": "actual_changed_files",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "provisional": true,
+    "provisional": false,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
     "target_ids": [
       "backend-main"
-    ]
+    ],
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/risk-l2/overview?run_id=88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26"
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
@@ -230,5 +235,16 @@
       "schema_version": "aistock_verification_budget_v1",
       "target_cost_percent_of_legacy": "30-45%"
     }
-  }
+  },
+  "design_compliance_review": {
+    "no_simplified_delivery": "Full inherited closure, manifest, lineage and amendment verification; every changed/new physical pin rehashed; explicit counters preserved.",
+    "no_silent_errors": "Unknown scopes, partial/nonzero counters, broken chains, hash drift, duplicates, missing pins, cycles and excessive depth fail closed.",
+    "business_logic_unchanged": "No model, feature, preprocessing, threshold, strategy, HMM fit, producer or dataset changes.",
+    "no_unapproved_gates": "Existing release evidence and fresh-process consumer only; no new approval, default or restart."
+  },
+  "validation_evidence": [
+    "rtk pytest backend/tests/hmm_risk/test_monthly_release_input.py -q --tb=short -> 50 passed",
+    "rtk ruff check changed Python files -> passed",
+    "git diff --check -> passed"
+  ]
 }
