@@ -245,6 +245,7 @@ def _run_nightly_pytest_shards(
             temporary_path = Path(temporary).resolve()
             if temporary_path.parent != scratch_parent.resolve():
                 raise RuntimeError("offline fixture scratch escaped its owner directory")
+            worker_env.update(dict.fromkeys(("TEMP", "TMP", "TMPDIR"), str(temporary_path)))
             worker_args.append(f"--basetemp={temporary_path / 'tests'}")
             result = subprocess.run(
                 [sys.executable, "-m", "pytest", *files, *worker_args],
