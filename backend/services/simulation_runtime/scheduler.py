@@ -9015,6 +9015,11 @@ class SimulationLifecycleScheduler:
     ) -> dict[str, Any]:
         config = source_release.release_config_json or {}
         metadata = deepcopy(config.get("metadata") if isinstance(config, dict) else {}) or {}
+        if source_binding.broker_backend is SimulationBrokerBackend.LOCAL_SIM:
+            from .localsim_pit_migration import POLICY_KEY, refresh_migrated_daily_pit
+
+            if POLICY_KEY in metadata:
+                metadata = refresh_migrated_daily_pit(metadata, trade_date=trade_date)
         created_by = SimulationLifecycleScheduler._roll_forward_created_by(source_binding.broker_backend)
         purpose = SimulationLifecycleScheduler._roll_forward_purpose(source_binding.broker_backend)
         metadata.update(

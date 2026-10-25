@@ -39,6 +39,17 @@ def _runner_outage_input():
             "nightly-l3": "skipped", "paper-v2-live": "skipped"}
 
 
+def _write_failed_status(path, *, include_url=False):
+    payload = _nightly_input("9001", include_url=include_url)
+    payload["statuses"].pop("codeIntelligence")
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _nightly_cli(status_path, output_path, *extra):
+    return summary.main(["--nightly-status-json", str(status_path), "--output", str(output_path),
+                         "--stdout-format", "compact", *extra])
+
+
 
 CI_LOG = """
 Backend tests (paper_v2_backend)\tUNKNOWN STEP\t2026-05-25T01:43:38.5513821Z nox > Running session paper_v2_backend
@@ -355,30 +366,9 @@ def test_cli_llm_rollout_preserves_deterministic_issue_payload(
 def test_cli_compact_stdout_keeps_details_in_artifact(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     status_path = tmp_path / "nightly-status.json"
     output_path = tmp_path / "summary.json"
-    status_path.write_text(
-        json.dumps(
-            {
-                "statuses": {
-                    "runnerPreflight": "success",
-                    "drSnapshot": "success",
-                    "drValidate": "success",
-                    "nightlyL3": "failure",
-                    "paperV2Live": "skipped",
-                },
-                "run_id": "9001",
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_failed_status(status_path)
 
-    assert summary.main([
-        "--nightly-status-json",
-        str(status_path),
-        "--output",
-        str(output_path),
-        "--stdout-format",
-        "compact",
-    ]) == 0
+    assert _nightly_cli(status_path, output_path) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     artifact_payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -430,18 +420,7 @@ def test_nightly_cli_discovers_bound_artifacts_without_same_run_query(
         lambda **_kwargs: pytest.fail("same-run GitHub Actions read must not occur"),
     )
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--run-id",
-            "9001",
-            "--output",
-            str(output_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert _nightly_cli(status_path, output_path, "--run-id", "9001") == 0
 
     capsys.readouterr()
     payload = json.loads(output_path.read_text(encoding="utf-8"))
@@ -574,6 +553,51 @@ def test_nightly_missing_session_receipt_does_not_hide_other_failed_stages() -> 
     assert "missing_session_receipt" not in issue_payload["body"]
 
 
+@pytest.mark.parametrize("stage,outcome,expected", [
+    ("workspace", "failure", "workspace_preparation_failed"),
+    ("environment", "failure", "environment_preparation_failed"),
+    ("plan", "failure", "plan_preparation_failed"),
+    ("sessions", "failure", "artifact_transport"),
+    ("sessions", "cancelled", "sessions_interrupted"),
+    ("sessions", "skipped", "sessions_not_started"),
+    ("mismatch", "failure", "invalid_execution_diagnostic"),
+])
+def test_nightly_setup_and_transport_failures_never_invent_test_sessions(stage, outcome, expected):
+    execution = {"run_id": "9001", "head_commit": "a" * 40,
+                 "workspace": "success", "environment": "success", "plan": "success", "sessions": "skipped"}
+    if stage == "mismatch":
+        execution["head_commit"] = "b" * 40
+    else:
+        execution[stage] = outcome
+    payload = summary.summarize_nightly_status({
+        "statuses": {"nightlyL3": "failure", "drSnapshot": "failure"},
+        "run_id": "9001", "commit": "a" * 40, "nightly_l3_execution": execution,
+    })
+    assert payload["nightly_failed_sessions"] == []
+    group = payload["nightly_failure_groups"][0]
+    assert group["sessions"] == [] and group["failure_kinds"] == [expected]
+    issue = summary.build_github_issue_payloads(payload)[0]
+    real = summary.build_github_issue_payloads(_failed_nightly_sessions("9000", "validation_workflow_automation"))[0]
+    assert issue["dedupe"]["nightly_marker"] != real["dedupe"]["nightly_marker"]
+    assert not issue["dedupe"].get("legacy_nightly_marker")
+    assert "validation_workflow_automation" not in issue["title"]
+
+
+def test_nightly_workflow_exports_setup_outcomes_without_fabricating_results():
+    import yaml
+    workflow = yaml.safe_load((Path(__file__).resolve().parents[3] / ".github/workflows/nightly.yml").read_text(encoding="utf-8"))
+    l3 = workflow["jobs"]["nightly-l3"]
+    steps = {step.get("id"): step for step in l3["steps"] if step.get("id")}
+    for name in ("prepare_workspace", "verify_environment", "build_plan", "execute_sessions"):
+        assert name in steps
+        assert any(f"steps.{name}.outcome" in value for value in l3["outputs"].values())
+    summary_steps = workflow["jobs"]["full-summary"]["steps"]
+    assert not any("Materialize exhausted" in step.get("name", "") for step in summary_steps)
+    build = next(step for step in summary_steps if step.get("name") == "Build Nightly failure issue context")
+    assert '"nightly_l3_execution"' in build["run"]
+    assert "needs.nightly-l3.outputs.workspace_result" in build["env"]["L3_WORKSPACE_RESULT"]
+
+
 def test_nightly_heterogeneous_failure_groups_are_bounded_with_overflow() -> None:
     sessions = [
         "factor_research_backend",
@@ -617,19 +641,8 @@ def test_nightly_cli_writes_issue_payload_manifest_for_heterogeneous_groups(
         encoding="utf-8",
     )
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--output",
-            str(output_path),
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--no-candidate-history",
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert _nightly_cli(status_path, output_path, "--github-issue-payload-output",
+                        str(issue_payload_path), "--no-candidate-history") == 0
 
     issue_document = json.loads(issue_payload_path.read_text(encoding="utf-8"))
     assert issue_document["schema_version"] == "aistock_ci_failure_github_issue_payload_manifest_v1"
@@ -644,33 +657,9 @@ def test_cli_persists_tmp_failure_candidate_history(
     output_path = tmp_path / "tmp" / "validation" / "nightly_failure_issue" / "summary.json"
     history_dir = tmp_path / "tests" / "aistock_validation" / "history" / "issue_candidates"
     monkeypatch.setattr(summary, "_default_candidate_history_dir", lambda: history_dir)
-    status_path.write_text(
-        json.dumps(
-            {
-                "statuses": {
-                    "runnerPreflight": "success",
-                    "drSnapshot": "success",
-                    "drValidate": "success",
-                    "nightlyL3": "failure",
-                    "paperV2Live": "skipped",
-                },
-                "run_id": "9001",
-                "run_url": "https://github.com/licong01-cloud/AIstock/actions/runs/9001",
-            }
-        ),
-        encoding="utf-8",
-    )
+    _write_failed_status(status_path, include_url=True)
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--output",
-            str(output_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert _nightly_cli(status_path, output_path) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     history_path = Path(stdout_payload["artifacts"]["candidate_history"])
@@ -1237,20 +1226,8 @@ def test_nightly_status_cli_keeps_generic_stage_local_until_run_completes(
         encoding="utf-8",
     )
 
-    assert summary.main(
-        [
-            "--nightly-status-json",
-            str(status_path),
-            "--run-id",
-            "28973219723",
-            "--output",
-            str(summary_path),
-            "--github-issue-payload-output",
-            str(issue_payload_path),
-            "--stdout-format",
-            "compact",
-        ]
-    ) == 0
+    assert _nightly_cli(status_path, summary_path, "--run-id", "28973219723",
+                        "--github-issue-payload-output", str(issue_payload_path)) == 0
 
     stdout_payload = json.loads(capsys.readouterr().out)
     payload = json.loads(summary_path.read_text(encoding="utf-8"))

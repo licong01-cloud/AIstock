@@ -1,4 +1,4 @@
-"""Frozen official quotes and PIT-cohort flows for an explicit history repair.
+"""Frozen official quotes and classified stock facts for a history repair.
 
 SOURCE freezes independent published quotes. BUILD aggregates already sealed
 stock moneyflow; it never reuses a previously aggregated industry's cohort,
@@ -17,7 +17,7 @@ import pandas as pd
 from .canonical import canonical_json_bytes
 from .errors import SourceManifestError
 
-CONTRACT = "official_quote_plus_pit_stock_flow_v1"
+CONTRACT = "official_quote_plus_classified_fact_stock_flow_v2"
 SCHEMA = "aistock_monthly_industry_quote_source_v1"
 QUOTE_FIELDS = ("open", "high", "low", "close", "pct_change", "vol", "amount", "pe", "pb", "total_mv")
 FLOW_FIELDS = {f"sw2_mf_{side}_{size}_amt": f"mf_{size}_{side}_amt"
@@ -126,14 +126,12 @@ def predecessor_context_matches(prefix, projection):
 
 
 def rebuild_industry_context(frame, *, projection, quotes, moneyflow, pit):
-    """Separate published quotes from sums of the corrected strategy PIT cohort.
+    """Sum all causally classified facts, independently of selection policy.
 
     Stock moneyflow is CNY/shares; sector storage remains native 10k CNY/hands.
     Missing facts stay NaN. SQL-compatible sums ignore individual NULLs, but an
     all-NULL group is not zero. No alias inference or current-membership join.
     """
-    from .pit import filter_frame_to_pit_spans
-
     actual = projection.project(frame)
     days = frame.index.get_level_values("datetime")
     selected = ((days >= pd.Timestamp(projection.payload["start_date"])) &
@@ -145,7 +143,10 @@ def rebuild_industry_context(frame, *, projection, quotes, moneyflow, pit):
     required = [FLOW_FIELDS[name] for name in flow_columns]
     if set(required).difference(moneyflow):
         raise SourceManifestError("frozen stock moneyflow fields are incomplete")
-    cohort, _ = filter_frame_to_pit_spans(moneyflow, pit)
+    # ``pit`` remains a compatibility argument for existing callers. Industry
+    # membership comes from the versioned classification projection, never
+    # from whether a strategy could buy the security on this date.
+    cohort = moneyflow
     if required and not cohort.empty:
         if np.isinf(cohort[required].to_numpy(dtype=float)).any():
             raise SourceManifestError("frozen stock moneyflow is infinite")
@@ -222,7 +223,8 @@ class FrozenIndustryContext:
         with pd.HDFStore(self.moneyflow_path, "r") as store:
             moneyflow = store.select("data", where=where)
         raw = moneyflow.reset_index().rename(columns={"datetime": "trade_date", "instrument": "ts_code"})
-        canonical = self.identity.remap_source_rows(raw, canonical_codes=set(self.pit.to_frame().ts_code), source_dataset=MONEYFLOW_DATASET)
+        canonical_codes = {row["canonical_symbol"] for row in self.projection.payload["effective_intervals"]}
+        canonical = self.identity.remap_source_rows(raw, canonical_codes=canonical_codes, source_dataset=MONEYFLOW_DATASET)
         canonical = canonical.rename(columns={"trade_date": "datetime", "ts_code": "instrument"}).set_index(["datetime", "instrument"])
         return quotes, canonical
 

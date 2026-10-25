@@ -1024,7 +1024,8 @@ class MonthlyReleaseWorker:
                 # state, consume its request or turn contention into an exit.
                 continue
             request = self.service.store.read_request(operation_id)
-            if state.get("status") == "READY_TO_ACTIVATE" and request.get("activation_mode") == "activate_when_ready":
+            if (state.get("status") == "READY_TO_ACTIVATE" and request.get("activation_mode") == "activate_when_ready"
+                    and self.service.store.read_plan(operation_id).get("monthly_ready_correction") is None):
                 if self.authorization_store is None or self.activation_verifier is None:
                     return self.service.store.update_state(
                         operation_id,

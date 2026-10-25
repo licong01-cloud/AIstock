@@ -1519,6 +1519,31 @@ def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
         if str(row.get("error") or "").strip():
             group["errors"].append(str(row["error"]).strip())
     failed_stages = _nightly_failed_keys(_nightly_statuses_from_payload(payload))
+    execution = payload.get("nightly_l3_execution")
+    if not groups and "nightly_l3" in failed_stages and isinstance(execution, dict):
+        bound = (
+            re.fullmatch(r"[0-9a-f]{40}", str(payload.get("commit") or "")) is not None
+            and execution.get("head_commit") == payload["commit"]
+            and str(payload.get("run_id") or "").isdigit()
+            and str(execution.get("run_id")) == str(payload["run_id"])
+        )
+        stage = next((name for name in ("workspace", "environment", "plan")
+                      if execution.get(name) in {"failure", "cancelled"}), None)
+        if not bound:
+            kind = "invalid_execution_diagnostic"
+        elif stage:
+            kind = f"{stage}_preparation_failed"
+        elif execution.get("sessions") == "cancelled":
+            kind = "sessions_interrupted"
+        elif execution.get("sessions") in {"failure", "success"}:
+            kind = "artifact_transport"
+        else:
+            kind = "sessions_not_started"
+        groups["validation.runner"] = {
+            "sessions": [], "failure_kinds": [kind],
+            "errors": [f"Nightly infrastructure: {kind}; no executed test failure was inferred"],
+            "infrastructure": True,
+        }
     if not groups and "nightly_l3" in failed_stages and (failed_stages == ["nightly_l3"] or "nightly_plan_status" in payload):
         kind, error = "missing_session_receipt", "Nightly L3 failed without a durable session result"
         plan_status = payload.get("nightly_plan_status")
@@ -1556,6 +1581,7 @@ def _nightly_failure_groups(payload: dict[str, Any]) -> list[dict[str, Any]]:
                 "session_count": len(sessions),
                 "failure_kinds": sorted(set(details["failure_kinds"])),
                 "errors": _unique(details["errors"]),
+                **({"infrastructure": True} if details.get("infrastructure") else {}),
             }
         )
     return normalized_groups
@@ -1625,10 +1651,12 @@ def _nightly_group_summaries(summary: dict[str, Any]) -> list[dict[str, Any]]:
         # membership changes between Nightly runs.  Session identities remain
         # in the title/body, but they must not be part of the dedupe identity.
         group_kind = "overflow" if group.get("overflow") else "module"
+        if group.get("infrastructure"):
+            group_kind = "infrastructure:" + ",".join(failure_kinds)
         group_source = f"module={module}|group_kind={group_kind}"
         group_hash = hashlib.sha256(group_source.encode("utf-8")).hexdigest()[:16]
         scoped["nightly_fingerprint"] = f"nightly-group-{group_hash}"
-        if not multiple_groups and summary.get("nightly_fingerprint") != scoped["nightly_fingerprint"]:
+        if not multiple_groups and not group.get("infrastructure") and summary.get("nightly_fingerprint") != scoped["nightly_fingerprint"]:
             scoped["nightly_legacy_fingerprint"] = summary.get("nightly_fingerprint")
         scoped["fingerprint_source"] = group_source
         scoped["fingerprint"] = f"ci-{group_hash}"

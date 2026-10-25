@@ -21,6 +21,39 @@ def _reset_nox_env_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(noxfile, "_VALIDATION_ENV_LOADED", False)
 
 
+def test_hmm_nightly_diagnostics_keep_plan_identity_and_survive_later_sessions(monkeypatch):
+    monkeypatch.setenv("AISTOCK_TEST_DIAGNOSTICS_RECEIPT", "X:/run/test-failures.jsonl")
+    monkeypatch.setattr(noxfile, "_env", lambda extra: extra)
+    calls = []
+    class Session:
+        def run(self, *args, **kwargs):
+            calls.append((args, kwargs))
+    noxfile.hmm_risk_backend(Session())
+    env = calls[-1][1]["env"]
+    assert env["AISTOCK_TEST_PLAN"] == "hmm_risk_backend"
+    assert env["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"].replace("\\", "/") == "X:/run/hmm-risk-test-failures.jsonl"
+    assert all(env[key] == "1" for key in noxfile.HMM_TEST_NUMERIC_ENV)
+
+
+@pytest.mark.parametrize("plan", ["advisory_modeling_backend", "unrelated_plan"])
+def test_advisory_fixture_numeric_pools_are_subprocess_local_and_diagnostics_are_plan_owned(monkeypatch, plan):
+    monkeypatch.setenv("OMP_NUM_THREADS", "16")
+    monkeypatch.setenv("AISTOCK_TEST_DIAGNOSTICS_RECEIPT", "X:/run/test-failures.jsonl")
+    monkeypatch.setattr(noxfile, "_nightly_shared_pytest_args", lambda name, args: args)
+    calls = []
+    class Session:
+        name = plan
+        def run(self, *args, **kwargs):
+            calls.append((args, kwargs))
+    noxfile._run_pytest(Session(), "backend/tests/advisory_modeling", "-q")
+    env = calls[-1][1]["env"]
+    assert env["AISTOCK_TEST_PLAN"] == plan
+    assert env["OMP_NUM_THREADS"] == ("1" if plan == "advisory_modeling_backend" else "16")
+    assert env["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"].replace("\\", "/").endswith(
+        "/advisory-modeling-test-failures.jsonl" if plan == "advisory_modeling_backend" else "/test-failures.jsonl")
+    assert os.environ["OMP_NUM_THREADS"] == "16"
+
+
 def test_budget_contract_is_not_nested_in_catalog_but_remains_in_nightly():
     from scripts.ci_change_classifier import _selected_nox_test_targets
     targets, error = _selected_nox_test_targets(repo_root=ROOT,
@@ -596,6 +629,27 @@ def test_hmm_risk_pr_targets_default_to_smoke_without_classifier_summary(
     assert noxfile._hmm_risk_pr_test_targets() == list(noxfile.HMM_RISK_PR_SMOKE_TESTS)
 
 
+@pytest.mark.parametrize("changed_files", [
+    ["scripts/hmm_risk/build_observed_industry_authority.py"],
+    ["backend/services/hmm_risk/observed_industry_authority.py"],
+    ["scripts/hmm_risk/build_observed_industry_authority.py",
+     "backend/services/hmm_risk/observed_industry_authority.py",
+     "backend/tests/hmm_risk/test_observed_industry_authority.py"],
+])
+def test_observed_authority_pr_slice_executes_direct_contract_once(monkeypatch, tmp_path, changed_files):
+    direct = "backend/tests/hmm_risk/test_observed_industry_authority.py"
+    _configure_hmm_pr_targets(monkeypatch, tmp_path, changed_files=changed_files,
+                              existing_paths=[*changed_files, direct])
+    assert noxfile._hmm_risk_pr_test_targets() == [*noxfile.HMM_RISK_PR_SMOKE_TESTS, direct]
+
+
+def test_observed_authority_pr_slice_rejects_missing_direct_contract(monkeypatch, tmp_path):
+    cli = "scripts/hmm_risk/build_observed_industry_authority.py"
+    _configure_hmm_pr_targets(monkeypatch, tmp_path, changed_files=[cli], existing_paths=[cli])
+    with pytest.raises(ValueError, match="mapped direct-neighbor test is missing"):
+        noxfile._hmm_risk_pr_test_targets()
+
+
 def test_hmm_risk_pr_targets_map_router_and_schema_to_direct_contracts(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -844,11 +898,15 @@ def test_frontend_sessions_invoke_direct_entrypoints_without_npm_bin_shims(
     calls: list[tuple[str, ...]] = []
 
     class DummySession:
+        posargs = []
+
         def run(self, *args: str, **_kwargs: object) -> None:
             calls.append(tuple(args))
 
     noxfile.frontend_type_lint(DummySession())  # type: ignore[arg-type]
     noxfile._run_mocked_frontend_target(DummySession(), "tests/watchlist")  # type: ignore[arg-type]
+    monkeypatch.setattr(noxfile, "_is_port_open", lambda *_args: False)
+    noxfile.validation_center_ui(DummySession())  # type: ignore[arg-type]
 
     assert calls[0] == (
         "node",
@@ -865,6 +923,11 @@ def test_frontend_sessions_invoke_direct_entrypoints_without_npm_bin_shims(
         "tests/watchlist",
     )
     assert all(command[0] != "npm" for command in calls)
+    assert calls[-2] == calls[0]
+    assert calls[-1][:4] == (
+        "node", "node_modules/@playwright/test/cli.js", "test",
+        "tests/validation-center/validation-center.spec.ts",
+    )
 
 
 def test_mcp_gateway_phase5_invokes_prebuilt_frontend_entrypoints_directly(

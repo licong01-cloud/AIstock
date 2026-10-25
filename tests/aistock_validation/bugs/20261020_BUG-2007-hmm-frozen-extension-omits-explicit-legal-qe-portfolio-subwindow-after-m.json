@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2007",
-  "closed_at": null,
+  "closed_at": "2026-10-20T08:05:44.618398Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -94,8 +94,8 @@
   },
   "first_seen_at": "2026-10-20T03:59:25.790134Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "0f66abdcdad9b4150a7cadd029663bb9c7c0fabd",
+  "fixed_at": "2026-10-20T04:44:16Z",
   "github_issue_number": 6414,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6414",
   "last_seen_at": "2026-10-20T03:59:25.790134Z",
@@ -103,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6419",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -128,9 +129,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-2007-close-sync-20261020\\tmp\\issue_workflow\\BUG-2007\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2007",
+      "business_smoke_semantic": {
+        "contract_id": "hmm_frozen_coefficient_extension",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "51f68baf253110d5a517f2835924549cd9f9e70a2f80336f16205bf2f24d5e3c",
+      "expected_identity": "0f66abdcdad9b4150a7cadd029663bb9c7c0fabd",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-20T08:05:15.655946Z",
+      "mode": "read_only",
+      "observed_identity": "4d9e1cd11835a47f0ad322d8c727f5bddcbb439c",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "46df4eda71e9b13f8f9b29c24f278bd6ea925f0c385bba10bbe109e3dd557397",
+      "receipt_sha256": "e8f476e12a133abf6071abe9dc6f15de8ed39b2fef8c2c214c85cf3651548a2c",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "57da05dfd9c9902e5b566850b3f5c0b2a29cb7a382ef8e42f79f70d0bdc5a992",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -140,7 +164,34 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2007",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "08d2dd945e5b3b38",
+    "recorded_at": "2026-10-20T04:45:26.384625Z",
+    "runtime_contract_digest": "51f68baf253110d5a517f2835924549cd9f9e70a2f80336f16205bf2f24d5e3c",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "5b85a5307e77bafecbc17a99a4342f21b6c86bd5",
+    "source_merge_commit": "0f66abdcdad9b4150a7cadd029663bb9c7c0fabd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6419",
+    "validation_evidence": [
+      "validation-receipt: id=67e56bb8fd7fc47d commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=nox plan=hmm_data_source_backend status=passed command=`python -m nox -s hmm_data_source_backend` result=`PASS 315 passed, 1 skipped, 6 integration deselected, coverage 77.78%; reused at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5 after source/test equivalence to 16c3cb4fc0318ee58ebc700c179cc4eb21053ea4; main sync only changed BUG-2008 JSON`",
+      "validation-receipt: id=6ce702b20a87c277 commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`PASS 8 passed; reused at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5, identical code and module catalog`",
+      "validation-receipt: id=a3fe79f0beb59614 commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=pytest plan=direct status=passed command=`pytest backend/tests/hmm_data_source/test_coefficient_extension.py -q -k 'completed_extension_adds_separate_legal_portfolio_window or portfolio_crop_rejects_unproven_source_or_conflicting_registration or scheduler_reconciles_new_release_without_reenrollment_or_retraining'` result=`PASS 15 passed at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5; RTK wrapper and AIstock Python 3.12.12`",
+      "validation-receipt: id=37291178a8f7ef74 commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`PASS zero blocking findings at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5`",
+      "validation-receipt: id=881c6198662e1897 commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=ruff plan=direct status=passed command=`ruff check backend/services/hmm_training_service.py backend/tests/hmm_data_source/test_coefficient_extension.py` result=`PASS at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5`",
+      "validation-receipt: id=432e4b1cf93f9407 commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/hmm_training_service.py backend/tests/hmm_data_source/test_coefficient_extension.py` result=`PASS at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5; Python 3.12.12 isolated task-root imports hmm_training, health, HMM service and coefficient_extension also PASS with no jobs or inference`",
+      "validation-receipt: id=81a53872845313d4 commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=diff_check plan=direct status=passed command=`git diff --check` result=`PASS at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5`"
+    ],
+    "validation_evidence_digest": "df447b1d8018c7c7de7d8be3727f0db5aabf08e5792d738ccca1ae619c324055"
+  },
+  "status": "verified",
   "suspected_modules": [
     "hmm"
   ],
@@ -149,6 +200,16 @@
     "fingerprint": "52efe50042411e745f2bb2b4",
     "source_event_id": "FE-20261020-52efe5004241"
   },
+  "validation_evidence": [
+    "validation-receipt: id=67e56bb8fd7fc47d commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=nox plan=hmm_data_source_backend status=passed command=`python -m nox -s hmm_data_source_backend` result=`PASS 315 passed, 1 skipped, 6 integration deselected, coverage 77.78%; reused at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5 after source/test equivalence to 16c3cb4fc0318ee58ebc700c179cc4eb21053ea4; main sync only changed BUG-2008 JSON`",
+    "validation-receipt: id=6ce702b20a87c277 commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0` result=`PASS 8 passed; reused at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5, identical code and module catalog`",
+    "validation-receipt: id=a3fe79f0beb59614 commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=pytest plan=direct status=passed command=`pytest backend/tests/hmm_data_source/test_coefficient_extension.py -q -k 'completed_extension_adds_separate_legal_portfolio_window or portfolio_crop_rejects_unproven_source_or_conflicting_registration or scheduler_reconciles_new_release_without_reenrollment_or_retraining'` result=`PASS 15 passed at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5; RTK wrapper and AIstock Python 3.12.12`",
+    "validation-receipt: id=37291178a8f7ef74 commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`PASS zero blocking findings at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5`",
+    "validation-receipt: id=881c6198662e1897 commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=ruff plan=direct status=passed command=`ruff check backend/services/hmm_training_service.py backend/tests/hmm_data_source/test_coefficient_extension.py` result=`PASS at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5`",
+    "validation-receipt: id=432e4b1cf93f9407 commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/hmm_training_service.py backend/tests/hmm_data_source/test_coefficient_extension.py` result=`PASS at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5; Python 3.12.12 isolated task-root imports hmm_training, health, HMM service and coefficient_extension also PASS with no jobs or inference`",
+    "validation-receipt: id=81a53872845313d4 commit=5b85a5307e77bafecbc17a99a4342f21b6c86bd5 kind=diff_check plan=direct status=passed command=`git diff --check` result=`PASS at final HEAD 5b85a5307e77bafecbc17a99a4342f21b6c86bd5`",
+    "User-owned backend restart completed 2026-10-20. Independent canonical BUG-2007 post-restart-verify PASS runtime=4d9e1cd11835a47f0ad322d8c727f5bddcbb439c. Actual 72-day portfolio asset and unique config/snapshot/preset_A registry readback PASS: 2026-05-20..2026-08-28, 72 frozen trade dates, missing=0, membership stocks=4921, 623309 bytes, SHA256=7aced80ed253e05b7851270da2469e7d139c15d29d2aaac84916b3ada8ff2127; formal canonical projection equals published bytes and original 73-day primary SHA unchanged. P10/P11 shared HMM consumer branch fresh-process PASS on actual production source with active v18 manifest f82670728cd6cde06bbc834481187794d081070689648c06b88786a7782e435b. Original 2024 test_start request remains blocked; no automatic window shortening. Full QE experiment/compose not executed. Post-fetch DB/network/subprocess poison attempts=0, fits=0, agent DB writes=0, process control=false."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

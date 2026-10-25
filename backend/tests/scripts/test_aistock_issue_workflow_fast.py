@@ -1146,16 +1146,18 @@ def _extension_probe():
     plan = dict(config_id="config-1", snapshot_id="snapshot-1", signal_preset="balanced", model_sha256="a" * 64,
                 source_mode="qe_frozen_file", generation_mode="frozen_window_extension_v1", policy=dict(policy),
                 test_start="2026-06-01", backtest_end="2026-08-31", windows=[["2026-06-01", "2026-08-31"]],
-                generator_sha256="f" * 64, model_inference_origin=origin, dataset_identity=identity, preset_coeffs={"bull": 1.1})
-    key = dict(policy=policy, preset="balanced", preset_coeffs=plan["preset_coeffs"], model_inference_origin=origin,
-               input_identity=identity, start=plan["test_start"], end=plan["backtest_end"], generator_sha256="f" * 64)
-    plan["extension_key"] = hashlib.sha256((json.dumps(key, sort_keys=True, separators=(",", ":")) + "\n").encode()).hexdigest()
+                generator_sha256="f" * 64, extension_reader_sha256="0" * 64,
+                model_inference_origin=origin, dataset_identity=identity, preset_coeffs={"bull": 1.1})
+    # Golden canonical writer key, including the frozen reader digest. Do not
+    # derive it from the validator: a matching omission would hide this bug.
+    plan["extension_key"] = "83e6e761ff52860f7e066fc080414c16665d8a4188ae9631b771886e95d32ffd"
     filename = f"coefficients_balanced_2026-06-01_2026-08-31__auto_{plan['extension_key'][:16]}__{'9' * 16}.json"
     window = dict(role="automatic_frozen_model_extension", preset="balanced", test_start="2026-06-01", backtest_end="2026-08-31",
                   strict_no_leakage=True, snapshot_id="snapshot-1", config_id="config-1", model_sha256="a" * 64,
                   dataset_generation="generation-1", release_id="release-1", dataset_manifest_identity="c" * 64,
                   dataset_manifest_file_sha256="d" * 64, active_profile_sha256="e" * 64, coefficient_filename=filename,
-                  coefficient_sha256="9" * 64, coefficient_bytes=123, extension_key=plan["extension_key"], generator_sha256="f" * 64)
+                  coefficient_sha256="9" * 64, coefficient_bytes=123, extension_key=plan["extension_key"],
+                  generator_sha256="f" * 64, extension_reader_sha256="0" * 64)
     result = dict(status="REGISTERED", training_performed=False, output_path="F:/models/" + filename, artifact_sha256="9" * 64,
                   windows=[window], dataset_identity=dict(identity), extension_key=plan["extension_key"], model_sha256="a" * 64, generator_sha256="f" * 64)
     job = dict(job_id="job-1", config_id="config-1", snapshot_id="snapshot-1", signal_preset="balanced",
@@ -1177,10 +1179,12 @@ def _extension_probe():
         ("completed_at", "2026-08-30T00:00:00+08:00"), ("completed_at", "2099-01-01T00:00:00+08:00"))),
     *(("jobs.0.plan_json." + k, v) for k, v in (("model_inference_origin", None), ("model_inference_origin.validation_end", "2026-06-01"),
         ("model_inference_origin.origin_authority", "mutable_config"), ("model_sha256", "8" * 64), ("source_mode", "database_daily"),
-        ("extension_key", "8" * 64), ("windows", []), ("dataset_identity.active_profile_sha256", "bad"))),
+        ("extension_key", "8" * 64), ("windows", []), ("dataset_identity.active_profile_sha256", "bad"),
+        ("extension_reader_sha256", None), ("extension_reader_sha256", "bad"), ("extension_reader_sha256", "8" * 64))),
     *(("jobs.0.result_json." + k, v) for k, v in (("training_performed", True), ("status", "FAILED"), ("windows", []),
         ("windows.0.strict_no_leakage", False), ("windows.0.test_start", "2024-07-01"), ("windows.0.snapshot_id", "other"),
-        ("windows.0.coefficient_bytes", True), ("windows.0.coefficient_filename", "other.json"), ("output_path", "F:/other.json"))),
+        ("windows.0.coefficient_bytes", True), ("windows.0.coefficient_filename", "other.json"), ("output_path", "F:/other.json"),
+        ("windows.0.extension_reader_sha256", None), ("windows.0.extension_reader_sha256", "8" * 64))),
 ])
 def test_coefficient_extension_semantic_contract(field, value):
     payload, query = _extension_probe(), ""
@@ -1445,6 +1449,7 @@ def test_required_check_unknown_bucket_fails_closed() -> None:
             ["worker-scheduler"],
         ),
         ("backend/services/hmm_risk/rotation_l1_gbdt.py", "none", []),
+        ("backend/services/hmm_risk/observed_industry_authority.py", "none", []),
         ("backend/services/hmm_risk/risk_l2_value_replay.py", "none", []),
         ("backend/services/hmm_risk/risk_l2_prediction.py", "backend", ["backend-main"]),
         ("backend/routers/hmm_risk.py", "backend", ["backend-main"]),
@@ -1479,6 +1484,30 @@ def test_hmm_offline_value_family_does_not_downgrade_mixed_online_scope() -> Non
     assert mixed["target_ids"] == ["backend-main"]
 
 
+def test_observed_industry_builder_role_is_exact_and_cannot_downgrade_backend() -> None:
+    source = "backend/services/hmm_risk/observed_industry_authority.py"
+    rule = next(rule for rule in workflow._load_runtime_target_catalog()["source_role_rules"]
+                if rule["rule_id"] == "offline-hmm-observed-industry-authority")
+    assert rule["source_globs"] == [source]
+    files = [source, "scripts/hmm_risk/build_observed_industry_authority.py",
+             "backend/tests/hmm_risk/test_observed_industry_authority.py"]
+    offline = workflow.build_runtime_contract(record={}, changed_files=files)
+    assert offline["runtime_impact"] == "none"
+    assert offline["backend_restart_required"] is False
+    assert offline["blocking"] == []
+    for online in ["backend/routers/hmm_risk.py",
+                   "backend/services/hmm_risk/observed_industry_authority_consumer.py"]:
+        mixed = workflow.build_runtime_contract(
+            record={"runtime_contract": {"schema_version": workflow.RUNTIME_CONTRACT_SCHEMA,
+                                         "runtime_impact": "none"}},
+            changed_files=[*files, online],
+        )
+        assert mixed["runtime_impact"] == "backend"
+        assert mixed["target_ids"] == ["backend-main"]
+        assert mixed["backend_restart_required"] is True
+        assert any("cannot downgrade" in reason for reason in mixed["blocking"])
+
+
 def test_advisory_fixed5_offline_roles_are_exact_and_preserve_online_scope() -> None:
     rule = next(rule for rule in workflow._load_runtime_target_catalog()["source_role_rules"]
                 if rule["rule_id"] == "offline-advisory-fixed5-valuation")
@@ -1499,7 +1528,7 @@ def test_advisory_fixed5_offline_roles_are_exact_and_preserve_online_scope() -> 
         assert mixed["target_ids"] == ["backend-main"]
 
 
-@pytest.mark.parametrize("monthly", [True, False, "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "consumer-script", "monthly_industry_history.py", "history-with-build", "wsl_resource_guardian.py", "resource_supervisor.py", "monthly_minute_repair.py", "monthly_prev_close_repair.py", "monthly_suspension_repair.py"])
+@pytest.mark.parametrize("monthly", [True, False, "build_stage.py", "monthly_construction_facts.py", "source_authority.py", "monthly_postgres_source.py", "artifact_ready_build_source.py", "monthly_unified.py", "monthly_supervised_build.py", "candidate_consumer_smoke.py", "consumer-script", "monthly_industry_history.py", "history-with-build", "wsl_resource_guardian.py", "resource_supervisor.py", "monthly_minute_repair.py", "monthly_prev_close_repair.py", "monthly_suspension_repair.py"])
 def test_release_sources_select_their_own_process_probe(monthly) -> None:
     catalog = workflow._load_runtime_target_catalog()
     target = catalog["targets"]["worker-scheduler"]
@@ -1522,7 +1551,7 @@ def test_release_sources_select_their_own_process_probe(monthly) -> None:
         monthly_sources = [f"backend/services/dataset_release/{monthly}"]
 
     selected, error = workflow._select_runtime_probe_route(
-        target, runtime_files=monthly_sources if monthly else ["backend/services/dataset_release/build_stage.py"],
+        target, runtime_files=monthly_sources if monthly else ["scripts/dataset_release_worker.py"],
     )
 
     assert error is None
@@ -1534,6 +1563,15 @@ def test_release_sources_select_their_own_process_probe(monthly) -> None:
     else:
         assert selected["probe_route_id"] == "dataset_release_worker_heartbeat"
         assert selected["probe_mode"] == workflow._DATASET_RELEASE_WORKER_HEARTBEAT_MODE
+
+
+@pytest.mark.parametrize("other", ["scripts/dataset_release_worker.py", "backend/services/dataset_release/unknown.py"])
+def test_monthly_build_probe_does_not_accept_legacy_or_unknown_mixed_sources(other) -> None:
+    target = workflow._load_runtime_target_catalog()["targets"]["worker-scheduler"]
+    _, error = workflow._select_runtime_probe_route(
+        target, runtime_files=["backend/services/dataset_release/build_stage.py", other],
+    )
+    assert error and "mix routed and non-routed" in error
 
 
 @pytest.mark.parametrize("worker_count", [1, 2])
@@ -1700,6 +1738,53 @@ def test_runtime_preflight_checks_semantic_registration_without_http(path, regis
     semantic_errors = [error for error in contract["blocking"] if "semantic contract" in error]
     assert bool(semantic_errors) is not registered
     assert (contract["pre_pr_ready"], contract["runtime_impact"], contract["target_ids"]) == (registered, "backend", ["backend-main"])
+
+
+HMM_DATABASE_SOURCE = "backend/services/hmm_risk/risk_l2_database_inference.py"
+
+
+@pytest.mark.parametrize("refs,extra,ready", [
+    ({}, [], True), ({"fresh_process_evidence": []}, [], False),
+    *(({}, [path], False) for path in ("backend/main.py", "backend/services/hmm_risk/contracts.py")),
+    ({"operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+      "identity_ref": "http://localhost:8001/api/v1/runtime-identity",
+      "business_smoke_ref": "http://localhost:8001/api/v1/hmm-risk/risk-l2/overview?run_id=" + "b" * 64}, [], True),
+    *(({key: value}, [], False) for key, value in (
+        ("operator_runbook_ref", ""), ("operator_runbook_ref", "docs/operations/absent.md"),
+        ("identity_ref", ""), ("identity_ref", "http://untrusted:8001/api/v1/runtime-identity"),
+        ("business_smoke_ref", ""), ("business_smoke_ref", "http://127.0.0.1:8001/api/v1/health"),
+        ("business_smoke_ref", "http://127.0.0.1:8001/api/v1/unregistered")))])
+def test_hmm_database_finish_contract_keeps_real_acceptance_pending(monkeypatch, refs, extra, ready):
+    monkeypatch.setattr(workflow, "_read_only_http_probe", lambda *a, **kw: pytest.fail("finish must not probe services"))
+    record = {"runtime_contract": {"schema_version": workflow.RUNTIME_CONTRACT_SCHEMA, "fresh_process_evidence": ["unit-fixture-only"], **refs}}
+    contract = workflow.build_runtime_contract(record=record, changed_files=[HMM_DATABASE_SOURCE, "backend/services/hmm_risk/stock_fact_repository.py", *extra])
+    assert (contract["runtime_impact"], contract["target_ids"], contract["backend_restart_required"], contract["backend_restart_owner"]) == ("backend", ["backend-main"], True, "user")
+    assert (contract["pre_pr_ready"], bool(contract["blocking"])) == (ready, not ready)
+    assert (contract["post_restart_effective_gate"], contract["runtime_identity_match"], contract["activation_states"]["backend_restart"]) == ("pending_user_restart", "pending", "pending_user_action")
+    if ready:
+        assert contract["operator_runbook_ref"] == refs.get("operator_runbook_ref", "docs/operations/hmm_database_runtime_finish_runbook.md")
+        probes = contract["target"]["probes"]
+        assert probes["identity_ref"] == refs.get("identity_ref", "http://127.0.0.1:8001/api/v1/runtime-identity")
+        altered = {**contract, "target": {**contract["target"], "business_smoke_contract_id": "health_ok"}}
+        assert workflow._runtime_contract_digest(contract) != workflow._runtime_contract_digest(altered)
+
+
+@pytest.mark.parametrize("field,value", [
+    *(("route.source_globs", [path]) for path in ("backend/**/*.py", "../backend/main.py", "backend/services/hmm_risk/missing.py")),
+    ("route.operator_runbook_ref", "docs/operations/missing.md"), ("route.probes", None),
+    ("route.probes.identity_ref", "http://untrusted:8001/api/v1/runtime-identity"),
+    ("route.probes.business_smoke_ref", "http://127.0.0.1:8001/api/v1/health"),
+    ("target.runtime_kind", "worker_scheduler"), ("target.probe_routes", "duplicate")])
+def test_http_route_catalog_does_not_relax_validation(monkeypatch, field, value):
+    catalog = workflow._load_runtime_target_catalog()
+    target = catalog["targets"]["backend-main"]
+    obj, parts = {"target": target, "route": target["probe_routes"][0]}, field.split(".")
+    for part in parts[:-1]:
+        obj = obj[part]
+    obj[parts[-1]] = target["probe_routes"] * 2 if value == "duplicate" else value
+    monkeypatch.setattr(workflow.yaml, "safe_load", lambda _: catalog)
+    with pytest.raises(workflow.WorkflowError):
+        workflow._load_runtime_target_catalog()
 
 
 def test_find_bug_record_parses_only_matching_or_opaque_filenames(

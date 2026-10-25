@@ -164,12 +164,22 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
     selected = _nightly_shared_pytest_args(str(getattr(session, "name", "")), args)
     if selected is None:
         return  # All explicit targets passed in the same coverage-enforcing producer.
+    plan = str(getattr(session, "name", "not_recorded"))
+    extra_env = {"AISTOCK_TEST_PLAN": plan}
+    if plan == "advisory_modeling_backend":
+        # Small offline model fixtures do not benefit from host-wide BLAS pools.
+        # Bound only test subprocesses, never the user's services or experiments.
+        extra_env.update(HMM_TEST_NUMERIC_ENV)
+        if os.environ.get("AISTOCK_TEST_DIAGNOSTICS_RECEIPT"):
+            extra_env["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"] = str(
+                Path(os.environ["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"]).with_name("advisory-modeling-test-failures.jsonl")
+            )
     session.run(
         "python",
         "-m",
         "pytest",
         *selected,
-        env=_env({"AISTOCK_TEST_PLAN": str(getattr(session, "name", "not_recorded"))}),
+        env=_env(extra_env),
         external=True,
     )
 
@@ -638,6 +648,31 @@ def frontend_type_lint(session: nox.Session) -> None:
         os.chdir(old_cwd)
 
 
+def _run_qe_read_contract_target(session: nox.Session, target: str) -> None:
+    """Run QE source/browser/mocked contracts, never the live qe_read_ui scenario."""
+    if any(not (ROOT / "frontend/node_modules" / path).is_file() for path in FRONTEND_DIRECT_ENTRYPOINTS):
+        session.error("QE read contracts require prebuilt dependencies; installation is not authorized")
+    session.chdir(ROOT / "frontend")
+    session.run("node", "node_modules/@playwright/test/cli.js", "test",
+                "--config=tests/qe-read-contract.config.ts",
+                target, *session.posargs, external=True)
+
+
+@nox.session(venv_backend="none")
+def qe_best_loop_contract_ui(session: nox.Session) -> None:
+    _run_qe_read_contract_target(session, "tests/qe/qe-evolution-best-loop-ui.spec.ts")
+
+
+@nox.session(venv_backend="none")
+def qe_terminal_poll_contract_ui(session: nox.Session) -> None:
+    _run_qe_read_contract_target(session, "tests/qe/qe-evolution-read-only.spec.ts")
+
+
+@nox.session(venv_backend="none")
+def qe_read_performance_ui(session: nox.Session) -> None:
+    _run_qe_read_contract_target(session, "tests/qe/qe-read-performance.spec.ts")
+
+
 @nox.session(venv_backend="none")
 def qe_experiment_registry_ui(session: nox.Session) -> None:
     """Run the mocked QE experiment registry and progress UI contract."""
@@ -807,6 +842,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_build_bridge.py",
         "backend/tests/dataset_release/test_monthly_build_executor.py",
         "backend/tests/dataset_release/test_monthly_build_resume.py",
+        "backend/tests/dataset_release/test_monthly_minute_coverage.py",
         "backend/tests/dataset_release/test_monthly_build_recovery.py",
         "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
         "backend/tests/dataset_release/test_monthly_supervised_build.py",
@@ -831,6 +867,9 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_monthly_remote_deploy.py",
         "backend/tests/dataset_release/test_runtime_release_registration.py",
         "backend/tests/dataset_release/test_monthly_worker_nodes.py",
+        "backend/tests/dataset_release/test_monthly_late_publication.py",
+        "backend/tests/dataset_release/test_monthly_existing_adoption.py",
+        "backend/tests/dataset_release/test_monthly_minute_adoption.py",
         "backend/tests/dataset_release/test_monthly_worker_composition.py",
         "backend/tests/dataset_release/test_monthly_production.py",
         "backend/tests/dataset_release/test_monthly_hmm_authority_bootstrap.py",
@@ -1208,6 +1247,10 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "compileall",
         "backend/services/tushare_sync_engine.py",
         "backend/services/tushare_dataset_specs.py",
+        "backend/services/report_rc_data.py",
+        "backend/services/report_rc_data_delivery.py",
+        "scripts/prepare_report_rc_history.py",
+        "scripts/export_report_rc_history.py",
         "scripts/repair_stk_limit_pre_close.py",
         "backend/services/adj_factor_history_reconciler.py",
         "backend/services/suspend_d_coverage.py",
@@ -1243,10 +1286,12 @@ def data_sync_autonomy_backend(session: nox.Session) -> None:
         "backend/tests/scripts/test_ingest_tushare_daily_basic.py",
         "backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py",
         "backend/tests/scripts/test_backfill_raw_volume_precision.py",
+        "backend/tests/scripts/test_repair_historical_daily_fact_absence.py",
         "backend/tests/scripts/test_prepare_canonical_pit_monthly.py",
         "backend/tests/test_stock_universe_pit_service.py",
         "backend/tests/test_stock_universe_pit_spans.py",
         "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/test_report_rc_data.py",
         "backend/tests/scripts/test_repair_stk_limit_pre_close.py",
         "backend/tests/scripts/test_repair_local_sync_incident.py",
         "backend/tests/test_sw_industry_history_store.py",
@@ -1674,6 +1719,9 @@ def qe_sector_risk_overlay_backend(session: nox.Session) -> None:
 def qe_read_backend(session: nox.Session) -> None:
     """Run QE read-path and authoritative factor-metric contract regressions."""
     targets = [
+        "backend/tests/quantevolver/test_qe_l2_risk_consumer.py",
+        "backend/tests/unified_engine/test_qe_l2_risk_strategy.py",
+        "backend/tests/unified_engine/test_qe_terminal_interval_executor.py",
         "backend/tests/unified_engine/test_qe_evolution_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_read_paths.py",
         "backend/tests/unified_engine/test_qe_experiment_log_terminal.py",
@@ -3186,6 +3234,7 @@ def platform_api_backend(session: nox.Session) -> None:
         session,
         "backend/tests/platform_api",
         "backend/tests/test_pg_pool_audit.py",
+        "backend/tests/test_manual_factor_service_wsl_output.py",
         "-q",
         "-p",
         "no:cacheprovider",
@@ -3541,24 +3590,22 @@ def validation_center_ui(session: nox.Session) -> None:
         frontend_port,
         external=True,
     )
+    _ensure_frontend_node_modules(session)
     old_cwd = Path.cwd()
     os.chdir(ROOT / "frontend")
     try:
         session.run(
-            "npm",
-            "exec",
-            "tsc",
-            "--",
+            "node",
+            "node_modules/typescript/bin/tsc",
             "--noEmit",
             "--incremental",
             "false",
             external=True,
         )
         session.run(
-            "npm",
-            "run",
-            "test:e2e",
-            "--",
+            "node",
+            "node_modules/@playwright/test/cli.js",
+            "test",
             "tests/validation-center/validation-center.spec.ts",
             env=_env(
                 {
@@ -3892,6 +3939,7 @@ HMM_RISK_PR_NEIGHBOR_OVERRIDES = {
     "backend/routers/hmm_risk.py": "backend/tests/hmm_risk/test_rotation_l1_api.py",
     "backend/services/hmm_risk/b3_mixed_dimension.py": "backend/tests/hmm_risk/test_b3_training.py",
     "scripts/hmm_risk/aggregate_transition_dwell_evidence.py": "backend/tests/hmm_risk/test_b3_evidence_aggregation.py",
+    "scripts/hmm_risk/build_observed_industry_authority.py": "backend/tests/hmm_risk/test_observed_industry_authority.py",
     "scripts/hmm_risk/build_rotation_l1_input_bundle.py": "backend/tests/hmm_risk/test_rotation_l1_input_bundle.py",
     "scripts/hmm_risk/prepare_state_model_set.py": "backend/tests/hmm_risk/test_prepare_state_model_set_b3.py",
     "scripts/hmm_risk/repair_b3_stock_fact_gaps.py": "backend/tests/hmm_risk/test_stock_fact_gap_repair.py",
@@ -4030,7 +4078,15 @@ def hmm_risk_backend(session: nox.Session) -> None:
         "-q",
         "-p",
         "no:cacheprovider",
-        env=_env({"COVERAGE_FILE": str(coverage_data), **HMM_TEST_NUMERIC_ENV}),
+        env=_env({
+            "COVERAGE_FILE": str(coverage_data), **HMM_TEST_NUMERIC_ENV,
+            "AISTOCK_TEST_PLAN": "hmm_risk_backend",
+            # A later plan must not overwrite the node active at HMM timeout.
+            "AISTOCK_TEST_DIAGNOSTICS_RECEIPT": (
+                str(Path(os.environ["AISTOCK_TEST_DIAGNOSTICS_RECEIPT"]).with_name("hmm-risk-test-failures.jsonl"))
+                if os.environ.get("AISTOCK_TEST_DIAGNOSTICS_RECEIPT") else ""
+            ),
+        }),
         external=True,
     )
 

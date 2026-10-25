@@ -365,6 +365,10 @@ jobs:
     if: needs.runner-preflight.outputs.background_admitted == 'true' && (always() && needs.runner-preflight.result == 'success' && (github.event_name != 'workflow_dispatch' || inputs.run_nightly_l3))
     outputs:
       background_admitted: ${{ steps.background_window.outputs.background_admitted }}
+      workspace_result: ${{ steps.prepare_workspace.outcome }}
+      environment_result: ${{ steps.verify_environment.outcome }}
+      plan_result: ${{ steps.build_plan.outcome }}
+      sessions_result: ${{ steps.execute_sessions.outcome }}
     runs-on: [self-hosted, Windows, aistock-ci]
     timeout-minutes: 120
     defaults:
@@ -382,6 +386,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "background admission failed closed" }
 
       - name: Prepare local workspace (no GitHub checkout)
+        id: prepare_workspace
         if: steps.background_window.outputs.background_admitted == 'true'
         timeout-minutes: 2
         run: |
@@ -402,6 +407,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify prebuilt AIstock-CI and frontend dependencies
+        id: verify_environment
         if: steps.background_window.outputs.background_admitted == 'true'
         env:
           AISTOCK_CI_ENV_NAME: AIstock-CI
@@ -433,6 +439,7 @@ jobs:
           path: tmp/validation/nightly_retry_receipt
 
       - name: Build receipt-watermark Nightly execution plan
+        id: build_plan
         if: steps.background_window.outputs.background_admitted == 'true'
         env:
           FULL_NIGHTLY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.full_nightly_run || false }}
@@ -484,6 +491,7 @@ jobs:
             @extraArgs
 
       - name: Run selected Nightly sessions once
+        id: execute_sessions
         if: steps.background_window.outputs.background_admitted == 'true'
         env:
           AISTOCK_TEST_SOURCE_HEAD: ${{ github.sha }}
@@ -513,6 +521,23 @@ jobs:
             $count = ($files | Measure-Object).Count
             Write-Host "gate=validation_history_captured root=tests/aistock_validation/history file_count=$count manifest=omitted_on_success"
           }
+
+      - name: Stage compact active discovery evidence
+        if: always() && steps.background_window.outputs.background_admitted == 'true'
+        run: |
+          $out = "tmp/validation/nightly_l3/discovery"
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $sources = @{
+            candidate = "tmp/validation/nightly_bug_candidate_queue/queue/manifest.json"
+            discovery = "tmp/validation/nightly_bug_candidate_queue/discovery/manifest.json"
+          }
+          foreach ($name in $sources.Keys) {
+            if (Test-Path -LiteralPath $sources[$name] -PathType Leaf) {
+              Copy-Item -LiteralPath $sources[$name] -Destination "$out/$name.json"
+            }
+          }
+          @{ run_id = $env:GITHUB_RUN_ID; head_commit = $env:GITHUB_SHA } |
+            ConvertTo-Json | Set-Content -LiteralPath "$out/provenance.json" -Encoding UTF8
 
       - name: Upload Nightly L3 session results
         id: upload_nightly_l3
@@ -1223,30 +1248,6 @@ jobs:
           path: tmp/validation/nightly_l3/
         continue-on-error: true
 
-      - name: Materialize exhausted Nightly artifact transport receipt
-        if: always() && steps.download_nightly_l3.outcome == 'failure' && steps.retry_download_nightly_l3.outcome == 'failure'
-        run: |
-          mkdir -p tmp/validation/nightly_l3
-          cat > tmp/validation/nightly_l3/session-results.json <<'EOF'
-          [
-            {
-              "session": "validation_workflow_automation",
-              "result": "failure",
-              "failure_kind": "artifact_transport",
-              "return_code": null,
-              "duration_seconds": 0.0,
-              "timeout_seconds": 0
-            }
-          ]
-          EOF
-          cat > tmp/validation/nightly_l3/session-results.md <<'EOF'
-          # Nightly selected session results
-
-          | Session | Result | Failure kind | Duration (s) |
-          | --- | --- | --- | ---: |
-          | `validation_workflow_automation` | `failure` | `artifact_transport` | 0.00 |
-          EOF
-
       - name: Compose nightly summary
         # Per Codex r4 P1.1 review (drawer d09a0a0): the summary MUST
         # include the dr-validate result line. full-summary.needs already
@@ -1312,9 +1313,9 @@ jobs:
           if [ -f "${LLM_USAGE_MD}" ]; then
             cat "${LLM_USAGE_MD}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
           fi
-          ACTIVE_DISCOVERY_MANIFEST="tmp/validation/code-intelligence/${RUN_ID}/bug-candidates/manifest.json"
-          DISCOVERY_PLAN_MANIFEST="tmp/validation/code-intelligence/${RUN_ID}/discovery-plans/manifest.json"
-          python scripts/nightly_active_discovery_summary.py --candidate-manifest "${ACTIVE_DISCOVERY_MANIFEST}" --discovery-manifest "${DISCOVERY_PLAN_MANIFEST}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
+          ACTIVE_DISCOVERY_MANIFEST="tmp/validation/nightly_l3/discovery/candidate.json"
+          DISCOVERY_PLAN_MANIFEST="tmp/validation/nightly_l3/discovery/discovery.json"
+          python scripts/nightly_active_discovery_summary.py --candidate-manifest "${ACTIVE_DISCOVERY_MANIFEST}" --discovery-manifest "${DISCOVERY_PLAN_MANIFEST}" --provenance tmp/validation/nightly_l3/discovery/provenance.json --expected-run-id "${RUN_ID}" --expected-head "${GITHUB_SHA}" >> "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
           cat "${SUMMARY_DIR}/nightly_${RUN_ID}.md"
 
       - name: Build Nightly failure issue context
@@ -1328,6 +1329,10 @@ jobs:
           LIVE_RESULT: ${{ needs.paper-v2-live.outputs.background_admitted == 'false' && 'deferred' || needs.paper-v2-live.result }}
           CODE_INTELLIGENCE_RESULT: ${{ needs.code-intelligence-weekly.outputs.background_admitted == 'false' && 'deferred' || needs.code-intelligence-weekly.result }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          L3_WORKSPACE_RESULT: ${{ needs.nightly-l3.outputs.workspace_result }}
+          L3_ENVIRONMENT_RESULT: ${{ needs.nightly-l3.outputs.environment_result }}
+          L3_PLAN_RESULT: ${{ needs.nightly-l3.outputs.plan_result }}
+          L3_SESSIONS_RESULT: ${{ needs.nightly-l3.outputs.sessions_result }}
           LLM_TRIAGE_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.llm_triage_mode || 'warning_only' }}
           LLM_AUTO_FILE_OPT_IN: ${{ github.event_name == 'workflow_dispatch' && inputs.llm_auto_file_opt_in || false }}
         run: |
@@ -1347,6 +1352,14 @@ jobs:
               "codeIntelligence": "${CODE_INTELLIGENCE_RESULT}"
             },
             "run_id": "${{ github.run_id }}",
+            "nightly_l3_execution": {
+              "run_id": "${{ github.run_id }}",
+              "head_commit": "${{ github.sha }}",
+              "workspace": "${L3_WORKSPACE_RESULT}",
+              "environment": "${L3_ENVIRONMENT_RESULT}",
+              "plan": "${L3_PLAN_RESULT}",
+              "sessions": "${L3_SESSIONS_RESULT}"
+            },
             "run_url": "${RUN_URL}"
           }
           EOF

@@ -488,6 +488,7 @@ class HistoricalRangeResearchBatchRequestV1(_StrictContract):
     program_specs: tuple[HistoricalRangeProgramSpecV1, ...] = Field(min_length=1)
     start_trade_date: date
     end_trade_date: date
+    selection_input_source_mode: Literal["FILE_ONLY", "DATABASE_ONLY", "FILE_THEN_DATABASE"] | None = None
     data_source: Literal[HISTORICAL_RANGE_DATA_SOURCE] = HISTORICAL_RANGE_DATA_SOURCE
     origin: Literal[HISTORICAL_RANGE_ORIGIN] = HISTORICAL_RANGE_ORIGIN
     research_scope: Literal[HISTORICAL_RANGE_RESEARCH_SCOPE] = HISTORICAL_RANGE_RESEARCH_SCOPE
@@ -496,6 +497,13 @@ class HistoricalRangeResearchBatchRequestV1(_StrictContract):
     requested_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     requested_by: str = Field(default="local-user", min_length=1, max_length=160)
     user_request_semantic_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @model_serializer(mode="wrap")
+    def _serialize_legacy_source(self, serializer: Any) -> dict[str, Any]:
+        payload = serializer(self)
+        if self.selection_input_source_mode is None:
+            payload.pop("selection_input_source_mode", None)
+        return payload
 
     @field_validator("request_id", "client_idempotency_key", "requested_by")
     @classmethod
@@ -531,6 +539,8 @@ class HistoricalRangeResearchBatchRequestV1(_StrictContract):
         return {
             "schema_version": self.schema_version,
             "program_specs": [item.semantic_payload() for item in self.program_specs],
+            **({"selection_input_source_mode": self.selection_input_source_mode}
+               if self.selection_input_source_mode is not None else {}),
             "start_trade_date": self.start_trade_date,
             "end_trade_date": self.end_trade_date,
             "data_source": self.data_source,
@@ -771,6 +781,14 @@ class HistoricalRangeFrozenProgramV1(_StrictContract):
     resolved_hmm_binding_set_ref: HistoricalRangeArtifactRefV1 | None = None
     resolved_hmm_binding_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
     frozen_program_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selection_input_source_plan: dict[str, Any] | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_legacy_source(self, serializer: Any) -> dict[str, Any]:
+        payload = serializer(self)
+        if self.selection_input_source_plan is None:
+            payload.pop("selection_input_source_plan", None)
+        return payload
 
     @field_validator("research_program_id", "package_id", "package_version", "code_release_id")
     @classmethod
@@ -798,6 +816,11 @@ class HistoricalRangeFrozenProgramV1(_StrictContract):
 
     @model_validator(mode="after")
     def _close_program(self) -> "HistoricalRangeFrozenProgramV1":
+        if self.selection_input_source_plan is not None:
+            from .input_source_plan import validate_source_plan
+
+            plan = self.selection_input_source_plan
+            validate_source_plan(plan, consumer_scope="ADVISORY", run_id=str(plan.get("run_id") or ""))
         source_values = (
             self.source_program_id,
             self.source_program_version,

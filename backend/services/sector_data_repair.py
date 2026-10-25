@@ -70,12 +70,16 @@ def eligibility_revision_spans(existing, incoming):
 
 
 def capture_sector_pit_spans(conn, universe_key):
-    from .stock_universe_pit_service import DEFAULT_ST_PIT_UNIVERSE_KEY, IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX
+    from .canonical_equity_pit import CANONICAL_PIT_AUTHORITY_ID
 
-    if universe_key != DEFAULT_ST_PIT_UNIVERSE_KEY and not universe_key.startswith(IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX):
-        return None
     with conn.cursor() as cur:
-        cur.execute("SELECT ts_code,eligible_start,eligible_end FROM market.stock_universe_pit_spans WHERE universe_key=%s FOR UPDATE", (universe_key,))
+        # Follow the same pointer as the producer. An inactive historical/frozen
+        # universe must not invalidate current derived facts.
+        cur.execute("SELECT current_rolling_key,current_rule_version FROM market.stock_universe_pit_authority_pointer WHERE authority_id=%s", (CANONICAL_PIT_AUTHORITY_ID,))
+        active = cur.fetchone()
+        if active is None or universe_key != active[0]:
+            return None
+        cur.execute("SELECT ts_code,eligible_start,eligible_end FROM market.stock_universe_pit_spans WHERE universe_key=%s AND rule_version=%s FOR UPDATE", (universe_key, active[1]))
         return [dict(zip(("ts_code", "eligible_start", "eligible_end"), row)) for row in cur.fetchall()]
 
 
