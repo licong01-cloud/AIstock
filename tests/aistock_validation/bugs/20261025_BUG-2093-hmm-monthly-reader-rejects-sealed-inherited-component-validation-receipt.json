@@ -118,7 +118,8 @@
       "Native afa9158 inherited closure fresh-process PASS; 1964 files hashed; source module SHA40524336172cd2fe80eb6429c3fb72399ed5784b4c6d95dd2c06856aa1d49e92; no services or dataset writes.",
       "Native afa9158 inherited closure fresh-process -> passed: 1964 files hashed; module SHA40524336172cd2fe80eb6429c3fb72399ed5784b4c6d95dd2c06856aa1d49e92; no writes or restart",
       "Native afa9158 inherited closure fresh-process -> passed: 1964 file hashes; no writes or restart",
-      "Formal frozen-file full stock-fact H1 inference completed on commit 966714a6c9e47037992a0231080cd69320153d1b; 125 days x131 L2; two fresh children bitwise equal; fits=0; acceptance receipt 9a68086cd466eae97ffe0cd1ea61d440d0688ee4716ac9daa5762f8f09865a99; prediction file SHA a21f228d22f37aea474bd61a6dd4601bc2818db0da52ebbf1873256b4af2d5d2; no backend restart or dataset writes."
+      "Formal frozen-file full stock-fact H1 inference completed on commit 966714a6c9e47037992a0231080cd69320153d1b; 125 days x131 L2; two fresh children bitwise equal; fits=0; acceptance receipt 9a68086cd466eae97ffe0cd1ea61d440d0688ee4716ac9daa5762f8f09865a99; prediction file SHA a21f228d22f37aea474bd61a6dd4601bc2818db0da52ebbf1873256b4af2d5d2; no backend restart or dataset writes.",
+      "Native afa9158 full frozen-file inference and inherited closure -> passed: 125 dates, 131 sectors, 1964 physical hashes, two fresh children bitwise equal, fits=0, acceptance 9a68086cd466eae97ffe0cd1ea61d440d0688ee4716ac9daa5762f8f09865a99; no restart"
     ],
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "inference_basis": "actual_changed_files",
