@@ -16,7 +16,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1961",
-  "closed_at": null,
+  "closed_at": "2026-10-25T07:41:46.141434Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -40,10 +40,10 @@
   "expected": "Explicit source-bound disclosure amendment resolves legitimate suspended day, keeps prior source and price exports unchanged, and rejects mismatched evidence.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261017_BUG-1961-sealed-monthly-source-cannot-bind-approved-suspension-disclosures-withou.json",
       "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/monthly_prev_close_repair.py",
       "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_suspension_repair.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_shared_components.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py",
@@ -51,16 +51,16 @@
       "backend/tests/scripts/test_monthly_unified_dataset_release.py",
       "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
       "scripts/monthly_unified_dataset_release.py",
-      "backend/services/dataset_release/monthly_suspension_repair.py"
+      "tests/aistock_validation/bugs/20261017_BUG-1961-sealed-monthly-source-cannot-bind-approved-suspension-disclosures-withou.json"
     ],
     "added_files": [
       "backend/services/dataset_release/monthly_suspension_repair.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261017_BUG-1961-sealed-monthly-source-cannot-bind-approved-suspension-disclosures-withou.json",
       "backend/routers/monthly_dataset_releases.py",
       "backend/services/dataset_release/monthly_prev_close_repair.py",
       "backend/services/dataset_release/monthly_shared_components.py",
+      "backend/services/dataset_release/monthly_suspension_repair.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_shared_components.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py",
@@ -68,7 +68,7 @@
       "backend/tests/scripts/test_monthly_unified_dataset_release.py",
       "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
       "scripts/monthly_unified_dataset_release.py",
-      "backend/services/dataset_release/monthly_suspension_repair.py"
+      "tests/aistock_validation/bugs/20261017_BUG-1961-sealed-monthly-source-cannot-bind-approved-suspension-disclosures-withou.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -260,8 +260,8 @@
   },
   "first_seen_at": "2026-10-17T12:06:07.463921Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "96ca602853b499c57b42a785f4dd4ba7ea244417",
+  "fixed_at": "2026-10-17T12:25:34Z",
   "github_issue_number": 6260,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6260",
   "last_seen_at": "2026-10-17T12:06:07.463921Z",
@@ -269,6 +269,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6262",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -291,9 +292,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1961-remaining.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1961",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "96ca602853b499c57b42a785f4dd4ba7ea244417",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:29:48.541905Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "b547d5fcc1be5b286d0ec429a3647c41dd92c08d2b87799ac1ab496367c6b24a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "6f493cafeccc908de893e1516650eb835a5e51bd10b20306c10963d048f2fa9f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -303,7 +327,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1961",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "bc3e1b355d84ba1d",
+    "recorded_at": "2026-10-17T12:26:19.434675Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "66d14daba29059f3a54f51632fa353cc0274338c",
+    "source_merge_commit": "96ca602853b499c57b42a785f4dd4ba7ea244417",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6262",
+    "validation_evidence": [
+      "python -m nox -s l0 -- --changed-only -> passed"
+    ],
+    "validation_evidence_digest": "5baf529a7bef4853bd57d04e990c5d8bf5d0cb8d03eaf076c233debe3ccbc663"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -312,6 +357,10 @@
     "fingerprint": "b299a9db76d1aeca67c59454",
     "source_event_id": "FE-20261017-b299a9db76d1"
   },
+  "validation_evidence": [
+    "python -m nox -s l0 -- --changed-only -> passed",
+    "Source merge independently confirmed; official current runtime identity/business smoke PASS; metadata-only close-sync; original validations retained; no new data scans, DB writes or service control"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
