@@ -106,13 +106,13 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "next scheduled kline_minute_raw incremental cycle completes auto-range without PG statement timeout; readback market.dataset_date_refresh_audit/ingestion_jobs success for kline_minute_raw",
-    "database_readback_ref": "noop:no_database_change",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/kline_minute_raw/status",
     "fresh_process_evidence": [
       "fresh Python process imported backend.ingestion.tdx_scheduler and verified _compute_auto_range runs the refresh-audit cursor before any table scan and uses the bounded CURRENT_DATE - INTERVAL '45 days' fast path with unbounded fallback -> PASS",
       "fresh Python process imported backend.ingestion.tdx_scheduler and verified _compute_auto_range audit-first cursor ordering plus bounded INTERVAL '45 days' fast path with unbounded fallback -> PASS"
     ],
-    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -126,6 +126,14 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "runtime_contract_migration": {
+    "scope": "Executable read-only probes replace legacy prose; no ingestion rerun or table-level maximum scan.",
+    "factual_readback": "X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/legacy-contract-factual-readback.json",
+    "production_job": "7ea949d5-67cb-48fc-a4fc-c0fddd59afaa completed 5577/5577 codes, failed=0, no error samples; ready_date=2026-10-23.",
+    "limitation": "This confirms cycle completion, not a new ingestion throughput benchmark or performance claim.",
+    "database_write": false,
+    "process_control": false
+  },
   "severity": "P1",
   "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
