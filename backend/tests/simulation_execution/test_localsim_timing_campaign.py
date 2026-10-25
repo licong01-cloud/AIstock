@@ -644,6 +644,11 @@ def test_adopted_successor_preserves_prefix_and_retries_same_twelve_accounts(tmp
     recovered = module.run_continuous_campaign(request)
     assert recovered["results"] == completed["results"] and len(replayed) == 12
     assert day_path.read_bytes() == original_summary
+    old_day = next(iter(prefix))
+    old_day.unlink()
+    recovered_prefix = module.run_continuous_campaign(request)
+    assert recovered_prefix["results"] == completed["results"] and len(replayed) == 12
+    assert old_day.read_bytes() == prefix[old_day]
 
 
 @pytest.mark.parametrize("problem", ["completed_suspension", "incomplete_account_day"])

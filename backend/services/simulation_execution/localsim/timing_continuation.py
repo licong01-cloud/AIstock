@@ -15,7 +15,7 @@ import re
 
 import pandas as pd
 
-from backend.services.position_timing.intraday.contracts import digest
+from backend.services.position_timing.intraday.contracts import canonical, digest
 from backend.services.position_timing.intraday.replay import FileRef
 from backend.services.position_timing.intraday.research import CostContract
 from backend.services.position_timing.intraday.research_inputs import CandidateReader, checked_file
@@ -241,6 +241,46 @@ def adopt_successor(*, request_ref: FileRef, candidate_ref: FileRef, producer_co
             "preserved_account_days": prefix["confirmed_account_days"], "computation_performed": True}
 
 
+def _verify_or_restore_prefix(value, request_ref, request, inspected):
+    """Only a missing index can be recreated, from its pinned native receipt."""
+    from .timing_campaign import _campaign_day_summary
+    from .timing_portfolio import validate_day_ledger
+
+    root = Path(request_ref.path).parent
+    entries = value["prefix"]["day_evidence"]
+    by_path = {entry["summary"]["path"]: entry for entry in entries}
+    if len(by_path) != len(entries):
+        raise ValueError("LOCALSIM_TIMING_SUCCESSOR_PREFIX_IDENTITY_CONFLICT")
+    initials = [read_json(checked_file(FileRef.model_validate(r))) for r in request["initial_accounts"]]
+    cost = CostContract.model_validate_json(checked_file(FileRef.model_validate(
+        inspected["preflight"]["inputs"]["cost_policy"])).read_text(encoding="utf-8"))
+    for initial in initials:
+        previous = None
+        for index, day in enumerate(request["trade_dates"][:value["prefix"]["completed_days"]]):
+            path = root / "days" / initial["account_id"] / (day + ".json")
+            entry = by_path.get(str(path))
+            if entry is None:
+                raise ValueError("LOCALSIM_TIMING_SUCCESSOR_PREFIX_IDENTITY_CONFLICT")
+            child = digest([request["identity"], initial["account_id"], day, previous])
+            store = TimingFileRepository(root / "journals", "lsc_" + child[:48])
+            journal = store.root / "generations/00000001.json"
+            if entry["account_receipt"]["path"] != str(journal):
+                raise ValueError("LOCALSIM_TIMING_SUCCESSOR_PREFIX_IDENTITY_CONFLICT")
+            checked_file(FileRef.model_validate(entry["account_receipt"]))
+            if not path.exists():
+                record = store.latest()
+                if record is None:
+                    raise ValueError("LOCALSIM_TIMING_SUCCESSOR_PREFIX_RECEIPT_CONFLICT")
+                validate_day_ledger(record, initial=initial, cost=cost)
+                summary = _campaign_day_summary(record=record, receipt_ref=entry["account_receipt"], request=request,
+                                                 initial=initial, day_index=index, previous=previous)
+                if hashlib.sha256(canonical(summary) + b"\n").hexdigest() != entry["summary"]["sha256"]:
+                    raise ValueError("LOCALSIM_TIMING_SUCCESSOR_PREFIX_SUMMARY_CONFLICT")
+                publish(path, summary)
+            checked_file(FileRef.model_validate(entry["summary"]))
+            previous = entry["summary"]
+
+
 def load_successor(request_ref: FileRef, request: dict, inspected: dict) -> dict | None:
     """Recover the persisted plan, with complete source checks before receipts."""
     from .timing_campaign import campaign_source_identity
@@ -274,5 +314,5 @@ def load_successor(request_ref: FileRef, request: dict, inspected: dict) -> dict
     # Source refs are data only. Do not read prefix receipt entities before this.
     _verify_refs(value["source_refs"])
     checked_file(FileRef.model_validate(value["candidate"]))
-    _verify_refs(r for entry in prefix["day_evidence"] for r in entry.values())
+    _verify_or_restore_prefix(value, request_ref, request, inspected)
     return value
