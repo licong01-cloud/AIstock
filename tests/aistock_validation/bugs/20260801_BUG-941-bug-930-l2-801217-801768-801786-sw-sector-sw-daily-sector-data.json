@@ -63,13 +63,13 @@
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
-    "business_smoke_ref": "local-data manual re-run of sw_sector composite for 2026-07-31 followed by sector_data build; readback market.sector_data row count for 2026-07-31",
-    "database_readback_ref": "noop:no_database_change",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "database_readback_ref": "http://127.0.0.1:8001/api/v1/local-data/datasets/sw_index_member/status",
     "fresh_process_evidence": [
       "fresh Python process imported backend.services.tushare_sync_engine and verified _count_code_rows plus the empty-upstream-and-local no-op mirror branch in _sync_by_code_batched -> PASS",
       "fresh Python process imported backend.services.tushare_sync_engine and verified _count_code_rows plus no-op mirror branch -> PASS"
     ],
-    "identity_ref": "GET http://127.0.0.1:8001/openapi.json and fixed helper SHA-256 readback",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
@@ -83,6 +83,13 @@
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
+  "runtime_contract_migration": {
+    "scope": "Replace legacy prose probe references with executable read-only probes; retain original expected behavior and source tests.",
+    "factual_readback": "X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/legacy-contract-factual-readback.json",
+    "historical_target": "2026-07-31 sector_data=4903 rows and sw_daily=155 rows; no job rerun required.",
+    "production_job": "sw_index_member 653a648f-5073-44fe-89ef-c7e9ff75a089 completed 134/134, failed=0; sw_daily cfd4e8f5-55ec-4f36-8490-c26fe1c0749c completed 155/155, failed=0.",
+    "limitation": "Unrelated sector_data weekend job failure is not declared resolved by this BUG."
+  },
   "severity": "P1",
   "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
