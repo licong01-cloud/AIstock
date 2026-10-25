@@ -28,9 +28,22 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2036-bounded-minute-repair-rejects-valid-historical-source-facts-outside-reta.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2036-bounded-minute-repair-rejects-valid-historical-source-facts-outside-reta.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -45,8 +58,8 @@
   },
   "first_seen_at": "2026-10-20T11:20:15.770673Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "55ad19aefcbe5aa66fc2e045d462fd5a3d325f95",
+  "fixed_at": "2026-10-20T11:38:10Z",
   "github_issue_number": 6491,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6491",
   "last_seen_at": "2026-10-20T11:20:15.770673Z",
@@ -54,6 +67,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6492",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,31 +77,37 @@
     "l0",
     "qlib_data_backend"
   ],
+  "review_results": {
+    "design_compliance_001": "All four checks reviewed: requested outcome, scope, real file/recovery evidence, no unapproved behavior or business simplification",
+    "red": "4 failing prepend/absent cases reproduced before source fix",
+    "round_1": "COW additions preserve all existing finite values and unrequested gaps; dates must exist in frozen calendar",
+    "round_2": "Crash-recovery permits create only in the minute correction path; conflicting new files still fail before replacement",
+    "round_3": "Original native writer identity retained; correction pins carry actual expanded bounds; PIT membership and old releases unchanged"
+  },
   "risk_area": "bug",
   "runtime_contract": {
-    "backend_restart_required": true,
     "backend_restart_owner": "user",
-    "fresh_process_evidence": ["python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -k 'expand_real or unknown_calendar or recovery_rejects' -q -> 8 passed, 40 deselected"],
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -k 'expand_real or unknown_calendar or recovery_rejects' -q -> 8 passed, 40 deselected"
+    ],
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
-    "target_ids": ["worker-scheduler"]
-  },
-  "review_results": {
-    "red": "4 failing prepend/absent cases reproduced before source fix",
-    "round_1": "COW additions preserve all existing finite values and unrequested gaps; dates must exist in frozen calendar",
-    "round_2": "Crash-recovery permits create only in the minute correction path; conflicting new files still fail before replacement",
-    "round_3": "Original native writer identity retained; correction pins carry actual expanded bounds; PIT membership and old releases unchanged",
-    "design_compliance_001": "All four checks reviewed: requested outcome, scope, real file/recovery evidence, no unapproved behavior or business simplification"
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -96,6 +116,9 @@
     "fingerprint": "77b96d1a6433ac81f1c09bdc",
     "source_event_id": "FE-20261020-77b96d1a6433"
   },
+  "validation_evidence": [
+    "Source PR current merge identity and source CI SUCCESS independently verified. python -m pytest backend/tests/dataset_release/test_monthly_build_resume.py -k 'expand_real or unknown_calendar or recovery_rejects' -q -> 8 passed, 40 deselected"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
