@@ -27,9 +27,20 @@
   "evidence_uris": [],
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/services/dataset_release/monthly_industry_static.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1891-monthly-static-industry-repair-repeats-historical-cohort-work.json"
+    ],
     "added_files": [],
-    "changed_files": [],
-    "changed_files_source": "planned_intake",
+    "changed_files": [
+      "backend/services/dataset_release/monthly_industry_history.py",
+      "backend/services/dataset_release/monthly_industry_static.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261013_BUG-1891-monthly-static-industry-repair-repeats-historical-cohort-work.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -44,8 +55,9 @@
   },
   "first_seen_at": "2026-10-13T19:11:02.958686Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "15fe18b81a78ce758d8427e8b9af35f566d1a018",
+  "fix_description": "Reuse exact stock/date facts from the completed sector output; input-bound sector and Parquet batch checkpoints preserve sealed work across interruption; missing static-only keys retain the previous authority path; unchanged columns, finite/NaN semantics, input drift and atomic publication remain verified. No full price export, dataset activation, database or runtime action.",
+  "fixed_at": "2026-10-25T18:53:34Z",
   "github_issue_number": 6035,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6035",
   "last_seen_at": "2026-10-13T19:11:02.958686Z",
@@ -53,6 +65,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6716",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -63,6 +76,7 @@
     "qlib_data_backend"
   ],
   "risk_area": "bug",
+  "root_cause": "static writer and its readback called remap_context again after sector H5 was completed, repeating alias/PIT/cohort aggregation; no per-static-batch progress or sealed-batch reuse. The original attempt267 long stall is not reproduced and is not attributed to disk speed or a multi-year first batch.",
   "runtime_contract": {
     "backend_restart_owner": "user",
     "backend_restart_required": true,
@@ -74,23 +88,40 @@
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
+    "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
-    "target_ids": ["worker-scheduler"]
+    "target_ids": [
+      "worker-scheduler"
+    ]
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "in_progress",
-  "root_cause": "static writer and its readback called remap_context again after sector H5 was completed, repeating alias/PIT/cohort aggregation; no per-static-batch progress or sealed-batch reuse. The original attempt267 long stall is not reproduced and is not attributed to disk speed or a multi-year first batch.",
-  "fix_description": "Reuse exact stock/date facts from the completed sector output; input-bound sector and Parquet batch checkpoints preserve sealed work across interruption; missing static-only keys retain the previous authority path; unchanged columns, finite/NaN semantics, input drift and atomic publication remain verified. No full price export, dataset activation, database or runtime action.",
-  "validation_evidence": [
-    "RED: four parameterized materialization cases fail on old source; GREEN: same four cases pass, including interruption/reuse and changed retained-batch rejection.",
-    "Related matrix: test_monthly_sector_mapping.py 69 passed, 1 skipped; Ruff, changed-file L0/ownership and git diff --check passed.",
-    "Read-only current release first 100000 rows (2018-08-01..2018-09-11): old recompute 2.973526s versus exact completed-fact join 0.161728s, different industry cells=0, unrelated columns unchanged. X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/BUG-1891-bounded-100k-benchmark.json. Not a full-month runtime guarantee.",
-    "Three self-review rounds: exact-date and taxonomy/units parity; source-bound restart/cache drift and publication safety; actual bounded performance plus source/owner scope. DESIGN-COMPLIANCE-001: requirements matched, no mock-only completion, real frozen-file readback, no unapproved scope reduction."
-  ],
+  "source_merge_receipt": {
+    "bug_id": "BUG-1891",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "096c1fa217d98c70",
+    "recorded_at": "2026-10-25T18:54:08.621067Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "614671dc206fffe1961a5c3f873b5f6c9dfb0e00",
+    "source_merge_commit": "15fe18b81a78ce758d8427e8b9af35f566d1a018",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6716",
+    "validation_evidence": [
+      "Current-HEAD CI green; 69 direct tests passed and 1 skipped; RED/GREEN interruption and tamper regressions, L0, Ruff, ownership, bounded 100k real-file equality/performance and three review rounds passed. Runtime remains pending user restart; no active dataset, DB or process changes."
+    ],
+    "validation_evidence_digest": "f3a1f5e52ee326761daa1e7cfdb65409c10a338b4026a08b34441f458bebfd6b"
+  },
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -99,6 +130,13 @@
     "fingerprint": "839984c4c8bf3a47625f8989",
     "source_event_id": "FE-20261013-839984c4c8bf"
   },
+  "validation_evidence": [
+    "RED: four parameterized materialization cases fail on old source; GREEN: same four cases pass, including interruption/reuse and changed retained-batch rejection.",
+    "Related matrix: test_monthly_sector_mapping.py 69 passed, 1 skipped; Ruff, changed-file L0/ownership and git diff --check passed.",
+    "Read-only current release first 100000 rows (2018-08-01..2018-09-11): old recompute 2.973526s versus exact completed-fact join 0.161728s, different industry cells=0, unrelated columns unchanged. X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/BUG-1891-bounded-100k-benchmark.json. Not a full-month runtime guarantee.",
+    "Three self-review rounds: exact-date and taxonomy/units parity; source-bound restart/cache drift and publication safety; actual bounded performance plus source/owner scope. DESIGN-COMPLIANCE-001: requirements matched, no mock-only completion, real frozen-file readback, no unapproved scope reduction.",
+    "Current-HEAD CI green; 69 direct tests passed and 1 skipped; RED/GREEN interruption and tamper regressions, L0, Ruff, ownership, bounded 100k real-file equality/performance and three review rounds passed. Runtime remains pending user restart; no active dataset, DB or process changes."
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
