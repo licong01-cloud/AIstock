@@ -18,6 +18,7 @@ import time
 from typing import Any, Mapping, Protocol, Sequence
 
 from .canonical import canonical_json_bytes, ensure_sha256
+from .monthly_file_identity import file_sha256
 from .monthly_registry import OfficialMonthlyProducerRegistry
 from .monthly_source_producer import AuditedMonthlySourceProducer
 from .monthly_stage_adapter import MonthlyStageArtifact, MonthlyStageResult
@@ -84,11 +85,7 @@ def _artifact(roots: Path | Sequence[Path], path: Path, *, label: str) -> Monthl
 
 
 def _sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
+    return file_sha256(path)
 
 
 def _content_ref(roots: Path | Sequence[Path], path: Path, *, label: str) -> dict[str, Any]:

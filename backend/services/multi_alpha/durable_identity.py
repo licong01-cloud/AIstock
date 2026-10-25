@@ -12,7 +12,7 @@ import asyncio
 import hashlib
 import subprocess
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Sequence
 
 from backend.services.multi_alpha.durable_models import (
@@ -50,13 +50,14 @@ _DATASET_FIELDS = (
 )
 _RUNTIME_FIELDS = (
     "qlib_runtime_template_sha256",
-    "conda_environment_lock_sha256",
     "execution_environment_snapshot_id",
     "execution_environment_manifest_sha256",
-    "executor_code_commit",
     "executor_file_set_sha256",
     "backtest_config_sha256",
 )
+# Deployment declarations are provenance, not experiment admission criteria.
+# Actual environment and executor content remain bound by the node manifest.
+_RUNTIME_PROVENANCE_FIELDS = ("conda_environment_lock_sha256", "executor_code_commit")
 _MATERIALIZER_FIELDS = (
     "aistock_commit",
     "planner_version",
@@ -102,9 +103,9 @@ def build_execution_identity(
 ) -> ExecutionIdentity:
     """Build a canonical P0-2 execution identity from content manifests.
 
-    All required evidence is explicit. A missing field is reported through a
-    structured contract error rather than silently falling back to a current
-    path, runtime default, or guessed configuration.
+    Required content evidence is explicit; optional deployment declarations
+    remain record-only. A missing content field is reported rather than
+    replaced by a current path, runtime default, or guessed configuration.
     """
 
     _require_mapping_fields(dataset, _DATASET_FIELDS, section="dataset")
@@ -150,7 +151,13 @@ def build_execution_identity(
             normalized_sources,
             key=lambda item: (item["leg_id"], item["seed_run_id"], item["artifact_sha256"]),
         ),
-        "runtime": _normalize_mapping(runtime, _RUNTIME_FIELDS, section="runtime"),
+        "runtime": {
+            **_normalize_mapping(runtime, _RUNTIME_FIELDS, section="runtime"),
+            **{
+                field: runtime[field].strip() if isinstance(runtime[field], str) else runtime[field]
+                for field in _RUNTIME_PROVENANCE_FIELDS if field in runtime
+            },
+        },
         "materializer": _normalize_mapping(materializer, _MATERIALIZER_FIELDS, section="materializer"),
         "business_formula": _normalize_mapping(
             business_formula,
@@ -474,16 +481,46 @@ class DurableExecutionIdentityResolver:
         suggestions: list[str],
         observations: dict[str, Any],
     ) -> dict[str, str] | None:
+        config = request.backtest_config
         data_root_uri: str | None = None
+        explicit_root = str(config.get("data_root_uri") or "").strip()
+        provider_path = str(config.get("remote_qlib_data_path") or "").strip()
+        component_root: str | None = None
+        # This is the exact direct-v2 component layout, not a filesystem probe
+        # or a search through parent directories/current active releases.
+        if provider_path:
+            provider = PurePosixPath(provider_path)
+            if provider.parts[-2:] == ("components", "daily_bin_candidate"):
+                component_root = str(provider.parent.parent)
+                if not provider.is_absolute() or ".." in provider.parts:
+                    missing.append("dataset.resolved_data_root_uri")
+                    observations["dataset_root_error"] = "invalid direct-v2 provider path"
+                    suggestions.append("bind the exact node-local absolute release root and daily component")
+                    return None
+        if explicit_root:
+            data_root_uri = str(PurePosixPath(explicit_root))
+            if not PurePosixPath(explicit_root).is_absolute() or ".." in PurePosixPath(explicit_root).parts:
+                missing.append("dataset.resolved_data_root_uri")
+                observations["dataset_root_error"] = "invalid explicit release root"
+                suggestions.append("bind an absolute node-local data_root_uri")
+                return None
+            if component_root is not None and data_root_uri != component_root:
+                missing.append("dataset.resolved_data_root_uri")
+                observations["dataset_root_mismatch"] = {
+                    "declared": data_root_uri, "provider_release_root": component_root,
+                }
+                suggestions.append("bind data_root_uri and provider_uri_day to the same frozen release")
+                return None
+        else:
+            data_root_uri = component_root or provider_path or None
+        scoped_root = bool(explicit_root or component_root)
         try:
-            node = self._node_info_resolver(node_id)
-            data_root_uri = str(
-                request.backtest_config.get("remote_qlib_data_path")
-                or getattr(node, "qlib_data_path", None)
-                or ""
-            ).strip() or None
+            if data_root_uri is None:
+                node = self._node_info_resolver(node_id)
+                data_root_uri = str(getattr(node, "qlib_data_path", None) or "").strip() or None
         except Exception as exc:
             observations["node_resolution_error"] = _exception_observation(exc)
+        observations["dataset_lookup_root"] = data_root_uri
         try:
             report = self._dataset_loader(node_id, data_root_uri)
         except Exception as exc:
@@ -510,6 +547,21 @@ class DurableExecutionIdentityResolver:
                 "expected": str(node_id),
                 "actual": dataset.get("resolved_node_id"),
             }
+            return None
+        if scoped_root and str(PurePosixPath(str(dataset.get("resolved_data_root_uri") or ""))) != data_root_uri:
+            missing.append("dataset.resolved_data_root_uri")
+            observations["dataset_root_mismatch"] = {
+                "expected": data_root_uri, "actual": dataset.get("resolved_data_root_uri"),
+            }
+            suggestions.append("retrieve the immutable manifest from the exact run-scoped release root")
+            return None
+        expected_manifest = str(config.get("dataset_manifest_sha256") or "").strip()
+        if expected_manifest and dataset.get("dataset_manifest_sha256") != expected_manifest:
+            missing.append("dataset.dataset_manifest_sha256")
+            observations["dataset_manifest_mismatch"] = {
+                "expected": expected_manifest, "actual": dataset.get("dataset_manifest_sha256"),
+            }
+            suggestions.append("restore the exact frozen dataset manifest; do not rebind this run to a newer release")
             return None
         observations["dataset_manifest_sha256"] = dataset.get("dataset_manifest_sha256")
         return dataset
@@ -579,27 +631,34 @@ class DurableExecutionIdentityResolver:
             runtime_template_hash = _optional_sha256(
                 declared_runtime.get("qlib_runtime_template_sha256"),
             )
-        conda_lock_hash = _configured_or_file_hash(
-            config,
-            hash_key="conda_environment_lock_sha256",
-            path_key="conda_environment_lock_path",
-        )
-        if conda_lock_hash is None:
+        provenance_errors: list[dict[str, str]] = []
+        try:
+            # Prefer what the execution node actually reports over an old
+            # request declaration. Neither absence nor collection failure may
+            # reject a new experiment or invent a deployment identity.
             conda_lock_hash = _optional_sha256(
                 declared_runtime.get("conda_environment_lock_sha256"),
+            ) or _configured_or_file_hash(
+                config,
+                hash_key="conda_environment_lock_sha256",
+                path_key="conda_environment_lock_path",
             )
+        except (OSError, ValueError, RuntimeError) as exc:
+            conda_lock_hash = None
+            provenance_errors.append({
+                "field": "conda_environment_lock_sha256",
+                "error_type": type(exc).__name__,
+                "reason_code": str(getattr(exc, "reason_code", "runtime_provenance_unavailable")),
+            })
         executor_code_commit = str(
-            config.get("executor_code_commit")
-            or declared_runtime.get("executor_code_commit")
+            declared_runtime.get("executor_code_commit")
+            or config.get("executor_code_commit")
             or ""
         ).strip()
         executor_file_set_hash = str(environment_manifest.get("executor_file_set_sha256") or "").strip()
         if runtime_template_hash is None:
             missing.append("runtime.qlib_runtime_template_sha256")
             suggestions.append("configure a content hash for the QE qrun runtime template or a readable runtime_template_dir")
-        if conda_lock_hash is None:
-            missing.append("runtime.conda_environment_lock_sha256")
-            suggestions.append("configure the expected conda environment lock hash for the QE deployment")
         if environment is None:
             # The environment loader already records the detail; keep each
             # required runtime component visible in the same evidence object.
@@ -610,20 +669,37 @@ class DurableExecutionIdentityResolver:
                     "runtime.executor_file_set_sha256",
                 ]
             )
-        if not executor_code_commit:
-            missing.append("runtime.executor_code_commit")
-            suggestions.append("set the owning QE deployment executor_code_commit as an immutable deployment value")
         if not executor_file_set_hash:
             missing.append("runtime.executor_file_set_sha256")
             suggestions.append("repair the owning QE execution-environment manifest executor file set")
+        provenance_missing = [
+            field for field, value in (
+                ("conda_environment_lock_sha256", conda_lock_hash),
+                ("executor_code_commit", executor_code_commit),
+            ) if not value
+        ]
+        observations["runtime_provenance"] = {
+            "record_only": True,
+            "complete": not provenance_missing,
+            "missing": provenance_missing,
+            "collection_errors": provenance_errors,
+            "sources": {
+                field: (
+                    "node_manifest" if declared_runtime.get(field)
+                    else "request_declaration" if config.get(field)
+                    else "request_lock_file" if field == "conda_environment_lock_sha256" and config.get("conda_environment_lock_path")
+                    else "unavailable"
+                )
+                for field in _RUNTIME_PROVENANCE_FIELDS
+            },
+        }
         if len(missing) > runtime_missing_before:
             return None
         assert environment is not None
         assert runtime_template_hash is not None
-        assert conda_lock_hash is not None
         runtime = {
             "qlib_runtime_template_sha256": runtime_template_hash,
-            "conda_environment_lock_sha256": conda_lock_hash,
+            "conda_environment_lock_sha256": conda_lock_hash or "",
             "execution_environment_snapshot_id": environment.execution_environment_snapshot_id,
             "execution_environment_manifest_sha256": environment.execution_environment_manifest_sha256,
             "executor_code_commit": executor_code_commit,

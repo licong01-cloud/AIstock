@@ -9,11 +9,12 @@ from __future__ import annotations
 
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 import re
 from typing import Any, Callable, Protocol, Sequence, TypeVar
 
 from .monthly_repair_journal import ManagedRepairImpactJournal
+from .monthly_unified import MonthlyReleaseCancelled, MonthlyReleaseSourceBlocked
 
 
 # PostgreSQL prints both the backend slot and local transaction counter in hex.
@@ -113,6 +114,11 @@ class MonthlySnapshotCoordinator(AbstractContextManager["MonthlySnapshotCoordina
             with connection.cursor() as cursor:
                 cursor.execute(f"SET TRANSACTION SNAPSHOT '{self.identity.snapshot_id}'")
             return reader(connection, self.identity)
+        except (MonthlyReleaseSourceBlocked, MonthlyReleaseCancelled):
+            # Missing authority is not transport/snapshot loss. Preserve the
+            # registered reason and remediation, but never reuse partial inputs.
+            self._lost = True
+            raise
         except Exception as exc:
             self._lost = True
             raise MonthlySnapshotError("monthly snapshot reader failed; the input set is invalid") from exc
@@ -157,6 +163,7 @@ def managed_monthly_snapshot(
     connection_factory: Callable[[], SnapshotConnection],
     *,
     journal: ManagedRepairImpactJournal | None = None,
+    cutoff: date | None = None,
 ) -> MonthlySnapshotCoordinator:
     """Construct the production coordinator with the managed write journal.
 
@@ -164,7 +171,9 @@ def managed_monthly_snapshot(
     substituting permissive watermark callbacks.
     """
 
-    selected = journal or ManagedRepairImpactJournal()
+    if journal is not None and cutoff is not None and journal.source_cutoff != cutoff:
+        raise MonthlySnapshotError("managed journal cutoff differs from frozen source cutoff")
+    selected = journal or ManagedRepairImpactJournal(source_cutoff=cutoff)
     return MonthlySnapshotCoordinator(
         connection_factory,
         repair_watermark_reader=selected.initial_watermark,

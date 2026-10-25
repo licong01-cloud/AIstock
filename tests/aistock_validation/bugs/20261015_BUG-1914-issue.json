@@ -1,0 +1,328 @@
+{
+  "actual": "memory拒绝40d/60d/120d/240d；year视图始于2024；报告不含区间说明。",
+  "allowed_write_scope": [
+    "backend/services/factor_research/memory.py",
+    "backend/services/factor_research/full_evaluation.py",
+    "backend/services/factor_research/comparison.py",
+    "backend/tests/factor_research/test_assistance.py",
+    "backend/tests/factor_research/test_full_evaluation.py",
+    "backend/tests/factor_research/test_comparison.py",
+    "tests/aistock_validation/bugs/20261015_BUG-1914-issue.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1914",
+  "closed_at": "2026-10-15T09:48:22Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-15T07:08:57.059521Z",
+  "description": "memory拒绝40d/60d/120d/240d；year视图始于2024；报告不含区间说明。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261015-2e92b15988a1",
+      "timestamp": "2026-10-15T07:08:57.059506Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "八期限检索与研究评价一致；历史年度视图完整；有效HAC标准误提供明确近似区间与带宽说明，未知不填零。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/factor_research/comparison.py",
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/services/factor_research/memory.py",
+      "backend/tests/factor_research/test_assistance.py",
+      "backend/tests/factor_research/test_comparison.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1914-issue.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/factor_research/comparison.py",
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/services/factor_research/memory.py",
+      "backend/tests/factor_research/test_assistance.py",
+      "backend/tests/factor_research/test_comparison.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "tests/aistock_validation/bugs/20261015_BUG-1914-issue.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/factor_research/memory.py",
+        "backend/services/factor_research/full_evaluation.py",
+        "backend/services/factor_research/comparison.py",
+        "backend/tests/factor_research/test_assistance.py",
+        "backend/tests/factor_research/test_full_evaluation.py",
+        "backend/tests/factor_research/test_comparison.py"
+      ],
+      "impacted_modules": [
+        "factor_library.research"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/factor_research/memory.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/services/factor_research/full_evaluation.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/services/factor_research/comparison.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_assistance.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_full_evaluation.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        },
+        {
+          "file": "backend/tests/factor_research/test_comparison.py",
+          "impact_modules": [],
+          "primary_module": "factor_library.research",
+          "risk_level": "high",
+          "rule_id": "factor_research_p1"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/factor_research/memory.py",
+        "backend/services/factor_research/full_evaluation.py",
+        "backend/services/factor_research/comparison.py",
+        "backend/tests/factor_research/test_assistance.py",
+        "backend/tests/factor_research/test_full_evaluation.py",
+        "backend/tests/factor_research/test_comparison.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/factor_research/memory.py",
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/services/factor_research/comparison.py",
+      "backend/tests/factor_research/test_assistance.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "backend/tests/factor_research/test_comparison.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/factor_research/memory.py",
+      "backend/services/factor_research/full_evaluation.py",
+      "backend/services/factor_research/comparison.py",
+      "backend/tests/factor_research/test_assistance.py",
+      "backend/tests/factor_research/test_full_evaluation.py",
+      "backend/tests/factor_research/test_comparison.py"
+    ]
+  },
+  "first_seen_at": "2026-10-15T07:08:57.059521Z",
+  "fix_branch": null,
+  "fix_commit": "776bdfdfee9a5a3f7366fbb058141b0e391e1d8a",
+  "fixed_at": "2026-10-15T09:48:22Z",
+  "github_issue_number": 6106,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6106",
+  "last_seen_at": "2026-10-15T07:08:57.059521Z",
+  "module": "factor_library.research",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6127",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/factor_research/test_assistance.py::test_memory_unknown_conflict_literal_paging_and_old_context backend/tests/factor_research/test_full_evaluation.py::test_annual_views_cover_actual_history_without_expanding_recent_views backend/tests/factor_research/test_comparison.py::test_hac_interval_preserves_bandwidth_and_contiguous_date_boundaries -q",
+  "required_verification": [
+    "l0",
+    "factor_research_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_gap": "memory.py and full_evaluation.py are CLI research paths in inspected imports but not exact non_runtime catalog entries; comparison.py already is. No target-owned HTTP semantic smoke exists for these research operations. Request workflow owner classification; do not forge health-as-business evidence or manually downgrade runtime.",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1914",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "b60664d563ba1850",
+    "recorded_at": "2026-10-15T09:49:37.299349Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "4b3f497bbc15a7c11a6fbae4ec0a34620d97d00b",
+    "source_merge_commit": "776bdfdfee9a5a3f7366fbb058141b0e391e1d8a",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6127",
+    "validation_evidence": [
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "3795de44c9bd37569bfe5f03fc970480732fcb54e21e94e76a12fc0664c1fc80"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "factor_library.research"
+  ],
+  "title": "因子研究八期限检索和历史比较报告范围不一致",
+  "trigger_condition": {
+    "fingerprint": "2e92b15988a142910405355c",
+    "source_event_id": "FE-20261015-2e92b15988a1"
+  },
+  "validation_evidence": [
+    "RED: extended horizon filters rejected, early annual view and confidence interval absent; GREEN: 7 focused cases passed",
+    "Final related matrix: test_assistance.py test_full_evaluation.py test_comparison.py -> 36 passed; no DEV authorization",
+    "Ruff changed files, git diff --check, python -m nox -s l0 -> passed",
+    "Review 1: only research projection/report additions, no new estimate or horizon/label change; no repository, SQL, official metrics, QE or runtime mutation",
+    "Review 2 DESIGN-COMPLIANCE-001: scopes fully implemented locally; undefined uncertainty stays null; original HAC values/default preserved with explicit no-serial-adjustment flag; no new gates; runtime classification unresolved and not manually downgraded",
+    "python -m nox -s l0 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "factor_library.research",
+        "factor_research"
+      ],
+      "plans": [
+        "factor_research_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "factor_library.research",
+          "factor_research"
+        ],
+        "plans": [
+          "factor_research_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}

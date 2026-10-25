@@ -1,5 +1,6 @@
 import pandas as pd
 import pytest
+import yaml
 
 from backend.services.quantevolver.config_composer import (
     ConfigComposer,
@@ -142,33 +143,47 @@ def test_config_composer_emits_long_horizon_maturity_purge():
     assert "test_end: 2021-12-31" in yaml_text
 
 
-def test_long_horizon_workspace_requires_qe_runtime_module():
+@pytest.mark.parametrize("horizon", ALLOWED_LABEL_HORIZONS)
+def test_every_horizon_workspace_requires_qe_runtime_module(horizon):
     assert _requires_qe_custom_loaders(
         has_custom_factors=False,
         disable_alpha158=False,
-        custom_params={"label_horizon": 180},
+        custom_params={"label_horizon": horizon},
     ) is True
-    assert _requires_qe_custom_loaders(
-        has_custom_factors=False,
-        disable_alpha158=False,
-        custom_params={"label_horizon": 20},
-    ) is False
 
 
-def test_config_composer_keeps_existing_20d_learning_contract():
+@pytest.mark.parametrize("horizon", [1, 20, 60])
+@pytest.mark.parametrize("custom_only,custom_factors", [(False, False), (False, True), (True, True)])
+def test_config_composer_purges_every_learning_path_without_shortening_inference(
+    horizon, custom_only, custom_factors
+):
     yaml_text = ConfigComposer()._compose_conf_yaml(
         factors_info=[],
         model_info=None,
         strategy_info=None,
         data_split=DATA_SPLIT,
-        custom_params={"label_horizon": 20},
-        has_custom_factors=False,
+        custom_params={"label_horizon": horizon},
+        has_custom_factors=custom_factors,
         has_alpha158=False,
+        disable_alpha158=custom_only,
         backtest_freq="day",
         execution_algo="CLOSE_PRICE",
     )
 
-    assert "LongHorizonLabelMaturityPurge" not in yaml_text
+    conf = yaml.safe_load(yaml_text)
+    dataset = conf["task"]["dataset"]["kwargs"]
+    handler = dataset["handler"]["kwargs"]
+    processors = handler["learn_processors"]
+    assert processors[0]["class"] == "LongHorizonLabelMaturityPurge"
+    assert processors[0]["module_path"] == "qe_custom_loaders"
+    assert processors[0]["kwargs"]["label_horizon"] == horizon
+    assert processors[1]["class"] == "DropnaLabel"
+    assert all(p["class"] != "LongHorizonLabelMaturityPurge" for p in handler["infer_processors"])
+    for segment in ("train", "valid", "test"):
+        assert [str(d) for d in dataset["segments"][segment]] == [
+            DATA_SPLIT[f"{segment}_start"], DATA_SPLIT[f"{segment}_end"]
+        ]
+    assert str(handler["end_time"]) == DATA_SPLIT["test_end"]
 
 
 def test_data_split_rejects_overlapping_inclusive_boundaries():
@@ -194,7 +209,8 @@ def test_dynamic_factors_only_loader_builds_horizon_aware_label():
     )
 
 
-def test_long_horizon_purge_masks_learning_labels_but_keeps_features():
+@pytest.mark.parametrize("horizon", ALLOWED_LABEL_HORIZONS)
+def test_maturity_purge_masks_learning_labels_but_keeps_features(horizon):
     calendar = pd.bdate_range("2020-01-01", periods=900)
     index = pd.MultiIndex.from_product(
         [calendar, ["000001.SZ"]],
@@ -208,7 +224,7 @@ def test_long_horizon_purge_masks_learning_labels_but_keeps_features():
         index=index,
     )
     processor = LongHorizonLabelMaturityPurge(
-        label_horizon=180,
+        label_horizon=horizon,
         train_start=calendar[0].date().isoformat(),
         train_end=calendar[249].date().isoformat(),
         valid_start=calendar[250].date().isoformat(),
@@ -219,13 +235,16 @@ def test_long_horizon_purge_masks_learning_labels_but_keeps_features():
 
     result = processor(frame.copy())
 
-    assert result.loc[(calendar[68], "000001.SZ"), ("label", "LABEL0")] == 2.0
-    assert pd.isna(result.loc[(calendar[69], "000001.SZ"), ("label", "LABEL0")])
+    last_mature = 249 - horizon - 1
+    assert result.loc[(calendar[last_mature], "000001.SZ"), ("label", "LABEL0")] == 2.0
+    assert pd.isna(result.loc[(calendar[last_mature + 1], "000001.SZ"), ("label", "LABEL0")])
     assert pd.isna(result.loc[(calendar[899], "000001.SZ"), ("label", "LABEL0")])
     assert result.loc[(calendar[899], "000001.SZ"), ("feature", "F0")] == 1.0
-    assert processor.purge_summary["train"]["masked_rows"] == 181
-    assert processor.purge_summary["valid"]["masked_rows"] == 181
-    assert processor.purge_summary["test"]["masked_rows"] == 181
+    assert processor.is_for_infer() is False
+    assert processor.readonly() is False
+    pd.testing.assert_series_equal(result[("feature", "F0")], frame[("feature", "F0")])
+    for segment in ("train", "valid", "test"):
+        assert processor.purge_summary[segment]["masked_rows"] == horizon + 1
 
 
 def test_long_horizon_purge_fails_when_segment_has_no_mature_sample():
@@ -247,6 +266,23 @@ def test_long_horizon_purge_fails_when_segment_has_no_mature_sample():
 
     with pytest.raises(ValueError, match="train segment"):
         processor(frame)
+
+
+def test_immature_test_labels_do_not_block_full_inference_window():
+    calendar = pd.bdate_range("2020-01-01", periods=105)
+    index = pd.MultiIndex.from_product([calendar, ["000001.SZ"]], names=["datetime", "instrument"])
+    frame = pd.DataFrame({("feature", "F0"): 1.0, ("label", "LABEL0"): 2.0}, index=index)
+    processor = LongHorizonLabelMaturityPurge(
+        label_horizon=20,
+        train_start=str(calendar[0].date()), train_end=str(calendar[49].date()),
+        valid_start=str(calendar[50].date()), valid_end=str(calendar[99].date()),
+        test_start=str(calendar[100].date()), test_end=str(calendar[104].date()),
+    )
+    result = processor(frame.copy())
+    assert result.loc[calendar[100]:, ("label", "LABEL0")].isna().all()
+    assert processor.purge_summary["test"]["masked_rows"] == 5
+    pd.testing.assert_series_equal(result[("feature", "F0")], frame[("feature", "F0")])
+    pd.testing.assert_index_equal(result.index, frame.index)
 
 
 def test_config_composer_passes_no_alpha_label_horizon_to_dynamic_loader():

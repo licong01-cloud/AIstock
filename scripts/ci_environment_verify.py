@@ -164,9 +164,15 @@ def prepare_test_temp(environ: Mapping[str, str]) -> dict[str, str]:
     }
 
 
-def main() -> int:
-    payload = verify_environment()
-    if payload["status"] == "ready" and os.environ.get("AISTOCK_CI_TEST_TEMP_REQUIRED") == "1":
+def main(*, prepare_temp_only: bool = False) -> int:
+    # Conda activation itself needs TEMP, so bootstrap storage before invoking it.
+    # This receipt deliberately does not attest the prebuilt environment.
+    payload = (
+        {"schema_version": "aistock_ci_temp_bootstrap_v1", "status": "ready",
+         "environment_verified": False, "failure_reasons": []}
+        if prepare_temp_only else verify_environment()
+    )
+    if prepare_temp_only or (payload["status"] == "ready" and os.environ.get("AISTOCK_CI_TEST_TEMP_REQUIRED") == "1"):
         try:
             github_env = os.environ.get("GITHUB_ENV", "")
             if not github_env:
@@ -184,4 +190,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import argparse
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--prepare-temp-only", action="store_true", help="Prepare X-only job storage before Conda activation; does not verify the environment")
+    raise SystemExit(main(prepare_temp_only=parser.parse_args().prepare_temp_only))

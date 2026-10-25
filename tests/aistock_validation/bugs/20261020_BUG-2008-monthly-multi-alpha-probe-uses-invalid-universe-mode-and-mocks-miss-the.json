@@ -1,0 +1,320 @@
+{
+  "actual": "qe_multi_alpha fails before node probe; no missing price or industry data established.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_qe_consumer_probe.py",
+    "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2008-monthly-multi-alpha-probe-uses-invalid-universe-mode-and-mocks-miss-the.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2008",
+  "closed_at": "2026-10-20T04:24:59.014342Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T04:11:52.523632Z",
+  "description": "qe_multi_alpha fails before node probe; no missing price or industry data established.",
+  "design_compliance_001": {
+    "business_semantics": "PASS: QE model/strategy/pool/window/threshold code and all candidate bytes are unchanged; uses existing index_union contract.",
+    "complete_requested_fix": "PASS: corrected the data-owned probe and exercised the real public parser and five real candidate resolver paths, not only mocked success.",
+    "no_added_gates": "PASS: no extra release gate, framework, source audit, approval or full export; retained all existing completed operation checkpoints.",
+    "no_silent_errors": "PASS: unknown universe modes still raise qe_universe_mode_invalid; cross-manifest and metadata-only blacklist failures remain covered."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-2e4d3e734083",
+      "timestamp": "2026-10-20T04:11:52.523632Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_runtime_state/monthly-dataset-release-v2/monthly/dmr_63a313d97fd046a38d5a876265565014/state.json"
+  ],
+  "expected": "Use the existing public index_union mode, validate all five probe selections with official UniverseSelection, preserve all completed exports/checkpoints and unchanged QE business contracts.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_qe_consumer_probe.py",
+      "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2008-monthly-multi-alpha-probe-uses-invalid-universe-mode-and-mocks-miss-the.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_qe_consumer_probe.py",
+      "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2008-monthly-multi-alpha-probe-uses-invalid-universe-mode-and-mocks-miss-the.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_qe_consumer_probe.py",
+        "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_qe_consumer_probe.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_qe_consumer_probe.py",
+        "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_qe_consumer_probe.py",
+      "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_qe_consumer_probe.py",
+      "backend/tests/dataset_release/test_monthly_qe_consumer_probe.py"
+    ]
+  },
+  "first_seen_at": "2026-10-20T04:11:52.523632Z",
+  "fix_branch": null,
+  "fix_commit": "6f4c7fbba97eadafe4cf9ae7efc72a92843a4918",
+  "fix_description": "Use index_union in the shared monthly multi-alpha probe. Validate all five emitted selections through official UniverseSelection in the existing parameterized test so mocks cannot accept a nonexistent public mode.",
+  "fixed_at": "2026-10-20T04:18:12Z",
+  "github_issue_number": 6415,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6415",
+  "last_seen_at": "2026-10-20T04:11:52.523632Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6417",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_rounds": [
+    "R1: real official parser reproduced RED only for multi-alpha (one failed, four passed); changed exactly the invalid data-owned mode and obtained GREEN.",
+    "R2: reviewed side-effect boundaries, PIT union semantics, manifest and blacklist fail-closed tests; related probe/node runner matrix 25 passed, Ruff/compile/whitespace passed.",
+    "R3: isolated worktree process read the real September profile and unchanged candidate; all five official QE resolver paths and actual Composer HMM reader passed, P11 excluded four intervals; no database, candidate/profile write, training or runtime control."
+  ],
+  "risk_area": "bug",
+  "root_cause": "The monthly producer used union, not the existing QE index_union enum. Its test copied the wrong value into a permissive mock resolver and never parsed the real UniverseSelection contract. This is a monthly validation-program defect, not missing market or industry facts.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "2026-10-20 isolated AIstock Python loaded patched monthly_qe_consumer_probe and official QE/Composer consumers against the real 20260930-monthly-v2-unified profile, manifest 1f6acfb4ede18d4b7d2d2a5c65d86a1efe49fc2e6037da5abdcc333c0f80b566. QE single/custom/multi-alpha/P10/P11 all PASS; P11 blacklist_excluded_count=4; database_access=false, candidate_write=false, profile_write=false, training_started=false, runtime_action=false. Durable operation remains FAILED until the user-owned worker restart and formal resume, not READY."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_dataset_release_control/operator_receipts/BUG-2008-postrestart-20261020-r1.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2008",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "6f4c7fbba97eadafe4cf9ae7efc72a92843a4918",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-20T04:24:45.402114Z",
+      "mode": "read_only",
+      "observed_identity": "6f4c7fbba97eadafe4cf9ae7efc72a92843a4918",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "c3142ce6aae767a62112205539a54d001696f8f1bd7b7af0683af8cbfd9036d4",
+      "receipt_sha256": "8aeb74a21ac369761128ddc70760d39d1a0e2c56c2cb7aa3c1416b3b4f385fe0",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "8a609e74afa8fd0964ab61a647f7d69a462edd0152c27fcf0bee3ba0eb7ce2c1",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2008",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "36f7640a4b046d96",
+    "recorded_at": "2026-10-20T04:18:55.740681Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "43a7108d4fec3bc87380ccc67f87813f3b11aebc",
+    "source_merge_commit": "6f4c7fbba97eadafe4cf9ae7efc72a92843a4918",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6417",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_qe_consumer_probe.py backend/tests/dataset_release/test_monthly_node_probe_runner.py -q -> 25 passed",
+      "python -m nox -s l0 --no-venv -> passed"
+    ],
+    "validation_evidence_digest": "a4abca521486d2895e15c49b7c54799ea9d4f415634ca5bc397b5e9ce54c9d74"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly multi-alpha probe uses invalid universe mode and mocks miss the public contract",
+  "trigger_condition": {
+    "fingerprint": "2e4d3e7340831c4c89a26699",
+    "source_event_id": "FE-20261020-2e4d3e734083"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_monthly_qe_consumer_probe.py backend/tests/dataset_release/test_monthly_node_probe_runner.py -q -> 25 passed",
+    "python -m nox -s l0 --no-venv -> passed",
+    "Post-restart official worker identity and business smoke passed; runtime identity contains merge 6f4c7fbba97eadafe4cf9ae7efc72a92843a4918; no process control."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
