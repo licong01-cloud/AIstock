@@ -258,7 +258,8 @@ def test_versioned_history_rejects_ambiguous_or_invented_authority(predecessor, 
         IndustryHistoryProjection.build(rows, current_map=binding["code_map"], authority_sha256="c" * 64)
 
 
-def test_history_materialization_rebinds_reference_facts_and_preserves_prices(predecessor, tmp_path):
+@pytest.mark.parametrize("execution", ["plain", "context", "interrupted", "tampered"])
+def test_history_materialization_rebinds_reference_facts_and_preserves_prices(predecessor, tmp_path, execution):
     import numpy as np
     import pandas as pd
     from backend.services.dataset_release.monthly_industry_history import IndustryHistoryProjection, materialize_history_files
@@ -290,7 +291,42 @@ def test_history_materialization_rebinds_reference_facts_and_preserves_prices(pr
         frame.to_hdf(factor / f"{name}.h5", "data", format="table", data_columns=["datetime", "instrument"])
     static.to_parquet(factor / "static_factors.parquet")
     signatures = {path.name: path.stat().st_mtime_ns for path in factor.iterdir()}
-    result = materialize_history_files(root, history)
+    calls, events = [], []
+    def rebuild(frame):
+        calls.append(len(frame))
+        actual = history.project(frame)
+        selected = frame.index.get_level_values("datetime") <= pd.Timestamp("2026-08-31")
+        actual.loc[selected, "sw2_close"] = np.where(
+            frame.index.get_level_values("datetime")[selected] < pd.Timestamp("2021-07-30"), np.nan, 200)
+        return actual
+    def progress(event):
+        events.append(event)
+        if execution in {"interrupted", "tampered"} and event.get("phase") == "INDUSTRY_STATIC_BATCH_SEALED":
+            raise RuntimeError("interrupt after completed batch")
+    options = {"max_rows": 2, "progress": progress}
+    if execution != "plain":
+        (factor / "moneyflow.h5").write_bytes(b"fixture-not-read-by-supplied-context")
+        (factor / "security_source_identity.json").write_bytes(b"{}")
+        signatures = {path.name: path.stat().st_mtime_ns for path in factor.iterdir()}
+        options.update(context_rebuilder=rebuild, context_identity={"contract": "test-frozen-context", "sha256": "d" * 64})
+    if execution in {"interrupted", "tampered"}:
+        with pytest.raises(RuntimeError, match="interrupt after completed batch"):
+            materialize_history_files(root, history, **options)
+        assert calls == [2, 2]
+        from backend.services.dataset_release.monthly_industry_history import _history_scratch_paths
+        digest = hashlib.sha256(canonical_json_bytes(options["context_identity"])).hexdigest()
+        scratch = _history_scratch_paths(root, history.sha256, digest)[0]
+        if execution == "tampered":
+            part = next(scratch.glob("static-part-*.parquet"))
+            part.write_bytes(part.read_bytes() + b"changed")
+            with pytest.raises(SourceManifestError, match="retained.*changed"):
+                materialize_history_files(root, history, **{**options, "progress": events.append})
+            return
+        options["progress"] = events.append
+    result = materialize_history_files(root, history, **options)
+    if execution != "plain":
+        assert calls == [2, 2]  # No static write/readback may recompute cohort economics.
+    assert any(event["phase"] == "INDUSTRY_STATIC_BATCH_SEALED" for event in events)
     outputs = {name: root.parent / pin["scratch_relative_path"] for name, pin in result["files"].items()}
     actual_sector = pd.read_hdf(outputs["sector_data.h5"], "data").sort_index()
     actual_static = pd.read_parquet(outputs["static_factors.parquet"])
@@ -302,11 +338,12 @@ def test_history_materialization_rebinds_reference_facts_and_preserves_prices(pr
     pd.testing.assert_frame_equal(actual_static.loc[pd.Timestamp("2026-09-01")], static.loc[pd.Timestamp("2026-09-01")])
     assert result["classification_only_rows_added"] == 2
     assert {path.name: path.stat().st_mtime_ns for path in factor.iterdir()} == signatures
-    assert materialize_history_files(root, history) == result
+    assert materialize_history_files(root, history, **options) == result
     from backend.services.dataset_release.monthly_industry_history import _history_scratch_paths
-    _history_scratch_paths(root, history.sha256, None)[1].mkdir()
+    digest = None if execution == "plain" else hashlib.sha256(canonical_json_bytes(options["context_identity"])).hexdigest()
+    _history_scratch_paths(root, history.sha256, digest)[1].mkdir()
     with pytest.raises(SourceManifestError, match="ambiguous"):
-        materialize_history_files(root, history)
+        materialize_history_files(root, history, **options)
     assert {path.name: path.stat().st_mtime_ns for path in factor.iterdir()} == signatures
 
 
