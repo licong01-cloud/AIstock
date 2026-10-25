@@ -138,7 +138,27 @@
     ]
   },
   "production_backend_dependency_gate": "noop",
-  "production_ddl_gate": "required",
+  "production_ddl_gate": "passed",
+  "production_ddl_evidence": {
+    "dev_validation": "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/bug1781-dev-schema-apply.json",
+    "production_authorization": "User explicitly authorized add_raw_volume_precision_v1.sql after DEV validation; historical authorization retained, not expanded or reapplied.",
+    "production_apply": "X:/AIstock_dataset_candidates/data_repair_staging/bug1779-20261007/bug1781-production-schema-apply.json",
+    "production_readback": "X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/BUG-1781-final-production-disposition.json",
+    "migration_sha256": "368b05723018e36e4bcc6d85e889742d427def6f6c2559cd62a1f180be23d7a3",
+    "production_ddl_reapplied": false
+  },
+  "final_data_disposition": {
+    "historical_precision_patch_rows": 1288,
+    "original_remaining_keys": 49,
+    "corrected_keys_independently_read_back": 3,
+    "published_provider_precision_variances": 45,
+    "published_known_provider_price_variances": 1,
+    "unexplained_keys": 0,
+    "acceptance_file_sha256": "6d5afdbe052d343abecf6398566a26187a8652e548ad477ed28cdb4a2e4fae23",
+    "quality_status": "ACCEPTED_WITH_WARNINGS",
+    "dataset_manifest_sha256": "afa9158b9b1d8cc76ec1e40a6efdb2060365bb3039ea791a0b5caa2bae8c5337",
+    "note": "No missing data waived or facts overwritten. Accepted precision/provider differences remain explicit warnings; they are not falsely reported as equal prices or volumes. Current six nullable schema fields independently read back."
+  },
   "production_frontend_dependency_gate": "noop",
   "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
   "reproduce_command": "n/a",
