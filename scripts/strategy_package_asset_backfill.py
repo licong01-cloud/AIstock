@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import io
 import os
 import sys
 from contextlib import contextmanager
@@ -54,6 +55,76 @@ class DryRunPackageAssetStore(PackageAssetStore):
     def __init__(self, delegate: PackageAssetStore | None = None) -> None:
         self.delegate = delegate or LocalPackageAssetStore()
         self._blobs: dict[str, bytes] = {}
+        self._files: dict[str, Path] = {}
+        self._file_sizes: dict[str, int] = {}
+
+    def put_file(
+        self, source_path: str | Path, *, kind: str, sha256: str, size_bytes: int | None = None
+    ) -> PackageAssetBlob:
+        source = Path(source_path)
+        if source.is_symlink() or not source.is_file():
+            raise PackageAssetInvalidError(
+                "dry-run source is not an ordinary file",
+                context={"reason_code": "strategy_package_asset_source_invalid", "dry_run": True},
+            )
+        actual_sha, actual_size = self._file_identity(source)
+        expected = str(sha256).strip().lower()
+        if actual_sha != expected or (size_bytes is not None and actual_size != int(size_bytes)):
+            self._identity_error()
+        uri = f"{PACKAGE_ASSET_URI_SCHEME}://blobs/{actual_sha}"
+        self._files[uri] = source
+        self._file_sizes[uri] = actual_size
+        return PackageAssetBlob(kind=str(kind), uri=uri, sha256=actual_sha, size_bytes=actual_size)
+
+    @staticmethod
+    def _file_identity(path: Path) -> tuple[str, int]:
+        digest = hashlib.sha256()
+        size = 0
+        with path.open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                digest.update(chunk)
+                size += len(chunk)
+        return digest.hexdigest(), size
+
+    @staticmethod
+    def _identity_error() -> None:
+        raise PackageAssetInvalidError(
+            "dry-run asset identity mismatch",
+            context={"reason_code": "strategy_package_asset_readback_mismatch", "dry_run": True},
+        )
+
+    def verify(self, uri: str, *, sha256: str, size_bytes: int) -> PackageAssetBlob:
+        base_uri = str(uri).split("?", 1)[0]
+        if base_uri in self._files:
+            digest, size = self._file_identity(self._files[base_uri])
+        elif base_uri in self._blobs:
+            data = self._blobs[base_uri]
+            digest, size = hashlib.sha256(data).hexdigest(), len(data)
+        else:
+            return self.delegate.verify(uri, sha256=sha256, size_bytes=size_bytes)
+        if digest != str(sha256).strip().lower() or size != int(size_bytes):
+            self._identity_error()
+        return PackageAssetBlob(kind="verified_blob", uri=uri, sha256=digest, size_bytes=size)
+
+    def materialize_file(self, uri: str, target: Path, *, sha256: str, size_bytes: int) -> None:
+        """Write only the caller's isolated smoke file, never authoritative CAS."""
+        self.verify(uri, sha256=sha256, size_bytes=size_bytes)
+        base_uri = str(uri).split("?", 1)[0]
+        source = self._files.get(base_uri)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        # Exclusive creation protects a pre-existing path even if verification fails.
+        with target.open("xb") as output:
+            try:
+                with source.open("rb") if source is not None else io.BytesIO(self.get(uri)) as data:
+                    while chunk := data.read(1024 * 1024):
+                        output.write(chunk)
+            except BaseException:
+                output.close()
+                target.unlink()
+                raise
+        if self._file_identity(target) != (str(sha256).strip().lower(), int(size_bytes)):
+            target.unlink()
+            self._identity_error()
 
     def put(self, data: bytes, *, kind: str, sha256: str | None = None) -> PackageAssetBlob:
         payload = bytes(data)
@@ -80,6 +151,9 @@ class DryRunPackageAssetStore(PackageAssetStore):
         base_uri = str(uri).split("?", 1)[0]
         if base_uri in self._blobs:
             return self._blobs[base_uri]
+        if base_uri in self._files:
+            self.verify(uri, sha256=base_uri.rsplit("/", 1)[-1], size_bytes=self._file_sizes[base_uri])
+            return self._files[base_uri].read_bytes()
         return self.delegate.get(uri)
 
     def exists(self, uri: str) -> bool:
@@ -88,6 +162,8 @@ class DryRunPackageAssetStore(PackageAssetStore):
         base_uri = str(uri).split("?", 1)[0]
         if base_uri in self._blobs:
             return True
+        if base_uri in self._files:
+            return self._files[base_uri].is_file()
         return self.delegate.exists(uri)
 
 
@@ -128,9 +204,7 @@ def _db_config(*, target_db: str) -> dict[str, Any]:
         }
         host = str(cfg["host"]).lower()
         dbname = str(cfg["dbname"]).lower()
-        if host not in {"127.0.0.1", "localhost"} or not any(
-            marker in dbname for marker in ("dev", "scratch", "test")
-        ):
+        if host not in {"127.0.0.1", "localhost"} or not any(marker in dbname for marker in ("dev", "scratch", "test")):
             raise AssetBackfillScriptError(
                 "refusing dev target because it does not look like a local scratch/dev DB: "
                 f"host={cfg['host']} dbname={cfg['dbname']}"
@@ -252,7 +326,9 @@ def _model_code_repair_preview(report: dict[str, Any]) -> dict[str, Any]:
             continue
         context = item.get("context") if isinstance(item.get("context"), dict) else {}
         repair = context.get("model_code_repair") if isinstance(context.get("model_code_repair"), dict) else {}
-        additions = repair.get("model_code_assets_to_add") if isinstance(repair.get("model_code_assets_to_add"), list) else []
+        additions = (
+            repair.get("model_code_assets_to_add") if isinstance(repair.get("model_code_assets_to_add"), list) else []
+        )
         if not additions:
             continue
         impacted.append(

@@ -8,6 +8,7 @@ const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 
 interface EvolutionTrajectoryProps {
   taskId: string | null;
+  suppliedLoops?: any[];
   taskType?: string;
   evolutionMode?: string;
   sourceType?: string;
@@ -69,11 +70,13 @@ function formatStatus(status: string): { label: string; color: string; bg: strin
 
 export default React.memo(function EvolutionTrajectory({
   taskId,
+  suppliedLoops,
   taskType,
   evolutionMode,
   sourceType,
   dataSourceAdapter,
 }: EvolutionTrajectoryProps) {
+  const hasSuppliedLoops = suppliedLoops != null;
   const [rawData, setRawData] = useState<any>(null);
   const [customConfig, setCustomConfig] = useState<any>(null);
   const [loading, setLoading] = useState(false);
@@ -81,11 +84,13 @@ export default React.memo(function EvolutionTrajectory({
 
   useEffect(() => {
     if (!taskId) return;
+    let cancelled = false;
+    const controller = new AbortController();
     setLoading(true);
     setError(null);
 
     const fetchJson = async (url: string) => {
-      const res = await fetch(url);
+      const res = await fetch(url, { signal: controller.signal });
       const json = await res.json();
       if (!res.ok || json.status !== "success") {
         throw new Error(json.detail || `HTTP ${res.status}`);
@@ -97,33 +102,38 @@ export default React.memo(function EvolutionTrajectory({
     const encodedTaskId = dataSourceAdapter ? encodeURIComponent(taskId) : taskId;
     const trajectoryUrl = dataSourceAdapter
       ? `${API}${dataSourceAdapter.basePath}/tasks/${encodedTaskId}/trajectory${query}`
-      : `${API}/quantevolver/evolution/tasks/${taskId}/trajectory`;
+      : `${API}/quantevolver/evolution/tasks/${taskId}/loops/comparison`;
     const configUrl = dataSourceAdapter
       ? `${API}${dataSourceAdapter.basePath}/tasks/${encodedTaskId}/custom-evo-config${query}`
       : `${API}/quantevolver/evolution/tasks/${taskId}/custom-evo-config`;
 
     Promise.allSettled([
-      fetchJson(trajectoryUrl),
+      hasSuppliedLoops ? Promise.resolve(null) : fetchJson(trajectoryUrl),
       fetchJson(configUrl),
     ])
       .then(([trajectoryResult, configResult]) => {
+        if (cancelled) return;
         if (trajectoryResult.status === "fulfilled") {
-          setRawData(trajectoryResult.value);
+          const value = trajectoryResult.value;
+          setRawData(!value || dataSourceAdapter ? value : { ...value, trajectory: (value.loops || []).map((loop: any) => ({
+            ...loop, config_json: loop.config_summary || {}, metrics_json: loop.metrics_summary || {},
+          })) });
         } else {
           setRawData(null);
           setError("无法获取轨迹数据");
         }
         setCustomConfig(configResult.status === "fulfilled" ? configResult.value : null);
       })
-      .catch((e) => setError(e.message))
-      .finally(() => setLoading(false));
-  }, [taskId, dataSourceAdapter?.basePath, dataSourceAdapter?.scheme, dataSourceAdapter]);
+      .catch((e) => { if (!cancelled) setError(e.message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; controller.abort(); };
+  }, [taskId, hasSuppliedLoops, dataSourceAdapter?.basePath, dataSourceAdapter?.scheme, dataSourceAdapter]);
 
   // 从后端原始数据转换为组件所需的格式
   const processedData = useMemo(() => {
-    if (!rawData) return null;
+    if (!rawData && !suppliedLoops) return null;
 
-    const trajectoryRows = rawData.trajectory || [];
+    const trajectoryRows = suppliedLoops || rawData.trajectory || [];
     const configuredLoops = Array.isArray(customConfig?.loops) ? customConfig.loops : [];
     const configuredByIndex = new Map<number, any>();
     configuredLoops.forEach((loop: any, idx: number) => {
@@ -139,7 +149,34 @@ export default React.memo(function EvolutionTrajectory({
         const rowCfg = parseConfigJson(row.config_json);
         const rowFlags = rowCfg.runtime_flags || {};
         const cfgFlags = cfg.runtime_flags || {};
-        const strategyParams = rowCfg.strategy_params || cfg.strategy_params || {};
+        const modelParams = rowCfg.model_params || {};
+        const strategyParams = {
+          ...modelParams,
+          ...(cfg.strategy_params || {}),
+          ...(rowCfg.strategy_params || {}),
+        };
+        const universeSelection = rowCfg.universe_selection
+          || rowCfg.universe
+          || modelParams?._qe_direct_v2_dataset_binding?.selection_pins
+          || cfg.universe_selection
+          || {};
+        const poolIds = Array.isArray(universeSelection.pool_ids) ? universeSelection.pool_ids : [];
+        const poolLabel = poolIds.length > 0
+          ? poolIds.join("+")
+          : firstText(rowCfg.stock_pool, cfg.stock_pool) || "stock_universe";
+        const hmmEnabled = row.policy_summary?.hmm?.enabled ?? rowCfg.enable_sector_hmm
+          ?? modelParams.enable_sector_hmm
+          ?? cfg.enable_sector_hmm;
+        const blacklistValues = rowCfg.sector_blacklist
+          ?? modelParams.sector_blacklist
+          ?? cfg.sector_blacklist;
+        const blacklistEnabled = Array.isArray(blacklistValues)
+          ? blacklistValues.length > 0
+          : (
+            row.policy_summary?.sector_blacklist?.enabled ?? rowCfg.sector_blacklist_enabled
+            ?? modelParams.sector_blacklist_enabled
+            ?? cfg.sector_blacklist_enabled
+          );
         const label = firstText(
           row.loop_label,
           row.label,
@@ -167,6 +204,9 @@ export default React.memo(function EvolutionTrajectory({
               ? cfgFlags.objectives
               : [],
           modelId: firstText(rowCfg.model_id, cfg.model_id),
+          poolLabel,
+          hmmEnabled,
+          blacklistEnabled,
           topk: strategyParams.topk,
           seed: rowFlags.random_seed ?? cfgFlags.random_seed ?? strategyParams.random_seed,
         };
@@ -180,6 +220,7 @@ export default React.memo(function EvolutionTrajectory({
     const isCombine = (dataSourceAdapter?.taskType || taskType || sourceType) === "multi_alpha_combine";
     const trajectory = trajectoryRows.map((loop: any) => {
       const m = loop.metrics_json || {};
+      const absolute = m?.enhanced_metrics?.absolute_returns || {};
       const desc = loopDescriptionByIndex.get(Number(loop.loop_index ?? 0));
       return {
         loop_id: loop.loop_index ?? 0,
@@ -188,9 +229,9 @@ export default React.memo(function EvolutionTrajectory({
         ic: extractMetric(m, "IC", "ic"),
         rank_ic: extractMetric(m, "Rank_IC", "rank_ic", "Rank IC"),
         icir: extractMetric(m, "ICIR", "icir"),
-        ann_ret: extractMetric(m, "annualized_return", "ann_return", "annual_return"),
-        sharpe: extractMetric(m, "sharpe", "Sharpe"),
-        max_drawdown: extractMetric(m, "max_drawdown", "max_drawdown_no_cost"),
+        ann_ret: extractMetric(absolute, "cagr", "annualized_return_absolute"),
+        sharpe: extractMetric(absolute, "sharpe", "sharpe_absolute"),
+        max_drawdown: extractMetric(absolute, "max_drawdown", "max_drawdown_absolute"),
         is_sota: loop.is_sota === true,
         action_type: loop.action_type || "unknown",
       };
@@ -240,7 +281,7 @@ export default React.memo(function EvolutionTrajectory({
       best_cagr: bestCagr,
       best_sharpe: bestSharpe,
     };
-  }, [rawData, customConfig, dataSourceAdapter?.taskType, taskType, sourceType]);
+  }, [rawData, suppliedLoops, customConfig, dataSourceAdapter?.taskType, taskType, sourceType]);
 
   if (!taskId) {
     return (
@@ -334,8 +375,11 @@ export default React.memo(function EvolutionTrajectory({
               const status = formatStatus(item.status);
               const tags = [
                 ...(item.objectives || []),
+                `pool:${item.poolLabel}`,
                 item.topk != null ? `topk${item.topk}` : "",
                 item.seed != null ? `seed${item.seed}` : "",
+                `HMM:${item.hmmEnabled === true ? "on" : item.hmmEnabled === false ? "off" : "unknown"}`,
+                `blacklist:${item.blacklistEnabled === true ? "on" : item.blacklistEnabled === false ? "off" : "unknown"}`,
               ].filter(Boolean);
               return (
                 <div key={item.loopIndex} style={{

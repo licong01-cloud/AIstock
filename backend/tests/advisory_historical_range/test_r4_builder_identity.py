@@ -12,7 +12,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-from backend.tests.advisory_historical_range.test_r4_historical_e2e import (
+from backend.tests.advisory_historical_range.r4_builder_identity_support import (
     _BRIDGE_BUILDER_SOURCE_FILES,
     _bridge_builder_hash,
 )

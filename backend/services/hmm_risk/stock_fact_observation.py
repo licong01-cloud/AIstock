@@ -12,11 +12,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-from .state_model_set import (
+from .contracts import (
     ALL_CORE_FEATURES,
     BASE_FEATURES,
-    D6ValidationCalendarSeries,
-    L1TrainingSeries,
     StateModelSetError,
     canonical_sha256,
 )
@@ -373,8 +371,22 @@ def _missing_row_evidence(row: Mapping[str, Any], fields: Sequence[str]) -> dict
         if isinstance(provider_absence, Mapping):
             evidence["moneyflow_provider_absence"] = dict(provider_absence)
     if "prev_circ_mv_cny" in fields:
-        evidence["circ_mv_source_date"] = row.get("circ_mv_source_date")
+        source_date = row.get("circ_mv_source_date")
+        evidence["circ_mv_source_date"] = source_date.isoformat() if isinstance(source_date, date) else source_date
         evidence["circ_mv_staleness_trading_days"] = row.get("circ_mv_staleness_trading_days")
+        # Keep the reader's authoritative cause, including latest-invalid facts.
+        # Legacy callers need not provide lineage; absence must not invent a status.
+        for key in (
+            "circ_mv_fact_status",
+            "circ_mv_reason_code",
+            "circ_mv_history_start",
+            "circ_mv_pit_eligible_start",
+            "circ_mv_crossed_pit_entry_boundary",
+            "circ_mv_lookback_contract_version",
+        ):
+            if key in row:
+                value = row[key]
+                evidence[key] = value.isoformat() if isinstance(value, date) else value
     return evidence
 
 
@@ -897,16 +909,24 @@ def build_l1_feature_panel(
     direct_sector_level: str = "L1",
     cross_section_min_coverage: float | None = None,
     use_moneyflow_amount_denominator: bool = False,
+    canonical_sector_codes: Sequence[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Recompute the approved 7/20 features from L1 raw aggregates."""
 
-    if not aggregates:
+    if not aggregates and canonical_sector_codes is None:
         raise StateModelSetError("cannot build features without L1 aggregates")
     rows = [item.__dict__ for item in aggregates]
-    panel = pd.DataFrame(rows)
+    panel = pd.DataFrame(rows) if rows else pd.DataFrame(columns=list(FeatureDomainDailyAggregate.__dataclass_fields__))
     panel["trade_date"] = pd.to_datetime(panel["trade_date"])
     panel = panel.set_index(["trade_date", "l1_code"]).sort_index()
     codes = tuple(sorted(panel.index.get_level_values("l1_code").unique()))
+    if canonical_sector_codes is not None:
+        declared = tuple(canonical_sector_codes)
+        if declared != tuple(sorted(set(declared))) or not set(codes) <= set(declared):
+            raise StateModelSetError(
+                "explicit frozen feature catalog is duplicated/unordered or excludes source sectors"
+            )
+        codes = declared
     if direct_sector_level not in {"L1", "L2"} or expected_sector_count not in {31, 131}:
         raise StateModelSetError("direct sector feature panel requires L1/31 or L2/131")
     if len(codes) != expected_sector_count:
@@ -1348,13 +1368,60 @@ def validate_c010_provider_absence_domain_partition(receipt: Any) -> dict[str, A
         ):
             frozen_authority = authority["authority"]
             if (
-                frozen_authority.get("schema_version") != "hmm_risk_pit_mapping_manifest_v2"
+                frozen_authority.get("schema_version")
+                not in {"hmm_risk_pit_mapping_manifest_v2", "hmm_risk_pit_mapping_manifest_v3"}
                 or not _c010_valid_sha256(frozen_authority.get("classification_authority_receipt_hash"))
                 or not _c010_valid_sha256(frozen_authority.get("index_membership_authority_receipt_hash"))
                 or not str(frozen_authority.get("active_classification_basis") or "").strip()
                 or not isinstance(frozen_authority.get("non_as_known_taxonomy"), bool)
             ):
                 raise StateModelSetError("C-010 partition frozen industry PIT authority schema is invalid")
+            if frozen_authority["schema_version"] == "hmm_risk_pit_mapping_manifest_v3":
+                v3_hash_fields = {
+                    "source_classification_authority_receipt_hash",
+                    "classification_authority_receipt_hash",
+                    "index_membership_authority_receipt_hash",
+                    "classification_candidate_hash",
+                    "index_membership_candidate_hash",
+                    "candidate_bundle_hash",
+                    "candidate_preflight_canonical_hash",
+                    "research_basis_contract_sha256",
+                    "l1_code_projection_sha256",
+                    "l2_code_projection_sha256",
+                    "constituent_manifest_hash",
+                }
+                v3_fields = v3_hash_fields | {
+                    "schema_version",
+                    "universe_key",
+                    "source_window_start",
+                    "source_window_end",
+                    "canonical_l1_count",
+                    "canonical_l2_count",
+                    "stable_backcast_candidate_sha256",
+                    "active_classification_basis",
+                    "non_as_known_taxonomy",
+                }
+                backcast = frozen_authority.get("stable_backcast_candidate_sha256")
+                basis = frozen_authority.get("active_classification_basis")
+                if (
+                    set(frozen_authority) != v3_fields
+                    or any(not _c010_valid_sha256(frozen_authority.get(key)) for key in v3_hash_fields)
+                    or frozen_authority.get("canonical_l1_count") != 31
+                    or frozen_authority.get("canonical_l2_count") != 131
+                    or not str(frozen_authority.get("universe_key") or "").strip()
+                    or (backcast is not None and not _c010_valid_sha256(backcast))
+                    or basis not in {"as_published_pit", "stable_taxonomy_backcast"}
+                    or frozen_authority.get("non_as_known_taxonomy") is not (basis == "stable_taxonomy_backcast")
+                    or ((backcast is not None) != (basis == "stable_taxonomy_backcast"))
+                ):
+                    raise StateModelSetError("C-010 partition v3 industry PIT authority identity is invalid")
+                try:
+                    start = date.fromisoformat(frozen_authority["source_window_start"])
+                    end = date.fromisoformat(frozen_authority["source_window_end"])
+                except (TypeError, ValueError) as exc:
+                    raise StateModelSetError("C-010 partition v3 industry PIT source window is invalid") from exc
+                if not start <= train_start <= train_end <= end:
+                    raise StateModelSetError("C-010 partition v3 industry PIT source window is incomplete")
     entries = value.get("entries")
     if not isinstance(entries, list):
         raise StateModelSetError("C-010 provider-absence partition entries are missing")
@@ -2337,6 +2404,7 @@ def build_c010_feature_domain_panel(
     expected_sector_count: int = 31,
     direct_sector_level: str = "L1",
     diagnostic_only: bool = False,
+    canonical_sector_codes: Sequence[str] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any], dict[str, Any]]:
     """Build the approved C-010 formula-v2 panel and immutable per-feature receipts."""
 
@@ -2346,6 +2414,7 @@ def build_c010_feature_domain_panel(
         csi300_returns=csi300_returns,
         expected_sector_count=expected_sector_count,
         direct_sector_level=direct_sector_level,
+        canonical_sector_codes=canonical_sector_codes,
     )
     required_domain_columns = {
         "moneyflow_amount",
@@ -2537,371 +2606,3 @@ def build_c010_feature_domain_panel(
     }
     evidence = {**evidence_body, "receipt_sha256": canonical_sha256(evidence_body)}
     return panel, feature_definition, evidence
-
-
-def _future_sum(series: pd.Series, horizon: int) -> pd.Series:
-    pieces = [series.groupby(level="l1_code").shift(-offset) for offset in range(1, horizon + 1)]
-    return pd.concat(pieces, axis=1).sum(axis=1, min_count=horizon)
-
-
-def build_legacy_dense_diagnostic_series(
-    panel: pd.DataFrame,
-    *,
-    feature_names: Sequence[str],
-    train_start: date,
-    train_end: date,
-    validation_start: date,
-    validation_end: date,
-    constituent_manifest_by_l1: Mapping[str, Mapping[str, Any]],
-    expected_sector_count: int = 31,
-    direct_sector_level: str = "L1",
-    frozen_input_identity: Mapping[str, Any] | None = None,
-) -> dict[str, L1TrainingSeries]:
-    """Reproduce the immutable dense input contract used only by historical C-008 diagnostics.
-
-    Formal D6 execution must use :func:`build_l1_training_series`; this dedicated constructor
-    prevents the historical diagnostic CLIs from consuming a calendar carrier while still
-    expecting row-aligned dense utility arrays.
-    """
-
-    features = tuple(str(item) for item in feature_names)
-    if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
-        raise StateModelSetError("feature_names is not an approved family")
-    work = panel.copy()
-    future_components = {horizon: _future_sum(work["daily_excess"], horizon) for horizon in (5, 10, 20)}
-    for horizon, values in future_components.items():
-        work[f"validation_excess_return_{horizon}d"] = values
-    work["validation_future_utility"] = (
-        0.35 * future_components[5] + 0.35 * future_components[10] + 0.30 * future_components[20]
-    )
-    output: dict[str, L1TrainingSeries] = {}
-    for code in sorted(work.index.get_level_values("l1_code").unique()):
-        sector = work.xs(code, level="l1_code")
-        sector_dates = sector.index.date
-        train = sector.loc[
-            (sector_dates >= train_start) & (sector_dates <= train_end),
-            list(features),
-        ].dropna()
-        validation = sector.loc[
-            (sector_dates >= validation_start) & (sector_dates <= validation_end),
-            [
-                *features,
-                "validation_future_utility",
-                "validation_excess_return_5d",
-                "validation_excess_return_10d",
-                "validation_excess_return_20d",
-            ],
-        ].dropna()
-        if len(train) < MIN_TRAINING_ROWS or len(validation) < 30:
-            raise StateModelSetError(
-                f"{code} diagnostic observation coverage is insufficient "
-                f"train={len(train)} validation={len(validation)}"
-            )
-        constituent = constituent_manifest_by_l1.get(str(code))
-        if not isinstance(constituent, Mapping):
-            raise StateModelSetError(f"{code} constituent manifest is missing")
-        l2_codes = tuple(sorted(str(item) for item in constituent.get("l2_codes") or ()))
-        if not l2_codes:
-            raise StateModelSetError(f"{code} constituent manifest has no L2 codes")
-        validation_dates = [item.date().isoformat() for item in validation.index]
-        utility_components = {
-            "excess_return_5d": validation["validation_excess_return_5d"].to_numpy(dtype=np.float64),
-            "excess_return_10d": validation["validation_excess_return_10d"].to_numpy(dtype=np.float64),
-            "excess_return_20d": validation["validation_excess_return_20d"].to_numpy(dtype=np.float64),
-        }
-        validation_observations = validation.loc[:, list(features)].to_numpy(dtype=np.float64)
-        validation_utility = validation["validation_future_utility"].to_numpy(dtype=np.float64)
-        validation_input_manifest = {
-            **dict(frozen_input_identity or {}),
-            "schema_version": "hmm_risk_d6_frozen_input_manifest_v1",
-            "direct_sector_level": direct_sector_level,
-            "sector_code": str(code),
-            "validation_dates": validation_dates,
-            "validation_dates_sha256": canonical_sha256(validation_dates),
-            "validation_observation_sha256": canonical_sha256(validation_observations.tolist()),
-            "utility_component_sha256": {
-                name: canonical_sha256(values.tolist()) for name, values in sorted(utility_components.items())
-            },
-            "combined_utility_sha256": canonical_sha256(validation_utility.tolist()),
-            "source_cutoff": "2025-04-30",
-            "formula_version": "hmm_risk_hard_future_excess_035_035_030_v1",
-            "benchmark_identity": "000300.SH",
-        }
-        output[str(code)] = L1TrainingSeries(
-            sector_code=str(code),
-            sector_name=str(sector["l1_name"].dropna().iloc[-1]),
-            train_observations=train.to_numpy(dtype=np.float64),
-            train_dates=tuple(item.date() for item in train.index),
-            validation_observations=validation_observations,
-            validation_dates=tuple(item.date() for item in validation.index),
-            validation_future_utility=validation_utility,
-            pit_l2_constituents=l2_codes,
-            pit_constituent_manifest_hash=canonical_sha256(constituent),
-            observation_manifest_hash=canonical_sha256(
-                {
-                    "observation_version": OBSERVATION_VERSION,
-                    "direct_sector_level": direct_sector_level,
-                    "sector_code": str(code),
-                    "feature_names": list(features),
-                    "train_dates": [item.date().isoformat() for item in train.index],
-                    "validation_dates": validation_dates,
-                    "train_sha256": canonical_sha256(train.to_numpy(dtype=np.float64).tolist()),
-                    "validation_sha256": canonical_sha256(validation.to_numpy(dtype=np.float64).tolist()),
-                }
-            ),
-            validation_future_components=utility_components,
-            validation_utility_source_cutoff=date(2025, 4, 30),
-            validation_utility_formula_version="hmm_risk_hard_future_excess_035_035_030_v1",
-            validation_input_manifest=validation_input_manifest,
-        )
-    if direct_sector_level not in {"L1", "L2"} or expected_sector_count not in {31, 131}:
-        raise StateModelSetError("diagnostic series requires an approved L1/31 or L2/131 contract")
-    if len(output) != expected_sector_count:
-        raise StateModelSetError(
-            f"diagnostic series requires {expected_sector_count} direct {direct_sector_level} sectors; "
-            f"actual={len(output)}"
-        )
-    return output
-
-
-def build_l1_training_series(
-    panel: pd.DataFrame,
-    *,
-    feature_names: Sequence[str],
-    train_start: date,
-    train_end: date,
-    validation_start: date,
-    validation_end: date,
-    constituent_manifest_by_l1: Mapping[str, Mapping[str, Any]],
-    expected_sector_count: int = 31,
-    direct_sector_level: str = "L1",
-    frozen_input_identity: Mapping[str, Any] | None = None,
-    validation_calendar_dates: Sequence[date] | None = None,
-) -> dict[str, L1TrainingSeries]:
-    """Freeze train data and a full-calendar D6 validation carrier without NA compression."""
-
-    features = tuple(str(item) for item in feature_names)
-    if features not in {BASE_FEATURES, ALL_CORE_FEATURES}:
-        raise StateModelSetError("feature_names is not an approved family")
-    work = panel.copy()
-    future_components = {horizon: _future_sum(work["daily_excess"], horizon) for horizon in (5, 10, 20)}
-    for horizon, values in future_components.items():
-        work[f"validation_excess_return_{horizon}d"] = values
-    utility = 0.35 * future_components[5] + 0.35 * future_components[10] + 0.30 * future_components[20]
-    work["validation_future_utility"] = utility
-    if validation_calendar_dates is None:
-        calendar_dates = tuple(
-            sorted(
-                {
-                    timestamp.date()
-                    for timestamp in work.index.get_level_values(0)
-                    if validation_start <= timestamp.date() <= validation_end
-                }
-            )
-        )
-    else:
-        calendar_dates = tuple(validation_calendar_dates)
-    if (
-        not calendar_dates
-        or any(not isinstance(value, date) for value in calendar_dates)
-        or tuple(sorted(calendar_dates)) != calendar_dates
-        or len(set(calendar_dates)) != len(calendar_dates)
-        or calendar_dates[0] != validation_start
-        or calendar_dates[-1] != validation_end
-    ):
-        raise StateModelSetError("D6 validation calendar authority is invalid")
-    source_identities = {
-        field: str((frozen_input_identity or {}).get(field) or "")
-        for field in (
-            "dataset_manifest_hash",
-            "mapping_manifest_hash",
-            "calendar_manifest_hash",
-            "l2_stock_fact_manifest_hash",
-            "feature_domain_policy_sha256",
-        )
-    }
-    if any(len(value) != 64 for value in source_identities.values()):
-        raise StateModelSetError("D6 validation source identities are incomplete")
-    calendar_index = pd.DatetimeIndex(calendar_dates)
-    output: dict[str, L1TrainingSeries] = {}
-    for code in sorted(work.index.get_level_values("l1_code").unique()):
-        sector = work.xs(code, level="l1_code")
-        sector_dates = sector.index.date
-        train = sector.loc[
-            (sector_dates >= train_start) & (sector_dates <= train_end),
-            list(features),
-        ].dropna()
-        validation = sector.reindex(calendar_index).loc[
-            :,
-            [
-                *features,
-                "validation_future_utility",
-                "validation_excess_return_5d",
-                "validation_excess_return_10d",
-                "validation_excess_return_20d",
-            ],
-        ]
-        if len(train) < MIN_TRAINING_ROWS:
-            raise StateModelSetError(f"{code} train observation coverage is insufficient train={len(train)}")
-        constituent = constituent_manifest_by_l1.get(str(code))
-        if not isinstance(constituent, Mapping):
-            raise StateModelSetError(f"{code} constituent manifest is missing")
-        l2_codes = tuple(sorted(str(item) for item in constituent.get("l2_codes") or ()))
-        if not l2_codes:
-            raise StateModelSetError(f"{code} constituent manifest has no L2 codes")
-        observation_matrix = validation.loc[:, list(features)].to_numpy(dtype=np.float64)
-        observation_mask = tuple(bool(value) for value in np.isfinite(observation_matrix).all(axis=1))
-        observation_positions = tuple(index for index, value in enumerate(observation_mask) if value)
-        observation_values = np.ascontiguousarray(
-            observation_matrix[np.asarray(observation_mask, dtype=bool)], dtype=np.float64
-        )
-        component_columns = {
-            "excess_return_5d": "validation_excess_return_5d",
-            "excess_return_10d": "validation_excess_return_10d",
-            "excess_return_20d": "validation_excess_return_20d",
-        }
-        component_masks: dict[str, tuple[bool, ...]] = {}
-        component_positions: dict[str, tuple[int, ...]] = {}
-        component_values: dict[str, np.ndarray] = {}
-        for name, column in sorted(component_columns.items()):
-            dense = validation[column].to_numpy(dtype=np.float64)
-            mask = tuple(bool(value) for value in np.isfinite(dense))
-            positions = tuple(index for index, value in enumerate(mask) if value)
-            component_masks[name] = mask
-            component_positions[name] = positions
-            component_values[name] = np.ascontiguousarray(dense[np.asarray(mask, dtype=bool)], dtype=np.float64)
-        utility_dense = validation["validation_future_utility"].to_numpy(dtype=np.float64)
-        utility_mask = tuple(
-            bool(np.isfinite(utility_dense[index])) and all(component_masks[name][index] for name in component_columns)
-            for index in range(len(calendar_dates))
-        )
-        utility_positions = tuple(index for index, value in enumerate(utility_mask) if value)
-        combined_values = np.ascontiguousarray(utility_dense[np.asarray(utility_mask, dtype=bool)], dtype=np.float64)
-        availability_ledger: list[dict[str, Any]] = []
-        for position, calendar_day in enumerate(calendar_dates):
-            missing_features = [
-                name
-                for feature_index, name in enumerate(features)
-                if not np.isfinite(observation_matrix[position, feature_index])
-            ]
-            missing_components = [name for name in sorted(component_columns) if not component_masks[name][position]]
-            observation_receipt = {
-                "sector_code": str(code),
-                "date": calendar_day.isoformat(),
-                "feature_names": list(features),
-                "missing_feature_names": missing_features,
-                "available": observation_mask[position],
-                "source_identities": source_identities,
-            }
-            utility_receipt = {
-                "sector_code": str(code),
-                "date": calendar_day.isoformat(),
-                "component_names": sorted(component_columns),
-                "missing_component_names": missing_components,
-                "available": utility_mask[position],
-                "source_identities": source_identities,
-            }
-            availability_ledger.append(
-                {
-                    "date": calendar_day.isoformat(),
-                    "position": position,
-                    "observation_available": observation_mask[position],
-                    "utility_available": utility_mask[position],
-                    "mode": "emission_update" if observation_mask[position] else "transition_only",
-                    "evidence_included": bool(observation_mask[position] and utility_mask[position]),
-                    "missing_feature_names": missing_features,
-                    "missing_component_names": missing_components,
-                    "observation_unavailable_reason_codes": (
-                        [] if observation_mask[position] else ["hmm_risk_semantic_validation_observation_unavailable"]
-                    ),
-                    "utility_unavailable_reason_codes": (
-                        [] if utility_mask[position] else ["hmm_risk_semantic_validation_utility_unavailable"]
-                    ),
-                    "observation_source_receipt": observation_receipt,
-                    "observation_source_receipt_sha256": canonical_sha256(observation_receipt),
-                    "utility_source_receipt": utility_receipt,
-                    "utility_source_receipt_sha256": canonical_sha256(utility_receipt),
-                }
-            )
-        carrier = D6ValidationCalendarSeries(
-            calendar_dates=calendar_dates,
-            feature_names=features,
-            observation_available_mask=observation_mask,
-            observation_available_positions=observation_positions,
-            observation_values_f64=observation_values,
-            component_available_masks=component_masks,
-            component_available_positions=component_positions,
-            component_values_f64=component_values,
-            utility_available_mask=utility_mask,
-            utility_available_positions=utility_positions,
-            combined_utility_values_f64=combined_values,
-            availability_ledger=tuple(availability_ledger),
-            source_identities=source_identities,
-        )
-        carrier.validate(len(features))
-        carrier_payload = carrier.payload()
-        validation_input_manifest = {
-            **source_identities,
-            "schema_version": "hmm_risk_d6_frozen_input_manifest_v2",
-            "direct_sector_level": direct_sector_level,
-            "sector_code": str(code),
-            "calendar_carrier_schema_version": carrier.schema_version,
-            "calendar_carrier_payload": carrier_payload,
-            "calendar_carrier_sha256": carrier.carrier_sha256,
-            "validation_calendar_sha256": canonical_sha256(carrier_payload["calendar_dates"]),
-            "feature_names_sha256": canonical_sha256(list(features)),
-            "observation_available_mask_sha256": canonical_sha256(list(observation_mask)),
-            "observation_available_positions_sha256": canonical_sha256(list(observation_positions)),
-            "observation_values_sha256": canonical_sha256(observation_values.tolist()),
-            "utility_component_sha256": {
-                name: canonical_sha256(component_values[name].tolist()) for name in sorted(component_values)
-            },
-            "component_available_mask_sha256": {
-                name: canonical_sha256(list(component_masks[name])) for name in sorted(component_masks)
-            },
-            "component_available_positions_sha256": {
-                name: canonical_sha256(list(component_positions[name])) for name in sorted(component_positions)
-            },
-            "utility_available_mask_sha256": canonical_sha256(list(utility_mask)),
-            "utility_available_positions_sha256": canonical_sha256(list(utility_positions)),
-            "combined_utility_sha256": canonical_sha256(combined_values.tolist()),
-            "availability_ledger_sha256": canonical_sha256(availability_ledger),
-            "source_cutoff": "2025-04-30",
-            "formula_version": "hmm_risk_hard_future_excess_035_035_030_v1",
-            "benchmark_identity": "000300.SH",
-        }
-        output[str(code)] = L1TrainingSeries(
-            sector_code=str(code),
-            sector_name=str(sector["l1_name"].dropna().iloc[-1]),
-            train_observations=train.to_numpy(dtype=np.float64),
-            train_dates=tuple(item.date() for item in train.index),
-            validation_observations=observation_values,
-            validation_dates=tuple(calendar_dates[position] for position in observation_positions),
-            validation_future_utility=np.empty((0,), dtype=np.float64),
-            pit_l2_constituents=l2_codes,
-            pit_constituent_manifest_hash=canonical_sha256(constituent),
-            observation_manifest_hash=canonical_sha256(
-                {
-                    "observation_version": OBSERVATION_VERSION,
-                    "direct_sector_level": direct_sector_level,
-                    "sector_code": str(code),
-                    "feature_names": list(features),
-                    "train_dates": [item.date().isoformat() for item in train.index],
-                    "validation_calendar_dates": [item.isoformat() for item in calendar_dates],
-                    "train_sha256": canonical_sha256(train.to_numpy(dtype=np.float64).tolist()),
-                    "validation_calendar_carrier_sha256": carrier.carrier_sha256,
-                }
-            ),
-            validation_future_components={},
-            validation_utility_source_cutoff=date(2025, 4, 30),
-            validation_utility_formula_version="hmm_risk_hard_future_excess_035_035_030_v1",
-            validation_input_manifest=validation_input_manifest,
-            validation_calendar_series=carrier,
-        )
-    if direct_sector_level not in {"L1", "L2"} or expected_sector_count not in {31, 131}:
-        raise StateModelSetError("training series requires an approved L1/31 or L2/131 contract")
-    if len(output) != expected_sector_count:
-        raise StateModelSetError(
-            f"training series requires {expected_sector_count} direct {direct_sector_level} sectors; actual={len(output)}"
-        )
-    return output

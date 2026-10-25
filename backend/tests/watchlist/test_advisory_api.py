@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from backend.routers import advisory as advisory_router
 from backend.services.advisory_program import AdvisoryProgramService, InMemoryAdvisoryProgramRepository
 from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus
+from backend.services.trading_core.errors import DataUnavailableError
 
 
 class FakeTradingCalendar:
@@ -31,6 +32,108 @@ def _client(selection_service=None) -> tuple[TestClient, AdvisoryProgramService]
     )
     app.dependency_overrides[advisory_router.get_advisory_program_service] = lambda: service
     return TestClient(app), service
+
+
+@pytest.mark.parametrize("as_of", ["2026-06-08", "2026-06-07"])
+def test_advisory_daily_defaults_use_authoritative_calendar_without_minute_readiness(as_of: str) -> None:
+    client, service = _client()
+    days = [date(2026, 6, day) for day in (2, 3, 4, 5, 8, 9)]
+
+    class Calendar:
+        def status(self, *, as_of_date=None):
+            assert as_of_date == date.fromisoformat(as_of)
+            return {
+                "as_of_date": as_of,
+                "is_trading_day": as_of_date in days,
+                "previous_trading_day": max(day for day in days if day < as_of_date).isoformat(),
+                "next_trading_day": min(day for day in days if day > as_of_date).isoformat(),
+                "source": "market.trading_calendar:file_cache",
+            }
+
+        def list_trading_days(self, start_date, end_date):
+            assert end_date == date.fromisoformat(as_of)
+            return [day for day in days if start_date <= day <= end_date]
+
+    service.calendar_provider = Calendar()
+    response = client.get(f"/api/v1/advisory/trading-days/defaults?as_of_date={as_of}&lookback_trading_days=2")
+
+    assert response.status_code == 200
+    payload = response.json()
+    expected = ["2026-06-05", "2026-06-08"] if as_of == "2026-06-08" else ["2026-06-04", "2026-06-05"]
+    assert payload["trading_days"] == expected
+    assert payload["latest_trading_day"] == payload["replay_end_date"] == expected[-1]
+    assert payload["replay_start_date"] == expected[0]
+    assert payload["next_trading_day"] == ("2026-06-09" if as_of == "2026-06-08" else "2026-06-08")
+    assert payload["as_of_date"] == as_of
+    assert payload["calendar_only"] is True
+    assert payload.get("data_ready_latest_date") is None
+
+
+@pytest.mark.parametrize("lookback", [0, 251])
+def test_advisory_daily_defaults_reject_invalid_lookback(lookback: int) -> None:
+    client, _service = _client()
+    response = client.get(f"/api/v1/advisory/trading-days/defaults?lookback_trading_days={lookback}")
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("missing_rows", [False, True])
+def test_advisory_daily_defaults_do_not_invent_dates_when_calendar_unavailable(missing_rows: bool) -> None:
+    client, service = _client()
+
+    class Calendar:
+        def status(self, *, as_of_date=None):
+            return {"as_of_date": "2026-06-08", "next_trading_day": "2026-06-09"}
+
+        def list_trading_days(self, start_date, end_date):
+            if missing_rows:
+                raise DataUnavailableError("official calendar rows missing")
+            return []
+
+    service.calendar_provider = Calendar()
+    response = client.get("/api/v1/advisory/trading-days/defaults?as_of_date=2026-06-08")
+    assert response.status_code == 404
+    message = response.json()["detail"]["message"]
+    assert ("official calendar rows missing" if missing_rows else "authoritative trading calendar dates") in message
+    assert "trading_days" not in response.json()
+
+
+def test_advisory_universe_options_expose_qe_compatible_core_index_contract() -> None:
+    client, _service = _client()
+
+    response = client.get("/api/v1/advisory/universe-options")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["modes"] == ["stock_universe", "single_index", "index_union"]
+    assert [row["pool_id"] for row in payload["pools"]] == [
+        "csi300",
+        "csi500",
+        "csi1000",
+        "star50",
+        "star100",
+    ]
+
+
+def test_advisory_api_create_exposes_normalized_index_union_on_binding() -> None:
+    client, _service = _client()
+
+    response = client.post(
+        "/api/v1/advisory/programs",
+        json={
+            "program_name": "Core index union advisory",
+            "package_mode": "single_package",
+            "package_ids": ["pkg_a"],
+            "universe_selection": {"mode": "index_union", "pool_ids": ["csi500", "csi300", "csi500"]},
+        },
+    )
+
+    assert response.status_code == 200
+    program_id = response.json()["program"]["program_id"]
+    bindings = client.get(f"/api/v1/advisory/programs/{program_id}/bindings")
+    assert bindings.status_code == 200
+    binding = bindings.json()["bindings"][0]
+    assert binding["universe_selection"] == {"mode": "index_union", "pool_ids": ["csi300", "csi500"]}
+    assert binding["runtime_config_json"]["universe_selection"] == binding["universe_selection"]
 
 
 def test_advisory_api_program_review_leaderboard_and_replay() -> None:
@@ -150,7 +253,9 @@ def test_advisory_api_program_review_leaderboard_and_replay() -> None:
         },
     )
     assert replay.status_code == 200
-    assert replay.json()["replay"]["summary"]["win_rate"] == 1.0
+    summary = replay.json()["replay"]["summary"]
+    assert summary["win_rate"] is None
+    assert summary["metric_evaluable_count"] == 0
 
 
 def test_advisory_quality_report_endpoint_rejects_future_decision_inputs() -> None:
@@ -233,10 +338,12 @@ def test_advisory_api_accepts_target_date_and_selection_cutoff_without_manual_ru
         def __init__(self) -> None:
             self.runtime_config = None
             self.trade_date = None
+            self.archive_context = None
 
-        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config):
+        def run_packages(self, *, package_ids, mode, trade_date, data_source, runtime_config, advisory_archive_context=None):
             self.trade_date = trade_date
             self.runtime_config = dict(runtime_config)
+            self.archive_context = advisory_archive_context
             return SelectionRun(
                 mode=mode,
                 trade_date=trade_date,
@@ -245,7 +352,9 @@ def test_advisory_api_accepts_target_date_and_selection_cutoff_without_manual_ru
                 runtime_config={
                     **runtime_config,
                     "point_in_time_context": {
-                        "reference_price_trade_date": runtime_config["advisory_date_context"]["selection_as_of_trade_date"],
+                        "reference_price_trade_date": runtime_config["advisory_date_context"][
+                            "selection_as_of_trade_date"
+                        ],
                     },
                 },
                 status=SelectionRunStatus.SUCCEEDED,
@@ -292,6 +401,8 @@ def test_advisory_api_accepts_target_date_and_selection_cutoff_without_manual_ru
     }
     assert fake_selection.runtime_config["selection_artifact_config"]["cutoff_date"] == "2026-06-09"
     assert fake_selection.runtime_config["runtime_profile"]["tradability"]["exclude_suspended"] is False
+    assert fake_selection.archive_context["program_id"] == program_id
+    assert fake_selection.archive_context["decision_as_of_trade_date"] == "2026-06-09"
     payload = review.json()["review"]
     assert payload["trade_date"] == "2026-06-10"
     assert payload["change_summary"]["advisory_date_context"]["selection_as_of_trade_date"] == "2026-06-09"
@@ -422,7 +533,10 @@ def test_advisory_apply_binding_without_replay_gate_retires_previous_and_keeps_a
     assert applied.json()["program"]["version"] == program["version"] + 1
     all_bindings = client.get(f"/api/v1/advisory/programs/{program_id}/bindings").json()["bindings"]
     assert sum(1 for row in all_bindings if row["activation_status"] == "ACTIVE") == 1
-    assert any(row["binding_version_id"] == before_binding["binding_version_id"] and row["activation_status"] == "RETIRED" for row in all_bindings)
+    assert any(
+        row["binding_version_id"] == before_binding["binding_version_id"] and row["activation_status"] == "RETIRED"
+        for row in all_bindings
+    )
     active_after = client.get(f"/api/v1/advisory/programs/{program_id}/active-pool").json()["active_pool"]
     assert [row["symbol"] for row in active_after] == [row["symbol"] for row in active_before]
 

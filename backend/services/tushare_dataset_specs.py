@@ -6,8 +6,26 @@ The TushareSyncEngine consumes these specs to replace per-dataset scripts.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+
+def stk_limit_prices_valid(row: Any) -> bool:
+    """Same-day CNY reference and limits, shared by ingestion and monthly SOURCE.
+
+    NULLs remain legal source facts for some non-trading securities, but do not
+    satisfy a consumer's required-price contract. No reference is derived here.
+    """
+    try:
+        raw = [row.get(name) for name in ("pre_close", "up_limit", "down_limit")]
+        if any(value is None or isinstance(value, bool) for value in raw):
+            return False
+        reference, upper, lower = [Decimal(str(value)) for value in raw]
+        return (all(value.is_finite() and value > 0 for value in (reference, upper, lower))
+                and lower <= reference <= upper)
+    except (InvalidOperation, ValueError, TypeError):
+        return False
 
 
 class QueryMode(str, Enum):
@@ -46,6 +64,7 @@ class DatasetSpec:
     trading_day_only: bool = False              # BY_DATE datasets that should iterate market trading days only
     create_table_script: Optional[str] = None    # operator-run DDL helper; engine never creates tables implicitly
     nullable_identity_columns: List[str] = field(default_factory=list)  # source identity fields that may be NULL
+    snapshot_date_column: Optional[str] = None  # SINGLE_CALL local observation date; excluded from provider fields
     # Minimum plausible rows for one trading day. When set, a successful sync
     # that persists 0 < rows < min_expected_rows is audited as
     # quality_status="low_coverage" so the existing freshness-check ->
@@ -305,6 +324,65 @@ CYQ_PERF = DatasetSpec(
     min_expected_rows=5000,
 )
 
+ETF_SHARE_SIZE = DatasetSpec(
+    name="etf_share_size",
+    tushare_api="etf_share_size",
+    target_table="market.etf_share_size",
+    primary_keys=["trade_date", "ts_code"],
+    query_mode=QueryMode.BY_DATE,
+    columns={
+        "trade_date": "date",
+        "ts_code": "text",
+        "total_share": "numeric",
+        "total_size": "numeric",
+        "nav": "numeric",
+        "close": "numeric",
+    },
+    batch_sleep=0.3,
+    rate_per_minute=200,
+    row_limit=5000,
+    incremental_cursor_from_audit=True,
+    trading_day_only=True,
+    create_table_script="backend/db/migrations/add_etf_share_sources_20260923.sql",
+)
+
+ETF_BASIC_SNAPSHOTS = DatasetSpec(
+    name="etf_basic_snapshots",
+    tushare_api="etf_basic",
+    target_table="market.etf_basic_snapshots",
+    primary_keys=["snapshot_date", "ts_code"],
+    query_mode=QueryMode.SINGLE_CALL,
+    columns={
+        "snapshot_date": "date",
+        "ts_code": "text",
+        "csname": "text",
+        "extname": "text",
+        "cname": "text",
+        "index_code": "text",
+        "index_name": "text",
+        "setup_date": "date",
+        "list_date": "date",
+        "list_status": "text",
+        "exchange": "text",
+        "mgr_name": "text",
+        "custod_name": "text",
+        "mgt_fee": "numeric",
+        "etf_type": "text",
+    },
+    single_call_param_sets=[
+        {"list_status": "L"},
+        {"list_status": "D"},
+        {"list_status": "P"},
+    ],
+    batch_sleep=0.3,
+    rate_per_minute=200,
+    row_limit=5000,
+    supports_incremental=False,
+    date_column="snapshot_date",
+    snapshot_date_column="snapshot_date",
+    create_table_script="backend/db/migrations/add_etf_share_sources_20260923.sql",
+)
+
 STK_LIMIT = DatasetSpec(
     name="stk_limit",
     tushare_api="stk_limit",
@@ -321,6 +399,7 @@ STK_LIMIT = DatasetSpec(
     batch_sleep=0.3,
     rate_per_minute=200,
     trading_day_only=True,
+    fetch_params={"limit": 5000, "max_pages": 10},
 )
 
 SUSPEND_D = DatasetSpec(
@@ -503,7 +582,10 @@ SW_INDEX_MEMBER = DatasetSpec(
     code_param_name="l2_code",
     skip_date_params=True,
     supports_incremental=False,
-    replace_by_code=True,
+    # BUG-1847: a partial provider history must never erase repaired local facts.
+    # SW refresh explicitly fetches both current (Y) and ended (N) memberships.
+    replace_by_code=False,
+    fetch_params={"limit": 2000, "max_pages": 100},
     batch_sleep=0.2,
     rate_per_minute=300,
 )
@@ -568,6 +650,8 @@ DATASET_REGISTRY: Dict[str, DatasetSpec] = {
         TUSHARE_FINA_INDICATOR_RAW,
         MARGIN_DETAIL,
         CYQ_PERF,
+        ETF_SHARE_SIZE,
+        ETF_BASIC_SNAPSHOTS,
         SW_INDEX_CLASSIFY,
         SW_INDEX_MEMBER,
         SW_DAILY,

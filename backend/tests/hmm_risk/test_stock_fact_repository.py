@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 from datetime import date, datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from backend.services.hmm_risk import stock_fact_repository as subject
 from backend.services.hmm_risk.security_identity import load_security_source_identity_manifest
 from backend.services.hmm_risk.provider_absence import load_provider_absence_manifest
-from backend.services.hmm_risk.state_model_set import StateModelSetError, canonical_sha256
+from backend.services.hmm_risk.contracts import StateModelSetError, canonical_sha256
 
 
 class _Cursor:
@@ -849,6 +850,89 @@ def test_missing_price_reader_uses_split_causal_daily_basic_without_evaluating_m
     assert row["circ_mv_source_date"] == date(2024, 1, 1)
     assert row["moneyflow_fact_status"] == "not_evaluated_missing_price"
     assert row["moneyflow_provider_absence"] is None
+
+
+@pytest.mark.parametrize("preserve", [False, True])
+@pytest.mark.parametrize("missing_price", [False, True])
+def test_reader_preserves_unclassified_facts_only_for_explicit_database_consumer(monkeypatch, preserve, missing_price):
+    from backend.services.hmm_risk.industry_pit_adapter import HMMIndustryProjection
+
+    day, previous, symbol = date(2026, 10, 8), date(2026, 9, 30), "000001.SZ"
+    projection = HMMIndustryProjection(
+        "unavailable",
+        symbol,
+        day,
+        None,
+        None,
+        None,
+        None,
+        "classification_authority_unavailable",
+        "a" * 64,
+        "b" * 64,
+        (),
+        (),
+        "unavailable",
+        "as_published_pit",
+        False,
+    )
+    reader = subject.PostgresStockFactReader(
+        _Connection(),
+        subject.StockFactSourceSpec("immutable_v1", "rule_v1", day, day, previous),
+        security_identity_manifest=_identity_manifest(),
+        provider_absence_manifest=_provider_absence_manifest(),
+        industry_pit_adapter=SimpleNamespace(resolve=lambda *args: projection),
+        preserve_unavailable_classification=preserve,
+    )
+    # Even if a legacy database membership exists, it is not a fallback for C-013.
+    owner = ["legacy-l1", "legacy name", "legacy-l2", "legacy name"]
+    stock = (
+        day,
+        symbol,
+        *owner,
+        date(2020, 1, 1),
+        1,
+        10_000,
+        11_000,
+        9_000,
+        10_500,
+        100,
+        1_000_000,
+        previous,
+        10_000,
+        previous,
+        9_000,
+        previous,
+        8_000,
+        previous,
+    )
+    missing = (day, symbol, *owner, 1, date(2020, 1, 1), previous)
+    basic = {(day, symbol): (100.0, 80.0)}
+    monkeypatch.setattr(reader, "_load_stock_base_rows", lambda **kw: [stock])
+    monkeypatch.setattr(reader, "_load_missing_price_base_rows", lambda **kw: [missing])
+    monkeypatch.setattr(reader, "_load_initial_circ_mv_state", lambda **kw: {symbol: (previous, 80.0)})
+    monkeypatch.setattr(reader, "_load_trading_date_ordinals", lambda start: {previous: 0, day: 1})
+    monkeypatch.setattr(reader, "_load_daily_basic_map", lambda **kw: basic)
+    monkeypatch.setattr(
+        reader,
+        "_load_window_fact_maps",
+        lambda **kw: (
+            basic,
+            {(day, symbol): (2.0, 1.0, 4.0, 3.0, 2.0)},
+            {(day, symbol): (11.0,)},
+        ),
+    )
+    method = reader._iter_missing_price_rows_separated if missing_price else reader._iter_stock_fact_rows_separated
+    rows = list(method(fetch_size=100, sector_level="L1"))
+    if not preserve:
+        assert rows == []
+        return
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["trade_date"] == day and row["symbol"] == symbol
+    assert all(row[key] is None for key in ("l1_code", "l1_name", "l2_code", "l2_name"))
+    assert row["industry_pit_resolution"] == projection.as_dict()
+    assert row["close_yuan"] == (None if missing_price else 10.5)
+    assert row["net_mf_amount_cny"] == (None if missing_price else 20_000.0)
 
 
 class _MappingReader:

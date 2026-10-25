@@ -6,6 +6,7 @@ import fnmatch
 import hashlib
 import io
 import json
+import math
 import os
 import platform
 import re
@@ -23,7 +24,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+try:
+    import psutil
+except ModuleNotFoundError as exc:
+    if exc.name != "psutil":
+        raise
+    psutil = None  # Metadata-only CI intake must not require process inspection.
 import yaml
+
+try:
+    import scripts.aistock_runtime_semantics as _runtime_semantics
+except ModuleNotFoundError as exc:  # Direct script entry without the repository on sys.path.
+    if exc.name not in {"scripts", "scripts.aistock_runtime_semantics"}:
+        raise
+    import aistock_runtime_semantics as _runtime_semantics
 
 try:
     from scripts.aistock_bug_id_allocator import (
@@ -56,7 +70,9 @@ except ModuleNotFoundError:  # Direct execution: python scripts/aistock_issue_wo
         write_allocator_state,
     )
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+SCRIPT_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = SCRIPT_ROOT
+_TASK_GIT_IDENTITY: tuple[Path, str, str] | None = None
 BUGS_ROOT = REPO_ROOT / "tests" / "aistock_validation" / "bugs"
 WORKFLOW_ROOT = Path("tmp") / "issue_workflow"
 ALLOWED_FIX_STATUSES = {"open", "in_progress"}
@@ -78,6 +94,12 @@ TERMINAL_WORKFLOW_STATES = {"merged", "close_synced", "cleanup_done", "complete"
 CLEANUP_BATCH_MANIFEST_SCHEMA = "aistock_cleanup_after_merge_batch_manifest_v1"
 CLEANUP_BATCH_RESULT_SCHEMA = "aistock_cleanup_after_merge_batch_v1"
 CLEANUP_BATCH_MAX_TARGETS = 200
+SUPERSEDED_CLEANUP_RECEIPT_SCHEMA = "aistock_superseded_cleanup_receipt_v1"
+SUPERSEDED_CLEANUP_MODES = (
+    "canonical_bug_replacement",
+    "owner_comment",
+    "patch_equivalent",
+)
 CLEANUP_BATCH_TARGET_KEYS = {
     "branch",
     "bug_id",
@@ -106,6 +128,22 @@ OUTPUT_FORMAT_TOKENS = {"json", "yaml", "yml", "text", "txt", "stdout", "stderr"
 OUTPUT_FORMAT_CHOICES = ("compact", "summary", "full-json")
 PR_BODY_CODEGRAPH_TEST_LIMIT = 10
 ACTIONABLE_CI_CLASSIFICATIONS = {"real_regression_candidate", "test_fixture_gap_or_real_regression"}
+RUNNER_INFRA_SIGNATURES = (
+    "self-hosted windows runner unavailable",
+    "no online github actions runner",
+    "unable to query github runner health",
+    "aistock_runner_health_token",
+    "runner-preflight=failure",
+    "runner_preflight=failure",
+    "runner-preflight: failure",
+    "runner_preflight: failure",
+)
+NETWORK_INFRA_SIGNATURES = (
+    "tls handshake timeout",
+    "connection reset",
+    "network is unreachable",
+    "early eof",
+)
 SUPERSEDED_CI_CLASSIFICATIONS = {
     "superseded_by_later_main_success",
     "superseded_by_later_branch_success",
@@ -133,6 +171,13 @@ _DATASET_RELEASE_WORKER_HEARTBEAT_REFS = {
     "health_ref": "worker_heartbeat.health",
     "identity_ref": "worker_heartbeat.identity",
     "business_smoke_ref": "worker_heartbeat.business",
+    "database_readback_ref": "not_required",
+}
+_MONTHLY_RELEASE_WORKER_PROCESS_MODE = "monthly_release_worker_process"
+_MONTHLY_RELEASE_WORKER_PROCESS_REFS = {
+    "health_ref": "monthly_worker_process.health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "business_smoke_ref": "monthly_worker_process.supervision",
     "database_readback_ref": "not_required",
 }
 VALIDATION_PASS_RE = re.compile(r"\b(?:pass|passed|success|successful|ok)\b|\b\d+\s+passed\b", re.IGNORECASE)
@@ -212,7 +257,7 @@ WORKTREE_BACKEND_LOG_LINE_RE = re.compile(
 )
 RTK_COMMAND_PREFIX = r"(?:rtk(?:\.exe)?\s+)?"
 VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
+    ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plans>[A-Za-z0-9_][A-Za-z0-9_-]*(?:\s+[A-Za-z0-9_][A-Za-z0-9_-]*)*)(?=\s+-|$)", re.IGNORECASE)),
     (
         "pytest",
         re.compile(
@@ -463,6 +508,44 @@ def _split_validation_budget_items(items: Iterable[Any]) -> dict[str, list[str]]
     }
 
 
+def _route_validation_budget_items(items: Iterable[Any]) -> dict[str, list[str]]:
+    """Route validation once to the cheapest authoritative execution phase."""
+
+    plans = flow._plans_by_key()
+    routed: dict[str, list[str]] = {
+        "local": [],
+        "ci": [],
+        "external": [],
+        "nightly": [],
+    }
+    for raw in items:
+        item = str(raw or "").strip()
+        if not item:
+            continue
+        plan = plans.get(item)
+        if item in LOCAL_PREMERGE_PLAN_KEYS:
+            routed["local"].append(item)
+        elif plan:
+            execution_mode = str(plan.get("execution_mode") or "").strip()
+            if bool(plan.get("requires_dev_db")) or execution_mode == "operator":
+                routed["external"].append(item)
+            elif execution_mode == "ci":
+                routed["ci"].append(item)
+            elif plan.get("runner_enabled") is False:
+                routed["nightly"].append(item)
+            elif plan.get("runner_enabled", True):
+                routed["ci"].append(item)
+            else:
+                routed["nightly"].append(item)
+        elif _is_local_validation_item(item):
+            routed["local"].append(item)
+        elif _is_broad_validation_plan(item):
+            routed["nightly"].append(item)
+        else:
+            routed["local"].append(item)
+    return {key: flow._unique_strings(values) for key, values in routed.items()}
+
+
 def _apply_validation_budget(
     *,
     record: dict[str, Any],
@@ -472,23 +555,56 @@ def _apply_validation_budget(
     """Keep pre-merge BUG validation narrow and move broad plans to nightly/VC."""
 
     selected_required_items = flow._unique_strings(validation.get("required_plans") or [])
-    selected_direct = [item for item in selected_required_items if item != "l0"]
-    selected_local = selected_direct or selected_required_items
+    selected_route = _route_validation_budget_items(selected_required_items)
     selected_recommended = flow._unique_strings(validation.get("recommended_plans") or [])
-    record_split = _split_validation_budget_items(record_required or record.get("required_verification") or [])
-    local_required = flow._unique_strings([*record_split["local"], *selected_local]) or ["l0"]
+    record_items = flow._unique_strings(
+        record_required if record_required is not None else record.get("required_verification") or []
+    )
+    record_route = _route_validation_budget_items(record_items)
+    inapplicable: set[str] = set()
+    if record_required is None:
+        inapplicable = set(flow._unique_strings(validation.get("inapplicable_plans") or []))
+        record_route = {
+            key: [item for item in values if item not in inapplicable]
+            for key, values in record_route.items()
+        }
+    stale_record_plans = [
+        item
+        for item in record_items
+        if item in _known_plan_keys() and item not in selected_required_items and item not in inapplicable
+    ]
+    stale_record_plan_set = set(stale_record_plans)
+    for phase in ("local", "ci", "external", "nightly"):
+        record_route[phase] = [item for item in record_route[phase] if item not in stale_record_plan_set]
+    record_route["nightly"] = flow._unique_strings([*record_route["nightly"], *stale_record_plans])
+    local_required = flow._unique_strings(
+        [
+            *record_route["local"],
+            *record_route["external"],
+            *selected_route["local"],
+            *selected_route["external"],
+        ]
+    ) or ["l0"]
     if any(item != "l0" for item in local_required):
         local_required = [item for item in local_required if item != "l0"]
-    deferred = flow._unique_strings(item for item in record_split["deferred"] if item not in selected_local)
+    ci_premerge = flow._unique_strings([*record_route["ci"], *selected_route["ci"]])
+    external_premerge = flow._unique_strings([*record_route["external"], *selected_route["external"]])
+    deferred = flow._unique_strings(
+        [*record_route["nightly"], *selected_route["nightly"], *selected_recommended]
+    )
     budgeted = dict(validation)
     budgeted["required_plans"] = local_required
-    budgeted["recommended_plans"] = flow._unique_strings([*selected_recommended, *deferred])
+    budgeted["recommended_plans"] = deferred
+    budgeted["ci_premerge_plans"] = ci_premerge
+    budgeted["external_premerge_plans"] = external_premerge
     budgeted["deferred_nightly_plans"] = deferred
     budgeted["validation_budget_gate"] = {
         "schema_version": "aistock_validation_budget_gate_v1",
         "premerge_required": local_required,
+        "ci_premerge_plans": ci_premerge,
+        "external_premerge_plans": external_premerge,
         "deferred_nightly_plans": deferred,
-        "policy": "broad module/UI/API/business-flow plans are nightly/VC by default; run pre-merge only on explicit request or production-gate need",
+        "policy": "run each plan once in its cheapest authoritative phase: local fix-point, required CI, external DEV, or deduplicated nightly",
     }
     return budgeted
 
@@ -650,6 +766,7 @@ def _build_validation_receipts(
     root: Path,
     changed_files: Iterable[str] | None = None,
 ) -> tuple[list[dict[str, Any]], list[str]]:
+    _assert_task_git_identity(root)
     commit = _git(["rev-parse", "HEAD"], cwd=root, check=False).strip() or "unknown"
     environment_identity = {
         "os": os.name,
@@ -674,43 +791,46 @@ def _build_validation_receipts(
             errors.append(f"validation result is not an explicit pass: {item}")
             continue
         evidence_kind = ""
-        plan = ""
+        plans = [""]
         for kind, pattern in VALIDATION_COMMAND_PATTERNS:
             match = pattern.search(command)
             if not match:
                 continue
+            if kind == "nox" and re.search(r"\s(?:-s|--sessions)(?:\s|=|$)", command[match.end():]):
+                break  # Repeated selectors can override each other; never infer executed plans.
             evidence_kind = kind
-            plan = str(match.groupdict().get("plan") or "")
+            plans = list(dict.fromkeys(str(match.groupdict().get("plans") or match.groupdict().get("plan") or "").split())) or [""]
             break
         if not evidence_kind:
             errors.append(f"validation command is not allowlisted: {command}")
             continue
-        identity_inputs = {
-            "commit": commit,
-            "changed_files_digest": changed_files_digest,
-            "command": command,
-            "result": result,
-            "evidence_kind": evidence_kind,
-            "plan": plan or None,
-            "environment": environment_identity,
-        }
-        normalized = json.dumps(identity_inputs, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-        receipts.append(
-            {
-                "schema_version": VALIDATION_RECEIPT_SCHEMA,
-                "receipt_id": hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16],
-                "reuse_key": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+        for plan in plans:
+            identity_inputs = {
                 "commit": commit,
                 "changed_files_digest": changed_files_digest,
-                "environment_identity": environment_identity,
                 "command": command,
                 "result": result,
-                "status": "passed",
                 "evidence_kind": evidence_kind,
                 "plan": plan or None,
-                "recorded_at": _utc_now(),
+                "environment": environment_identity,
             }
-        )
+            normalized = json.dumps(identity_inputs, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            receipts.append(
+                {
+                    "schema_version": VALIDATION_RECEIPT_SCHEMA,
+                    "receipt_id": hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16],
+                    "reuse_key": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+                    "commit": commit,
+                    "changed_files_digest": changed_files_digest,
+                    "environment_identity": environment_identity,
+                    "command": command,
+                    "result": result,
+                    "status": "passed",
+                    "evidence_kind": evidence_kind,
+                    "plan": plan or None,
+                    "recorded_at": _utc_now(),
+                }
+            )
     return receipts, errors
 
 
@@ -874,6 +994,9 @@ def _compact_phase_summary(value: Any) -> dict[str, Any] | None:
         "event_count",
         "known_duration_seconds",
         "inferred_elapsed_seconds",
+        "measurement_scope",
+        "measurement_status",
+        "queue_measurement_scope",
         "code_repair_seconds",
         "total_estimated_tokens",
         "context_estimated_tokens",
@@ -1179,7 +1302,11 @@ def _compact_triage_ci_issue(value: Any) -> dict[str, Any] | None:
 def _compact_promote_ci_issue(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    compact = _pick(value, "dry_run")
+    compact = _pick(value, "dry_run", "excluded_scope_paths", "blocking")
+    if isinstance(value.get("registry_pr_capability"), dict):
+        compact["registry_pr_capability"] = _pick(value["registry_pr_capability"], "allowed", "source", "reason")
+    if isinstance(value.get("local_intake"), dict):
+        compact["local_intake"] = _pick(value["local_intake"], "status", "owner_role", "claim_status", "repair_module", "next_command")
     triage = _compact_triage_ci_issue(value.get("triage"))
     if triage:
         compact["triage"] = triage
@@ -1818,6 +1945,20 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
         if type(max_files) is not int or not 0 < max_files <= 200:
             raise WorkflowError(f"{owner} local_probe max_files must be in 1..200")
 
+    def validate_monthly_worker_local_probe(owner: str, local_probe: Any) -> None:
+        if not isinstance(local_probe, dict):
+            raise WorkflowError(f"{owner} local_probe must be a mapping")
+        expected = {
+            "worker_script": "scripts/monthly_unified_dataset_release_worker.py",
+            "worker_mode": "--serve",
+            "parent_module": "backend.main:app",
+            "parent_port": 8001,
+        }
+        if local_probe != expected:
+            raise WorkflowError(f"{owner} local_probe must use the canonical monthly Worker process contract")
+        if not (root / str(local_probe["worker_script"])).is_file():
+            raise WorkflowError(f"{owner} monthly Worker script does not exist")
+
     seen_ports: dict[int, str] = {}
     for target_id, target in targets.items():
         if not isinstance(target, dict):
@@ -1835,6 +1976,18 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
                     f"runtime target {target_id} dataset-release heartbeat mode requires worker_scheduler"
                 )
             validate_worker_local_probe(f"runtime target {target_id}", target.get("local_probe"))
+        elif probe_mode == _MONTHLY_RELEASE_WORKER_PROCESS_MODE:
+            if target.get("runtime_kind") != "worker_scheduler":
+                raise WorkflowError(
+                    f"runtime target {target_id} monthly Worker process mode requires worker_scheduler"
+                )
+            if not target.get("probe_origins"):
+                raise WorkflowError(f"runtime target {target_id} is missing probe_origins")
+            if target.get("probes") != _MONTHLY_RELEASE_WORKER_PROCESS_REFS:
+                raise WorkflowError(
+                    f"runtime target {target_id} does not use canonical monthly Worker process probes"
+                )
+            validate_monthly_worker_local_probe(f"runtime target {target_id}", target.get("local_probe"))
         else:
             raise WorkflowError(f"runtime target {target_id} has unsupported probe_mode: {probe_mode}")
         probe_routes = target.get("probe_routes", [])
@@ -1853,20 +2006,84 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
                 not isinstance(item, str) or not item.strip() for item in route_globs
             ):
                 raise WorkflowError(f"runtime target {target_id} probe route {route_id} source_globs are invalid")
+            required_route_globs = route.get("required_source_globs", [])
+            if not isinstance(required_route_globs, list) or any(
+                not isinstance(item, str) or not item.strip() for item in required_route_globs
+            ):
+                raise WorkflowError(
+                    f"runtime target {target_id} probe route {route_id} required_source_globs are invalid"
+                )
+            if not set(required_route_globs).issubset(set(route_globs)):
+                raise WorkflowError(
+                    f"runtime target {target_id} probe route {route_id} requires sources outside its route"
+                )
+            route_mode = route.get("probe_mode")
+            if route_mode == "http":
+                # HTTP business defaults belong to exact existing backend sources,
+                # never a broad backend/** fallback or a Worker route.
+                if target.get("runtime_kind") != "backend" or probe_mode != "http":
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route requires a backend HTTP target")
+                if any(
+                    any(character in path for character in "*?[\\")
+                    or Path(path).is_absolute()
+                    or ".." in Path(path).parts
+                    or not (root / path).is_file()
+                    or not any(_runtime_glob_matches(path, str(pattern)) for pattern in target["source_globs"])
+                    for path in route_globs
+                ):
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route requires exact target-owned sources")
+                runbook_error = _validate_operator_runbook_ref(route.get("operator_runbook_ref"), root=root)
+                if runbook_error:
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route {runbook_error}")
+                route_probes = route.get("probes")
+                if not isinstance(route_probes, dict):
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route probes must be a mapping")
+                for field in ("health_ref", "identity_ref", "business_smoke_ref"):
+                    error = _validate_runtime_probe_ref(
+                        field, route_probes.get(field), allowed_origins=flow._as_list(target.get("probe_origins"))
+                    )
+                    if error:
+                        raise WorkflowError(f"runtime target {target_id} HTTP probe route {error}")
+                smoke_path = urllib.parse.urlsplit(route_probes["business_smoke_ref"]).path
+                semantic = _business_smoke_semantic_contract(smoke_path)
+                contract_id = route.get("business_smoke_contract_id")
+                if (
+                    not contract_id or semantic is None or semantic[0] != contract_id
+                    or contract_id in {"health_ok", "openapi_document", "object_liveness", "research_pipeline_readiness_only"}
+                ):
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route requires a bound business semantic contract")
+                continue
             if not set(route_globs).issubset(set(flow._as_list(target.get("source_globs")))):
                 raise WorkflowError(
                     f"runtime target {target_id} probe route {route_id} contains sources outside its target"
                 )
-            if route.get("probe_mode") != _DATASET_RELEASE_WORKER_HEARTBEAT_MODE:
+            if route_mode not in {
+                _DATASET_RELEASE_WORKER_HEARTBEAT_MODE,
+                _MONTHLY_RELEASE_WORKER_PROCESS_MODE,
+            }:
                 raise WorkflowError(f"runtime target {target_id} probe route {route_id} mode is unsupported")
-            if route.get("probes") != _DATASET_RELEASE_WORKER_HEARTBEAT_REFS:
-                raise WorkflowError(
-                    f"runtime target {target_id} probe route {route_id} does not use canonical heartbeat probes"
+            if route_mode == _DATASET_RELEASE_WORKER_HEARTBEAT_MODE:
+                if route.get("probes") != _DATASET_RELEASE_WORKER_HEARTBEAT_REFS:
+                    raise WorkflowError(
+                        f"runtime target {target_id} probe route {route_id} does not use canonical heartbeat probes"
+                    )
+                validate_worker_local_probe(
+                    f"runtime target {target_id} probe route {route_id}",
+                    route.get("local_probe"),
                 )
-            validate_worker_local_probe(
-                f"runtime target {target_id} probe route {route_id}",
-                route.get("local_probe"),
-            )
+            else:
+                if route.get("probes") != _MONTHLY_RELEASE_WORKER_PROCESS_REFS:
+                    raise WorkflowError(
+                        f"runtime target {target_id} probe route {route_id} does not use canonical monthly Worker probes"
+                    )
+                if not target.get("probe_origins"):
+                    raise WorkflowError(
+                        f"runtime target {target_id} probe route {route_id} requires probe_origins"
+                    )
+                validate_monthly_worker_local_probe(
+                    f"runtime target {target_id} probe route {route_id}",
+                    route.get("local_probe"),
+                )
         port = target.get("production_port")
         if port is not None:
             port = int(port)
@@ -1970,6 +2187,98 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
         non_runtime_path_keys.add(normalized_key)
         non_runtime_paths.append(path_value)
     payload["non_runtime_source_paths"] = non_runtime_paths
+    raw_source_role_rules = payload.get("source_role_rules", [])
+    if not isinstance(raw_source_role_rules, list):
+        raise WorkflowError("runtime target catalog source_role_rules must be a list")
+    source_role_rules: list[dict[str, Any]] = []
+    seen_rule_ids: set[str] = set()
+    seen_role_patterns: set[str] = set()
+    runtime_patterns = {
+        str(pattern)
+        for target in targets.values()
+        for pattern in flow._as_list(target.get("source_globs"))
+    }
+    for raw_rule in raw_source_role_rules:
+        if not isinstance(raw_rule, dict):
+            raise WorkflowError("runtime target catalog source_role_rules entries must be mappings")
+        rule_id = str(raw_rule.get("rule_id") or "").strip()
+        role = str(raw_rule.get("role") or "").strip()
+        source_globs = raw_rule.get("source_globs")
+        if not rule_id or not re.fullmatch(r"[a-z][a-z0-9_-]*", rule_id):
+            raise WorkflowError("runtime target catalog source_role_rules rule_id is invalid")
+        if rule_id in seen_rule_ids:
+            raise WorkflowError(f"runtime target catalog source_role_rules contains duplicate rule_id: {rule_id}")
+        if role != "non_runtime":
+            raise WorkflowError(
+                f"runtime target catalog source_role_rules only supports non_runtime: {rule_id}"
+            )
+        if not isinstance(source_globs, list) or not source_globs:
+            raise WorkflowError(
+                f"runtime target catalog source_role_rules source_globs must be a non-empty list: {rule_id}"
+            )
+        normalized_patterns: list[str] = []
+        for raw_pattern in source_globs:
+            if not isinstance(raw_pattern, str):
+                raise WorkflowError(
+                    f"runtime target catalog source_role_rules patterns must be strings: {rule_id}"
+                )
+            pattern = raw_pattern.strip()
+            if (
+                not pattern
+                or "\\" in pattern
+                or pattern.startswith(("/", "./"))
+                or re.match(r"^[A-Za-z]:(?:/|$)", pattern)
+                or any(part in {"", ".", ".."} for part in pattern.split("/"))
+            ):
+                raise WorkflowError(
+                    f"runtime target catalog source_role_rules contains an invalid relative pattern: {raw_pattern}"
+                )
+            suffix = Path(pattern).suffix.casefold()
+            supported_namespace = (
+                (pattern.startswith("scripts/") and suffix in {".py", ".ps1"})
+                or (pattern.startswith("backend/services/") and suffix == ".py")
+                or pattern == "noxfile.py"
+            )
+            if not supported_namespace:
+                raise WorkflowError(
+                    "runtime target catalog source_role_rules only accepts Python or PowerShell patterns "
+                    f"under scripts/, Python patterns under backend/services/, or noxfile.py: {pattern}"
+                )
+            if pattern.startswith("backend/services/") and any(character in pattern for character in "*?["):
+                parts = pattern.split("/")
+                directory_parts = parts[:-1]
+                filename = parts[-1]
+                literal_prefix = re.split(r"[\*\?\[]", filename, maxsplit=1)[0]
+                if (
+                    len(parts) != 4
+                    or any(any(character in part for character in "*?[") for part in directory_parts)
+                    or "**" in filename
+                    or len(literal_prefix) < 4
+                ):
+                    raise WorkflowError(
+                        "runtime target catalog backend source-role globs must be bounded to one exact service "
+                        f"directory and a filename family with a literal prefix: {pattern}"
+                    )
+            if pattern in runtime_patterns:
+                raise WorkflowError(
+                    f"runtime target catalog source-role pattern duplicates a runtime target pattern: {pattern}"
+                )
+            normalized_key = os.path.normcase(pattern).casefold()
+            if normalized_key in seen_role_patterns:
+                raise WorkflowError(
+                    f"runtime target catalog source_role_rules contains duplicate pattern: {pattern}"
+                )
+            seen_role_patterns.add(normalized_key)
+            normalized_patterns.append(pattern)
+        seen_rule_ids.add(rule_id)
+        source_role_rules.append(
+            {
+                "rule_id": rule_id,
+                "role": role,
+                "source_globs": normalized_patterns,
+            }
+        )
+    payload["source_role_rules"] = source_role_rules
     return payload
 
 
@@ -1980,6 +2289,17 @@ def _runtime_glob_matches(path: str, pattern: str) -> bool:
         current = current.replace("**/", "", 1)
         candidates.add(current)
     return any(fnmatch.fnmatchcase(path, candidate) for candidate in candidates)
+
+
+def _runtime_pattern_specificity(pattern: str) -> tuple[int, int, int]:
+    """Rank exact and bounded runtime/source-role patterns deterministically."""
+
+    wildcard_count = sum(pattern.count(character) for character in "*?[")
+    return (
+        int(wildcard_count == 0),
+        sum(character not in "*?[]" for character in pattern),
+        -wildcard_count,
+    )
 
 
 def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None = None) -> dict[str, Any]:
@@ -1995,10 +2315,15 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
     runtime_files: list[str] = []
     target_ids: set[str] = set()
     catalog: dict[str, Any] = {}
-    with contextlib.suppress(WorkflowError):
+    catalog_error: str | None = None
+    try:
         catalog = _load_runtime_target_catalog(root)
+    except WorkflowError as exc:
+        catalog_error = str(exc)
+        impacts.add("unknown")
     catalog_targets = catalog.get("targets") or {}
     catalog_non_runtime_files = set(flow._as_list(catalog.get("non_runtime_source_paths")))
+    catalog_source_role_rules = flow._as_list(catalog.get("source_role_rules"))
     known_non_runtime_prefixes = (
         ".github/",
         "backend/tests/",
@@ -2022,26 +2347,62 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
             impacts.add("none")
             continue
         if (
-            path in catalog_non_runtime_files
-            or lower.startswith(known_non_runtime_prefixes)
+            path in catalog_non_runtime_files or lower.startswith(known_non_runtime_prefixes)
+            or (lower.startswith("tdx-api-main/") and lower.endswith("_test.go"))
         ):
             impacts.add("none")
             continue
-        matched_targets: list[tuple[str, str]] = []
+        matched_targets: list[tuple[str, str, str]] = []
         for catalog_target_id, catalog_target in catalog_targets.items():
             if not isinstance(catalog_target, dict):
                 continue
-            if any(
-                _runtime_glob_matches(path, str(pattern))
-                for pattern in flow._as_list(catalog_target.get("source_globs"))
-            ):
-                matched_targets.append((str(catalog_target_id), str(catalog_target.get("runtime_kind") or "unknown")))
+            for pattern in flow._as_list(catalog_target.get("source_globs")):
+                pattern = str(pattern)
+                if _runtime_glob_matches(path, pattern):
+                    matched_targets.append(
+                        (
+                            str(catalog_target_id),
+                            str(catalog_target.get("runtime_kind") or "unknown"),
+                            pattern,
+                        )
+                    )
+        matched_non_runtime_patterns = [
+            str(pattern)
+            for rule in catalog_source_role_rules
+            if isinstance(rule, dict) and rule.get("role") == "non_runtime"
+            for pattern in flow._as_list(rule.get("source_globs"))
+            if _runtime_glob_matches(path, str(pattern))
+        ]
+        best_runtime_specificity = max(
+            (_runtime_pattern_specificity(item[2]) for item in matched_targets),
+            default=None,
+        )
+        best_non_runtime_specificity = max(
+            (_runtime_pattern_specificity(pattern) for pattern in matched_non_runtime_patterns),
+            default=None,
+        )
+        if (
+            best_non_runtime_specificity is not None
+            and (
+                best_runtime_specificity is None
+                or best_non_runtime_specificity > best_runtime_specificity
+            )
+        ):
+            impacts.add("none")
+            continue
+        if (
+            best_runtime_specificity is not None
+            and best_non_runtime_specificity == best_runtime_specificity
+        ):
+            impacts.add("unknown")
+            runtime_files.append(path)
+            continue
         worker_matches = [item for item in matched_targets if item[1] == "worker_scheduler"]
         if worker_matches:
             matched_targets = worker_matches
         if matched_targets:
             runtime_files.append(path)
-            for catalog_target_id, runtime_kind in matched_targets:
+            for catalog_target_id, runtime_kind, _pattern in matched_targets:
                 target_ids.add(catalog_target_id)
                 impacts.add(runtime_kind if runtime_kind in RUNTIME_IMPACTS else "unknown")
         elif lower.startswith("tdx-api-main/") and lower.endswith(".go"):
@@ -2074,6 +2435,7 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         "observed_impacts": sorted(impacts),
         "runtime_files": runtime_files,
         "target_ids": sorted(target_ids),
+        "catalog_error": catalog_error,
     }
 
 
@@ -2210,6 +2572,10 @@ def _runtime_contract_digest(contract: dict[str, Any]) -> str:
         "local_probe": target.get("local_probe") or None,
         "probes": target.get("probes") or {},
     }
+    # Preserve legacy receipt digests, but bind new HTTP routes to their
+    # source-owned business contract as well as their endpoint references.
+    if target.get("business_smoke_contract_id"):
+        payload["business_smoke_contract_id"] = target["business_smoke_contract_id"]
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -2229,7 +2595,12 @@ def _select_runtime_probe_route(
             continue
         patterns = flow._as_list(route.get("source_globs"))
         matches = [any(_runtime_glob_matches(path, str(pattern)) for pattern in patterns) for path in files]
-        if matches and all(matches):
+        required_patterns = flow._as_list(route.get("required_source_globs"))
+        required_match = not required_patterns or any(
+            any(_runtime_glob_matches(path, str(pattern)) for pattern in required_patterns)
+            for path in files
+        )
+        if matches and all(matches) and required_match:
             fully_matched.append(route)
         elif any(matches):
             partially_matched.append(str(route.get("route_id") or "unknown"))
@@ -2239,11 +2610,14 @@ def _select_runtime_probe_route(
         if partially_matched:
             return (
                 selected,
-                "runtime files mix routed and non-routed Worker sources: "
+                "runtime files mix routed and non-routed sources: "
                 + json.dumps(partially_matched, ensure_ascii=False),
             )
         return selected, None
     route = fully_matched[0]
+    if route.get("probe_mode") == "http":
+        selected["operator_runbook_ref"] = route["operator_runbook_ref"]
+        selected["business_smoke_contract_id"] = route["business_smoke_contract_id"]
     selected.update(
         {
             "probe_route_id": str(route.get("route_id")),
@@ -2252,7 +2626,8 @@ def _select_runtime_probe_route(
             "probes": route.get("probes"),
         }
     )
-    selected.pop("probe_origins", None)
+    if route.get("probe_mode") == _DATASET_RELEASE_WORKER_HEARTBEAT_MODE:
+        selected.pop("probe_origins", None)
     return selected, None
 
 
@@ -2271,6 +2646,9 @@ def build_runtime_contract(
     inferred = _classify_runtime_impact(changed_files, root=root)
     explicit = record.get("runtime_contract") if isinstance(record.get("runtime_contract"), dict) else {}
     blocking: list[str] = []
+    catalog_error = str(inferred.get("catalog_error") or "").strip()
+    if catalog_error:
+        blocking.append(f"runtime target catalog validation failed: {catalog_error}")
     explicit_impact = str(explicit.get("runtime_impact") or "").strip()
     inferred_impact = str(inferred["runtime_impact"])
     if explicit and explicit.get("schema_version") != RUNTIME_CONTRACT_SCHEMA:
@@ -2327,7 +2705,7 @@ def build_runtime_contract(
         )
     target: dict[str, Any] | None = None
     catalog_ref = _repo_rel(root / "docs" / "standards" / "aistock_runtime_targets_v1.yaml", root)
-    if backend_restart_required:
+    if backend_restart_required and not catalog_error:
         try:
             catalog = _load_runtime_target_catalog(root)
             raw_target = (catalog.get("targets") or {}).get(target_id)
@@ -2341,11 +2719,22 @@ def build_runtime_contract(
                 if probe_route_error:
                     blocking.append(f"runtime target {target_id} {probe_route_error}")
                 probes = raw_target.get("probes") if isinstance(raw_target.get("probes"), dict) else {}
+                # HTTP routes provide defaults only. Keep explicit BUG references
+                # (including invalid/empty ones) subject to the normal strict gate.
+                http_route = raw_target.get("probe_route_id") and raw_target.get("probe_mode") == "http"
+                runbook = (
+                    explicit["operator_runbook_ref"]
+                    if http_route and "operator_runbook_ref" in explicit
+                    else raw_target.get("operator_runbook_ref")
+                )
                 target = {
                     **raw_target,
                     "target_id": target_id,
-                    "operator_runbook_ref": _resolve_runtime_ref(raw_target.get("operator_runbook_ref"), explicit),
-                    "probes": {key: _resolve_runtime_ref(value, explicit) for key, value in probes.items()},
+                    "operator_runbook_ref": _resolve_runtime_ref(runbook, explicit),
+                    "probes": {
+                        key: _resolve_runtime_ref(explicit[key] if http_route and key in explicit else value, explicit)
+                        for key, value in probes.items()
+                    },
                 }
                 if not target.get("operator_runbook_ref"):
                     blocking.append(f"runtime target {target_id} operator runbook ref is incomplete")
@@ -2360,6 +2749,19 @@ def build_runtime_contract(
                             f"runtime target {target_id} dataset-release heartbeat probes must match "
                             "the canonical local probe set"
                         )
+                elif probe_mode == _MONTHLY_RELEASE_WORKER_PROCESS_MODE:
+                    if target["probes"] != _MONTHLY_RELEASE_WORKER_PROCESS_REFS:
+                        blocking.append(
+                            f"runtime target {target_id} monthly Worker process probes must match "
+                            "the canonical process probe set"
+                        )
+                    identity_error = _validate_runtime_probe_ref(
+                        "identity_ref",
+                        target["probes"].get("identity_ref"),
+                        allowed_origins=flow._as_list(target.get("probe_origins")),
+                    )
+                    if identity_error:
+                        blocking.append(f"runtime target {target_id} {identity_error}")
                 else:
                     for field in ("health_ref", "identity_ref", "business_smoke_ref"):
                         if not target["probes"].get(field):
@@ -2373,6 +2775,17 @@ def build_runtime_contract(
                             if probe_error:
                                 blocking.append(f"runtime target {target_id} {probe_error}")
                     database_ref = target["probes"].get("database_readback_ref")
+                    smoke_ref = target["probes"].get("business_smoke_ref")
+                    smoke_path = urllib.parse.urlsplit(str(smoke_ref or "")).path or "/"
+                    if smoke_ref and _business_smoke_semantic_contract(smoke_path) is None:
+                        blocking.append(
+                            f"runtime target {target_id} has no target-owned business-smoke "
+                            f"semantic contract registered for endpoint path: {smoke_path}"
+                        )
+                    elif smoke_ref and target.get("business_smoke_contract_id"):
+                        semantic = _business_smoke_semantic_contract(smoke_path)
+                        if semantic[0] != target["business_smoke_contract_id"]:
+                            blocking.append(f"runtime target {target_id} business smoke conflicts with its source-owned semantic contract")
                     if database_ref:
                         probe_error = _validate_runtime_probe_ref(
                             "database_readback_ref",
@@ -2452,6 +2865,8 @@ def build_runtime_contract(
         "backend_restart_owner": "user",
         "target_id": target_id,
         "target_ids": target_ids,
+        # Diagnostic only: excluded from runtime receipt digest and gate decisions.
+        "inferred_runtime_files": list(inferred.get("runtime_files") or []),
         "catalog_ref": catalog_ref,
         "operator_runbook_ref": (target or {}).get("operator_runbook_ref"),
         "expected_identity_ref": (target or {}).get("expected_identity_ref"),
@@ -2471,6 +2886,7 @@ def build_runtime_contract(
             "database_migration": "required" if runtime_impact == "database" else "not_required",
         },
         "target": target,
+        "catalog_validation_error": catalog_error or None,
         "blocking": flow._unique_strings(blocking),
         "pre_pr_ready": not blocking,
     }
@@ -2570,6 +2986,25 @@ def _payload_schema_evidence(body: bytes) -> dict[str, Any]:
 _READ_ONLY_HTTP_PROBE_MAX_BYTES = 8 * 1024 * 1024
 
 
+def _monthly_read_only_probe_headers(url: str) -> dict[str, str]:
+    """Never forward the operator credential outside the exact local GET routes."""
+    parsed = urllib.parse.urlsplit(url)
+    if (
+        _normalized_http_origin(url) not in {
+            "http://127.0.0.1:8001", "http://localhost:8001"
+        }
+        or parsed.query or parsed.fragment
+        or not re.fullmatch(
+            r"/api/v1/qlib/monthly-releases/dmr_[0-9a-f]{32}(?:/receipts)?",
+            parsed.path,
+        )
+    ):
+        return {}
+    from scripts.monthly_unified_dataset_release import TOKEN_HEADER, _token
+
+    return {TOKEN_HEADER: _token()}
+
+
 def _read_only_http_probe(
     name: str,
     url: str,
@@ -2600,18 +3035,39 @@ def _read_only_http_probe(
             "transport": {"status_code": None, "ok": False, "error": reason},
             "payload_schema": {"json": False, "kind": "none"},
         }
-    request = urllib.request.Request(url, method="GET", headers={"Accept": "application/json,text/plain,*/*"})
+    try:
+        credential_headers = _monthly_read_only_probe_headers(url)
+    except (OSError, RuntimeError, ValueError):
+        reason = "monthly read-only probe operator credential is unavailable"
+        return {
+            "name": name, "url": url, "status": "blocked", "error": reason,
+            "transport": {"status_code": None, "ok": False, "error": reason},
+            "payload_schema": {"json": False, "kind": "none"},
+        }
+    request = urllib.request.Request(
+        url, method="GET",
+        headers={"Accept": "application/json,text/plain,*/*", **credential_headers},
+    )
     try:
         with _open_read_only_url(request, timeout_seconds=timeout_seconds) as response:
             status_code = int(getattr(response, "status", 200))
             body = response.read(_READ_ONLY_HTTP_PROBE_MAX_BYTES + 1)
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        # Credential-bearing transport errors must not reflect request headers.
+        error = "authenticated monthly read-only probe failed" if credential_headers else str(exc)
         return {
             "name": name,
             "url": url,
             "status": "failed",
-            "error": str(exc),
-            "transport": {"status_code": None, "ok": False, "error": str(exc)},
+            "error": error,
+            "transport": {"status_code": None, "ok": False, "error": error},
+            "payload_schema": {"json": False, "kind": "none"},
+        }
+    if any(secret.encode("utf-8") in body for secret in credential_headers.values()):
+        reason = "monthly read-only probe response contains sensitive content"
+        return {
+            "name": name, "url": url, "status": "failed", "error": reason,
+            "transport": {"status_code": status_code, "ok": False, "error": reason},
             "payload_schema": {"json": False, "kind": "none"},
         }
     transport_ok = 200 <= status_code < 400
@@ -2786,6 +3242,185 @@ def _read_dataset_release_worker_heartbeat_probes(
     return results
 
 
+def _resolved_process_argument(argument: str, *, cwd: Path) -> Path | None:
+    value = str(argument or "").strip().strip('"')
+    if not value or not value.lower().endswith(".py"):
+        return None
+    candidate = Path(value)
+    if not candidate.is_absolute():
+        candidate = cwd / candidate
+    try:
+        return candidate.resolve()
+    except OSError:
+        return None
+
+
+def _monthly_release_worker_process_snapshot(target: dict[str, Any]) -> dict[str, Any]:
+    if psutil is None:
+        raise WorkflowError("monthly Worker process enumeration requires the prebuilt psutil dependency")
+    local_probe = target.get("local_probe") if isinstance(target.get("local_probe"), dict) else {}
+    worker_script = (REPO_ROOT / str(local_probe.get("worker_script") or "")).resolve()
+    worker_mode = str(local_probe.get("worker_mode") or "")
+    parent_module = str(local_probe.get("parent_module") or "")
+    parent_port = str(local_probe.get("parent_port") or "")
+    repo_root = REPO_ROOT.resolve()
+    workers: list[dict[str, Any]] = []
+
+    try:
+        backend_pids = sorted(
+            {
+                int(connection.pid)
+                for connection in psutil.net_connections(kind="tcp")
+                if connection.pid is not None
+                and connection.status == psutil.CONN_LISTEN
+                and connection.laddr
+                and int(connection.laddr.port) == int(parent_port)
+            }
+        )
+        for backend_pid in backend_pids:
+            parent = psutil.Process(backend_pid)
+            parent_cmdline = [str(item) for item in (parent.cmdline() or [])]
+            parent_cwd = Path(parent.cwd()).resolve()
+            parent_port_match = any(
+                parent_cmdline[index] == "--port" and parent_cmdline[index + 1] == parent_port
+                for index in range(max(0, len(parent_cmdline) - 1))
+            )
+            for process in parent.children(recursive=False):
+                info = {"pid": process.pid, "ppid": process.ppid()}
+                cmdline = [str(item) for item in (process.cmdline() or [])]
+                if not cmdline:
+                    continue
+                try:
+                    process_cwd = Path(process.cwd()).resolve()
+                    if not any(
+                        _resolved_process_argument(item, cwd=process_cwd) == worker_script
+                        for item in cmdline
+                    ):
+                        continue
+                    forbidden_modes = sorted(
+                        {item for item in ("--once", "--drain", "--preflight") if item in cmdline}
+                    )
+                    workers.append(
+                        {
+                            "pid": int(info["pid"]),
+                            "ppid": int(info["ppid"]),
+                            "worker_cwd_matches": process_cwd == repo_root,
+                            "worker_mode_matches": worker_mode in cmdline,
+                            "forbidden_modes": forbidden_modes,
+                            "parent_pid": int(parent.pid),
+                            "parent_cwd_matches": parent_cwd == repo_root,
+                            "parent_module_matches": parent_module in parent_cmdline,
+                            "parent_port_matches": parent_port_match,
+                        }
+                    )
+                except (OSError, RuntimeError, TypeError, ValueError, psutil.Error):
+                    continue
+    except psutil.Error as exc:
+        raise WorkflowError(f"monthly Worker process enumeration failed: {exc}") from exc
+
+    workers.sort(key=lambda item: int(item["pid"]))
+    healthy = bool(
+        len(backend_pids) == 1
+        and len(workers) == 1
+        and workers[0]["worker_cwd_matches"]
+        and workers[0]["worker_mode_matches"]
+        and not workers[0]["forbidden_modes"]
+        and workers[0]["parent_cwd_matches"]
+        and workers[0]["parent_module_matches"]
+        and workers[0]["parent_port_matches"]
+    )
+    return {
+        "schema_version": "aistock_monthly_release_worker_process_snapshot_v1",
+        "backend_listener_count": len(backend_pids),
+        "worker_count": len(workers),
+        "healthy": healthy,
+        "workers": workers,
+    }
+
+
+def _read_monthly_release_worker_process_probes(
+    target: dict[str, Any],
+    timeout_seconds: float,
+) -> list[dict[str, Any]]:
+    if timeout_seconds <= 0:
+        raise WorkflowError("monthly Worker process probe timeout must be positive")
+    probes = target.get("probes") if isinstance(target.get("probes"), dict) else {}
+    identity = _read_only_http_probe(
+        "identity_ref",
+        str(probes.get("identity_ref") or ""),
+        allowed_origins=flow._as_list(target.get("probe_origins")),
+        timeout_seconds=timeout_seconds,
+    )
+    try:
+        snapshot = _monthly_release_worker_process_snapshot(target)
+        raw = json.dumps(
+            snapshot,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        healthy = snapshot["healthy"] is True
+        reason = None if healthy else (
+            "monthly Worker supervision is not ready: "
+            f"backend_listener_count={snapshot['backend_listener_count']} "
+            f"worker_count={snapshot['worker_count']} workers={snapshot['workers']}"
+        )
+        response_sha = hashlib.sha256(raw).hexdigest()
+        common = {
+            "status_code": None,
+            "transport": {"status_code": None, "ok": True, "error": None, "kind": "local_process"},
+            "payload_schema": {"json": True, "kind": "object"},
+            "response_sha256": response_sha,
+            "response_bytes": len(raw),
+        }
+        health = {
+            "name": "health_ref",
+            "url": "monthly-worker-process://worker-scheduler/health_ref",
+            "status": "passed" if healthy else "failed",
+            **common,
+        }
+        business = {
+            "name": "business_smoke_ref",
+            "url": "monthly-worker-process://worker-scheduler/business_smoke_ref",
+            "status": "passed" if healthy else "failed",
+            **common,
+            "semantic": {
+                "schema_version": BUSINESS_SMOKE_SEMANTIC_SCHEMA,
+                "contract_id": "monthly_release_worker_supervision",
+                "verdict": "passed" if healthy else "failed",
+                "reason": reason,
+                "facts": {
+                    "backend_listener_count": snapshot["backend_listener_count"],
+                    "worker_count": snapshot["worker_count"],
+                    "supervised_worker_count": 1 if healthy else 0,
+                },
+                "expectation": None,
+                "expectation_digest": None,
+                "response_sha256": response_sha,
+            },
+        }
+        if reason:
+            health["error"] = reason
+            business["error"] = reason
+        return [health, identity, business]
+    except Exception as exc:
+        reason = f"monthly Worker process probe failed: {type(exc).__name__}: {exc}"
+        failed = []
+        for name in ("health_ref", "business_smoke_ref"):
+            failed.append(
+                {
+                    "name": name,
+                    "url": f"monthly-worker-process://worker-scheduler/{name}",
+                    "status": "failed",
+                    "error": reason,
+                    "transport": {"status_code": None, "ok": False, "error": reason, "kind": "local_process"},
+                    "payload_schema": {"json": False, "kind": "none"},
+                }
+            )
+        return [failed[0], identity, failed[1]]
+
+
 # ---------------------------------------------------------------------------
 # Target-owned business-smoke semantic contracts (BUG-1084).
 #
@@ -2798,806 +3433,89 @@ def _read_dataset_release_worker_heartbeat_probes(
 # no HTTP-only fallback.
 # ---------------------------------------------------------------------------
 
-BUSINESS_SMOKE_SEMANTIC_SCHEMA = "aistock_business_smoke_semantic_verdict_v1"
-SCHEDULER_VERIFICATION_STATUS_SCHEMA = "simulation_scheduler_verification_status_v1"
-SCHEDULER_VERIFICATION_SCOPE_SCHEMA = "simulation_scheduler_verification_scope_v1"
-_SCHEDULER_VERIFICATION_RUN_ID_RE = re.compile(r"^simrun_[0-9a-f]{16}$")
-EXPECTED_TERMINAL_OUTCOME_SCHEMA = "aistock_expected_terminal_outcome_v1"
-SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA = "simulation_run_terminal_evidence_v1"
-_EXPECTATION_CAPABLE_CONTRACT_IDS = frozenset({"run_terminal_evidence"})
-_EXPECTED_TERMINAL_OUTCOME_FIELDS = (
-    "schema_version",
-    "contract_id",
-    "expected_status",
-    "expected_previous_status",
-    "expected_reason_code",
-    "expected_evidence_schema",
-    "expected_run_id",
-)
-_EXPECTED_REASON_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,127}$")
-_EXPECTED_EVIDENCE_SCHEMA_RE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
-_EXPECTED_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{2,127}$")
-
-_RUN_STATUS_SUCCESS = frozenset({
-    "APPLIED",
-    "CLOSED",
-    "COMPLETED",
-    "DONE",
-    "FILLED",
-    "PASSED",
-    "READY",
-    "SUCCESS",
-    "SUCCEEDED",
-})
-_RUN_STATUS_FAILURE = frozenset({
-    "ABORTED",
-    "BLOCKED",
-    "CANCELED",
-    "CANCELLED",
-    "DEAD",
-    "ERROR",
-    "FAILED",
-    "FAILED_RETRYABLE",
-    "FAILED_TERMINAL",
-    "REJECTED",
-    "TIMED_OUT",
-    "TIMEOUT",
-})
-_HEALTH_FAILURE_STATUSES = _RUN_STATUS_FAILURE | {"DEGRADED", "DOWN", "STALLED", "UNHEALTHY"}
-_HEALTH_SUCCESS_STATUSES = frozenset({"healthy", "ok", "passed", "ready", "success", "succeeded", "up"})
-_CONTAINER_KEYS = ("run", "result", "batch", "task", "plan", "operation", "data", "scheduler", "summary")
-_STATUS_FIELD_NAMES = ("status", "state", "verdict")
-
-_COLLECTION_LIST_KEYS = (
-    "items",
-    "runs",
-    "tasks",
-    "nodes",
-    "schedules",
-    "entries",
-    "results",
-    "rows",
-    "records",
-    "batches",
-    "experiments",
-    "strategies",
-    "programs",
-    "data",
-)
-_SCHEDULER_BLOCKING_LIST_KEYS = frozenset({
-    "blockers",
-    "blocking_reasons",
-    "errors",
-    "failure_reasons",
-    "last_result_errors",
-})
-_SCHEDULER_CURRENT_TRADE_DATE_BLOCKERS_KEY = "current_trade_date_blockers"
-_SCHEDULER_BLOCKING_VALUE_KEYS = frozenset({"blocking_result", "last_blocking_result"})
-_SCHEDULER_REASON_KEYS = frozenset({
-    "blocked_reason",
-    "blocking_reason",
-    "failure_reason",
-    "recovery_failure_reason",
-})
-
-
-def _collect_status_fields(payload: Any) -> dict[str, str]:
-    """Collect status/state/verdict fields from a payload and known containers."""
-    found: dict[str, str] = {}
-    queue: list[tuple[str, Any]] = [("", payload)]
-    depth = 0
-    while queue and depth <= 4:
-        depth += 1
-        label, container = queue.pop(0)
-        if not isinstance(container, dict):
-            continue
-        for field in _STATUS_FIELD_NAMES:
-            value = container.get(field)
-            if isinstance(value, str) and value.strip():
-                name = f"{label}.{field}" if label else field
-                found.setdefault(name, value.strip())
-        for key in _CONTAINER_KEYS:
-            nested = container.get(key)
-            if isinstance(nested, dict):
-                nested_label = f"{label}.{key}" if label else key
-                queue.append((nested_label, nested))
-    return found
-
-
-def _normalize_expected_terminal_outcome(raw: Any) -> tuple[dict[str, Any] | None, list[str]]:
-    """Validate and normalize a declared expected terminal outcome.
-
-    The declaration is the only channel through which a failure-class terminal
-    status may satisfy a run-class business-smoke semantic contract. It is
-    fail-closed: any schema violation yields blocking errors and no
-    expectation. Normalization emits the fixed field set in canonical order so
-    digests are stable.
-    """
-    if raw is None:
-        return None, []
-    if not isinstance(raw, dict):
-        return None, ["expected_terminal_outcome must be an object"]
-    errors: list[str] = []
-    unknown_fields = sorted(set(raw) - set(_EXPECTED_TERMINAL_OUTCOME_FIELDS))
-    if unknown_fields:
-        errors.append(f"expected_terminal_outcome has unknown fields: {unknown_fields}")
-    if raw.get("schema_version") != EXPECTED_TERMINAL_OUTCOME_SCHEMA:
-        errors.append(f"expected_terminal_outcome schema_version must be {EXPECTED_TERMINAL_OUTCOME_SCHEMA}")
-    contract_id = str(raw.get("contract_id") or "").strip()
-    if contract_id not in _EXPECTATION_CAPABLE_CONTRACT_IDS:
-        errors.append(
-            "expected_terminal_outcome contract_id is not expectation-capable: "
-            f"{contract_id or 'missing'}"
-        )
-    expected_status = str(raw.get("expected_status") or "").strip().upper()
-    if expected_status not in _RUN_STATUS_FAILURE:
-        errors.append(
-            "expected_terminal_outcome expected_status must be a declared failure-class "
-            f"terminal status: {expected_status or 'missing'}"
-        )
-    expected_previous_status = str(raw.get("expected_previous_status") or "").strip().upper()
-    if expected_previous_status not in (_RUN_STATUS_FAILURE | _RUN_STATUS_SUCCESS):
-        errors.append(
-            "expected_terminal_outcome expected_previous_status must be a known terminal "
-            f"status: {expected_previous_status or 'missing'}"
-        )
-    expected_reason_code = str(raw.get("expected_reason_code") or "").strip()
-    if not _EXPECTED_REASON_CODE_RE.fullmatch(expected_reason_code):
-        errors.append(
-            "expected_terminal_outcome expected_reason_code must be an upper snake-case "
-            f"reason code: {expected_reason_code or 'missing'}"
-        )
-    expected_evidence_schema = str(raw.get("expected_evidence_schema") or "").strip()
-    if not _EXPECTED_EVIDENCE_SCHEMA_RE.fullmatch(expected_evidence_schema):
-        errors.append(
-            "expected_terminal_outcome expected_evidence_schema must be a lower snake-case "
-            f"schema id: {expected_evidence_schema or 'missing'}"
-        )
-    expected_run_id = str(raw.get("expected_run_id") or "").strip()
-    if not _EXPECTED_RUN_ID_RE.fullmatch(expected_run_id):
-        errors.append(
-            "expected_terminal_outcome expected_run_id must be a non-empty run id "
-            f"(alphanumeric, underscore or dash): {expected_run_id or 'missing'}"
-        )
-    if errors:
-        return None, errors
-    normalized = {
-        "schema_version": EXPECTED_TERMINAL_OUTCOME_SCHEMA,
-        "contract_id": contract_id,
-        "expected_status": expected_status,
-        "expected_previous_status": expected_previous_status,
-        "expected_reason_code": expected_reason_code,
-        "expected_evidence_schema": expected_evidence_schema,
-        "expected_run_id": expected_run_id,
-    }
-    return normalized, []
-
-
-def _expectation_outcome_digest(expectation: dict[str, Any] | None) -> str | None:
-    if expectation is None:
-        return None
-    encoded = json.dumps(expectation, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _validate_run_terminal_success(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Run-class payloads must prove terminal target closure."""
-    if not isinstance(payload, dict):
-        return "failed", "run payload must be a JSON object", {}
-    if payload.get("ok") is False:
-        return "failed", "run payload reports ok=false", {}
-    statuses = _collect_status_fields(payload)
-    if not statuses:
-        return "failed", "run payload is missing a status/state field to prove target closure", {}
-    normalized = {name: value.upper() for name, value in statuses.items()}
-    failures = {name: value for name, value in normalized.items() if value in _RUN_STATUS_FAILURE}
-    if failures:
-        detail = ", ".join(f"{name}={value}" for name, value in sorted(failures.items()))
-        return "failed", f"run payload reports failure status: {detail}", {"statuses": normalized}
-    open_states = {name: value for name, value in normalized.items() if value not in _RUN_STATUS_SUCCESS}
-    if open_states:
-        detail = ", ".join(f"{name}={value}" for name, value in sorted(open_states.items()))
-        return (
-            "failed",
-            f"run payload has not reached terminal target closure: {detail}",
-            {"statuses": normalized},
-        )
-    return "passed", None, {"statuses": normalized}
-
-
-def _validate_run_terminal_evidence(
-    payload: Any,
-    *,
-    expectation: dict[str, Any] | None = None,
-) -> tuple[str, str | None, dict[str, Any]]:
-    """Bounded terminal-evidence payloads prove an exact expected terminal outcome.
-
-    Without a declared expectation this contract is exactly as strict as
-    ``run_terminal_success``: every status/state/verdict field in the payload
-    and its known containers is scanned, and failure-class or non-terminal
-    values fail closed. With a declared expectation the verdict passes only
-    when the subject run id, the run status, the evidence carrier schema, the
-    terminal reason code and the previous status all match the declaration
-    exactly; every mismatch fails closed with the specific drift.
-    """
-    if not isinstance(payload, dict):
-        return "failed", "run terminal-evidence payload must be a JSON object", {}
-    if payload.get("ok") is False:
-        return "failed", "run terminal-evidence payload reports ok=false", {}
-    if payload.get("schema_version") != SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA:
-        return (
-            "failed",
-            "run terminal-evidence payload schema mismatch: "
-            f"expected {SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA}, "
-            f"observed {payload.get('schema_version')!r}",
-            {},
-        )
-    run = payload.get("run")
-    if not isinstance(run, dict):
-        return "failed", "run terminal-evidence payload is missing the run object", {}
-    raw_status = run.get("status")
-    if not isinstance(raw_status, str) or not raw_status.strip():
-        return "failed", "run terminal-evidence payload is missing run.status", {}
-    status = raw_status.strip().upper()
-    facts: dict[str, Any] = {"statuses": {"run.status": status}}
-    if expectation is None:
-        statuses = _collect_status_fields(payload)
-        statuses.setdefault("run.status", status)
-        normalized = {name: value.upper() for name, value in statuses.items()}
-        facts = {"statuses": normalized}
-        failures = {name: value for name, value in normalized.items() if value in _RUN_STATUS_FAILURE}
-        if failures:
-            detail = ", ".join(f"{name}={value}" for name, value in sorted(failures.items()))
-            return "failed", f"run payload reports failure status: {detail}", facts
-        open_states = {name: value for name, value in normalized.items() if value not in _RUN_STATUS_SUCCESS}
-        if open_states:
-            detail = ", ".join(f"{name}={value}" for name, value in sorted(open_states.items()))
-            return (
-                "failed",
-                f"run payload has not reached terminal target closure: {detail}",
-                facts,
-            )
-        return "passed", None, facts
-    expected_status = str(expectation.get("expected_status") or "").strip().upper()
-    if expected_status not in _RUN_STATUS_FAILURE:
-        return (
-            "failed",
-            "declared expected terminal status is not failure-class: "
-            f"{expected_status or 'missing'}",
-            facts,
-        )
-    expected_run_id = str(expectation.get("expected_run_id") or "").strip()
-    observed_run_id = str(run.get("run_id") or "").strip()
-    facts["run_id"] = observed_run_id
-    if not expected_run_id or observed_run_id != expected_run_id:
-        return (
-            "failed",
-            "run id does not match the declared expected terminal outcome subject: "
-            f"observed={observed_run_id or 'missing'} expected={expected_run_id or 'missing'}",
-            facts,
-        )
-    if status != expected_status:
-        return (
-            "failed",
-            f"run status does not match the declared expected terminal status: "
-            f"run.status={status} expected={expected_status}",
-            facts,
-        )
-    carriers = run.get("terminal_evidence")
-    if not isinstance(carriers, list):
-        return (
-            "failed",
-            "run terminal-evidence payload is missing the terminal_evidence carrier list",
-            facts,
-        )
-    expected_schema = str(expectation.get("expected_evidence_schema") or "").strip()
-    carrier = next(
-        (
-            item
-            for item in carriers
-            if isinstance(item, dict) and str(item.get("schema_version") or "").strip() == expected_schema
-        ),
-        None,
-    )
-    if carrier is None:
-        return (
-            "failed",
-            f"expected terminal evidence carrier is absent: schema={expected_schema}",
-            facts,
-        )
-    facts["matched_evidence"] = {
-        "schema_version": expected_schema,
-        "reason_code": carrier.get("reason_code"),
-        "previous_status": carrier.get("previous_status"),
-        "terminal_status": carrier.get("terminal_status"),
-    }
-    expected_reason = str(expectation.get("expected_reason_code") or "").strip()
-    if str(carrier.get("reason_code") or "").strip() != expected_reason:
-        return (
-            "failed",
-            f"terminal evidence reason code does not match the declaration: "
-            f"observed={carrier.get('reason_code')!r} expected={expected_reason}",
-            facts,
-        )
-    expected_previous = str(expectation.get("expected_previous_status") or "").strip().upper()
-    observed_previous = str(carrier.get("previous_status") or "").strip().upper()
-    if observed_previous != expected_previous:
-        return (
-            "failed",
-            f"terminal evidence previous status does not match the declaration: "
-            f"observed={observed_previous or 'missing'} expected={expected_previous}",
-            facts,
-        )
-    observed_terminal = str(carrier.get("terminal_status") or "").strip().upper()
-    if observed_terminal != expected_status:
-        return (
-            "failed",
-            f"terminal evidence terminal status does not match the declaration: "
-            f"observed={observed_terminal or 'missing'} expected={expected_status}",
-            facts,
-        )
-    return "passed", None, facts
-
-
-def _structured_current_trade_date_blockers_are_clear(value: Any) -> bool:
-    """Accept only the scheduler's explicit, internally consistent CLEAR shape."""
-    if not isinstance(value, dict):
-        return False
-    return bool(
-        str(value.get("status") or "").strip().upper() == "CLEAR"
-        and type(value.get("blocker_count")) is int
-        and value["blocker_count"] == 0
-        and type(value.get("observed_blocker_count")) is int
-        and value["observed_blocker_count"] == 0
-        and value.get("blockers") == []
-        and value.get("execution_gate") is False
-        and value.get("truncated") is False
-    )
-
-
-def _scheduler_failure_markers(payload: Any) -> list[str]:
-    """Scan a scheduler/health-class payload for blocking or failure markers."""
-    markers: list[str] = []
-    queue: list[tuple[str, Any]] = [("", payload)]
-    visited = 0
-    while queue and visited < 400:
-        prefix, node = queue.pop(0)
-        if isinstance(node, dict):
-            visited += 1
-            for key, value in node.items():
-                name = f"{prefix}.{key}" if prefix else str(key)
-                lowered = str(key).lower()
-                if lowered == _SCHEDULER_CURRENT_TRADE_DATE_BLOCKERS_KEY:
-                    if isinstance(value, list):
-                        if value:
-                            markers.append(name)
-                    elif not _structured_current_trade_date_blockers_are_clear(value):
-                        markers.append(name)
-                elif lowered in _SCHEDULER_BLOCKING_LIST_KEYS and value:
-                    markers.append(name)
-                elif lowered in _SCHEDULER_BLOCKING_VALUE_KEYS and isinstance(value, dict) and value:
-                    markers.append(name)
-                elif lowered in _SCHEDULER_REASON_KEYS and isinstance(value, str) and value.strip():
-                    markers.append(name)
-                elif lowered in _STATUS_FIELD_NAMES and isinstance(value, str) and value.strip().upper() in _HEALTH_FAILURE_STATUSES:
-                    markers.append(f"{name}={value.strip()}")
-                if isinstance(value, (dict, list)) and len(str(prefix).split(".")) < 8:
-                    queue.append((name, value))
-        elif isinstance(node, list):
-            visited += 1
-            for index, value in enumerate(node):
-                if isinstance(value, (dict, list)):
-                    queue.append((f"{prefix}[{index}]", value))
-    return sorted(set(markers))
-
-
-def _validate_scheduler_status(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Scheduler/health-class payloads must prove ok=true without blockers."""
-    if not isinstance(payload, dict):
-        return "failed", "scheduler payload must be a JSON object", {}
-    if payload.get("ok") is not True:
-        if "ok" not in payload:
-            return "failed", "scheduler payload is missing the required ok=true envelope", {}
-        return "failed", "scheduler payload reports ok=false", {}
-    markers = _scheduler_failure_markers(payload)
-    if markers:
-        return (
-            "failed",
-            "scheduler payload exposes blocking/failure markers: " + ", ".join(markers[:8]),
-            {"markers": markers},
-        )
-    return "passed", None, {}
-
-
-def _validate_scheduler_verification_status(
-    payload: Any,
-    *,
-    url: str,
-) -> tuple[str, str | None, dict[str, Any]]:
-    """Bind a scoped scheduler verdict to the exact broker/run subject in the probe URL."""
-
-    verdict, reason, facts = _validate_scheduler_status(payload)
-    if verdict != "passed":
-        return verdict, reason, facts
-    scheduler = payload.get("scheduler") if isinstance(payload, dict) else None
-    if not isinstance(scheduler, dict):
-        return "failed", "scheduler verification payload is missing scheduler object", {}
-    if scheduler.get("schema_version") != SCHEDULER_VERIFICATION_STATUS_SCHEMA:
-        return "failed", "scheduler verification payload schema_version is invalid", {}
-    if scheduler.get("read_only") is not True:
-        return "failed", "scheduler verification payload is not read-only", {}
-    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
-    unknown_query = sorted(set(query) - {"broker_backend", "run_id"})
-    if unknown_query:
-        return "failed", f"scheduler verification probe has unknown subject query fields: {unknown_query}", {}
-    if not query or any(len(values) != 1 for values in query.values()):
-        return "failed", "scheduler verification probe must declare one value per broker/run subject field", {}
-    broker_backend = query.get("broker_backend", [None])[0]
-    run_id = query.get("run_id", [None])[0]
-    if broker_backend not in {None, "local_sim", "minqmt_sim"}:
-        return "failed", "scheduler verification probe broker_backend is invalid", {}
-    if run_id is not None and _SCHEDULER_VERIFICATION_RUN_ID_RE.fullmatch(run_id) is None:
-        return "failed", "scheduler verification probe run_id is invalid", {}
-    if broker_backend is None and run_id is None:
-        return "failed", "scheduler verification probe subject is missing", {}
-    scope = scheduler.get("verification_scope")
-    blockers = scheduler.get("current_trade_date_blockers")
-    blocker_scope = blockers.get("verification_scope") if isinstance(blockers, dict) else None
-    if not isinstance(scope, dict) or scope.get("schema_version") != SCHEDULER_VERIFICATION_SCOPE_SCHEMA:
-        return "failed", "scheduler verification response scope schema is invalid", {}
-    if scope.get("active") is not True:
-        return "failed", "scheduler verification response scope is not active", {}
-    observed_scope = {
-        "broker_backend": scope.get("broker_backend"),
-        "run_id": scope.get("run_id"),
-    }
-    if broker_backend is None and observed_scope["broker_backend"] not in {"local_sim", "minqmt_sim"}:
-        return "failed", "scheduler verification response resolved broker_backend is invalid", {}
-    expected_scope = {
-        "broker_backend": broker_backend or observed_scope["broker_backend"],
-        "run_id": run_id,
-    }
-    if observed_scope != expected_scope:
-        return (
-            "failed",
-            "scheduler verification response scope does not match probe subject: "
-            f"observed={observed_scope} expected={expected_scope}",
-            {"verification_scope": observed_scope},
-        )
-    if blocker_scope != scope:
-        return "failed", "scheduler verification blocker scope does not match response scope", {}
-    return "passed", None, {"verification_scope": observed_scope}
-
-
-def _validate_health_ok(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Health endpoints must report ok=true or an explicitly healthy status."""
-    if not isinstance(payload, dict):
-        return "failed", "health payload must be a JSON object", {}
-    if payload.get("ok") is False:
-        return "failed", "health payload reports ok=false", {}
-    status = payload.get("status") or payload.get("state")
-    if isinstance(status, str) and status.strip().upper() in _HEALTH_FAILURE_STATUSES:
-        return "failed", f"health payload reports unhealthy status: {status.strip()}", {}
-    errors = payload.get("errors")
-    if errors:
-        return "failed", "health payload reports errors", {}
-    if payload.get("ok") is True:
-        return "passed", None, {}
-    if isinstance(status, str) and status.strip().lower() in _HEALTH_SUCCESS_STATUSES:
-        return "passed", None, {"status": status.strip()}
-    return "failed", "health payload is missing ok=true or an explicitly healthy status", {}
-
-
-def _validate_collection_payload(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Collection endpoints must return a list or a non-error list envelope."""
-    if isinstance(payload, list):
-        return "passed", None, {"kind": "array", "size": len(payload)}
-    if not isinstance(payload, dict):
-        return "failed", "collection payload must be a JSON array or object", {}
-    if payload.get("ok") is False:
-        return "failed", "collection payload reports ok=false", {}
-    errors = payload.get("errors")
-    if errors:
-        return "failed", "collection payload reports errors", {}
-    for field in _STATUS_FIELD_NAMES:
-        value = payload.get(field)
-        if isinstance(value, str) and value.strip().upper() in _RUN_STATUS_FAILURE:
-            return "failed", f"collection payload reports failure {field}={value.strip()}", {}
-    for key in _COLLECTION_LIST_KEYS:
-        value = payload.get(key)
-        if isinstance(value, list):
-            return "passed", None, {"items_key": key, "size": len(value)}
-    if payload.get("ok") is True:
-        return "passed", None, {"ok": True}
-    for field in _STATUS_FIELD_NAMES:
-        value = payload.get(field)
-        if isinstance(value, str) and value.strip().lower() in _HEALTH_SUCCESS_STATUSES:
-            return "passed", None, {field: value.strip()}
-    return "failed", "collection payload is missing an items array or an explicit ok/success marker", {}
-
-
-def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Object endpoints must return a non-error object or array payload."""
-    if isinstance(payload, list):
-        return "passed", None, {"kind": "array", "size": len(payload)}
-    if not isinstance(payload, dict):
-        return "failed", "object payload must be a JSON object or array", {}
-    if payload.get("ok") is False:
-        return "failed", "object payload reports ok=false", {}
-    errors = payload.get("errors")
-    if errors:
-        return "failed", "object payload reports errors", {}
-    for field in _STATUS_FIELD_NAMES:
-        value = payload.get(field)
-        if isinstance(value, str) and value.strip().upper() in _RUN_STATUS_FAILURE:
-            return "failed", f"object payload reports failure {field}={value.strip()}", {}
-    return "passed", None, {"kind": "object"}
-
-
-def _validate_openapi_document(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """The OpenAPI document smoke must prove the app serves its route schema."""
-    if not isinstance(payload, dict):
-        return "failed", "openapi payload must be a JSON object", {}
-    version = payload.get("openapi")
-    if not isinstance(version, str) or not version.strip():
-        return "failed", "openapi payload is missing the openapi version field", {}
-    paths = payload.get("paths")
-    if not isinstance(paths, dict) or not paths:
-        return "failed", "openapi payload is missing a non-empty paths mapping", {}
-    return "passed", None, {"openapi": version.strip(), "paths": len(paths)}
-
-
-def _validate_correlation_status(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Correlation status reports idle/computing plus explicit refresh errors."""
-    if not isinstance(payload, dict):
-        return "failed", "correlation status payload must be a JSON object", {}
-    status = payload.get("status")
-    if not isinstance(status, str) or not status.strip():
-        return "failed", "correlation status payload is missing the status field", {}
-    normalized = status.strip()
-    if normalized.upper() in _HEALTH_FAILURE_STATUSES:
-        return "failed", f"correlation status payload reports failure status: {normalized}", {}
-    refresh_errors = payload.get("refresh_errors")
-    if refresh_errors:
-        count = len(refresh_errors) if isinstance(refresh_errors, list) else 1
-        return "failed", "correlation status payload reports refresh errors", {"refresh_errors": count}
-    if normalized.lower() in {"idle", "computing"}:
-        return "passed", None, {"status": normalized}
-    return "failed", f"correlation status payload reports unknown status: {normalized}", {}
-
-
-def _validate_factor_lifecycle_detail(
-    payload: Any,
-    *,
-    url: str,
-) -> tuple[str, str | None, dict[str, Any]]:
-    """Bind factor-library detail readback to an explicit lifecycle expectation."""
-
-    if not isinstance(payload, dict):
-        return "failed", "factor detail payload must be a JSON object", {}
-    if payload.get("ok") is not True or payload.get("domain") != "factor_library":
-        return "failed", "factor detail payload must report ok=true and domain=factor_library", {}
-    factor = payload.get("factor")
-    if not isinstance(factor, dict):
-        return "failed", "factor detail payload is missing factor", {}
-
-    parsed = urllib.parse.urlsplit(url)
-    path_match = re.fullmatch(r"/api/v1/factor-library/factors/([^/]+)", parsed.path)
-    if path_match is None:
-        return "failed", "factor detail probe path is invalid", {}
-    requested_name = urllib.parse.unquote(path_match.group(1)).strip()
-    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-
-    def required_query_value(name: str) -> tuple[str | None, str | None]:
-        values = query.get(name) or []
-        if len(values) != 1 or not str(values[0]).strip():
-            return None, f"factor detail probe requires exactly one non-empty {name} query value"
-        return str(values[0]).strip(), None
-
-    requested_source, query_error = required_query_value("source")
-    if query_error:
-        return "failed", query_error, {}
-    expected_available_text, query_error = required_query_value("expected_is_available")
-    if query_error:
-        return "failed", query_error, {}
-    expected_available_normalized = str(expected_available_text).lower()
-    if expected_available_normalized not in {"true", "false"}:
-        return "failed", "factor detail expected_is_available must be true or false", {}
-    expected_available = expected_available_normalized == "true"
-
-    factor_id = factor.get("id")
-    factor_name = factor.get("factor_name")
-    source = factor.get("source")
-    available = factor.get("is_available")
-    if type(factor_id) is not int or factor_id <= 0:
-        return "failed", "factor detail id must be a positive integer", {}
-    if not isinstance(factor_name, str) or factor_name.strip() != requested_name:
-        return "failed", "factor detail factor_name does not match the requested factor", {}
-    if not isinstance(source, str) or source.strip() != requested_source:
-        return "failed", "factor detail source does not match the requested source", {}
-    if type(available) is not bool:
-        return "failed", "factor detail is_available must be boolean", {}
-    if available is not expected_available:
-        return (
-            "failed",
-            f"factor detail availability mismatch: expected={expected_available} observed={available}",
-            {},
-        )
-
-    facts: dict[str, Any] = {
-        "factor_id": factor_id,
-        "factor_name": factor_name.strip(),
-        "source": source.strip(),
-        "is_available": available,
-    }
-    expected_reason_code_values = query.get("expected_disable_reason_code") or []
-    expected_batch_id_values = query.get("expected_disable_batch_id") or []
-    if expected_available:
-        if expected_reason_code_values or expected_batch_id_values:
-            return "failed", "available factor detail must not declare disable expectations", facts
-        return "passed", None, facts
-
-    expected_reason_code, query_error = required_query_value("expected_disable_reason_code")
-    if query_error:
-        return "failed", query_error, facts
-    expected_batch_id, query_error = required_query_value("expected_disable_batch_id")
-    if query_error:
-        return "failed", query_error, facts
-    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,127}", str(expected_reason_code)):
-        return "failed", "factor detail expected_disable_reason_code is invalid", facts
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.\-]{2,127}", str(expected_batch_id)):
-        return "failed", "factor detail expected_disable_batch_id is invalid", facts
-
-    disable_reason = factor.get("disable_reason")
-    disable_batch_id = factor.get("disable_batch_id")
-    disable_at = factor.get("disable_at")
-    rehab_candidate = factor.get("rehab_candidate")
-    if not isinstance(disable_reason, str) or not disable_reason.strip():
-        return "failed", "disabled factor detail is missing disable_reason", facts
-    reason_prefix = f"{expected_reason_code}:"
-    if not disable_reason.strip().startswith(reason_prefix):
-        return "failed", "factor detail disable reason code does not match the declared expectation", facts
-    observed_reason_code = expected_reason_code
-    if not isinstance(disable_batch_id, str) or disable_batch_id.strip() != expected_batch_id:
-        return "failed", "factor detail disable_batch_id does not match the declared expectation", facts
-    if not isinstance(disable_at, str) or not disable_at.strip():
-        return "failed", "disabled factor detail is missing disable_at", facts
-    try:
-        parsed_disable_at = datetime.fromisoformat(disable_at.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return "failed", "factor detail disable_at must be a timezone-aware timestamp", facts
-    if parsed_disable_at.tzinfo is None or parsed_disable_at.utcoffset() is None:
-        return "failed", "factor detail disable_at must be a timezone-aware timestamp", facts
-    if rehab_candidate is not False:
-        return "failed", "quarantined factor detail must report rehab_candidate=false", facts
-
-    facts.update(
-        {
-            "disable_reason_code": observed_reason_code,
-            "disable_batch_id": disable_batch_id.strip(),
-            "disable_at": parsed_disable_at.isoformat(),
-            "rehab_candidate": rehab_candidate,
-        }
-    )
-    return "passed", None, facts
-
-
-_LOCALSIM_CUTOVER_REQUIRED_RELATIONS = frozenset({
-    "paper_v2.simulation_account_v1",
-    "paper_v2.legacy_localsim_account_lineage_v1",
-    "paper_v2.localsim_replay_job_v1",
-    "paper_v2.localsim_runtime_profile_v1",
-    "paper_v2.localsim_runtime_profile_version_v1",
-    "paper_v2.simulation_ledger_scope_v1",
-    "strategy_pkg.strategy_runtime_release",
-    "paper_v2.simulation_release_binding",
-    "paper_v2.simulation_daily_run",
-    "paper_v2.run",
-    "paper_v2.intraday_snapshots",
-})
-
-
-def _validate_localsim_cutover_readiness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Require the complete LocalSIM cutover authority to report a safe boundary."""
-    if not isinstance(payload, dict):
-        return "failed", "LocalSIM cutover-readiness payload must be a JSON object", {}
-    if payload.get("ok") is not True:
-        return "failed", "LocalSIM cutover-readiness payload must report ok=true", {}
-    readiness = payload.get("readiness")
-    if not isinstance(readiness, dict):
-        return "failed", "LocalSIM cutover-readiness payload is missing readiness", {}
-    if readiness.get("schema_version") != "localsim_cutover_readiness_v1":
-        return "failed", "LocalSIM cutover-readiness schema_version is invalid", {}
-    checked_at = readiness.get("checked_at")
-    if not isinstance(checked_at, str) or not checked_at.strip():
-        return "failed", "LocalSIM cutover-readiness checked_at must be a timezone-aware timestamp", {}
-    try:
-        parsed_checked_at = datetime.fromisoformat(checked_at.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return "failed", "LocalSIM cutover-readiness checked_at must be a timezone-aware timestamp", {}
-    if parsed_checked_at.tzinfo is None:
-        return "failed", "LocalSIM cutover-readiness checked_at must be a timezone-aware timestamp", {}
-
-    ready = readiness.get("ready")
-    blockers = readiness.get("blockers")
-    if type(ready) is not bool:
-        return "failed", "LocalSIM cutover-readiness ready must be boolean", {}
-    if not isinstance(blockers, list) or any(not isinstance(item, str) or not item.strip() for item in blockers):
-        return "failed", "LocalSIM cutover-readiness blockers must be a list of non-empty strings", {}
-    if ready != (not blockers):
-        return "failed", "LocalSIM cutover-readiness ready and blockers are inconsistent", {}
-
-    relation_presence = readiness.get("relation_presence")
-    if (
-        not isinstance(relation_presence, dict)
-        or not relation_presence
-        or any(not isinstance(name, str) or type(present) is not bool for name, present in relation_presence.items())
-    ):
-        return "failed", "LocalSIM cutover-readiness relation_presence is invalid", {}
-    relation_names = set(relation_presence)
-    if relation_names != _LOCALSIM_CUTOVER_REQUIRED_RELATIONS:
-        missing = sorted(_LOCALSIM_CUTOVER_REQUIRED_RELATIONS - relation_names)
-        unexpected = sorted(relation_names - _LOCALSIM_CUTOVER_REQUIRED_RELATIONS)
-        return (
-            "failed",
-            f"LocalSIM cutover-readiness relation_presence keys are invalid: missing={missing}, unexpected={unexpected}",
-            {},
-        )
-    missing_relations = sorted(name for name, present in relation_presence.items() if not present)
-
-    count_fields = (
-        "runtime_fk_count",
-        "orphan_ledger_scope_count",
-        "invalid_ledger_scope_count",
-        "legacy_active_session_count",
-        "legacy_auto_run_count",
-        "legacy_sentinel_count",
-        "in_flight_economic_run_count",
-    )
-    counts: dict[str, int] = {}
-    for field in count_fields:
-        value = readiness.get(field)
-        if type(value) is not int or value < 0:
-            return "failed", f"LocalSIM cutover-readiness {field} must be a non-negative integer", {}
-        counts[field] = value
-
-    retained_accounts = readiness.get("retained_legacy_account_ids")
-    missing_lineages = readiness.get("missing_lineage_account_ids")
-    for field, value in (
-        ("retained_legacy_account_ids", retained_accounts),
-        ("missing_lineage_account_ids", missing_lineages),
-    ):
-        if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
-            return "failed", f"LocalSIM cutover-readiness {field} must be a list of non-empty strings", {}
-
-    facts = {
-        "ready": ready,
-        "checked_at": parsed_checked_at.isoformat(),
-        "blockers": list(blockers),
-        "relation_count": len(relation_presence),
-        "missing_relations": missing_relations,
-        **counts,
-        "retained_legacy_account_count": len(retained_accounts),
-        "missing_lineage_account_count": len(missing_lineages),
-    }
-    invariant_failures: list[str] = []
-    if missing_relations:
-        invariant_failures.append(f"missing_relations={missing_relations}")
-    if counts["runtime_fk_count"] != 2:
-        invariant_failures.append(f"runtime_fk_count={counts['runtime_fk_count']}")
-    for field in count_fields[1:]:
-        if counts[field]:
-            invariant_failures.append(f"{field}={counts[field]}")
-    if missing_lineages:
-        invariant_failures.append(f"missing_lineage_account_count={len(missing_lineages)}")
-    if blockers:
-        invariant_failures.append(f"blockers={blockers}")
-    if invariant_failures:
-        return "failed", "LocalSIM cutover is not ready: " + "; ".join(invariant_failures), facts
-    return "passed", None, facts
+# Keep historical workflow entry points; implementation lives in one indexable module.
+BUSINESS_SMOKE_SEMANTIC_SCHEMA = _runtime_semantics.BUSINESS_SMOKE_SEMANTIC_SCHEMA
+SCHEDULER_VERIFICATION_STATUS_SCHEMA = _runtime_semantics.SCHEDULER_VERIFICATION_STATUS_SCHEMA
+SCHEDULER_VERIFICATION_SCOPE_SCHEMA = _runtime_semantics.SCHEDULER_VERIFICATION_SCOPE_SCHEMA
+_SCHEDULER_VERIFICATION_RUN_ID_RE = _runtime_semantics._SCHEDULER_VERIFICATION_RUN_ID_RE
+EXPECTED_TERMINAL_OUTCOME_SCHEMA = _runtime_semantics.EXPECTED_TERMINAL_OUTCOME_SCHEMA
+SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA = _runtime_semantics.SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA
+_EXPECTATION_CAPABLE_CONTRACT_IDS = _runtime_semantics._EXPECTATION_CAPABLE_CONTRACT_IDS
+_EXPECTED_TERMINAL_OUTCOME_FIELDS = _runtime_semantics._EXPECTED_TERMINAL_OUTCOME_FIELDS
+_EXPECTED_REASON_CODE_RE = _runtime_semantics._EXPECTED_REASON_CODE_RE
+_EXPECTED_EVIDENCE_SCHEMA_RE = _runtime_semantics._EXPECTED_EVIDENCE_SCHEMA_RE
+_EXPECTED_RUN_ID_RE = _runtime_semantics._EXPECTED_RUN_ID_RE
+_RUN_STATUS_SUCCESS = _runtime_semantics._RUN_STATUS_SUCCESS
+_RUN_STATUS_FAILURE = _runtime_semantics._RUN_STATUS_FAILURE
+_HEALTH_FAILURE_STATUSES = _runtime_semantics._HEALTH_FAILURE_STATUSES
+_HEALTH_SUCCESS_STATUSES = _runtime_semantics._HEALTH_SUCCESS_STATUSES
+_CONTAINER_KEYS = _runtime_semantics._CONTAINER_KEYS
+_STATUS_FIELD_NAMES = _runtime_semantics._STATUS_FIELD_NAMES
+_COLLECTION_LIST_KEYS = _runtime_semantics._COLLECTION_LIST_KEYS
+_SCHEDULER_BLOCKING_LIST_KEYS = _runtime_semantics._SCHEDULER_BLOCKING_LIST_KEYS
+_SCHEDULER_CURRENT_TRADE_DATE_BLOCKERS_KEY = _runtime_semantics._SCHEDULER_CURRENT_TRADE_DATE_BLOCKERS_KEY
+_SCHEDULER_BLOCKING_VALUE_KEYS = _runtime_semantics._SCHEDULER_BLOCKING_VALUE_KEYS
+_SCHEDULER_REASON_KEYS = _runtime_semantics._SCHEDULER_REASON_KEYS
+_collect_status_fields = _runtime_semantics._collect_status_fields
+_normalize_expected_terminal_outcome = _runtime_semantics._normalize_expected_terminal_outcome
+_expectation_outcome_digest = _runtime_semantics._expectation_outcome_digest
+_validate_run_terminal_success = _runtime_semantics._validate_run_terminal_success
+_validate_run_terminal_evidence = _runtime_semantics._validate_run_terminal_evidence
+_structured_current_trade_date_blockers_are_clear = _runtime_semantics._structured_current_trade_date_blockers_are_clear
+_scheduler_failure_markers = _runtime_semantics._scheduler_failure_markers
+_validate_scheduler_status = _runtime_semantics._validate_scheduler_status
+_validate_scheduler_verification_status = _runtime_semantics._validate_scheduler_verification_status
+_validate_health_ok = _runtime_semantics._validate_health_ok
+_validate_collection_payload = _runtime_semantics._validate_collection_payload
+_validate_tdx_raw_kline = _runtime_semantics._validate_tdx_raw_kline
+_validate_object_liveness = _runtime_semantics._validate_object_liveness
+_validate_pipeline_overview = _runtime_semantics._validate_pipeline_overview
+_validate_advisory_entry_price_status = _runtime_semantics._validate_advisory_entry_price_status
+_validate_advisory_returns = _runtime_semantics._validate_advisory_returns
+_validate_advisory_trading_day_defaults = _runtime_semantics._validate_advisory_trading_day_defaults
+_validate_advisory_historical_operations = _runtime_semantics._validate_advisory_historical_operations
+_validate_advisory_sector_entry_original_list = _runtime_semantics._validate_advisory_sector_entry_original_list
+_validate_hmm_rotation_l2_overview = _runtime_semantics._validate_hmm_rotation_l2_overview
+_validate_hmm_daily_coefficient_jobs = _runtime_semantics._validate_hmm_daily_coefficient_jobs
+_validate_hmm_coefficient_extension = _runtime_semantics._validate_hmm_coefficient_extension
+_validate_hmm_workers = _runtime_semantics._validate_hmm_workers
+_validate_hmm_risk_l2_overview = _runtime_semantics._validate_hmm_risk_l2_overview
+_validate_research_pipeline_health = _runtime_semantics._validate_research_pipeline_health
+_validate_hmm_research_records = _runtime_semantics._validate_hmm_research_records
+_validate_selection_artifacts = _runtime_semantics._validate_selection_artifacts
+_validate_qe_dataset_profile = _runtime_semantics._validate_qe_dataset_profile
+_validate_openapi_document = _runtime_semantics._validate_openapi_document
+_validate_correlation_status = _runtime_semantics._validate_correlation_status
+_validate_factor_metrics_results = _runtime_semantics._validate_factor_metrics_results
+_validate_factor_lifecycle_detail = _runtime_semantics._validate_factor_lifecycle_detail
+_LOCALSIM_CUTOVER_REQUIRED_RELATIONS = _runtime_semantics._LOCALSIM_CUTOVER_REQUIRED_RELATIONS
+_validate_localsim_cutover_readiness = _runtime_semantics._validate_localsim_cutover_readiness
+_validate_local_data_freshness = _runtime_semantics._validate_local_data_freshness
+_validate_monthly_release_ready = _runtime_semantics._validate_monthly_release_ready
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/simulation-runtime/localsim/replays/[^/]+/recovery$"),
+     "localsim_replay_recovery", _runtime_semantics._validate_localsim_replay_recovery),
+    (re.compile(r"^/api/v1/simulation-runtime/localsim/workbench/overview$"),
+     "localsim_workbench_valuation", _runtime_semantics._validate_localsim_workbench),
+    (re.compile(r"^/api/v1/advisory/trading-days/defaults$"),
+     "advisory_calendar_defaults_only", _validate_advisory_trading_day_defaults),
+    (re.compile(r"^/api/v1/advisory/historical-range-batches/[^/]+/operations$"),
+     "advisory_historical_operation_status_readback", _validate_advisory_historical_operations),
+    (re.compile(r"^/api/v1/strategy-packages/[^/]+/selection-artifacts$"),
+     "strategy_package_selection_artifact_readback", _validate_selection_artifacts),
+    (re.compile(r"^/api/v1/hmm-training/snapshots/[^/]+/daily-coefficients/jobs$"),
+     "hmm_database_daily_coefficient_jobs", _validate_hmm_daily_coefficient_jobs),
+    (re.compile(r"^/api/v1/hmm-training/configs/[^/]+/coefficient-extension$"),
+     "hmm_frozen_coefficient_extension", _validate_hmm_coefficient_extension),
+    (re.compile(r"^/api/kline-all/tdx$"), "tdx_raw_kline_facts", _validate_tdx_raw_kline),
+    (re.compile(r"^/api/v1/hmm-evolution/workers$"), "hmm_worker_liveness", _validate_hmm_workers),
+    (re.compile(r"^/api/v1/hmm-risk/risk-l2/overview$"), "hmm_risk_l2_overview", _validate_hmm_risk_l2_overview),
+    (re.compile(r"^/api/v1/research-pipeline/health$"), "research_pipeline_readiness_only", _validate_research_pipeline_health),
+    (re.compile(r"^/api/v1/research-pipeline/experiments/[^/]+/backtest-records$"), "hmm_research_records", _validate_hmm_research_records),
+    (re.compile(r"^/api/v1/qlib/monthly-releases/dmr_[0-9a-f]{32}$"), "monthly_release_ready", _validate_monthly_release_ready),
+    (re.compile(r"^/api/v1/local-data/(?:overview|data-stats)$"), "local_data_freshness", _validate_local_data_freshness),
     (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/qe-archive/health$"), "health_ok", _validate_health_ok),
     (re.compile(r"^/api/v1/simulation-runtime/scheduler/status$"), "scheduler_status", _validate_scheduler_status),
@@ -3613,8 +3531,24 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
         _validate_localsim_cutover_readiness,
     ),
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
+    (re.compile(r"^/api/v1/advisory/programs/[^/]+/sector-entry-price$"),
+     "advisory_sector_entry_original_list", _validate_advisory_sector_entry_original_list),
+    (re.compile(r"^/api/v1/advisory/programs/[^/]+/returns$"),
+     "advisory_returns_metrics_v2", _validate_advisory_returns),
+    (
+        re.compile(r"^/api/v1/advisory/programs/[^/]+/entry-price/status$"),
+        "advisory_entry_price_status",
+        _validate_advisory_entry_price_status,
+    ),
+    (
+        re.compile(r"^/api/v1/hmm-risk/rotation-l2/overview$"),
+        "hmm_rotation_l2_overview",
+        _validate_hmm_rotation_l2_overview,
+    ),
+    (re.compile(r"^/api/v1/quantevolver/dataset-profile$"), "qe_dataset_profile", _validate_qe_dataset_profile),
     (re.compile(r"^/api/v1/position-timing/intents$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/correlations/status$"), "correlation_status", _validate_correlation_status),
+    (re.compile(r"^/api/v1/factor-metrics/results$"), "factor_metrics_results", _validate_factor_metrics_results),
     (
         re.compile(r"^/api/v1/factor-library/factors/[^/]+$"),
         "factor_lifecycle_detail",
@@ -3639,6 +3573,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/ingestion/schedule$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/data-stats$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/local-data/schedules$"), "collection", _validate_collection_payload),
+    (re.compile(r"^/api/v1/local-data/targets$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/dispatch/nodes$"), "collection", _validate_collection_payload),
     (re.compile(r"^/api/v1/quantevolver/evolution/tasks/[^/]+/.+$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/advisory/historical-range-options$"), "object_liveness", _validate_object_liveness),
@@ -3647,6 +3582,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/qlib/config$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/runtime-contracts/[^/]+$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/validation/plans/[^/]+$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/api/v1/validation/overview/snapshot$"), "pipeline_overview_observations", _validate_pipeline_overview),
     (re.compile(r"^/openapi\.json$"), "openapi_document", _validate_openapi_document),
 )
 
@@ -3739,7 +3675,25 @@ def _evaluate_business_smoke_semantics(
             }
             return schema, semantic
         verdict, reason, facts = validator(payload, expectation=expectation)
-    elif contract_id in {"scheduler_verification_status", "factor_lifecycle_detail"}:
+    elif contract_id in {
+        "strategy_package_selection_artifact_readback",
+        "hmm_worker_liveness",
+        "hmm_risk_l2_overview",
+        "hmm_research_records",
+        "scheduler_verification_status",
+        "factor_lifecycle_detail",
+        "factor_metrics_results",
+        "hmm_rotation_l2_overview",
+        "hmm_database_daily_coefficient_jobs",
+        "hmm_frozen_coefficient_extension",
+        "advisory_entry_price_status",
+        "advisory_sector_entry_original_list",
+        "advisory_returns_metrics_v2",
+        "advisory_calendar_defaults_only",
+        "advisory_historical_operation_status_readback",
+        "local_data_freshness",
+        "monthly_release_ready",
+    }:
         verdict, reason, facts = validator(payload, url=url)
     else:
         verdict, reason, facts = validator(payload)
@@ -3965,9 +3919,13 @@ def build_post_restart_verify(
 ) -> dict[str, Any]:
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
+    recorded_merge = str(record.get("fix_commit") or record.get("merge_commit") or "").strip()
     contract = build_runtime_contract(
         record=record,
-        changed_files=resolve_record_runtime_changed_files(record),
+        changed_files=(
+            _merged_commit_changed_files(recorded_merge)
+            if recorded_merge else resolve_record_runtime_changed_files(record)
+        ),
         fresh_process_evidence=flow._as_list((record.get("runtime_contract") or {}).get("fresh_process_evidence"))
         if isinstance(record.get("runtime_contract"), dict)
         else [],
@@ -3986,6 +3944,8 @@ def build_post_restart_verify(
     if not blocking:
         if probe_mode == _DATASET_RELEASE_WORKER_HEARTBEAT_MODE:
             results = _read_dataset_release_worker_heartbeat_probes(target, timeout_seconds)
+        elif probe_mode == _MONTHLY_RELEASE_WORKER_PROCESS_MODE:
+            results = _read_monthly_release_worker_process_probes(target, timeout_seconds)
         else:
             for name in ("health_ref", "identity_ref", "business_smoke_ref"):
                 results.append(
@@ -4116,7 +4076,7 @@ def _git_fetch_with_transport_retry(
     attempts: int = 2,
     timeout: int = 60,
 ) -> str:
-    """Retry only transport-class failures for an idempotent git fetch."""
+    """Bound transport/remote-ref CAS retries to this idempotent fetch only."""
 
     total = max(1, int(attempts))
     for index in range(total):
@@ -4124,7 +4084,12 @@ def _git_fetch_with_transport_retry(
         if result.get("ok"):
             return str(result.get("stdout") or "").strip()
         message = str(result.get("stderr") or result.get("stdout") or "git fetch failed")
-        if not _looks_like_github_transport_failure(message) or index + 1 >= total:
+        ref_race = re.search(
+            r"(?:fetching ref|cannot lock ref) ['\"]?refs/remotes/[^'\"\s:]+['\"]?(?: failed)?: "
+            r"(?:incorrect old value provided|is at [0-9a-f]+ but expected [0-9a-f]+)",
+            message,
+        ) is not None
+        if not (ref_race or _looks_like_github_transport_failure(message)) or index + 1 >= total:
             raise WorkflowError(message)
         time.sleep(0.5 * (index + 1))
     raise AssertionError("unreachable git fetch retry state")
@@ -4316,9 +4281,25 @@ def _run_read_command_with_retry(
 
 def _subprocess_env(args: list[str]) -> dict[str, str] | None:
     """Return a safe environment for workflow child processes."""
-    if not args or Path(str(args[0])).name.lower() != "git":
+    executable = Path(str(args[0])).name.lower() if args else ""
+    if executable not in {"git", "git.exe", "gh", "gh.exe"}:
         return None
     env = os.environ.copy()
+    if executable in {"gh", "gh.exe"}:
+        if platform.system() != "Windows" or env.get("AISTOCK_GITHUB_API_DIRECT") == "0":
+            return env
+        # GitHub API must not inherit the AI residential proxy. Keep all other
+        # destinations and proxy credentials unchanged, including model APIs.
+        bypass = list(dict.fromkeys(
+            item.strip()
+            for key in ("NO_PROXY", "no_proxy")
+            for item in env.get(key, "").split(",")
+            if item.strip()
+        ))
+        if "api.github.com" not in {item.lower() for item in bypass}:
+            bypass.append("api.github.com")
+        env["NO_PROXY"] = env["no_proxy"] = ",".join(bypass)
+        return env
     shell = env.get("SHELL", "")
     if os.name == "nt" and shell:
         shell_name = Path(shell).name.lower()
@@ -4575,6 +4556,7 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
             {
                 "event_count": 0,
                 "known_duration_seconds": 0.0,
+                "recorded_duration_event_count": 0,
                 "inferred_since_previous_seconds": 0.0,
                 "inferred_until_next_seconds": 0.0,
                 "first_at": event.get("timestamp"),
@@ -4584,8 +4566,9 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         bucket["event_count"] += 1
         bucket["last_at"] = event.get("timestamp")
         duration = event.get("duration_seconds")
-        if isinstance(duration, (int, float)):
+        if isinstance(duration, (int, float)) and not isinstance(duration, bool) and math.isfinite(duration) and duration >= 0:
             bucket["known_duration_seconds"] = round(float(bucket["known_duration_seconds"]) + float(duration), 3)
+            bucket["recorded_duration_event_count"] += 1
             known_duration += float(duration)
         if ts and previous_ts and previous_phase:
             delta = max(0.0, (ts - previous_ts).total_seconds())
@@ -4611,12 +4594,16 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         1 for event in events if (event.get("tooling") or {}).get("rtk_used") == "not_recorded"
     )
 
-    queue_seconds = _phase_seconds(phases, "discovered")
-    context_seconds = _phase_seconds(phases, "context_ready")
-    active_fix_seconds = _phase_seconds(phases, "fix_in_progress") + _phase_seconds(phases, "fix_applied") + context_seconds
-    local_validation_seconds = _phase_seconds(phases, "validation_planned") + _phase_seconds(phases, "validation_running") + _phase_seconds(phases, "validation_passed")
-    pr_ci_seconds = _phase_seconds(phases, "pr_opened") + _phase_seconds(phases, "ci_running") + _phase_seconds(phases, "ci_green") + _phase_seconds(phases, "gh_pr_create")
-    merge_aftercare_seconds = sum(_phase_seconds(phases, phase) for phase in ("merged", "close_synced", "cleanup_done", "complete", "close_sync_apply", "close_sync_persisted"))
+    def known_seconds(*names: str) -> float | None:
+        values = [_phase_seconds(phases, name) for name in names]
+        observed = [value for value in values if value is not None]
+        return round(sum(observed), 3) if observed else None
+
+    queue_seconds = known_seconds("discovered")
+    active_fix_seconds = known_seconds("fix_in_progress", "fix_applied")
+    local_validation_seconds = known_seconds("validation_planned", "validation_running", "validation_passed")
+    pr_ci_seconds = known_seconds("pr_opened", "ci_running", "ci_green", "gh_pr_create")
+    merge_aftercare_seconds = known_seconds("merged", "close_synced", "cleanup_done", "complete", "close_sync_apply", "close_sync_persisted")
 
     return {
         "schema_version": "aistock_issue_workflow_timing_summary_v1",
@@ -4627,12 +4614,16 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         "known_duration_seconds": round(known_duration, 3),
         "inferred_elapsed_seconds": round(inferred_duration, 3),
         "phases": phases,
-        "queue_seconds": round(queue_seconds, 3) if queue_seconds else None,
-        "active_fix_seconds": round(active_fix_seconds, 3) if active_fix_seconds else None,
-        "local_validation_seconds": round(local_validation_seconds, 3) if local_validation_seconds else None,
-        "pr_ci_seconds": round(pr_ci_seconds, 3) if pr_ci_seconds else None,
-        "merge_aftercare_seconds": round(merge_aftercare_seconds, 3) if merge_aftercare_seconds else None,
-        "code_repair_seconds": round(active_fix_seconds, 3) if active_fix_seconds else None,
+        "queue_seconds": queue_seconds,
+        "active_fix_seconds": active_fix_seconds,
+        "local_validation_seconds": local_validation_seconds,
+        "pr_ci_seconds": pr_ci_seconds,
+        "merge_aftercare_seconds": merge_aftercare_seconds,
+        "code_repair_seconds": active_fix_seconds,
+        "measurement_scope": "recorded_commands_only; null means not_recorded",
+        "measurement_status": {name: ("recorded_command_time" if value is not None else "not_recorded")
+                               for name, value in (("active_fix", active_fix_seconds), ("local_validation", local_validation_seconds),
+                                                   ("pr_ci", pr_ci_seconds), ("merge_aftercare", merge_aftercare_seconds))},
         "rtk_telemetry": {
             "used_event_count": rtk_used_count,
             "fallback_event_count": rtk_fallback_count,
@@ -4642,7 +4633,7 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         "notes": [
             "known_duration_seconds comes from command-level telemetry when available",
             "inferred_elapsed_seconds is wall-clock distance between recorded events and may include human/CI wait time",
-            "code_repair_seconds is an upper bound between automatic repair-start and finish-plan boundaries and may include local validation run before finish",
+            "phase execution fields sum observed command durations only; inferred event gaps never count as development or testing",
         ],
     }
 
@@ -4664,6 +4655,7 @@ def _augment_timing_with_issue_record(timing: dict[str, Any], state: dict[str, A
         queue_seconds = round((started_at - created_at).total_seconds(), 3)
         existing = float(timing.get("queue_seconds") or 0)
         timing["queue_seconds"] = max(existing, queue_seconds)
+        timing["queue_measurement_scope"] = "BUG creation to first workflow event; wall elapsed, not command time"
         timing["issue_created_at"] = record.get("created_at") or record.get("first_seen_at")
         timing["active_work_started_at"] = timing.get("started_at")
         timing.setdefault("notes", []).append(
@@ -4672,14 +4664,13 @@ def _augment_timing_with_issue_record(timing: dict[str, Any], state: dict[str, A
     return timing
 
 
-def _phase_seconds(phases: dict[str, Any], phase: str) -> float:
+def _phase_seconds(phases: dict[str, Any], phase: str) -> float | None:
     item = phases.get(phase)
     if not isinstance(item, dict):
-        return 0.0
-    return max(
-        float(item.get("known_duration_seconds") or 0),
-        float(item.get("inferred_until_next_seconds") or item.get("inferred_since_previous_seconds") or 0),
-    )
+        return None
+    if not item.get("recorded_duration_event_count"):
+        return None
+    return float(item.get("known_duration_seconds") or 0)
 
 
 def _phase_cost_table(timing: dict[str, Any]) -> list[dict[str, Any]]:
@@ -5362,23 +5353,41 @@ def _create_github_issue_with_recovery(
     labels: list[str],
     cwd: Path,
 ) -> dict[str, Any]:
-    result = _run_command(
-        [
-            "gh",
-            "issue",
-            "create",
-            "--repo",
-            GITHUB_REPO,
-            "--title",
-            title,
-            "--body-file",
-            str(body_path),
-            "--label",
-            _csv_arg(labels),
-        ],
-        cwd=cwd,
-        timeout=120,
-    )
+    def create(issue_labels: list[str]) -> dict[str, Any]:
+        return _run_command(
+            [
+                "gh",
+                "issue",
+                "create",
+                "--repo",
+                GITHUB_REPO,
+                "--title",
+                title,
+                "--body-file",
+                str(body_path),
+                "--label",
+                _csv_arg(issue_labels),
+            ],
+            cwd=cwd,
+            timeout=120,
+        )
+
+    result = create(labels)
+    warnings: list[str] = []
+    if not result.get("ok"):
+        message = str(result.get("stderr") or result.get("stdout") or "")
+        missing_module = re.search(
+            r"could not add label:\s*['\"]?(module:([a-z0-9_.-]+))['\"]?\s+not found",
+            message,
+            re.IGNORECASE,
+        )
+        if missing_module and "." in missing_module.group(2):
+            missing_label = missing_module.group(1)
+            parent_label = f"module:{missing_module.group(2).rsplit('.', 1)[0]}"
+            fallback_labels = [parent_label if label == missing_label else label for label in labels]
+            result = create(flow._unique_strings(fallback_labels))
+            if result.get("ok"):
+                warnings.append(f"GitHub label {missing_label} was unavailable; used {parent_label}")
     issue_url = str(result.get("stdout") or "").splitlines()[-1].strip() if result.get("ok") else ""
     issue_number = _github_issue_number_from_url(issue_url) if issue_url else None
     if result.get("ok") and issue_url and issue_number:
@@ -5387,13 +5396,14 @@ def _create_github_issue_with_recovery(
             "url": issue_url,
             "number": issue_number,
             "recovered_after_transport_error": False,
-            "warnings": [],
+            "warnings": warnings,
         }
 
     message = str(result.get("stderr") or result.get("stdout") or "gh issue create failed")
     uncertain_remote_result = bool(result.get("ok")) or _looks_like_github_transport_failure(message)
     if uncertain_remote_result:
-        recovered, warnings = _github_bug_issue_for_id(bug_id)
+        recovered, recovery_warnings = _github_bug_issue_for_id(bug_id)
+        warnings.extend(recovery_warnings)
         if recovered is not None and str(recovered.get("title") or "").strip() == title.strip():
             recovered_number = recovered.get("github_issue_number")
             recovered_url = str(recovered.get("source") or _github_issue_url(recovered_number))
@@ -6141,18 +6151,36 @@ def _refresh_reused_close_sync_worktree(
     worktree: Path,
     branch: str,
     label: str,
+    recoverable_bug_id: str | None = None,
+    recoverable_issue_json: Path | None = None,
+    recoverable_source_pr_url: str | None = None,
+    recoverable_merge_commit: str | None = None,
 ) -> tuple[dict[str, Any], str]:
     git = _git_snapshot(worktree)
     if not git.get("ok"):
         raise WorkflowError(f"target {label} worktree is not a git checkout: {worktree}")
-    if git.get("dirty"):
-        raise WorkflowError(f"target {label} worktree is dirty: {worktree}")
     if git.get("branch") != branch:
         raise WorkflowError(
             f"target {label} worktree branch mismatch: expected={branch} actual={git.get('branch')}"
         )
     head = str(git.get("head") or "")
     origin_main = str(git.get("origin_main") or "")
+    if git.get("dirty"):
+        recovery = _recoverable_close_sync_dirty_record(
+            worktree,
+            recoverable_bug_id,
+            recoverable_issue_json,
+            source_pr_url=recoverable_source_pr_url,
+            merge_commit=recoverable_merge_commit,
+        )
+        if not recovery:
+            raise WorkflowError(f"target {label} worktree is dirty: {worktree}")
+        if head and origin_main and head != origin_main:
+            behind = _run_command(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], cwd=worktree)
+            if not behind.get("ok"):
+                raise WorkflowError(f"target {label} worktree diverged from origin/main: {worktree}")
+        git["recoverable_dirty_record"] = recovery
+        return git, "recoverable_dirty_bug_json"
     if not head or not origin_main or head == origin_main:
         return git, "current"
     behind = _run_command(["git", "merge-base", "--is-ancestor", "HEAD", "origin/main"], cwd=worktree)
@@ -6168,7 +6196,66 @@ def _refresh_reused_close_sync_worktree(
     raise WorkflowError(f"target {label} worktree diverged from origin/main: {worktree}")
 
 
-def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: bool) -> dict[str, Any]:
+def _recoverable_close_sync_dirty_record(
+    worktree: Path,
+    bug_id: str | None,
+    issue_json: Path | None,
+    *,
+    source_pr_url: str | None = None,
+    merge_commit: str | None = None,
+) -> dict[str, Any] | None:
+    canonical_bug_id = str(bug_id or "").strip().upper()
+    dirty = [path.replace("\\", "/") for path in _dirty_files(worktree)]
+    if not canonical_bug_id or issue_json is None or len(dirty) != 1:
+        return None
+    relative_path = dirty[0]
+    if not relative_path.startswith("tests/aistock_validation/bugs/") or not relative_path.endswith(".json"):
+        return None
+    expected_target = _issue_json_path_for_worktree(issue_json, worktree)
+    try:
+        expected_relative = expected_target.resolve().relative_to(worktree.resolve()).as_posix()
+    except (OSError, ValueError):
+        return None
+    if relative_path != expected_relative:
+        return None
+    target = worktree / Path(relative_path)
+    try:
+        record = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    if str(record.get("bug_id") or "").strip().upper() != canonical_bug_id:
+        return None
+    status = str(record.get("status") or "").strip()
+    if status not in {"fixed", "verified"}:
+        return None
+    record_commit = str(record.get("fix_commit") or "").strip()
+    record_pr_url = str(record.get("pr_url") or "").strip()
+    if not record_commit or not record_pr_url:
+        return None
+    if source_pr_url and record_pr_url != str(source_pr_url).strip():
+        return None
+    if merge_commit and record_commit != str(merge_commit).strip():
+        return None
+    return {
+        "bug_id": canonical_bug_id,
+        "path": relative_path,
+        "status": status,
+        "fix_commit": record_commit,
+        "pr_url": record_pr_url,
+    }
+
+
+def _maybe_create_close_sync_worktree(
+    *,
+    bug_id: str,
+    create: bool,
+    dry_run: bool,
+    issue_json: Path | None = None,
+    source_pr_url: str | None = None,
+    merge_commit: str | None = None,
+) -> dict[str, Any]:
     branch, worktree = _close_sync_worktree_names(bug_id=bug_id)
     plan = {
         "create_worktree": create,
@@ -6185,11 +6272,17 @@ def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: boo
             worktree=worktree,
             branch=branch,
             label="close-sync",
+            recoverable_bug_id=bug_id,
+            recoverable_issue_json=issue_json,
+            recoverable_source_pr_url=source_pr_url,
+            recoverable_merge_commit=merge_commit,
         )
         if relation == "fast_forwarded":
             plan["fast_forwarded"] = True
         elif relation == "ahead_with_task_commits":
             plan["ahead_with_task_commits"] = True
+        elif relation == "recoverable_dirty_bug_json":
+            plan["recoverable_dirty_bug_json"] = True
         plan["reused"] = True
         plan["git"] = git
         return plan
@@ -6199,6 +6292,10 @@ def _maybe_create_close_sync_worktree(*, bug_id: str, create: bool, dry_run: boo
             worktree=worktree,
             branch=branch,
             label="close-sync",
+            recoverable_bug_id=bug_id,
+            recoverable_issue_json=issue_json,
+            recoverable_source_pr_url=source_pr_url,
+            recoverable_merge_commit=merge_commit,
         )
         plan[relation] = True
         plan["reused_branch"] = True
@@ -6323,9 +6420,23 @@ def _validate_registry_apply_target(target_root: Path) -> dict[str, Any]:
     }
 
 
-def _validate_close_sync_apply_target(target_root: Path) -> dict[str, Any]:
+def _validate_close_sync_apply_target(
+    target_root: Path,
+    *,
+    recoverable_dirty_record: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     guard = _validate_registry_apply_target(target_root)
     blocking = list(guard.get("blocking") or [])
+    if recoverable_dirty_record:
+        expected_path = str(recoverable_dirty_record.get("path") or "").replace("\\", "/")
+        dirty = [path.replace("\\", "/") for path in _dirty_files(target_root)]
+        if expected_path and dirty == [expected_path]:
+            blocking = [item for item in blocking if not item.startswith("registry target is dirty (")]
+            guard.setdefault("warnings", []).append(
+                "resuming one exact close-sync BUG JSON left by an interrupted GitHub state readback"
+            )
+            guard["recoverable_dirty_record"] = recoverable_dirty_record
+    guard["blocking"] = blocking
     if blocking:
         guard["blocking"] = [
             item.replace("write BUG registry files", "close-sync BUG registry files")
@@ -6468,7 +6579,39 @@ def _canonical_root() -> Path:
     if override:
         return Path(override)
     default = Path("F:/Dev/AIstock")
-    return default if default.exists() else REPO_ROOT
+    return default if default.exists() else SCRIPT_ROOT
+
+
+TASK_CONTEXT_COMMANDS = frozenset({
+    "run", "resume", "finish", "finish-batch", "workflow-smoke",
+    "restart-plan", "post-restart-verify", "close-sync", "close-sync-batch",
+})
+
+
+def _task_execution_root(command: str) -> Path:
+    """Use a linked task checkout for data, never as CLI/client code authority."""
+    if command not in TASK_CONTEXT_COMMANDS:
+        return REPO_ROOT
+    if any(os.environ.get(key) for key in ("GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR", "GIT_INDEX_FILE")):
+        raise WorkflowError("ambiguous task Git context: inherited Git directory/index override")
+    cwd = Path.cwd().resolve()
+    top = _run_command(["git", "rev-parse", "--show-toplevel"], cwd=cwd)
+    if not top.get("ok"):
+        raise WorkflowError("Cannot verify the invoking task repository")
+    root = Path(str(top["stdout"])).resolve()
+    common_dirs = []
+    for checkout in (SCRIPT_ROOT, root):
+        result = _run_command(
+            ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=checkout,
+        )
+        if not result.get("ok") or not result.get("stdout"):
+            raise WorkflowError("Cannot verify linked task worktree identity")
+        common_dirs.append(Path(str(result["stdout"])).resolve())
+    if common_dirs[0] != common_dirs[1]:
+        raise WorkflowError("Invoking task worktree belongs to a different Git repository")
+    return root
+
+
 
 
 def _git_snapshot(root: Path) -> dict[str, Any]:
@@ -6936,12 +7079,6 @@ def _extract_run_id_from_issue_body(body: str) -> str | None:
     return run_url.group(1) if run_url else None
 
 
-def _issue_body_failure_text(body: str) -> str:
-    """Keep CI classification focused on failure evidence, not generic checklists."""
-    text = str(body or "")
-    return re.split(r"\n##\s+(Agent Handoff|Suggested Triage|BUG JSON Linkage|Production Gates)\b", text, maxsplit=1)[0]
-
-
 def _extract_regression_locator_from_issue_body(body: str, summary: dict[str, Any]) -> dict[str, Any] | None:
     text = str(body or "")
     status_match = re.search(r"last_green_status:\s*`?([A-Za-z0-9_-]+)`?", text)
@@ -7019,6 +7156,7 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
     if not isinstance(runs, list):
         return None
     current_id = int(run_id)
+    receipt_checks = 0
     for item in runs:
         if not isinstance(item, dict):
             continue
@@ -7029,6 +7167,19 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
             continue
         if str(item.get("conclusion") or "").lower() != "success":
             continue
+        if workflow == ci_failure_summary.NIGHTLY_RESEARCH_WORKFLOW:
+            if receipt_checks >= ci_failure_summary.MAX_NIGHTLY_RECEIPT_CANDIDATES:
+                break
+            receipt_checks += 1
+            eligibility = ci_failure_summary.nightly_success_receipt_eligibility(
+                repo=GITHUB_REPO, run_id=candidate_id, source_head=str(item.get("headSha") or ""),
+                run_provider=lambda args, **kwargs: _run_command(args, cwd=REPO_ROOT, **kwargs),
+                required_job_names=ci_failure_summary.nightly_required_failure_jobs(summary),
+            )
+            if not eligibility["eligible"]:
+                if eligibility["reason"] == "receipt_index_unavailable":
+                    return None  # Do not infer recovery during an external evidence outage.
+                continue
         return {
             "run_id": candidate_id,
             "run_url": item.get("url"),
@@ -7525,9 +7676,13 @@ def _verification_budget_for_record(
     split = _split_validation_budget_items(required)
     if validation_budget is not None:
         local_plans = flow._unique_strings(validation_budget.get("required_plans") or [])
+        ci_premerge_plans = flow._unique_strings(validation_budget.get("ci_premerge_plans") or [])
+        external_premerge_plans = flow._unique_strings(validation_budget.get("external_premerge_plans") or [])
         deferred_plans = flow._unique_strings(validation_budget.get("deferred_nightly_plans") or [])
     else:
         local_plans = flow._unique_strings(split["local"] or ["l0"])
+        ci_premerge_plans = []
+        external_premerge_plans = []
         deferred_plans = flow._unique_strings(split["deferred"])
     deferred_modules = _deferred_modules_from_plans(module, deferred_plans)
     return {
@@ -7541,6 +7696,8 @@ def _verification_budget_for_record(
             "production gates",
         ],
         "premerge_required_plans": local_plans,
+        "ci_premerge_plans": ci_premerge_plans,
+        "external_premerge_plans": external_premerge_plans,
         "delegated_validation": {
             "skill": "aistock-validation-delegation",
             "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate",
@@ -8239,6 +8396,18 @@ def _maybe_create_worktree(
         "worktree": str(worktree),
         "base": "origin/main",
     }
+    if not dry_run and (REPO_ROOT / ".git").is_file():
+        state = _load_state(bug_id, REPO_ROOT) or {}
+        recorded_root = state.get("worktree") or state.get("planned_worktree")
+        recorded_branch = state.get("branch") or state.get("planned_branch")
+        if recorded_root and Path(str(recorded_root)).resolve() == REPO_ROOT.resolve():
+            if not source_bug_json.resolve().is_relative_to(BUGS_ROOT.resolve()):
+                raise WorkflowError("Existing task BUG record is outside its checkout")
+            actual_branch = _git(["branch", "--show-current"], cwd=REPO_ROOT)
+            if not recorded_branch or actual_branch != recorded_branch:
+                raise WorkflowError("Existing task branch differs from its recorded identity")
+            plan.update(branch=actual_branch, worktree=str(REPO_ROOT), reused=True)
+            return plan
     if not create or dry_run:
         return plan
     if worktree.exists():
@@ -8253,7 +8422,7 @@ def _maybe_create_worktree(
 
 def _actual_and_planned_worktree(worktree_plan: dict[str, Any]) -> tuple[str | None, str | None]:
     worktree = str(worktree_plan.get("worktree") or "").strip() or None
-    if worktree_plan.get("created"):
+    if worktree_plan.get("created") or worktree_plan.get("reused"):
         return worktree, None
     return None, worktree
 
@@ -8448,6 +8617,7 @@ def build_task_card(
             runtime_contract,
             "schema_version",
             "runtime_impact",
+            "inferred_runtime_files",
             "backend_restart_required",
             "backend_restart_owner",
             "target_id",
@@ -8543,6 +8713,11 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- backend_restart_required: `{str(bool(runtime_contract.get('backend_restart_required'))).lower()}`",
         f"- backend_restart_owner: `{runtime_contract.get('backend_restart_owner') or 'user'}`",
         f"- target_id: `{runtime_contract.get('target_id') or 'none'}`",
+        *[f"- runtime_source: `{path}`" for path in (runtime_contract.get("inferred_runtime_files") or [])[:10]],
+        *([f"- runtime_source_count: `{len(runtime_contract['inferred_runtime_files'])}` (at most 10 paths shown; full list in task-card.json)"]
+          if len(runtime_contract.get("inferred_runtime_files") or []) > 10 else []),
+        *(["- source_role_review: inferred source attribution only; suspected offline tools need call-closure review, not health/HTTP-200 substitution or automatic exemption."]
+          if runtime_contract.get("inferred_runtime_files") else []),
         f"- catalog_ref: `{runtime_contract.get('catalog_ref') or 'none'}`",
         f"- operator_runbook_ref: `{runtime_contract.get('operator_runbook_ref') or 'none'}`",
         f"- post_restart_effective_gate: `{runtime_contract.get('post_restart_effective_gate') or 'unknown'}`",
@@ -8551,6 +8726,8 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         "## Verification Budget",
         f"- budget: `{budget.get('budget') or 'not_recorded'}`",
         f"- target_cost_percent_of_legacy: `{budget.get('target_cost_percent_of_legacy') or 'not_recorded'}`",
+        f"- ci_premerge_plans: `{', '.join(budget.get('ci_premerge_plans') or []) or 'none'}`",
+        f"- external_premerge_plans: `{', '.join(budget.get('external_premerge_plans') or []) or 'none'}`",
         f"- deferred_nightly_required: `{str(bool(deferred.get('required'))).lower()}`",
         f"- deferred_nightly_modules: `{', '.join(deferred.get('modules') or []) or 'none'}`",
         f"- deferred_nightly_plans: `{', '.join(deferred.get('plans') or []) or 'none'}`",
@@ -9787,9 +9964,10 @@ def build_start_plan(
     }
 
 
-def _finish_changed_files(base: str, head: str, *, root: Path = REPO_ROOT) -> list[str]:
+def _finish_changed_files(base: str, head: str, *, root: Path | None = None) -> list[str]:
     """Combine committed branch changes with the current staged, dirty, and untracked task paths."""
 
+    root = root or REPO_ROOT
     return _normalize_changed_files(
         [
             *flow.changed_files_from_git(base, head),
@@ -9811,6 +9989,9 @@ def build_finish_plan(
     fresh_process_evidence: list[str] | None = None,
     code_intelligence_summary_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    _assert_task_git_identity(REPO_ROOT)
+    if _TASK_GIT_IDENTITY is not None and _git(["rev-parse", head], cwd=REPO_ROOT) != _TASK_GIT_IDENTITY[1]:
+        raise WorkflowError("finish --head does not match the actual task HEAD")
     record, source_path = find_bug_record(bug_id=bug_id, issue_json=issue_json)
     canonical_bug_id = str(record.get("bug_id") or bug_id or source_path.stem).upper()
     current_state = _load_state(canonical_bug_id, REPO_ROOT) or {}
@@ -9879,7 +10060,7 @@ def build_finish_plan(
                 "runtime_identity_match": runtime_contract.get("runtime_identity_match"),
             }
         )
-        persisted_file_scope = record.get("file_scope_contract")
+        persisted_file_scope = _actual_file_scope_contract(record, changed)
         if reconciliation.get("applied"):
             persisted_runtime.update(
                 {
@@ -9888,14 +10069,11 @@ def build_finish_plan(
                     "planned_target_ids": reconciliation.get("planned_target_ids") or [],
                 }
             )
-            persisted_file_scope = _actual_file_scope_contract(record, changed)
         if (
             persisted_runtime != record.get("runtime_contract")
             or persisted_file_scope != record.get("file_scope_contract")
         ):
-            record = {**record, "runtime_contract": persisted_runtime}
-            if reconciliation.get("applied"):
-                record["file_scope_contract"] = persisted_file_scope
+            record = {**record, "runtime_contract": persisted_runtime, "file_scope_contract": persisted_file_scope}
             _write_json(source_path, record)
     closure_ready = bool(evidence) and not validation_evidence_errors
     draft_ready = (
@@ -11105,6 +11283,38 @@ def _merge_commit_changed_files(merge_commit: str, *, root: Path) -> dict[str, A
     }
 
 
+def _refresh_ci_git_mirror_after_root_sync(root: Path) -> dict[str, Any]:
+    """Best-effort offline cache maintenance, never a source/cleanup gate."""
+    helper = root / "scripts" / "maintain_aistock_git_mirror.ps1"
+    allowed = Path(os.environ.get("AISTOCK_GITHUB_RUNNER_PREBUILT_ROOT") or "F:/Dev/github-actions-runner/prebuilt")
+    mirror = Path(os.environ.get("AISTOCK_GIT_OBJECT_MIRROR_ROOT") or str(allowed / "git" / "AIstock.git"))
+    if os.name != "nt" or not helper.is_file() or not allowed.is_dir():
+        return {"status": "not_required", "reason": "local_runner_cache_not_available"}
+    snapshot = _git_snapshot(root)
+    if snapshot.get("branch") != "main" or snapshot.get("dirty") or not snapshot.get("head") or snapshot.get("head") != snapshot.get("origin_main"):
+        return {"status": "warning", "warning": "mirror refresh deferred: canonical main is not clean and aligned"}
+    identity = _run_command(["git", "rev-parse", "HEAD", "refs/remotes/origin/main"], cwd=root, timeout=10)
+    revisions = str(identity.get("stdout") or "").splitlines()
+    if (not identity.get("ok") or len(revisions) != 2
+            or not all(re.fullmatch(r"[0-9a-f]{40}", sha) for sha in revisions)
+            or revisions[0] != revisions[1]):
+        return {"status": "warning", "warning": "mirror refresh deferred: exact main identities are unavailable or differ"}
+    result = _run_command(
+        ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(helper),
+         "-SourceRoot", str(root), "-MirrorRoot", str(mirror), "-AllowedRoot", str(allowed), "-Apply", "-Json"],
+        cwd=root, timeout=60,
+    )
+    try:
+        receipt = json.loads(str(result.get("stdout") or "")) if result.get("ok") else {}
+        if (receipt.get("status") == "ready" and receipt.get("main_sha") == revisions[0]
+                and receipt.get("network_accessed") is False and receipt.get("process_control_performed") is False):
+            return {"status": "ready", "receipt": receipt}
+    except (ValueError, TypeError):
+        pass
+    return {"status": "warning", "warning": "offline mirror refresh failed; bounded remote checkout remains available",
+            "result": result}
+
+
 def _publish_changed_clients_after_merge(
     *,
     merge_commit: str,
@@ -11172,6 +11382,9 @@ def _publish_changed_clients_after_merge(
         payload["workflow_gate"] = "blocked"
         return payload
 
+    payload["git_object_mirror"] = _refresh_ci_git_mirror_after_root_sync(root)
+    if payload["git_object_mirror"].get("warning"):
+        payload.setdefault("warnings", []).append(payload["git_object_mirror"]["warning"])
     changed = _merge_commit_changed_files(merge_commit, root=root)
     payload["merge_diff"] = changed
     payload["changed_files"] = changed.get("files") or []
@@ -12147,6 +12360,7 @@ def _build_resume_runtime_preflight(root: Path, state: dict[str, Any]) -> dict[s
         inference = _classify_runtime_impact(ordered_files, root=root)
         payload["runtime_impact"] = inference["runtime_impact"]
         payload["target_ids"] = inference["target_ids"]
+        payload["catalog_error"] = inference.get("catalog_error")
         issue_path = _state_issue_json_path(root, state)
         if issue_path and issue_path.is_file():
             contract = build_runtime_contract(
@@ -12426,32 +12640,45 @@ def build_postmortem_plan(
 
 def _classify_ci_issue(summary: dict[str, Any], issue: dict[str, Any]) -> str:
     title = str(issue.get("title") or "").lower()
-    evidence_body = _issue_body_failure_text(str(issue.get("body") or "")).lower()
-    title_body = f"{title}\n{evidence_body}"
     errors = "\n".join(
         str(item)
         for job in summary.get("failed_jobs") or []
         for item in [job.get("error_signature"), *(job.get("key_log_excerpt") or [])]
         if item
     ).lower()
-    infra_signatures = [
-        "self-hosted",
-        "runner-preflight",
-        "runner unavailable",
-        "runner availability",
-        "no online github actions runner",
-        "unable to query github runner health",
-        "aistock_runner_health_token",
-    ]
-    if any(token in title_body or token in errors for token in infra_signatures):
+    explicit_failure_evidence = f"{title}\n{errors}"
+    if any(token in explicit_failure_evidence for token in RUNNER_INFRA_SIGNATURES):
         return "infra_blocker"
-    if any(token in title_body for token in ["flaky", "timeout", "network"]):
+    if re.search(r"\b(?:flaky|timeout|network)\b", title) or any(
+        token in errors for token in NETWORK_INFRA_SIGNATURES
+    ):
         return "infra_flaky"
     if any(token in errors for token in ["relation ", "does not exist", "fixture", "test fixture"]):
         return "test_fixture_gap_or_real_regression"
     if summary.get("diagnostic_status") == "complete":
         return "real_regression_candidate"
     return "needs_log_triage"
+
+
+def _nightly_runner_infra_recovery_eligible(triage: dict[str, Any]) -> bool:
+    summary = triage.get("summary") if isinstance(triage.get("summary"), dict) else {}
+    workflow = str(summary.get("workflow") or "").lower()
+    if "nightly" not in workflow:
+        return False
+    issue = triage.get("github_issue") if isinstance(triage.get("github_issue"), dict) else {}
+    text_parts = [str(issue.get("title") or "")]
+    for job in summary.get("failed_jobs") or []:
+        if not isinstance(job, dict):
+            continue
+        text_parts.extend(
+            [
+                str(job.get("job_name") or ""),
+                str(job.get("error_signature") or ""),
+                *[str(item) for item in job.get("key_log_excerpt") or []],
+            ]
+        )
+    evidence = "\n".join(text_parts).lower()
+    return any(token in evidence for token in RUNNER_INFRA_SIGNATURES)
 
 
 def build_triage_ci_issue_plan(
@@ -12546,6 +12773,7 @@ def build_triage_ci_issue_plan(
         context_pack["failure_event"] = failure_event
         handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
         handoff["needs_bug_json"] = False
+        handoff["registry_intake"] = None
         handoff["handoff_mode"] = "triage_only"
         handoff["workflow_entrypoints"] = {
             "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue.get('number')}",
@@ -12823,7 +13051,10 @@ def build_ci_issue_janitor_plan(
     limit: int = 50,
     skip_github_summary: bool = False,
     close_infra: bool = True,
+    runner_recovered_only: bool = False,
 ) -> dict[str, Any]:
+    if runner_recovered_only and not close_infra:
+        raise WorkflowError("runner_recovered_only cannot be combined with superseded-only cleanup")
     if issue_numbers:
         issues = [{"number": str(item)} for item in issue_numbers]
         source = "explicit_issues"
@@ -12884,6 +13115,10 @@ def build_ci_issue_janitor_plan(
                 entry["reason"] = "infra_closure_disabled"
                 evaluated.append(entry)
                 continue
+            if runner_recovered_only and not _nightly_runner_infra_recovery_eligible(triage):
+                entry["reason"] = "not_nightly_runner_recovery_scope"
+                evaluated.append(entry)
+                continue
             infra_count += 1
             entry["action"] = "close_infra"
             entry["infra_action"] = _pick(
@@ -12920,6 +13155,7 @@ def build_ci_issue_janitor_plan(
         "source": source,
         "limit": limit,
         "close_infra": close_infra,
+        "runner_recovered_only": runner_recovered_only,
         "scanned_count": len(evaluated),
         "superseded_count": superseded_count,
         "infra_count": infra_count,
@@ -12938,7 +13174,13 @@ def build_ci_issue_janitor_plan(
     if not apply and actionable_count:
         issue_args = " ".join(f"--issue {item.get('issue')}" for item in evaluated if item.get("action") in {"close_superseded", "close_infra"})
         limit_arg = "" if issue_args else f" --limit {limit}"
-        infra_arg = "" if close_infra else " --superseded-only"
+        infra_arg = (
+            " --runner-recovered-only"
+            if runner_recovered_only
+            else ""
+            if close_infra
+            else " --superseded-only"
+        )
         payload["next_command"] = (
             f"python scripts/aistock_issue_workflow.py ci-issue-janitor {issue_args}{infra_arg} --apply"
             if issue_args
@@ -13065,6 +13307,9 @@ def build_promote_ci_issue_plan(
                 "dry_run": False,
                 "triage": triage,
                 "registry_pr_capability": registry_pr_capability,
+                "local_intake": ci_failure_summary.build_agent_handoff(
+                    triage["summary"], github_issue_number=issue_number
+                )["registry_intake"],
                 "warnings": [
                     "Nightly failure remains an actionable GitHub Issue; BUG allocation is deferred until a registry PR can be persisted"
                 ],
@@ -13079,7 +13324,23 @@ def build_promote_ci_issue_plan(
     failed_tests = first_job.get("failed_tests") or []
     error_signature = first_job.get("error_signature")
     details = ci_failure_summary.render_issue_markdown(summary, github_issue_number=issue_number)
-    changed_files = list(suggested.get("allowed_write_scope") or [])
+    # Diagnostic module roots are context, not permission to recursively edit.
+    # Resolve only the bounded candidate list; submit-bug still validates every
+    # accepted file for repository containment and ownership before allocation.
+    scope = flow._unique_strings(suggested.get("allowed_write_scope") or [])
+    changed_files = [path for path in scope if (REPO_ROOT / path).is_file()]
+    excluded_scope_paths = [path for path in scope if path not in changed_files]
+    if not changed_files:
+        return {
+            "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "blocked_exact_file_scope_required",
+            "dry_run": not apply,
+            "triage": triage,
+            "excluded_scope_paths": excluded_scope_paths,
+            "blocking": ["Diagnostic roots contain no existing exact files; triage must identify the repair files before BUG allocation."],
+            "next_command": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_number}",
+        }
     evidence_refs = flow._unique_strings(
         [
             str(summary.get("run_url") or ""),
@@ -13116,6 +13377,7 @@ def build_promote_ci_issue_plan(
         "dry_run": not apply,
         "triage": triage,
         "submit_bug": plan,
+        "excluded_scope_paths": excluded_scope_paths,
         "next_command": plan.get("next_command"),
     }
 
@@ -13875,11 +14137,67 @@ def _cleanup_evidence_finalization(bug_id: str | None) -> dict[str, Any]:
             "durable_receipt_present": False,
             "error": str(exc),
         }
-    return _cleanup_evidence_finalization_from_record(
+    local_finalization = _cleanup_evidence_finalization_from_record(
         record,
         source=_repo_rel(source_path),
         expected_bug_id=bug_id,
     )
+    if local_finalization.get("durable_receipt_present"):
+        return local_finalization
+
+    canonical_root = _canonical_root()
+    canonical_path = _issue_json_path_for_worktree(source_path, canonical_root)
+    try:
+        relative_path = canonical_path.resolve().relative_to(canonical_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return {
+            **local_finalization,
+            "origin_main_exact_record_checked": False,
+            "origin_main_reason": "canonical_bug_path_unavailable",
+        }
+    origin_record = _run_command(
+        ["git", "show", f"origin/main:{relative_path}"],
+        cwd=canonical_root,
+        timeout=30,
+    )
+    if not origin_record.get("ok"):
+        return {
+            **local_finalization,
+            "origin_main_exact_record_checked": False,
+            "origin_main_reason": "exact_bug_record_unavailable",
+        }
+    try:
+        candidate = json.loads(str(origin_record.get("stdout") or ""))
+    except (json.JSONDecodeError, TypeError):
+        return {
+            **local_finalization,
+            "origin_main_exact_record_checked": True,
+            "origin_main_reason": "exact_bug_record_invalid_json",
+        }
+    if not isinstance(candidate, dict):
+        return {
+            **local_finalization,
+            "origin_main_exact_record_checked": True,
+            "origin_main_reason": "exact_bug_record_not_mapping",
+        }
+    origin_finalization = _cleanup_evidence_finalization_from_record(
+        candidate,
+        source=f"origin/main:{relative_path}",
+        expected_bug_id=bug_id,
+    )
+    if origin_finalization.get("durable_receipt_present"):
+        return {
+            **origin_finalization,
+            "evidence_source": "origin_main_exact_bug_record",
+            "local_status": local_finalization.get("status"),
+            "local_bug_json": local_finalization.get("bug_json"),
+            "origin_main_exact_record_checked": True,
+        }
+    return {
+        **local_finalization,
+        "origin_main_exact_record_checked": True,
+        "origin_main_status": origin_finalization.get("status"),
+    }
 
 
 def _worktree_active_process_profile(worktree_path: Path) -> dict[str, Any]:
@@ -13975,7 +14293,7 @@ def _worktree_ignored_artifact_profile(
 ) -> dict[str, Any]:
     protected = {_normalize_worktree_artifact_path(item) for item in (protected_paths or set()) if item}
     result = _run_command(
-        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z"],
+        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"],
         cwd=worktree_path,
         timeout=120,
     )
@@ -13991,11 +14309,55 @@ def _worktree_ignored_artifact_profile(
         "protected_samples": [],
         "unknown_samples": [],
         "manifest_sha256": None,
+        "inventory_mode": "collapsed_intrinsic_transient_roots_with_targeted_expansion",
+        "collapsed_transient_root_count": 0,
+        "expanded_ignored_directory_count": 0,
     }
     if not result.get("ok"):
         profile["error"] = result.get("stderr") or result.get("stdout") or "ignored artifact scan failed"
         return profile
-    ignored = sorted({_normalize_worktree_artifact_path(item) for item in str(result.get("stdout") or "").split("\0") if item})
+    collapsed_transient_roots: dict[str, str] = {}
+    ignored_paths: set[str] = set()
+    for raw_item in str(result.get("stdout") or "").split("\0"):
+        if not raw_item:
+            continue
+        is_directory = raw_item.replace("\\", "/").endswith("/")
+        relative_path = _normalize_worktree_artifact_path(raw_item).rstrip("/")
+        if not is_directory:
+            ignored_paths.add(relative_path)
+            continue
+        probe_root, probe_reason = _worktree_transient_root(
+            f"{relative_path}/.aistock-inventory-probe",
+            worktree_path=worktree_path,
+            canonical_root=canonical_root,
+        )
+        if probe_root == relative_path:
+            ignored_paths.add(relative_path)
+            collapsed_transient_roots[relative_path] = probe_reason
+            continue
+        expanded = _run_command(
+            ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", relative_path],
+            cwd=worktree_path,
+            timeout=120,
+        )
+        if not expanded.get("ok"):
+            profile.update(
+                {
+                    "scan_status": "failed",
+                    "error": expanded.get("stderr")
+                    or expanded.get("stdout")
+                    or f"ignored artifact expansion failed: {relative_path}",
+                }
+            )
+            return profile
+        profile["expanded_ignored_directory_count"] += 1
+        ignored_paths.update(
+            _normalize_worktree_artifact_path(item).rstrip("/")
+            for item in str(expanded.get("stdout") or "").split("\0")
+            if item
+        )
+    ignored = sorted(ignored_paths)
+    profile["collapsed_transient_root_count"] = len(collapsed_transient_roots)
     qe_live_log_paths, qe_live_log_reason = _validated_qe_live_log_transient_paths(
         ignored,
         worktree_path=worktree_path,
@@ -14020,7 +14382,6 @@ def _worktree_ignored_artifact_profile(
             "sha256": pytest_factor_checkpoint_digest,
         }
     roots: list[str] = []
-    transient_entries: list[tuple[str, str]] = []
     canonical_lines: list[str] = []
     for rel in ignored:
         if rel in protected:
@@ -14029,7 +14390,10 @@ def _worktree_ignored_artifact_profile(
             if len(profile["protected_samples"]) < 20:
                 profile["protected_samples"].append(rel)
         else:
-            if rel.startswith(qe_live_log_prefix):
+            if rel in collapsed_transient_roots:
+                root = rel
+                reason = collapsed_transient_roots[rel]
+            elif rel.startswith(qe_live_log_prefix):
                 root = WORKTREE_QE_LIVE_LOG_ROOT if rel in qe_live_log_paths else None
                 reason = qe_live_log_reason
             elif rel.startswith(backend_log_prefix):
@@ -14043,7 +14407,6 @@ def _worktree_ignored_artifact_profile(
             if root:
                 category = "transient"
                 roots.append(root)
-                transient_entries.append((rel, root))
                 profile["transient_count"] += 1
                 if len(profile["transient_samples"]) < 20:
                     profile["transient_samples"].append(rel)
@@ -14071,13 +14434,42 @@ def _worktree_ignored_artifact_profile(
     profile["ignored_count"] = len(ignored)
     profile["transient_roots"] = minimal_roots
     profile["transient_root_count"] = len(minimal_roots)
-    retained_transient_paths = sorted(
-        rel
-        for rel, _classified_root in transient_entries
-        if any(rel == root or rel.startswith(root.rstrip("/") + "/") for root in minimal_roots)
+    transient_readback = _run_command(
+        [
+            "git",
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+            "--",
+            *minimal_roots,
+        ],
+        cwd=worktree_path,
+        timeout=120,
     )
+    if not transient_readback.get("ok"):
+        profile.update(
+            {
+                "scan_status": "failed",
+                "error": transient_readback.get("stderr")
+                or transient_readback.get("stdout")
+                or "transient root readback failed",
+            }
+        )
+        return profile
+    transient_readback_paths = sorted(
+        {
+            _normalize_worktree_artifact_path(item).rstrip("/")
+            for item in str(transient_readback.get("stdout") or "").split("\0")
+            if item
+        }
+    )
+    profile["transient_manifest_mode"] = "git_collapsed_root_readback"
+    profile["transient_manifest_entry_count"] = len(transient_readback_paths)
     profile["transient_manifest_sha256"] = hashlib.sha256(
-        "\n".join(retained_transient_paths).encode("utf-8")
+        "\n".join(transient_readback_paths).encode("utf-8")
     ).hexdigest()
     profile["manifest_sha256"] = hashlib.sha256("\n".join(canonical_lines).encode("utf-8")).hexdigest()
     return profile
@@ -14133,14 +14525,28 @@ def _purge_worktree_transient_artifacts(
         raise WorkflowError("ignored artifacts include protected or unknown files")
     transient_roots = [str(item) for item in expected_profile.get("transient_roots") or []]
     live = _run_command(
-        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *transient_roots],
+        [
+            "git",
+            "ls-files",
+            "--others",
+            "--ignored",
+            "--exclude-standard",
+            "--directory",
+            "-z",
+            "--",
+            *transient_roots,
+        ],
         cwd=worktree_path,
         timeout=120,
     )
     if not live.get("ok"):
         raise WorkflowError(str(live.get("stderr") or live.get("stdout") or "targeted transient rescan failed"))
     live_paths = sorted(
-        {_normalize_worktree_artifact_path(item) for item in str(live.get("stdout") or "").split("\0") if item}
+        {
+            _normalize_worktree_artifact_path(item).rstrip("/")
+            for item in str(live.get("stdout") or "").split("\0")
+            if item
+        }
     )
     live_digest = hashlib.sha256("\n".join(live_paths).encode("utf-8")).hexdigest()
     if live_digest != expected_profile.get("transient_manifest_sha256"):
@@ -14150,7 +14556,10 @@ def _purge_worktree_transient_artifacts(
         if not isinstance(content_bound_manifest, dict):
             raise WorkflowError("content-bound transient manifest is invalid")
         content_bound_paths = [str(item) for item in content_bound_manifest.get("paths") or []]
-        if not content_bound_paths or not set(content_bound_paths).issubset(set(live_paths)):
+        if not content_bound_paths or not all(
+            any(path == root or path.startswith(root.rstrip("/") + "/") for root in transient_roots)
+            for path in content_bound_paths
+        ):
             raise WorkflowError("content-bound transient artifact paths changed after cleanup preflight")
         live_content_digest = _content_bound_file_manifest_sha256(worktree_path, content_bound_paths)
         if not live_content_digest or live_content_digest != content_bound_manifest.get("sha256"):
@@ -14170,13 +14579,12 @@ def _purge_worktree_transient_artifacts(
     for relative_root, target in validated_roots:
         _remove_exact_transient_root(worktree_path, relative_root, target=target)
         removed_roots.append(relative_root)
-    after = _run_command(
-        ["git", "ls-files", "--others", "--ignored", "--exclude-standard", "-z", "--", *transient_roots],
-        cwd=worktree_path,
-        timeout=120,
-    )
-    after_paths = [item for item in str(after.get("stdout") or "").split("\0") if item]
-    if not after.get("ok") or after_paths:
+    remaining_roots = [
+        relative_root
+        for relative_root, target in validated_roots
+        if target.exists() or _is_reparse_or_symlink(target)
+    ]
+    if remaining_roots:
         raise WorkflowError("transient artifact purge did not leave the targeted roots empty")
     return {
         "ok": True,
@@ -14188,7 +14596,7 @@ def _purge_worktree_transient_artifacts(
         "removed_roots_truncated": len(removed_roots) > 50,
         "ignored_count_before": len(live_paths),
         "ignored_count_after": 0,
-        "scan_scope": "preflight_full_manifest_then_targeted_root_readback",
+        "scan_scope": "collapsed_intrinsic_transient_roots_then_targeted_root_readback",
     }
 
 
@@ -14683,6 +15091,13 @@ def _pre_pr_gate(
         blocking.append(f"ownership check failed: ambiguous={ownership.get('ambiguous') or ownership.get('ambiguous_count')}")
     if artifact_rows:
         blocking.append(f"temporary/cache artifacts are present in git status: {[row['path'] for row in artifact_rows]}")
+    ci_classifier = _run_ci_changed_file_classifier(changed_files, root=root)
+    if ci_classifier.get("workflow_gate") == "blocked":
+        classifier_blocking = [str(item) for item in ci_classifier.get("blocking") or []]
+        blocking.extend(f"local CI classifier: {item}" for item in classifier_blocking)
+        next_actions.append(
+            "repair file ownership or selected nox test coverage before push; rerun finish on the same changed files"
+        )
     lint = _run_changed_file_lint(changed_files, root=root) if run_lint else {"status": "skipped", "python_files": []}
     if lint.get("status") == "failed":
         blocking.append("changed-file Ruff lint failed")
@@ -14705,7 +15120,28 @@ def _pre_pr_gate(
         "dirty_task_files": task_dirty_rows,
         "next_actions": next_actions,
         "lint": lint,
+        "ci_classifier": ci_classifier,
         "validation_evidence_present": bool(validation_evidence),
+    }
+
+
+def _run_ci_changed_file_classifier(changed_files: list[str], *, root: Path) -> dict[str, Any]:
+    """Reuse the pull-request classifier before push without duplicating its policy."""
+
+    try:
+        from scripts import ci_change_classifier
+    except ModuleNotFoundError:  # Direct execution: python scripts/aistock_issue_workflow.py
+        import ci_change_classifier  # type: ignore[no-redef]
+
+    payload = ci_change_classifier.classify_changed_files(changed_files, repo_root=root)
+    return {
+        "schema_version": payload.get("schema_version"),
+        "workflow_gate": payload.get("workflow_gate"),
+        "classification": payload.get("classification"),
+        "blocking": list(payload.get("blocking") or []),
+        "unmapped_code_files": list(payload.get("unmapped_code_files") or []),
+        "unexecuted_test_files": list(payload.get("unexecuted_test_files") or []),
+        "selected_plan_keys": list(payload.get("selected_plan_keys") or []),
     }
 
 
@@ -14874,6 +15310,55 @@ def build_watch_ci_plan(
     }
 
 
+def _pr_body_matches(actual: Any, expected: str) -> bool:
+    """GitHub may return CRLF Markdown; normalize no content except that transport representation."""
+    return isinstance(actual, str) and actual.replace("\r\n", "\n") == expected.replace("\r\n", "\n")
+
+
+def _sync_owned_pr_body(*, pr_url: str, branch: str, body_path: Path, expected_head: str, before_push: bool) -> dict[str, Any]:
+    """Publish validated receipts before synchronize; never overwrite a foreign PR."""
+    number = _github_pr_number_from_url(pr_url)
+    if number is None or pr_url != f"https://github.com/{GITHUB_REPO}/pull/{number}":
+        raise WorkflowError("existing PR URL is outside this repository")
+    current = _github_pull_rest_readback(pr_url)
+    if (current.get("state") != "OPEN" or current.get("head_ref") != branch
+            or current.get("base_ref") != "main" or current.get("url") != pr_url
+            or current.get("head_repo") != GITHUB_REPO):
+        raise WorkflowError("existing PR is not the open, repository-owned source branch; use its correct aftercare lane")
+    old_head = str(current.get("head_sha") or "")
+    if not _FULL_GIT_COMMIT_RE.fullmatch(old_head):
+        raise WorkflowError("existing PR has no exact head identity")
+    if old_head != expected_head:
+        if not before_push:
+            raise WorkflowError("existing PR head differs from validated task HEAD; push is required")
+        ancestor = _run_command(["git", "merge-base", "--is-ancestor", old_head, expected_head], cwd=REPO_ROOT, timeout=10)
+        if not ancestor.get("ok"):
+            raise WorkflowError("existing PR head is not an ancestor of validated task HEAD; refuse receipt overwrite")
+    body = body_path.read_text(encoding="utf-8")
+    updated = not _pr_body_matches(current.get("body"), body)
+    if updated:
+        result = _run_command(["gh", "api", "--method", "PATCH", f"repos/{GITHUB_REPO}/pulls/{current['pr_number']}",
+                               "-F", f"body=@{body_path}"], cwd=REPO_ROOT, timeout=30)
+        if result.get("ok"):
+            response = _parse_rest_object(result, context="owned PR receipt update")
+            head = response.get("head") or {}
+            if (not _pr_body_matches(response.get("body"), body) or response.get("state") != "open"
+                    or response.get("number") != current["pr_number"] or response.get("html_url") != pr_url
+                    or head.get("sha") != old_head or head.get("ref") != branch
+                    or (head.get("repo") or {}).get("full_name") != GITHUB_REPO
+                    or (response.get("base") or {}).get("ref") != "main"):
+                raise WorkflowError("PR changed during receipt update; refuse push")
+        elif _looks_like_github_transport_failure(f"{result.get('stderr')}\n{result.get('stdout')}"):
+            recovered = _github_pull_rest_readback(pr_url)
+            if (recovered.get("head_sha") != old_head or not _pr_body_matches(recovered.get("body"), body) or recovered.get("state") != "OPEN"
+                    or recovered.get("head_ref") != branch or recovered.get("base_ref") != "main"
+                    or recovered.get("head_repo") != GITHUB_REPO or recovered.get("url") != pr_url):
+                raise WorkflowError("PR receipt update outcome unavailable; do not push or repeat mutation")
+        else:
+            raise WorkflowError(result.get("stderr") or "PR receipt update failed")
+    return {"url": pr_url, "head_sha": old_head, "body_updated": updated}
+
+
 def _maybe_create_pr(
     *,
     bug_id: str,
@@ -14889,6 +15374,8 @@ def _maybe_create_pr(
     if guard["blocking"]:
         raise WorkflowError("; ".join(guard["blocking"]))
     branch = _current_branch()
+    if push or create_pr:
+        _check_pr_receipt_identity(finish, root=REPO_ROOT)
     pre_pr_gate = _pre_pr_gate(
         finish=finish,
         validation_evidence=finish.get("validation_evidence") or [],
@@ -14910,11 +15397,21 @@ def _maybe_create_pr(
         raise WorkflowError("validation evidence is required before push/create-pr automation")
     if pre_pr_gate["workflow_gate"] != "passed":
         raise WorkflowError("; ".join(pre_pr_gate["blocking"]))
+    existing_pr: dict[str, Any] | None = None
+    known_pr_url = str(_load_state(bug_id).get("pr_url") or "")
+    if known_pr_url and (push or create_pr):
+        _check_pr_receipt_identity(finish, root=REPO_ROOT)
+        expected_head = _git(["rev-parse", "HEAD"], cwd=REPO_ROOT).strip()
+        existing_pr = _sync_owned_pr_body(pr_url=known_pr_url, branch=branch,
+            body_path=REPO_ROOT / str(finish.get("pr_body_path")), expected_head=expected_head, before_push=push)
+        actions.append({"command": "sync owned PR receipts before push", "result": {"ok": True, **existing_pr}})
     if push:
+        _check_pr_receipt_identity(finish, root=REPO_ROOT)
+        already_remote = bool(existing_pr and existing_pr.get("head_sha") == expected_head)
         actions.append(
             {
-                "command": f"git push -u origin {branch}",
-                "result": _execute_workflow_command(
+                "command": "reuse exact remote task HEAD; skip redundant git push" if already_remote else f"git push -u origin {branch}",
+                "result": {"ok": True, "already_pushed": True, "head_sha": expected_head} if already_remote else _execute_workflow_command(
                     bug_id,
                     ["git", "push", "-u", "origin", branch],
                     state="pushed",
@@ -14926,27 +15423,33 @@ def _maybe_create_pr(
         )
         _write_state(bug_id, state="pushed", branch=branch, next_actions=["create_pr_from_pr_body"])
     if create_pr:
+        _check_pr_receipt_identity(finish, root=REPO_ROOT)
         title = pr_title or f"{bug_id} issue workflow fix"
         body_path = REPO_ROOT / str(finish.get("pr_body_path"))
         head_result = _run_command(["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, timeout=30)
         expected_head = str(head_result.get("stdout") or "").strip()
         if not head_result.get("ok") or not re.fullmatch(r"[0-9a-fA-F]{40}", expected_head):
             raise WorkflowError(head_result.get("stderr") or "cannot resolve source PR head SHA")
-        result = _create_pr_with_transport_fallback(
-            branch=branch,
-            base="main",
-            title=title,
-            body_path=body_path,
-            expected_head=expected_head,
-            root=REPO_ROOT,
-        )
+        if existing_pr:
+            _sync_owned_pr_body(pr_url=known_pr_url, branch=branch, body_path=body_path,
+                                expected_head=expected_head, before_push=False)
+            result = {"ok": True, "stdout": known_pr_url, "source": "github_rest_existing_owned_pr"}
+        else:
+            result = _create_pr_with_transport_fallback(
+                branch=branch,
+                base="main",
+                title=title,
+                body_path=body_path,
+                expected_head=expected_head,
+                root=REPO_ROOT,
+            )
         if not result.get("ok"):
             raise WorkflowError(result.get("stderr") or result.get("stdout") or "PR create failed")
         _append_event(
             bug_id,
-            event="command:gh_pr_create",
+            event="command:gh_pr_reuse" if existing_pr else "command:gh_pr_create",
             state="pr_opened",
-            command="gh pr create",
+            command="gh api owned PR readback" if existing_pr else "gh pr create",
             cwd=REPO_ROOT,
             result="ok",
             evidence={
@@ -14956,7 +15459,7 @@ def _maybe_create_pr(
             },
         )
         pr_url = str(result.get("stdout") or "").splitlines()[-1].strip()
-        actions.append({"command": "gh pr create", "result": result})
+        actions.append({"command": "reuse owned source PR" if existing_pr else "gh pr create", "result": result})
         _write_state(bug_id, state="pr_opened", branch=branch, pr_url=pr_url, next_actions=["watch_ci_before_merge"])
     ci_watch: dict[str, Any] | None = None
     if watch_ci:
@@ -15543,6 +16046,284 @@ def _cleanup_merge_verification(
     return payload
 
 
+def _superseded_cleanup_receipt_path(branch: str, expected_head: str) -> Path:
+    override = os.environ.get("AISTOCK_CLEANUP_RECEIPT_ROOT")
+    root = Path(override) if override else _default_worktree_root() / ".cleanup-receipts" / "superseded"
+    identity = hashlib.sha256(f"{branch}\n{expected_head.lower()}".encode()).hexdigest()[:20]
+    return root / f"{_slug(branch)}-{identity}.json"
+
+
+def _persist_superseded_cleanup_receipt(
+    verification: dict[str, Any],
+    *,
+    status: str,
+    cleanup_verification: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    branch = str(verification.get("branch") or "")
+    expected_head = str(verification.get("expected_head") or "").lower()
+    if not branch or not _FULL_GIT_COMMIT_RE.fullmatch(expected_head):
+        raise WorkflowError("superseded cleanup receipt identity is incomplete")
+    path = _superseded_cleanup_receipt_path(branch, expected_head)
+    if path.exists() and _is_reparse_or_symlink(path):
+        raise WorkflowError(f"superseded cleanup receipt must not be a symlink or reparse point: {path}")
+    if path.parent.exists() and _is_reparse_or_symlink(path.parent):
+        raise WorkflowError(f"superseded cleanup receipt root must not be a symlink or reparse point: {path.parent}")
+    receipt = {
+        "schema_version": SUPERSEDED_CLEANUP_RECEIPT_SCHEMA,
+        "status": status,
+        "branch": branch,
+        "expected_head": expected_head,
+        "mode": verification.get("mode"),
+        "authority_ref": verification.get("authority_ref"),
+        "reason": verification.get("reason"),
+        "authority_digest": verification.get("authority_digest"),
+        "recorded_at": _utc_now(),
+    }
+    if cleanup_verification is not None:
+        receipt["cleanup_verification"] = cleanup_verification
+    _write_json(path, receipt)
+    return {
+        "schema_version": SUPERSEDED_CLEANUP_RECEIPT_SCHEMA,
+        "path": str(path),
+        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+        "status": status,
+    }
+
+
+def _git_patch_equivalence_profile(branch: str, *, root: Path) -> dict[str, Any]:
+    cherry = _run_command(["git", "cherry", "origin/main", branch], cwd=root, timeout=30)
+    if not cherry.get("ok"):
+        return {
+            "verified": False,
+            "reason": "git_cherry_failed",
+            "error": cherry.get("stderr") or cherry.get("stdout"),
+        }
+    entries = [line.strip() for line in str(cherry.get("stdout") or "").splitlines() if line.strip()]
+    positive = [line for line in entries if line.startswith("+")]
+    equivalent = [line for line in entries if line.startswith("-")]
+    merge_result = _run_command(
+        ["git", "rev-list", "--merges", f"origin/main..{branch}"],
+        cwd=root,
+        timeout=30,
+    )
+    if not merge_result.get("ok"):
+        return {
+            "verified": False,
+            "reason": "merge_commit_inventory_failed",
+            "error": merge_result.get("stderr") or merge_result.get("stdout"),
+        }
+    merge_commits = [
+        line.strip()
+        for line in str(merge_result.get("stdout") or "").splitlines()
+        if line.strip()
+    ]
+    unmatched_merges: list[dict[str, Any]] = []
+    for commit in merge_commits:
+        changed_paths = _git_changed_files(f"{commit}^1", commit, cwd=root)
+        if changed_paths and not _git_paths_equivalent(commit, "origin/main", changed_paths, cwd=root):
+            unmatched_merges.append(
+                {
+                    "commit": commit,
+                    "changed_path_count": len(changed_paths),
+                    "changed_paths_digest": hashlib.sha256(
+                        "\n".join(sorted(changed_paths)).encode()
+                    ).hexdigest(),
+                }
+            )
+    verified = bool((equivalent or merge_commits) and not positive and not unmatched_merges)
+    return {
+        "verified": verified,
+        "reason": "all_branch_changes_present_in_origin_main" if verified else "unique_branch_changes_remain",
+        "positive_commit_count": len(positive),
+        "equivalent_commit_count": len(equivalent),
+        "merge_commit_count": len(merge_commits),
+        "unmatched_merge_count": len(unmatched_merges),
+        "positive_commits": [line.split(maxsplit=1)[-1] for line in positive],
+        "unmatched_merges": unmatched_merges,
+    }
+
+
+def _owner_supersession_comment_profile(
+    comment_url: str,
+    *,
+    branch: str,
+    expected_head: str,
+    root: Path,
+) -> dict[str, Any]:
+    pattern = re.compile(
+        rf"https://github\.com/{re.escape(GITHUB_REPO)}/pull/(\d+)#issuecomment-(\d+)",
+        re.IGNORECASE,
+    )
+    match = pattern.fullmatch(comment_url.strip().rstrip("/"))
+    if not match:
+        return {"verified": False, "reason": "invalid_supersession_comment_url"}
+    pr_number, comment_id = match.groups()
+    comment_result = _run_transport_read_with_retry(
+        ["gh", "api", f"repos/{GITHUB_REPO}/issues/comments/{comment_id}"],
+        cwd=root,
+        timeout=60,
+        attempts=2,
+    )
+    pr_result = _run_transport_read_with_retry(
+        ["gh", "api", f"repos/{GITHUB_REPO}/pulls/{pr_number}"],
+        cwd=root,
+        timeout=60,
+        attempts=2,
+    )
+    if not comment_result.get("ok") or not pr_result.get("ok"):
+        return {
+            "verified": False,
+            "reason": "supersession_github_read_failed",
+            "error": (
+                comment_result.get("stderr")
+                or comment_result.get("stdout")
+                or pr_result.get("stderr")
+                or pr_result.get("stdout")
+            ),
+        }
+    try:
+        comment = json.loads(str(comment_result.get("stdout") or "{}"))
+        pr = json.loads(str(pr_result.get("stdout") or "{}"))
+    except json.JSONDecodeError as exc:
+        return {"verified": False, "reason": "supersession_github_json_invalid", "error": str(exc)}
+    head = pr.get("head") if isinstance(pr.get("head"), dict) else {}
+    body = str(comment.get("body") or "")
+    association = str(comment.get("author_association") or "").upper()
+    directive_present = bool(re.search(r"(?i)\b(supersed\w*|obsolete|do not merge|do not cherry-pick)\b", body))
+    verified = bool(
+        str(comment.get("html_url") or "").rstrip("/") == comment_url.strip().rstrip("/")
+        and association in {"OWNER", "MEMBER", "COLLABORATOR"}
+        and directive_present
+        and str(pr.get("state") or "").lower() == "closed"
+        and not pr.get("merged_at")
+        and str(head.get("ref") or "") == branch
+        and str(head.get("sha") or "").lower() == expected_head
+    )
+    return {
+        "verified": verified,
+        "reason": "trusted_owner_supersession_comment" if verified else "supersession_comment_contract_mismatch",
+        "comment_url": comment_url,
+        "comment_author_association": association or None,
+        "comment_body_sha256": hashlib.sha256(body.encode()).hexdigest(),
+        "original_pr_url": str(pr.get("html_url") or "") or None,
+        "original_pr_state": pr.get("state"),
+        "original_pr_merged": bool(pr.get("merged_at")),
+        "original_pr_head": str(head.get("sha") or "") or None,
+    }
+
+
+def _cleanup_supersession_verification(
+    *,
+    branch: str,
+    bug_id: str | None,
+    expected_head: str,
+    mode: str,
+    authority_ref: str,
+    reason: str,
+    replacement_pr_url: str | None,
+    supersession_comment_url: str | None,
+    remote_ref: str,
+    root: Path,
+) -> dict[str, Any]:
+    normalized_head = expected_head.strip().lower()
+    blocking: list[str] = []
+    if not _FULL_GIT_COMMIT_RE.fullmatch(normalized_head):
+        blocking.append("expected superseded branch HEAD must be a full Git commit")
+    local_head = _git(
+        ["rev-parse", "--verify", f"refs/heads/{branch}^{{commit}}"],
+        cwd=root,
+        check=False,
+    ).strip().lower()
+    if local_head != normalized_head:
+        blocking.append(
+            f"superseded branch HEAD mismatch: expected {normalized_head or 'missing'}, observed {local_head or 'missing'}"
+        )
+    remote_head = str(remote_ref or "").strip().split(maxsplit=1)[0].lower() if remote_ref.strip() else None
+    if remote_head and remote_head != normalized_head:
+        blocking.append(
+            f"superseded remote branch HEAD mismatch: expected {normalized_head}, observed {remote_head}"
+        )
+    if mode not in SUPERSEDED_CLEANUP_MODES:
+        blocking.append(f"unsupported superseded cleanup mode: {mode}")
+    elif mode == "canonical_bug_replacement" and supersession_comment_url:
+        blocking.append("canonical BUG replacement mode does not accept --supersession-comment-url")
+    elif mode == "owner_comment" and replacement_pr_url:
+        blocking.append("owner comment mode does not accept --replacement-pr-url")
+    elif mode == "patch_equivalent" and (replacement_pr_url or supersession_comment_url):
+        blocking.append("patch-equivalent mode does not accept PR or comment authority arguments")
+    if len(reason.strip()) < 12:
+        blocking.append("superseded cleanup reason must contain at least 12 characters")
+    if not authority_ref.strip():
+        blocking.append("superseded cleanup requires an explicit authorization reference")
+    open_pr: dict[str, Any] | None = None
+    try:
+        open_pr = _rest_open_pr_for_branch(branch, root=root)
+    except WorkflowError as exc:
+        blocking.append(str(exc))
+    if open_pr:
+        blocking.append(f"superseded branch still has an open PR: {open_pr.get('url')}")
+
+    authority: dict[str, Any] = {"verified": False, "reason": "authority_not_checked"}
+    if not blocking and mode == "canonical_bug_replacement":
+        if not bug_id or not replacement_pr_url:
+            blocking.append("canonical BUG replacement mode requires --bug-id and --replacement-pr-url")
+        else:
+            try:
+                replacement = _verify_pr_merged(replacement_pr_url)
+            except WorkflowError as exc:
+                replacement = {"checked": False, "merged": False, "error": str(exc)}
+            merge_commit = _merge_commit_from_pr_check(replacement)
+            snapshot = _canonical_bug_record_snapshot(bug_id.upper(), root)
+            authority = {
+                "verified": bool(
+                    replacement.get("merged")
+                    and merge_commit
+                    and _git_commit_is_ancestor(merge_commit, "origin/main", root=root)
+                    and snapshot.get("persisted")
+                    and snapshot.get("status") in {"fixed", "verified"}
+                    and str(snapshot.get("pr_url") or "").rstrip("/") == replacement_pr_url.rstrip("/")
+                    and str(snapshot.get("fix_commit") or "").lower() == str(merge_commit).lower()
+                ),
+                "reason": "canonical_bug_replacement" if replacement.get("merged") else "replacement_pr_not_merged",
+                "replacement_pr_url": replacement_pr_url,
+                "replacement_merge_commit": merge_commit,
+                "canonical_bug_record": snapshot,
+            }
+    elif not blocking and mode == "owner_comment":
+        if not supersession_comment_url:
+            blocking.append("owner comment mode requires --supersession-comment-url")
+        else:
+            authority = _owner_supersession_comment_profile(
+                supersession_comment_url,
+                branch=branch,
+                expected_head=normalized_head,
+                root=root,
+            )
+    elif not blocking and mode == "patch_equivalent":
+        authority = _git_patch_equivalence_profile(branch, root=root)
+    if not authority.get("verified"):
+        blocking.append(f"supersession authority is not verified: {authority.get('reason') or 'unknown'}")
+    authority_digest = hashlib.sha256(
+        json.dumps(authority, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    return {
+        "schema_version": "aistock_cleanup_supersession_verification_v1",
+        "verified": not blocking,
+        "branch": branch,
+        "bug_id": bug_id.upper() if bug_id else None,
+        "expected_head": normalized_head,
+        "observed_local_head": local_head or None,
+        "observed_remote_head": remote_head,
+        "mode": mode,
+        "authority_ref": authority_ref.strip(),
+        "reason": reason.strip(),
+        "authority": authority,
+        "authority_digest": authority_digest,
+        "open_pr": open_pr,
+        "blocking": blocking,
+    }
+
+
 def _cleanup_preflight_fetch_origin(root: Path, *, apply: bool) -> dict[str, Any]:
     if not apply:
         return {"status": "skipped", "reason": "dry_run"}
@@ -15589,7 +16370,11 @@ def _canonical_bug_record_snapshot(bug_id: str, root: Path | None = None) -> dic
     if not bugs_root.exists():
         payload["reason"] = "bugs_root_missing"
         return payload
+    target_number = _bug_id_number(bug_id)
     for path in _bug_files(bugs_root):
+        filename_number = _bug_id_number_from_filename(path.name)
+        if filename_number not in {target_number, None}:
+            continue
         try:
             record = _load_json(path)
         except WorkflowError:
@@ -15603,6 +16388,8 @@ def _canonical_bug_record_snapshot(bug_id: str, root: Path | None = None) -> dic
                 "status": record.get("status"),
                 "github_issue_number": record.get("github_issue_number"),
                 "github_issue_url": record.get("github_issue_url"),
+                "pr_url": record.get("pr_url"),
+                "fix_commit": record.get("fix_commit"),
             }
         )
         return payload
@@ -16029,6 +16816,7 @@ def _github_pull_rest_readback(pr_url: str) -> dict[str, Any]:
         "merge_commit": str(payload.get("merge_commit_sha") or "").strip() or None,
         "head_sha": str(head.get("sha") or "").strip(),
         "head_ref": str(head.get("ref") or "").strip(),
+        "head_repo": str((head.get("repo") or {}).get("full_name") or ""),
         "base_ref": str(base.get("ref") or "").strip(),
         "url": str(payload.get("html_url") or pr_url),
         "body": str(payload.get("body") or ""),
@@ -16103,7 +16891,9 @@ def _run_merge_read_with_retry(
     event: str,
 ) -> dict[str, Any]:
     started = time.monotonic()
-    result = _run_transport_read_with_retry(args, cwd=REPO_ROOT, timeout=60, attempts=2)
+    # Both callers have a head-bound REST recovery path. Repeating GraphQL
+    # delays that recovery; mutations and generic REST/Git retries stay unchanged.
+    result = _run_transport_read_with_retry(args, cwd=REPO_ROOT, timeout=30, attempts=1)
     if bug_id:
         _append_event(
             bug_id,
@@ -16637,6 +17427,20 @@ def _complete_pr_merge_attempt(
     }
 
 
+def _required_check_poll_schedule(attempts: int, delay_seconds: int, *, adaptive: bool = False) -> tuple[int, ...]:
+    """Short initial polls within the existing total wait budget, never an unbounded watcher."""
+    count, delay = max(1, int(attempts)) - 1, max(0, int(delay_seconds))
+    if not adaptive or not delay:
+        return (delay,) * count
+    remaining, interval, schedule = count * delay, min(5, delay), []
+    while remaining:
+        wait = min(interval, remaining)
+        schedule.append(wait)
+        remaining -= wait
+        interval = min(interval * 2, delay)
+    return tuple(schedule)
+
+
 def _await_required_pr_checks(
     pr_url: str,
     *,
@@ -16644,6 +17448,7 @@ def _await_required_pr_checks(
     bug_id: str | None = None,
     attempts: int = 6,
     delay_seconds: int = 10,
+    adaptive: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, list[str]], list[dict[str, Any]]]:
     """Poll queued required checks briefly instead of forcing manual retries.
 
@@ -16653,13 +17458,12 @@ def _await_required_pr_checks(
     becomes a long ``gh pr checks --watch`` loop.
     """
 
-    max_attempts = max(1, int(attempts))
-    wait_seconds = max(0, int(delay_seconds))
+    schedule = _required_check_poll_schedule(attempts, delay_seconds, adaptive=adaptive)
     history: list[dict[str, Any]] = []
     latest_result: dict[str, Any] = {"ok": False, "stdout": "[]", "stderr": "not run"}
     latest_fallback: dict[str, Any] | None = None
     latest_summary: dict[str, list[str]] = {"failed": [], "pending": [], "non_blocking": [], "passed": []}
-    for index in range(1, max_attempts + 1):
+    for index in range(1, len(schedule) + 2):
         latest_result, latest_fallback = _merge_required_check_result_with_transport_fallback(
             pr_url,
             payload=payload,
@@ -16676,8 +17480,8 @@ def _await_required_pr_checks(
         )
         if latest_summary["failed"] or not latest_summary["pending"]:
             return latest_result, latest_fallback, latest_summary, history
-        if index < max_attempts and wait_seconds:
-            time.sleep(wait_seconds)
+        if index <= len(schedule) and schedule[index - 1]:
+            time.sleep(schedule[index - 1])
     if bug_id:
         _append_event(
             bug_id,
@@ -16724,6 +17528,7 @@ def _merge_pr_if_ready_for_bug(
     *,
     required_check_attempts: int = 6,
     required_check_delay_seconds: int = 10,
+    adaptive_required_checks: bool = False,
 ) -> dict[str, Any]:
     payload, view_fallback = _merge_pr_view_with_transport_fallback(pr_url, bug_id=bug_id)
     if payload.get("state") == "MERGED":
@@ -16737,6 +17542,7 @@ def _merge_pr_if_ready_for_bug(
         bug_id=bug_id,
         attempts=required_check_attempts,
         delay_seconds=required_check_delay_seconds,
+        adaptive=adaptive_required_checks,
     )
     failed = check_summary["failed"]
     pending = check_summary["pending"]
@@ -17924,14 +18730,14 @@ def _merge_close_sync_pr_if_ready(
             "next_command": f"gh pr merge {pr_url} --squash",
         }
     try:
-        # Close-sync CI normally queues behind the source merge's default-branch
-        # Keep the stable CI verdict wait bounded, but long enough to avoid a
-        # guaranteed second manual finalizer invocation for an active CI job.
+        # Metadata-only CI is normally short: poll early without extending the
+        # existing total wait budget or weakening exact-HEAD required checks.
         result = _merge_pr_if_ready_for_bug(
             bug_id,
             pr_url,
             required_check_attempts=16,
             required_check_delay_seconds=30,
+            adaptive_required_checks=True,
         )
     except WorkflowError as exc:
         return {
@@ -18503,8 +19309,16 @@ def build_merge_finalizer_plan(
     )
     if close_sync_root_sync_deferred:
         root_sync_deferrals.append(close_sync_root_sync_deferred)
+    state_root = (
+        _canonical_root()
+        if (cleanup_plan or {}).get("workflow_gate") == "cleanup_done" and not REPO_ROOT.exists()
+        else REPO_ROOT
+    )
     try:
-        postmortem = build_postmortem_plan(bug_id=canonical_bug_id)
+        postmortem = (
+            build_postmortem_plan(bug_id=canonical_bug_id, worktree=str(state_root))
+            if state_root != REPO_ROOT else build_postmortem_plan(bug_id=canonical_bug_id)
+        )
     except WorkflowError as exc:
         postmortem = {
             "schema_version": "aistock_issue_workflow_postmortem_v1",
@@ -18604,6 +19418,7 @@ def build_merge_finalizer_plan(
         _write_state(
             state_bug_id,
             state=durable_state,
+            root=state_root,
             pr_url=source_pr_url,
             commit=merge_commit,
             close_sync=close_sync,
@@ -18640,11 +19455,15 @@ def build_run_plan(
     pr_url: str | None = None,
     merge: bool = False,
     sync_root: bool = False,
+    merge_close_sync_pr: bool = False,
+    cleanup: bool = False,
     branch: str | None = None,
     worktree: str | None = None,
     production_gates: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     canonical_bug_id = bug_id.strip().upper()
+    if (cleanup or merge_close_sync_pr) and mode != "merge":
+        raise WorkflowError("aftercare apply flags require run --mode merge")
     if mode in {"plan", "fix"}:
         if not issue_json:
             active_registry_record = _find_bug_record_from_active_registry(canonical_bug_id)
@@ -18780,8 +19599,8 @@ def build_run_plan(
             allow_missing_linkage=allow_missing_linkage,
             production_gates=production_gates or _production_gates_payload(),
             sync_root=sync_root,
-            merge_close_sync_pr=False,
-            cleanup=False,
+            merge_close_sync_pr=merge_close_sync_pr,
+            cleanup=cleanup,
             apply=True,
             source_pr_check=merge_result.get("verified") if isinstance(merge_result, dict) else None,
         )
@@ -18807,6 +19626,11 @@ def build_run_plan(
         _write_state(
             canonical_bug_id,
             state=wrapper_state,
+            root=(
+                _canonical_root()
+                if (finalizer.get("cleanup") or {}).get("workflow_gate") == "cleanup_done" and not REPO_ROOT.exists()
+                else REPO_ROOT
+            ),
             pr_url=pr_url,
             commit=finalizer.get("source_merge_commit"),
             merge=merge_result,
@@ -19041,16 +19865,30 @@ def build_close_sync_plan(
         bug_id=canonical_bug_id,
         create=create_registry_worktree,
         dry_run=not apply,
+        issue_json=source_path,
+        source_pr_url=pr_url,
+        merge_commit=merge_commit,
     )
     close_sync_root = Path(registry_worktree_plan["worktree"]) if create_registry_worktree else REPO_ROOT
     if create_registry_worktree and apply:
-        rel_source = source_path.resolve().relative_to(REPO_ROOT.resolve())
-        target_source = close_sync_root / rel_source
+        target_source = _issue_json_path_for_worktree(source_path, close_sync_root)
         if not target_source.exists():
             raise WorkflowError(f"BUG JSON does not exist in close-sync worktree: {target_source}")
         record = _load_json(target_source)
         source_path = target_source
-    apply_guard = _validate_close_sync_apply_target(close_sync_root) if apply else None
+    recoverable_dirty_record = (
+        (registry_worktree_plan.get("git") or {}).get("recoverable_dirty_record")
+        if registry_worktree_plan.get("recoverable_dirty_bug_json")
+        else None
+    )
+    apply_guard = (
+        _validate_close_sync_apply_target(
+            close_sync_root,
+            recoverable_dirty_record=recoverable_dirty_record,
+        )
+        if apply
+        else None
+    )
     if apply_guard and apply_guard["blocking"] and not allow_current_worktree:
         raise WorkflowError("; ".join(apply_guard["blocking"]))
     output_dir = close_sync_root / WORKFLOW_ROOT / canonical_bug_id
@@ -19194,6 +20032,10 @@ def build_close_sync_plan(
                 runtime_receipt,
             )
         updated["runtime_contract"] = updated_runtime
+        if merge_commit:
+            updated["file_scope_contract"] = _actual_file_scope_contract(
+                record, _merged_commit_changed_files(merge_commit),
+            )
         _write_json(source_path, updated)
         evidence_payload = {
             **payload,
@@ -19815,6 +20657,7 @@ def build_cleanup_after_merge_plan(
     source_receipt_path: str | None = None,
     verified_pr_check: dict[str, Any] | None = None,
     preflight_fetch: dict[str, Any] | None = None,
+    supersession: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(canonical_root) if canonical_root else _canonical_root()
     branch_bug_match = BUG_ID_RE.search(branch)
@@ -19844,6 +20687,42 @@ def build_cleanup_after_merge_plan(
         cwd=root,
         verified_pr_check=verified_pr_check,
     )
+    supersession_verification: dict[str, Any] | None = None
+    if supersession is not None:
+        supersession_verification = _cleanup_supersession_verification(
+            branch=branch,
+            bug_id=evidence_bug_id,
+            expected_head=str(supersession.get("expected_head") or ""),
+            mode=str(supersession.get("mode") or ""),
+            authority_ref=str(supersession.get("authority_ref") or ""),
+            reason=str(supersession.get("reason") or ""),
+            replacement_pr_url=(
+                str(supersession.get("replacement_pr_url"))
+                if supersession.get("replacement_pr_url")
+                else None
+            ),
+            supersession_comment_url=(
+                str(supersession.get("supersession_comment_url"))
+                if supersession.get("supersession_comment_url")
+                else None
+            ),
+            remote_ref=remote_ref,
+            root=root,
+        )
+        if supersession_verification.get("verified"):
+            merge_verification = {
+                "method": f"superseded_{supersession_verification.get('mode')}",
+                "verified": True,
+                "squash_merge_verified": False,
+                "tree_equivalent_to_origin_main": (
+                    supersession_verification.get("mode") == "patch_equivalent"
+                ),
+                "tree_equivalence_ref": branch,
+                "pr_check": None,
+                "path_equivalence": supersession_verification.get("authority"),
+                "merge_commit_path_equivalence": None,
+                "origin_path_equivalence": None,
+            }
     squash_merge_verified = bool(merge_verification["squash_merge_verified"])
     pr_check = merge_verification["pr_check"]
     tree_equivalent = bool(merge_verification["tree_equivalent_to_origin_main"])
@@ -20074,6 +20953,11 @@ def build_cleanup_after_merge_plan(
         blocking.append("refusing to cleanup the currently checked-out branch")
     if not merge_verified:
         blocking.append(f"branch is not merged into origin/main: {branch}")
+    if supersession_verification and supersession_verification.get("blocking"):
+        blocking.extend(
+            f"superseded cleanup: {item}"
+            for item in supersession_verification.get("blocking") or []
+        )
     if worktree_path and worktree_exists and worktree_is_current_cwd and apply and not root.exists():
         blocking.append(f"refusing to remove the current working directory because canonical root is unavailable: {worktree_path}")
     if (
@@ -20105,6 +20989,7 @@ def build_cleanup_after_merge_plan(
         worktree_ignored_artifacts
         and worktree_ignored_artifacts.get("transient_count")
         and not evidence_finalization.get("durable_receipt_present")
+        and not (supersession_verification or {}).get("verified")
     ):
         blocking.append(
             "transient evidence cannot be purged before compact durable receipt finalization: "
@@ -20175,6 +21060,7 @@ def build_cleanup_after_merge_plan(
         "sync_root": sync_root,
         "merged_into_origin_main": merged,
         "merge_verification": merge_verification,
+        "supersession_verification": supersession_verification,
         "squash_merge_verified": squash_merge_verified,
         "tree_equivalent_to_origin_main": tree_equivalent,
         "pr_check": pr_check,
@@ -20254,6 +21140,20 @@ def build_cleanup_after_merge_plan(
                 )
             else:
                 applied.append({"command": "git merge --ff-only origin/main", "result": _execute_checked(["git", "merge", "--ff-only", "origin/main"], cwd=root, timeout=120)})
+            payload["git_object_mirror"] = _refresh_ci_git_mirror_after_root_sync(root)
+            if payload["git_object_mirror"].get("warning"):
+                payload.setdefault("warnings", []).append(payload["git_object_mirror"]["warning"])
+        if supersession_verification:
+            payload["superseded_cleanup_receipt"] = _persist_superseded_cleanup_receipt(
+                supersession_verification,
+                status="authorized_pre_cleanup",
+            )
+            payload["evidence_finalization"] = {
+                **evidence_finalization,
+                "status": "finalized_superseded_cleanup_receipt",
+                "durable_receipt_present": True,
+                "superseded_cleanup_receipt": payload["superseded_cleanup_receipt"],
+            }
         if worktree_path and worktree_path.exists() and worktree_is_current_cwd:
             os.chdir(root)
             applied.append(
@@ -20335,6 +21235,12 @@ def build_cleanup_after_merge_plan(
             if deferred_only:
                 return payload
             raise WorkflowError(f"post-cleanup verification failed: {cleanup_verification}")
+        if supersession_verification:
+            payload["superseded_cleanup_receipt"] = _persist_superseded_cleanup_receipt(
+                supersession_verification,
+                status="cleanup_done",
+                cleanup_verification=cleanup_verification,
+            )
         if bug_id:
             registry_cleanup = build_registry_intake_cleanup_plan(
                 bug_id=bug_id,
@@ -20901,6 +21807,7 @@ def cmd_ci_issue_janitor(args: argparse.Namespace) -> int:
         limit=args.limit,
         skip_github_summary=args.skip_github_summary,
         close_infra=not args.superseded_only,
+        runner_recovered_only=args.runner_recovered_only,
     )
     _emit_args(payload, args)
     return 0 if payload.get("workflow_gate") in {"ready_for_apply", "closed", "no_actionable_ci_issues"} else 2
@@ -20962,12 +21869,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         pr_url=args.pr_url,
         merge=args.merge,
         sync_root=args.sync_root,
+        merge_close_sync_pr=getattr(args, "merge_close_sync_pr", False),
+        cleanup=getattr(args, "cleanup", False),
         branch=args.branch,
         worktree=args.worktree,
         production_gates=_production_gates_payload(args),
     )
     _emit_args(payload, args)
-    return 0 if payload.get("workflow_gate") not in {"validation_evidence_missing", "blocked"} else 2
+    return 0 if payload.get("workflow_gate") not in {"validation_evidence_missing", "blocked", "merged_aftercare_blocked"} else 2
 
 
 def cmd_resume(args: argparse.Namespace) -> int:
@@ -21149,6 +22058,27 @@ def cmd_cleanup_after_merge(args: argparse.Namespace) -> int:
     return 0 if payload.get("workflow_gate") in {"ready_for_cleanup", "cleanup_done"} else 2
 
 
+def cmd_cleanup_superseded(args: argparse.Namespace) -> int:
+    payload = build_cleanup_after_merge_plan(
+        branch=args.branch,
+        bug_id=args.bug_id,
+        worktree=args.worktree,
+        apply=args.apply,
+        sync_root=args.sync_root,
+        canonical_root=args.canonical_root,
+        supersession={
+            "expected_head": args.expected_head,
+            "mode": args.mode,
+            "authority_ref": args.authorization_ref,
+            "reason": args.reason,
+            "replacement_pr_url": args.replacement_pr_url,
+            "supersession_comment_url": args.supersession_comment_url,
+        },
+    )
+    _emit_args(payload, args)
+    return 0 if payload.get("workflow_gate") in {"ready_for_cleanup", "cleanup_done"} else 2
+
+
 def cmd_cleanup_after_merge_batch(args: argparse.Namespace) -> int:
     payload = build_cleanup_after_merge_batch_plan(
         manifest_path=args.manifest,
@@ -21294,6 +22224,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only close unlinked issues superseded by later successful runs; leave infra-only issues for manual ops review.",
     )
     ci_janitor.add_argument(
+        "--runner-recovered-only",
+        action="store_true",
+        help="Close only unlinked Nightly runner-infrastructure issues after a successful runner preflight.",
+    )
+    ci_janitor.add_argument(
         "--apply",
         action="store_true",
         help="Close only unlinked issues classified as superseded_by_later_main_success or infra-only.",
@@ -21366,6 +22301,8 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--branch", help="Task branch for post-merge cleanup planning.")
     run.add_argument("--worktree", help="Task worktree for post-merge cleanup planning.")
     run.add_argument("--sync-root", action="store_true", help="Plan canonical root fast-forward after merge.")
+    run.add_argument("--merge-close-sync-pr", action="store_true", help="Complete the existing green-check close-sync merge in the same authorized invocation.")
+    run.add_argument("--cleanup", action="store_true", help="Explicitly authorize the existing exact task cleanup; default source merge does not delete.")
     run.add_argument("--production-ddl-gate", default="noop")
     run.add_argument("--production-frontend-dependency-gate", default="noop")
     run.add_argument("--production-backend-dependency-gate", default="noop")
@@ -21637,6 +22574,25 @@ def build_parser() -> argparse.ArgumentParser:
     add_output_options(cleanup)
     cleanup.set_defaults(func=cmd_cleanup_after_merge)
 
+    superseded_cleanup = sub.add_parser(
+        "cleanup-superseded",
+        help="Safely clean an exact unmerged branch with verified supersession authority.",
+    )
+    superseded_cleanup.add_argument("--branch", required=True)
+    superseded_cleanup.add_argument("--bug-id")
+    superseded_cleanup.add_argument("--worktree", required=True)
+    superseded_cleanup.add_argument("--expected-head", required=True)
+    superseded_cleanup.add_argument("--mode", required=True, choices=SUPERSEDED_CLEANUP_MODES)
+    superseded_cleanup.add_argument("--authorization-ref", required=True)
+    superseded_cleanup.add_argument("--reason", required=True)
+    superseded_cleanup.add_argument("--replacement-pr-url")
+    superseded_cleanup.add_argument("--supersession-comment-url")
+    superseded_cleanup.add_argument("--sync-root", action="store_true")
+    superseded_cleanup.add_argument("--canonical-root")
+    superseded_cleanup.add_argument("--apply", action="store_true")
+    add_output_options(superseded_cleanup)
+    superseded_cleanup.set_defaults(func=cmd_cleanup_superseded)
+
     cleanup_batch = sub.add_parser(
         "cleanup-after-merge-batch",
         help="Safely clean an explicit bounded manifest of merged worktrees with one shared fetch.",
@@ -21669,11 +22625,73 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _assert_task_git_identity(root: Path) -> None:
+    if _TASK_GIT_IDENTITY is None:
+        return
+    expected_root, expected_head, expected_branch = _TASK_GIT_IDENTITY
+    if root.resolve() != expected_root or (
+        _git(["rev-parse", "HEAD"], cwd=root) != expected_head
+        or _git(["symbolic-ref", "-q", "HEAD"], cwd=root, check=False) != expected_branch
+    ):
+        raise WorkflowError("task Git context/HEAD/branch drift; regenerate validation evidence in the task worktree")
+
+
+def _check_pr_receipt_identity(finish: dict[str, Any], *, root: Path) -> None:
+    _assert_task_git_identity(root)
+    head = _git(["rev-parse", "HEAD"], cwd=root)
+    receipts = finish.get("validation_receipts") or []
+    digest = hashlib.sha256(
+        "\n".join(sorted(str(item).replace("\\", "/") for item in finish.get("changed_files") or [])).encode("utf-8")
+    ).hexdigest()
+    if not receipts or any(
+        not isinstance(item, dict) or item.get("commit") != head or item.get("changed_files_digest") != digest
+        for item in receipts
+    ):
+        raise WorkflowError("validation receipt does not match task HEAD; regenerate finish evidence before push/PR")
+
+
+@contextlib.contextmanager
+def _cli_task_context(args: argparse.Namespace):
+    """Keep imports canonical while binding task data and Git to the caller checkout."""
+    global REPO_ROOT, BUGS_ROOT, RUNTIME_TARGET_CATALOG, _TASK_GIT_IDENTITY
+    root = _task_execution_root(args.command)
+    previous = (REPO_ROOT, BUGS_ROOT, RUNTIME_TARGET_CATALOG, _TASK_GIT_IDENTITY)
+    flow_paths = {
+        "REPO_ROOT": root,
+        "CATALOG_ROOT": root / "tests/aistock_validation/catalog",
+        "BUGS_ROOT": root / "tests/aistock_validation/bugs",
+        "CANDIDATES_ROOT": root / "tests/aistock_validation/runs/candidates",
+        "FAILURES_ROOT": root / "tests/aistock_validation/runs/failures",
+        "MODULE_REGISTRY": root / "tests/aistock_validation/catalog/module_registry.yaml",
+        "FILE_OWNERSHIP": root / "tests/aistock_validation/catalog/file_ownership.yaml",
+        "TEST_PLANS": root / "tests/aistock_validation/catalog/test_plans.yaml",
+    }
+    previous_flow = {key: getattr(flow, key) for key in flow_paths}
+    REPO_ROOT, BUGS_ROOT = root, flow_paths["BUGS_ROOT"]
+    RUNTIME_TARGET_CATALOG = root / "docs/standards/aistock_runtime_targets_v1.yaml"
+    strict = args.command in {"finish", "finish-batch"} or (args.command == "run" and getattr(args, "mode", None) == "pr")
+    try:
+        for key, value in flow_paths.items():
+            setattr(flow, key, value)
+        _TASK_GIT_IDENTITY = (
+            (root, _git(["rev-parse", "HEAD"], cwd=root), _git(["symbolic-ref", "-q", "HEAD"], cwd=root, check=False))
+            if strict else None
+        )
+        yield
+        if strict:
+            _assert_task_git_identity(root)
+    finally:
+        REPO_ROOT, BUGS_ROOT, RUNTIME_TARGET_CATALOG, _TASK_GIT_IDENTITY = previous
+        for key, value in previous_flow.items():
+            setattr(flow, key, value)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        return int(args.func(args))
+        with _cli_task_context(args):
+            return int(args.func(args))
     except WorkflowPayloadError as exc:
         _emit_args(exc.payload, args)
         return 2

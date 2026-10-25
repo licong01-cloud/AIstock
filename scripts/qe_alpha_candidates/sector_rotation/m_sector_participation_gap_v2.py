@@ -165,6 +165,20 @@ def _read_sector_window(
         if "/data" not in handle:
             raise ValueError("sector_data must contain the /data HDF group")
         group = handle.root.data
+        if hasattr(group, "table"):
+            layout = "table"
+        else:
+            layout = "fixed"
+
+    if layout == "table":
+        return _read_sector_table_window(
+            path,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    with tables.open_file(path, mode="r") as handle:
+        group = handle.root.data
         required_nodes = (
             "axis1_label0",
             "axis1_label1",
@@ -246,6 +260,82 @@ def _read_sector_window(
     if frame.empty:
         raise ValueError("sector_data has no rows in the requested date window")
     return frame
+
+
+def _read_sector_table_window(
+    path: Path,
+    *,
+    start_date: pd.Timestamp | None,
+    end_date: pd.Timestamp | None,
+) -> pd.DataFrame:
+    """Read the approved pandas table layout with an exact rolling warmup."""
+
+    with pd.HDFStore(path, mode="r") as store:
+        storer = store.get_storer("data")
+        if storer is None or storer.format_type != "table":
+            raise ValueError("sector_data /data must use pandas fixed or table format")
+        stored_columns = {
+            str(column)
+            for _, columns in storer.non_index_axes
+            for column in columns
+        }
+        missing_columns = [
+            column for column in REQUIRED_SECTOR_COLUMNS if column not in stored_columns
+        ]
+        if missing_columns:
+            raise ValueError(
+                "sector_data missing required columns: " + ",".join(missing_columns)
+            )
+
+        table = storer.table
+        if table is None or "datetime" not in table.colnames:
+            raise ValueError("sector_data table format must index datetime")
+        date_values = np.asarray(table.cols.datetime[:], dtype=np.int64)
+        if date_values.size == 0:
+            raise ValueError("sector_data has no rows in the requested date window")
+        if np.any(date_values[1:] < date_values[:-1]):
+            raise ValueError("sector_data table datetime values must be sorted")
+        unique_dates = date_values[
+            np.r_[True, date_values[1:] != date_values[:-1]]
+        ]
+
+        start_level = 0
+        if start_date is not None:
+            requested_level = int(
+                np.searchsorted(unique_dates, start_date.value, side="left")
+            )
+            start_level = max(0, requested_level - (SLOW_WINDOW - 1))
+        stop_level = len(unique_dates)
+        if end_date is not None:
+            stop_level = int(
+                np.searchsorted(
+                    unique_dates,
+                    (end_date + pd.Timedelta(days=1)).value,
+                    side="left",
+                )
+            )
+        if start_level >= stop_level:
+            raise ValueError("sector_data has no rows in the requested date window")
+
+        start_row = int(
+            np.searchsorted(date_values, unique_dates[start_level], side="left")
+        )
+        stop_row = (
+            len(date_values)
+            if stop_level >= len(unique_dates)
+            else int(
+                np.searchsorted(date_values, unique_dates[stop_level], side="left")
+            )
+        )
+        frame = store.select(
+            "data",
+            start=start_row,
+            stop=stop_row,
+            columns=list(REQUIRED_SECTOR_COLUMNS),
+        )
+    if frame.empty:
+        raise ValueError("sector_data has no rows in the requested date window")
+    return _validated_frame(frame, name="sector_data")
 
 
 def _normalized_date(value: str | pd.Timestamp | None) -> pd.Timestamp | None:

@@ -5,7 +5,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from .models import ResearchError, read_json
-from .runner import execute, validate_spec, write_json
+from .runner import execute, reuse_path, validate_spec, write_json
 
 
 class ResearchService:
@@ -83,13 +83,23 @@ class ResearchService:
                 or [item.get("factor_name") for item in candidates if isinstance(item, dict)] != expected_names
                 or len(candidates) != len(expected_names)):
             raise ResearchError("result_mismatch", "Result must contain every candidate in the recorded attempt")
-        for item in candidates:
+        for item, candidate_spec in zip(candidates, execution["spec"]["candidates"]):
             if not isinstance(item.get("metrics"), dict) or item.get("scope") != "research_candidate":
                 raise ResearchError("result_mismatch", "Missing candidate evaluation result")
             folder = expected.parent / item["factor_name"]
+            reused = candidate_spec.get("values_artifact")
+            if reused is not None and (
+                    item.get("values_origin") != "reused_reviewed_artifact"
+                    or item.get("reuse_basis") != candidate_spec["reuse_basis"]):
+                raise ResearchError("result_mismatch", "Reuse origin/basis differs from recorded attempt")
+            if reused is None and ("values_origin" in item or "reuse_basis" in item):
+                raise ResearchError("result_mismatch", "Undeclared reuse metadata")
             for field, filename in (("values", "values.h5"), ("source_script", "factor.py")):
                 path = Path(item.get(field, ""))
-                if path.is_symlink() or path.resolve() != (folder / filename).resolve() or not path.is_file():
+                target = reuse_path(reused) if field == "values" and reused is not None else folder / filename
+                if reused is not None and field == "values" and path != target:
+                    raise ResearchError("result_mismatch", "Reuse path differs from recorded attempt")
+                if path.is_symlink() or path.resolve() != target.resolve() or not path.is_file():
                     raise ResearchError("result_mismatch", "Candidate artifact missing or belongs to another attempt")
         comparison = result.get("research_comparison")
         expected_comparison = execution["spec"].get("comparison")
@@ -135,6 +145,152 @@ class ResearchService:
                 raise ResearchError("result_mismatch", "Comparison result is missing or has the wrong contract")
         elif comparison is not None:
             raise ResearchError("result_mismatch", "Legacy request cannot attach an undeclared comparison")
+        full_evaluation = result.get("full_evaluation")
+        expected_full_evaluation = execution["spec"].get("full_evaluation")
+        if expected_full_evaluation is not None:
+            correlations = (
+                full_evaluation.get("correlations")
+                if isinstance(full_evaluation, dict)
+                else None
+            )
+            expected_reference_count = len(
+                set(expected_full_evaluation["reference_value_artifacts"])
+                - set(expected_names)
+            )
+            expected_reference_names = sorted(
+                set(expected_full_evaluation["reference_value_artifacts"])
+                - set(expected_names)
+            )
+            expected_parameters = {
+                key: expected_full_evaluation[key]
+                for key in (
+                    "correlation_batch_size",
+                    "correlation_half_life",
+                    "correlation_min_stocks",
+                    "correlation_min_effective_days",
+                )
+            }
+            windows = (
+                correlations.get("windows") if isinstance(correlations, dict) else None
+            )
+            candidate_windows = (
+                correlations.get("candidate_candidate_windows")
+                if isinstance(correlations, dict)
+                else None
+            )
+
+            expected_external_pairs = {
+                (candidate, reference)
+                for candidate in expected_names
+                for reference in expected_reference_names
+            }
+            expected_internal_pairs = {
+                (left, right)
+                for position, left in enumerate(sorted(expected_names))
+                for right in sorted(expected_names)[position + 1 :]
+            }
+
+            def closed(rows, expected_pairs):
+                return (
+                    isinstance(rows, list)
+                    and all(isinstance(row, dict) for row in rows)
+                    and all(
+                        isinstance(row.get("candidate"), str)
+                        and isinstance(row.get("reference"), str)
+                        and row.get("status") in {"available", "unavailable"}
+                        for row in rows
+                    )
+                    and len(rows) == len(expected_pairs)
+                    and {
+                        (row.get("candidate"), row.get("reference")) for row in rows
+                    }
+                    == expected_pairs
+                )
+
+            external_closed = (
+                isinstance(windows, list)
+                and all(
+                    isinstance(window, dict)
+                    and window.get("requested_pairs")
+                    == len(expected_names) * expected_reference_count
+                    and closed(
+                        window.get("records"), expected_external_pairs,
+                    )
+                    and window.get("available_pairs")
+                    == sum(
+                        row.get("status") == "available"
+                        for row in window.get("records", [])
+                    )
+                    and window.get("unavailable_pairs")
+                    == sum(
+                        row.get("status") == "unavailable"
+                        for row in window.get("records", [])
+                    )
+                    and window.get("available_pairs", 0)
+                    + window.get("unavailable_pairs", 0)
+                    == window.get("requested_pairs")
+                    for window in windows
+                )
+            )
+            internal_pair_count = len(expected_names) * (len(expected_names) - 1) // 2
+            internal_closed = (
+                isinstance(candidate_windows, list)
+                and all(
+                    isinstance(window, dict)
+                    and window.get("requested_pairs") == internal_pair_count
+                    and closed(window.get("records"), expected_internal_pairs)
+                    and window.get("available_pairs")
+                    == sum(
+                        row.get("status") == "available"
+                        for row in window.get("records", [])
+                    )
+                    and window.get("unavailable_pairs")
+                    == sum(
+                        row.get("status") == "unavailable"
+                        for row in window.get("records", [])
+                    )
+                    and window.get("available_pairs", 0)
+                    + window.get("unavailable_pairs", 0)
+                    == internal_pair_count
+                    for window in candidate_windows
+                )
+            )
+            if (
+                not isinstance(full_evaluation, dict)
+                or full_evaluation.get("schema_version") != "factor_research_full_evaluation_v1"
+                or full_evaluation.get("scope")
+                != "research_only_not_official_metrics_correlations_or_qe_result"
+                or full_evaluation.get("candidate_names") != expected_names
+                or full_evaluation.get("official_database_writes") != 0
+                or not isinstance(full_evaluation.get("windows"), dict)
+                or not isinstance(correlations, dict)
+                or correlations.get("reference_count") != expected_reference_count
+                or correlations.get("reference_names") != expected_reference_names
+                or correlations.get("parameters") != expected_parameters
+                or correlations.get("reference_reference_pairs_computed") != 0
+                or not isinstance(correlations.get("window_names"), list)
+                or correlations.get("window_names")
+                != [window.get("window") for window in windows]
+                or correlations.get("window_names")
+                != [window.get("window") for window in candidate_windows]
+                or len(set(correlations.get("window_names")))
+                != len(correlations.get("window_names"))
+                or any(
+                    name not in full_evaluation.get("windows", {})
+                    or name.startswith("month_")
+                    for name in correlations.get("window_names")
+                )
+                or not external_closed
+                or not internal_closed
+            ):
+                raise ResearchError(
+                    "result_mismatch",
+                    "Full evaluation result is missing or has the wrong contract",
+                )
+        elif full_evaluation is not None:
+            raise ResearchError(
+                "result_mismatch", "Legacy request cannot attach an undeclared full evaluation"
+            )
         return self.repository.record({"task_id": value["task_id"], "record_id": value["record_id"],
                                        "expected_revision": value["expected_revision"], "record_type": "result",
                                        "attempt_id": value["attempt_id"], "summary": "候选评价完成（不代表因子有效）",

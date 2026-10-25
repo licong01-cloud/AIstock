@@ -153,6 +153,32 @@ def _merge_data_stats_extra_info(existing: Any, overlay: Dict[str, Any]) -> Dict
     return info
 
 
+def _data_gap_presence_query(
+    data_kind: str, table_name: str, date_column: str, start: dt.date, end: dt.date,
+) -> tuple[str, tuple]:
+    """Day presence only, not symbol/bar completeness; leave the time key bare."""
+    table = _qualified_table_name(table_name)
+    column = _quote_identifier(date_column)
+    params = (start, end)
+    predicate = f"{column}::date = cal_date"
+    if data_kind == KLINE_MINUTE_RAW_KIND:
+        if date_column != "trade_time":
+            raise ValueError("minute gap query requires trade_time")
+        # Fixed bounds permit chunk pruning before the correlated EXISTS probe.
+        # Explicit exchange timezone makes results independent of pool timezone.
+        predicate = f"""{column} >= (cal_date::timestamp AT TIME ZONE 'Asia/Shanghai')
+            AND {column} < ((cal_date + 1)::timestamp AT TIME ZONE 'Asia/Shanghai')
+            AND {column} >= (%s::date::timestamp AT TIME ZONE 'Asia/Shanghai')
+            AND {column} < (%s::date::timestamp AT TIME ZONE 'Asia/Shanghai')"""
+        params += (start, end + dt.timedelta(days=1))
+    return f"""
+        SELECT cal_date AS d FROM market.trading_calendar
+         WHERE is_trading = TRUE AND cal_date >= %s AND cal_date <= %s
+           AND EXISTS (SELECT 1 FROM {table} WHERE {predicate})
+         ORDER BY cal_date
+    """, params
+
+
 # Per-statement budget for stats queries inside the refresh loop (BUG-960).
 # The default checkout timeout is sized for API requests; full-table/windowed
 # COUNT/MAX scans on heavy hypertables legitimately need more headroom. The
@@ -170,6 +196,7 @@ def _refresh_one_data_stats(cfg: Dict[str, Any]) -> Dict[str, Any]:
             table_name = _qualified_table_name(cfg.get("table_name"))
             date_column = str(cfg.get("date_column") or "").strip()
             updated_column = str(cfg.get("updated_column") or "").strip()
+            last_updated_at = None
 
             if data_kind == KLINE_MINUTE_RAW_KIND:
                 if date_column != "trade_time":
@@ -177,17 +204,21 @@ def _refresh_one_data_stats(cfg: Dict[str, Any]) -> Dict[str, Any]:
                         "reason_code=data_stats_minute_window_invalid_config "
                         f"data_kind={data_kind} date_column={date_column!r}"
                     )
+                updated_projection = (
+                    f"MAX({_quote_identifier(updated_column)})" if updated_column else "NULL::timestamptz"
+                )
                 cur.execute(
                     f"""
                     SELECT COUNT(*),
                            MIN({_quote_identifier(date_column)})::date,
-                           MAX({_quote_identifier(date_column)})::date
+                           MAX({_quote_identifier(date_column)})::date,
+                           {updated_projection} AS last_updated_at
                       FROM {table_name}
                      WHERE {_quote_identifier(date_column)} >= CURRENT_DATE - (%s::text)::interval
                     """,
                     (f"{KLINE_MINUTE_RAW_STATS_WINDOW_MONTHS} months",),
                 )
-                row_count, min_date, max_date = cur.fetchone()
+                row_count, min_date, max_date, last_updated_at = cur.fetchone()
                 extra_info = _merge_data_stats_extra_info(
                     cfg.get("extra_info"),
                     {
@@ -219,24 +250,16 @@ def _refresh_one_data_stats(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 extra_info = _merge_data_stats_extra_info(cfg.get("extra_info"), {})
                 stats_scope = "full_table"
 
-            last_updated_at = None
-            if updated_column:
-                if data_kind == KLINE_MINUTE_RAW_KIND:
-                    cur.execute(
-                        f"""
-                        SELECT MAX({_quote_identifier(updated_column)})
-                          FROM {table_name}
-                         WHERE {_quote_identifier(date_column)} >= CURRENT_DATE - (%s::text)::interval
-                        """,
-                        (f"{KLINE_MINUTE_RAW_STATS_WINDOW_MONTHS} months",),
-                    )
-                else:
-                    cur.execute(f"SELECT MAX({_quote_identifier(updated_column)}) FROM {table_name}")
+            if updated_column and data_kind != KLINE_MINUTE_RAW_KIND:
+                cur.execute(f"SELECT MAX({_quote_identifier(updated_column)}) FROM {table_name}")
                 last_updated_at = cur.fetchone()[0]
 
             cur.execute(
-                "SELECT pg_total_relation_size(%s::regclass), pg_indexes_size(%s::regclass)",
-                (str(cfg.get("table_name") or "").strip(), str(cfg.get("table_name") or "").strip()),
+                """SELECT COALESCE(h.total_bytes, pg_total_relation_size(t.rel)),
+                          COALESCE(h.index_bytes, pg_indexes_size(t.rel))
+                     FROM (VALUES (%s::regclass)) AS t(rel)
+                     LEFT JOIN LATERAL hypertable_detailed_size(t.rel) AS h ON TRUE""",
+                (str(cfg.get("table_name") or "").strip(),),
             )
             table_bytes, index_bytes = cur.fetchone()
 
@@ -599,6 +622,8 @@ def _infer_source(dataset: Optional[str]) -> Optional[str]:
         "stk_limit",
         "suspend_d",
         "margin_detail",
+        "etf_share_size",
+        "etf_basic_snapshots",
         *FINANCIAL_EVENT_RAW_DATASETS,
     }:
         return "tushare"
@@ -1225,6 +1250,18 @@ def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
     if dataset not in {"kline_minute_raw", "kline_daily_raw_go"}:
         raise HTTPException(status_code=400, detail="unsupported dataset for init")
     options = dict(payload.options or {})
+    try:
+        population_start = dt.date.fromisoformat(str(options.get("start_date") or "1990-01-01"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid start_date for Go init")
+    population_end = _latest_trading_day_on_or_before()
+    if population_end is None:
+        raise HTTPException(status_code=400, detail="no trading_calendar rows; please sync calendar first")
+    codes = scheduler._go_provider_codes(
+        population_start, population_end, requested_codes=options.get("codes") or None,
+    )
+    if not codes:
+        raise HTTPException(status_code=400, detail="no non-B-share TDX provider codes requested")
     summary = {"datasets": [dataset], **options}
     job_id = _create_init_job(summary)
 
@@ -1243,7 +1280,6 @@ def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
         workers = int(options.get("workers") or 1)
         truncate_before = bool(options.get("truncate"))
         max_rows_per_chunk = int(options.get("max_rows_per_chunk") or 500_000)
-        codes = options.get("codes") or []
 
         go_payload: Dict[str, Any] = {
             "job_id": str(job_id),
@@ -1326,7 +1362,6 @@ def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
         workers = int(options.get("workers") or 1)
         truncate_before = bool(options.get("truncate"))
         max_rows_per_chunk = int(options.get("max_rows_per_chunk") or 500_000)
-        codes = options.get("codes") or []
 
         go_payload: Dict[str, Any] = {
             "job_id": str(job_id),
@@ -1492,6 +1527,11 @@ class BatchCreateSchedulesRequest(BaseModel):
     items: List[BatchScheduleItem]
 
 
+def _validate_dataset_schedule_mode(dataset: str, mode: str) -> None:
+    if dataset == "etf_basic_snapshots" and mode != "init":
+        raise HTTPException(status_code=400, detail="etf_basic_snapshots only supports init mode")
+
+
 def _suspend_d_refresh_options() -> Dict[str, Any]:
     return {
         "date_strategy": "current_and_next_trading_day",
@@ -1516,6 +1556,11 @@ def batch_create_ingestion_schedules(payload: BatchCreateSchedulesRequest) -> Di
     for item in payload.items:
         if item.mode not in SUPPORTED_INGESTION_MODES:
             results.append({"dataset": item.dataset, "error": f"invalid mode: {item.mode}"})
+            continue
+        try:
+            _validate_dataset_schedule_mode(item.dataset, item.mode)
+        except HTTPException as exc:
+            results.append({"dataset": item.dataset, "error": str(exc.detail)})
             continue
         options: Dict[str, Any] = {}
         if item.at:
@@ -1576,6 +1621,8 @@ _DAILY_PRESETS = [
     ("sw_sector", "incremental"),
     ("sector_data", "incremental"),
     ("cyq_perf", "incremental"),
+    ("etf_share_size", "incremental"),
+    ("etf_basic_snapshots", "init"),
 ]
 
 
@@ -1901,6 +1948,14 @@ def trigger_ingestion_run(payload: IngestionRunRequest) -> Dict[str, Any]:
             raise HTTPException(status_code=400, detail="margin_detail init requires start_date")
         if mode == "init" and not options.get("end_date"):
             raise HTTPException(status_code=400, detail="margin_detail init requires end_date")
+    elif dataset == "etf_share_size":
+        if mode == "init" and not options.get("start_date"):
+            raise HTTPException(status_code=400, detail="etf_share_size init requires start_date")
+        if mode == "init" and not options.get("end_date"):
+            raise HTTPException(status_code=400, detail="etf_share_size init requires end_date")
+    elif dataset == "etf_basic_snapshots":
+        if mode != "init":
+            raise HTTPException(status_code=400, detail="etf_basic_snapshots only supports init mode")
     elif dataset in FINANCIAL_EVENT_RAW_DATASETS:
         if mode == "init" and not options.get("start_date"):
             raise HTTPException(status_code=400, detail=f"{dataset} init requires start_date")
@@ -2037,6 +2092,7 @@ def list_ingestion_schedules() -> Dict[str, Any]:
 @router.post("/ingestion/schedule")
 def upsert_ingestion_schedule(payload: IngestionScheduleUpsertRequest) -> Dict[str, Any]:
     payload.validate_mode()
+    _validate_dataset_schedule_mode(payload.dataset, payload.mode)
     schedule_id = payload.schedule_id
     if schedule_id is None:
         rows = _fetchall(
@@ -2365,7 +2421,8 @@ def list_data_stats() -> Dict[str, Any]:
                    trade_date AS audit_ready_date,
                    row_count AS audit_row_count,
                    refreshed_at AS audit_refreshed_at,
-                   quality_status AS audit_quality_status
+                   quality_status AS audit_quality_status,
+                   data_max_at AS audit_data_max_at
               FROM market.dataset_date_refresh_audit
              WHERE status = 'success'
              ORDER BY dataset, trade_date DESC, refreshed_at DESC
@@ -2383,7 +2440,8 @@ def list_data_stats() -> Dict[str, Any]:
                la.audit_ready_date,
                la.audit_row_count,
                la.audit_refreshed_at,
-               la.audit_quality_status
+               la.audit_quality_status,
+               la.audit_data_max_at
           FROM market.data_stats ds
           LEFT JOIN latest_audit la ON la.dataset = ds.data_kind
          ORDER BY ds.data_kind
@@ -2406,10 +2464,20 @@ def list_data_stats() -> Dict[str, Any]:
         row["ready_date"] = _date_iso(audit_ready_date)
         row["audit_ready_date"] = _date_iso(audit_ready_date)
         row["stats_max_date"] = _date_iso(stats_max_date)
-        row["physical_max_date"] = _date_iso(stats_max_date)
+        # A cached MAX is not a live physical probe. Batch readback is a
+        # separately named lower-bound observation, not full-table MAX either.
+        row["physical_max_date"] = None
+        row["physical_max_date_source"] = "not_probed"
+        row["audit_data_max_at"] = _isoformat(row.get("audit_data_max_at"))
+        row["stats_date_source"] = "data_stats_cache"
         row["cache_state"] = cache_state
         row["readiness_source"] = "dataset_date_refresh_audit"
         row["operator_action_required"] = False
+        row["readiness_status"] = (
+            "unknown" if not audit_ready_date else
+            "quality_blocked" if row.get("audit_quality_status") in {"error", "empty_invalid", "low_coverage", "unproven"}
+            else "audit_success"
+        )
         row["audit_refreshed_at"] = _isoformat(row.get("audit_refreshed_at"))
         row["stats_scope"] = extra_info.get("stats_scope") or "full_table"
         row["stats_window_months"] = extra_info.get("window_months")
@@ -2635,22 +2703,8 @@ def get_data_gaps(
         with conn.cursor() as cur:
             cur.execute("SET statement_timeout = '300s'")
             
-            # Efficiently find which trading days have data
-            # 注意：date_column 在分钟/日线表中通常是 timestamp/timestamptz，需要按日期比较。
-            # 因此前端看到的 data_kind=kline_minute_raw 等，需要使用 {date_column}::date = cal_date，
-            # 否则严格相等比较会导致始终匹配不到任何行，从而错误地认为所有交易日都缺失。
-            sql = f"""
-                SELECT cal_date AS d
-                  FROM market.trading_calendar
-                 WHERE is_trading = TRUE
-                   AND cal_date >= %s AND cal_date <= %s
-                   AND EXISTS (
-                       SELECT 1 FROM {table_name}
-                        WHERE {date_column}::date = cal_date
-                   )
-                 ORDER BY cal_date
-            """
-            cur.execute(sql, (start, end))
+            sql, params = _data_gap_presence_query(data_kind, table_name, date_column, start, end)
+            cur.execute(sql, params)
             data_rows = [dict(zip([c[0] for c in cur.description], r)) for r in cur.fetchall()]
     
     data_days = {r["d"] for r in data_rows}
@@ -2946,6 +3000,9 @@ def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any]:
         latest_trading_date = latest
     
     workers = payload.workers if payload.workers and payload.workers > 0 else 1
+    codes = scheduler._go_provider_codes(start_date, latest_trading_date)
+    if not codes:
+        raise HTTPException(status_code=400, detail="no non-B-share TDX provider codes requested")
     
     summary: Dict[str, Any] = {
         "data_kind": data_kind,
@@ -2965,7 +3022,7 @@ def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any]:
         start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
         go_payload: Dict[str, Any] = {
             "job_id": str(job_id),
-            "codes": [],
+            "codes": codes,
             "start_time": start_dt.isoformat(),
             "workers": workers,
             "options": {
@@ -2979,7 +3036,7 @@ def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any]:
         start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
         go_payload = {
             "job_id": str(job_id),
-            "codes": [],
+            "codes": codes,
             "start_time": start_dt.isoformat(),
             "workers": workers,
             "options": {

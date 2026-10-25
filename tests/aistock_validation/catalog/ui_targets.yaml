@@ -223,6 +223,24 @@ targets:
   - Review candidate registry and evaluation batch state
   - Inspect read-only QE experiment evidence and evaluation results
   coverage_status: partial
+- route_id: hmm.risk
+  href: /hmm-risk
+  label: HMM Risk Research
+  nav_group: HMM 研究工作台
+  primary_module: hmm.risk
+  impact_modules:
+  - hmm
+  - qe.archive
+  risk_level: high
+  required_test_plans:
+  - l0
+  - hmm_risk_backend
+  recommended_test_plans: []
+  business_operations:
+  - Open HMM Risk Research
+  - Review state-model evidence and retrospective reports
+  - Inspect advisory-only risk alerts without trading activation
+  coverage_status: partial
 - route_id: market_regime.timeline
   href: /market-regime
   label: Market Regime

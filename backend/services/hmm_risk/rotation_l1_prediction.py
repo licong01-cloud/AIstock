@@ -21,12 +21,18 @@ import numpy as np
 import pandas as pd
 
 from backend.db.pg_pool import get_conn
+from backend.services.hmm_risk.product_validation_store import ProductValidationStoreError, find_receipt, read_receipt
+from backend.services.dataset_release.cas_store import canonical_json_bytes
+from backend.services.hmm_risk.jump_model import Preprocessor, causal_states
 from backend.services.hmm_risk.rotation_l1_gbdt import (
     BINDING_MBE_IC,
     CANONICAL_SECTOR_COUNT,
     CONTINUOUS_FEATURES,
     FEATURES,
     MARKET_FEATURES,
+    V14_FEATURES,
+    V16_CONTRACT_VERSION,
+    V16_SCORE_FEATURE,
     REASON_FEATURE,
     REASON_SCORE,
     RotationL1G2AError,
@@ -35,10 +41,11 @@ from backend.services.hmm_risk.rotation_l1_gbdt import (
     _market_raw_features,
     _lightgbm_profile,
     _prepared_market_component,
+    _v16_scoring_contract,
     _with_market_signs,
     build_label_free_feature_panel,
+    build_v16_single_date_feature_frame,
     canonical_sha256,
-    causal_states,
     close_processes,
     cross_section_rank_features,
     project_states,
@@ -50,6 +57,7 @@ REASON_CONFLICT = "hmm_risk_rotation_prediction_identity_conflict"
 REASON_NOT_FOUND = "hmm_risk_rotation_prediction_not_found"
 REASON_MODEL_AMBIGUOUS = "hmm_risk_rotation_prediction_model_ambiguous"
 REASON_INFERENCE = "hmm_risk_rotation_single_date_inference_failed"
+REASON_AUTHORITY_RECLOSURE = "hmm_risk_rotation_prediction_authority_reclosure_failed"
 PREDICTION_ID_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "aistock:hmm-risk:rotation-l1-prediction:v1")
 
 PREDICTION_COLUMNS = (
@@ -92,6 +100,23 @@ SELECT {",".join(PREDICTION_COLUMNS)}
 FROM hmm_risk.rotation_l1_prediction
 WHERE model_hash=%s AND trade_date=%s AND sector_code=%s AND revision=%s
 """
+_READ_LATEST_BATCH_FOR_UPDATE_SQL = f"""
+WITH requested(model_hash,trade_date,sector_code) AS (
+  SELECT * FROM unnest(%s::text[],%s::date[],%s::text[])
+)
+SELECT {",".join("p." + column for column in PREDICTION_COLUMNS)}
+FROM hmm_risk.rotation_l1_prediction p
+JOIN requested r
+  ON r.model_hash=p.model_hash AND r.trade_date=p.trade_date AND r.sector_code=p.sector_code
+WHERE p.revision=(
+  SELECT max(newer.revision)
+  FROM hmm_risk.rotation_l1_prediction newer
+  WHERE newer.model_hash=p.model_hash AND newer.trade_date=p.trade_date
+    AND newer.sector_code=p.sector_code
+)
+ORDER BY p.model_hash,p.trade_date,p.sector_code
+FOR UPDATE OF p
+"""
 
 
 class RotationL1PredictionError(RuntimeError):
@@ -115,6 +140,30 @@ def _json_value(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {str(key): _json_value(item) for key, item in value.items()}
     return value
+
+
+def _validate_v16_model_identity(
+    *,
+    model_text: str,
+    final_model: Mapping[str, Any],
+    model_profile: Mapping[str, Any],
+) -> str:
+    expected_contract = _v16_scoring_contract()
+    expected_text = canonical_json_bytes(expected_contract).decode("utf-8")
+    expected_hash = canonical_sha256(expected_contract)
+    expected_model = {
+        "model_kind": "deterministic_cross_section_rank",
+        "model_sha256": expected_hash,
+        "scoring_contract_sha256": expected_hash,
+        "training_performed": False,
+    }
+    if (
+        model_text != expected_text
+        or dict(final_model) != expected_model
+        or dict(model_profile) != {"model_kind": "deterministic_cross_section_rank", "fit_required": False}
+    ):
+        raise RotationL1PredictionError(REASON_INFERENCE, "v1.6 deterministic model identity differs")
+    return expected_hash
 
 
 def _row_identity_payload(row: Mapping[str, Any]) -> dict[str, Any]:
@@ -218,7 +267,7 @@ def _validate_row(raw: Mapping[str, Any]) -> dict[str, Any]:
             or not math.isfinite(float(score))
             or row["forecast_state"] not in {"fading", "neutral", "trending"}
             or not isinstance(contributions, list)
-            or len(contributions) != len(FEATURES) + 1
+            or len(contributions) not in {len(FEATURES) + 1, len(V14_FEATURES) + 1}
             or not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in contributions)
             or row["reason_code"] is not None
         ):
@@ -253,6 +302,9 @@ def build_oof_prediction_rows(
     acceptance: Mapping[str, Any],
     process_reports: Sequence[Mapping[str, Any]],
     sector_names: Mapping[str, str],
+    v14_reference: Mapping[str, Any] | None = None,
+    input_bundle: Mapping[str, Any] | None = None,
+    v14_input_bundle: Mapping[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """Translate verified OOF output into the only product-row contract."""
 
@@ -260,7 +312,13 @@ def build_oof_prediction_rows(
         raise RotationL1PredictionError(REASON_WRITER, "G2-A product requires two fresh-process reports")
     process_report = process_reports[0]
     try:
-        recomputed_acceptance = close_processes(process_reports[0], process_reports[1])
+        closure_kwargs = {
+            "v14_reference": v14_reference,
+            "input_bundle": input_bundle,
+        }
+        if v14_input_bundle is not None:
+            closure_kwargs["v14_input_bundle"] = v14_input_bundle
+        recomputed_acceptance = close_processes(process_reports[0], process_reports[1], **closure_kwargs)
     except RotationL1G2AError as exc:
         raise RotationL1PredictionError(exc.reason_code, str(exc)) from exc
     if dict(recomputed_acceptance) != dict(acceptance):
@@ -295,7 +353,23 @@ def build_oof_prediction_rows(
     input_hash = canonical_sha256(input_identity)
     if not all(_is_sha256(item) for item in (final_model_hash, mapping_hash, input_hash)):
         raise RotationL1PredictionError(REASON_WRITER, "G2-A product lineage is invalid")
-    if not isinstance(model_text, str) or final_model_hash != canonical_sha256(model_text):
+    if payload.get("contract_version") == V16_CONTRACT_VERSION:
+        try:
+            validated_hash = _validate_v16_model_identity(
+                model_text=model_text,
+                final_model=final_model,
+                model_profile=payload.get("profile") if isinstance(payload.get("profile"), Mapping) else {},
+            )
+        except RotationL1PredictionError as exc:
+            raise RotationL1PredictionError(REASON_WRITER, "G2-A v1.6 frozen model readback differs") from exc
+        if (
+            validated_hash != final_model_hash
+            or acceptance.get("contract_version") != V16_CONTRACT_VERSION
+            or acceptance.get("scoring_contract_sha256") != validated_hash
+            or payload.get("scoring_contract_sha256") != validated_hash
+        ):
+            raise RotationL1PredictionError(REASON_WRITER, "G2-A v1.6 scoring authority differs")
+    elif not isinstance(model_text, str) or final_model_hash != canonical_sha256(model_text):
         raise RotationL1PredictionError(REASON_WRITER, "G2-A frozen model readback differs")
     fold_model_hashes = {
         str(fold.get("model_sha256")) for fold in payload.get("folds", []) if isinstance(fold, Mapping)
@@ -377,14 +451,9 @@ def build_oof_prediction_rows(
 def _load_surface_receipt(path: Path | None) -> Mapping[str, Any] | None:
     if path is None:
         return None
-    if not path.is_absolute() or path.is_symlink():
-        raise RotationL1PredictionError(REASON_READBACK, "rotation product validation receipt path is indirect")
     try:
-        resolved = path.resolve(strict=True)
-        if not resolved.is_file():
-            raise OSError("not a regular file")
-        raw = json.loads(resolved.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raw = read_receipt(path)
+    except (OSError, ValueError, ProductValidationStoreError) as exc:
         raise RotationL1PredictionError(REASON_READBACK, "rotation product validation receipt cannot be read") from exc
     if not isinstance(raw, Mapping):
         raise RotationL1PredictionError(REASON_READBACK, "rotation product validation receipt is not an object")
@@ -458,6 +527,52 @@ def _validate_write_batch(rows: Sequence[Mapping[str, Any]]) -> None:
                 REASON_CONFLICT,
                 "rotation prediction write batch does not contain one consistent 31-sector cross-section",
             )
+
+
+def _stored_prediction_row(raw: Sequence[Any]) -> dict[str, Any]:
+    stored = dict(zip(PREDICTION_COLUMNS, raw, strict=True))
+    for field in ("model_hash", "input_hash", "mapping_snapshot_hash"):
+        stored[field] = str(stored[field]).strip()
+    if isinstance(stored["feature_contributions"], str):
+        stored["feature_contributions"] = json.loads(stored["feature_contributions"])
+    return _validate_row(stored)
+
+
+def _authority_reclosure_business_payload(row: Mapping[str, Any]) -> dict[str, Any]:
+    excluded = {
+        "prediction_id",
+        "input_hash",
+        "mapping_snapshot_hash",
+        "revision",
+        "supersedes_prediction_id",
+    }
+    return {column: _json_value(row[column]) for column in PREDICTION_COLUMNS if column not in excluded}
+
+
+def _insert_and_readback(cursor: Any, rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    for row in rows:
+        values = [
+            json.dumps(row[column], ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+            if column == "feature_contributions" and row[column] is not None
+            else row[column]
+            for column in PREDICTION_COLUMNS
+        ]
+        cursor.execute(_INSERT_SQL, values)
+    readback: list[dict[str, Any]] = []
+    for row in rows:
+        cursor.execute(
+            _READ_ONE_SQL,
+            (row["model_hash"], row["trade_date"], row["sector_code"], row["revision"]),
+        )
+        raw = cursor.fetchone()
+        if raw is None:
+            raise RotationL1PredictionError(REASON_READBACK, "rotation prediction row is missing after write")
+        readback.append(_stored_prediction_row(raw))
+    expected_hash = canonical_sha256([_row_identity_payload(row) for row in rows])
+    actual_hash = canonical_sha256([_row_identity_payload(row) for row in readback])
+    if expected_hash != actual_hash:
+        raise RotationL1PredictionError(REASON_READBACK, "rotation prediction canonical readback differs")
+    return readback
 
 
 def build_single_date_raw_features(
@@ -543,6 +658,21 @@ def _validate_single_date_authority(
         or (forward_confirmation == "PENDING_INCONCLUSIVE" and forward_power_status == "INSUFFICIENT")
     ):
         raise RotationL1PredictionError(REASON_INFERENCE, "single-date forward state coupling differs")
+    deterministic_v16 = (
+        final_model.get("model_kind") == "deterministic_cross_section_rank"
+        or model_profile.get("model_kind") == "deterministic_cross_section_rank"
+    )
+    if deterministic_v16:
+        model_hash = _validate_v16_model_identity(
+            model_text=model_text,
+            final_model=final_model,
+            model_profile=model_profile,
+        )
+        return {
+            "contract_version": V16_CONTRACT_VERSION,
+            "model_kind": "deterministic_cross_section_rank",
+            "model_sha256": model_hash,
+        }, (development_values[0], development_values[1], development_values[2])
     if (
         not isinstance(model_text, str)
         or not model_text
@@ -591,10 +721,14 @@ def predict_single_date_from_assets(
         forward_confirmation=forward_confirmation,
         product_bundle_id=product_bundle_id,
     )
-    try:
-        market_start = date.fromisoformat(str(context["train_start"]))
-    except (KeyError, ValueError) as exc:
-        raise RotationL1PredictionError(REASON_INFERENCE, "single-date market checkpoint start is invalid") from exc
+    deterministic_v16 = context.get("contract_version") == V16_CONTRACT_VERSION
+    if deterministic_v16:
+        market_start = None
+    else:
+        try:
+            market_start = date.fromisoformat(str(context["train_start"]))
+        except (KeyError, ValueError) as exc:
+            raise RotationL1PredictionError(REASON_INFERENCE, "single-date market checkpoint start is invalid") from exc
 
     from backend.services.hmm_risk.rotation_l1_input_bundle import (
         RotationL1InputBundleError,
@@ -612,6 +746,11 @@ def predict_single_date_from_assets(
             trade_date=trade_date,
             as_of_date=as_of_date,
             market_start=market_start,
+            model_contract_version=(
+                V16_CONTRACT_VERSION
+                if deterministic_v16
+                else str(final_model.get("contract_version") or "hmm_risk_rotation_l1_g2a_v1_3")
+            ),
         )
     except RotationL1InputBundleError as exc:
         raise RotationL1PredictionError(exc.reason_code, str(exc), context=exc.context) from exc
@@ -620,9 +759,14 @@ def predict_single_date_from_assets(
         raise RotationL1PredictionError(REASON_INFERENCE, "single-date source receipt is missing")
     source_body = {key: value for key, value in source_receipt.items() if key != "receipt_sha256"}
     source_sha256 = canonical_sha256(source_body)
+    expected_source_schema = (
+        "hmm_risk_rotation_l1_single_date_source_v2"
+        if deterministic_v16
+        else "hmm_risk_rotation_l1_single_date_source_v1"
+    )
     if (
-        source.get("schema_version") != "hmm_risk_rotation_l1_single_date_source_v1"
-        or source_receipt.get("schema_version") != "hmm_risk_rotation_l1_single_date_source_v1"
+        source.get("schema_version") != expected_source_schema
+        or source_receipt.get("schema_version") != expected_source_schema
         or source_receipt.get("receipt_sha256") != source_sha256
         or source.get("input_hash") != source_sha256
         or source_receipt.get("mapping_snapshot_sha256") != source.get("mapping_snapshot_hash")
@@ -631,21 +775,35 @@ def predict_single_date_from_assets(
         or source_receipt.get("target_columns_read") is not False
     ):
         raise RotationL1PredictionError(REASON_INFERENCE, "single-date source receipt differs")
-    feature_benchmark = {day: source["benchmark_close"][day] for day in source["feature_calendar"][:-1]}
-    raw_features = build_single_date_raw_features(
-        calendar=source["feature_calendar"],
-        sector_close=source["sector_close"],
-        benchmark_close=feature_benchmark,
-        stock_daily_inputs=source["stock_daily_inputs"],
-        trade_date=trade_date,
-    )
+    if deterministic_v16:
+        if (
+            source.get("model_contract_version") != V16_CONTRACT_VERSION
+            or source_receipt.get("model_contract_version") != V16_CONTRACT_VERSION
+            or source_receipt.get("market_context_used_for_score") is not False
+            or source_receipt.get("sector_close_used_for_score") is not False
+        ):
+            raise RotationL1PredictionError(REASON_INFERENCE, "single-date v1.6 source authority differs")
+        raw_features = build_v16_single_date_feature_frame(
+            calendar=source["feature_calendar"],
+            stock_daily_inputs=source["stock_daily_inputs"],
+            trade_date=trade_date,
+        )
+    else:
+        feature_benchmark = {day: source["benchmark_close"][day] for day in source["feature_calendar"][:-1]}
+        raw_features = build_single_date_raw_features(
+            calendar=source["feature_calendar"],
+            sector_close=source["sector_close"],
+            benchmark_close=feature_benchmark,
+            stock_daily_inputs=source["stock_daily_inputs"],
+            trade_date=trade_date,
+        )
     rows = predict_single_date_rows(
         model_text=model_text,
         final_model=final_model,
         model_profile=model_profile,
         raw_features=raw_features,
-        benchmark_close=source["benchmark_close"],
-        calendar=source["market_calendar"],
+        benchmark_close=source.get("benchmark_close", {}),
+        calendar=source["feature_calendar"] if deterministic_v16 else source["market_calendar"],
         trade_date=trade_date,
         as_of_date=as_of_date,
         sector_names=source["sector_names"],
@@ -667,6 +825,7 @@ class RotationL1PredictionRepository:
         autocommit=False, manage_transaction=True
     )
     surface_validation_receipt_path: Path | None = None
+    surface_validation_store_root: Path | None = None
 
     def write_rows(self, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         validated = [_validate_row(row) for row in rows]
@@ -678,36 +837,127 @@ class RotationL1PredictionRepository:
             raise RotationL1PredictionError(REASON_CONFLICT, "rotation prediction write contains duplicate keys")
         with self.conn_factory() as conn:
             with conn.cursor() as cursor:
-                for row in validated:
-                    values = [
-                        json.dumps(row[column], ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-                        if column == "feature_contributions" and row[column] is not None
-                        else row[column]
-                        for column in PREDICTION_COLUMNS
-                    ]
-                    cursor.execute(_INSERT_SQL, values)
-                readback: list[dict[str, Any]] = []
-                for row in validated:
-                    cursor.execute(
-                        _READ_ONE_SQL,
-                        (row["model_hash"], row["trade_date"], row["sector_code"], row["revision"]),
-                    )
-                    raw = cursor.fetchone()
-                    if raw is None:
-                        raise RotationL1PredictionError(
-                            REASON_READBACK, "rotation prediction row is missing after write"
-                        )
-                    stored = dict(zip(PREDICTION_COLUMNS, raw, strict=True))
-                    for field in ("model_hash", "input_hash", "mapping_snapshot_hash"):
-                        stored[field] = str(stored[field]).strip()
-                    if isinstance(stored["feature_contributions"], str):
-                        stored["feature_contributions"] = json.loads(stored["feature_contributions"])
-                    readback.append(_validate_row(stored))
-            expected_hash = canonical_sha256([_row_identity_payload(row) for row in validated])
+                readback = _insert_and_readback(cursor, validated)
             actual_hash = canonical_sha256([_row_identity_payload(row) for row in readback])
-            if expected_hash != actual_hash:
-                raise RotationL1PredictionError(REASON_READBACK, "rotation prediction canonical readback differs")
         return {"row_count": len(readback), "canonical_row_sha256": actual_hash, "idempotency_verified": True}
+
+    def write_authority_reclosure(self, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        """Append an authority-only revision chain without changing prediction semantics."""
+
+        requested = sorted(
+            (_validate_row(row) for row in rows),
+            key=lambda row: (row["model_hash"], row["trade_date"], row["sector_code"]),
+        )
+        if not requested:
+            raise RotationL1PredictionError(REASON_AUTHORITY_RECLOSURE, "authority reclosure write is empty")
+        if any(row["revision"] != 1 or row["supersedes_prediction_id"] is not None for row in requested):
+            raise RotationL1PredictionError(
+                REASON_AUTHORITY_RECLOSURE,
+                "authority reclosure input must be a canonical revision-1 snapshot",
+            )
+        if any(
+            len({row[field] for row in requested}) != 1
+            for field in ("model_hash", "input_hash", "mapping_snapshot_hash")
+        ):
+            raise RotationL1PredictionError(
+                REASON_AUTHORITY_RECLOSURE,
+                "authority reclosure input does not bind one model and authority snapshot",
+            )
+        _validate_write_batch(requested)
+        keys = [(row["model_hash"], row["trade_date"], row["sector_code"]) for row in requested]
+        if len(keys) != len(set(keys)):
+            raise RotationL1PredictionError(
+                REASON_AUTHORITY_RECLOSURE,
+                "authority reclosure input contains duplicate identities",
+            )
+
+        with self.conn_factory() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    _READ_LATEST_BATCH_FOR_UPDATE_SQL,
+                    (
+                        [row["model_hash"] for row in requested],
+                        [row["trade_date"] for row in requested],
+                        [row["sector_code"] for row in requested],
+                    ),
+                )
+                current = [_stored_prediction_row(raw) for raw in cursor.fetchall()]
+                if len(current) != len(requested):
+                    current_keys = {(row["model_hash"], row["trade_date"], row["sector_code"]) for row in current}
+                    missing = next(
+                        row
+                        for row in requested
+                        if (row["model_hash"], row["trade_date"], row["sector_code"]) not in current_keys
+                    )
+                    raise RotationL1PredictionError(
+                        REASON_AUTHORITY_RECLOSURE,
+                        "authority reclosure prior prediction is missing",
+                        context={
+                            "trade_date": missing["trade_date"].isoformat(),
+                            "sector_code": missing["sector_code"],
+                        },
+                    )
+                if any(
+                    len({row[field] for row in current}) != 1
+                    for field in ("model_hash", "input_hash", "mapping_snapshot_hash", "revision")
+                ):
+                    raise RotationL1PredictionError(
+                        REASON_AUTHORITY_RECLOSURE,
+                        "authority reclosure prior lineage is inconsistent",
+                    )
+                _validate_write_batch(current)
+
+                authority_matches: list[bool] = []
+                for desired, prior in zip(requested, current, strict=True):
+                    if (
+                        desired["model_hash"],
+                        desired["trade_date"],
+                        desired["sector_code"],
+                    ) != (prior["model_hash"], prior["trade_date"], prior["sector_code"]):
+                        raise RotationL1PredictionError(
+                            REASON_AUTHORITY_RECLOSURE,
+                            "authority reclosure prior identity differs",
+                        )
+                    if _authority_reclosure_business_payload(desired) != _authority_reclosure_business_payload(prior):
+                        raise RotationL1PredictionError(
+                            REASON_AUTHORITY_RECLOSURE,
+                            "authority reclosure business payload differs",
+                            context={
+                                "trade_date": desired["trade_date"].isoformat(),
+                                "sector_code": desired["sector_code"],
+                            },
+                        )
+                    authority_matches.append(
+                        desired["input_hash"] == prior["input_hash"]
+                        and desired["mapping_snapshot_hash"] == prior["mapping_snapshot_hash"]
+                    )
+
+                if all(authority_matches):
+                    readback = current
+                    action = "already_current"
+                elif any(authority_matches):
+                    raise RotationL1PredictionError(
+                        REASON_AUTHORITY_RECLOSURE,
+                        "authority reclosure batch mixes current and stale authority identities",
+                    )
+                else:
+                    revised: list[dict[str, Any]] = []
+                    for desired, prior in zip(requested, current, strict=True):
+                        candidate = dict(desired)
+                        candidate["revision"] = prior["revision"] + 1
+                        candidate["supersedes_prediction_id"] = prior["prediction_id"]
+                        candidate["prediction_id"] = _prediction_id(candidate)
+                        revised.append(_validate_row(candidate))
+                    _validate_write_batch(revised)
+                    readback = _insert_and_readback(cursor, revised)
+                    action = "appended"
+
+        return {
+            "row_count": len(readback),
+            "canonical_row_sha256": canonical_sha256([_row_identity_payload(row) for row in readback]),
+            "idempotency_verified": True,
+            "authority_reclosure_action": action,
+        }
 
     def _resolve_model_hash(self, cursor: Any, explicit: str | None, *, trade_date: date | None = None) -> str:
         if explicit is not None:
@@ -812,6 +1062,18 @@ class RotationL1PredictionRepository:
         )
         if any(row[field] != head[field] for row in rows[1:] for field in invariant_fields):
             raise RotationL1PredictionError(REASON_READBACK, "rotation prediction overview state is inconsistent")
+        if surface_receipt is None:
+            try:
+                path = find_receipt(
+                    "rotation_l1",
+                    identity=selected_model,
+                    trade_date=detail["trade_date"],
+                    row_hash=canonical_sha256([_row_identity_payload(row) for row in rows]),
+                    root=self.surface_validation_store_root,
+                )
+                surface_receipt = _load_surface_receipt(path)
+            except (OSError, ProductValidationStoreError) as exc:
+                raise RotationL1PredictionError(REASON_READBACK, "rotation validation store cannot be read") from exc
         surface_status = _surface_status_from_receipt(
             rows,
             receipt=surface_receipt,
@@ -841,6 +1103,94 @@ class RotationL1PredictionRepository:
                 )
             },
         }
+
+
+def _predict_v16_single_date_rows(
+    *,
+    raw_features: pd.DataFrame,
+    trade_date: date,
+    sector_names: Mapping[str, str],
+    input_hash: str,
+    mapping_snapshot_hash: str,
+    development_values: tuple[float, float, float],
+    capability_status: str,
+    forward_power_status: str,
+    forward_confirmation: str,
+    model_hash: str,
+    as_of_date: date,
+) -> list[dict[str, Any]]:
+    reason_column = f"reason__{V16_SCORE_FEATURE}"
+    if (
+        not isinstance(raw_features.index, pd.MultiIndex)
+        or tuple(raw_features.index.names) != ("trade_date", "sector_code")
+        or raw_features.index.has_duplicates
+        or set(raw_features.columns) != {V16_SCORE_FEATURE, reason_column}
+        or set(raw_features.index.get_level_values("trade_date")) != {trade_date}
+        or len(raw_features) != CANONICAL_SECTOR_COUNT
+        or set(raw_features.index.get_level_values("sector_code")) != set(sector_names)
+    ):
+        raise RotationL1PredictionError(REASON_INFERENCE, "single-date v1.6 feature identity differs")
+    try:
+        numeric = pd.to_numeric(raw_features[V16_SCORE_FEATURE], errors="raise").astype(np.float64)
+    except (TypeError, ValueError) as exc:
+        raise RotationL1PredictionError(REASON_FEATURE, "single-date v1.6 feature value is invalid") from exc
+    frame = raw_features.copy()
+    frame[V16_SCORE_FEATURE] = numeric
+    ranked = cross_section_rank_features(frame, continuous_features=(V16_SCORE_FEATURE,))
+    scores = ranked[V16_SCORE_FEATURE].sort_index()
+    available_count = int(np.isfinite(scores.to_numpy(dtype=np.float64)).sum())
+    if available_count < 28:
+        raise RotationL1PredictionError(REASON_FEATURE, "single-date v1.6 feature coverage is insufficient")
+    try:
+        states, _state_receipt = project_states(scores)
+    except RotationL1G2AError as exc:
+        raise RotationL1PredictionError(exc.reason_code, str(exc)) from exc
+
+    contribution_index = V14_FEATURES.index(V16_SCORE_FEATURE)
+    rows: list[dict[str, Any]] = []
+    for identity, raw_score in scores.items():
+        code = str(identity[1])
+        score = float(raw_score)
+        available = math.isfinite(score)
+        contributions = None
+        if available:
+            contributions = [0.0] * (len(V14_FEATURES) + 1)
+            contributions[contribution_index] = score
+        raw_reason = frame.at[identity, reason_column]
+        reason = (
+            None if available else (str(raw_reason) if isinstance(raw_reason, str) and raw_reason else REASON_FEATURE)
+        )
+        rows.append(
+            _make_row(
+                product_bundle_id=None,
+                trade_date=trade_date,
+                as_of_date=as_of_date,
+                sector_level="L1",
+                sector_code=code,
+                sector_name=sector_names[code],
+                rotation_score=score if available else None,
+                forecast_state=states.get((trade_date, code)) if available else None,
+                feature_contributions=contributions,
+                availability="available" if available else "unavailable",
+                reason_code=reason,
+                research_surface_status="NOT_AVAILABLE",
+                rotation_l1_capability_status=capability_status,
+                forward_power_status=forward_power_status,
+                forward_confirmation=forward_confirmation,
+                advisory_status="NOT_AVAILABLE",
+                validation_basis="single_date_frozen_model",
+                development_oof_rank_ic=development_values[0],
+                development_oof_rank_ic_hac_lower=development_values[1],
+                development_oof_rank_ic_hac_upper=development_values[2],
+                model_hash=model_hash,
+                input_hash=input_hash,
+                mapping_snapshot_hash=mapping_snapshot_hash,
+                tail_accessed=False,
+                revision=1,
+                supersedes_prediction_id=None,
+            )
+        )
+    return rows
 
 
 def predict_single_date_rows(
@@ -883,6 +1233,20 @@ def predict_single_date_rows(
         forward_confirmation=forward_confirmation,
         product_bundle_id=product_bundle_id,
     )
+    if context.get("contract_version") == V16_CONTRACT_VERSION:
+        return _predict_v16_single_date_rows(
+            raw_features=raw_features,
+            trade_date=trade_date,
+            sector_names=sector_names,
+            input_hash=input_hash,
+            mapping_snapshot_hash=mapping_snapshot_hash,
+            development_values=development_values,
+            capability_status=capability_status,
+            forward_power_status=forward_power_status,
+            forward_confirmation=forward_confirmation,
+            model_hash=str(context["model_sha256"]),
+            as_of_date=as_of_date,
+        )
     try:
         market_start = date.fromisoformat(str(context["train_start"]))
         mean = np.asarray(context["mean"], dtype=np.float64)
@@ -916,8 +1280,6 @@ def predict_single_date_rows(
         raw_market = _market_raw_features(benchmark_close, ordered)
     except (KeyError, TypeError, ValueError, ZeroDivisionError) as exc:
         raise RotationL1PredictionError(REASON_INFERENCE, "single-date benchmark history is invalid") from exc
-    from backend.services.hmm_risk.rotation_l1_gbdt import Preprocessor
-
     preprocessor = Preprocessor(
         feature_names=MARKET_FEATURES,
         lower=tuple(float(value) for value in lower),

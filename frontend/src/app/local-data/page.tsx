@@ -54,6 +54,8 @@ const INGESTION_DATASETS_BY_SOURCE: Record<DataSource, Record<string, string>> =
     kline_daily_raw_go: "日线（未复权 RAW · Go 直连）",
   },
   Tushare: {
+    etf_share_size: "ETF 每日份额和规模（Tushare etf_share_size）",
+    etf_basic_snapshots: "ETF 基础信息每日观察快照（Tushare etf_basic）",
     stock_moneyflow_ts: "个股资金流（moneyflow · Tushare）",
     daily_basic: "股票每日指标（Tushare daily_basic）",
     index_daily: "指数日线行情（Tushare index_daily）",
@@ -422,7 +424,7 @@ export default function LocalDataPage() {
             <div className={styles.textMuted}>
               启动命令示例：
               <code className={styles.codeChip}>
-                uvicorn backend.main:app --host 0.0.0.0 --port 8001
+                {"uvicorn backend.main:app --host 127.0.0.1 --port <dev-port>"}
               </code>
             </div>
           </div>
@@ -616,6 +618,7 @@ function InitTab({ onCalendarSynced }: { onCalendarSynced?: () => void }) {
   ];
 
   const datasetOptionsTushare: { key: string; label: string }[] = [
+    { key: "etf_share_size", label: "etf_share_size · ETF 每日份额和规模（Tushare）" },
     { key: "kline_weekly", label: "kline_weekly · 周线（由本地日线QFQ聚合）" },
     {
       key: "stock_moneyflow_ts",
@@ -1356,6 +1359,8 @@ function IncrementalTab({
   ];
 
   const datasetOptionsTushare = [
+    { key: "etf_share_size", label: "etf_share_size · ETF 每日份额和规模（Tushare）" },
+    { key: "etf_basic_snapshots", label: "etf_basic_snapshots · ETF 基础信息每日观察快照（Tushare）" },
     {
       key: "kline_weekly",
       label: "kline_weekly · 周线（由本地日线QFQ聚合）",
@@ -4012,6 +4017,7 @@ function DataStatsTab({
       k === "kline_minute_raw" ||
       k === "stock_moneyflow_ts" ||
       k === "margin_detail" ||
+      k === "etf_share_size" ||
       k === "suspend_d" ||
       k === "index_daily"
     ) {
@@ -4029,6 +4035,7 @@ function DataStatsTab({
       k === "adj_factor" ||
       k === "symbol_dim" ||
       k === "index_basic" ||
+      k === "etf_basic_snapshots" ||
       k === "stk_limit" ||
       FINANCIAL_EVENT_RAW_DATASETS.includes(k)
     ) {
@@ -4179,6 +4186,7 @@ function DataStatsTab({
           lower === "stk_limit" ||
           lower === "suspend_d" ||
           lower === "margin_detail" ||
+          lower === "etf_share_size" ||
           FINANCIAL_EVENT_RAW_DATASETS.includes(lower) ||
           lower === "anns_d" ||
           lower === "anns_metadata" ||
@@ -4489,6 +4497,7 @@ function DataStatsTab({
                       "stk_limit",
                       "suspend_d",
                       "margin_detail",
+                      "etf_share_size",
                       ...FINANCIAL_EVENT_RAW_DATASETS,
                     ].includes(kind);
 
@@ -5303,7 +5312,9 @@ const WORKER_SUPPORTED_DATASETS = new Set([
 ]);
 
 // 每日定时调度快捷创建：核心目标数据集及默认执行时间
-const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; defaultAt: string; frequency?: string }[] = [
+const DAILY_SCHEDULE_PRESETS: { dataset: string; label: string; source: string; defaultAt: string; frequency?: string; mode?: "incremental" | "init" }[] = [
+  { dataset: "etf_share_size", label: "ETF 每日份额和规模", source: "Tushare", defaultAt: "20:00" },
+  { dataset: "etf_basic_snapshots", label: "ETF 基础信息快照", source: "Tushare", defaultAt: "20:05", mode: "init" },
   { dataset: "kline_daily_raw", label: "日线（未复权 RAW）", source: "TDX", defaultAt: "17:00" },
   { dataset: "kline_minute_raw", label: "分钟线（RAW）", source: "TDX", defaultAt: "17:00" },
   // Tushare 盘后数据（按执行时间排序）
@@ -5706,7 +5717,7 @@ function IngestionSchedulesTab() {
         : DAILY_SCHEDULE_PRESETS;
       const items = targets.map((p) => ({
         dataset: p.dataset,
-        mode: "incremental" as const,
+        mode: p.mode || ("incremental" as const),
         frequency: p.frequency || "daily",
         enabled: true,
         at: p.frequency ? undefined : presetTimes[p.dataset] || p.defaultAt,

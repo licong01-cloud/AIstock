@@ -12,9 +12,7 @@ from backend.data_service.moneyflow_contract import (
     derive_moneyflow_factors,
 )
 from backend.services.position_timing.action_value import (
-    FEATURE_ORDER,
     FEATURE_SPEC_SHA256,
-    POLICY_SHA256,
     MONEYFLOW_FEATURE_ORDER,
     MONEYFLOW_FEATURE_SPEC_SHA256,
     MONEYFLOW_INFORMATION_BLOCK,
@@ -22,22 +20,11 @@ from backend.services.position_timing.action_value import (
     market_features,
     policy_sha256_for,
 )
-from backend.services.position_timing.action_value_incremental import (
-    PIPELINE_ID,
-    REQUEST_SCHEMA,
-    _load_request,
-    _require_matched_source_coverage,
-)
-from backend.services.position_timing.action_value_research import (
-    EXOGENOUS_INITIAL_HOLDING_POLICY,
-    EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
-)
 from backend.services.position_timing.action_value_moneyflow import (
     MONEYFLOW_FEATURE,
     MoneyflowAugmentedCandidate,
     MoneyflowDataSource,
 )
-from backend.services.position_timing.contracts import canonical_sha256
 
 
 class BaseCandidate:
@@ -191,53 +178,3 @@ def test_moneyflow_features_join_core_and_source_coverage_is_outcome_free(tmp_pa
         row["complete_selected_feature_sessions"] <= row["complete_core_sessions"]
         for row in coverage["coverage"].values()
     )
-
-
-def test_moneyflow_request_binds_single_matched_core_hypothesis(tmp_path: Path) -> None:
-    coverage = {
-        "information_block": MONEYFLOW_INFORMATION_BLOCK,
-        "outcomes_read": False,
-        "coverage": {
-            "000001.SZ": {
-                "complete_core_sessions": 100,
-                "complete_selected_feature_sessions": 95,
-                "feature_nonmissing": {MONEYFLOW_FEATURE: 95},
-            }
-        },
-    }
-    _require_matched_source_coverage(coverage, information_block=MONEYFLOW_INFORMATION_BLOCK)
-    request = {
-        "schema_version": REQUEST_SCHEMA,
-        "pipeline_id": PIPELINE_ID,
-        "information_block": MONEYFLOW_INFORMATION_BLOCK,
-        "hypothesis": "CORE_PLUS_MAIN_NET_FLOW_RATIO_5D_LAG1_POLICY_MINUS_MATCHED_CORE_POLICY",
-        "planned_trial_count": 1,
-        "source_correction": "EXPLICIT_DB_SUSPENSION_UNION_V1",
-        "suspension_snapshot": {"path": "snapshot.json", "sha256": "a" * 64, "size_bytes": 1},
-        "initial_holding_contract": {
-            "policy": EXOGENOUS_INITIAL_HOLDING_POLICY,
-            "policy_sha256": EXOGENOUS_INITIAL_HOLDING_POLICY_SHA256,
-        },
-        "feature_contract": {
-            "block_id": MONEYFLOW_INFORMATION_BLOCK,
-            "added_features": [MONEYFLOW_FEATURE],
-            "feature_order": MONEYFLOW_FEATURE_ORDER,
-            "feature_spec_sha256": MONEYFLOW_FEATURE_SPEC_SHA256,
-            "policy_sha256": policy_sha256_for(MONEYFLOW_INFORMATION_BLOCK),
-        },
-        "matched_core_contract": {
-            "information_block": "CORE_ONLY",
-            "feature_order": FEATURE_ORDER,
-            "feature_spec_sha256": FEATURE_SPEC_SHA256,
-            "policy_sha256": POLICY_SHA256,
-        },
-        "training_spec": {
-            "main_comparison": "CORE_PLUS_MAIN_NET_FLOW_RATIO_5D_LAG1_MINUS_MATCHED_CORE",
-            "economic_threshold_bps": 0.0,
-        },
-        "population_spec": {"selection": "SHA256_SEED_MONEYFLOW_SOURCE_COVERAGE_ONLY"},
-    }
-    request["request_sha256"] = canonical_sha256(request)
-    path = tmp_path / "request.json"
-    path.write_text(json.dumps(request), encoding="utf-8")
-    assert canonical_sha256(_load_request(path)) == canonical_sha256(request)

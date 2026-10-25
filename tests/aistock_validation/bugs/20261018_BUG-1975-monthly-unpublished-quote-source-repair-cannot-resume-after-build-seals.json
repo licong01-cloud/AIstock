@@ -1,0 +1,254 @@
+{
+  "actual": "September operation dmr_63a313d97fd046a38d5a876265565014 BUILD277 succeeded without re-export, but DERIVE fails on official quote sw2_pct_change at 801012.SI/2026-03-13. The operation still binds pre-BUG-1940 quote partition 139f52b0 with 12 missing industry keys despite immutable real-provider repair readback already available. Existing refresh requires FAILED BUILD with no BUILD checkpoint; the narrow prior recovery only admits obsolete quote-policy identity and cannot recover this idle, never-ready/never-deployed candidate. Need controlled unpublished packaging recovery retaining completed price exports, exact source amendment and same operation/candidate, early existing quote-audit readback, no active/profile/database mutation, no HMM/QE changes.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_build_recovery.py",
+    "backend/tests/dataset_release/test_monthly_build_recovery.py",
+    "tests/aistock_validation/bugs/20261018_BUG-1975-monthly-unpublished-quote-source-repair-cannot-resume-after-build-seals.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1975",
+  "closed_at": "2026-10-18T17:42:03Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-18T17:23:20.241265Z",
+  "data_delivery_status": "BLOCKED_PENDING_FROZEN_QUOTE_REFRESH",
+  "description": "September operation dmr_63a313d97fd046a38d5a876265565014 BUILD277 succeeded without re-export, but DERIVE fails on official quote sw2_pct_change at 801012.SI/2026-03-13. The operation still binds pre-BUG-1940 quote partition 139f52b0 with 12 missing industry keys despite immutable real-provider repair readback already available. Existing refresh requires FAILED BUILD with no BUILD checkpoint; the narrow prior recovery only admits obsolete quote-policy identity and cannot recover this idle, never-ready/never-deployed candidate. Need controlled unpublished packaging recovery retaining completed price exports, exact source amendment and same operation/candidate, early existing quote-audit readback, no active/profile/database mutation, no HMM/QE changes.",
+  "design_compliance_review": {
+    "business_semantics_unchanged": "PASS: existing taxonomy, quote-availability, PIT, HMM/QE contracts and model windows are unchanged.",
+    "no_new_gate_or_approval": "PASS: reuse existing operator preparation, locks, SOURCE refresh and resume; no extra activation, research or resource approval.",
+    "no_partial_success_claim": "PASS: tool completion is not candidate READY; DERIVE, deployment and consumer validation remain required.",
+    "no_silent_error": "PASS: absent/finite source proof, unavailable quote, changed exports, active identity and downstream checkpoints fail closed."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261018-83eff8e84831",
+      "timestamp": "2026-10-18T17:23:20.241247Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/data_repair_staging/BUG-1940-quote-repair-20261016/real-source-readback.json",
+    "X:/AIstock_dataset_release_control/monthly/dmr_63a313d97fd046a38d5a876265565014/derive-hmm/attempt-277/frozen-input-bundle.json"
+  ],
+  "expected": "A proven quote-available hole may retract only idle, never-ready and never-deployed packaging to its original retained BUILD, preserving sealed SOURCE, original checkpoint, all accurate price exports and active identity. The existing authenticated additive quote refresh and normal resume still perform data repair and validation.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1975-monthly-unpublished-quote-source-repair-cannot-resume-after-build-seals.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1975-monthly-unpublished-quote-source-repair-cannot-resume-after-build-seals.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_build_recovery.py",
+      "backend/tests/dataset_release/test_monthly_build_recovery.py"
+    ]
+  },
+  "first_seen_at": "2026-10-18T17:23:20.241265Z",
+  "fix_branch": null,
+  "fix_commit": "13c472b7762c6b653e26b0c2ed57de96a82f3ac1",
+  "fix_summary": "Extend only the existing maintenance recovery with a precise quote-gap mode. Prove official publication availability, missing frozen sw_daily fields and the same hole in a BUILD-pinned H5; keep worker/state locks, active/ready/deployment protections and all retained export signatures. Preserve per-attempt intent/checkpoint, move the never-ready root back to the same private staging, atomically retain FAILED while returning its stage to BUILD. SOURCE repair remains the existing authenticated provider-backed additive refresh. Three review passes covered safety/identity, recursive-lock and crash recovery, then scope/design semantics. No HMM/QE code, database mutation, model changes or price re-export.",
+  "fixed_at": "2026-10-18T17:42:03Z",
+  "fresh_process_validation": [
+    "RED: quote source repack regression failed with unsupported quote_gap argument before fix; GREEN after fix.",
+    "Real frozen candidate dry-run: 125269 retained file signatures unchanged, quote-source partition 139f52b0069f881415b7ae34087d42f16ad6f17e0ff634569526fc8b7b75d256 and output quote SHA ffb62feeec7c2689c434d4b7feb2b643f1632fd40228f17cd1007f57a14bf17b prove 801012.SI/2026-03-13 hole; applied=false, database_write=false, active_profile_write=false, exports_repeated=false."
+  ],
+  "github_issue_number": 6319,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6319",
+  "last_seen_at": "2026-10-18T17:23:20.241265Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6320",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "root_cause": "BUG-1940 source refresh was developed but its 12 true 2026-03-13 provider rows were never bound to this operation. BUILD sealed the old 139f52b0 quote partition. Existing unpublished recovery admitted only the obsolete publication policy, so the actual quote-source hole could not use the existing FAILED-BUILD refresh endpoint after DERIVE rejected it.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1975",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "5e0bda93cb5f4032",
+    "recorded_at": "2026-10-18T17:52:52.916759Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2695254c585eb6f5236fb40ed14357d5777b9ee2",
+    "source_merge_commit": "13c472b7762c6b653e26b0c2ed57de96a82f3ac1",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6320",
+    "validation_evidence": [
+      "rtk pytest backend/tests/dataset_release/test_monthly_build_recovery.py -q -> passed (16 tests); merged fresh-process apply preserved125269 export signatures and retracted only never-published packaging into original private staging; no database/profile write"
+    ],
+    "validation_evidence_digest": "d16fb893fa858816e6a820ac401bb1ac8427466c7ef7a3a13e15032336919a13"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly unpublished quote-source repair cannot resume after BUILD seals stale historical facts",
+  "trigger_condition": {
+    "fingerprint": "83eff8e84831db8c8d636209",
+    "source_event_id": "FE-20261018-83eff8e84831"
+  },
+  "validation_evidence": [
+    "rtk pytest backend/tests/dataset_release/test_monthly_build_recovery.py -q -> passed (16 tests); merged fresh-process apply preserved125269 export signatures and retracted only never-published packaging into original private staging; no database/profile write"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

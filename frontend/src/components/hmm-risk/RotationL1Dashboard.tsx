@@ -10,6 +10,7 @@ import {
   type RotationOverview,
 } from "@/lib/hmm-risk/api";
 import styles from "./rotation-l1.module.css";
+import RiskL1Panel from "./RiskL1Panel";
 
 function number(value: number | null, digits = 4): string {
   return value === null ? "—" : value.toFixed(digits);
@@ -74,6 +75,8 @@ export default function RotationL1Dashboard() {
         </div>
         <Link href="/hmm-evolution" className={styles.link}>演进实验室</Link>
       </header>
+
+      <RiskL1Panel />
 
       {loading && <section className={styles.notice}>正在读取真实 prediction repository…</section>}
       {error && (

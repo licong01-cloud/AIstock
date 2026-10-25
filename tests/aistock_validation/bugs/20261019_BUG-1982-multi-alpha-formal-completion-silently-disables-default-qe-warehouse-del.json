@@ -1,0 +1,428 @@
+{
+  "actual": "All nine runs succeeded but archive-status=not_archived and archive-detail returns snapshot_not_found; no capture env switch is configured.",
+  "allowed_write_scope": [
+    "noxfile.py",
+    "backend/services/qe_archive/event_capture.py",
+    "backend/services/multi_alpha/durable_orchestrator.py",
+    "backend/services/multi_alpha/combine_backtest.py",
+    "backend/services/multi_alpha/durable_repository.py",
+    "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+    "backend/tests/multi_alpha/test_archive_health.py",
+    "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+    "tests/aistock_validation/bugs/20261019_BUG-1982-multi-alpha-formal-completion-silently-disables-default-qe-warehouse-del.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1982",
+  "closed_at": "2026-10-19T06:04:50.249494Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-19T03:42:54.724020Z",
+  "description": "All nine runs succeeded but archive-status=not_archived and archive-detail returns snapshot_not_found; no capture env switch is configured.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261019-d433a1d85160",
+      "timestamp": "2026-10-19T03:42:54.724003Z"
+    },
+    {
+      "action": "implementation_review",
+      "actor": "codex",
+      "note": "Three review rounds: formal default delivery and explicit opt-outs; existing X/policy exclusions and worker NOOP audit; recovery-selected successful child results retained while stale attempts excluded. No changes to experiment models, metrics, query semantics, schema or pipeline. Direct/legacy diagnostic adapters remain opt-in. Production data and the nine historical source runs were not modified.",
+      "timestamp": "2026-10-19T03:55:08Z"
+    },
+    {
+      "action": "design_compliance_001_review",
+      "actor": "codex",
+      "note": "1 Complete durable producer-to-worker delivery, no placeholders. 2 Existing archive_error retry and typed NOOP skip reasons retained; no silent discard. 3 Computation/financial semantics unchanged; negative/zero results and valid partial recovery retained. 4 Reuse existing lifecycle X and archive policy, no new approval or research gate. Backend restart and post-restart warehouse readback remain pending user action.",
+      "timestamp": "2026-10-19T03:55:08Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_qe_research/cross-regime-20261019/runtime_status.json",
+    "docs/architecture/qe_experiment_asset_warehouse_lifecycle_f2_detailed_design_20260922.md"
+  ],
+  "expected": "Eligible formal Multi-alpha results automatically enqueue durable Archive delivery with explicit disable/skip honored; tests and diagnostic capture remain opt-in.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/multi_alpha/durable_orchestrator.py",
+      "backend/services/qe_archive/event_capture.py",
+      "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+      "backend/tests/multi_alpha/test_archive_health.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1982-multi-alpha-formal-completion-silently-disables-default-qe-warehouse-del.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/multi_alpha/durable_orchestrator.py",
+      "backend/services/qe_archive/event_capture.py",
+      "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+      "backend/tests/multi_alpha/test_archive_health.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1982-multi-alpha-formal-completion-silently-disables-default-qe-warehouse-del.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/qe_archive/event_capture.py",
+        "backend/services/multi_alpha/durable_orchestrator.py",
+        "backend/services/multi_alpha/combine_backtest.py",
+        "backend/services/multi_alpha/durable_repository.py",
+        "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+        "backend/tests/multi_alpha/test_archive_health.py",
+        "backend/tests/qe_archive/test_multi_alpha_archive_handler.py"
+      ],
+      "impacted_modules": [
+        "qe.archive",
+        "qe.data_completeness",
+        "qe.enhanced_metrics",
+        "qe.auto_evolution",
+        "qe.core",
+        "platform.db",
+        "qe.archive_handlers",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/qe_archive/event_capture.py",
+          "impact_modules": [
+            "qe.data_completeness",
+            "qe.enhanced_metrics"
+          ],
+          "primary_module": "qe.archive",
+          "risk_level": "high",
+          "rule_id": "qe_archive_services"
+        },
+        {
+          "file": "backend/services/multi_alpha/durable_orchestrator.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/services/multi_alpha/combine_backtest.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/services/multi_alpha/durable_repository.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+          "impact_modules": [
+            "qe.archive",
+            "qe.data_completeness",
+            "paper_v2"
+          ],
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
+        },
+        {
+          "file": "backend/tests/multi_alpha/test_archive_health.py",
+          "impact_modules": [
+            "qe.core",
+            "qe.data_completeness",
+            "qe.enhanced_metrics",
+            "platform.db"
+          ],
+          "primary_module": "qe.auto_evolution",
+          "risk_level": "high",
+          "rule_id": "qe_multi_alpha_services"
+        },
+        {
+          "file": "backend/tests/qe_archive/test_multi_alpha_archive_handler.py",
+          "impact_modules": [
+            "qe.archive",
+            "qe.data_completeness",
+            "paper_v2"
+          ],
+          "primary_module": "qe.archive_handlers",
+          "risk_level": "high",
+          "rule_id": "qe_archive_handlers"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/qe_archive/event_capture.py",
+        "backend/services/multi_alpha/durable_orchestrator.py",
+        "backend/services/multi_alpha/combine_backtest.py",
+        "backend/services/multi_alpha/durable_repository.py",
+        "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+        "backend/tests/multi_alpha/test_archive_health.py",
+        "backend/tests/qe_archive/test_multi_alpha_archive_handler.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/qe_archive/event_capture.py",
+      "backend/services/multi_alpha/durable_orchestrator.py",
+      "backend/services/multi_alpha/combine_backtest.py",
+      "backend/services/multi_alpha/durable_repository.py",
+      "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+      "backend/tests/multi_alpha/test_archive_health.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/qe_archive/event_capture.py",
+      "backend/services/multi_alpha/durable_orchestrator.py",
+      "backend/services/multi_alpha/combine_backtest.py",
+      "backend/services/multi_alpha/durable_repository.py",
+      "backend/services/qe_archive/handlers/multi_alpha_combine_archive_handler.py",
+      "backend/tests/multi_alpha/test_archive_health.py",
+      "backend/tests/qe_archive/test_multi_alpha_archive_handler.py"
+    ]
+  },
+  "first_seen_at": "2026-10-19T03:42:54.724020Z",
+  "fix_branch": null,
+  "fix_commit": "0ddd725c98d7f416b97fbfceacb1dc80f1b92dd3",
+  "fixed_at": "2026-10-19T04:05:57Z",
+  "github_issue_number": 6347,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6347",
+  "last_seen_at": "2026-10-19T03:42:54.724020Z",
+  "module": "qe.auto_evolution",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6349",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/multi_alpha/test_archive_health.py::test_formal_runtime_defaults_to_archive_but_honors_explicit_disable -q",
+  "required_verification": [
+    "l0",
+    "qe_archive_backend",
+    "qe_read_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qe-archive/health",
+    "fresh_process_evidence": [
+      "Fresh Python pytest process: default durable runtime RED (archive_pass=0) then GREEN; default/explicit-disable/duplicate outbox contracts passed with in-memory repositories, no DB or process control.",
+      "Related matrix: 52 passed, one partial-recovery regression exposed selected-child result handling; corrected and exact nodeid passed. Preserve valid selected child metrics even without assembled scheme rows; do not use stale/unselected attempts.",
+      "Fresh Python process on final HEAD 7f803355c runs both changed test files with in-memory outbox/repository only; runtime default enabled, explicit opt-out and idempotence exercised; no DB writes or service control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1982\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1982",
+      "business_smoke_semantic": {
+        "contract_id": "health_ok",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "7e566e34089b329cf71fc329d390e789019c7e3cf6ad0e6b1b910a736e01a7c6",
+      "expected_identity": "0ddd725c98d7f416b97fbfceacb1dc80f1b92dd3",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-19T06:02:17.914718Z",
+      "mode": "read_only",
+      "observed_identity": "0ddd725c98d7f416b97fbfceacb1dc80f1b92dd3",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "8dde09104e3134c9ea3e29a03046e5b972deac250b3aa18300869e2a38f11bc9",
+      "receipt_sha256": "2890b0608f5df1950ae73d693b803f210e28f66ff4c0a89e841097d3fe215229",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "61343210b9c53e290aae011b3ecbf676cea333122684b4d8a061874c3d3703e1",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1982",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "55cb5367d6af6939",
+    "recorded_at": "2026-10-19T04:06:32.333207Z",
+    "runtime_contract_digest": "7e566e34089b329cf71fc329d390e789019c7e3cf6ad0e6b1b910a736e01a7c6",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "60c1f199bca9316bb08c788a58e3e80220565252",
+    "source_merge_commit": "0ddd725c98d7f416b97fbfceacb1dc80f1b92dd3",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6349",
+    "validation_evidence": [
+      "validation-receipt: id=c968b9296ce4e773 commit=60c1f199bca9316bb08c788a58e3e80220565252 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`PASS 8 tests zero findings`",
+      "validation-receipt: id=20e54bdb8db415d7 commit=60c1f199bca9316bb08c788a58e3e80220565252 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/multi_alpha/test_archive_health.py backend/tests/qe_archive/test_multi_alpha_archive_handler.py -q --disable-warnings` result=`30 passed`",
+      "validation-receipt: id=7aac0c650c4770cc commit=60c1f199bca9316bb08c788a58e3e80220565252 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`PASS 7 files blocking=0`"
+    ],
+    "validation_evidence_digest": "89e76f2b9bfde9855d1fad3e7606d49a4498ecdfcd55a87173821fe8f1cf5641"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qe.auto_evolution"
+  ],
+  "title": "Multi-alpha formal completion silently disables default QE warehouse delivery",
+  "trigger_condition": {
+    "fingerprint": "d433a1d8516077a6c5f95a4d",
+    "source_event_id": "FE-20261019-d433a1d85160"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=c968b9296ce4e773 commit=60c1f199bca9316bb08c788a58e3e80220565252 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`PASS 8 tests zero findings`",
+    "validation-receipt: id=20e54bdb8db415d7 commit=60c1f199bca9316bb08c788a58e3e80220565252 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/multi_alpha/test_archive_health.py backend/tests/qe_archive/test_multi_alpha_archive_handler.py -q --disable-warnings` result=`30 passed`",
+    "validation-receipt: id=7aac0c650c4770cc commit=60c1f199bca9316bb08c788a58e3e80220565252 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`PASS 7 files blocking=0`",
+    "post-restart-verify backend-main -> verified exact identity 0ddd725c, health and Archive semantic smoke passed",
+    "GET archive-status/archive-detail for nine batch runs -> 9/9 archived, outbox completed retry=0, valid v2 recovery/provenance; F:/Dev/AIstock/tmp/issue_workflow/BUG-1982/archive-readback.json"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qe.auto_evolution",
+        "qe_archive",
+        "qe_read"
+      ],
+      "plans": [
+        "qe_archive_backend",
+        "qe_read_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qe.auto_evolution",
+          "qe_archive",
+          "qe_read"
+        ],
+        "plans": [
+          "qe_archive_backend",
+          "qe_read_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

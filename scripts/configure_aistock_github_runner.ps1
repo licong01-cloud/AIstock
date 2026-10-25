@@ -9,10 +9,14 @@ param(
   [string]$RepositoryUrl = 'https://github.com/licong01-cloud/AIstock',
   [string]$RunnerName = "$env:COMPUTERNAME-aistock-security",
   [string]$Role = 'security',
-  [string[]]$Labels = @('aistock', 'aistock-ci-security'),
+  [string[]]$Labels = @('aistock', 'aistock-ci', 'aistock-ci-security'),
   [string]$StartHelperPath,
+  [switch]$AuditOnly,
   [switch]$Apply,
   [switch]$Start,
+  [switch]$ScheduledDispatch,
+  [string]$SchedulerPython = $(Join-Path ([Environment]::GetFolderPath('UserProfile')) 'miniconda3\envs\AIstock-CI\pythonw.exe'),
+  [string]$SchedulerGhConfigRoot = $(if ($env:GH_CONFIG_DIR) { $env:GH_CONFIG_DIR } else { Join-Path $env:APPDATA 'GitHub CLI' }),
   [switch]$Json
 )
 
@@ -41,8 +45,107 @@ function Resolve-BoundedPath {
   return $resolved
 }
 
+function Resolve-ScheduledDispatchOwnerSid {
+  param([Parameter(Mandatory)][ValidateNotNullOrEmpty()][string]$UserId)
+  if ($UserId -match '^S-\d-') {
+    return ([Security.Principal.SecurityIdentifier]$UserId).Value
+  }
+  return ([Security.Principal.NTAccount]$UserId).Translate([Security.Principal.SecurityIdentifier]).Value
+}
+
+# Separate infrastructure-only mode: no runner/service/DB lifecycle operations.
+if ($ScheduledDispatch) {
+  if ($Start -or ($AuditOnly -and $Apply)) {
+    throw 'ScheduledDispatch cannot start a runner or combine AuditOnly with Apply'
+  }
+  $commonGit = & git -C (Join-Path $PSScriptRoot '..') rev-parse --path-format=absolute --git-common-dir
+  if ($LASTEXITCODE -ne 0 -or -not $commonGit) { throw 'Cannot resolve canonical Git authority' }
+  $canonical = Split-Path ([IO.Path]::GetFullPath($commonGit.Trim())) -Parent
+  $python = [IO.Path]::GetFullPath($SchedulerPython)
+  $script = Join-Path $canonical 'scripts\aistock_runner_health.py'
+  $state = Join-Path (Split-Path $canonical -Parent) 'aistock-nightly-scheduler'
+  $taskName = 'AIstock Nightly Scheduled Dispatch'
+  $zone = Get-TimeZone
+  if ($zone.BaseUtcOffset.TotalHours -ne 8 -or $zone.SupportsDaylightSavingTime) {
+    throw 'Scheduler requires a fixed UTC+8 Windows timezone'
+  }
+  if (-not (Get-Command gh -ErrorAction SilentlyContinue)) { throw 'Existing gh CLI is required; not installed here' }
+  $ghConfig = [IO.Path]::GetFullPath($SchedulerGhConfigRoot)
+  if (-not (Test-Path -LiteralPath (Join-Path $ghConfig 'hosts.yml') -PathType Leaf)) {
+    throw 'Existing authenticated gh config location is required; credentials are not copied'
+  }
+  $arguments = '"{0}" dispatch-scheduled --state-root "{1}" --gh-config-dir "{2}" --apply' -f $script, $state, $ghConfig
+  foreach ($required in @($python, $script)) {
+    if (-not (Test-Path -LiteralPath $required -PathType Leaf)) { throw "Missing scheduler entry: $required" }
+  }
+  $existing = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+  if ($existing -and ($existing.Actions.Count -ne 1 -or
+      $existing.Actions[0].Execute -ne $python -or $existing.Actions[0].Arguments -ne $arguments)) {
+    throw 'Existing scheduled task has unexpected ownership/action; not overwritten'
+  }
+  if ($existing) {
+    $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+    $ownerSid = Resolve-ScheduledDispatchOwnerSid -UserId $existing.Principal.UserId
+    $triggerTimes = @($existing.Triggers | ForEach-Object { ([datetime]$_.StartBoundary).ToString('HH:mm') })
+    # Task Scheduler CIM enums are numeric: Disabled=1, Interactive=3, Limited=0, IgnoreNew=2.
+    if ([int]$existing.State -eq 1 -or $existing.Actions[0].WorkingDirectory -ne $canonical -or
+        $ownerSid -ne $identity.User.Value -or
+        [int]$existing.Principal.RunLevel -ne 0 -or -not $existing.Settings.Hidden -or
+        -not $existing.Settings.StartWhenAvailable -or
+        [int]$existing.Principal.LogonType -ne 3 -or $triggerTimes.Count -ne 3 -or
+        @('02:30','03:07','04:27' | Where-Object { $_ -notin $triggerTimes }).Count -ne 0 -or
+        $existing.Triggers[0].Repetition.Interval -ne 'PT5M' -or
+        $existing.Triggers[0].Repetition.Duration -ne 'PT3H45M' -or
+        [int]$existing.Settings.MultipleInstances -ne 2 -or
+        $existing.Settings.ExecutionTimeLimit -ne 'PT4M') {
+      throw 'Owned scheduler configuration drift; inspect before modifying'
+    }
+  }
+  if ($Apply) {
+    if ([IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..')).TrimEnd('\') -ne $canonical) {
+      throw 'Apply scheduler only from the merged canonical script'
+    }
+    $branch = & git -C $canonical branch --show-current
+    if ($LASTEXITCODE -ne 0 -or $branch -ne 'main') { throw 'Scheduler apply requires canonical main' }
+    $dirty = & git -C $canonical status --porcelain
+    if ($LASTEXITCODE -ne 0 -or $dirty) { throw 'Scheduler apply requires a clean canonical checkout' }
+    $triggers = @()
+    foreach ($at in @('02:30', '03:07', '04:27')) {
+      $triggers += New-ScheduledTaskTrigger -Daily -At $at
+    }
+    # A bounded retry tick covers missed wakeup/network failures; no continuous daemon.
+    $triggers[0].Repetition = New-CimInstance -ClientOnly -Namespace 'Root/Microsoft/Windows/TaskScheduler' `
+      -ClassName MSFT_TaskRepetitionPattern -Property @{ Interval='PT5M'; Duration='PT3H45M'; StopAtDurationEnd=$false }
+    $action = New-ScheduledTaskAction -Execute $python -Argument $arguments -WorkingDirectory $canonical
+    $settings = New-ScheduledTaskSettingsSet -Hidden -StartWhenAvailable -MultipleInstances IgnoreNew `
+      -ExecutionTimeLimit (New-TimeSpan -Minutes 4) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+    $principal = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) `
+      -LogonType Interactive -RunLevel Limited
+    if (-not $existing) {
+      Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers `
+        -Settings $settings -Principal $principal -Description 'Only dispatch existing overnight workflows; no service control.' | Out-Null
+    }
+    # Existing exact owned action is left untouched, including while running.
+    $existing = Get-ScheduledTask -TaskName $taskName
+  }
+  $info = if ($existing) { Get-ScheduledTaskInfo -TaskName $taskName } else { $null }
+  Write-Result @{
+    schema_version='aistock_scheduled_dispatch_install_v1'
+    status=$(if ($existing) { 'installed' } else { 'planned' })
+    configured=[bool]$existing; started=$false; role='scheduled_dispatch'
+    task_name=$taskName; state_root=$state; execute=$python; arguments=$arguments
+    next_run_time=$(if ($info) { $info.NextRunTime.ToString('o') } else { $null })
+    last_task_result=$(if ($info) { $info.LastTaskResult } else { $null })
+    requires_awake_signed_in_host=$true
+  }
+  exit 0
+}
+
 if ($Role -notin @('general', 'security')) {
   throw "Runner role must be general or security: $Role"
+}
+if ($AuditOnly -and ($Apply -or $Start)) {
+  throw 'AuditOnly cannot be combined with Apply or Start'
 }
 
 function Get-RunnerProcess {
@@ -65,10 +168,107 @@ function Get-RunnerProcess {
 if (-not $Labels -or $Labels.Count -eq 0) {
   throw 'At least one explicit runner label is required'
 }
-$requiredRoleLabel = $(if ($Role -eq 'general') { 'aistock-ci' } else { 'aistock-ci-security' })
-if ($Labels -notcontains $requiredRoleLabel) {
-  throw "Runner labels for role $Role must include $requiredRoleLabel"
+$requiredRoleLabels = $(
+  if ($Role -eq 'general') {
+    @('aistock-ci')
+  } else {
+    @('aistock-ci', 'aistock-ci-security')
+  }
+)
+foreach ($requiredRoleLabel in $requiredRoleLabels) {
+  if ($Labels -notcontains $requiredRoleLabel) {
+    throw "Runner labels for role $Role must include $requiredRoleLabel"
+  }
 }
+if ($Role -eq 'general' -and $Labels -contains 'aistock-ci-security') {
+  throw 'General runner labels must not include aistock-ci-security'
+}
+
+$resolvedRoot = Resolve-BoundedPath -Path $InstallRoot -Boundary $AllowedRoot
+if ($AuditOnly) {
+  $auditIdentityPath = Join-Path $resolvedRoot '.runner'
+  $auditWrapperPath = Join-Path $resolvedRoot 'run-aistock-runner-hidden.cmd'
+  $auditSupervisorPath = Join-Path $resolvedRoot 'supervise-aistock-runner.ps1'
+  $auditSupervisorStatePath = Join-Path $resolvedRoot '.aistock-runner-supervisor.json'
+  $blocking = @()
+  $warnings = @()
+  $identity = $null
+  $supervisorPid = $null
+  $supervisorAlive = $false
+
+  if (-not (Test-Path -LiteralPath $resolvedRoot -PathType Container)) {
+    $blocking += "runner install root is missing: $resolvedRoot"
+  } elseif (-not (Test-Path -LiteralPath $auditIdentityPath -PathType Leaf)) {
+    $blocking += "runner identity is missing: $auditIdentityPath"
+  } else {
+    try {
+      $identity = Get-Content -Raw -LiteralPath $auditIdentityPath | ConvertFrom-Json
+    } catch {
+      $blocking += "runner identity is invalid: $auditIdentityPath"
+    }
+  }
+
+  if ($null -ne $identity) {
+    if ($identity.gitHubUrl.TrimEnd('/') -ne $RepositoryUrl.TrimEnd('/')) {
+      $blocking += "configured runner repository mismatch: $($identity.gitHubUrl)"
+    }
+    if ($identity.workFolder -ne '_work') {
+      $blocking += "configured runner work folder mismatch: $($identity.workFolder)"
+    }
+    if (-not [bool]$identity.disableUpdate) {
+      $blocking += 'runner automatic update is enabled; disableUpdate=true is required'
+    }
+  }
+  if (-not (Test-Path -LiteralPath $auditWrapperPath -PathType Leaf)) {
+    $blocking += "runner wrapper is missing: $auditWrapperPath"
+  } else {
+    $auditWrapperText = Get-Content -Raw -LiteralPath $auditWrapperPath
+    if ($auditWrapperText -notmatch '(?im)^set "GIT_ALTERNATE_OBJECT_DIRECTORIES="\s*$') {
+      $blocking += 'runner wrapper must clear GIT_ALTERNATE_OBJECT_DIRECTORIES; external object caches are not durable runner dependencies'
+    }
+  }
+  if (-not (Test-Path -LiteralPath $auditSupervisorPath -PathType Leaf)) {
+    $blocking += "runner supervisor is missing: $auditSupervisorPath"
+  }
+  if (Test-Path -LiteralPath $auditSupervisorStatePath -PathType Leaf) {
+    try {
+      $state = Get-Content -Raw -LiteralPath $auditSupervisorStatePath | ConvertFrom-Json
+      if ($state.schema_version -eq 'aistock_github_runner_supervisor_state_v1' -and [int]$state.supervisor_pid -gt 0) {
+        $supervisorPid = [int]$state.supervisor_pid
+        $supervisorAlive = $null -ne (Get-Process -Id $supervisorPid -ErrorAction SilentlyContinue)
+      }
+    } catch {
+      $warnings += "runner supervisor state is invalid: $auditSupervisorStatePath"
+    }
+  }
+  if ((Test-Path -LiteralPath $auditSupervisorPath -PathType Leaf) -and -not $supervisorAlive) {
+    $warnings += 'runner supervisor is installed but not active'
+  }
+
+  $payload = @{
+    schema_version = 'aistock_github_runner_install_audit_v1'
+    status = $(if ($blocking.Count -eq 0) { 'ready' } else { 'blocked' })
+    workflow_gate = $(if ($blocking.Count -eq 0) { 'ready' } else { 'blocked' })
+    configured = $null -ne $identity
+    started = $false
+    role = $Role
+    labels = $Labels
+    runner_name = $(if ($null -ne $identity) { $identity.agentName } else { $null })
+    install_root = $resolvedRoot
+    automatic_update_disabled = $(if ($null -ne $identity) { [bool]$identity.disableUpdate } else { $false })
+    wrapper_present = Test-Path -LiteralPath $auditWrapperPath -PathType Leaf
+    supervisor_present = Test-Path -LiteralPath $auditSupervisorPath -PathType Leaf
+    supervisor_pid = $supervisorPid
+    supervisor_alive = $supervisorAlive
+    blocking = $blocking
+    warnings = $warnings
+    process_control_performed = $false
+    remediation = $(if ($blocking.Count -eq 0) { 'none' } else { 'run configure helper with pinned archive inputs only after explicit runner process-control authorization' })
+  }
+  Write-Result $payload
+  exit $(if ($blocking.Count -eq 0) { 0 } else { 2 })
+}
+
 if (-not $RunnerVersion -or $RunnerVersion -notmatch '^\d+\.\d+\.\d+$') {
   throw 'RunnerVersion must be an explicit semantic version such as 2.337.0'
 }
@@ -79,7 +279,6 @@ if (-not $ArchiveSha256 -or $ArchiveSha256 -notmatch '^[a-fA-F0-9]{64}$') {
   throw 'ArchiveSha256 must be an explicit 64-character SHA-256'
 }
 
-$resolvedRoot = Resolve-BoundedPath -Path $InstallRoot -Boundary $AllowedRoot
 $resolvedArchive = [System.IO.Path]::GetFullPath($ArchivePath)
 $resolvedTemplate = [System.IO.Path]::GetFullPath($TemplateWrapper)
 $resolvedSupervisorSource = [System.IO.Path]::GetFullPath($SupervisorSource)
@@ -218,6 +417,13 @@ $wrapperText = [regex]::Replace(
   ('cd /d "' + $resolvedRoot + '"'),
   1
 )
+$gitAlternatePattern = '(?im)^set "GIT_ALTERNATE_OBJECT_DIRECTORIES=.*"\s*$'
+$gitAlternateClear = 'set "GIT_ALTERNATE_OBJECT_DIRECTORIES="'
+if ($wrapperText -match $gitAlternatePattern) {
+  $wrapperText = [regex]::Replace($wrapperText, $gitAlternatePattern, $gitAlternateClear)
+} else {
+  $wrapperText = $wrapperText -replace '(?im)^call run\.cmd', ($gitAlternateClear + "`r`ncall run.cmd")
+}
 if ($wrapperText -match '(?im)^set "AISTOCK_RUNNER_ROLE=.*"\s*$') {
   $wrapperText = [regex]::Replace(
     $wrapperText,

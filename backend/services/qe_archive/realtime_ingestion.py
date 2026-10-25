@@ -1,17 +1,19 @@
 """Best-effort realtime QE archive ingestion hooks.
 
-The hook is disabled by default. When explicitly enabled, QE completion paths
-can call it after their own DB transaction succeeds; archive failures are
-reported in logs/API results and must not change QE loop or experiment status.
+Formal QE completion paths capture a durable outbox event by default after
+their own DB transaction succeeds.  Operators can explicitly disable capture;
+archive failures never change the QE loop or experiment compute status.
 """
 
 from __future__ import annotations
 
 import logging
 import os
+from dataclasses import replace
 from typing import Any
 
 from .backfill_service import QEArchiveBackfillService
+from .asset_lifecycle import attach_lifecycle, classify_qe_result, has_lifecycle_evidence
 from .event_capture import QEArchiveEventCapture
 from .ingest_history import record_decision_skip, record_ingest_history
 from .policy import resolve_archive_policy
@@ -28,6 +30,12 @@ logger = logging.getLogger("aistock.qe_archive.realtime_ingestion")
 
 def _env_truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_enabled_by_default(value: str | None) -> bool:
+    if value is None or not value.strip():
+        return True
+    return _env_truthy(value)
 
 
 class QEArchiveRealtimeIngestion:
@@ -56,7 +64,7 @@ class QEArchiveRealtimeIngestion:
     def enabled(self) -> bool:
         if self._enabled is not None:
             return self._enabled
-        return _env_truthy(os.getenv(QE_ARCHIVE_REALTIME_ENABLED_ENV))
+        return _env_enabled_by_default(os.getenv(QE_ARCHIVE_REALTIME_ENABLED_ENV))
 
     @property
     def mode(self) -> str:
@@ -75,9 +83,11 @@ class QEArchiveRealtimeIngestion:
     ) -> dict[str, Any]:
         if not self.enabled:
             return {"archived": False, "skipped_reason": "disabled"}
+        assembled = True
         try:
             payload = self._assembler.assemble_loop_payload(loop_id=loop_id, task_id=task_id, loop_index=loop_index)
         except Exception as exc:
+            assembled = False
             logger.warning("QE archive loop policy payload assembly failed, using minimal payload: %s", exc)
             payload = {
                 "source_system": "qe_evolution",
@@ -95,7 +105,21 @@ class QEArchiveRealtimeIngestion:
             payload=payload,
             runtime_config=payload.get("config") if isinstance(payload.get("config"), dict) else {},
         )
-        if not decision.should_archive:
+        lifecycle = (
+            classify_qe_result(payload)
+            if assembled and has_lifecycle_evidence(payload)
+            else None
+        )
+        if lifecycle is not None:
+            payload = attach_lifecycle(payload, lifecycle)
+        if lifecycle is not None and not lifecycle.archive_eligible:
+            decision = replace(
+                decision,
+                archive_policy="SKIP",
+                archive_policy_source="qe_asset_lifecycle",
+                reason=lifecycle.reason_code,
+            )
+        if not decision.should_archive and not (lifecycle and lifecycle.archive_eligible):
             skip_id = record_policy_skip(decision, event_type="qe.loop.completed", trigger_reason="realtime")
             history_id = record_decision_skip(decision, trigger_reason="realtime")
             return {
@@ -146,9 +170,11 @@ class QEArchiveRealtimeIngestion:
     def archive_experiment_completed(self, *, experiment_id: str) -> dict[str, Any]:
         if not self.enabled:
             return {"archived": False, "skipped_reason": "disabled"}
+        assembled = True
         try:
             payload = self._assembler.assemble_experiment_payload(experiment_id)
         except Exception as exc:
+            assembled = False
             logger.warning("QE archive experiment policy payload assembly failed, using minimal payload: %s", exc)
             payload = {
                 "source_system": "qe",
@@ -162,7 +188,21 @@ class QEArchiveRealtimeIngestion:
             payload=payload,
             runtime_config=payload.get("config") if isinstance(payload.get("config"), dict) else {},
         )
-        if not decision.should_archive:
+        lifecycle = (
+            classify_qe_result(payload)
+            if assembled and has_lifecycle_evidence(payload)
+            else None
+        )
+        if lifecycle is not None:
+            payload = attach_lifecycle(payload, lifecycle)
+        if lifecycle is not None and not lifecycle.archive_eligible:
+            decision = replace(
+                decision,
+                archive_policy="SKIP",
+                archive_policy_source="qe_asset_lifecycle",
+                reason=lifecycle.reason_code,
+            )
+        if not decision.should_archive and not (lifecycle and lifecycle.archive_eligible):
             skip_id = record_policy_skip(decision, event_type="qe.experiment.completed", trigger_reason="realtime")
             history_id = record_decision_skip(decision, trigger_reason="realtime")
             return {

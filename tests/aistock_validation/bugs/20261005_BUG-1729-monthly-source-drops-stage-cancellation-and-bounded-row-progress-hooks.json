@@ -1,0 +1,418 @@
+{
+  "actual": "checkpoint defaults to no-op; stage state timestamp remains at entry while raw source scan runs for hours.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_frozen_source_audit.py",
+    "backend/services/dataset_release/monthly_preparation_composition.py",
+    "backend/services/dataset_release/monthly_unified.py",
+    "backend/services/dataset_release/monthly_postgres_source.py",
+    "backend/services/dataset_release/monthly_preparation_source.py",
+    "backend/tests/dataset_release/test_monthly_unified_v2.py",
+    "backend/tests/dataset_release/test_monthly_postgres_source.py",
+    "backend/tests/dataset_release/test_monthly_preparation_source.py",
+    "tests/aistock_validation/bugs/20261005_BUG-1729-monthly-source-drops-stage-cancellation-and-bounded-row-progress-hooks.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1729",
+  "closed_at": "2026-10-25T07:49:20.192118Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-05T02:08:40.591735Z",
+  "description": "月更 SOURCE adapter 未传递已有分批 checkpoint，阶段内取消与真实进度不可见。接通 BUG-1730 的代码拥有回调，记录 attempt/stage 绑定的阶段、当前分区、已校验行、已封存行和分区及心跳；未知计数与总量为 null，15秒节流且阶段切换立即刷新。raw freeze、冻结行审计、私有准备执行传递 checkpoint；取消返回 CANCELLED，checkpoint 发布时在 operation lock 内再检查取消标志，禁止取消竞态产生成功 checkpoint。进度不参与 SOURCE/READY 或复用证明；历史复用/有界并行仍为后续性能任务。当前 attempt 242 和 active profile 不变；无生产/DEV DDL/DML、服务或训练动作。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261005-2c4a7b58f3eb",
+      "timestamp": "2026-10-05T02:08:40.591719Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "SOURCE分区和行计数可读，已有取消请求在chunk或分区边界传播并回滚快照，不写SOURCE checkpoint；进度不作为READY或复用证据。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_composition.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1729-monthly-source-drops-stage-cancellation-and-bounded-row-progress-hooks.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_composition.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "tests/aistock_validation/bugs/20261005_BUG-1729-monthly-source-drops-stage-cancellation-and-bounded-row-progress-hooks.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/services/dataset_release/monthly_worker.py",
+        "backend/services/dataset_release/monthly_postgres_source.py",
+        "backend/services/dataset_release/monthly_preparation_source.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py",
+        "backend/tests/dataset_release/test_monthly_postgres_source.py",
+        "backend/tests/dataset_release/test_monthly_preparation_source.py",
+        "backend/tests/dataset_release/test_monthly_worker.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_unified.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_worker.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_postgres_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_preparation_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_unified_v2.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_postgres_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_preparation_source.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_worker.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_unified.py",
+        "backend/services/dataset_release/monthly_worker.py",
+        "backend/services/dataset_release/monthly_postgres_source.py",
+        "backend/services/dataset_release/monthly_preparation_source.py",
+        "backend/tests/dataset_release/test_monthly_unified_v2.py",
+        "backend/tests/dataset_release/test_monthly_postgres_source.py",
+        "backend/tests/dataset_release/test_monthly_preparation_source.py",
+        "backend/tests/dataset_release/test_monthly_worker.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
+      "backend/tests/dataset_release/test_monthly_worker.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_unified.py",
+      "backend/services/dataset_release/monthly_worker.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_preparation_source.py",
+      "backend/tests/dataset_release/test_monthly_unified_v2.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "backend/tests/dataset_release/test_monthly_preparation_source.py",
+      "backend/tests/dataset_release/test_monthly_worker.py"
+    ]
+  },
+  "first_seen_at": "2026-10-05T02:08:40.591735Z",
+  "fix_branch": null,
+  "fix_commit": "0984a1b9668da7ee2345693b112c161a274ac7bd",
+  "fixed_at": "2026-10-05T02:23:57Z",
+  "github_issue_number": 5471,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5471",
+  "last_seen_at": "2026-10-05T02:08:40.591735Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5476",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "database_readback_ref": "not_required",
+    "fresh_process_evidence": [
+      "AIstock interpreter fresh process: seven focused monthly SOURCE/service/worker/snapshot suites -> 141 passed, 1 existing skipped. RED 6 failures before implementation; real temporary CAS private source cancellation after 1000 validated raw rows, frozen audit interruption after 100000 rows, registered pipeline to service cancellation and checkpoint publication race all PASS. Windows temporary test state only X:/AIstock_temp/BUG-1729; no DEV/production DB, active profile, production candidate or runtime actions. Depends on BUG-1730 source merge 3aa559f71dd7056b3ccca38f7a09ef230df77273; deployed attempt 242 unchanged, runtime pending user-owned restart."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main",
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1729-corrected-contract-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1729",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "d5dfe9b718d3a23de3da51d528eeabf83fab50bec97eae9bfb76acd819e74c9c",
+      "expected_identity": "0984a1b9668da7ee2345693b112c161a274ac7bd",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:49:16.248169Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "b99e77f3265c1792389ea9d436ae2b2d3b9ce30fbc9bf49c58993c71b614a083",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d62a27366a6f9acaa553dcf09ba2b78d01ea314a4206a83b75038a81e6c5f074",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1729",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "fbe292a407426626",
+    "recorded_at": "2026-10-05T02:24:31.996248Z",
+    "runtime_contract_digest": "986ad9dcb33f12aeefd7f3e233f59566a2e2c57a201478777cc60b89f7413e5f",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0abe60ff25e40ae730610b31b8412085a6794ddc",
+    "source_merge_commit": "0984a1b9668da7ee2345693b112c161a274ac7bd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5476",
+    "validation_evidence": [
+      "AIstock focused SOURCE integration 141 passed, 1 existing skipped; L0 and exact-head CI SUCCESS; runtime unchanged"
+    ],
+    "validation_evidence_digest": "1116c8be7137ddec7eff9a21b01362dfccb46c94cbdfd6a65a060e54a8c4da24"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Monthly SOURCE drops stage cancellation and bounded row progress hooks",
+  "trigger_condition": {
+    "fingerprint": "2c4a7b58f3ebfbf5c6dd6f12",
+    "source_event_id": "FE-20261005-2c4a7b58f3eb"
+  },
+  "validation_evidence": [
+    "AIstock focused SOURCE integration 141 passed, 1 existing skipped; L0 and exact-head CI SUCCESS; runtime unchanged",
+    "Exact merged source scope and canonical-root supervised Worker probe PASS; target metadata correction reviewed twice; original source checks retained; no data/source/gate/runtime changes."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

@@ -142,6 +142,9 @@ class AuditBackedDataHealthChecker:
         if dataset in NO_FRESHNESS_TABLES:
             return None
         previous = self._previous_trading_day(latest_trading)
+        from .data_sync_targets import PUBLICATION_LAG_DAYS, publication_target_date
+        if dataset in PUBLICATION_LAG_DAYS:
+            return publication_target_date(dataset, latest_trading, self._now_cn(), self._previous_trading_day)
         if dataset in T_PLUS_1_TABLES:
             return previous or latest_trading
 
@@ -154,6 +157,7 @@ class AuditBackedDataHealthChecker:
                 "bak_basic",
                 "cyq_perf",
                 "daily_basic",
+                "etf_share_size",
                 "index_daily",
                 "kline_daily_raw",
                 "kline_minute_raw",

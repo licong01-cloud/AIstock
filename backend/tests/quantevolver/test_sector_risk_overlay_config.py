@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
+from pathlib import Path
+import sys
+import types
 
 import pandas as pd
 import pytest
+import yaml
 
 from backend.services.quantevolver.config_composer import (
     QE_MINUTE_RUNTIME_HELPER_FILES,
@@ -31,6 +36,47 @@ STRATEGY_INFO = {
     "source_code": "class ScoreWeightedTopkStrategyV2:\n    pass\n",
     "portfolio_config": {"class": "ScoreWeightedTopkStrategyV2", "kwargs": {}},
 }
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+SCRIPTS_DIR = PROJECT_ROOT / "scripts"
+
+
+def _load_score_weighted_strategy(monkeypatch: pytest.MonkeyPatch):
+    modules = {
+        name: types.ModuleType(name)
+        for name in (
+            "qlib",
+            "qlib.contrib",
+            "qlib.contrib.strategy",
+            "qlib.contrib.strategy.signal_strategy",
+            "qlib.backtest",
+            "qlib.backtest.decision",
+        )
+    }
+
+    class TopkDropoutStrategy:
+        pass
+
+    class Order:
+        pass
+
+    class OrderDir:
+        BUY = 1
+        SELL = 0
+
+    class TradeDecisionWO:
+        pass
+
+    modules["qlib.contrib.strategy.signal_strategy"].TopkDropoutStrategy = TopkDropoutStrategy
+    modules["qlib.backtest.decision"].Order = Order
+    modules["qlib.backtest.decision"].OrderDir = OrderDir
+    modules["qlib.backtest.decision"].TradeDecisionWO = TradeDecisionWO
+    for name, module in modules.items():
+        monkeypatch.setitem(sys.modules, name, module)
+    monkeypatch.syspath_prepend(str(SCRIPTS_DIR))
+    sys.modules.pop("score_weighted_strategy", None)
+    return importlib.import_module("score_weighted_strategy")
 
 
 def _artifact(tmp_path):
@@ -140,3 +186,276 @@ def test_composed_yaml_routes_to_qe_overlay_wrapper(tmp_path) -> None:
     assert "module_path: qe_sector_risk_overlay_strategy" in yaml_text
     assert f"sector_risk_overlay_manifest_file: {SECTOR_RISK_OVERLAY_MANIFEST_FILE}" in yaml_text
     assert f"sector_risk_overlay_data_file: {SECTOR_RISK_OVERLAY_DATA_FILE}" in yaml_text
+
+
+@pytest.mark.parametrize("catalog_threads", [None, 8])
+def test_lgbm_num_threads_is_model_only_and_preserves_other_contracts(catalog_threads) -> None:
+    composer = ConfigComposer()
+    model_info = (
+        {"model_type": "LGBM", "model_hyperparameters": {"num_threads": catalog_threads}}
+        if catalog_threads is not None else None
+    )
+    params = {
+        "random_seed": 42,
+        "label_horizon": 20,
+        "stock_pool": "/fixture/pit_stock_pool.txt",
+        "filter_suspended_on_signal": True,
+        "risk_policy_enabled": True,
+    }
+
+    def compose(custom_params):
+        return yaml.safe_load(composer._compose_conf_yaml(
+            factors_info=[], model_info=model_info, strategy_info=STRATEGY_INFO,
+            data_split=DATA_SPLIT, custom_params=custom_params,
+            has_custom_factors=True, has_alpha158=False, disable_alpha158=True,
+            qlib_data_path="/fixture/v15/day", qlib_minute_path="/fixture/v15/1min",
+            backtest_freq="1min", execution_algo="TWAP",
+            execution_algo_params={"unfilled_handler": "TAIL_BOOST", "unfilled_backup_depth": 5},
+            node_id="rdagent-node1",
+        ))
+
+    baseline = compose(params)
+    overrides = {**params, "num_threads": 12}
+    overridden = compose(overrides)
+    assert overridden["task"]["model"]["class"] == "LGBModel"
+    assert overridden["task"]["model"]["kwargs"]["num_threads"] == 12
+    # Whole executable contract is unchanged apart from this explicit model override.
+    overridden["task"]["model"]["kwargs"]["num_threads"] = baseline["task"]["model"]["kwargs"]["num_threads"]
+    assert overridden == baseline
+    assert baseline["task"]["model"]["kwargs"]["num_threads"] == (24 if catalog_threads is None else catalog_threads)
+    assert compose(params) == baseline
+    assert overrides == {**params, "num_threads": 12}
+    if model_info is not None:
+        assert model_info["model_hyperparameters"] == {"num_threads": catalog_threads}
+    with pytest.raises(ValueError, match="unsupported_strategy_param"):
+        compose({**overrides, "unsupported_strategy_param": 1})
+
+
+@pytest.mark.parametrize("strategy_class", ["ScoreWeightedTopkStrategyV2", "CatalogExternalStrategy"])
+def test_num_threads_keeps_existing_non_lgbm_strategy_semantics(strategy_class) -> None:
+    kwargs = dict(
+        factors_info=[], model_info={"model_type": "XGB"},
+        strategy_info={
+            "source_code": f"class {strategy_class}:\n    pass\n",
+            "portfolio_config": {"class": strategy_class, "kwargs": {}},
+        },
+        data_split=DATA_SPLIT, custom_params={"num_threads": 12},
+        has_custom_factors=False, has_alpha158=True,
+        qlib_data_path="/fixture/day", qlib_minute_path="/fixture/1min",
+        backtest_freq="1min", execution_algo="TWAP",
+    )
+    if strategy_class == "ScoreWeightedTopkStrategyV2":
+        with pytest.raises(ValueError, match="num_threads"):
+            ConfigComposer()._compose_conf_yaml(**kwargs)
+    else:
+        conf = yaml.safe_load(ConfigComposer()._compose_conf_yaml(**kwargs))
+        assert conf["port_analysis_config"]["strategy"]["kwargs"]["num_threads"] == 12
+        assert "num_threads" not in conf["task"]["model"]["kwargs"]
+
+
+def test_hmm_adjustment_uses_point_in_time_membership_spans(monkeypatch, tmp_path):
+    module = _load_score_weighted_strategy(monkeypatch)
+    artifact = tmp_path / "hmm.json"
+    artifact.write_text(
+        module.json.dumps(
+            {
+                "daily_coefficients": {
+                    "2026-07-15": {"OLD.SI": 2.0, "NEW.SI": 3.0},
+                    "2026-07-16": {"OLD.SI": 2.0, "NEW.SI": 3.0},
+                },
+                "stock_sector_membership_spans": {
+                    "000001.SZ": [
+                        {
+                            "start_date": "2026-07-15",
+                            "end_date": "2026-07-15",
+                            "sector_code": "OLD.SI",
+                        },
+                        {
+                            "start_date": "2026-07-16",
+                            "end_date": "2026-07-16",
+                            "sector_code": "NEW.SI",
+                        },
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    strategy = object.__new__(module.ScoreWeightedTopkStrategy)
+    strategy.enable_sector_hmm = True
+    strategy.hmm_coefficients_file = str(artifact)
+    strategy._hmm_config = None
+    strategy._hmm_config_loaded = False
+    scores = module.pd.Series({"000001.SZ": 1.0})
+
+    old = strategy._apply_hmm_adjustment(scores, "2026-07-15")
+    new = strategy._apply_hmm_adjustment(scores, "2026-07-16")
+
+    assert old["000001.SZ"] == 2.0
+    assert new["000001.SZ"] == 3.0
+
+
+def test_hmm_adjustment_rejects_missing_point_in_time_membership(monkeypatch, tmp_path):
+    module = _load_score_weighted_strategy(monkeypatch)
+    artifact = tmp_path / "hmm.json"
+    artifact.write_text(
+        module.json.dumps(
+            {
+                "daily_coefficients": {"2026-07-16": {"A.SI": 1.1}},
+                "stock_sector_map_by_date": {
+                    "2026-07-16": {"000001.SZ": "A.SI"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    strategy = object.__new__(module.ScoreWeightedTopkStrategy)
+    strategy.enable_sector_hmm = True
+    strategy.hmm_coefficients_file = str(artifact)
+    strategy._hmm_config = None
+    strategy._hmm_config_loaded = False
+
+    with pytest.raises(RuntimeError, match="coverage is incomplete"):
+        strategy._apply_hmm_adjustment(
+            module.pd.Series({"000002.SZ": 1.0}),
+            "2026-07-16",
+        )
+
+
+def test_hmm_adjustment_explicitly_skips_l2_overlay_when_quote_is_unavailable(monkeypatch, tmp_path):
+    module = _load_score_weighted_strategy(monkeypatch)
+    artifact = tmp_path / "hmm.json"
+    artifact.write_text(
+        module.json.dumps(
+            {
+                "daily_coefficients": {"2026-07-16": {"A.SI": 1.1}},
+                "stock_sector_map_by_date": {
+                    "2026-07-16": {
+                        "000001.SZ": "A.SI",
+                        "000002.SZ": "B.SI",
+                    },
+                },
+                "quote_unavailable_sector_codes_by_date": {
+                    "2026-07-16": ["B.SI"],
+                },
+                "l2_overlay_unavailable_policy": "explicit_no_l2_overlay_v1",
+                "quote_availability_authority": {
+                    "authority_id": "fixture",
+                    "authority_sha256": "a" * 64,
+                },
+                "quote_availability_digest": "b" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    strategy = object.__new__(module.ScoreWeightedTopkStrategy)
+    strategy.enable_sector_hmm = True
+    strategy.hmm_coefficients_file = str(artifact)
+    strategy._hmm_config = None
+    strategy._hmm_config_loaded = False
+
+    adjusted = strategy._apply_hmm_adjustment(
+        module.pd.Series({"000001.SZ": 2.0, "000002.SZ": 3.0}),
+        "2026-07-16",
+    )
+
+    assert adjusted["000001.SZ"] == pytest.approx(2.2)
+    assert adjusted["000002.SZ"] == 3.0
+    assert strategy._last_hmm_adjustment_trace["no_l2_overlay_rows"] == [
+        {
+            "stock_id": "000002.SZ",
+            "sector_code": "B.SI",
+            "coefficient": None,
+            "reason": "hmm_l2_quote_unavailable_no_overlay",
+        }
+    ]
+
+
+def test_hmm_adjustment_rejects_missing_coefficient_without_quote_authority(monkeypatch, tmp_path):
+    module = _load_score_weighted_strategy(monkeypatch)
+    artifact = tmp_path / "hmm.json"
+    artifact.write_text(
+        module.json.dumps(
+            {
+                "daily_coefficients": {"2026-07-16": {"A.SI": 1.1}},
+                "stock_sector_map_by_date": {
+                    "2026-07-16": {"000002.SZ": "B.SI"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    strategy = object.__new__(module.ScoreWeightedTopkStrategy)
+    strategy.enable_sector_hmm = True
+    strategy.hmm_coefficients_file = str(artifact)
+    strategy._hmm_config = None
+    strategy._hmm_config_loaded = False
+
+    with pytest.raises(RuntimeError, match="coverage is incomplete"):
+        strategy._apply_hmm_adjustment(
+            module.pd.Series({"000002.SZ": 3.0}),
+            "2026-07-16",
+        )
+
+
+def test_hmm_adjustment_rejects_sector_marked_available_and_unavailable(monkeypatch, tmp_path):
+    module = _load_score_weighted_strategy(monkeypatch)
+    artifact = tmp_path / "hmm.json"
+    artifact.write_text(
+        module.json.dumps(
+            {
+                "daily_coefficients": {"2026-07-16": {"A.SI": 1.1}},
+                "stock_sector_map_by_date": {
+                    "2026-07-16": {"000001.SZ": "A.SI"},
+                },
+                "quote_unavailable_sector_codes_by_date": {
+                    "2026-07-16": ["A.SI"],
+                },
+                "l2_overlay_unavailable_policy": "explicit_no_l2_overlay_v1",
+                "quote_availability_authority": {
+                    "authority_id": "fixture",
+                    "authority_sha256": "a" * 64,
+                },
+                "quote_availability_digest": "b" * 64,
+            }
+        ),
+        encoding="utf-8",
+    )
+    strategy = object.__new__(module.ScoreWeightedTopkStrategy)
+    strategy.enable_sector_hmm = True
+    strategy.hmm_coefficients_file = str(artifact)
+    strategy._hmm_config = None
+    strategy._hmm_config_loaded = False
+
+    with pytest.raises(RuntimeError, match="overlaps coefficients"):
+        strategy._apply_hmm_adjustment(
+            module.pd.Series({"000001.SZ": 2.0}),
+            "2026-07-16",
+        )
+
+
+def test_hmm_adjustment_keeps_legacy_static_map_compatible(monkeypatch, tmp_path):
+    module = _load_score_weighted_strategy(monkeypatch)
+    artifact = tmp_path / "hmm.json"
+    artifact.write_text(
+        module.json.dumps(
+            {
+                "daily_coefficients": {"2026-07-16": {"A.SI": 1.1}},
+                "stock_sector_map": {"000001.SZ": "A.SI"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    strategy = object.__new__(module.ScoreWeightedTopkStrategy)
+    strategy.enable_sector_hmm = True
+    strategy.hmm_coefficients_file = str(artifact)
+    strategy._hmm_config = None
+    strategy._hmm_config_loaded = False
+
+    adjusted = strategy._apply_hmm_adjustment(
+        module.pd.Series({"000001.SZ": 2.0, "legacy-unmapped": 3.0}),
+        "2026-07-16",
+    )
+
+    assert adjusted["000001.SZ"] == pytest.approx(2.2)
+    assert adjusted["legacy-unmapped"] == 3.0

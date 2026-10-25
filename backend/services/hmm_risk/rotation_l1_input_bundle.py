@@ -22,7 +22,7 @@ import unicodedata
 import uuid
 from bisect import bisect_right
 from collections import defaultdict, deque
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
@@ -45,7 +45,7 @@ from backend.services.dataset_release.stock_schema import (
 from backend.services.hmm_risk.industry_pit_adapter import HMMIndustryPitAdapter, HMM_MAPPING_MANIFEST_SCHEMA
 from backend.services.hmm_risk.provider_absence import load_provider_absence_manifest
 from backend.services.hmm_risk.security_identity import load_security_source_identity_manifest
-from backend.services.hmm_risk.state_model_set import canonical_sha256
+from backend.services.hmm_risk.contracts import canonical_sha256
 from backend.services.hmm_risk.stock_fact_observation import (
     C010_APPROVED_TRAIN_END,
     C010_APPROVED_TRAIN_START,
@@ -69,7 +69,9 @@ DIRECT_V2_SOURCE_REVISION = "c013-g2a-hmm-input-bundle-direct-v2-v2"
 SOURCE_ASSET_SCHEMA_VERSION = "hmm_risk_dataset_release_asset_binding_v1"
 SOURCE_INVENTORY_SCHEMA_VERSION = "hmm_risk_rotation_l1_source_inventory_v1"
 DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1 = "hmm_risk_qe_direct_v2_dataset_identity_v1"
-DIRECT_V2_IDENTITY_SCHEMA_VERSION = "hmm_risk_qe_direct_v2_dataset_identity_v2"
+DIRECT_V2_IDENTITY_SCHEMA_VERSION = "hmm_risk_qe_direct_v2_dataset_identity_v3"
+MONTHLY_IDENTITY_SCHEMA_VERSION = "hmm_risk_qe_monthly_dataset_identity_v1"
+MONTHLY_SOURCE_REVISION = "hmm-risk-monthly-file-source-v1"
 DIRECT_V2_STATE_SCHEMA_VERSION_V2 = "qe_direct_monthly_state_v2"
 DIRECT_V2_STATE_SCHEMA_VERSION = "qe_direct_monthly_state_v3"
 DIRECT_V2_SUPPORTED_STATE_SCHEMA_VERSIONS = frozenset(
@@ -81,6 +83,16 @@ DIRECT_V2_SUSPEND_SCHEMA_VERSION = "qe_direct_suspend_d_v1"
 DIRECT_V2_SW_L1_SCHEMA_VERSION = "qe_direct_sw_l1_index_daily_v1"
 DIRECT_V2_SW_L1_SOURCE_IDENTITY = "market.sw_index_classify:SW2021:L1:published+market.sw_daily"
 DIRECT_V2_PROFILE = "qe_hmm_full_v2"
+DIRECT_V2_DATASET_MANIFEST_SCHEMA_VERSION = "qe_dataset_manifest_v1"
+ACTIVE_DATASET_PROFILE_ENV = "AISTOCK_ACTIVE_DATASET_PROFILE_PATH"
+ACTIVE_DATASET_PROFILE_SCHEMA_VERSIONS = frozenset(
+    {
+        "aistock_active_dataset_profile_v1",
+        "aistock_active_dataset_profile_v2",
+        "aistock_active_dataset_profile_v3",
+        "aistock_active_dataset_profile_v4",
+    }
+)
 DIRECT_V2_UNIVERSE_KEY = "aistock_equity_pit_canonical_v2"
 DIRECT_V2_RELEASE_START = date(2018, 8, 1)
 DIRECT_V2_MINIMUM_CUTOFF = date(2026, 8, 31)
@@ -495,12 +507,14 @@ def _load_table_h5_window(
         timestamps.tz is not None
         or not timestamps.equals(timestamps.normalize())
         or any(_STOCK_CODE.fullmatch(value) is None for value in instruments)
-        or not frame.index.is_monotonic_increasing
-        or timestamps[0].date() < start
-        or timestamps[-1].date() > end
+        or timestamps.hasnans
+        or timestamps.min().date() < start
+        or timestamps.max().date() > end
     ):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 window keys differ")
-    return frame
+    # Physical HDF append order is not data identity. Sort only in memory;
+    # duplicate keys are rejected above, never deduplicated or overwritten.
+    return frame.sort_index()
 
 
 def _load_fixed_h5_window(
@@ -614,22 +628,22 @@ def _fixed_h5_inventory(
                 table, rows = _table_h5_columns(group, expected_columns=expected_columns, expected_dtype=dtype)
                 if rows <= 0:
                     raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 is empty")
-                first_date = int(table.cols.datetime[0])
-                last_date = int(table.cols.datetime[rows - 1])
-                if first_date > last_date:
-                    raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 dates are not ordered")
+                first_date: int | None = None
+                last_date: int | None = None
                 instruments: set[str] = set()
-                previous_date: int | None = None
                 for start in range(0, rows, 100_000):
                     stop = min(rows, start + 100_000)
                     dates = np.asarray(table.cols.datetime[start:stop], dtype=np.int64)
                     codes = np.asarray(table.cols.instrument[start:stop])
-                    if np.any(dates[1:] < dates[:-1]) or (
-                        previous_date is not None and len(dates) and int(dates[0]) < previous_date
-                    ):
-                        raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 dates are not ordered")
-                    if len(dates):
-                        previous_date = int(dates[-1])
+                    # Incremental immutable components can append historical
+                    # alias corrections. Compute true extrema; require valid
+                    # daily timestamps rather than a physical row ordering.
+                    timestamps = pd.DatetimeIndex(pd.to_datetime(dates, unit="ns"))
+                    if timestamps.hasnans or not timestamps.equals(timestamps.normalize()):
+                        raise _fail(REASON_SOURCE_SCHEMA_INVALID, f"{path.name} table H5 dates are invalid")
+                    low, high = int(dates.min()), int(dates.max())
+                    first_date = low if first_date is None else min(first_date, low)
+                    last_date = high if last_date is None else max(last_date, high)
                     for raw in codes:
                         try:
                             code = bytes(raw).rstrip(b"\x00").decode("ascii")
@@ -679,7 +693,9 @@ def _fixed_h5_inventory(
         }
 
 
-def _parse_instrument_spans(path: Path) -> dict[str, tuple[tuple[date, date], ...]]:
+def _parse_instrument_spans(
+    path: Path, *, allowed_nonstock_codes: Sequence[str] = ()
+) -> dict[str, tuple[tuple[date, date], ...]]:
     spans: dict[str, list[tuple[date, date]]] = defaultdict(list)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -691,7 +707,7 @@ def _parse_instrument_spans(path: Path) -> dict[str, tuple[tuple[date, date], ..
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib instrument row schema differs", line=line_number)
         symbol = parts[0].strip().upper()
         _ascii(symbol, "instrument.symbol", width=16)
-        if _STOCK_CODE.fullmatch(symbol) is None:
+        if _STOCK_CODE.fullmatch(symbol) is None and symbol not in allowed_nonstock_codes:
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib instrument symbol is outside canonical sh/sz scope")
         start = _as_date(parts[1], "instrument.start")
         end = _as_date(parts[2], "instrument.end")
@@ -732,7 +748,12 @@ def _read_qlib_stock_rows(
     symbol: str,
     calendar: Sequence[date],
     active_spans: Sequence[tuple[date, date]],
+    suspension_keys: frozenset[tuple[date, str]] = frozenset(),
+    window_start: date = SOURCE_START,
+    window_end: date = SOURCE_END,
 ) -> np.ndarray:
+    if window_start > window_end:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "Qlib stock read window is reversed")
     feature_root = qlib_root / "features" / _qlib_code_directory(symbol)
     inventories: dict[str, tuple[Path, int, int]] = {}
     for field in QLIB_STOCK_FIELDS:
@@ -762,14 +783,21 @@ def _read_qlib_stock_rows(
     expected_positions = [
         index
         for index, day in enumerate(calendar)
-        if SOURCE_START <= day <= SOURCE_END
+        if window_start <= day <= window_end
         and any(span_start <= day <= span_end for span_start, span_end in active_spans)
     ]
-    positions = [index for index in expected_positions if start_index <= index < start_index + length]
-    if positions != expected_positions:
-        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, f"Qlib stock feature omits active span dates: {symbol}")
-    calendar_positions = np.asarray(positions, dtype=np.int64)
-    local_positions = calendar_positions - start_index
+    # Selection PIT eligibility can outlive the physical quote range during a
+    # full-day suspension. Keep those exact, authority-backed dates as quote NA;
+    # neither truncate the PIT span nor invent a quote. Unproven gaps still fail.
+    for index in expected_positions:
+        if not start_index <= index < start_index + length and (calendar[index], symbol) not in suspension_keys:
+            raise _fail(
+                REASON_SOURCE_RANGE_INCOMPLETE,
+                f"Qlib stock feature omits active span dates: {symbol}/{calendar[index]}",
+            )
+    calendar_positions = np.asarray(expected_positions, dtype=np.int64)
+    physical = (calendar_positions >= start_index) & (calendar_positions < start_index + length)
+    local_positions = calendar_positions[physical] - start_index
     result = np.zeros(len(calendar_positions), dtype=_QLIB_SOURCE_DTYPE)
     result["trade_date"] = np.fromiter(
         (
@@ -781,10 +809,13 @@ def _read_qlib_stock_rows(
     )
     result["symbol"] = _ascii(symbol, "qlib.symbol", width=16)
     for field in QLIB_STOCK_FIELDS:
+        result[field] = np.nan
+        if not len(local_positions):
+            continue
         path, _field_start, field_length = inventories[field]
         mapped = np.memmap(path, dtype="<f4", mode="r", offset=4, shape=(field_length,))
         try:
-            result[field] = np.asarray(mapped[local_positions], dtype="<f4")
+            result[field][physical] = np.asarray(mapped[local_positions], dtype="<f4")
         finally:
             del mapped
     return result
@@ -1147,6 +1178,199 @@ def _is_indirect_path(path: Path) -> bool:
     return path.is_symlink() or (junction is not None and bool(junction(path)))
 
 
+def load_active_hmm_dataset_identity() -> dict[str, Any]:
+    """Read the canonical cross-node dataset identity without resolving foreign roots."""
+
+    raw_path = os.getenv(ACTIVE_DATASET_PROFILE_ENV)
+    if not raw_path:
+        raise _fail(REASON_MANIFEST_INVALID, f"{ACTIVE_DATASET_PROFILE_ENV} is required")
+    profile_path = Path(raw_path)
+    if not profile_path.is_absolute() or _is_indirect_path(profile_path) or not profile_path.is_file():
+        raise _fail(REASON_MANIFEST_INVALID, "active dataset profile path is invalid")
+    try:
+        payload_bytes = profile_path.read_bytes()
+        payload = json.loads(payload_bytes.decode("utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise _fail(REASON_MANIFEST_INVALID, "active dataset profile is not readable canonical JSON") from exc
+    if not isinstance(payload, Mapping) or payload_bytes != canonical_json_bytes(payload):
+        raise _fail(REASON_MANIFEST_INVALID, "active dataset profile must use canonical JSON plus one newline")
+    controller_paths = payload.get("controller_paths")
+    node_bindings = payload.get("node_bindings")
+    if (
+        payload.get("schema_version") not in ACTIVE_DATASET_PROFILE_SCHEMA_VERSIONS
+        or not isinstance(payload.get("generation"), str)
+        or not str(payload["generation"]).strip()
+        or not isinstance(payload.get("release_id"), str)
+        or not str(payload["release_id"]).startswith("qe_hmm_full_v2_")
+        or not isinstance(payload.get("cutoff"), str)
+        or not isinstance(controller_paths, Mapping)
+        or not isinstance(controller_paths.get("candidate_root"), str)
+        or not isinstance(node_bindings, Mapping)
+        or not node_bindings
+    ):
+        raise _fail(REASON_MANIFEST_INVALID, "active dataset profile identity is invalid")
+    try:
+        cutoff = _as_date(payload["cutoff"], "active dataset cutoff")
+    except RotationL1InputBundleError:
+        raise
+    candidate_roots = [str(controller_paths["candidate_root"])]
+    for value in node_bindings.values():
+        if not isinstance(value, Mapping) or not isinstance(value.get("candidate_root"), str):
+            raise _fail(REASON_MANIFEST_INVALID, "active dataset profile node binding is invalid")
+        candidate_roots.append(str(value["candidate_root"]))
+    for candidate_root in candidate_roots:
+        _normalized_external_locator(candidate_root, field="active_profile.candidate_root")
+    return {
+        "schema_version": "hmm_risk_active_dataset_identity_v1",
+        "generation": str(payload["generation"]),
+        "release_id": str(payload["release_id"]),
+        "cutoff": cutoff,
+        "profile_sha256": hashlib.sha256(payload_bytes).hexdigest(),
+        "profile_path": profile_path.resolve(strict=True),
+        "controller_candidate_root": str(controller_paths["candidate_root"]),
+        "candidate_roots": tuple(sorted(set(candidate_roots))),
+    }
+
+
+def _require_active_direct_v2_profile(
+    *,
+    root: Path,
+    state: Mapping[str, Any],
+    release_cutoff: date,
+) -> tuple[dict[str, Any], Path, dict[str, Any]]:
+    """Close one HMM candidate against the single active QE dataset profile."""
+
+    profile = load_active_hmm_dataset_identity()
+    observed_root = _portable_external_locator(str(root), field="local_candidate_root")
+    if observed_root not in {
+        _portable_external_locator(value, field="active_profile.candidate_root") for value in profile["candidate_roots"]
+    }:
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 candidate is not the active dataset profile root")
+
+    declared_root = _normalized_external_locator(state.get("candidate_root"), field="candidate_root")
+    if _portable_external_locator(declared_root, field="candidate_root") != _portable_external_locator(
+        profile["controller_candidate_root"], field="active_profile.controller_candidate_root"
+    ):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 state root differs from the active controller identity")
+    if profile["cutoff"] != release_cutoff or state.get("release_id") != profile["release_id"]:
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 release identity differs from the active dataset profile")
+
+    manifest_path, manifest = _require_direct_v2_manifest(
+        root=root, state=state, release_cutoff=release_cutoff, release_id=profile["release_id"]
+    )
+    return profile, manifest_path, manifest
+
+
+def _require_direct_v2_manifest(
+    *,
+    root: Path,
+    state: Mapping[str, Any],
+    release_cutoff: date,
+    release_id: str,
+    frozen_binding: Mapping[str, str] | None = None,
+) -> tuple[Path, dict[str, Any]]:
+    """One manifest validator shared by active and explicitly frozen consumers."""
+
+    manifest_binding = state.get("manifest")
+    legacy_fields = {
+        "dataset_manifest_sha256",
+        "deployment_snapshot_id",
+        "file_sha256",
+        "path",
+    }
+    shared_fields = {"dataset_manifest_sha256", "path", "sha256", "size"}
+    shared = isinstance(manifest_binding, Mapping) and set(manifest_binding) == shared_fields
+    if not isinstance(manifest_binding, Mapping) or not (
+        set(manifest_binding) == legacy_fields or (shared and frozen_binding is not None)
+    ):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 state manifest binding is invalid")
+    if manifest_binding.get("path") != "qe_dataset_manifest.json":
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 dataset manifest path differs")
+    manifest_path = root / "qe_dataset_manifest.json"
+    if _is_indirect_path(manifest_path) or not manifest_path.is_file():
+        raise _fail(REASON_SOURCE_COMPONENT_MISSING, "direct-v2 dataset manifest is missing or indirect")
+    file_hash = _require_sha256(
+        manifest_binding.get("sha256" if shared else "file_sha256"), "direct-v2 manifest file_sha256"
+    )
+    if _sha256_file(manifest_path) != file_hash:
+        raise _fail(REASON_HASH_MISMATCH, "direct-v2 dataset manifest file hash differs")
+    if shared and (
+        type(manifest_binding.get("size")) is not int
+        or manifest_binding["size"] != manifest_path.stat().st_size
+        or file_hash != frozen_binding["manifest_file_sha256"]
+        or manifest_binding["dataset_manifest_sha256"] != frozen_binding["manifest_sha256"]
+    ):
+        raise _fail(REASON_HASH_MISMATCH, "direct-v2 shared manifest differs from approved frozen pins")
+    manifest = _read_json_object(manifest_path)
+    dataset_manifest_sha256 = _require_sha256(
+        manifest_binding.get("dataset_manifest_sha256"), "direct-v2 dataset_manifest_sha256"
+    )
+    if (
+        manifest.get("schema_version") != DIRECT_V2_DATASET_MANIFEST_SCHEMA_VERSION
+        or manifest.get("release_id") != release_id
+        or manifest.get("cutoff_trade_date") != release_cutoff.isoformat()
+        or manifest.get("availability_status") != "CANDIDATE_READY"
+        or manifest.get("dataset_manifest_sha256") != dataset_manifest_sha256
+        # A shared successor can retain an older logical manifest revision.
+        # Only an explicit frozen identity/file pin permits this shape; the
+        # active/legacy path keeps its existing revision/snapshot checks.
+        or (not shared and manifest.get("deployment_snapshot_id") != manifest_binding.get("deployment_snapshot_id"))
+        or (not shared and state.get("revision") != manifest.get("revision"))
+    ):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 dataset manifest identity differs")
+    return manifest_path, manifest
+
+
+def _require_frozen_direct_v2_profile(
+    *, root: Path, state: Mapping[str, Any], release_cutoff: date, binding: Mapping[str, str]
+) -> tuple[dict[str, Any], Path, dict[str, Any]]:
+    """Bind an explicitly approved immutable successor without touching active."""
+    fields = {"generation", "release_id", "revision", "cutoff", "manifest_sha256", "manifest_file_sha256"}
+    validation = state.get("validation")
+    structural = validation.get("structural") if isinstance(validation, Mapping) else None
+    checks = structural.get("checks") if isinstance(structural, Mapping) else None
+    if (
+        not isinstance(binding, Mapping)
+        or set(binding) != fields
+        or any(not isinstance(value, str) or not value or value != value.strip() for value in binding.values())
+        or state.get("profile") != DIRECT_V2_PROFILE
+        or state.get("schema_version") != DIRECT_V2_STATE_SCHEMA_VERSION
+        or state.get("status") != "CANDIDATE_READY"
+        or not isinstance(structural, Mapping)
+        or structural.get("status") != "PASS"
+        or not isinstance(checks, Mapping)
+        or not checks
+        or any(value is not True for value in checks.values())
+        or state.get("generation") != binding["generation"]
+        or state.get("release_id") != binding["release_id"]
+        or state.get("revision") != binding["revision"]
+        or state.get("cutoff") != binding["cutoff"]
+        or release_cutoff.isoformat() != binding["cutoff"]
+    ):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 frozen release binding differs")
+    _require_sha256(binding["manifest_sha256"], "frozen manifest identity")
+    _require_sha256(binding["manifest_file_sha256"], "frozen manifest file hash")
+    if (
+        not root.is_absolute()
+        or any(_is_indirect_path(parent) for parent in (root, *root.parents))
+        or not root.is_dir()
+    ):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 frozen root is invalid")
+    if _portable_external_locator(str(root), field="local_candidate_root") != _portable_external_locator(
+        state.get("candidate_root"), field="candidate_root"
+    ):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 frozen state root differs")
+    manifest_path, manifest = _require_direct_v2_manifest(
+        root=root, state=state, release_cutoff=release_cutoff, release_id=binding["release_id"], frozen_binding=binding
+    )
+    if (
+        manifest.get("dataset_manifest_sha256") != binding["manifest_sha256"]
+        or state["manifest"].get("file_sha256", state["manifest"].get("sha256")) != binding["manifest_file_sha256"]
+    ):
+        raise _fail(REASON_HASH_MISMATCH, "direct-v2 frozen manifest differs from approved pins")
+    return {**binding, "binding_sha256": canonical_sha256(binding)}, manifest_path, manifest
+
+
 def _require_direct_component_state(
     state: Mapping[str, Any],
     *,
@@ -1158,6 +1382,11 @@ def _require_direct_component_state(
     components = state.get("components")
     component = components.get(name) if isinstance(components, Mapping) else None
     receipt = component.get("receipt") if isinstance(component, Mapping) else None
+    if isinstance(component, Mapping) and component.get("status") == "PASS" and receipt is None:
+        action = component.get("action")
+        if not isinstance(action, str) or not action.strip():
+            raise _fail(REASON_MANIFEST_INVALID, f"direct-v2 {name} action is invalid")
+        return
     expected_path = _portable_external_locator(
         f"{declared_root}/components/{relative_path}", field=f"components.{name}.expected_path"
     )
@@ -1433,6 +1662,7 @@ def load_rotation_l1_direct_v2_source_assets(
     security_identity_manifest: Path,
     provider_absence_manifest: Path,
     data_window_end: date | None = None,
+    frozen_release_binding: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
     """Bind one explicit qe_hmm_full_v2 candidate without legacy-path fallback."""
 
@@ -1441,11 +1671,25 @@ def load_rotation_l1_direct_v2_source_assets(
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 candidate root must be absolute")
     if _is_indirect_path(unresolved_root):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 candidate root cannot be a symlink or junction")
+    if frozen_release_binding is not None and any(_is_indirect_path(parent) for parent in unresolved_root.parents):
+        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 frozen candidate has an indirect ancestor")
     try:
         root = unresolved_root.resolve(strict=True)
     except OSError as exc:
         raise _fail(REASON_SOURCE_COMPONENT_MISSING, "direct-v2 candidate root does not exist") from exc
     state_path = root / "direct_monthly_state.json"
+    # Native monthly releases close through a manifest/receipt DAG, not the
+    # retired exporter state. Never hide an existing, invalid legacy state.
+    if not state_path.exists() and not _is_indirect_path(state_path):
+        from backend.services.hmm_risk.monthly_release_input import load_monthly_l2_source_assets
+
+        return load_monthly_l2_source_assets(
+            root,
+            security_identity_manifest=security_identity_manifest,
+            provider_absence_manifest=provider_absence_manifest,
+            data_window_end=data_window_end,
+            frozen_release_binding=frozen_release_binding,
+        )
     state = _read_json_object(state_path)
     validation = state.get("validation")
     state_schema_version = state.get("schema_version")
@@ -1464,38 +1708,37 @@ def load_rotation_l1_direct_v2_source_assets(
         "index_context": "index_context",
         "suspend_d": "suspend_d_daily_candidate_v2",
     }
-    state_components = dict(consumed_components)
-    if state_schema_version == DIRECT_V2_STATE_SCHEMA_VERSION:
-        state_components.update(
-            {
-                "minute_bin": "minute_bin_candidate",
-                "sw_l1_index": "sw_l1_index_daily_candidate_v1",
-            }
-        )
-        consumed_components["sw_l1_index"] = "sw_l1_index_daily_candidate_v1"
+    state_components = {
+        **consumed_components,
+        "minute_bin": "minute_bin_candidate",
+        "sw_l1_index": "sw_l1_index_daily_candidate_v1",
+    }
+    consumed_components["sw_l1_index"] = "sw_l1_index_daily_candidate_v1"
+    structural = validation.get("structural") if isinstance(validation, Mapping) else None
+    structural_checks = structural.get("checks") if isinstance(structural, Mapping) else None
     if (
-        state_schema_version not in DIRECT_V2_SUPPORTED_STATE_SCHEMA_VERSIONS
-        or state.get("profile") != DIRECT_V2_PROFILE
+        state_schema_version != DIRECT_V2_STATE_SCHEMA_VERSION
         or state.get("cutoff") != release_cutoff.isoformat()
         or state.get("status") != "CANDIDATE_READY"
-        or state.get("source_freeze") is not False
-        or state.get("full_history_content_hash") is not False
-        or not isinstance(validation, Mapping)
-        or validation.get("status") != "PASS"
-        or validation.get("cutoff") != release_cutoff.isoformat()
+        or not isinstance(structural, Mapping)
+        or structural.get("status") != "PASS"
+        or not isinstance(structural_checks, Mapping)
+        or not structural_checks
+        or any(value is not True for value in structural_checks.values())
     ):
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 candidate state is not approved for HMM consumption")
+    if frozen_release_binding is None:
+        release_binding, dataset_manifest_path, dataset_manifest = _require_active_direct_v2_profile(
+            root=root, state=state, release_cutoff=release_cutoff
+        )
+    else:
+        release_binding, dataset_manifest_path, dataset_manifest = _require_frozen_direct_v2_profile(
+            root=root, state=state, release_cutoff=release_cutoff, binding=frozen_release_binding
+        )
     declared_root = _normalized_external_locator(state.get("candidate_root"), field="candidate_root")
-    if _portable_external_locator(declared_root, field="candidate_root") != _portable_external_locator(
-        str(root), field="local_candidate_root"
-    ):
-        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 local root differs from candidate identity")
     release_id = root.name
     if not release_id or "/" in release_id or "\\" in release_id:
         raise _fail(REASON_MANIFEST_INVALID, "direct-v2 release identity is invalid")
-    checks = validation.get("checks")
-    if not isinstance(checks, Mapping) or any(checks.get(name) is not True for name in state_components):
-        raise _fail(REASON_MANIFEST_INVALID, "direct-v2 HMM component validation is incomplete")
     for name, relative in state_components.items():
         _require_direct_component_state(
             state,
@@ -1600,11 +1843,25 @@ def load_rotation_l1_direct_v2_source_assets(
     if state_schema_version == DIRECT_V2_STATE_SCHEMA_VERSION:
         all_spans = _parse_instrument_spans(qlib_root / "instruments" / "all.txt")
         benchmark_spans = _parse_instrument_spans(qlib_root / "instruments" / "benchmark.txt")
+
+        def selection_spans_are_contained() -> bool:
+            for symbol, selected_intervals in spans.items():
+                provider_intervals = all_spans.get(symbol, ())
+                if not provider_intervals:
+                    return False
+                for selected_start, selected_end in selected_intervals:
+                    if not any(
+                        provider_start <= selected_start and selected_end <= provider_end
+                        for provider_start, provider_end in provider_intervals
+                    ):
+                        return False
+            return True
+
         if (
             "000300.SH" in spans
             or set(benchmark_spans) != {"000300.SH"}
             or benchmark_spans["000300.SH"] != all_spans.get("000300.SH")
-            or {symbol: values for symbol, values in all_spans.items() if symbol != "000300.SH"} != spans
+            or not selection_spans_are_contained()
         ):
             raise _fail(REASON_MANIFEST_INVALID, "direct-v2 stock/benchmark universe separation differs")
     if not any(
@@ -1635,6 +1892,7 @@ def load_rotation_l1_direct_v2_source_assets(
     )
     metadata_hashes = {
         "direct_state": _sha256_file(state_path),
+        "dataset_manifest": _sha256_file(dataset_manifest_path),
         "daily_meta": _sha256_file(daily_meta_path),
         "factor_meta": _sha256_file(factor_meta_path),
         "index_meta": _sha256_file(index_meta_path),
@@ -1642,6 +1900,10 @@ def load_rotation_l1_direct_v2_source_assets(
         "security_identity": _sha256_file(resolved["security_identity"]),
         "provider_absence": _sha256_file(resolved["provider_absence"]),
     }
+    if frozen_release_binding is None:
+        metadata_hashes["active_profile"] = release_binding["profile_sha256"]
+    else:
+        metadata_hashes["frozen_release_binding"] = release_binding["binding_sha256"]
     component_hashes = {
         "index_context": _sha256_file(resolved["index_context"]),
         "suspend_data": _sha256_file(resolved["suspend_data"]),
@@ -1666,6 +1928,8 @@ def load_rotation_l1_direct_v2_source_assets(
     release_identity = {
         "schema_version": identity_schema_version,
         "release_id": release_id,
+        "dataset_manifest_sha256": dataset_manifest["dataset_manifest_sha256"],
+        "dataset_revision": dataset_manifest["revision"],
         "profile": DIRECT_V2_PROFILE,
         "cutoff": release_cutoff.isoformat(),
         "universe_key": DIRECT_V2_UNIVERSE_KEY,
@@ -1673,6 +1937,18 @@ def load_rotation_l1_direct_v2_source_assets(
         "metadata_sha256": metadata_hashes,
         "component_sha256": component_hashes,
     }
+    if frozen_release_binding is None:
+        release_identity.update(
+            active_release_id=release_binding["release_id"],
+            active_profile_generation=release_binding["generation"],
+            active_profile_sha256=release_binding["profile_sha256"],
+        )
+    else:
+        release_identity.update(
+            frozen_release_id=release_binding["release_id"],
+            frozen_release_generation=release_binding["generation"],
+            frozen_release_binding_sha256=release_binding["binding_sha256"],
+        )
     if state_schema_version == DIRECT_V2_STATE_SCHEMA_VERSION:
         release_identity["state_schema_version"] = state_schema_version
     inventory_body = {
@@ -1730,7 +2006,7 @@ def load_rotation_l1_g2a_direct_v2_source_assets(
     *,
     security_identity_manifest: Path,
     provider_absence_manifest: Path,
-    data_window_end: date = SOURCE_END,
+    data_window_end: date | None = SOURCE_END,
 ) -> dict[str, Any]:
     """Bind the G2-A v1.2 source; legacy v2 candidates are not eligible."""
 
@@ -1779,6 +2055,31 @@ def _industry_adapter(authority: Mapping[str, Any], *, forbidden_roots: Sequence
     return adapter
 
 
+def _read_parquet_date_window(
+    path: Path,
+    *,
+    start: date,
+    end: date,
+    columns: Sequence[str],
+) -> pd.DataFrame:
+    """Predicate-pushdown read without loading later business rows."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    kind = pq.read_schema(path).field("trade_date").type
+    if pa.types.is_timestamp(kind):
+        lower, upper = pd.Timestamp(start), pd.Timestamp(end)
+    elif pa.types.is_date(kind):
+        lower, upper = start, end
+    elif pa.types.is_string(kind):
+        lower, upper = start.isoformat(), end.isoformat()
+    else:
+        raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Parquet trade_date type is unsupported")
+    return pd.read_parquet(
+        path, columns=list(columns), filters=[("trade_date", ">=", lower), ("trade_date", "<=", upper)]
+    )
+
+
 def _load_suspend_keys(
     data_path: Path,
     manifest_path: Path,
@@ -1786,6 +2087,7 @@ def _load_suspend_keys(
     calendar: Sequence[date],
     expected_release_cutoff: date | None = None,
     expected_universe_key: str | None = None,
+    bounded: bool = False,
 ) -> frozenset[tuple[date, str]]:
     manifest = _read_json_object(manifest_path, reason=REASON_SOURCE_SCHEMA_INVALID)
     schema = manifest.get("schema_version")
@@ -1812,12 +2114,17 @@ def _load_suspend_keys(
     ):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend_d authority differs from the approved contract")
     try:
-        frame = pd.read_parquet(data_path, columns=["ts_code", "trade_date", "suspend_type", "suspend_timing"])
+        columns = ["ts_code", "trade_date", "suspend_type", "suspend_timing"]
+        frame = (
+            _read_parquet_date_window(data_path, start=min(calendar), end=max(calendar), columns=columns)
+            if bounded
+            else pd.read_parquet(data_path, columns=columns)
+        )
     except Exception as exc:
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend_d parquet cannot be read") from exc
-    if frame.empty and direct:
+    if frame.empty and direct and not bounded:
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "direct-v2 suspend_d is empty")
-    if frame.empty:
+    if frame.empty and not (direct and bounded):
         return frozenset()
     frame["trade_date"] = pd.to_datetime(frame["trade_date"], errors="raise").dt.date
     frame["ts_code"] = frame["ts_code"].astype(str).str.upper()
@@ -1825,7 +2132,16 @@ def _load_suspend_keys(
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend_d includes rows outside suspend_type S")
     if frame.duplicated(["trade_date", "ts_code"]).any():
         raise _fail(REASON_DUPLICATE_KEY, "suspend_d contains duplicate stock/date rows")
-    if direct:
+    if direct and bounded:
+        declared = manifest.get("daily_row_counts")
+        if not isinstance(declared, Mapping) or any(
+            not isinstance(day, str) or type(count) is not int or count < 0 for day, count in declared.items()
+        ):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend window lacks declared daily counts")
+        actual = frame.groupby("trade_date").size().to_dict()
+        if any(actual.get(day, 0) != declared.get(day.isoformat(), 0) for day in calendar):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "suspend window readback differs from metadata")
+    elif direct:
         daily_counts = {day.isoformat(): int(count) for day, count in frame.groupby("trade_date").size().items()}
         declared_counts = manifest.get("daily_row_counts")
         declared_dates = (
@@ -2003,6 +2319,9 @@ def _spool_qlib_months(
     calendar: Sequence[date],
     spans: Mapping[str, Sequence[tuple[date, date]]],
     spool_root: Path,
+    suspension_keys: frozenset[tuple[date, str]] = frozenset(),
+    window_start: date = SOURCE_START,
+    window_end: date = SOURCE_END,
     resource_started: float | None = None,
 ) -> tuple[Path, ...]:
     spool_root.mkdir(parents=True, exist_ok=False)
@@ -2022,6 +2341,9 @@ def _spool_qlib_months(
                 symbol=symbol,
                 calendar=calendar,
                 active_spans=active_spans,
+                suspension_keys=suspension_keys,
+                window_start=window_start,
+                window_end=window_end,
             )
             if not len(rows):
                 continue
@@ -2330,6 +2652,58 @@ def _build_train_only_contributor_eligibility(
     return eligibility, _receipt_from_body(body)
 
 
+def _strict_prior_price_state(
+    qlib_root: Path,
+    *,
+    calendar: Sequence[date],
+    spans: Mapping[str, Sequence[tuple[date, date]]],
+    suspension_keys: frozenset[tuple[date, str]],
+    source_start: date,
+    window_start: date,
+) -> dict[str, tuple[date, tuple[tuple[date, float], ...]]]:
+    """Carry at most ten real quotes within the current PIT span, never calendar fills."""
+    if source_start > window_start or source_start not in calendar or window_start not in calendar:
+        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "strictly prior price context boundary differs")
+    prior_days = tuple(day for day in calendar if source_start <= day < window_start)
+    state: dict[str, tuple[date, tuple[tuple[date, float], ...]]] = {}
+    for symbol, active_spans in sorted(spans.items()):
+        current = [span for span in active_spans if span[0] <= window_start <= span[1]]
+        if len(current) > 1:
+            raise _fail(REASON_AUTHORITY_AMBIGUOUS, f"prior price PIT span is ambiguous: {symbol}")
+        if not current:
+            continue
+        span_start, span_end = current[0]
+        days = tuple(day for day in prior_days if span_start <= day <= span_end)
+        cursor, batch_size = len(days), 10
+        quotes: list[tuple[date, float]] = []
+        while cursor and len(quotes) < 10:
+            first = max(0, cursor - batch_size)
+            rows = _read_qlib_stock_rows(
+                qlib_root,
+                symbol=symbol,
+                calendar=calendar,
+                active_spans=current,
+                suspension_keys=suspension_keys,
+                window_start=days[first],
+                window_end=days[cursor - 1],
+            )
+            for raw in reversed(rows):
+                day = _date_from_yyyymmdd(int(raw["trade_date"]), "qlib.trade_date")
+                missing = _qlib_row_is_fully_missing(raw)
+                values = None if missing else _raw_qlib_values(raw)
+                # Match the unchanged forward kernel: suspension and all-field
+                # source NA never append a quote; invalid partial rows fail.
+                if (day, symbol) in suspension_keys or values is None:
+                    continue
+                quotes.append((day, values["close"]))
+                if len(quotes) == 10:
+                    break
+            cursor, batch_size = first, batch_size * 2
+        if quotes:
+            state[symbol] = (span_start, tuple(reversed(quotes)))
+    return state
+
+
 def _build_stock_fact_aggregates(
     *,
     month_paths: Sequence[Path],
@@ -2346,11 +2720,56 @@ def _build_stock_fact_aggregates(
     window_start: date = SOURCE_START,
     window_end: date = SOURCE_END,
     build_feature_domain_aggregates: bool = True,
+    day_rows_callback: Callable[[date, Sequence[Mapping[str, Any]]], None] | None = None,
+    initial_circ_state: Mapping[str, tuple[date, float | None, str, str | None]] | None = None,
+    initial_price_state: Mapping[str, tuple[date, tuple[tuple[date, float], ...]]] | None = None,
 ) -> tuple[list[Any], list[Any], dict[tuple[date, str, str], str], dict[str, list[dict[str, Any]]]]:
     history: dict[str, deque[float]] = defaultdict(lambda: deque(maxlen=10))
     g2a_history: dict[str, deque[tuple[date, float]]] = defaultdict(lambda: deque(maxlen=20))
     active_span_start: dict[str, date] = {}
-    circ_state: dict[str, tuple[date, float | None, str, str | None]] = {}
+    calendar_position = {day: index for index, day in enumerate(calendar)}
+    for symbol, context in (initial_price_state or {}).items():
+        if not isinstance(context, tuple) or len(context) != 2:
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "invalid strictly prior price context shape")
+        span_start, quotes = context
+        current = [span for span in spans.get(symbol, ()) if span[0] <= window_start <= span[1]]
+        if (
+            len(current) != 1
+            or current[0][0] != span_start
+            or not isinstance(quotes, tuple)
+            or not 0 < len(quotes) <= 10
+        ):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "invalid strictly prior price PIT context")
+        previous = None
+        for quote in quotes:
+            if not isinstance(quote, tuple) or len(quote) != 2:
+                raise _fail(REASON_SOURCE_SCHEMA_INVALID, "invalid strictly prior price quote shape")
+            day, value = quote
+            if (
+                not isinstance(day, date)
+                or not isinstance(value, (int, float))
+                or isinstance(value, bool)
+                or not math.isfinite(value)
+                or value <= 0
+                or day not in calendar_position
+                or not max(SOURCE_START, span_start) <= day < window_start
+                or (previous is not None and day <= previous)
+                or (day, symbol) in suspension_keys
+            ):
+                raise _fail(REASON_SOURCE_SCHEMA_INVALID, "invalid strictly prior price quote context")
+            history[symbol].append(value)
+            previous = day
+        active_span_start[symbol] = span_start
+    circ_state: dict[str, tuple[date, float | None, str, str | None]] = dict(initial_circ_state or {})
+    for source_code, (fact_day, value, status, _) in circ_state.items():
+        if (
+            not source_code
+            or not SOURCE_START <= fact_day < window_start
+            or status not in {"available", "latest_value_non_finite", "latest_value_non_positive"}
+            or (status == "available" and (value is None or not math.isfinite(value) or value <= 0))
+            or (status != "available" and value is not None)
+        ):
+            raise _fail(REASON_SOURCE_SCHEMA_INVALID, "invalid strictly prior circ_mv context")
     l1_aggregates: list[Any] = []
     l2_aggregates: list[Any] = []
     unavailable: dict[tuple[date, str, str], str] = {}
@@ -2358,7 +2777,6 @@ def _build_stock_fact_aggregates(
     industry_done: list[tuple[str, date, date, tuple[str, ...]]] = []
     status_active: dict[str, tuple[date, date, tuple[str, ...]]] = {}
     status_done: list[tuple[str, date, date, tuple[str, ...]]] = []
-    calendar_position = {day: index for index, day in enumerate(calendar)}
 
     for month_path in month_paths:
         if resource_started is not None:
@@ -2659,6 +3077,8 @@ def _build_stock_fact_aggregates(
                 prices.append(qlib["close"])
                 g2a_history[symbol].append((day, qlib["close"]))
             advance_circ_state(through=day)
+            if day_rows_callback is not None:
+                day_rows_callback(day, day_rows)
             if build_feature_domain_aggregates:
                 _append_day_level_aggregates(
                     day_rows,
@@ -2835,6 +3255,7 @@ def build_rotation_l1_inputs_from_assets(
     forbidden_roots: Sequence[Path],
     work_parent: Path,
     g2a_contract: bool = False,
+    risk_l1_contract: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Build the existing RW1 in-memory input interface from frozen assets only."""
 
@@ -2845,13 +3266,19 @@ def build_rotation_l1_inputs_from_assets(
         if security_identity_manifest is None or provider_absence_manifest is None:
             raise _fail(REASON_MANIFEST_INVALID, "direct-v2 source requires explicit security/provider authority")
         loader = (
-            load_rotation_l1_g2a_direct_v2_source_assets if g2a_contract else load_rotation_l1_direct_v2_source_assets
+            load_rotation_l1_g2a_direct_v2_source_assets
+            if g2a_contract or risk_l1_contract
+            else load_rotation_l1_direct_v2_source_assets
         )
         assets = loader(
             direct_v2_candidate_root,
             security_identity_manifest=security_identity_manifest,
             provider_absence_manifest=provider_absence_manifest,
-            **({"data_window_end": SOURCE_END} if g2a_contract else {}),
+            **(
+                {"data_window_end": None if risk_l1_contract else SOURCE_END}
+                if g2a_contract or risk_l1_contract
+                else {}
+            ),
         )
     else:
         if security_identity_manifest is not None or provider_absence_manifest is not None:
@@ -2905,13 +3332,14 @@ def build_rotation_l1_inputs_from_assets(
     )
     work_parent = Path(work_parent).resolve()
     work_parent.mkdir(parents=True, exist_ok=True)
-    g2a_l1_daily: list[dict[str, Any]] | None = [] if g2a_contract else None
+    g2a_l1_daily: list[dict[str, Any]] | None = [] if g2a_contract or risk_l1_contract else None
     with tempfile.TemporaryDirectory(prefix="hmm-rotation-l1-source-", dir=work_parent) as raw_temporary:
         month_paths = _spool_qlib_months(
             qlib_root,
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(raw_temporary) / "qlib-months",
+            suspension_keys=suspension_keys,
             resource_started=started,
         )
         resource_receipts.append(
@@ -3051,7 +3479,7 @@ def build_rotation_l1_inputs_from_assets(
         },
         "source_build_resource_receipts": resource_receipts,
     }
-    if g2a_contract:
+    if g2a_contract or risk_l1_contract:
         if (
             g2a_l1_daily is None
             or assets.get("sector_index_close") is None
@@ -3075,13 +3503,15 @@ def build_rotation_l1_inputs_from_assets(
             sector_close=published_sector_close,
             benchmark_close=assets["benchmark_close"],
             stock_daily_inputs=g2a_l1_daily,
+            include_targets=not risk_l1_contract,
+            include_risk_target=risk_l1_contract,
+            outcome_calendar=calendar_all if risk_l1_contract else None,
         )
         feature_contract = {
-            "contract_version": "hmm_risk_rotation_l1_g2a_v1_4",
+            "contract_version": ("hmm_risk_risk_l1_g2b_v1" if risk_l1_contract else "hmm_risk_rotation_l1_g2a_v1_4"),
             "feature_names": list(CONTINUOUS_FEATURES),
             "source_end": SOURCE_END.isoformat(),
             "as_of_policy": "decision_t_reads_through_t_minus_1",
-            "target_horizons": [5, 10],
             "stock_feature_coverage": "count>=5 and 10*valid>=9*expected_non_suspended",
             "moneyflow_intensity_delta_5d": {
                 "formula": "m20(t)-m20(t-5 canonical open days)",
@@ -3099,7 +3529,7 @@ def build_rotation_l1_inputs_from_assets(
             ]
             for horizon in (5, 10)
         }
-        inputs["g2a_bundle"] = {
+        model_input_bundle = {
             "schema_version": INPUT_SCHEMA_VERSION,
             "panel": g2a_panel,
             "benchmark_close": {day: float(assets["benchmark_close"][day]) for day in calendar},
@@ -3115,6 +3545,30 @@ def build_rotation_l1_inputs_from_assets(
                 ),
             },
         }
+        if not risk_l1_contract:
+            feature_contract["target_horizons"] = [5, 10]
+        if g2a_contract:
+            inputs["g2a_bundle"] = model_input_bundle
+        if risk_l1_contract:
+            risk_identity = {
+                "contract_version": "hmm_risk_risk_l1_g2b_v1",
+                "source_sha256": model_input_bundle["identity"]["source_sha256"],
+                "mapping_sha256": model_input_bundle["identity"]["mapping_sha256"],
+                "feature_contract_sha256": model_input_bundle["identity"]["feature_contract_sha256"],
+                "target_contract_sha256": canonical_sha256(
+                    {
+                        "horizon": 10,
+                        "threshold": -0.05,
+                        "formula": "min_k(sector_cum_return_t_plus_1_to_k-csi300_cum_return_t_plus_1_to_k)",
+                        "decision_feature_boundary": "t_minus_1",
+                    }
+                ),
+            }
+            inputs["risk_l1_bundle"] = {
+                "schema_version": "hmm_risk_risk_l1_g2b_input_bundle_v1",
+                "panel": g2a_panel,
+                "identity": risk_identity,
+            }
     inputs["source_build_resource_receipts"].append(
         _resource_checkpoint(
             started,
@@ -3136,7 +3590,8 @@ def build_rotation_l1_single_date_source_from_assets(
     work_parent: Path,
     trade_date: date,
     as_of_date: date,
-    market_start: date,
+    market_start: date | None = None,
+    model_contract_version: str = "hmm_risk_rotation_l1_g2a_v1_3",
 ) -> dict[str, Any]:
     """Bind one label-free G2-A inference request to an explicit direct-v2 release.
 
@@ -3145,7 +3600,20 @@ def build_rotation_l1_single_date_source_from_assets(
     is placed in the returned feature or market inputs.
     """
 
-    if not isinstance(trade_date, date) or not isinstance(as_of_date, date) or not isinstance(market_start, date):
+    supported_contracts = {
+        "hmm_risk_rotation_l1_g2a_v1_3",
+        "hmm_risk_rotation_l1_g2a_v1_6",
+        "hmm_risk_risk_l1_g2b_v1",
+    }
+    deterministic_v16 = model_contract_version == "hmm_risk_rotation_l1_g2a_v1_6"
+    risk_l1_contract = model_contract_version == "hmm_risk_risk_l1_g2b_v1"
+    if (
+        not isinstance(trade_date, date)
+        or not isinstance(as_of_date, date)
+        or model_contract_version not in supported_contracts
+        or ((deterministic_v16 or risk_l1_contract) and market_start is not None)
+        or (not deterministic_v16 and not risk_l1_contract and not isinstance(market_start, date))
+    ):
         raise _fail(REASON_SOURCE_SCHEMA_INVALID, "single-date source dates are invalid")
     assets = load_rotation_l1_g2a_direct_v2_source_assets(
         direct_v2_candidate_root,
@@ -3160,24 +3628,36 @@ def build_rotation_l1_single_date_source_from_assets(
         raise _fail(
             REASON_SOURCE_RANGE_INCOMPLETE, "single-date decision session is outside the selected release"
         ) from exc
+    minimum_position = 44 if deterministic_v16 else 61
     if (
-        trade_position < 61
+        trade_position < minimum_position
         or calendar_all[trade_position - 1] != as_of_date
-        or market_start not in calendar_all
-        or market_start > as_of_date
         or assets["data_window_end"] != as_of_date
+        or (
+            not deterministic_v16
+            and not risk_l1_contract
+            and (market_start not in calendar_all or market_start is None or market_start > as_of_date)
+        )
     ):
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date canonical as-of/calendar boundary differs")
 
-    feature_calendar = tuple(calendar_all[trade_position - 61 : trade_position + 1])
-    market_start_position = calendar_all.index(market_start)
-    market_calendar = tuple(calendar_all[market_start_position : trade_position + 1])
-    stock_history_calendar = tuple(calendar_all[trade_position - 39 : trade_position])
-    stock_feature_dates = frozenset(calendar_all[trade_position - 20 : trade_position])
+    feature_lookback = 25 if deterministic_v16 else 61
+    stock_history_lookback = 44 if deterministic_v16 else 39
+    stock_feature_lookback = 25 if deterministic_v16 else 20
+    feature_calendar = tuple(calendar_all[trade_position - feature_lookback : trade_position + 1])
+    market_calendar = (
+        (trade_date,)
+        if deterministic_v16
+        else feature_calendar
+        if risk_l1_contract
+        else tuple(calendar_all[calendar_all.index(market_start) : trade_position + 1])
+    )
+    stock_history_calendar = tuple(calendar_all[trade_position - stock_history_lookback : trade_position])
+    stock_feature_dates = frozenset(calendar_all[trade_position - stock_feature_lookback : trade_position])
     if (
-        len(feature_calendar) != 62
-        or len(stock_history_calendar) != 39
-        or len(stock_feature_dates) != 20
+        len(feature_calendar) != feature_lookback + 1
+        or len(stock_history_calendar) != stock_history_lookback
+        or len(stock_feature_dates) != stock_feature_lookback
         or feature_calendar[-2:] != (as_of_date, trade_date)
         or market_calendar[-1] != trade_date
     ):
@@ -3218,9 +3698,12 @@ def build_rotation_l1_single_date_source_from_assets(
     with tempfile.TemporaryDirectory(prefix="hmm-rotation-l1-inference-", dir=work_root) as raw_temporary:
         month_paths = _spool_qlib_months(
             assets["qlib_root"],
-            calendar=stock_history_calendar,
+            calendar=calendar_all,
             spans=spans,
             spool_root=Path(raw_temporary) / "qlib-months",
+            suspension_keys=suspension_keys,
+            window_start=stock_history_calendar[0],
+            window_end=as_of_date,
         )
         _build_stock_fact_aggregates(
             month_paths=month_paths,
@@ -3265,25 +3748,33 @@ def build_rotation_l1_single_date_source_from_assets(
                 },
             )
     canonical_stock_inputs = [by_key[key] for key in sorted(by_key)]
-    if len(canonical_stock_inputs) != 20 * 31:
+    if len(canonical_stock_inputs) != stock_feature_lookback * 31:
         raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date stock-derived feature denominator differs")
 
-    published_sector_close = _published_l1_sector_close(
-        assets["sector_index_close"],
-        assets["sector_index_code_by_sector"],
-        canonical_codes=l1_codes,
-    )
-    feature_source_dates = frozenset(feature_calendar[:-1])
-    sector_close = {key: value for key, value in published_sector_close.items() if key[0] in feature_source_dates}
-    benchmark_close = {
-        day: float(value) for day, value in assets["benchmark_close"].items() if market_start <= day <= as_of_date
-    }
-    if (
-        len(sector_close) != 61 * 31
-        or set(benchmark_close) != set(market_calendar[:-1])
-        or any((day, sector) not in sector_close for day in feature_calendar[:-1] for sector in l1_codes)
-    ):
-        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date price/benchmark lookback is incomplete")
+    if deterministic_v16:
+        sector_close: dict[tuple[date, str], float] = {}
+        benchmark_close: dict[date, float] = {}
+    else:
+        published_sector_close = _published_l1_sector_close(
+            assets["sector_index_close"],
+            assets["sector_index_code_by_sector"],
+            canonical_codes=l1_codes,
+        )
+        feature_source_dates = frozenset(feature_calendar[:-1])
+        sector_close = {key: value for key, value in published_sector_close.items() if key[0] in feature_source_dates}
+        effective_market_start = feature_calendar[0] if risk_l1_contract else market_start
+        assert effective_market_start is not None
+        benchmark_close = {
+            day: float(value)
+            for day, value in assets["benchmark_close"].items()
+            if effective_market_start <= day <= as_of_date
+        }
+        if (
+            len(sector_close) != 61 * 31
+            or set(benchmark_close) != set(market_calendar[:-1])
+            or any((day, sector) not in sector_close for day in feature_calendar[:-1] for sector in l1_codes)
+        ):
+            raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, "single-date price/benchmark lookback is incomplete")
 
     try:
         sector_names = {code: str(adapter.classification_lookup[("L1", code)]["name"]) for code in l1_codes}
@@ -3305,28 +3796,51 @@ def build_rotation_l1_single_date_source_from_assets(
         }
         for row in canonical_stock_inputs
     ]
+    source_schema_version = (
+        "hmm_risk_rotation_l1_single_date_source_v2"
+        if deterministic_v16
+        else "hmm_risk_risk_l1_single_date_source_v1"
+        if risk_l1_contract
+        else "hmm_risk_rotation_l1_single_date_source_v1"
+    )
     source_body = {
-        "schema_version": "hmm_risk_rotation_l1_single_date_source_v1",
+        "schema_version": source_schema_version,
         "release_identity": dict(assets["release_identity"]),
         "source_inventory_sha256": assets["inventory"]["inventory_sha256"],
         "source_binding_manifest_sha256": assets["binding_manifest_sha256"],
         "trade_date": trade_date.isoformat(),
         "as_of_date": as_of_date.isoformat(),
-        "market_start": market_start.isoformat(),
         "feature_calendar_sha256": canonical_sha256([day.isoformat() for day in feature_calendar]),
-        "market_calendar_sha256": canonical_sha256([day.isoformat() for day in market_calendar]),
         "stock_feature_rows_sha256": canonical_sha256(canonical_stock_payload),
-        "sector_close_sha256": canonical_sha256(
-            [[day.isoformat(), sector, sector_close[(day, sector)]] for day, sector in sorted(sector_close)]
-        ),
-        "benchmark_close_sha256": canonical_sha256(
-            [[day.isoformat(), benchmark_close[day]] for day in sorted(benchmark_close)]
-        ),
         "mapping_snapshot_sha256": canonical_sha256(mapping_manifest),
         "target_columns_read": False,
     }
-    return {
-        "schema_version": "hmm_risk_rotation_l1_single_date_source_v1",
+    if deterministic_v16:
+        source_body.update(
+            {
+                "model_contract_version": model_contract_version,
+                "market_context_used_for_score": False,
+                "sector_close_used_for_score": False,
+            }
+        )
+    else:
+        effective_market_start = feature_calendar[0] if risk_l1_contract else market_start
+        assert effective_market_start is not None
+        source_body.update(
+            {
+                "model_contract_version": model_contract_version,
+                "market_start": effective_market_start.isoformat(),
+                "market_calendar_sha256": canonical_sha256([day.isoformat() for day in market_calendar]),
+                "sector_close_sha256": canonical_sha256(
+                    [[day.isoformat(), sector, sector_close[(day, sector)]] for day, sector in sorted(sector_close)]
+                ),
+                "benchmark_close_sha256": canonical_sha256(
+                    [[day.isoformat(), benchmark_close[day]] for day in sorted(benchmark_close)]
+                ),
+            }
+        )
+    result = {
+        "schema_version": source_schema_version,
         "trade_date": trade_date,
         "as_of_date": as_of_date,
         "feature_calendar": feature_calendar,
@@ -3339,6 +3853,9 @@ def build_rotation_l1_single_date_source_from_assets(
         "mapping_snapshot_hash": source_body["mapping_snapshot_sha256"],
         "source_receipt": _receipt_from_body(source_body),
     }
+    if deterministic_v16 or risk_l1_contract:
+        result["model_contract_version"] = model_contract_version
+    return result
 
 
 def _require_sha256(value: Any, field: str) -> str:
@@ -3912,6 +4429,7 @@ def _validated_source_identity(value: Any) -> dict[str, Any]:
     if release_identity.get("schema_version") in {
         DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1,
         DIRECT_V2_IDENTITY_SCHEMA_VERSION,
+        MONTHLY_IDENTITY_SCHEMA_VERSION,
     } and value.get("source_binding_manifest_sha256") != canonical_sha256(release_identity):
         raise _fail(REASON_HASH_MISMATCH, "direct-v2 source binding identity hash differs")
     for field in (
@@ -3931,6 +4449,11 @@ def _validated_source_identity(value: Any) -> dict[str, Any]:
 
 def _validated_release_identity(value: Any) -> tuple[dict[str, Any], str, str, str]:
     direct_schema = value.get("schema_version") if isinstance(value, Mapping) else None
+    if direct_schema == MONTHLY_IDENTITY_SCHEMA_VERSION:
+        from backend.services.hmm_risk.monthly_release_input import validate_monthly_release_identity
+
+        identity = validate_monthly_release_identity(value)
+        return identity, DIRECT_V2_UNIVERSE_KEY, identity["rule_version"], MONTHLY_SOURCE_REVISION
     if direct_schema in {DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1, DIRECT_V2_IDENTITY_SCHEMA_VERSION}:
         expected = {
             "schema_version",

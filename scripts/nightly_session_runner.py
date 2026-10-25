@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -14,8 +15,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-SessionExecutor = Callable[[str, int, list[str] | None], dict[str, Any]]
+SessionExecutor = Callable[[str, int, list[str] | None, list[str]], dict[str, Any]]
 CHANGE_SCOPED_SESSIONS = frozenset({"l0"})
+NIGHTLY_RUNNER_ENV = "AISTOCK_NIGHTLY_SESSION_RUNNER"
+NIGHTLY_COMPLETED_SESSIONS_ENV = "AISTOCK_NIGHTLY_COMPLETED_SESSIONS"
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -61,6 +64,7 @@ def execute_session(
     session: str,
     timeout_seconds: int,
     positional_args: list[str] | None = None,
+    completed_sessions: list[str] | None = None,
 ) -> dict[str, Any]:
     command = [sys.executable, "-m", "nox", "-s", session]
     scope_file: Path | None = None
@@ -80,10 +84,17 @@ def execute_session(
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         popen_kwargs["start_new_session"] = True
+    process_env = os.environ.copy()
+    process_env[NIGHTLY_RUNNER_ENV] = "1"
+    process_env[NIGHTLY_COMPLETED_SESSIONS_ENV] = ",".join(completed_sessions or [])
+    # Fail fast within a failed pytest invocation, not across independent plans.
+    # The existing plugin is observational unless a collection receipt is set.
+    process_env["PYTEST_ADDOPTS"] = (
+        process_env.get("PYTEST_ADDOPTS", "") + " -x -p scripts.ci_plan_coverage"
+    ).strip()
     if scope_file is not None:
-        process_env = os.environ.copy()
         process_env["AISTOCK_NIGHTLY_SESSION_ARGS_FILE"] = str(scope_file)
-        popen_kwargs["env"] = process_env
+    popen_kwargs["env"] = process_env
     print(
         f"NIGHTLY_SESSION_START session={session} timeout_seconds={timeout_seconds} "
         f"positional_arg_count={len(positional_args or [])}",
@@ -112,6 +123,7 @@ def execute_session(
         "duration_seconds": round(duration, 3),
         "timeout_seconds": timeout_seconds,
         "positional_arg_count": len(positional_args or []),
+        "completed_prerequisites": list(completed_sessions or []),
     }
     print(
         "NIGHTLY_SESSION_END "
@@ -131,9 +143,29 @@ def run_sessions(
     total_timeout_seconds: int,
     executor: SessionExecutor = execute_session,
     session_args: dict[str, list[str]] | None = None,
+    session_budgets: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
+    # Library callers receive the same fail-closed budget boundary as the CLI.
+    if any(isinstance(value, bool) or not isinstance(value, int) or value <= 0
+           for value in (session_timeout_seconds, total_timeout_seconds)):
+        raise ValueError("Nightly execution budgets must be positive integers")
+    if session_budgets is not None and (
+        not isinstance(session_budgets, dict) or any(
+            key not in sessions or isinstance(value, bool) or not isinstance(value, int) or value <= 0
+            for key, value in session_budgets.items()
+        )
+    ):
+        raise ValueError("Nightly execution plan contains invalid session_timeout_seconds")
+    if any(not isinstance(session, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", session)
+           for session in sessions):
+        raise ValueError("Nightly session names must be nox identifiers, not options")
     results: list[dict[str, Any]] = []
+    completed_sessions: list[str] = []
     deadline = time.monotonic() + total_timeout_seconds
+    # A valid no-op plan is still a durable Nightly result.  Persist the empty
+    # receipt before iterating so the next scheduled run can advance from this
+    # watermark instead of falling back to an older failed receipt.
+    write_receipts(results, output_json=output_json, output_md=output_md)
     for session in sessions:
         remaining = int(deadline - time.monotonic())
         if remaining <= 0:
@@ -148,23 +180,28 @@ def run_sessions(
         else:
             row = executor(
                 session,
-                min(session_timeout_seconds, remaining),
+                min((session_budgets or {}).get(session, session_timeout_seconds), remaining),
                 list((session_args or {}).get(session) or []),
+                list(completed_sessions),
             )
         results.append(row)
+        if row.get("result") == "success":
+            completed_sessions.append(session)
         # Persist after every session so a later timeout/cancellation cannot erase
         # already observed business failures.
         write_receipts(results, output_json=output_json, output_md=output_md)
     return results
 
 
-def _load_execution_plan(plan_path: Path) -> tuple[list[str], dict[str, list[str]]]:
+def _load_execution_plan(plan_path: Path) -> tuple[list[str], dict[str, list[str]], dict[str, int]]:
     payload = json.loads(plan_path.read_text(encoding="utf-8-sig"))
     if not isinstance(payload, dict):
         raise ValueError("Nightly execution plan must be a JSON object")
     raw = payload.get("selected_sessions")
     if not isinstance(raw, list):
         raise ValueError("Nightly execution plan must contain selected_sessions")
+    if any(not isinstance(item, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]*", item) for item in raw):
+        raise ValueError("Nightly session names must be nox identifiers, not options")
     sessions = [str(item).strip() for item in raw if str(item).strip()]
     if len(sessions) != len(set(sessions)):
         raise ValueError("Nightly execution plan contains duplicate sessions")
@@ -194,11 +231,19 @@ def _load_execution_plan(plan_path: Path) -> tuple[list[str], dict[str, list[str
             "Nightly execution plan selected change-scoped sessions without changed_files: "
             + ", ".join(sorted(missing_change_scope))
         )
-    return sessions, session_args
+    budgets = payload.get("session_timeout_seconds", {})
+    if not isinstance(budgets, dict) or any(
+        session not in sessions or isinstance(value, bool) or not isinstance(value, int) or value <= 0
+        for session, value in budgets.items()
+    ):
+        raise ValueError("Nightly execution plan contains invalid session_timeout_seconds")
+    if budgets and set(budgets) != set(sessions):
+        raise ValueError("Nightly execution plan has incomplete session_timeout_seconds")
+    return sessions, session_args, budgets
 
 
 def _selected_sessions(plan_path: Path) -> list[str]:
-    sessions, _session_args = _load_execution_plan(plan_path)
+    sessions, _session_args, _budgets = _load_execution_plan(plan_path)
     return sessions
 
 
@@ -219,7 +264,7 @@ def main(argv: list[str] | None = None) -> int:
     output_json = Path(args.output_json)
     output_md = Path(args.output_md)
     try:
-        sessions, session_args = _load_execution_plan(Path(args.plan))
+        sessions, session_args, session_budgets = _load_execution_plan(Path(args.plan))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         failure = [{
             "session": "nightly_execution_plan",
@@ -240,6 +285,7 @@ def main(argv: list[str] | None = None) -> int:
         session_timeout_seconds=args.session_timeout_seconds,
         total_timeout_seconds=args.total_timeout_seconds,
         session_args=session_args,
+        session_budgets=session_budgets,
     )
     failures = [row for row in results if row.get("result") != "success"]
     print(

@@ -329,18 +329,28 @@ def test_test_plan_advice_blocks_runner_plans_outside_changed_file_selection():
     ]
 
 
-def test_test_plan_advice_blocks_unknown_non_runner_and_production_state_plans():
+def test_test_plan_advice_blocks_unknown_non_runner_and_production_state_plans(monkeypatch):
     config = adapter.load_config()
+    # Test authorization semantics, not a live plan's mutable runner policy.
+    safe = {"enabled": True, "runner_enabled": True, "writes_business_state": False}
+    monkeypatch.setattr(adapter, "_catalog_plans_by_key", lambda *args, **kwargs: {
+        "mocked_ui": dict(safe),
+        "disabled_runner": {**safe, "runner_enabled": False},
+        "production_state": {**safe, "runner_enabled": False, "writes_business_state": True},
+    })
 
     unknown = adapter.build_test_plan_advice("deterministic", config, plan_keys=["missing_plan"])
     assert unknown["deterministic_gate"]["workflow_gate"] == "blocked"
     assert unknown["test_plan_advice"][0]["rejection_reasons"] == ["unknown_plan_key"]
 
-    non_runner = adapter.build_test_plan_advice("deterministic", config, plan_keys=["validation_center_ui"])
+    allowed = adapter.build_test_plan_advice("deterministic", config, plan_keys=["mocked_ui"])
+    assert allowed["deterministic_gate"]["workflow_gate"] == "ready"
+
+    non_runner = adapter.build_test_plan_advice("deterministic", config, plan_keys=["disabled_runner"])
     assert non_runner["deterministic_gate"]["workflow_gate"] == "blocked"
     assert "runner_not_enabled" in non_runner["test_plan_advice"][0]["rejection_reasons"]
 
-    business_state = adapter.build_test_plan_advice("deterministic", config, plan_keys=["miniqmt_sim_trading_hours_l5"])
+    business_state = adapter.build_test_plan_advice("deterministic", config, plan_keys=["production_state"])
     assert business_state["deterministic_gate"]["workflow_gate"] == "blocked"
     assert "runner_not_enabled" in business_state["test_plan_advice"][0]["rejection_reasons"]
     assert "writes_business_state" in business_state["test_plan_advice"][0]["rejection_reasons"]
@@ -392,9 +402,11 @@ def test_test_plan_advice_cli_uses_compact_success_output(capsys, tmp_path):
     assert exit_code == 0
     assert '"check": "test-plan-advice"' in captured.out
     assert '"workflow_gate": "passed"' not in captured.out
-    assert '"advised_plan_count": 1' in captured.out
     assert '"llm_invoked": false' in captured.out
     assert output.exists()
+    compact = json.loads(captured.out)
+    assert compact["advised_plan_count"] == compact["allowed_plan_count"]
+    assert compact["advised_plan_count"] > 0
 
 
 

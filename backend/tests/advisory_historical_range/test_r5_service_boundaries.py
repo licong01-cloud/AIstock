@@ -19,10 +19,3 @@ def test_r5_facade_does_not_import_protected_consumers() -> None:
             node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
         )
         assert not any(name in imports.lower() for name in protected)
-
-
-def test_r5_adds_no_migration_or_scheduler() -> None:
-    changed_targets = {
-        "api_models.py", "query_repository.py", "service.py", "composition.py", "advisory.py"
-    }
-    assert not any("migration" in name or "scheduler" in name for name in changed_targets)

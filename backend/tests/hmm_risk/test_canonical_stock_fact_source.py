@@ -19,7 +19,7 @@ from backend.services.hmm_risk.canonical_stock_fact_source import (
     CanonicalRollingStockFactSource,
     require_same_stock_fact_lease,
 )
-from backend.services.hmm_risk.state_model_set import StateModelSetError
+from backend.services.hmm_risk.contracts import StateModelSetError
 
 
 def _binding(*, generation: int = 7, canonical: bool = True) -> PitConsumerBinding:

@@ -511,7 +511,7 @@ class DurableMultiAlphaOrchestrator:
             repository=self._repository,
             adapter=self._adapter,
         )
-        self._archive_capture = archive_capture or QEArchiveEventCapture()
+        self._archive_capture = archive_capture or QEArchiveEventCapture.for_formal_runtime()
         self._active_import_service = active_import_service or QEActiveExecutionImportService()
         self._control_service = control_service or DurableMultiAlphaControlService(
             self._repository,

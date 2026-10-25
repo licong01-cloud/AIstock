@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import sys
@@ -21,8 +22,23 @@ from backend.services.canonical_equity_pit import (
 from backend.services.hmm_risk import rotation_l1_input_bundle as subject
 from backend.services.dataset_release.copy_on_write import tree_merkle
 from backend.services.dataset_release.stock_schema import qlib_stock_schema_digest
-from backend.services.hmm_risk.state_model_set import canonical_sha256
+from backend.services.hmm_risk.contracts import canonical_sha256
 from scripts.hmm_risk import build_rotation_l1_input_bundle as cli
+
+
+_ACTIVE_DIRECT_V2_ROOT: Path | None = None
+_ACTIVE_PROFILE_PATH: Path | None = None
+
+
+@pytest.fixture(autouse=True)
+def _active_direct_v2_profile(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    global _ACTIVE_DIRECT_V2_ROOT, _ACTIVE_PROFILE_PATH
+    _ACTIVE_DIRECT_V2_ROOT = None
+    _ACTIVE_PROFILE_PATH = tmp_path / "active_dataset_profile.json"
+    monkeypatch.setenv(subject.ACTIVE_DATASET_PROFILE_ENV, str(_ACTIVE_PROFILE_PATH))
+    yield
+    _ACTIVE_DIRECT_V2_ROOT = None
+    _ACTIVE_PROFILE_PATH = None
 
 
 def _receipt(label: str) -> dict[str, object]:
@@ -674,6 +690,84 @@ def test_qlib_stock_reader_validates_release_range_but_materializes_only_develop
     assert 999_999.0 not in rows["close"].tolist()
 
 
+@pytest.fixture
+def suspended_quote_edges(tmp_path: Path):
+    root, symbol = tmp_path / "qlib", "601028.SH"
+    calendar = tuple(date(2025, 3, 24) + timedelta(days=i) for i in range(5))
+    feature_root = root / "features" / symbol.lower()
+    feature_root.mkdir(parents=True)
+    for i, field in enumerate(subject.QLIB_STOCK_FIELDS, start=1):
+        values = (0.0, 0.0) if field in {"limit_up", "limit_down"} else (1.0, 1.0) if field == "factor" else (i, i + 1)
+        np.asarray([1.0, *values], dtype="<f4").tofile(feature_root / f"{field}.day.bin")
+    suspension = frozenset((calendar[i], symbol) for i in (0, 3, 4))
+    return root, symbol, calendar, suspension
+
+
+def test_qlib_spool_keeps_authority_backed_edge_suspension_as_na_without_dropping_pit(
+    suspended_quote_edges, tmp_path, monkeypatch
+):
+    root, symbol, calendar, suspension = suspended_quote_edges
+    paths = subject._spool_qlib_months(
+        root,
+        calendar=calendar,
+        spans={symbol: ((calendar[0], calendar[-1]),)},
+        suspension_keys=suspension,
+        spool_root=tmp_path / "months",
+        window_start=calendar[0],
+        window_end=calendar[-1],
+    )
+    rows = np.fromfile(paths[0], dtype=subject._QLIB_SOURCE_DTYPE)
+    assert rows["trade_date"].tolist() == [20250324, 20250325, 20250326, 20250327, 20250328]
+    assert set(rows["symbol"]) == {symbol.encode("ascii")}
+    for field in subject.QLIB_STOCK_FIELDS:
+        original = np.fromfile(root / "features" / symbol.lower() / f"{field}.day.bin", dtype="<f4")[1:]
+        np.testing.assert_equal(rows[field], [np.nan, *original, np.nan, np.nan])
+    assert all(subject._qlib_row_is_fully_missing(rows[i]) for i in (0, 3, 4))
+    state = subject._strict_prior_price_state(
+        root,
+        calendar=calendar,
+        spans={symbol: ((calendar[0], calendar[-1]),)},
+        suspension_keys=suspension,
+        source_start=calendar[0],
+        window_start=calendar[-1],
+    )
+    close_index = subject.QLIB_STOCK_FIELDS.index("close") + 1
+    assert state[symbol] == (calendar[0], ((calendar[1], float(close_index)), (calendar[2], float(close_index + 1))))
+    monkeypatch.setattr(subject.np, "memmap", lambda *_a, **_kw: pytest.fail("all-suspended window read quote values"))
+    only_na = subject._read_qlib_stock_rows(
+        root,
+        symbol=symbol,
+        calendar=calendar,
+        active_spans=((calendar[0], calendar[-1]),),
+        suspension_keys=suspension,
+        window_start=calendar[3],
+        window_end=calendar[4],
+    )
+    assert len(only_na) == 2 and all(subject._qlib_row_is_fully_missing(row) for row in only_na)
+
+
+@pytest.mark.parametrize("proof", ["none", "one_date_missing", "other_symbol"])
+def test_qlib_quote_edge_gap_without_exact_full_day_suspension_still_fails(suspended_quote_edges, proof):
+    root, symbol, calendar, suspension = suspended_quote_edges
+    if proof == "none":
+        suspension = frozenset()
+    elif proof == "one_date_missing":
+        suspension = suspension - {(calendar[-1], symbol)}
+    else:
+        suspension = frozenset((day, "000001.SZ") for day, _ in suspension)
+    with pytest.raises(subject.RotationL1InputBundleError) as error:
+        subject._read_qlib_stock_rows(
+            root,
+            symbol=symbol,
+            calendar=calendar,
+            active_spans=((calendar[0], calendar[-1]),),
+            suspension_keys=suspension,
+            window_start=calendar[0],
+            window_end=calendar[-1],
+        )
+    assert error.value.reason_code == subject.REASON_SOURCE_RANGE_INCOMPLETE
+
+
 def test_fixed_h5_label_lower_bound_uses_bounded_scalar_reads() -> None:
     class Labels:
         shape = (8,)
@@ -913,6 +1007,30 @@ def test_qlib_month_spool_skips_symbols_without_rows_in_the_approved_window(
     assert [path.name for path in paths] == ["202201.bin"]
     rows = np.fromfile(paths[0], dtype=subject._QLIB_SOURCE_DTYPE)
     assert rows[["trade_date", "symbol"]].tolist() == [(20220103, b"000002.SZ")]
+
+
+def test_qlib_month_spool_uses_full_calendar_for_bin_indices_and_bounds_output_window(tmp_path: Path) -> None:
+    calendar = tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(100))
+    window = calendar[-44:]
+    qlib_root = tmp_path / "qlib"
+    feature_root = qlib_root / "features" / "000001.sz"
+    feature_root.mkdir(parents=True)
+    start_index = 10
+    for field in subject.QLIB_STOCK_FIELDS:
+        values = np.asarray([float(start_index), *range(90)], dtype="<f4")
+        values.tofile(feature_root / f"{field}.day.bin")
+
+    paths = subject._spool_qlib_months(
+        qlib_root,
+        calendar=calendar,
+        spans={"000001.SZ": ((calendar[0], calendar[-1]),)},
+        spool_root=tmp_path / "spool",
+        window_start=window[0],
+        window_end=window[-1],
+    )
+
+    rows = np.concatenate([np.fromfile(path, dtype=subject._QLIB_SOURCE_DTYPE) for path in paths])
+    assert rows["trade_date"].tolist() == [int(day.strftime("%Y%m%d")) for day in window]
 
 
 def test_security_intervals_preserve_dataset_specific_source_aliases() -> None:
@@ -1406,7 +1524,19 @@ def _direct_v2_candidate(
     state_schema_version: str = subject.DIRECT_V2_STATE_SCHEMA_VERSION,
     root_name: str = "20260831-qe_hmm_full_v2-direct-test-candidate",
 ) -> tuple[Path, Path, Path]:
+    global _ACTIVE_DIRECT_V2_ROOT, _ACTIVE_PROFILE_PATH
     root = (tmp_path / root_name).resolve()
+    _ACTIVE_DIRECT_V2_ROOT = root
+    assert _ACTIVE_PROFILE_PATH is not None
+    profile = {
+        "schema_version": "aistock_active_dataset_profile_v1",
+        "generation": "20260917-v9",
+        "release_id": "qe_hmm_full_v2_20260831",
+        "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "controller_paths": {"candidate_root": str(root)},
+        "node_bindings": {"test-node": {"candidate_root": str(root)}},
+    }
+    _ACTIVE_PROFILE_PATH.write_bytes(subject.canonical_json_bytes(profile))
     day = root / "components" / "daily_bin_candidate"
     factor = root / "components" / "factor_h5_static_candidate_v2"
     index_root = root / "components" / "index_context"
@@ -1603,36 +1733,41 @@ def _direct_v2_candidate(
     }
     if state_schema_version == subject.DIRECT_V2_STATE_SCHEMA_VERSION:
         components["sw_l1_index"] = ("sw_l1_index_daily_candidate_v1", "sw_l1_index")
-    (root / "direct_monthly_state.json").write_text(
-        json.dumps(
-            {
-                "schema_version": state_schema_version,
-                "profile": subject.DIRECT_V2_PROFILE,
-                "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
-                "status": "CANDIDATE_READY",
-                "source_freeze": False,
-                "full_history_content_hash": False,
-                "candidate_root": declared_root,
-                "components": {
-                    name: {
-                        "status": "PASS",
-                        "receipt": {
-                            "status": "PASS",
-                            "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
-                            "path": f"{declared_root}\\components\\{directory}",
-                        },
-                    }
-                    for name, (directory, _label) in components.items()
-                },
-                "validation": {
-                    "status": "PASS",
-                    "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
-                    "checks": {name: True for name in components},
-                },
+    dataset_manifest_sha256 = "d" * 64
+    dataset_manifest = {
+        "schema_version": subject.DIRECT_V2_DATASET_MANIFEST_SCHEMA_VERSION,
+        "release_id": "qe_hmm_full_v2_20260831",
+        "cutoff_trade_date": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "availability_status": "CANDIDATE_READY",
+        "dataset_manifest_sha256": dataset_manifest_sha256,
+        "deployment_snapshot_id": "qe_hmm_full_v2_20260831_test",
+        "revision": "20260917-r6-test",
+        "components": {},
+    }
+    manifest_path = root / "qe_dataset_manifest.json"
+    manifest_path.write_text(json.dumps(dataset_manifest, sort_keys=True), encoding="utf-8")
+    state = {
+        "schema_version": state_schema_version,
+        "cutoff": subject.DIRECT_V2_RELEASE_CUTOFF.isoformat(),
+        "release_id": "qe_hmm_full_v2_20260831",
+        "revision": dataset_manifest["revision"],
+        "status": "CANDIDATE_READY",
+        "candidate_root": declared_root,
+        "components": {name: {"status": "PASS", "action": "REUSE_BYTE_IDENTICAL_HARDLINK"} for name in components},
+        "manifest": {
+            "dataset_manifest_sha256": dataset_manifest_sha256,
+            "deployment_snapshot_id": dataset_manifest["deployment_snapshot_id"],
+            "file_sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+            "path": "qe_dataset_manifest.json",
+        },
+        "validation": {
+            "structural": {
+                "status": "PASS",
+                "checks": {name: True for name in components},
             }
-        ),
-        encoding="utf-8",
-    )
+        },
+    }
+    (root / "direct_monthly_state.json").write_text(json.dumps(state), encoding="utf-8")
     security = tmp_path / "security.json"
     provider = tmp_path / "provider.json"
     security.write_text("{}", encoding="utf-8")
@@ -1694,6 +1829,66 @@ def test_direct_v2_factor_table_layout_inventory_and_window_are_formally_readabl
     assert loaded.equals(frame.loc[pd.IndexSlice[pd.Timestamp("2026-08-31"), :], :])
 
 
+def test_table_h5_physical_row_order_is_not_industry_or_date_authority(tmp_path: Path) -> None:
+    index = pd.MultiIndex.from_product(
+        [pd.to_datetime(["2024-06-28", "2024-07-01", "2026-08-31"]), ["000001.SZ", "000002.SZ"]],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame({"value": np.arange(6, dtype=np.float32)}, index=index)
+    path = tmp_path / "moneyflow.h5"
+    # A validated immutable release may append corrections/aliases out of order.
+    frame.iloc[[5, 0, 3, 1, 4, 2]].to_hdf(path, key="data", format="table", data_columns=["datetime", "instrument"])
+    before = subject._sha256_file(path)
+    inventory = subject._fixed_h5_inventory(path, expected_columns=("value",), expected_dtype="<f4")
+    assert (inventory["date_min"], inventory["date_max"], inventory["row_count"]) == (
+        "2024-06-28",
+        "2026-08-31",
+        6,
+    )
+    loaded = subject._load_fixed_h5_window(
+        path,
+        expected_columns=("value",),
+        expected_dtype="<f4",
+        start=date(2024, 6, 28),
+        end=date(2024, 7, 1),
+    )
+    assert loaded.equals(frame.loc[pd.IndexSlice[: pd.Timestamp("2024-07-01"), :], :])
+    assert subject._sha256_file(path) == before
+
+
+def test_unordered_table_h5_keeps_duplicate_and_invalid_date_fail_closed(tmp_path: Path) -> None:
+    path = tmp_path / "moneyflow.h5"
+    index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2024-07-01"), "000001.SZ"),
+            (pd.Timestamp("2024-06-28"), "000001.SZ"),
+            (pd.Timestamp("2024-07-01"), "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    frame = pd.DataFrame({"value": np.ones(3, dtype=np.float32)}, index=index)
+    frame.to_hdf(path, key="data", format="table", data_columns=["datetime", "instrument"])
+    with pytest.raises(subject.RotationL1InputBundleError, match="duplicated"):
+        subject._load_fixed_h5_window(
+            path,
+            expected_columns=("value",),
+            expected_dtype="<f4",
+            start=date(2024, 6, 28),
+            end=date(2024, 7, 1),
+        )
+    frame.index = pd.MultiIndex.from_tuples(
+        [
+            (pd.Timestamp("2024-07-01 12:00"), "000001.SZ"),
+            (pd.NaT, "000002.SZ"),
+            (pd.Timestamp("2024-06-28"), "000001.SZ"),
+        ],
+        names=["datetime", "instrument"],
+    )
+    frame.to_hdf(path, key="data", mode="w", format="table", data_columns=["datetime", "instrument"])
+    with pytest.raises(subject.RotationL1InputBundleError, match="date"):
+        subject._fixed_h5_inventory(path, expected_columns=("value",), expected_dtype="<f4")
+
+
 def _stub_direct_source_preflights(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subject, "_fixed_h5_inventory", _stub_direct_factor_inventory)
     monkeypatch.setattr(
@@ -1739,6 +1934,14 @@ def test_direct_v2_source_binding_keeps_release_cutoff_separate_from_model_windo
     assert "minute_bin" not in loaded["files"]
     assert loaded["source_revision"] == subject.DIRECT_V2_SOURCE_REVISION
     assert loaded["release_identity"]["release_id"] == root.name
+    assert loaded["release_identity"]["active_release_id"] == "qe_hmm_full_v2_20260831"
+    assert loaded["release_identity"]["active_profile_generation"] == "20260917-v9"
+    assert _ACTIVE_PROFILE_PATH is not None
+    assert (
+        loaded["release_identity"]["active_profile_sha256"]
+        == hashlib.sha256(_ACTIVE_PROFILE_PATH.read_bytes()).hexdigest()
+    )
+    assert loaded["release_identity"]["dataset_revision"] == "20260917-r6-test"
     assert len(loaded["sector_index_code_by_sector"]) == 31
     assert len(loaded["sector_index_close"]) == 31 * 3
     assert set(loaded["benchmark_close"]) == {
@@ -1748,12 +1951,167 @@ def test_direct_v2_source_binding_keeps_release_cutoff_separate_from_model_windo
     }
 
 
-def test_direct_v2_schema_boundary_keeps_v2_compatible_but_g2a_requires_v3(
+def test_frozen_successor_binding_does_not_read_or_forge_active_profile(tmp_path, monkeypatch):
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    _stub_direct_source_preflights(monkeypatch)
+    state = json.loads((root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    state.update(generation="approved-frozen-successor", profile=subject.DIRECT_V2_PROFILE)
+    (root / "direct_monthly_state.json").write_text(json.dumps(state), encoding="utf-8")
+    binding = {
+        "generation": state["generation"],
+        "release_id": state["release_id"],
+        "revision": state["revision"],
+        "cutoff": state["cutoff"],
+        "manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "manifest_file_sha256": state["manifest"]["file_sha256"],
+    }
+    before = _ACTIVE_PROFILE_PATH.read_bytes()
+    monkeypatch.setattr(subject, "load_active_hmm_dataset_identity", lambda: pytest.fail("active profile accessed"))
+    loaded = subject.load_rotation_l1_direct_v2_source_assets(
+        root,
+        security_identity_manifest=security,
+        provider_absence_manifest=provider,
+        frozen_release_binding=binding,
+    )
+    identity = loaded["release_identity"]
+    assert identity["frozen_release_generation"] == binding["generation"]
+    assert identity["frozen_release_binding_sha256"] == canonical_sha256(binding)
+    assert not any(key.startswith("active_") for key in identity)
+    assert "active_profile" not in identity["metadata_sha256"]
+    assert _ACTIVE_PROFILE_PATH.read_bytes() == before
+    for key in binding:
+        wrong = {**binding, key: "unapproved"}
+        with pytest.raises(subject.RotationL1InputBundleError):
+            subject._require_frozen_direct_v2_profile(
+                root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, binding=wrong
+            )
+
+
+def test_frozen_binding_cannot_fall_back_to_active_or_accept_rehashed_manifest(tmp_path, monkeypatch):
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state = json.loads((root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    state.update(generation="approved-frozen-successor", profile=subject.DIRECT_V2_PROFILE)
+    binding = {
+        "generation": state["generation"],
+        "release_id": state["release_id"],
+        "revision": state["revision"],
+        "cutoff": state["cutoff"],
+        "manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "manifest_file_sha256": state["manifest"]["file_sha256"],
+    }
+    subject._require_frozen_direct_v2_profile(
+        root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, binding=binding
+    )
+    for change in ("wrong_root", "missing_field", "status", "unknown_schema", "structural", "manifest_content"):
+        changed_state = copy.deepcopy(state)
+        changed_binding = dict(binding)
+        if change == "wrong_root":
+            changed_state["candidate_root"] = str(tmp_path / "old-active")
+        elif change == "missing_field":
+            changed_binding.pop("generation")
+        elif change == "status":
+            changed_state["status"] = "FAILED"
+        elif change == "unknown_schema":
+            changed_state["schema_version"] = "qe_direct_monthly_state_v999"
+        elif change == "structural":
+            changed_state["validation"]["structural"]["checks"]["daily_bin"] = 1
+        else:
+            path = root / "qe_dataset_manifest.json"
+            value = json.loads(path.read_text(encoding="utf-8"))
+            value["revision"] = "forged"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            changed_state["revision"] = "forged"
+            changed_state["manifest"]["file_sha256"] = subject._sha256_file(path)
+        with pytest.raises(subject.RotationL1InputBundleError):
+            subject._require_frozen_direct_v2_profile(
+                root=root,
+                state=changed_state,
+                release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF,
+                binding=changed_binding,
+            )
+
+
+def _shared_frozen_successor(tmp_path):
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state = json.loads((root / "direct_monthly_state.json").read_text(encoding="utf-8"))
+    manifest_path = root / "qe_dataset_manifest.json"
+    digest = subject._sha256_file(manifest_path)
+    state.update(generation="approved-v18-successor", revision="20261015-successor", profile=subject.DIRECT_V2_PROFILE)
+    state["manifest"] = {
+        "dataset_manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "path": manifest_path.name,
+        "sha256": digest,
+        "size": manifest_path.stat().st_size,
+    }
+    binding = {
+        **{k: state[k] for k in ("generation", "release_id", "revision", "cutoff")},
+        "manifest_sha256": state["manifest"]["dataset_manifest_sha256"],
+        "manifest_file_sha256": digest,
+    }
+    return root, security, provider, state, binding
+
+
+def test_shared_frozen_successor_reads_pinned_manifest_with_inherited_revision(tmp_path, monkeypatch):
+    root, security, provider, state, binding = _shared_frozen_successor(tmp_path)
+    (root / "direct_monthly_state.json").write_text(json.dumps(state), encoding="utf-8")
+    _stub_direct_source_preflights(monkeypatch)
+    monkeypatch.setattr(subject, "load_active_hmm_dataset_identity", lambda: pytest.fail("active profile accessed"))
+    before = {
+        path.name: path.read_bytes() for path in (root / "direct_monthly_state.json", root / "qe_dataset_manifest.json")
+    }
+    assets = subject.load_rotation_l1_direct_v2_source_assets(
+        root, security_identity_manifest=security, provider_absence_manifest=provider, frozen_release_binding=binding
+    )
+    assert assets["release_identity"]["frozen_release_generation"] == binding["generation"]
+    assert assets["release_identity"]["frozen_release_binding_sha256"] == canonical_sha256(binding)
+    assert all((root / name).read_bytes() == content for name, content in before.items())
+
+
+@pytest.mark.parametrize("drift", ("hash", "size", "bool_size", "mixed", "identity", "revision", "rehashed_content"))
+def test_shared_frozen_successor_still_rejects_binding_drift(tmp_path, drift):
+    root, _, _, state, binding = _shared_frozen_successor(tmp_path)
+    if drift == "hash":
+        state["manifest"]["sha256"] = "a" * 64
+    elif drift == "size":
+        state["manifest"]["size"] += 1
+    elif drift == "bool_size":
+        state["manifest"]["size"] = True
+    elif drift == "mixed":
+        state["manifest"]["file_sha256"] = state["manifest"]["sha256"]
+    elif drift == "identity":
+        state["manifest"]["dataset_manifest_sha256"] = "a" * 64
+    elif drift == "revision":
+        state["revision"] = "unapproved"
+    else:
+        path = root / "qe_dataset_manifest.json"
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+        manifest["revision"] = "forged"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        state["manifest"].update(sha256=subject._sha256_file(path), size=path.stat().st_size)
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._require_frozen_direct_v2_profile(
+            root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, binding=binding
+        )
+
+
+def test_shared_inherited_manifest_requires_explicit_frozen_pins(tmp_path):
+    root, _, _, state, _ = _shared_frozen_successor(tmp_path)
+    with pytest.raises(subject.RotationL1InputBundleError):
+        subject._require_direct_v2_manifest(
+            root=root, state=state, release_cutoff=subject.DIRECT_V2_RELEASE_CUTOFF, release_id=state["release_id"]
+        )
+
+
+def test_direct_v2_selection_universe_may_be_a_pit_subset_of_provider_catalog(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    root, security, provider = _direct_v2_candidate(
-        tmp_path, state_schema_version=subject.DIRECT_V2_STATE_SCHEMA_VERSION_V2
-    )
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    all_path = root / "components" / "daily_bin_candidate" / "instruments" / "all.txt"
+    with all_path.open("a", encoding="utf-8", newline="") as handle:
+        handle.write(
+            f"000018.SZ\t{subject.DIRECT_V2_RELEASE_START.isoformat()}\t"
+            f"{subject.DIRECT_V2_RELEASE_CUTOFF.isoformat()}\n"
+        )
     _stub_direct_source_preflights(monkeypatch)
 
     loaded = subject.load_rotation_l1_direct_v2_source_assets(
@@ -1762,10 +2120,19 @@ def test_direct_v2_schema_boundary_keeps_v2_compatible_but_g2a_requires_v3(
         provider_absence_manifest=provider,
     )
 
-    assert loaded["release_identity"]["schema_version"] == subject.DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1
-    assert loaded["sector_index_close"] is None
+    assert loaded["instrument_universe_path"].name == "stock_universe.txt"
+
+
+def test_direct_v2_schema_boundary_rejects_retired_v2_for_all_new_hmm_experiments(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root, security, provider = _direct_v2_candidate(
+        tmp_path, state_schema_version=subject.DIRECT_V2_STATE_SCHEMA_VERSION_V2
+    )
+    _stub_direct_source_preflights(monkeypatch)
+
     with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
-        subject.load_rotation_l1_g2a_direct_v2_source_assets(
+        subject.load_rotation_l1_direct_v2_source_assets(
             root,
             security_identity_manifest=security,
             provider_absence_manifest=provider,
@@ -1778,6 +2145,54 @@ def test_direct_v2_source_binding_rejects_unknown_state_schema(tmp_path: Path) -
     state_path = root / "direct_monthly_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["schema_version"] = "qe_direct_monthly_state_v4"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_source_binding_requires_active_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    monkeypatch.delenv(subject.ACTIVE_DATASET_PROFILE_ENV)
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_MANIFEST_INVALID
+
+
+def test_direct_v2_source_binding_rejects_manifest_hash_drift(tmp_path: Path) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    manifest_path = root / "qe_dataset_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["revision"] = "stale-revision"
+    manifest_path.write_text(json.dumps(manifest, sort_keys=True), encoding="utf-8")
+
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.load_rotation_l1_direct_v2_source_assets(
+            root,
+            security_identity_manifest=security,
+            provider_absence_manifest=provider,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_HASH_MISMATCH
+
+
+def test_direct_v2_source_binding_rejects_state_manifest_revision_drift(tmp_path: Path) -> None:
+    root, security, provider = _direct_v2_candidate(tmp_path)
+    state_path = root / "direct_monthly_state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["revision"] = "stale-revision"
     state_path.write_text(json.dumps(state), encoding="utf-8")
 
     with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
@@ -1811,7 +2226,7 @@ def test_direct_v2_candidate_root_must_be_absolute_and_direct(tmp_path: Path, mo
     assert indirect.value.reason_code == subject.REASON_MANIFEST_INVALID
 
 
-def test_direct_v2_v3_requires_sw_l1_component_and_matching_receipt(tmp_path: Path) -> None:
+def test_direct_v2_v3_requires_sw_l1_component_and_valid_component_state(tmp_path: Path) -> None:
     root, security, provider = _direct_v2_candidate(tmp_path / "missing")
     (root / "components" / "sw_l1_index_daily_candidate_v1" / "sector_data.h5").unlink()
     with pytest.raises(subject.RotationL1InputBundleError) as missing:
@@ -1825,7 +2240,7 @@ def test_direct_v2_v3_requires_sw_l1_component_and_matching_receipt(tmp_path: Pa
     root, security, provider = _direct_v2_candidate(tmp_path / "receipt")
     state_path = root / "direct_monthly_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["components"]["sw_l1_index"]["receipt"]["path"] = str(root / "components" / "factor_h5_static_candidate_v2")
+    state["components"]["sw_l1_index"]["action"] = ""
     state_path.write_text(json.dumps(state), encoding="utf-8")
     with pytest.raises(subject.RotationL1InputBundleError) as mismatch:
         subject.load_rotation_l1_direct_v2_source_assets(
@@ -1840,7 +2255,7 @@ def test_direct_v2_candidate_root_is_dynamic_and_never_uses_old_release_fallback
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _stub_direct_source_preflights(monkeypatch)
-    roots = []
+    candidates = []
     for suffix in ("release-a", "release-b"):
         root, security, provider = _direct_v2_candidate(tmp_path / suffix, root_name=f"candidate-{suffix}")
         loaded = subject.load_rotation_l1_g2a_direct_v2_source_assets(
@@ -1855,13 +2270,24 @@ def test_direct_v2_candidate_root_is_dynamic_and_never_uses_old_release_fallback
             if name not in {"security_identity", "provider_absence"}
         )
         assert "20260902-candidate" not in json.dumps(loaded["release_identity"])
-        roots.append(root)
-    assert roots[0] != roots[1]
+        candidates.append((root, security, provider))
+    assert candidates[0][0] != candidates[1][0]
+    old_root, old_security, old_provider = candidates[0]
+    with pytest.raises(subject.RotationL1InputBundleError) as stale:
+        subject.load_rotation_l1_g2a_direct_v2_source_assets(
+            old_root,
+            security_identity_manifest=old_security,
+            provider_absence_manifest=old_provider,
+        )
+    assert stale.value.reason_code == subject.REASON_MANIFEST_INVALID
 
 
+@pytest.mark.parametrize("contract_kind", ["rotation_v13", "rotation_v16", "risk_v1"])
 def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, contract_kind: str
 ) -> None:
+    deterministic_v16 = contract_kind == "rotation_v16"
+    risk_v1 = contract_kind == "risk_v1"
     calendar = tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(100))
     trade_day = calendar[-1]
     as_of = calendar[-2]
@@ -1872,6 +2298,7 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
     qlib_root = candidate_root / "qlib"
     qlib_root.mkdir()
     loader_calls: list[dict[str, object]] = []
+    spool_calls: list[dict[str, object]] = []
 
     def load_assets(root, **kwargs):
         loader_calls.append({"root": root, **kwargs})
@@ -1906,7 +2333,8 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
 
     def build_stock_inputs(*_args, **kwargs):
         output = kwargs["g2a_l1_daily_output"]
-        for day in kwargs["calendar"][-20:]:
+        required_days = 25 if deterministic_v16 else 20
+        for day in kwargs["calendar"][-required_days:]:
             for code in codes:
                 output.append(
                     {
@@ -1938,7 +2366,12 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
     monkeypatch.setattr(subject, "_SecurityResolutionIndex", lambda value: value)
     monkeypatch.setattr(subject, "load_provider_absence_manifest", lambda *_args, **_kwargs: SimpleNamespace(rows=[]))
     monkeypatch.setattr(subject, "_load_suspend_keys", lambda *_args, **_kwargs: frozenset())
-    monkeypatch.setattr(subject, "_spool_qlib_months", lambda *_args, **_kwargs: (tmp_path / "202603.bin",))
+
+    def spool_qlib_months(*_args, **kwargs):
+        spool_calls.append(kwargs)
+        return (tmp_path / "202603.bin",)
+
+    monkeypatch.setattr(subject, "_spool_qlib_months", spool_qlib_months)
     monkeypatch.setattr(subject, "_build_stock_fact_aggregates", build_stock_inputs)
 
     result = subject.build_rotation_l1_single_date_source_from_assets(
@@ -1950,7 +2383,14 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
         work_parent=tmp_path / "work",
         trade_date=trade_day,
         as_of_date=as_of,
-        market_start=market_start,
+        market_start=None if deterministic_v16 or risk_v1 else market_start,
+        model_contract_version=(
+            "hmm_risk_rotation_l1_g2a_v1_6"
+            if deterministic_v16
+            else "hmm_risk_risk_l1_g2b_v1"
+            if risk_v1
+            else "hmm_risk_rotation_l1_g2a_v1_3"
+        ),
     )
 
     assert loader_calls == [
@@ -1962,14 +2402,58 @@ def test_single_date_source_uses_explicit_release_and_reads_only_through_as_of(
         }
     ]
     assert result["feature_calendar"][-2:] == (as_of, trade_day)
-    assert set(result["benchmark_close"]) == set(result["market_calendar"][:-1])
-    assert all(day <= as_of for day, _code in result["sector_close"])
-    assert len(result["sector_close"]) == 61 * 31
-    assert len(result["stock_daily_inputs"]) == 20 * 31
+    assert len(spool_calls) == 1
+    assert spool_calls[0]["calendar"] == calendar
+    assert spool_calls[0]["window_start"] == calendar[-45 if deterministic_v16 else -40]
+    assert spool_calls[0]["window_end"] == as_of
+    if deterministic_v16:
+        assert result["schema_version"] == "hmm_risk_rotation_l1_single_date_source_v2"
+        assert result["model_contract_version"] == "hmm_risk_rotation_l1_g2a_v1_6"
+        assert result["benchmark_close"] == {}
+        assert result["sector_close"] == {}
+        assert len(result["feature_calendar"]) == 26
+        assert len(result["stock_daily_inputs"]) == 25 * 31
+        assert result["source_receipt"]["market_context_used_for_score"] is False
+        assert result["source_receipt"]["sector_close_used_for_score"] is False
+    else:
+        assert result["schema_version"] == (
+            "hmm_risk_risk_l1_single_date_source_v1" if risk_v1 else "hmm_risk_rotation_l1_single_date_source_v1"
+        )
+        if risk_v1:
+            assert result["model_contract_version"] == "hmm_risk_risk_l1_g2b_v1"
+        assert set(result["benchmark_close"]) == set(result["market_calendar"][:-1])
+        assert all(day <= as_of for day, _code in result["sector_close"])
+        assert len(result["sector_close"]) == 61 * 31
+        assert len(result["stock_daily_inputs"]) == 20 * 31
     assert result["source_receipt"]["target_columns_read"] is False
     assert result["source_receipt"]["receipt_sha256"] == subject.canonical_sha256(
         {key: value for key, value in result["source_receipt"].items() if key != "receipt_sha256"}
     )
+
+
+@pytest.mark.parametrize(
+    "unsupported_contract",
+    ["hmm_risk_rotation_l1_g2a_v1_4", "hmm_risk_rotation_l1_g2a_v1_5", "unknown"],
+)
+def test_single_date_source_rejects_non_productised_model_contracts(
+    tmp_path: Path,
+    unsupported_contract: str,
+) -> None:
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject.build_rotation_l1_single_date_source_from_assets(
+            direct_v2_candidate_root=tmp_path / "unused-candidate",
+            security_identity_manifest=tmp_path / "security.json",
+            provider_absence_manifest=tmp_path / "provider.json",
+            industry_authority={},
+            forbidden_roots=(),
+            work_parent=tmp_path / "work",
+            trade_date=date(2026, 1, 5),
+            as_of_date=date(2026, 1, 2),
+            market_start=date(2025, 1, 1),
+            model_contract_version=unsupported_contract,
+        )
+
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
 
 
 def test_direct_v2_sw_l1_readback_is_order_independent(tmp_path: Path) -> None:
@@ -2062,7 +2546,7 @@ def test_direct_v2_source_binding_rejects_cross_release_and_legacy_fallback(
     root, security, provider = _direct_v2_candidate(tmp_path / "fallback")
     state_path = root / "direct_monthly_state.json"
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["components"]["daily_bin"]["receipt"]["path"] = "/home/lc999/data/qlib_bin"
+    state["candidate_root"] = "/home/lc999/data/qlib_bin"
     state_path.write_text(json.dumps(state), encoding="utf-8")
     with pytest.raises(subject.RotationL1InputBundleError) as legacy:
         subject.load_rotation_l1_direct_v2_source_assets(
@@ -2323,11 +2807,128 @@ def test_suspend_sidecar_uses_only_full_day_rows_and_preserves_intraday_observat
     )
 
 
+@pytest.fixture
+def prior_quote_case(tmp_path: Path):
+    symbol = "600988.SH"
+    calendar = tuple(d.date() for d in pd.bdate_range("2026-03-17", "2026-04-02"))
+    root = tmp_path / "qlib"
+    feature_root = root / "features" / symbol.lower()
+    feature_root.mkdir(parents=True)
+    for field in subject.QLIB_STOCK_FIELDS:
+        values = np.ones(len(calendar), dtype="<f4")
+        if field in {"open", "high", "low", "close", "prev_close", "up_limit_price", "down_limit_price"}:
+            values = np.arange(30, 30 + len(calendar), dtype="<f4")
+        elif field in {"limit_up", "limit_down"}:
+            values[:] = 0
+        np.concatenate((np.array([0.0], dtype="<f4"), values)).tofile(feature_root / f"{field}.day.bin")
+    suspension = frozenset((d, symbol) for d in (date(2026, 3, 19), date(2026, 3, 20)))
+    spans = {symbol: ((calendar[0], calendar[-1]),)}
+    return root, symbol, calendar, spans, suspension
+
+
+def _prior_quotes(case, *, spans=None, suspension=None):
+    root, _, calendar, original_spans, original_suspension = case
+    return subject._strict_prior_price_state(
+        root,
+        calendar=calendar,
+        spans=original_spans if spans is None else spans,
+        suspension_keys=original_suspension if suspension is None else suspension,
+        source_start=calendar[0],
+        window_start=calendar[-1],
+    )
+
+
+def test_prior_quote_context_counts_real_quotes_across_normal_suspension(prior_quote_case):
+    _, symbol, calendar, _, suspension = prior_quote_case
+    state = _prior_quotes(prior_quote_case)
+    span_start, quotes = state[symbol]
+    assert span_start == calendar[0]
+    assert [d for d, _ in quotes] == [d for d in calendar[:-1] if (d, symbol) not in suspension]
+    assert len(quotes) == 10
+    assert quotes[0] == (date(2026, 3, 17), 30.0)
+    assert all(d < calendar[-1] and np.isfinite(value) for d, value in quotes)
+
+
+def test_prior_quote_context_cannot_cross_a_pit_reentry(prior_quote_case):
+    _, symbol, calendar, _, _ = prior_quote_case
+    reentry = date(2026, 3, 23)
+    state = _prior_quotes(
+        prior_quote_case,
+        spans={symbol: ((calendar[0], date(2026, 3, 20)), (reentry, calendar[-1]))},
+    )
+    assert state[symbol][0] == reentry
+    assert len(state[symbol][1]) == 8
+    assert all(d >= reentry for d, _ in state[symbol][1])
+
+
+def test_prior_quote_context_preserves_true_history_shortage(prior_quote_case):
+    root, symbol, calendar, _, _ = prior_quote_case
+    for field in subject.QLIB_STOCK_FIELDS:
+        values = np.fromfile(root / "features" / symbol.lower() / f"{field}.day.bin", dtype="<f4")
+        values[1] = np.nan
+        values.tofile(root / "features" / symbol.lower() / f"{field}.day.bin")
+    quotes = _prior_quotes(prior_quote_case)[symbol][1]
+    assert len(quotes) == 9
+    assert all(d != calendar[0] for d, _ in quotes)
+
+
+def test_prior_quote_context_reaches_real_history_after_a_long_suspension(prior_quote_case):
+    _, symbol, calendar, _, _ = prior_quote_case
+    suspended = frozenset((d, symbol) for d in calendar[1:-1])
+    assert _prior_quotes(prior_quote_case, suspension=suspended)[symbol][1] == ((calendar[0], 30.0),)
+
+
+@pytest.mark.parametrize(
+    "context",
+    (
+        (),
+        (date(2026, 1, 2), ((date(2026, 1, 16), 2.0),)),
+        (date(2026, 1, 2), ((date(2026, 1, 15), 2.0), (date(2026, 1, 14), 3.0))),
+        (date(2026, 1, 2), ((date(2026, 1, 14), np.inf),)),
+        (date(2026, 1, 2), ((date(2026, 1, 14), 2.0),)),
+    ),
+)
+def test_price_carry_rejects_malformed_future_unordered_nonfinite_or_suspended_context(context):
+    symbol = "600988.SH"
+    dates = tuple(d.date() for d in pd.bdate_range("2026-01-02", "2026-01-16"))
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        subject._build_stock_fact_aggregates(
+            month_paths=(),
+            assets={},
+            calendar=dates,
+            spans={symbol: ((dates[0], dates[-1]),)},
+            adapter=None,
+            security=None,
+            provider_absence=None,
+            suspension_keys=frozenset({(date(2026, 1, 14), symbol)}),
+            contributor_eligibility={},
+            window_start=dates[-1],
+            window_end=dates[-1],
+            initial_price_state={symbol: context},
+        )
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_SCHEMA_INVALID
+
+
+@pytest.mark.parametrize(("field", "bad_value"), (("close", np.inf), ("factor", 0.0)))
+def test_prior_quote_context_does_not_hide_invalid_source(prior_quote_case, field, bad_value):
+    root, symbol, _, _, _ = prior_quote_case
+    path = root / "features" / symbol.lower() / f"{field}.day.bin"
+    values = np.fromfile(path, dtype="<f4")
+    values[-2] = bad_value
+    values.tofile(path)
+    with pytest.raises(subject.RotationL1InputBundleError) as exc_info:
+        _prior_quotes(prior_quote_case)
+    assert exc_info.value.reason_code == subject.REASON_SOURCE_UNIT_INVALID
+
+
+@pytest.mark.parametrize("with_price_context", (False, True))
 def test_full_day_suspension_precedes_missing_evidence_and_price_history(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    with_price_context: bool,
 ) -> None:
     dates = (date(2026, 1, 16), date(2026, 1, 19))
+    prior_dates = tuple(d.date() for d in pd.bdate_range(end="2026-01-15", periods=10))
     symbol = "688005.SH"
     source_rows = np.zeros(len(dates), dtype=subject._QLIB_SOURCE_DTYPE)
     for index, day in enumerate(dates):
@@ -2391,22 +2992,29 @@ def test_full_day_suspension_precedes_missing_evidence_and_price_history(
     subject._build_stock_fact_aggregates(
         month_paths=(month_path,),
         assets={"files": {"daily_basic": tmp_path / "basic.h5", "moneyflow": tmp_path / "moneyflow.h5"}},
-        calendar=dates,
-        spans={symbol: ((dates[0], dates[-1]),)},
+        calendar=(*prior_dates, *dates),
+        spans={symbol: ((prior_dates[0], dates[-1]),)},
         adapter=Adapter(),
         security=Security(),
         provider_absence=ProviderAbsence(),
         suspension_keys=frozenset({(dates[0], symbol)}),
         contributor_eligibility={symbol: True},
+        window_start=dates[0],
+        window_end=dates[-1],
+        initial_price_state=(
+            {symbol: (prior_dates[0], tuple((d, 2.0 + i) for i, d in enumerate(prior_dates)))}
+            if with_price_context
+            else None
+        ),
     )
 
     suspended, resumed = captured
     assert suspended["is_suspended"] is True
     assert suspended["moneyflow_fact_status"] == "not_applicable_suspended"
     assert resumed["is_suspended"] is False
-    assert resumed["prev_close_yuan"] is None
-    assert resumed["prev_close_5_yuan"] is None
-    assert resumed["prev_close_10_yuan"] is None
+    assert resumed["prev_close_yuan"] == (1.0 if with_price_context else None)
+    assert resumed["prev_close_5_yuan"] == (7.0 if with_price_context else None)
+    assert resumed["prev_close_10_yuan"] == (2.0 if with_price_context else None)
 
 
 @pytest.mark.parametrize(

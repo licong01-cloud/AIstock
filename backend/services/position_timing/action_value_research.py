@@ -29,6 +29,7 @@ from .action_value import (
     action_candidates,
     apply_fill,
     cutoff_on,
+    choose_action,
     daily_fill,
     feature_contract,
     leg_fee,
@@ -44,6 +45,14 @@ from .action_value_corporate_actions import (
 )
 from .action_value_model import HEADS, LocalActionModel, fit_local_model, monthly_training_windows
 from .action_value_add_model import ADD_OBJECTIVE, AddActionModel
+from .action_value_entry_timing_model import (
+    ALWAYS_OPEN_ENTRY_COMPARATOR,
+    ALWAYS_OPEN_ENTRY_POLICY_SHA256,
+    ENTRY_TIMING_ACTION_AUTHORITY,
+    ENTRY_TIMING_OBJECTIVE,
+    ENTRY_TIMING_POLICY_SHA256,
+    EntryTimingModel,
+)
 from .contracts import canonical_sha256
 
 
@@ -112,6 +121,368 @@ class ContinuousReplayResult:
     sleeve_days: pd.DataFrame
     daily_comparisons: pd.DataFrame
     receipt: dict[str, Any]
+
+
+def build_deferred_entry_timing_rows(
+    candidate: DailyCandidate,
+    spec: ActionValuePopulationSpec,
+    *,
+    symbols: Sequence[str] | None = None,
+    corporate_actions: CorporateActionBook | None = None,
+    information_block: str = CORE_INFORMATION_BLOCK,
+) -> ActionValueRows:
+    """Build same-stock T+1 OPEN versus T+2 OPEN labels.
+
+    Every row freezes one positive quantity at T.  The immediate path must fill
+    on T+1; UNKNOWN/NO_FILL observations are coverage exclusions rather than
+    zero labels.  The deferred path uses T+1 close as its causal reference and
+    attempts that exact quantity on T+2.  Its NO_FILL outcome is valid cash,
+    while UNKNOWN remains unavailable.  Both paths then use only the frozen
+    risk exit/HOLD policy through one common terminal valuation.
+    """
+
+    market_feature_names, feature_order, feature_spec_sha256 = feature_contract(
+        information_block
+    )
+    requested_symbols = (
+        tuple(symbols)
+        if symbols is not None
+        else deterministic_symbols(
+            candidate.symbols, limit=spec.symbol_limit, seed=spec.seed
+        )
+    )
+    if (
+        not requested_symbols
+        or len(requested_symbols) != len(set(requested_symbols))
+        or any(symbol not in candidate.symbols for symbol in requested_symbols)
+    ):
+        raise ActionValueError("ENTRY_TIMING_SYMBOL_POPULATION_INVALID")
+    action_book = corporate_actions or CorporateActionBook.empty()
+    benchmark = candidate.bars(BENCHMARK)["close"]
+    calendar = candidate.calendar
+    calendar_dates = [day.date() for day in calendar]
+    indexes = np.flatnonzero(
+        (calendar.date >= spec.start) & (calendar.date <= spec.end)
+    )
+    if not len(indexes):
+        raise ActionValueError("POPULATION_DATE_RANGE_EMPTY")
+
+    records: list[dict[str, Any]] = []
+    counts: dict[str, Any] = {
+        "review_candidates": 0,
+        "complete_core": 0,
+        "positive_plan_candidates": 0,
+        "immediate_filled_rows": 0,
+        "immediate_no_fill_rows": 0,
+        "immediate_unknown_rows": 0,
+        "deferred_filled_rows": 0,
+        "deferred_no_fill_rows": 0,
+        "deferred_unknown_rows": 0,
+        "terminal_unavailable": 0,
+        "corporate_action_unavailable": 0,
+        "unbound_material_factor_change": 0,
+        "path_value_unavailable": 0,
+        "rows": 0,
+        "error_counts": {},
+    }
+    for symbol in requested_symbols:
+        bars = candidate.bars(symbol)
+        features = market_features(
+            bars, benchmark, information_block=information_block
+        )
+        for ordinal in indexes[:: spec.review_stride]:
+            if ordinal < 30 or ordinal + spec.primary_horizon >= len(calendar):
+                continue
+            counts["review_candidates"] += 1
+            if not bool(bars.iloc[ordinal].get("pit_active")):
+                continue
+            current = features.iloc[ordinal]
+            if current.isna().any():
+                continue
+            counts["complete_core"] += 1
+            terminal_ordinal = _effective_terminal_ordinal(
+                bars,
+                ordinal + spec.primary_horizon,
+                max_defer=spec.terminal_max_defer,
+                symbol=symbol,
+                corporate_actions=action_book,
+                calendar_dates=calendar_dates,
+            )
+            if terminal_ordinal is None:
+                counts["terminal_unavailable"] += 1
+                continue
+            if _has_unbound_material_factor_change(
+                symbol=symbol,
+                bars=bars,
+                start_ordinal=ordinal,
+                end_ordinal=terminal_ordinal,
+                corporate_actions=action_book,
+            ):
+                counts["unbound_material_factor_change"] += 1
+                continue
+            state = PositionState(
+                quantity=0,
+                sellable=0,
+                cash=spec.reference_capital_cny,
+                capital=spec.reference_capital_cny,
+            )
+            try:
+                immediate_target, immediate_reference, _, immediate_fractional = (
+                    _project_target_state(
+                        state=state,
+                        symbol=symbol,
+                        bars=bars,
+                        decision_ordinal=ordinal,
+                        corporate_actions=action_book,
+                        calendar_dates=calendar_dates,
+                    )
+                )
+            except ActionValueError as exc:
+                if not exc.code.startswith("CORPORATE_ACTION_"):
+                    raise
+                _count_entry_timing_error(counts, exc.code)
+                counts["corporate_action_unavailable"] += 1
+                continue
+            for plan in action_candidates(
+                symbol, immediate_target, immediate_reference
+            ):
+                if plan.delta <= 0:
+                    continue
+                counts["positive_plan_candidates"] += 1
+                immediate_fill = daily_fill(
+                    plan,
+                    bars.iloc[ordinal + 1],
+                    sellable=immediate_target.sellable,
+                )
+                if immediate_fill.status != "FILLED":
+                    key = (
+                        "immediate_unknown_rows"
+                        if immediate_fill.status == "UNKNOWN"
+                        else "immediate_no_fill_rows"
+                    )
+                    counts[key] += 1
+                    continue
+                counts["immediate_filled_rows"] += 1
+                immediate_state = apply_fill(immediate_target, immediate_fill)
+                deferred_reference = _available_raw_close(bars.iloc[ordinal + 1])
+                if deferred_reference is None:
+                    counts["deferred_unknown_rows"] += 1
+                    _count_entry_timing_error(
+                        counts, "DEFERRED_DECISION_REFERENCE_UNAVAILABLE"
+                    )
+                    continue
+                try:
+                    deferred_target, deferred_plan_reference, _, deferred_fractional = (
+                        _project_target_state(
+                            state=state,
+                            symbol=symbol,
+                            bars=bars,
+                            decision_ordinal=ordinal + 1,
+                            corporate_actions=action_book,
+                            calendar_dates=calendar_dates,
+                        )
+                    )
+                    deferred_plan = ActionPlan(
+                        symbol, plan.delta, deferred_plan_reference
+                    )
+                    deferred_fill = daily_fill(
+                        deferred_plan,
+                        bars.iloc[ordinal + 2],
+                        sellable=deferred_target.sellable,
+                    )
+                    if deferred_fill.status == "UNKNOWN":
+                        counts["deferred_unknown_rows"] += 1
+                        continue
+                    if deferred_fill.status == "FILLED":
+                        counts["deferred_filled_rows"] += 1
+                    else:
+                        counts["deferred_no_fill_rows"] += 1
+                    try:
+                        deferred_state = apply_fill(deferred_target, deferred_fill)
+                    except ActionValueError as exc:
+                        if exc.code != "CASH_OR_POSITION_INVARIANT":
+                            raise
+                        raise ActionValueError(
+                            "DEFERRED_ENTRY_CASH_INSUFFICIENT",
+                            symbol=symbol,
+                            planned_delta_qty=plan.delta,
+                        ) from exc
+                    immediate_value, immediate_future_fractional = (
+                        _frozen_risk_path_terminal_value(
+                            state=immediate_state,
+                            symbol=symbol,
+                            bars=bars,
+                            start_ordinal=ordinal + 1,
+                            terminal_ordinal=terminal_ordinal,
+                            corporate_actions=action_book,
+                            calendar_dates=calendar_dates,
+                        )
+                    )
+                    deferred_value, deferred_future_fractional = (
+                        _frozen_risk_path_terminal_value(
+                            state=deferred_state,
+                            symbol=symbol,
+                            bars=bars,
+                            start_ordinal=ordinal + 2,
+                            terminal_ordinal=terminal_ordinal,
+                            corporate_actions=action_book,
+                            calendar_dates=calendar_dates,
+                        )
+                    )
+                except ActionValueError as exc:
+                    if not (
+                        exc.code.startswith("CORPORATE_ACTION_")
+                        or exc.code
+                        in {
+                            "PATH_VALUATION_UNKNOWN",
+                            "DEFERRED_ENTRY_CASH_INSUFFICIENT",
+                        }
+                    ):
+                        raise
+                    counts["path_value_unavailable"] += 1
+                    _count_entry_timing_error(counts, exc.code)
+                    continue
+                label = (
+                    (immediate_value - deferred_value)
+                    / spec.reference_capital_cny
+                    * BPS
+                )
+                records.append(
+                    {
+                        "symbol": symbol,
+                        "decision_as_of": cutoff_on(calendar_dates[ordinal]),
+                        "label_available_at": cutoff_on(
+                            calendar_dates[terminal_ordinal]
+                        ),
+                        "label_terminal_trade_date": calendar_dates[
+                            terminal_ordinal
+                        ].isoformat(),
+                        "objective": ENTRY_TIMING_OBJECTIVE,
+                        "planned_delta_qty": plan.delta,
+                        "immediate_fill_status": immediate_fill.status,
+                        "deferred_fill_status": deferred_fill.status,
+                        "immediate_fill_price_raw": float(immediate_fill.price),
+                        "deferred_fill_price_raw": (
+                            float(deferred_fill.price)
+                            if deferred_fill.price is not None
+                            else None
+                        ),
+                        "net_entry_timing_value_bps": float(label),
+                        "immediate_fractional_share_discarded": float(
+                            immediate_fractional + immediate_future_fractional
+                        ),
+                        "deferred_fractional_share_discarded": float(
+                            deferred_fractional + deferred_future_fractional
+                        ),
+                        **{
+                            name: float(current[name])
+                            for name in market_feature_names
+                        },
+                        **state_features(immediate_target, plan),
+                    }
+                )
+    rows = pd.DataFrame(records)
+    if rows.empty:
+        raise ActionValueError("ENTRY_TIMING_LABEL_ROWS_EMPTY")
+    counts["rows"] = len(rows)
+    coverage = {
+        "schema_version": "position_timing_entry_timing_label_coverage_v1",
+        "objective": ENTRY_TIMING_OBJECTIVE,
+        "estimand": "T_PLUS_1_OPEN_MINUS_T_PLUS_2_OPEN_SAME_STOCK_SAME_QUANTITY",
+        "feature_order": feature_order,
+        "feature_spec_sha256": feature_spec_sha256,
+        "population_spec": {
+            "start": spec.start.isoformat(),
+            "end": spec.end.isoformat(),
+            "review_stride": spec.review_stride,
+            "primary_horizon": spec.primary_horizon,
+            "terminal_max_defer": spec.terminal_max_defer,
+            "reference_capital_cny": str(spec.reference_capital_cny),
+            "corporate_action_snapshot_sha256": action_book.snapshot_sha256,
+        },
+        "symbols": requested_symbols,
+        "counts": counts,
+    }
+    coverage["coverage_sha256"] = canonical_sha256(coverage)
+    return ActionValueRows(rows=rows, coverage=coverage)
+
+
+def _count_entry_timing_error(counts: dict[str, Any], code: str) -> None:
+    errors = counts["error_counts"]
+    errors[code] = int(errors.get(code, 0)) + 1
+
+
+def _frozen_risk_path_terminal_value(
+    *,
+    state: PositionState,
+    symbol: str,
+    bars: pd.DataFrame,
+    start_ordinal: int,
+    terminal_ordinal: int,
+    corporate_actions: CorporateActionBook,
+    calendar_dates: Sequence[date],
+) -> tuple[Decimal, Decimal]:
+    """Advance one already-frozen entry path using risk-exit/HOLD only."""
+
+    from .action_value import risk_exit_plan
+
+    result = state
+    fractional = Decimal(0)
+    for decision_ordinal in range(start_ordinal, terminal_ordinal):
+        if decision_ordinal > start_ordinal:
+            result = _roll_state_to_decision(result)
+        decision_reference = _available_raw_close(bars.iloc[decision_ordinal])
+        if decision_reference is None:
+            target_action = corporate_actions.on(
+                symbol, calendar_dates[decision_ordinal + 1]
+            )
+            if target_action is not None:
+                if target_action.source_available_at > cutoff_on(
+                    calendar_dates[decision_ordinal]
+                ):
+                    raise ActionValueError(
+                        "CORPORATE_ACTION_NOT_VISIBLE_AT_DECISION", symbol=symbol
+                    )
+                application = apply_corporate_action_with_audit(
+                    result,
+                    target_action,
+                    next_trade_date=(
+                        calendar_dates[decision_ordinal + 2]
+                        if decision_ordinal + 2 < len(calendar_dates)
+                        else None
+                    ),
+                )
+                result = application.state
+                fractional += application.fractional_share_discarded
+            continue
+        target_state, target_reference, _, target_fractional = (
+            _project_target_state(
+                state=result,
+                symbol=symbol,
+                bars=bars,
+                decision_ordinal=decision_ordinal,
+                corporate_actions=corporate_actions,
+                calendar_dates=calendar_dates,
+            )
+        )
+        fractional += target_fractional
+        risk = risk_exit_plan(symbol, result, decision_reference)
+        if risk is None:
+            result = target_state
+            continue
+        translated = ActionPlan(
+            symbol, -target_state.sellable, target_reference, True
+        )
+        fill = daily_fill(
+            translated,
+            bars.iloc[decision_ordinal + 1],
+            sellable=target_state.sellable,
+            full_exit=(-translated.delta == target_state.quantity),
+        )
+        if fill.status == "UNKNOWN":
+            raise ActionValueError("PATH_VALUATION_UNKNOWN", symbol=symbol)
+        result = apply_fill(target_state, fill)
+    return _terminal_net_value(result, symbol, bars.iloc[terminal_ordinal]), fractional
 
 
 def deterministic_symbols(symbols: Iterable[str], *, limit: int, seed: int) -> tuple[str, ...]:
@@ -573,6 +944,8 @@ def build_state_matched_add_rows(
                 end_ordinal=end_ordinal,
                 models=ordered_models,
                 add_models=(),
+                entry_timing_models=(),
+                entry_timing_force_open=False,
                 initial_state=initial_state,
                 corporate_actions=action_book,
                 information_block=information_block,
@@ -625,6 +998,8 @@ def replay_continuous_cohorts(
     *,
     models: Sequence[LocalActionModel],
     add_models: Sequence[AddActionModel] = (),
+    entry_timing_models: Sequence[EntryTimingModel] = (),
+    entry_timing_force_open: bool = False,
     symbols: Sequence[str],
     corporate_actions: CorporateActionBook | None = None,
     horizon: int = PRIMARY_HORIZON,
@@ -660,8 +1035,11 @@ def replay_continuous_cohorts(
         ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
         OPEN_ONLY_MODEL_ACTION_AUTHORITY,
         STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY,
+        ENTRY_TIMING_ACTION_AUTHORITY,
     }:
         raise ActionValueError("MODEL_ACTION_AUTHORITY_UNSUPPORTED")
+    if entry_timing_force_open and model_action_authority != ENTRY_TIMING_ACTION_AUTHORITY:
+        raise ActionValueError("ENTRY_TIMING_FORCE_OPEN_AUTHORITY_INVALID")
     if initial_holding_policy_id not in {
         LEGACY_INITIAL_HOLDING_POLICY_ID,
         EXOGENOUS_INITIAL_HOLDING_POLICY_ID,
@@ -672,8 +1050,15 @@ def replay_continuous_cohorts(
     ordered_add_models = sorted(
         add_models, key=lambda item: item.metadata["available_at"]
     )
+    ordered_entry_timing_models = sorted(
+        entry_timing_models, key=lambda item: item.metadata["available_at"]
+    )
     action_book = corporate_actions or CorporateActionBook.empty()
-    if not ordered_models or len(set(symbols)) != len(symbols):
+    deferred_entry_timing = model_action_authority == ENTRY_TIMING_ACTION_AUTHORITY
+    if (
+        (not ordered_models and not deferred_entry_timing)
+        or len(set(symbols)) != len(symbols)
+    ):
         raise ActionValueError("CONTINUOUS_REPLAY_INPUT_INVALID")
     calendar_dates = [day.date() for day in candidate.calendar]
     date_to_index = {day: index for index, day in enumerate(calendar_dates)}
@@ -682,8 +1067,22 @@ def replay_continuous_cohorts(
     )
     if state_matched_add and not ordered_add_models:
         raise ActionValueError("ADD_MODEL_UNAVAILABLE_RULE_FALLBACK")
-    first_day = datetime.fromisoformat(ordered_models[0].metadata["available_at"]).date()
-    last_model_day = datetime.fromisoformat(ordered_models[-1].metadata["available_at"]).date()
+    if deferred_entry_timing and not ordered_entry_timing_models:
+        raise ActionValueError("ENTRY_TIMING_MODEL_UNAVAILABLE_RULE_FALLBACK")
+    if deferred_entry_timing:
+        first_day = datetime.fromisoformat(
+            ordered_entry_timing_models[0].metadata["available_at"]
+        ).date()
+        last_model_day = datetime.fromisoformat(
+            ordered_entry_timing_models[-1].metadata["available_at"]
+        ).date()
+    else:
+        first_day = datetime.fromisoformat(
+            ordered_models[0].metadata["available_at"]
+        ).date()
+        last_model_day = datetime.fromisoformat(
+            ordered_models[-1].metadata["available_at"]
+        ).date()
     if state_matched_add:
         first_day = max(
             first_day,
@@ -769,6 +1168,8 @@ def replay_continuous_cohorts(
                     end_ordinal=end_ordinal,
                     models=ordered_models,
                     add_models=ordered_add_models,
+                    entry_timing_models=ordered_entry_timing_models,
+                    entry_timing_force_open=entry_timing_force_open,
                     initial_state=initial_state,
                     corporate_actions=action_book,
                     information_block=information_block,
@@ -869,6 +1270,9 @@ def replay_continuous_cohorts(
         "policy_id": (
             "DAILY_ACTION_VALUE_POLICY_V2"
             if model_action_authority == FULL_MODEL_ACTION_AUTHORITY
+            else ALWAYS_OPEN_ENTRY_COMPARATOR
+            if model_action_authority == ENTRY_TIMING_ACTION_AUTHORITY
+            and entry_timing_force_open
             else model_action_authority
         ),
         "horizon_trading_days": horizon,
@@ -925,6 +1329,7 @@ def replay_continuous_cohorts(
         ENTRY_ONLY_MODEL_ACTION_AUTHORITY,
         OPEN_ONLY_MODEL_ACTION_AUTHORITY,
         STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY,
+        ENTRY_TIMING_ACTION_AUTHORITY,
     }:
         receipt.update(
             {
@@ -935,11 +1340,21 @@ def replay_continuous_cohorts(
                     "position_timing_open_only_continuous_policy_receipt_v1",
                     STATE_MATCHED_ADD_MODEL_ACTION_AUTHORITY:
                     "position_timing_state_matched_add_continuous_policy_receipt_v1",
+                    ENTRY_TIMING_ACTION_AUTHORITY:
+                    "position_timing_deferred_entry_continuous_policy_receipt_v1",
                 }[model_action_authority],
-                "policy_sha256": action_authority_policy_sha256(
-                    information_block, model_action_authority
+                "policy_sha256": (
+                    ALWAYS_OPEN_ENTRY_POLICY_SHA256
+                    if model_action_authority == ENTRY_TIMING_ACTION_AUTHORITY
+                    and entry_timing_force_open
+                    else ENTRY_TIMING_POLICY_SHA256
+                    if model_action_authority == ENTRY_TIMING_ACTION_AUTHORITY
+                    else action_authority_policy_sha256(
+                        information_block, model_action_authority
+                    )
                 ),
                 "model_action_authority": model_action_authority,
+                "entry_timing_force_open": entry_timing_force_open,
             }
         )
     receipt["receipt_sha256"] = canonical_sha256(receipt)
@@ -1180,6 +1595,8 @@ def _replay_one_sleeve(
     end_ordinal: int,
     models: Sequence[LocalActionModel],
     add_models: Sequence[AddActionModel],
+    entry_timing_models: Sequence[EntryTimingModel],
+    entry_timing_force_open: bool,
     initial_state: str,
     corporate_actions: CorporateActionBook,
     information_block: str,
@@ -1242,7 +1659,16 @@ def _replay_one_sleeve(
         target_ordinal = decision_ordinal + 1
         decision_as_of = cutoff_on(calendar_dates[decision_ordinal])
         model = _model_available_for(models, decision_as_of)
-        if model is None:
+        entry_timing_model = _entry_timing_model_available_for(
+            entry_timing_models, decision_as_of
+        )
+        if (
+            model_action_authority != ENTRY_TIMING_ACTION_AUTHORITY
+            and model is None
+        ) or (
+            model_action_authority == ENTRY_TIMING_ACTION_AUTHORITY
+            and entry_timing_model is None
+        ):
             raise ActionValueError("MODEL_UNAVAILABLE_RULE_FALLBACK")
         policy_state = _roll_state_to_decision(policy_state)
         buy_hold_state = _roll_state_to_decision(buy_hold_state)
@@ -1321,7 +1747,32 @@ def _replay_one_sleeve(
 
         decision = None
         add_model = _add_model_available_for(add_models, decision_as_of)
-        if decision_input_status == "AVAILABLE":
+        if (
+            decision_input_status == "AVAILABLE"
+            and model_action_authority == ENTRY_TIMING_ACTION_AUTHORITY
+        ):
+            try:
+                decision = _entry_timing_policy_decision(
+                    symbol=symbol,
+                    state=policy_state,
+                    target_state=policy_target_state,
+                    decision_reference=decision_reference,
+                    target_reference=target_reference,
+                    current_market=features.iloc[decision_ordinal],
+                    decision_as_of=decision_as_of,
+                    model=entry_timing_model,
+                    force_open=entry_timing_force_open,
+                    information_block=information_block,
+                )
+            except ActionValueError as exc:
+                if exc.code not in {
+                    "CURRENT_CORE_FEATURE_UNAVAILABLE",
+                    "CURRENT_OPTIONAL_FEATURE_UNAVAILABLE",
+                }:
+                    raise
+                decision_input_status = "UNAVAILABLE"
+                decision_reason = exc.code
+        elif decision_input_status == "AVAILABLE":
             try:
                 decision = decide_stock_day(
                     symbol=symbol,
@@ -1369,10 +1820,16 @@ def _replay_one_sleeve(
             policy_authority = "SOURCE_UNAVAILABLE_NO_ACTION"
             policy_model_sha256 = None
         else:
-            policy_plan = decision.plan
-            policy_action = decision.action
-            policy_authority = decision.authority
-            policy_model_sha256 = decision.model_sha256
+            if isinstance(decision, dict):
+                policy_plan = decision["plan"]
+                policy_action = decision["action"]
+                policy_authority = decision["authority"]
+                policy_model_sha256 = decision["model_sha256"]
+            else:
+                policy_plan = decision.plan
+                policy_action = decision.action
+                policy_authority = decision.authority
+                policy_model_sha256 = decision.model_sha256
         pre_policy_state = policy_target_state
         policy_fill = daily_fill(
             policy_plan,
@@ -1562,6 +2019,95 @@ def _add_model_available_for(
         if datetime.fromisoformat(model.metadata["available_at"]) <= decision_as_of
     ]
     return available[-1] if available else None
+
+
+def _entry_timing_model_available_for(
+    models: Sequence[EntryTimingModel], decision_as_of: datetime
+) -> EntryTimingModel | None:
+    available = [
+        model
+        for model in models
+        if datetime.fromisoformat(model.metadata["available_at"]) <= decision_as_of
+    ]
+    return available[-1] if available else None
+
+
+def _entry_timing_policy_decision(
+    *,
+    symbol: str,
+    state: PositionState,
+    target_state: PositionState,
+    decision_reference: Decimal,
+    target_reference: Decimal,
+    current_market: pd.Series,
+    decision_as_of: datetime,
+    model: EntryTimingModel,
+    force_open: bool,
+    information_block: str,
+) -> dict[str, Any]:
+    """Research-only OPEN/WAIT decision with frozen held-state risk exits."""
+
+    from .action_value import risk_exit_plan
+
+    risk = risk_exit_plan(symbol, state, decision_reference)
+    if risk is not None:
+        translated_delta = -target_state.sellable
+        plan = (
+            ActionPlan(symbol, translated_delta, target_reference, True)
+            if translated_delta
+            else ActionPlan(symbol, 0, target_reference)
+        )
+        return {
+            "plan": plan,
+            "action": "EXIT" if translated_delta == -target_state.quantity else "REDUCE",
+            "authority": "FROZEN_RULE_RISK_OVERRIDE",
+            "model_sha256": None,
+        }
+    if target_state.quantity:
+        return {
+            "plan": ActionPlan(symbol, 0, target_reference),
+            "action": "HOLD",
+            "authority": "FROZEN_RULE_HOLD",
+            "model_sha256": None,
+        }
+    market_feature_names, feature_order, _ = feature_contract(information_block)
+    current = current_market.loc[list(market_feature_names)]
+    if current.isna().any():
+        raise ActionValueError(
+            "CURRENT_CORE_FEATURE_UNAVAILABLE",
+            features=[name for name in market_feature_names if pd.isna(current[name])],
+        )
+    plans = action_candidates(symbol, target_state, target_reference)
+    positive = [plan for plan in plans if plan.delta > 0]
+    if not positive:
+        model.predict(
+            pd.DataFrame(columns=feature_order), decision_as_of=decision_as_of
+        )
+        selected = ActionPlan(symbol, 0, target_reference)
+    else:
+        frame = pd.DataFrame(
+            [
+                {**current.to_dict(), **state_features(target_state, plan)}
+                for plan in positive
+            ],
+            columns=feature_order,
+        )
+        predictions = model.predict(frame, decision_as_of=decision_as_of)
+        if force_open:
+            selected = max(positive, key=lambda plan: plan.delta)
+        else:
+            candidates = [ActionPlan(symbol, 0, target_reference), *positive]
+            selected = choose_action(candidates, [0.0, *predictions.tolist()])
+    return {
+        "plan": selected,
+        "action": "OPEN" if selected.delta > 0 else "WAIT",
+        "authority": (
+            "FROZEN_ALWAYS_OPEN_COMPARATOR"
+            if force_open
+            else "ENTRY_TIMING_MODEL_ESTIMATE"
+        ),
+        "model_sha256": model.metadata["model_sha256"],
+    }
 
 
 def _collect_state_matched_add_labels(

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
@@ -27,7 +28,7 @@ FACTOR_WORKSPACE_WSL = os.getenv("FACTOR_WORKSPACE_WSL", "").strip()
 # 数据文件列表
 DATA_FILES = [
     "daily_pv.h5", "daily_basic.h5", "moneyflow.h5",
-    "bak_basic.h5", "cyq_perf.h5", "sector_data.h5",
+    "bak_basic.h5", "cyq_perf.h5", "margin_detail.h5", "sector_data.h5",
     "static_factors.parquet",
 ]
 
@@ -35,6 +36,15 @@ FACTOR_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,80}$")
 
 
 def _require_factor_workspace_wsl() -> str:
+    from .quantevolver.node_execution import resolve_default_qe_node_id
+    from .quantevolver.qe_active_dataset_profile import resolve_active_dataset_node_binding
+
+    active_binding = resolve_active_dataset_node_binding(node_id=resolve_default_qe_node_id())
+    if active_binding is not None:
+        factor_data_dir = str(active_binding.get("factor_data_dir") or "").strip()
+        if not factor_data_dir:
+            raise RuntimeError("active dataset profile is missing factor_data_dir for manual factor validation")
+        return factor_data_dir
     if FACTOR_WORKSPACE_WSL:
         return FACTOR_WORKSPACE_WSL
     raise RuntimeError(
@@ -241,6 +251,55 @@ class ManualFactorService:
                 )
             finally:
                 os.unlink(tmp_path_cleanup)
+
+    def register_candidate(
+        self, factor_name: str, code_text: str, *,
+        description: Optional[str] = None, expression: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Register authorized QE-readable code only; never overwrite or evaluate.
+
+        Availability means consumable code, not strategy acceptance. Existing
+        save/full-pipeline callers retain their original behavior.
+        """
+        if not FACTOR_NAME_PATTERN.fullmatch(factor_name):
+            raise ValueError("Invalid candidate factor name")
+        if not code_text.strip():
+            raise ValueError("Candidate code must not be empty")
+        compile(code_text, f"{factor_name}.py", "exec")  # syntax only; never execute
+        source = "manual"
+        with get_conn(autocommit=False, manage_transaction=True) as conn:
+            with conn.cursor() as cur:
+                # Serialize this entrypoint's same-name retries, including first insert.
+                cur.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (factor_name,))
+                select = """SELECT id, source, code_text, expression, is_available
+                            FROM aistock_factor_catalog WHERE factor_name = %s FOR UPDATE"""
+                cur.execute(select, (factor_name,))
+                rows = cur.fetchall()
+                inserted = False
+                if not rows:
+                    cur.execute("""
+                        INSERT INTO aistock_factor_catalog (
+                            factor_name, source, catalog_version, generated_at_utc,
+                            catalog_source, expression, code_text, description_cn, is_available
+                        ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, TRUE)
+                        ON CONFLICT (factor_name, source) DO NOTHING RETURNING id
+                    """, (factor_name, source, "research_candidate_v1",
+                          datetime.now(timezone.utc).isoformat(), "factor_research",
+                          expression, code_text, description))
+                    inserted = cur.fetchone() is not None
+                    cur.execute(select, (factor_name,))
+                    rows = cur.fetchall()
+                if len(rows) != 1 or rows[0][1:4] != (source, code_text, expression):
+                    raise ValueError("Candidate identity conflict; existing catalog entries not overwritten")
+                catalog_id, _, stored_code, _, available = rows[0]
+        return {
+            "factor_name": factor_name, "source": source, "catalog_id": catalog_id,
+            "source_sha256": hashlib.sha256(stored_code.encode("utf-8")).hexdigest(),
+            "is_available": available is not False,
+            "status": "registered" if inserted else "replayed",
+            "official_metrics_written": False, "classification_written": False,
+            "rating_written": False, "strategy_acceptance": "not_claimed",
+        }
 
     async def save_factor(
         self,

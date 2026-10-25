@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 from backend.services.industry_pit.candidate_builder import FrozenDenominator, UniverseSpan
 from backend.services.industry_pit.contracts import IndustryPitContractError
 
-from .state_model_set import StateModelSetError, canonical_json_bytes
+from .contracts import StateModelSetError, canonical_json_bytes
 from .security_identity import SecuritySourceIdentityManifest
 from .provider_absence import ProviderAbsenceManifest
 from .stock_fact_observation import (
@@ -300,13 +300,19 @@ class PostgresStockFactReader:
         security_identity_manifest: SecuritySourceIdentityManifest,
         provider_absence_manifest: ProviderAbsenceManifest,
         industry_pit_adapter: HMMIndustryPitAdapter | None = None,
+        preserve_unavailable_classification: bool = False,
     ) -> None:
         spec.validate()
+        if type(preserve_unavailable_classification) is not bool or (
+            preserve_unavailable_classification and industry_pit_adapter is None
+        ):
+            raise StateModelSetError("preserving classification NA requires an explicit industry PIT adapter")
         self._conn = conn
         self.spec = spec
         self.security_identity_manifest = security_identity_manifest
         self.provider_absence_manifest = provider_absence_manifest
         self.industry_pit_adapter = industry_pit_adapter
+        self.preserve_unavailable_classification = preserve_unavailable_classification
         self.industry_pit_preflight: Mapping[str, Any] | None = None
         self._classification_lookup: dict[tuple[str, str], dict[str, str]] | None = None
 
@@ -706,7 +712,11 @@ class PostgresStockFactReader:
                     )
                 code = str(row[1])
                 industry_projection = self._industry_projection(code, trade_date_value)
-                if industry_projection is not None and industry_projection.status == "unavailable":
+                if (
+                    industry_projection is not None
+                    and industry_projection.status == "unavailable"
+                    and not self.preserve_unavailable_classification
+                ):
                     continue
                 l1_code = row[2] if industry_projection is None else industry_projection.l1_code
                 l1_name = row[3] if industry_projection is None else industry_projection.l1_name
@@ -1002,7 +1012,11 @@ class PostgresStockFactReader:
                     )
                 code = str(row[1])
                 industry_projection = self._industry_projection(code, trade_date_value)
-                if industry_projection is not None and industry_projection.status == "unavailable":
+                if (
+                    industry_projection is not None
+                    and industry_projection.status == "unavailable"
+                    and not self.preserve_unavailable_classification
+                ):
                     continue
                 l1_code = row[2] if industry_projection is None else industry_projection.l1_code
                 l1_name = row[3] if industry_projection is None else industry_projection.l1_name

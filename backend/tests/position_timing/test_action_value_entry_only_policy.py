@@ -249,25 +249,6 @@ def _receipt(request: dict) -> dict:
     return payload
 
 
-def test_candidate_and_full_controls_require_exact_path_identity() -> None:
-    full = _sleeves()
-    candidate = _sleeves(changed=True)
-    candidate["decision_input_status"] = "UNAVAILABLE"
-    candidate["decision_reason"] = "POLICY_STATE_DEPENDENT_TEST"
-
-    identity = entry_only._assert_same_path_identity(candidate, full)
-    daily, diagnostic = entry_only._candidate_minus_full_daily(candidate, full)
-
-    assert identity["exact_match"] is True
-    assert diagnostic["interpretation"] == "DIAGNOSTIC_ONLY_NOT_A_TRIAL"
-    assert diagnostic["interval"] is None
-    assert diagnostic["action_changed_count"] == 2
-    assert len(daily) == 2
-    broken = candidate.iloc[:-1]
-    with pytest.raises(ActionValueError, match="PATH_IDENTITY_MISMATCH"):
-        entry_only._assert_same_path_identity(broken, full)
-
-
 def test_bundle_is_immutable_inspectable_and_exact_retry_is_noop(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

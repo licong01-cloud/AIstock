@@ -113,7 +113,7 @@ func GetTime(bs [4]byte, Type uint8) time.Time {
 		day := int((yearMonthDay % 2048) % 100)
 		hour := int(hourMinute / 60)
 		minute := int(hourMinute % 60)
-		return time.Date(year, time.Month(month), day, hour, minute, 0, 0, time.Local)
+		return time.Date(year, time.Month(month), day, hour, minute, 0, 0, ExchangeLocation)
 
 	default:
 
@@ -121,7 +121,7 @@ func GetTime(bs [4]byte, Type uint8) time.Time {
 		year := int(yearMonthDay / 10000)
 		month := int((yearMonthDay % 10000) / 100)
 		day := int(yearMonthDay % 100)
-		return time.Date(year, time.Month(month), day, 15, 0, 0, 0, time.Local)
+		return time.Date(year, time.Month(month), day, 15, 0, 0, 0, ExchangeLocation)
 
 	}
 }
@@ -143,6 +143,9 @@ func basePrice(code string) Price {
 }
 
 func getVolume(val uint32) (volume float64) {
+	if val == 0 {
+		return 0
+	}
 	ivol := int32(val)
 	logpoint := ivol >> (8 * 3)
 	//hheax := ivol >> (8 * 3)          // [3]
@@ -186,7 +189,7 @@ func getVolume(val uint32) (volume float64) {
 		if dwEdx >= 0 {
 			dbl_xmm0 = math.Pow(2.0, float64(dwEdx)) * float64(hleax)
 		} else {
-			dbl_xmm0 = (1 / math.Pow(2.0, float64(dwEdx))) * float64(hleax)
+			dbl_xmm0 = math.Pow(2.0, float64(dwEdx)) * float64(hleax)
 		}
 		dbl_xmm4 = dbl_xmm0
 	}
@@ -202,6 +205,9 @@ func getVolume(val uint32) (volume float64) {
 }
 
 func getVolume2(val uint32) float64 {
+	if val == 0 {
+		return 0
+	}
 	ivol := int32(val)
 	logpoint := ivol >> 24       // 提取最高字节（原8*3移位）
 	hleax := (ivol >> 16) & 0xff // 提取次高字节

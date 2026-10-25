@@ -33,10 +33,7 @@ class LoadedAdvisoryOutcomeBundle:
 def expected_outcome_model_names() -> tuple[str, ...]:
     names: list[str] = []
     for horizon in OUTCOME_HORIZONS:
-        names.extend(
-            f"excess_return_h{horizon}_q{int(quantile * 100):02d}"
-            for quantile in OUTCOME_QUANTILES
-        )
+        names.extend(f"excess_return_h{horizon}_q{int(quantile * 100):02d}" for quantile in OUTCOME_QUANTILES)
         names.extend((f"positive_excess_h{horizon}", f"signal_survival_h{horizon}"))
         for prefix in ("path_mfe", "path_mae_loss"):
             names.extend(f"{prefix}_h{horizon}_q{value}" for value in (50, 90))
@@ -62,13 +59,7 @@ def outcome_binding_path(
             "outcome binding path identity is invalid",
             reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
         )
-    target = (
-        root
-        / "outcome_bindings"
-        / package_id
-        / manifest_sha256
-        / f"{style_profile_hash}.json"
-    )
+    target = root / "outcome_bindings" / package_id / manifest_sha256 / f"{style_profile_hash}.json"
     try:
         target.resolve().relative_to(root)
     except ValueError as exc:
@@ -256,15 +247,89 @@ def load_exact_outcome_bundle(
                 reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
                 context={"field": field},
             )
+    return _load_outcome_bundle_models(
+        bundle_path=bundle_path,
+        outcome_bundle_id=outcome_bundle_id,
+        manifest=manifest,
+        booster_factory=booster_factory,
+    )
+
+
+def load_frozen_outcome_bundle(
+    *,
+    model_root: str | Path,
+    outcome_bundle_id: str,
+    outcome_bundle_manifest_sha256: str,
+    expected_package_id: str,
+    expected_manifest_sha256: str,
+    expected_style_profile_hash: str,
+    expected_parent_bundle_id: str,
+    booster_factory: Callable[[Path], Any] | None = None,
+) -> LoadedAdvisoryOutcomeBundle:
+    """Load an explicit outcome bundle without reading or changing runtime bindings."""
+
+    sha_values = {
+        "outcome_bundle_id": outcome_bundle_id,
+        "outcome_bundle_manifest_sha256": outcome_bundle_manifest_sha256,
+        "expected_manifest_sha256": expected_manifest_sha256,
+        "expected_style_profile_hash": expected_style_profile_hash,
+        "expected_parent_bundle_id": expected_parent_bundle_id,
+    }
+    if not expected_package_id or any(not _is_sha256(value) for value in sha_values.values()):
+        raise AdvisoryModelFirstError(
+            "frozen outcome bundle target identity is invalid",
+            reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
+        )
+    root = Path(model_root).resolve()
+    bundle_path = root / "outcome_bundles" / outcome_bundle_id
+    manifest_path = bundle_path / "manifest.json"
+    if not manifest_path.is_file() or _sha256_file(manifest_path) != outcome_bundle_manifest_sha256:
+        raise AdvisoryModelFirstError(
+            "frozen outcome bundle manifest differs from the requested identity",
+            reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
+        )
+    manifest = read_outcome_bundle_manifest(
+        bundle_path,
+        expected_bundle_id=outcome_bundle_id,
+    )
+    _validate_outcome_runtime_manifest(manifest)
+    expected_identity = {
+        "package_id": expected_package_id,
+        "manifest_sha256": expected_manifest_sha256,
+        "style_profile_hash": expected_style_profile_hash,
+        "parent_bundle_id": expected_parent_bundle_id,
+        "feature_schema_hash": FEATURE_SCHEMA_HASH,
+        "status": "EXPERIMENTAL_SHADOW",
+    }
+    actual_identity = {key: manifest.get(key) for key in expected_identity}
+    if actual_identity != expected_identity:
+        raise AdvisoryModelFirstError(
+            "frozen outcome bundle identity differs from the prospective request",
+            reason_code="ADVISORY_MODEL_TARGET_IDENTITY_MISMATCH",
+            context={"actual_identity": actual_identity},
+        )
+    return _load_outcome_bundle_models(
+        bundle_path=bundle_path,
+        outcome_bundle_id=outcome_bundle_id,
+        manifest=manifest,
+        booster_factory=booster_factory,
+    )
+
+
+def _load_outcome_bundle_models(
+    *,
+    bundle_path: Path,
+    outcome_bundle_id: str,
+    manifest: dict[str, Any],
+    booster_factory: Callable[[Path], Any] | None,
+) -> LoadedAdvisoryOutcomeBundle:
     feature_schema = _read_json(
         bundle_path / "feature_schema.json",
         missing_reason_code="ADVISORY_OUTCOME_BUNDLE_INVALID",
     )
     model_names = expected_outcome_model_names()
     model_paths = {name: bundle_path / "models" / f"{name}.txt" for name in model_names}
-    actual_model_files = {
-        path.stem for path in (bundle_path / "models").glob("*.txt") if path.is_file()
-    }
+    actual_model_files = {path.stem for path in (bundle_path / "models").glob("*.txt") if path.is_file()}
     if actual_model_files != set(model_names):
         raise AdvisoryModelFirstError(
             "outcome bundle model set differs from the runtime contract",
@@ -343,33 +408,20 @@ def _validate_outcome_runtime_manifest(manifest: dict[str, Any]) -> None:
         )
 
 
-def _validate_runtime_calibration(
-    calibration: dict[str, Any], *, manifest: dict[str, Any]
-) -> None:
+def _validate_runtime_calibration(calibration: dict[str, Any], *, manifest: dict[str, Any]) -> None:
     expected_binary = {
-        f"{family}_h{horizon}"
-        for horizon in OUTCOME_HORIZONS
-        for family in ("positive_excess", "signal_survival")
+        f"{family}_h{horizon}" for horizon in OUTCOME_HORIZONS for family in ("positive_excess", "signal_survival")
     }
     expected_returns = {f"excess_return_h{horizon}" for horizon in OUTCOME_HORIZONS}
-    expected_path = {
-        f"{family}_h{horizon}"
-        for horizon in OUTCOME_HORIZONS
-        for family in ("path_mfe", "path_mae_loss")
-    }
+    expected_path = {f"{family}_h{horizon}" for horizon in OUTCOME_HORIZONS for family in ("path_mfe", "path_mae_loss")}
     binary = calibration.get("binary_heads") or {}
-    binary_states = {
-        str(value.get("state"))
-        for value in binary.values()
-        if isinstance(value, dict)
-    }
+    binary_states = {str(value.get("state")) for value in binary.values() if isinstance(value, dict)}
     expected_binary_state = "CALIBRATED" if binary_states == {"CALIBRATED"} else "PARTIAL"
     if (
         calibration.get("schema_version") != "advisory_outcome_calibration_spec_v1"
         or calibration.get("request_id") != manifest.get("request_id")
         or calibration.get("request_sha256") != manifest.get("request_sha256")
-        or calibration.get("calibration_policy_version")
-        != "advisory_outcome_calibration_policy_v1"
+        or calibration.get("calibration_policy_version") != "advisory_outcome_calibration_policy_v1"
         or manifest.get("binary_calibration_state") != expected_binary_state
         or set(binary) != expected_binary
         or set(calibration.get("return_intervals") or {}) != expected_returns
@@ -405,10 +457,7 @@ def _validate_runtime_calibration(
                 context={"head": head},
             )
         if value["state"] == "CALIBRATED" and (
-            not all(
-                _is_finite_number(value.get(field))
-                for field in ("coefficient", "intercept")
-            )
+            not all(_is_finite_number(value.get(field)) for field in ("coefficient", "intercept"))
             or float(value["coefficient"]) <= 0.0
             or value.get("reason_code") is not None
             or not _is_positive_int(value.get("iteration_count"))
@@ -452,17 +501,21 @@ def _validate_runtime_calibration(
 
 
 def _valid_runtime_platt_solver(value: Any) -> bool:
-    return isinstance(value, dict) and value == {
-        "library": "scikit-learn",
-        "estimator": "LogisticRegression",
-        "penalty": None,
-        "solver": "lbfgs",
-        "fit_intercept": True,
-        "max_iter": 1000,
-        "random_state": 20260812,
-        "library_version": value.get("library_version"),
-    } and isinstance(value.get("library_version"), str) and bool(
-        value["library_version"].strip()
+    return (
+        isinstance(value, dict)
+        and value
+        == {
+            "library": "scikit-learn",
+            "estimator": "LogisticRegression",
+            "penalty": None,
+            "solver": "lbfgs",
+            "fit_intercept": True,
+            "max_iter": 1000,
+            "random_state": 20260812,
+            "library_version": value.get("library_version"),
+        }
+        and isinstance(value.get("library_version"), str)
+        and bool(value["library_version"].strip())
     )
 
 
@@ -470,8 +523,7 @@ def _valid_runtime_uncalibrated_state(value: dict[str, Any]) -> bool:
     reason_code = value.get("reason_code")
     if reason_code == "ADVISORY_OUTCOME_CALIBRATION_CLASS_VARIATION_MISSING":
         return (
-            value.get("iteration_count") == 0
-            and value.get("convergence_state") == "NOT_FITTED_CLASS_VARIATION_MISSING"
+            value.get("iteration_count") == 0 and value.get("convergence_state") == "NOT_FITTED_CLASS_VARIATION_MISSING"
         )
     if reason_code == "ADVISORY_OUTCOME_CALIBRATION_ORDER_REVERSAL":
         return (
@@ -541,11 +593,7 @@ def _is_sha256(value: str) -> bool:
 
 
 def _is_finite_number(value: Any) -> bool:
-    return (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(float(value))
-    )
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
 
 
 def _is_nonnegative_int(value: Any) -> bool:

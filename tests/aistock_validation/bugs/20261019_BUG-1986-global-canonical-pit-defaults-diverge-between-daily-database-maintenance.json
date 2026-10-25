@@ -1,0 +1,451 @@
+{
+  "actual": "v18 canonical v2 cutoff Aug31; DB canonical through Sep30; runtime default legacy through Oct19.",
+  "allowed_write_scope": [
+    "noxfile.py",
+    "backend/services/canonical_equity_pit.py",
+    "backend/services/tushare_sync_engine.py",
+    "backend/inference_engine.py",
+    "backend/services/selection_center/canonical_pit_runtime.py",
+    "backend/tests/test_canonical_equity_pit.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "backend/tests/selection_center/test_canonical_pit_runtime.py",
+    "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+    "tests/aistock_validation/bugs/20261019_BUG-1986-global-canonical-pit-defaults-diverge-between-daily-database-maintenance.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1986",
+  "closed_at": "2026-10-25T08:02:26.445211Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-19T13:14:04.948988Z",
+  "description": "v18 canonical v2 cutoff Aug31; DB canonical through Sep30; runtime default legacy through Oct19.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261019-411317fec88f",
+      "timestamp": "2026-10-19T13:14:04.948988Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "All new consumers inherit one canonical authority; frozen and rolling physical IDs share rule identity and cutoff parity; daily maintenance advances canonical facts without silently claiming success; publication cannot expose mixed policies.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/inference_engine.py",
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1986-global-canonical-pit-defaults-diverge-between-daily-database-maintenance.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/inference_engine.py",
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "noxfile.py",
+      "tests/aistock_validation/bugs/20261019_BUG-1986-global-canonical-pit-defaults-diverge-between-daily-database-maintenance.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/canonical_equity_pit.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/inference_engine.py",
+        "backend/services/selection_center/canonical_pit_runtime.py",
+        "backend/tests/test_canonical_equity_pit.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/selection_center/test_canonical_pit_runtime.py",
+        "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api",
+        "paper_v2",
+        "selection_center",
+        "advisory.historical_range",
+        "tests.backend",
+        "strategy_package",
+        "hmm",
+        "hmm.evolution"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/canonical_equity_pit.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/inference_engine.py",
+          "impact_modules": [
+            "tests.backend"
+          ],
+          "primary_module": "advisory.historical_range",
+          "risk_level": "high",
+          "rule_id": "advisory_historical_range_foundation"
+        },
+        {
+          "file": "backend/services/selection_center/canonical_pit_runtime.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        },
+        {
+          "file": "backend/tests/test_canonical_equity_pit.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/test_tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/selection_center/test_canonical_pit_runtime.py",
+          "impact_modules": [
+            "paper_v2",
+            "strategy_package",
+            "hmm"
+          ],
+          "primary_module": "selection_center",
+          "risk_level": "high",
+          "rule_id": "selection_center_services"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/canonical_equity_pit.py",
+        "backend/services/tushare_sync_engine.py",
+        "backend/inference_engine.py",
+        "backend/services/selection_center/canonical_pit_runtime.py",
+        "backend/tests/test_canonical_equity_pit.py",
+        "backend/tests/test_tushare_sync_engine.py",
+        "backend/tests/selection_center/test_canonical_pit_runtime.py",
+        "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/inference_engine.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/canonical_equity_pit.py",
+      "backend/services/tushare_sync_engine.py",
+      "backend/inference_engine.py",
+      "backend/services/selection_center/canonical_pit_runtime.py",
+      "backend/tests/test_canonical_equity_pit.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "backend/tests/selection_center/test_canonical_pit_runtime.py",
+      "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py"
+    ]
+  },
+  "first_seen_at": "2026-10-19T13:14:04.948988Z",
+  "fix_branch": null,
+  "fix_commit": "d74d1e585bf68e34317d86ea45ce0793c157d9fd",
+  "fix_summary": {
+    "deployment_constraint": "Do not restart into strict new-task admission before authorized canonical registry/profile migration. Current legacy pointer is not silently promoted. Production migration and activation remain pending.",
+    "design_compliance": [
+      "No source merge claimed as production migration.",
+      "No fabricated default policy, snapshot or successful activation.",
+      "Existing immutable task leases retained; new tasks reject legacy policy.",
+      "Reuse existing canonical resolver and release CAS; no new scheduler, dependency or approval framework."
+    ],
+    "root_cause": "Daily maintenance refreshed legacy v1, new consumer admission accepted migration pointer, and physical snapshot names were confused with policy identity.",
+    "shared_policy": "aistock_equity_pit_canonical/shsz_a_252td_st_delist_asof_v2",
+    "verification": "223 targeted tests passed; RED then GREEN; lint and diff check passed.",
+    "worker_followup": "BUG-1987 owns monthly activation readback; no worker source in this PR."
+  },
+  "fixed_at": "2026-10-19T13:53:02Z",
+  "github_issue_number": 6363,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6363",
+  "last_seen_at": "2026-10-19T13:14:04.948988Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6365",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend",
+    "data_sync_autonomy_backend",
+    "advisory_historical_range_backend",
+    "paper_v2_backend",
+    "hmm_evolution_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "Isolated AIstock python -B loaded canonical policy helpers, Selection admission, inference and canonical daily hook from persistent BUG-1986 source; no DB access or process control"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main",
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1986-facts-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1986",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "d74d1e585bf68e34317d86ea45ce0793c157d9fd",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T08:02:22.831220Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "46cc5ac0f00561ad466d8935c123511c6659eb38bfc14beb49e74e2b2edcc1a6",
+      "receipt_sha256": "5426f24383e93570b36e7c941f0f948c6c6a892a4bfa413c6b662ebc87dbf725",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "cc3e380ebd55843f5ef14dc2b7979334f91b84eda778a99cf8e4f5cd07cd51fd",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1986",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "cb91007c7d80e751",
+    "recorded_at": "2026-10-19T13:54:03.859596Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "51f707a0b1e1fb51397d4c8ff2a0aa1b25b92a98",
+    "source_merge_commit": "d74d1e585bf68e34317d86ea45ce0793c157d9fd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6365",
+    "validation_evidence": [
+      "python -m pytest backend/tests/test_canonical_equity_pit.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/test_tushare_sync_engine.py backend/tests/dataset_release/test_canonical_pit_w6_contracts.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q -> 223 passed",
+      "nox -s validation_catalog_integrity -> passed; PR6365 current HEAD CI green"
+    ],
+    "validation_evidence_digest": "be834cfa4663e776eb1b4356cbac4734e3a8f1b3a58cad4e50c4bb1708a2b961"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Global canonical PIT defaults diverge between daily database maintenance and unified dataset publication",
+  "trigger_condition": {
+    "fingerprint": "411317fec88f87028adc0307",
+    "source_event_id": "FE-20261019-411317fec88f"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_canonical_equity_pit.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/test_tushare_sync_engine.py backend/tests/dataset_release/test_canonical_pit_w6_contracts.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q -> 223 passed",
+    "nox -s validation_catalog_integrity -> passed; PR6365 current HEAD CI green",
+    "Source PR current merge identity and source CI SUCCESS independently verified. Isolated AIstock python -B loaded canonical policy helpers, Selection admission, inference and canonical daily hook from persistent BUG-1986 source; no DB access or process control"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data",
+        "data_sync_autonomy",
+        "advisory_historical_range",
+        "paper_v2",
+        "hmm_evolution"
+      ],
+      "plans": [
+        "qlib_data_backend",
+        "data_sync_autonomy_backend",
+        "advisory_historical_range_backend",
+        "paper_v2_backend",
+        "hmm_evolution_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data",
+          "data_sync_autonomy",
+          "advisory_historical_range",
+          "paper_v2",
+          "hmm_evolution"
+        ],
+        "plans": [
+          "qlib_data_backend",
+          "data_sync_autonomy_backend",
+          "advisory_historical_range_backend",
+          "paper_v2_backend",
+          "hmm_evolution_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

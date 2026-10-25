@@ -263,11 +263,39 @@ def test_qe_universe_comparison_mcp_posts_structured_request_without_dataset_int
     assert captured["path"].endswith("/quantevolver/evolution/universe-comparison-tasks")
     payload = captured["payload"]
     assert payload["pool_ids"] == ["csi300", "csi500"]
+    assert payload["topk_by_pool"] == {"csi300": 50, "csi500": 50}
     assert payload["base_loop"]["runtime_flags"]["random_seed"] == 2718
     serialized = json.dumps(payload, sort_keys=True)
     assert "provider_uri" not in serialized
     assert "sha256" not in serialized
     assert "dataset_binding" not in serialized
+
+
+def test_qe_universe_comparison_mcp_assigns_star50_top20(experiment_mcp):
+    captured = {}
+
+    def handler(request: httpx.Request):
+        captured["payload"] = json.loads(request.content.decode("utf-8"))
+        return {"status": "success", "task_id": "qe_cmp_star50"}
+
+    _swap(
+        experiment_mcp,
+        experiment_mcp.LoopbackApiClient(
+            base_url="http://127.0.0.1/api/v1",
+            env_name="test",
+            transport=_mock_transport(handler),
+        ),
+    )
+
+    experiment_mcp.qe_universe_comparison_task_create(
+        task_name="pool comparison",
+        pool_ids=["star50", "csi500"],
+        factor_keys=["factor_a||catalog"],
+        model_id="model_lgbm_v1",
+        topk=50,
+    )
+
+    assert captured["payload"]["topk_by_pool"] == {"star50": 20, "csi500": 50}
 
 
 def test_qe_template_delete_requires_confirm_before_http(experiment_mcp):

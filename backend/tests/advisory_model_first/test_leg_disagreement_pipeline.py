@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from itertools import combinations
-
 import numpy as np
 import pandas as pd
 import pytest
@@ -17,6 +15,7 @@ from backend.services.advisory_model_first.leg_disagreement_pipeline import (
     evaluate_leg_models,
     run_leg_crossfit,
 )
+from backend.tests.advisory_model_first._test_support import eight_block_cpcv_paths as _paths
 
 
 def _source() -> pd.DataFrame:
@@ -58,20 +57,6 @@ def _request() -> FrozenLegDisagreementRequestV1:
         bootstrap_repetitions=100,
         bootstrap_seed=20260902,
     )
-
-
-def _paths(dates: list[str]) -> list[dict[str, object]]:
-    paths: list[dict[str, object]] = []
-    for index, validation in enumerate(combinations(range(8), 2)):
-        paths.append(
-            {
-                "path_id": f"path-{index:02d}",
-                "status": "READY",
-                "train_dates": [day for offset, day in enumerate(dates) if offset not in validation],
-                "validation_dates": [day for offset, day in enumerate(dates) if offset in validation],
-            }
-        )
-    return paths
 
 
 def test_feature_builder_uses_exact_same_date_formulas_and_ignores_future_columns() -> None:

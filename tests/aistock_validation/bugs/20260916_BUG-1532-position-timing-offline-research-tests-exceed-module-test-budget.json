@@ -1,0 +1,352 @@
+{
+  "actual": "Deterministic audit reports production_sloc=31819, test_sloc=10524, ratio=33.07 percent, over_budget_sloc=979.",
+  "allowed_write_scope": [
+    "backend/tests/position_timing/test_action_value_incremental.py",
+    "backend/tests/position_timing/test_action_value_state_matched_add.py",
+    "backend/tests/position_timing/test_action_value_open_only.py",
+    "backend/tests/position_timing/test_action_value_entry_only_policy.py",
+    "backend/tests/position_timing/test_action_value_heldout.py",
+    "backend/tests/position_timing/test_pattern_universe_benchmark.py",
+    "tests/aistock_validation/bugs/20260916_BUG-1532-position-timing-offline-research-tests-exceed-module-test-budget.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1532",
+  "closed_at": "2026-09-16T02:24:12Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-16T02:11:24.315542Z",
+  "description": "Deterministic audit reports production_sloc=31819, test_sloc=10524, ratio=33.07 percent, over_budget_sloc=979.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260916-16d91e87c265",
+      "timestamp": "2026-09-16T02:11:24.315484Z"
+    }
+  ],
+  "evidence_uris": [
+    "scripts/aistock_validation_budget.py"
+  ],
+  "expected": "Reduce position_timing effective test SLOC by at least 979 lines to below 30 percent while retaining corporate actions, PIT, suspension/ex-rights, holding isolation, strategy identity, artifact/API contracts, and fail-closed coverage.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/tests/position_timing/test_action_value_incremental.py",
+      "backend/tests/position_timing/test_action_value_open_only.py",
+      "backend/tests/position_timing/test_action_value_state_matched_add.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1532-position-timing-offline-research-tests-exceed-module-test-budget.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/tests/position_timing/test_action_value_incremental.py",
+      "backend/tests/position_timing/test_action_value_open_only.py",
+      "backend/tests/position_timing/test_action_value_state_matched_add.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1532-position-timing-offline-research-tests-exceed-module-test-budget.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/position_timing/test_action_value_incremental.py",
+        "backend/tests/position_timing/test_action_value_state_matched_add.py",
+        "backend/tests/position_timing/test_action_value_open_only.py",
+        "backend/tests/position_timing/test_action_value_entry_only_policy.py",
+        "backend/tests/position_timing/test_action_value_heldout.py",
+        "backend/tests/position_timing/test_pattern_universe_benchmark.py"
+      ],
+      "impacted_modules": [
+        "position_timing",
+        "platform.api",
+        "portfolio_management",
+        "watchlist",
+        "frontend_common"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/position_timing/test_action_value_incremental.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        },
+        {
+          "file": "backend/tests/position_timing/test_action_value_state_matched_add.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        },
+        {
+          "file": "backend/tests/position_timing/test_action_value_open_only.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        },
+        {
+          "file": "backend/tests/position_timing/test_action_value_entry_only_policy.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        },
+        {
+          "file": "backend/tests/position_timing/test_action_value_heldout.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        },
+        {
+          "file": "backend/tests/position_timing/test_pattern_universe_benchmark.py",
+          "impact_modules": [
+            "platform.api",
+            "portfolio_management",
+            "watchlist",
+            "frontend_common"
+          ],
+          "primary_module": "position_timing",
+          "risk_level": "high",
+          "rule_id": "position_timing_advice"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/tests/position_timing/test_action_value_incremental.py",
+        "backend/tests/position_timing/test_action_value_state_matched_add.py",
+        "backend/tests/position_timing/test_action_value_open_only.py",
+        "backend/tests/position_timing/test_action_value_entry_only_policy.py",
+        "backend/tests/position_timing/test_action_value_heldout.py",
+        "backend/tests/position_timing/test_pattern_universe_benchmark.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/position_timing/test_action_value_incremental.py",
+      "backend/tests/position_timing/test_action_value_state_matched_add.py",
+      "backend/tests/position_timing/test_action_value_open_only.py",
+      "backend/tests/position_timing/test_action_value_entry_only_policy.py",
+      "backend/tests/position_timing/test_action_value_heldout.py",
+      "backend/tests/position_timing/test_pattern_universe_benchmark.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/position_timing/test_action_value_incremental.py",
+      "backend/tests/position_timing/test_action_value_state_matched_add.py",
+      "backend/tests/position_timing/test_action_value_open_only.py",
+      "backend/tests/position_timing/test_action_value_entry_only_policy.py",
+      "backend/tests/position_timing/test_action_value_heldout.py",
+      "backend/tests/position_timing/test_pattern_universe_benchmark.py"
+    ]
+  },
+  "first_seen_at": "2026-09-16T02:11:24.315542Z",
+  "fix_branch": null,
+  "fix_commit": "bf891ec5952b392190bb74e9e382c29ded2290a5",
+  "fixed_at": "2026-09-16T02:24:12Z",
+  "github_issue_number": 4801,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4801",
+  "last_seen_at": "2026-09-16T02:11:24.315542Z",
+  "module": "position_timing",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4804",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/aistock_validation_budget.py --max-ratio 0.30 --json",
+  "required_verification": [
+    "l0",
+    "position_timing_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1532",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e44d7e7779687c2b",
+    "recorded_at": "2026-09-16T02:25:29.226568Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "bed59954f0a2febd9cf70f137837d97dec08ea8d",
+    "source_merge_commit": "bf891ec5952b392190bb74e9e382c29ded2290a5",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4804",
+    "validation_evidence": [
+      "validation-receipt: id=63ee4b045dd999c5 commit=bed59954f0a2febd9cf70f137837d97dec08ea8d kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed with 0 findings`",
+      "validation-receipt: id=7afd588b9725f09c commit=bed59954f0a2febd9cf70f137837d97dec08ea8d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/position_timing -q` result=`320 passed before metadata-only scope reconciliation; test code unchanged`",
+      "validation-receipt: id=de2a6a14e69bec0d commit=bed59954f0a2febd9cf70f137837d97dec08ea8d kind=diff_check plan=direct status=passed command=`git diff --check origin/main...HEAD` result=`passed`"
+    ],
+    "validation_evidence_digest": "544aa188ff5892fbbe4c6c7f2af0c3868cdf4b38e229cb2bbc6e48f85163bd22"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "position_timing"
+  ],
+  "title": "Position timing offline research tests exceed module test budget",
+  "trigger_condition": {
+    "fingerprint": "16d91e87c2657555c32a7119",
+    "source_event_id": "FE-20260916-16d91e87c265"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=63ee4b045dd999c5 commit=bed59954f0a2febd9cf70f137837d97dec08ea8d kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed with 0 findings`",
+    "validation-receipt: id=7afd588b9725f09c commit=bed59954f0a2febd9cf70f137837d97dec08ea8d kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/position_timing -q` result=`320 passed before metadata-only scope reconciliation; test code unchanged`",
+    "validation-receipt: id=de2a6a14e69bec0d commit=bed59954f0a2febd9cf70f137837d97dec08ea8d kind=diff_check plan=direct status=passed command=`git diff --check origin/main...HEAD` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "position_timing"
+      ],
+      "plans": [
+        "position_timing_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "position_timing"
+        ],
+        "plans": [
+          "position_timing_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

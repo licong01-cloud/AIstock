@@ -1,7 +1,8 @@
-"""Disabled-by-default QE archive event capture helpers.
+"""Durable QE archive outbox capture helpers.
 
-This module is intentionally not wired into QE routers yet. It provides the
-next ingestion step while keeping current QE production request paths unchanged.
+The realtime facade explicitly enables this adapter after a formal QE terminal
+write.  The adapter itself remains opt-in when constructed directly so tests
+and diagnostic callers cannot create control-plane rows by accident.
 """
 
 from __future__ import annotations
@@ -36,6 +37,16 @@ class QEArchiveEventCapture:
     ) -> None:
         self._repository = repository or QEArchiveRepository()
         self._enabled = enabled
+
+    @classmethod
+    def for_formal_runtime(cls) -> QEArchiveEventCapture:
+        """Formal completion delivers by default; either explicit opt-out wins.
+
+        Keep the direct adapter opt-in for diagnostic and legacy test callers.
+        Read switches once when constructing the runtime, without mutating env.
+        """
+        switches = (os.getenv("QE_ARCHIVE_REALTIME_ENABLED"), os.getenv(QE_ARCHIVE_EVENT_CAPTURE_ENV))
+        return cls(enabled=all(value is None or not value.strip() or _env_truthy(value) for value in switches))
 
     @property
     def enabled(self) -> bool:

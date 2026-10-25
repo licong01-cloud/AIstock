@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from backend.services.hmm_risk.provider_absence import load_provider_absence_manifest
-from backend.services.hmm_risk.state_model_set import StateModelSetError, canonical_sha256
+from backend.services.hmm_risk.contracts import StateModelSetError, canonical_sha256
 
 
 def _path() -> Path:

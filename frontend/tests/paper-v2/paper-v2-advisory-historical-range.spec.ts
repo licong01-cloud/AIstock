@@ -3,12 +3,14 @@ import { expect, test, type Page, type Route } from "@playwright/test";
 const PROGRAM_ID = "advp_r5_existing";
 const BATCH_ID = "ahrb_r5_001";
 const RUN_ID = "ahrrun_r5_001";
+const CANDIDATE_RUN_ID = "ahrrun_r5_002";
 const OPERATION_ID = "ahrop_r5_refresh_failed";
 
 type MockState = {
   batchStatus?: string;
   runStatus?: string;
   recoverableProgramCount?: number;
+  twoRuns?: boolean;
 };
 
 function json(route: Route, data: unknown, status = 200) {
@@ -19,7 +21,7 @@ function observeBrowserFailures(page: Page) {
   const consoleErrors: string[] = [];
   const failedRequests: string[] = [];
   page.on("console", (message) => {
-    if (message.type() === "error") consoleErrors.push(message.text());
+    if (message.type() === "error") consoleErrors.push(`${message.text()} ${message.location().url}`.trim());
   });
   page.on("requestfailed", (request) => {
     const errorText = request.failure()?.errorText || "unknown request failure";
@@ -51,6 +53,7 @@ async function mockPage(page: Page, state: MockState = {}) {
     const request = route.request();
     const path = new URL(request.url()).pathname;
     requests.push(`${request.method()} ${path}`);
+    if (path.endsWith("/universe-options")) return json(route, { ok: true, schema_version: "advisory_universe_catalog_v1", default_selection: { mode: "stock_universe", pool_ids: [] }, modes: ["stock_universe", "single_index", "index_union"], pools: [] });
     if (path.endsWith("/historical-range-options")) return json(route, { ok: true, data: {
       existing_programs: [{ program_id: PROGRAM_ID, name: "Existing Program R5", version: 3, active_binding_version_id: "advbind_r5_3", package_id: "pkg_single", target_count: 20, review_policy_summary: {} }],
       admitted_packages: [
@@ -62,7 +65,28 @@ async function mockPage(page: Page, state: MockState = {}) {
     if (path.endsWith("/historical-range-batches") && request.method() === "GET") return json(route, { ok: true, data: { batches: [{ batch_id: BATCH_ID, start_trade_date: "2026-07-01", end_trade_date: "2026-07-21", program_count: 2, status: batchStatus, successful_day_count: 28, planned_day_count: 30, recoverable_program_count: recoverableProgramCount, row_version: 12, created_at: "2026-07-22T08:00:00Z" }] }, page: { limit: 50, next_cursor: null, has_more: false } });
     if (path.endsWith("/historical-range-batches") && request.method() === "POST") return json(route, { ok: true, data: { batch: { batch_id: "ahrb_new", status: "PLANNING", row_version: 1 }, operation: { operation_id: "ahrop_catalog", operation_type: "BUILD_SOURCE_CATALOG", status: "QUEUED", row_version: 1 }, operation_id: "ahrop_catalog", exact_retry: false, dispatch_state: "SCHEDULED", links: { operation: "/api/v1/advisory/historical-range-operations/ahrop_catalog" } } }, 202);
     if (path.endsWith(`/historical-range-batches/${BATCH_ID}`)) return json(route, { ok: true, data: { batch: { batch_id: BATCH_ID, status: batchStatus, row_version: 12, successful_day_count: 28, terminal_failed_day_count: 1, recoverable_program_count: recoverableProgramCount, planning_recoverable: false, catalog_phase: "VERIFY" } } });
-    if (path.endsWith(`/historical-range-batches/${BATCH_ID}/runs`)) return json(route, { ok: true, data: { runs: [{ range_run_id: RUN_ID, research_program_id: PROGRAM_ID, package_id: "pkg_native_parent", package_version: "v7", alpha_mode: "multi_alpha", status: runStatus, completed_day_count: 14, total_day_count: 15, row_version: 7 }] }, page: { limit: 50, next_cursor: null, has_more: false } });
+    if (path.endsWith(`/historical-range-batches/${BATCH_ID}/runs`)) return json(route, { ok: true, data: { runs: [
+      { range_run_id: RUN_ID, research_program_id: PROGRAM_ID, package_id: "pkg_native_parent", package_version: "v7", alpha_mode: "multi_alpha", status: runStatus, completed_day_count: 14, total_day_count: 15, row_version: 7 },
+      ...(state.twoRuns ? [{ range_run_id: CANDIDATE_RUN_ID, research_program_id: "hrp_candidate", package_id: "pkg_single", package_version: "v1", alpha_mode: "single_alpha", status: "COMPLETED", completed_day_count: 15, total_day_count: 15, row_version: 5 }] : []),
+    ] }, page: { limit: 50, next_cursor: null, has_more: false } });
+    if (path.endsWith(`/historical-range-batches/${BATCH_ID}/comparison`)) return json(route, { ok: true, data: { comparison: {
+      schema_version: "advisory_historical_range_comparison_v1",
+      batch_id: BATCH_ID,
+      comparability: { status: "COMPARABLE", blockers: [], warnings: [], summary_policy_hash: "a".repeat(64), producer_code_hash: "b".repeat(64), decision_use: "BUSINESS_VALIDATION_ONLY" },
+      baseline: { range_run_id: RUN_ID, research_program_id: PROGRAM_ID, package_id: "pkg_native_parent", package_version: "v7", summary_id: "sum_base", summary_version: 1 },
+      candidate: { range_run_id: CANDIDATE_RUN_ID, research_program_id: "hrp_candidate", package_id: "pkg_single", package_version: "v1", summary_id: "sum_candidate", summary_version: 1 },
+      day_support: {
+        baseline: { status_counts: { COMPLETE: 12, VALID_NO_CANDIDATE: 2 }, total_day_count: 14, successful_day_count: 14, valid_no_candidate_day_count: 2 },
+        candidate: { status_counts: { COMPLETE: 11, VALID_NO_CANDIDATE: 4 }, total_day_count: 15, successful_day_count: 15, valid_no_candidate_day_count: 4 },
+      },
+      omitted_diagnostics: {
+        reason: "HIGH_CARDINALITY_PER_DATE_RECALL_NOT_A_BUSINESS_AGGREGATE",
+        baseline: { available_daily_recall: 3, unavailable_daily_recall: 7 },
+        candidate: { available_daily_recall: 5, unavailable_daily_recall: 11 },
+      },
+      metrics: [{ metric_key: "LIST:RETURN_NET_ABSOLUTE:mean_return", group_key: null, baseline: { status: "AVAILABLE", value: "0.010", reason_code: null, coverage: { numeric_return_count: 12 } }, candidate: { status: "AVAILABLE", value: "0.025", reason_code: null, coverage: { numeric_return_count: 11 } }, delta: "0.015", delta_semantics: "CANDIDATE_MINUS_BASELINE" }],
+      interpretation: { delta_semantics: "CANDIDATE_MINUS_BASELINE", winner_declared: false, significance_claimed: false },
+    } } });
     if (path.endsWith(`/historical-range-batches/${BATCH_ID}/operations`)) return json(route, { ok: true, data: { operations: [{ operation_id: OPERATION_ID, operation_type: "REFRESH_OUTCOMES", status: "FAILED", row_version: 4, error_json: { reason_code: "SOURCE_GAP", message: "Outcome source is incomplete", context: { missing_trade_date: "2026-07-18" } }, updated_at: "2026-07-24T09:00:00Z" }] }, page: { limit: 50, next_cursor: null, has_more: false } });
     if (path.endsWith(`/historical-range-operations/${OPERATION_ID}`)) return json(route, { ok: true, data: { operation: { operation_id: OPERATION_ID, operation_type: "REFRESH_OUTCOMES", status: "FAILED", row_version: 4, error_json: { reason_code: "SOURCE_GAP", message: "Outcome source is incomplete", context: { missing_trade_date: "2026-07-18" } }, updated_at: "2026-07-24T09:00:00Z" } } });
     if (path.endsWith(`/historical-range-runs/${RUN_ID}/days`)) return json(route, { ok: true, data: { days: [
@@ -104,6 +128,26 @@ test("historical range view separates batch and failed operation state without l
   expect(browserFailures.consoleErrors).toEqual([]);
   expect(browserFailures.failedRequests).toEqual([]);
   await page.screenshot({ path: testInfo.outputPath("historical-range-1440x900.png"), fullPage: true });
+});
+
+test("same-batch comparison shows identities, no-candidate support, and non-significance warning", async ({ page }) => {
+  const requests = await mockPage(page, { twoRuns: true });
+  await page.goto(`/paper-v2/advisory?view=historical-range&program_id=${PROGRAM_ID}`);
+  await page.getByRole("button", { name: "查看任务" }).click();
+
+  const panel = page.getByTestId("historical-range-comparison");
+  await expect(panel).toBeVisible();
+  await expect(page.getByLabel("基线 Program")).toHaveValue(RUN_ID);
+  await expect(page.getByLabel("候选 Program")).toHaveValue(CANDIDATE_RUN_ID);
+  await page.getByRole("button", { name: "比较已有结果" }).click();
+
+  await expect(panel).toContainText("COMPARABLE");
+  await expect(panel).toContainText("基线无合格荐股日");
+  await expect(panel).toContainText("候选无合格荐股日");
+  await expect(panel).toContainText("0.015");
+  await expect(panel.getByTestId("historical-range-omitted-diagnostics")).toContainText("基线 10 项，候选 16 项");
+  await expect(panel).toContainText("不代表统计显著、模型胜出或可激活结论");
+  expect(requests.some((item) => item.endsWith(`/historical-range-batches/${BATCH_ID}/comparison`))).toBeTruthy();
 });
 
 test("research specs carry explicit selection top_k for single and native multi-alpha packages", async ({ page }) => {
@@ -252,7 +296,7 @@ test("runs operations and summaries load every cursor page", async ({ page }) =>
   await page.goto("/paper-v2/advisory?view=historical-range");
   await page.getByRole("button", { name: "查看任务" }).click();
   await page.getByRole("button", { name: "加载更多 Program" }).click();
-  await expect(page.getByText("program_page_2")).toBeVisible();
+  await expect(page.getByText("program_page_2", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "加载更多 Operations" }).click();
   await expect(page.getByText("BUILD_DATASET_BRIDGE")).toBeVisible();
   await page.getByRole("button", { name: "查看 Program run" }).first().click();

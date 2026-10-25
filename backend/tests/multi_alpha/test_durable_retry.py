@@ -416,27 +416,15 @@ def test_terminal_targeted_recovery_freezes_dependency_closure_and_preserves_sib
     }
     assert preview.evidence["execution_identity"]["complete"] is False
     assert "legacy_execution_identity_incomplete" in preview.evidence["evidence_gaps"]
-
-
-def test_recovery_preview_replay_keeps_command_and_successor_identity_stable() -> None:
-    service = DurableRecoveryService(_Repository(run_status="partial_failed"))
-
-    first = service.preview(
-        source_run_id=RUN_ID,
-        target_child_id=LOO_ID,
-        retry_mode="backtest_only",
-        idempotency_key="stable-recovery-key",
-    )
     replay = service.preview(
         source_run_id=RUN_ID,
         target_child_id=LOO_ID,
         retry_mode="backtest_only",
-        idempotency_key="stable-recovery-key",
+        idempotency_key="retry_loo_1",
     )
-
-    assert replay.command_id == first.command_id
-    assert replay.scope_hash == first.scope_hash
-    assert replay.successor_run_id == first.successor_run_id
+    assert replay.command_id == preview.command_id
+    assert replay.scope_hash == preview.scope_hash
+    assert replay.successor_run_id == preview.successor_run_id
 
 
 def test_nonterminal_recovery_only_exposes_narrow_results_reference_topology() -> None:

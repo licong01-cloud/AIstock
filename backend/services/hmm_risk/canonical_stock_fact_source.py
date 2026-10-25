@@ -22,7 +22,7 @@ from backend.services.canonical_equity_pit import (
     require_canonical_rolling_universe_key,
 )
 
-from .state_model_set import StateModelSetError
+from .contracts import StateModelSetError
 from .stock_fact_repository import PostgresStockFactReader, StockFactSourceSpec
 
 

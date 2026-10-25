@@ -1,0 +1,374 @@
+{
+  "actual": "advisory.candidate_quality test-to-production ratio is 42.45% with 782 excess effective test SLOC.",
+  "allowed_write_scope": [
+    "noxfile.py",
+    "backend/tests/advisory_phase0b/test_audit_service.py",
+    "backend/tests/advisory_phase0b/test_cli.py",
+    "backend/tests/advisory_phase0b/test_contracts.py",
+    "backend/tests/advisory_phase0b/test_metrics.py",
+    "backend/tests/advisory_phase0b/test_producer_closure.py",
+    "backend/tests/advisory_phase0b/test_report_store.py",
+    "backend/tests/advisory_phase0b/test_service.py",
+    "backend/tests/advisory_phase0b/test_snapshot_reader.py",
+    "backend/tests/advisory_phase0b/test_spool.py",
+    "tests/aistock_validation/bugs/20260916_BUG-1545-advisory-candidate-quality-tests-exceed-leaf-module-sloc-budget-with-dup.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1545",
+  "closed_at": "2026-09-16T04:01:16Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-09-16T03:47:14.461876Z",
+  "description": "advisory.candidate_quality test-to-production ratio is 42.45% with 782 excess effective test SLOC.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20260916-c278376c2d46",
+      "timestamp": "2026-09-16T03:47:14.461859Z"
+    }
+  ],
+  "evidence_uris": [
+    "validation-budget:advisory.candidate_quality=42.45%,excess=782"
+  ],
+  "expected": "Advisory candidate-quality remains behaviorally covered and falls at or below the 30% tracked effective-SLOC budget while preserving PIT, candidate uniqueness, calibration, coverage, policy identity, test-data isolation, transaction, and fail-closed contracts.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "noxfile.py",
+      "backend/tests/advisory_phase0b/test_audit_service.py",
+      "backend/tests/advisory_phase0b/test_service.py"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "noxfile.py",
+      "backend/tests/advisory_phase0b/test_audit_service.py",
+      "backend/tests/advisory_phase0b/test_service.py"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/tests/advisory_phase0b/test_audit_service.py",
+        "backend/tests/advisory_phase0b/test_cli.py",
+        "backend/tests/advisory_phase0b/test_contracts.py",
+        "backend/tests/advisory_phase0b/test_metrics.py",
+        "backend/tests/advisory_phase0b/test_producer_closure.py",
+        "backend/tests/advisory_phase0b/test_report_store.py",
+        "backend/tests/advisory_phase0b/test_service.py",
+        "backend/tests/advisory_phase0b/test_snapshot_reader.py",
+        "backend/tests/advisory_phase0b/test_spool.py"
+      ],
+      "impacted_modules": [
+        "advisory.candidate_quality",
+        "advisory.historical_range"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/tests/advisory_phase0b/test_audit_service.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "backend/tests/advisory_phase0b/test_cli.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "backend/tests/advisory_phase0b/test_contracts.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "backend/tests/advisory_phase0b/test_metrics.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "backend/tests/advisory_phase0b/test_producer_closure.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "backend/tests/advisory_phase0b/test_report_store.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "backend/tests/advisory_phase0b/test_service.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "backend/tests/advisory_phase0b/test_snapshot_reader.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        },
+        {
+          "file": "backend/tests/advisory_phase0b/test_spool.py",
+          "impact_modules": [
+            "advisory.historical_range"
+          ],
+          "primary_module": "advisory.candidate_quality",
+          "risk_level": "high",
+          "rule_id": "advisory_phase0b_candidate_quality"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/tests/advisory_phase0b/test_audit_service.py",
+        "backend/tests/advisory_phase0b/test_cli.py",
+        "backend/tests/advisory_phase0b/test_contracts.py",
+        "backend/tests/advisory_phase0b/test_metrics.py",
+        "backend/tests/advisory_phase0b/test_producer_closure.py",
+        "backend/tests/advisory_phase0b/test_report_store.py",
+        "backend/tests/advisory_phase0b/test_service.py",
+        "backend/tests/advisory_phase0b/test_snapshot_reader.py",
+        "backend/tests/advisory_phase0b/test_spool.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/tests/advisory_phase0b/test_audit_service.py",
+      "backend/tests/advisory_phase0b/test_cli.py",
+      "backend/tests/advisory_phase0b/test_contracts.py",
+      "backend/tests/advisory_phase0b/test_metrics.py",
+      "backend/tests/advisory_phase0b/test_producer_closure.py",
+      "backend/tests/advisory_phase0b/test_report_store.py",
+      "backend/tests/advisory_phase0b/test_service.py",
+      "backend/tests/advisory_phase0b/test_snapshot_reader.py",
+      "backend/tests/advisory_phase0b/test_spool.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/tests/advisory_phase0b/test_audit_service.py",
+      "backend/tests/advisory_phase0b/test_cli.py",
+      "backend/tests/advisory_phase0b/test_contracts.py",
+      "backend/tests/advisory_phase0b/test_metrics.py",
+      "backend/tests/advisory_phase0b/test_producer_closure.py",
+      "backend/tests/advisory_phase0b/test_report_store.py",
+      "backend/tests/advisory_phase0b/test_service.py",
+      "backend/tests/advisory_phase0b/test_snapshot_reader.py",
+      "backend/tests/advisory_phase0b/test_spool.py"
+    ]
+  },
+  "first_seen_at": "2026-09-16T03:47:14.461876Z",
+  "fix_branch": null,
+  "fix_commit": "44da71560924e1c401998dbdedcefc2ce551ad0b",
+  "fixed_at": "2026-09-16T04:01:16Z",
+  "github_issue_number": 4839,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4839",
+  "last_seen_at": "2026-09-16T03:47:14.461876Z",
+  "module": "advisory_candidate_quality",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4841",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python scripts/aistock_validation_budget.py --json",
+  "required_verification": [
+    "l0",
+    "advisory_phase0b_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [],
+    "inference_basis": "actual_changed_files",
+    "persistence_basis": "not_required",
+    "planned_target_ids": [],
+    "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
+    "provisional": false,
+    "runtime_identity_match": "not_required",
+    "runtime_impact": "none",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": null,
+    "target_ids": []
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P2",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1545",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "364483b985b225a2",
+    "recorded_at": "2026-09-16T04:02:30.435046Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6f4dbacab38329999fa097e7d4ccfaf0570a5c87",
+    "source_merge_commit": "44da71560924e1c401998dbdedcefc2ce551ad0b",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/4841",
+    "validation_evidence": [
+      "validation-receipt: id=7d3d3e93190894be commit=6f4dbacab38329999fa097e7d4ccfaf0570a5c87 kind=nox plan=advisory_phase0b_backend status=passed command=`python -m nox -s advisory_phase0b_backend` result=`69 passed`",
+      "validation-receipt: id=91909135d7a83def commit=6f4dbacab38329999fa097e7d4ccfaf0570a5c87 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`16 passed; findings=0`",
+      "validation-receipt: id=0ef99e770b6aecf7 commit=6f4dbacab38329999fa097e7d4ccfaf0570a5c87 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+    ],
+    "validation_evidence_digest": "b4baa8ec46be9bcdcdec488c35cd59fb16540a7fc62011436bab84364033c20f"
+  },
+  "status": "fixed",
+  "suspected_modules": [
+    "advisory_candidate_quality"
+  ],
+  "title": "Advisory candidate-quality tests exceed leaf-module SLOC budget with duplicate metric snapshots",
+  "trigger_condition": {
+    "fingerprint": "c278376c2d4621c5f4765bae",
+    "source_event_id": "FE-20260916-c278376c2d46"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=7d3d3e93190894be commit=6f4dbacab38329999fa097e7d4ccfaf0570a5c87 kind=nox plan=advisory_phase0b_backend status=passed command=`python -m nox -s advisory_phase0b_backend` result=`69 passed`",
+    "validation-receipt: id=91909135d7a83def commit=6f4dbacab38329999fa097e7d4ccfaf0570a5c87 kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_catalog_integrity` result=`16 passed; findings=0`",
+    "validation-receipt: id=0ef99e770b6aecf7 commit=6f4dbacab38329999fa097e7d4ccfaf0570a5c87 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+  ],
+  "verification_budget": {
+    "budget": "light",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "advisory_candidate_quality",
+        "advisory_phase0b"
+      ],
+      "plans": [
+        "advisory_phase0b_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "25-35%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "light",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "advisory_candidate_quality",
+          "advisory_phase0b"
+        ],
+        "plans": [
+          "advisory_phase0b_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "25-35%"
+    }
+  }
+}

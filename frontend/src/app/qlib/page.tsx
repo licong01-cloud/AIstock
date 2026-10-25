@@ -2,6 +2,7 @@
 
 import type React from "react";
 import { useState, useEffect, useCallback } from "react";
+import MonthlyReleasePanel from "./MonthlyReleasePanel";
 
 const BACKEND_BASE =
   process.env.NEXT_PUBLIC_TDX_BACKEND_BASE || "http://127.0.0.1:8001";
@@ -14,11 +15,12 @@ async function backendRequest<T = any>(
   method: string,
   path: string,
   body?: any,
+  headers?: Record<string, string>,
 ): Promise<T> {
   const url = `${BACKEND_BASE.replace(/\/$/, "")}${path}`;
   const res = await fetch(url, {
     method,
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...headers },
     body: body ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
@@ -782,6 +784,8 @@ export default function QlibPage() {
       <p className="text-sm text-gray-500 mb-6">
         从本地 TimescaleDB 导出数据到 Qlib Snapshot，供 RD-Agent / Qlib 回测使用。
       </p>
+
+      <MonthlyReleasePanel request={backendRequest} />
 
       {/* Tab 区域 */}
       <section style={cardStyle}>

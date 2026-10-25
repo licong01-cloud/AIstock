@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+from fnmatch import fnmatchcase
 import json
 import os
 import sys
@@ -15,6 +16,7 @@ if str(ROOT) not in sys.path:
 from scripts import issue_flow as flow  # noqa: E402
 
 BUG_REGISTRY_PREFIX = "tests/aistock_validation/bugs/"
+DIRECT_NEIGHBOR_GLOB_PREFIX = "direct-neighbor-glob:"
 CLOSE_SYNC_STATUSES = {
     "fixed",
     "fixed_source_pending_user_restart",
@@ -52,6 +54,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     ".github/workflows/codeql.yml",
     ".github/workflows/code-intelligence-refresh.yml",
     ".github/workflows/nightly.yml",
+    ".github/workflows/runner-queue-watchdog.yml",
     ".github/workflows/dependency-update-validate.yml",
     ".github/workflows/pr-quality.yml",
     ".github/workflows/semgrep.yml",
@@ -122,8 +125,12 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "prompt_packs/validation_llm/design_drift_audit.prompt.yml",
     "prompt_packs/validation_llm/silent_degradation_audit.prompt.yml",
     "scripts/aistock_issue_workflow.py",
+    "scripts/aistock_validation_budget.py",
+    "backend/tests/scripts/test_aistock_validation_budget.py",
+    "scripts/aistock_runtime_semantics.py",
     "scripts/aistock_runner_health.py",
     "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_task_root.py",
     "scripts/aistock_bug_id_allocator.py",
     "scripts/aistock_mcp_server.py",
     "scripts/aistock_feature_workflow.py",
@@ -137,6 +144,7 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
     "scripts/ci_failure_issue_summary.py",
     "scripts/ci/prepare_self_hosted_workspace.py",
     "scripts/ci_workflow_policy_scan.py",
+    "scripts/maintain_aistock_git_mirror.ps1",
     "scripts/configure_aistock_github_runner.ps1",
     "scripts/start_aistock_github_runner.ps1",
     "scripts/supervise_aistock_github_runner.ps1",
@@ -156,13 +164,25 @@ WORKFLOW_VALIDATION_FAST_LANE_FILES = {
 }
 WORKFLOW_VALIDATION_FAST_LANE_PREFIXES: tuple[str, ...] = ()
 WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
+    "scripts/aistock_validation_budget.py": ("backend/tests/scripts/test_aistock_validation_budget.py",),
+    "scripts/aistock_runtime_semantics.py": ("backend/tests/scripts/test_aistock_issue_workflow_fast.py",),
+    ".github/workflows/runner-queue-watchdog.yml": (
+        "backend/tests/scripts/test_aistock_runner_health.py",
+        "backend/tests/scripts/test_ci_workflow_policy_scan.py",
+    ),
     ".github/workflows/test.yml": (
         "backend/tests/scripts/test_ci_change_classifier.py",
         "backend/tests/scripts/test_ci_test_plan_coverage.py",
     ),
     ".github/workflows/pr-quality.yml": ("backend/tests/scripts/test_issue_flow_pr_quality.py",),
     ".github/workflows/semgrep.yml": ("backend/tests/scripts/test_ci_change_classifier.py",),
-    "scripts/aistock_issue_workflow.py": ("backend/tests/scripts/test_aistock_issue_workflow_fast.py",),
+    "scripts/aistock_issue_workflow.py": (
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_task_root.py",
+    ),
+    "backend/tests/scripts/test_aistock_issue_workflow_task_root.py": (
+        "backend/tests/scripts/test_aistock_issue_workflow_task_root.py",
+    ),
     "scripts/aistock_runner_health.py": ("backend/tests/scripts/test_aistock_runner_health.py",),
     "backend/tests/scripts/test_aistock_issue_workflow_fast.py": (
         "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
@@ -179,7 +199,7 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "docs/standards/aistock_development_standard_v1.5_20260523.yaml": ("backend/tests/test_aistock_guardrail_scan.py",),
     "docs/standards/aistock_runtime_targets_v1.yaml": (
         "backend/tests/test_aistock_guardrail_scan.py",
-        "backend/tests/scripts/test_aistock_issue_workflow.py",
+        "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
     ),
     "scripts/bug_registry_metadata_check.py": ("backend/tests/scripts/test_bug_registry_metadata_check.py",),
     "scripts/ci_change_classifier.py": ("backend/tests/scripts/test_ci_change_classifier.py",),
@@ -189,6 +209,7 @@ WORKFLOW_TEST_TARGETS_BY_FILE: dict[str, tuple[str, ...]] = {
     "scripts/ci_failure_issue_summary.py": ("backend/tests/scripts/test_ci_failure_issue_summary.py",),
     "scripts/ci/prepare_self_hosted_workspace.py": ("backend/tests/scripts/test_prepare_self_hosted_workspace.py",),
     "scripts/ci_workflow_policy_scan.py": ("backend/tests/scripts/test_ci_workflow_policy_scan.py",),
+    "scripts/maintain_aistock_git_mirror.ps1": ("backend/tests/scripts/test_ci_workflow_policy_scan.py",),
     "scripts/configure_aistock_github_runner.ps1": ("backend/tests/scripts/test_configure_aistock_github_runner.py",),
     "scripts/start_aistock_github_runner.ps1": ("backend/tests/scripts/test_start_aistock_github_runner.py",),
     "scripts/supervise_aistock_github_runner.ps1": ("backend/tests/scripts/test_start_aistock_github_runner.py",),
@@ -232,6 +253,10 @@ PROMPT_EVALUATION_FILES = {
     "scripts/llm_provider_adapter.py",
 }
 DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
+    "scripts/audit_shared_dataset_consumer_coverage.py": ("qlib_data_backend",),
+    "scripts/prepare_canonical_pit_activation.py": ("qlib_data_backend",),
+    "scripts/activate_canonical_pit_default.py": ("qlib_data_backend",),
+    "backend/tests/scripts/test_activate_canonical_pit_default.py": ("qlib_data_backend",),
     "backend/db/pg_pool.py": ("platform_api_backend",),
     "backend/tests/test_pg_pool_audit.py": ("platform_api_backend",),
     "backend/tests/test_validation_ui_target_catalog.py": ("validation_center_backend",),
@@ -265,8 +290,25 @@ FRONTEND_FILES = {
     "frontend/tsconfig.json",
     "frontend/next.config.mjs",
 }
+DEPENDENCY_FILES = {
+    ".github/renovate.json",
+    "pyproject.toml",
+    "frontend/package.json",
+    "frontend/package-lock.json",
+}
 GO_PATH_PREFIXES = ("tdx-api-main/",)
-GO_FILES = {"tdx-api-main/go.mod", "tdx-api-main/go.sum"}
+GO_FILES = {"tdx-api-main/go.mod", "tdx-api-main/go.sum", "tdx-api-main/web/go.mod", "tdx-api-main/web/go.sum"}
+# Python consumers still need their own catalog plans; these additionally
+# validate the shared TDX protocol/build contract without market or DB access.
+TDX_GO_VALIDATION_INPUTS = {
+    "tdx-api-main/web/start.bat",
+    "scripts/start_tdx_go_backend.py",
+    "start_all_ai_stock.bat",
+    "backend/data_service/tdx_adapter.py",
+    "backend/ingestion/tdx_scheduler.py",
+    "backend/tests/ingestion/test_tdx_go_integrity.py",
+    "backend/tests/scripts/test_start_tdx_go_backend.py",
+}
 CODE_SUFFIXES = (".py", ".pyi", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".go", ".sql", ".sh", ".ps1")
 CODE_ROOT_FILES = {"noxfile.py", "pyproject.toml", "pytest.ini"}
 
@@ -402,6 +444,26 @@ def _backend_sessions_from_selection(selection: dict[str, Any], plans: dict[str,
     return sessions
 
 
+def _apply_plan_subsumption(
+    plan_keys: list[str], plans: dict[str, dict[str, Any]]
+) -> tuple[list[str], dict[str, str]]:
+    """Remove selected plans whose work is explicitly covered by another selected plan."""
+
+    ordered = list(dict.fromkeys(str(plan_key) for plan_key in plan_keys))
+    selected = set(ordered)
+    suppressed: dict[str, str] = {}
+    for covering_key in ordered:
+        plan = plans.get(covering_key) or {}
+        raw_subsumes = plan.get("subsumes") or []
+        if isinstance(raw_subsumes, str):
+            raw_subsumes = [raw_subsumes]
+        for raw_covered_key in raw_subsumes:
+            covered_key = str(raw_covered_key).strip()
+            if covered_key and covered_key != covering_key and covered_key in selected:
+                suppressed.setdefault(covered_key, covering_key)
+    return [plan_key for plan_key in ordered if plan_key not in suppressed], suppressed
+
+
 def _is_python_test_file(path: str, *, repo_root: Path) -> bool:
     normalized = _normalize_path(path)
     name = normalized.rsplit("/", 1)[-1]
@@ -409,6 +471,17 @@ def _is_python_test_file(path: str, *, repo_root: Path) -> bool:
         normalized.startswith(("backend/tests/", "tests/"))
         and name.startswith("test_")
         and name.endswith(".py")
+        and (repo_root / normalized).is_file()
+    )
+
+
+def _is_frontend_test_file(path: str, *, repo_root: Path) -> bool:
+    normalized = _normalize_path(path)
+    name = normalized.rsplit("/", 1)[-1]
+    return (
+        normalized.startswith(("frontend/tests/", "frontend/e2e/", "frontend/src/"))
+        and any(name.endswith(f".{kind}.{ext}") for kind in ("spec", "test")
+                for ext in ("ts", "tsx", "js", "jsx", "mjs", "cjs"))
         and (repo_root / normalized).is_file()
     )
 
@@ -469,8 +542,40 @@ def _normalize_nox_test_target(value: str) -> str | None:
     return None
 
 
+def _is_direct_neighbor_target_call(node: ast.AST | None) -> bool:
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_direct_neighbor_pr_targets"
+    )
+
+
+def _resolve_direct_neighbor_fallback(
+    node: ast.AST,
+    values: dict[str, list[str]],
+    direct_neighbor_variables: dict[str, list[str]],
+) -> list[str]:
+    """Return declared test globs only when a trusted slice has a fallback."""
+
+    if not isinstance(node, ast.Starred) or not isinstance(node.value, ast.BoolOp):
+        return []
+    expression = node.value
+    if not isinstance(expression.op, ast.Or) or len(expression.values) < 2:
+        return []
+    selected = expression.values[0]
+    if not isinstance(selected, ast.Name) or selected.id not in direct_neighbor_variables:
+        return []
+    fallback_targets: list[str] = []
+    for fallback in expression.values[1:]:
+        fallback_targets.extend(_resolve_nox_literal(fallback, values))
+    if not any(_normalize_nox_test_target(target) for target in fallback_targets):
+        return []
+    return [f"{DIRECT_NEIGHBOR_GLOB_PREFIX}{pattern}" for pattern in direct_neighbor_variables[selected.id]]
+
+
 def _session_test_targets(function: ast.FunctionDef) -> set[str]:
     values: dict[str, list[str]] = {}
+    direct_neighbor_variables: dict[str, list[str]] = {}
     nodes = sorted(ast.walk(function), key=lambda item: (getattr(item, "lineno", -1), getattr(item, "col_offset", -1)))
     for node in nodes:
         if isinstance(node, ast.For) and isinstance(node.target, ast.Name):
@@ -481,7 +586,22 @@ def _session_test_targets(function: ast.FunctionDef) -> set[str]:
             targets = node.targets if isinstance(node, ast.Assign) else [node.target]
             resolved = _resolve_nox_literal(node.value, values) if node.value is not None else []
             for target in targets:
-                if isinstance(target, ast.Name) and resolved:
+                if not isinstance(target, ast.Name):
+                    continue
+                if _is_direct_neighbor_target_call(node.value):
+                    test_globs = next(
+                        (
+                            _resolve_nox_literal(keyword.value, values)
+                            for keyword in node.value.keywords
+                            if keyword.arg == "test_globs"
+                        ),
+                        [],
+                    )
+                    if test_globs:
+                        direct_neighbor_variables[target.id] = test_globs
+                else:
+                    direct_neighbor_variables.pop(target.id, None)
+                if resolved:
                     values[target.id] = resolved
         elif (
             isinstance(node, ast.Call)
@@ -501,7 +621,14 @@ def _session_test_targets(function: ast.FunctionDef) -> set[str]:
         call_name = _nox_call_name(node)
         resolved_args: list[str] = []
         for argument in node.args:
-            resolved_args.extend(_resolve_nox_literal(argument, values))
+            resolved = _resolve_nox_literal(argument, values)
+            if not resolved:
+                resolved = _resolve_direct_neighbor_fallback(
+                    argument,
+                    values,
+                    direct_neighbor_variables,
+                )
+            resolved_args.extend(resolved)
         is_pytest_call = call_name == "_run_pytest" or (
             call_name in {"run", "run_always"} and "pytest" in {item.casefold() for item in resolved_args}
         )
@@ -511,6 +638,8 @@ def _session_test_targets(function: ast.FunctionDef) -> set[str]:
             target = _normalize_nox_test_target(value)
             if target:
                 targets.add(target)
+            elif value.startswith(DIRECT_NEIGHBOR_GLOB_PREFIX):
+                targets.add(value)
     return targets
 
 
@@ -534,6 +663,9 @@ def _selected_nox_test_targets(*, repo_root: Path, sessions: list[str]) -> tuple
 def _test_target_covers_path(target: str, path: str) -> bool:
     normalized_target = _normalize_path(target).rstrip("/")
     normalized_path = _normalize_path(path)
+    if normalized_target.startswith(DIRECT_NEIGHBOR_GLOB_PREFIX):
+        pattern = normalized_target.removeprefix(DIRECT_NEIGHBOR_GLOB_PREFIX)
+        return fnmatchcase(normalized_path, pattern)
     if any(token in normalized_target for token in "*?["):
         return False
     if normalized_target.endswith(".py"):
@@ -546,6 +678,7 @@ def _changed_test_plan_coverage(
     *,
     repo_root: Path,
     file_backend_sessions: dict[str, list[str]],
+    frontend_test_targets: list[str] | None = None,
 ) -> dict[str, Any]:
     test_files = [path for path in paths if _is_python_test_file(path, repo_root=repo_root)]
     selected_sessions = list(
@@ -567,9 +700,19 @@ def _changed_test_plan_coverage(
             for session in sessions
             if any(_test_target_covers_path(target, path) for target in targets_by_session.get(session, set()))
         ]
+    # Type/lint is not execution of a changed spec. Compare only the targets
+    # emitted to the frontend runner; never infer coverage from module ownership.
+    frontend_tests = [path for path in paths if _is_frontend_test_file(path, repo_root=repo_root)]
+    for path in frontend_tests:
+        coverage[path] = [
+            f"frontend:{target}" for target in frontend_test_targets or []
+            if _test_target_covers_path(f"frontend/{target}", path)
+        ]
     unexecuted = [path for path, covering_sessions in coverage.items() if not covering_sessions]
     return {
-        "changed_test_files": test_files,
+        "changed_test_files": test_files + frontend_tests,
+        "backend_changed_test_files": test_files,
+        "frontend_changed_test_files": frontend_tests,
         "coverage": coverage,
         "deferred_test_files": deferred_test_files,
         "resolution_error": resolution_error,
@@ -604,9 +747,13 @@ def _plan_routing(plan_key: str, plan: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
-    plans = flow._plans_by_key()
-    selection = flow.select_validation(paths)
+def _catalog_backend_selection(paths: list[str], *, budget_scope_paths: list[str] | None = None) -> dict[str, Any]:
+    catalog = flow.validation_catalog_snapshot()
+    plans = catalog.plans
+    selection = flow.select_validation(paths, _catalog=catalog)
+    budget_ownership = flow.match_changed_files(
+        budget_scope_paths, _modules=catalog.modules, _rules=catalog.rules,
+    ) if budget_scope_paths else {}
     selected_plan_keys: list[str] = []
     dev_db_plan_keys: list[str] = []
     frontend_test_targets: list[str] = []
@@ -614,7 +761,7 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
     unmapped_files: list[str] = []
     file_backend_sessions: dict[str, list[str]] = {}
     for path in paths:
-        path_selection = flow.select_validation([path])
+        path_selection = flow.select_validation([path], _catalog=catalog)
         required_plans = [str(item) for item in path_selection.get("required_plans") or []]
         if _is_frontend_path(path):
             required_plans.extend(
@@ -625,6 +772,7 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
         for plan_key in DIRECT_BACKEND_PLAN_KEYS_BY_FILE.get(path, ()):
             if plan_key not in required_plans:
                 required_plans.append(plan_key)
+        required_plans, _ = _apply_plan_subsumption(required_plans, plans)
         for plan_key in required_plans:
             if plan_key not in selected_plan_keys:
                 selected_plan_keys.append(plan_key)
@@ -632,7 +780,8 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
             if _plan_requires_dev_db(plan) and plan_key not in dev_db_plan_keys:
                 dev_db_plan_keys.append(plan_key)
             target = str(plan.get("frontend_test_path") or "").strip()
-            if plan.get("ci_lane") == "frontend" and target and target not in frontend_test_targets:
+            if (plan.get("ci_lane") == "frontend" and plan.get("enabled", True)
+                    and plan.get("runner_enabled", True) and target and target not in frontend_test_targets):
                 frontend_test_targets.append(target)
         has_related_deferred_plan = any(
             plan_key not in SHARED_PLAN_KEYS
@@ -649,10 +798,22 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
             mapped_files.append(path)
         elif _is_code_path(path):
             unmapped_files.append(path)
+    selected_plan_keys, suppressed_plan_keys = _apply_plan_subsumption(selected_plan_keys, plans)
+    for path, path_sessions in file_backend_sessions.items():
+        effective_sessions = list(path_sessions)
+        for covered_key, covering_key in suppressed_plan_keys.items():
+            covered_session = str((plans.get(covered_key) or {}).get("nox_session") or "").strip()
+            covering_session = str((plans.get(covering_key) or {}).get("nox_session") or "").strip()
+            if covered_session in effective_sessions:
+                effective_sessions = [session for session in effective_sessions if session != covered_session]
+                if covering_session and covering_session not in effective_sessions:
+                    effective_sessions.append(covering_session)
+        file_backend_sessions[path] = effective_sessions
     sessions = _backend_sessions_from_selection({"required_plans": selected_plan_keys}, plans)
     dev_db_plan_keys = _dev_db_plan_keys({"required_plans": selected_plan_keys}, plans)
     return {
         "selected_plan_keys": selected_plan_keys,
+        "suppressed_plan_keys": suppressed_plan_keys,
         "backend_sessions": sessions,
         "dev_db_plan_keys": dev_db_plan_keys,
         "frontend_test_targets": frontend_test_targets,
@@ -661,11 +822,23 @@ def _catalog_backend_selection(paths: list[str]) -> dict[str, Any]:
         "file_backend_sessions": file_backend_sessions,
         "impacted_modules": selection.get("impacted_modules") or [],
         "required_plans": selected_plan_keys,
+        "workflow_budget_required": any(
+            rule.get("primary_module") == "validation.workflow_automation"
+            for rule in budget_ownership.get("matched_rules", [])
+        ),
     }
 
 
 def _is_frontend_path(path: str) -> bool:
     return path in FRONTEND_FILES or path.startswith(FRONTEND_PATH_PREFIXES)
+
+
+def _is_dependency_path(path: str) -> bool:
+    return (
+        path in DEPENDENCY_FILES
+        or (path.startswith("requirements") and "/" not in path and path.endswith(".txt"))
+        or (path.startswith(".github/requirements/") and path.endswith(".txt"))
+    )
 
 
 def _is_go_path(path: str) -> bool:
@@ -858,20 +1031,28 @@ def classify_changed_files(
         for path in routable_non_bug_registry_files
         if _workflow_validation_fast_lane(path) and not _is_docs_fast_path(path)
     ]
-    workflow_test_targets = _workflow_test_targets(workflow_fast_files)
     frontend_files = [path for path in routable_non_bug_registry_files if _is_frontend_path(path)]
-    go_files = [path for path in routable_non_bug_registry_files if _is_go_path(path)]
+    go_files = [path for path in routable_non_bug_registry_files if _is_go_path(path) or path in TDX_GO_VALIDATION_INPUTS]
     business_files = [
         path
         for path in routable_non_bug_registry_files
         if path not in workflow_fast_files
-        and path not in go_files
+        and not _is_go_path(path)
         and not _is_docs_path(path)
         and not _catalog_validation_required(path)
     ]
-    catalog_selection = _catalog_backend_selection(business_files)
+    catalog_selection = _catalog_backend_selection(business_files, budget_scope_paths=non_bug_registry_files)
     selected_plan_keys = catalog_selection["selected_plan_keys"]
+    suppressed_plan_keys = catalog_selection["suppressed_plan_keys"]
     backend_sessions = catalog_selection["backend_sessions"]
+    workflow_test_targets = _workflow_test_targets(workflow_fast_files)
+    budget_test = "backend/tests/scripts/test_aistock_validation_budget.py"
+    if (catalog_selection["workflow_budget_required"]
+            and "validation_workflow_automation" not in backend_sessions
+            and budget_test not in workflow_test_targets):
+        workflow_test_targets.append(
+            budget_test + "::test_workflow_automation_has_an_honest_production_denominator"
+        )
     dev_db_plan_keys = catalog_selection["dev_db_plan_keys"]
     frontend_test_targets = catalog_selection["frontend_test_targets"]
     mapped_backend_files = catalog_selection["mapped_files"]
@@ -884,6 +1065,7 @@ def classify_changed_files(
         business_files,
         repo_root=repo_root,
         file_backend_sessions=catalog_selection["file_backend_sessions"],
+        frontend_test_targets=frontend_test_targets,
     )
     unexecuted_test_files = changed_test_plan_coverage["unexecuted_test_files"]
     if changed_test_plan_coverage["resolution_error"]:
@@ -921,12 +1103,19 @@ def classify_changed_files(
         reasons.append("validation LLM prompt/config/provider files changed; run prompt evaluation gate")
     if backend_sessions:
         reasons.append("backend code matched direct nox sessions: " + ", ".join(backend_sessions))
+    if suppressed_plan_keys:
+        reasons.append(
+            "redundant validation plans were subsumed: "
+            + ", ".join(
+                f"{covered}->{covering}" for covered, covering in suppressed_plan_keys.items()
+            )
+        )
     if dev_db_plan_keys:
         reasons.append("database validation must use the existing DEV database: " + ", ".join(dev_db_plan_keys))
     if frontend_files:
         reasons.append("frontend code changed; run the single frontend type/lint gate")
     if go_files:
-        reasons.append("TDX Go code changed; run the Go unit-test gate")
+        reasons.append("TDX source, dependencies, launcher or shared collector changed; run offline Go validation")
 
     backend_required = bool(backend_sessions) and not docs_lite_only and not close_sync_metadata_only
     dev_db_required = bool(dev_db_plan_keys) and not docs_lite_only and not close_sync_metadata_only
@@ -967,6 +1156,7 @@ def classify_changed_files(
         else "hosted_static"
     )
     active_files = [path for path in normalized if path not in deleted_file_set]
+    dependency_files = [path for path in active_files if _is_dependency_path(path)]
     codeql_languages = _codeql_languages(active_files, exclude_test_sources=False)
     codeql_pr_languages = _codeql_languages(active_files, exclude_test_sources=True)
     return {
@@ -1001,8 +1191,11 @@ def classify_changed_files(
         "plan_routing": plan_routing,
         "environment_fingerprint_ref": "AIstock-CI" if runner_kind == "windows_ai_stock_ci" else None,
         "install_forbidden": True,
+        "dependency_validation_required": bool(dependency_files),
+        "dependency_files": dependency_files,
         "backend_plan_keys": catalog_selection["required_plans"],
         "selected_plan_keys": selected_plan_keys,
+        "suppressed_plan_keys": suppressed_plan_keys,
         "catalog_impacted_modules": catalog_selection["impacted_modules"],
         "mapped_backend_files": mapped_backend_files,
         "frontend_required": frontend_required,
@@ -1015,7 +1208,8 @@ def classify_changed_files(
         "codeql_pr_test_only": bool(codeql_languages) and not codeql_pr_languages,
         "unmapped_code_files": unmapped_code_files,
         "changed_test_plan_coverage": changed_test_plan_coverage,
-        "backend_changed_test_files": changed_test_plan_coverage["changed_test_files"],
+        "backend_changed_test_files": changed_test_plan_coverage["backend_changed_test_files"],
+        "frontend_changed_test_files": changed_test_plan_coverage["frontend_changed_test_files"],
         "unexecuted_test_files": unexecuted_test_files,
         "obsolete_surface_removal": bool(deleted_files),
         "nightly_deferred_verification": {
@@ -1047,6 +1241,8 @@ def _write_github_output(path: str, payload: dict[str, Any]) -> None:
         f"plan_routing={json.dumps(payload['plan_routing'])}",
         f"environment_fingerprint_ref={payload['environment_fingerprint_ref'] or 'not_applicable'}",
         f"install_forbidden={str(payload['install_forbidden']).lower()}",
+        f"dependency_validation_required={str(payload['dependency_validation_required']).lower()}",
+        f"dependency_files={json.dumps(payload['dependency_files'])}",
         f"frontend_required={str(payload['frontend_required']).lower()}",
         f"frontend_test_targets={json.dumps(payload['frontend_test_targets'])}",
         f"go_required={str(payload['go_required']).lower()}",

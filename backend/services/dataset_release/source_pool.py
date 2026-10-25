@@ -88,6 +88,8 @@ class ReadOnlySourcePool:
         self,
         connection_factory: ConnectionFactory,
         policy: ResourcePolicy,
+        *,
+        transaction_initializer: Callable[[Any], None] | None = None,
     ) -> None:
         if not callable(connection_factory):
             raise TypeError("connection_factory must be callable")
@@ -98,6 +100,7 @@ class ReadOnlySourcePool:
         self._max_fetch_rows = self.policy.validation_read_chunk_rows
         self._default_fetch_rows = min(_DEFAULT_FETCH_ROWS, self._max_fetch_rows)
         self._factory = connection_factory
+        self._transaction_initializer = transaction_initializer
         self._idle: queue.LifoQueue[Any] = queue.LifoQueue(maxsize=self._max_connections)
         self._row_gate = threading.BoundedSemaphore(self._row_query_concurrency)
         self._condition = threading.Condition()
@@ -286,6 +289,11 @@ class ReadOnlySourcePool:
                 cursor.execute("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
             finally:
                 cursor.close()
+        # PostgreSQL requires an exported snapshot to be imported before the
+        # transaction performs any ordinary query.  This hook deliberately
+        # runs ahead of the query-local resource settings/readback below.
+        if self._transaction_initializer is not None:
+            self._transaction_initializer(connection)
         cursor = connection.cursor()
         try:
             cursor.execute(

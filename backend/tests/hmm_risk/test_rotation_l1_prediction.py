@@ -71,6 +71,75 @@ def _process_and_acceptance(*, mean_ic: float = 0.01):
     return process, acceptance
 
 
+def _v16_process_and_acceptance():
+    scoring_contract = subject._v16_scoring_contract()
+    model_text = subject.canonical_json_bytes(scoring_contract).decode("utf-8")
+    model_hash = canonical_sha256(scoring_contract)
+    oof = []
+    day = date(2026, 1, 5)
+    contribution_index = subject.V14_FEATURES.index(subject.V16_SCORE_FEATURE)
+    for index, code in enumerate(SECTORS):
+        contributions = [0.0] * (len(subject.V14_FEATURES) + 1)
+        score = (index / 30.0) - 0.5
+        contributions[contribution_index] = score
+        oof.append(
+            {
+                "trade_date": day.isoformat(),
+                "as_of_date": date(2026, 1, 2).isoformat(),
+                "sector_code": code,
+                "availability": "available",
+                "reason_code": None,
+                "rotation_score": score,
+                "forecast_state": "fading" if index < 7 else "trending" if index >= 24 else "neutral",
+                "feature_contributions": contributions,
+                "model_hash": model_hash,
+            }
+        )
+    input_identity = {
+        "source_sha256": "a" * 64,
+        "mapping_sha256": "b" * 64,
+        "feature_contract_sha256": "c" * 64,
+    }
+    payload = {
+        "contract_version": subject.V16_CONTRACT_VERSION,
+        "profile": {"model_kind": "deterministic_cross_section_rank", "fit_required": False},
+        "scoring_contract_sha256": model_hash,
+        "oof_prediction_rows": oof,
+        "oof_prediction_rows_sha256": canonical_sha256(oof),
+        "final_model": {
+            "model_kind": "deterministic_cross_section_rank",
+            "model_sha256": model_hash,
+            "scoring_contract_sha256": model_hash,
+            "training_performed": False,
+        },
+        "folds": [{"model_sha256": model_hash}],
+        "development_summary": {
+            "mean_rank_ic": 0.039,
+            "hac_lower_two_sided_95pct": 0.001,
+            "hac_upper_two_sided_95pct": 0.077,
+        },
+        "input_identity": input_identity,
+        "tail_access_gate": {"passed": True},
+        "forward_power_status": "INSUFFICIENT",
+        "research_product_gate": {"passed": True, "effect_threshold_applied": False},
+    }
+    process = {
+        "reproducibility_payload": payload,
+        "reproducibility_payload_sha256": canonical_sha256(payload),
+        "final_model_text": model_text,
+    }
+    process["report_sha256"] = canonical_sha256(process)
+    acceptance = {
+        "contract_version": subject.V16_CONTRACT_VERSION,
+        "scoring_contract_sha256": model_hash,
+        "reproducibility_payload_sha256": process["reproducibility_payload_sha256"],
+        "research_surface_status": "NOT_AVAILABLE",
+        "research_product_gate_passed": False,
+    }
+    acceptance["acceptance_sha256"] = canonical_sha256(acceptance)
+    return process, acceptance
+
+
 def _surface_receipt(rows, *, mock_used: bool = False):
     body = {
         "schema_version": "hmm_risk_rotation_l1_product_validation_v1",
@@ -110,6 +179,42 @@ def test_oof_product_rows_keep_snapshot_and_surface_authority_is_separate() -> N
     assert {row["research_surface_status"] for row in rows} == {"NOT_AVAILABLE"}
     assert {row["revision"] for row in rows} == {1}
     assert all(row["supersedes_prediction_id"] is None for row in rows)
+
+
+def test_v16_oof_product_rows_accept_deterministic_contract_without_fake_model() -> None:
+    process, acceptance = _v16_process_and_acceptance()
+    rows = _build_rows(process, acceptance)
+
+    assert len(rows) == 31
+    assert {row["model_hash"] for row in rows} == {process["reproducibility_payload"]["final_model"]["model_sha256"]}
+    assert {row["rotation_l1_capability_status"] for row in rows} == {
+        "RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED"
+    }
+    assert {row["forward_confirmation"] for row in rows} == {"PENDING_INSUFFICIENT_POWER"}
+
+
+def test_v16_oof_product_closure_passes_parent_authorities_to_revalidation() -> None:
+    process, acceptance = _v16_process_and_acceptance()
+    v14_reference = {"authority": "v1.4"}
+    input_bundle = {"authority": "immutable-input"}
+    v14_input_bundle = {"authority": "immutable-v1.4-input"}
+
+    with patch.object(subject, "close_processes", return_value=acceptance) as close:
+        rows = subject.build_oof_prediction_rows(
+            acceptance=acceptance,
+            process_reports=(process, process),
+            sector_names=SECTORS,
+            v14_reference=v14_reference,
+            input_bundle=input_bundle,
+            v14_input_bundle=v14_input_bundle,
+        )
+
+    assert len(rows) == 31
+    assert close.call_args.kwargs == {
+        "v14_reference": v14_reference,
+        "input_bundle": input_bundle,
+        "v14_input_bundle": v14_input_bundle,
+    }
 
 
 def test_oof_product_rows_reject_offline_surface_claim() -> None:
@@ -197,6 +302,16 @@ class _Cursor:
             key = (str(values[0]), values[1], values[2], values[3])
             row = self.rows.get(key)
             self.result = [tuple(row[column] for column in subject.PREDICTION_COLUMNS)] if row else []
+        elif normalized.startswith("with requested(model_hash,trade_date,sector_code) as"):
+            requested = set(zip(values[0], values[1], values[2], strict=True))
+            latest = {}
+            for key, row in self.rows.items():
+                identity = key[:3]
+                if identity in requested and (identity not in latest or row["revision"] > latest[identity]["revision"]):
+                    latest[identity] = row
+            self.result = [
+                tuple(latest[identity][column] for column in subject.PREDICTION_COLUMNS) for identity in sorted(latest)
+            ]
         elif normalized.startswith("select distinct model_hash"):
             hashes = {key[0] for key in self.rows if "where trade_date=%s" not in normalized or key[1] == values[0]}
             self.result = [(item,) for item in sorted(hashes)]
@@ -334,6 +449,115 @@ def test_repository_rejects_partial_or_mixed_lineage_cross_section() -> None:
         repository.write_rows(mixed)
 
 
+def _authority_reclosure_rows(rows):
+    reclosed = copy.deepcopy(rows)
+    for row in reclosed:
+        row["input_hash"] = "d" * 64
+        row["mapping_snapshot_hash"] = "e" * 64
+        row["prediction_id"] = subject._prediction_id(row)
+    return reclosed
+
+
+def test_repository_authority_reclosure_appends_revision_and_preserves_prior_rows() -> None:
+    process, acceptance = _process_and_acceptance()
+    original = _build_rows(process, acceptance)
+    reclosed = _authority_reclosure_rows(original)
+    connection = _Connection()
+    repository = subject.RotationL1PredictionRepository(conn_factory=_factory(connection))
+    repository.write_rows(original)
+
+    receipt = repository.write_authority_reclosure(reclosed)
+    detail = repository.read_date(original[0]["trade_date"], model_hash=original[0]["model_hash"])
+
+    assert receipt["authority_reclosure_action"] == "appended"
+    assert receipt["row_count"] == 31
+    assert len(connection.rows) == 62
+    assert {row["revision"] for row in detail["rows"]} == {2}
+    assert {row["input_hash"] for row in detail["rows"]} == {"d" * 64}
+    assert {row["mapping_snapshot_hash"] for row in detail["rows"]} == {"e" * 64}
+    original_ids = {row["sector_code"]: row["prediction_id"] for row in original}
+    assert {row["sector_code"]: row["supersedes_prediction_id"] for row in detail["rows"]} == original_ids
+    assert all(
+        connection.rows[(row["model_hash"], row["trade_date"], row["sector_code"], 1)] == row for row in original
+    )
+
+
+def test_repository_authority_reclosure_retry_is_idempotent_without_revision_three() -> None:
+    process, acceptance = _process_and_acceptance()
+    original = _build_rows(process, acceptance)
+    reclosed = _authority_reclosure_rows(original)
+    connection = _Connection()
+    repository = subject.RotationL1PredictionRepository(conn_factory=_factory(connection))
+    repository.write_rows(original)
+
+    first = repository.write_authority_reclosure(reclosed)
+    second = repository.write_authority_reclosure(reclosed)
+
+    assert first["authority_reclosure_action"] == "appended"
+    assert second["authority_reclosure_action"] == "already_current"
+    assert first["canonical_row_sha256"] == second["canonical_row_sha256"]
+    assert len(connection.rows) == 62
+    assert {key[3] for key in connection.rows} == {1, 2}
+
+
+def test_repository_authority_reclosure_rejects_business_payload_drift() -> None:
+    process, acceptance = _process_and_acceptance()
+    original = _build_rows(process, acceptance)
+    reclosed = _authority_reclosure_rows(original)
+    reclosed[0]["rotation_score"] += 1.0
+    reclosed[0]["prediction_id"] = subject._prediction_id(reclosed[0])
+    connection = _Connection()
+    repository = subject.RotationL1PredictionRepository(conn_factory=_factory(connection))
+    repository.write_rows(original)
+
+    with pytest.raises(subject.RotationL1PredictionError, match="business payload differs"):
+        repository.write_authority_reclosure(reclosed)
+
+    assert len(connection.rows) == 31
+
+
+def test_repository_authority_reclosure_requires_complete_existing_lineage() -> None:
+    process, acceptance = _process_and_acceptance()
+    reclosed = _authority_reclosure_rows(_build_rows(process, acceptance))
+    repository = subject.RotationL1PredictionRepository(conn_factory=_factory(_Connection()))
+
+    with pytest.raises(subject.RotationL1PredictionError, match="prior prediction is missing"):
+        repository.write_authority_reclosure(reclosed)
+
+
+def test_repository_authority_reclosure_rejects_mixed_requested_authority() -> None:
+    process, acceptance = _process_and_acceptance()
+    reclosed = _authority_reclosure_rows(_build_rows(process, acceptance))
+    reclosed[0]["mapping_snapshot_hash"] = "f" * 64
+    reclosed[0]["prediction_id"] = subject._prediction_id(reclosed[0])
+    repository = subject.RotationL1PredictionRepository(conn_factory=_factory(_Connection()))
+
+    with pytest.raises(subject.RotationL1PredictionError, match="one model and authority snapshot") as error:
+        repository.write_authority_reclosure(reclosed)
+
+    assert error.value.reason_code == subject.REASON_AUTHORITY_RECLOSURE
+
+
+def test_repository_authority_reclosure_rejects_partially_revised_prior_lineage() -> None:
+    process, acceptance = _process_and_acceptance()
+    original = _build_rows(process, acceptance)
+    reclosed = _authority_reclosure_rows(original)
+    connection = _Connection()
+    repository = subject.RotationL1PredictionRepository(conn_factory=_factory(connection))
+    repository.write_rows(original)
+    partial = dict(reclosed[0])
+    partial["revision"] = 2
+    partial["supersedes_prediction_id"] = original[0]["prediction_id"]
+    partial["prediction_id"] = subject._prediction_id(partial)
+    partial = subject._validate_row(partial)
+    connection.rows[(partial["model_hash"], partial["trade_date"], partial["sector_code"], 2)] = partial
+
+    with pytest.raises(subject.RotationL1PredictionError, match="prior lineage is inconsistent") as error:
+        repository.write_authority_reclosure(reclosed)
+
+    assert error.value.reason_code == subject.REASON_AUTHORITY_RECLOSURE
+
+
 class _Booster:
     fit_called = False
 
@@ -464,6 +688,140 @@ def test_single_date_inference_is_zero_fit_causal_and_returns_31_rows() -> None:
 
     with pytest.raises(subject.RotationL1PredictionError, match="extra data"):
         subject.predict_single_date_rows(**{**arguments, "raw_features": raw.assign(target_5d=0.0)})
+
+
+def test_v16_single_date_inference_uses_only_delta_and_preserves_typed_missing() -> None:
+    calendar = tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(26))
+    trade_day, as_of = calendar[-1], calendar[-2]
+    index = pd.MultiIndex.from_product([[trade_day], list(SECTORS)], names=["trade_date", "sector_code"])
+    raw = pd.DataFrame(index=index)
+    raw[subject.V16_SCORE_FEATURE] = np.arange(31, dtype=np.float64)
+    raw[f"reason__{subject.V16_SCORE_FEATURE}"] = None
+    missing_code = list(SECTORS)[0]
+    raw.at[(trade_day, missing_code), subject.V16_SCORE_FEATURE] = np.nan
+    raw.at[(trade_day, missing_code), f"reason__{subject.V16_SCORE_FEATURE}"] = "provider_absent"
+    scoring_contract = subject._v16_scoring_contract()
+    model_text = subject.canonical_json_bytes(scoring_contract).decode("utf-8")
+    model_hash = canonical_sha256(scoring_contract)
+
+    rows = subject.predict_single_date_rows(
+        model_text=model_text,
+        final_model={
+            "model_kind": "deterministic_cross_section_rank",
+            "model_sha256": model_hash,
+            "scoring_contract_sha256": model_hash,
+            "training_performed": False,
+        },
+        model_profile={"model_kind": "deterministic_cross_section_rank", "fit_required": False},
+        raw_features=raw,
+        benchmark_close={},
+        calendar=calendar,
+        trade_date=trade_day,
+        as_of_date=as_of,
+        sector_names=SECTORS,
+        input_hash="e" * 64,
+        mapping_snapshot_hash="f" * 64,
+        development_summary={
+            "mean_rank_ic": 0.039,
+            "hac_lower_two_sided_95pct": 0.001,
+            "hac_upper_two_sided_95pct": 0.077,
+        },
+        capability_status="RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED",
+        forward_power_status="INSUFFICIENT",
+        forward_confirmation="PENDING_INSUFFICIENT_POWER",
+        booster_factory=lambda **_kwargs: pytest.fail("v1.6 must not construct a booster"),
+    )
+
+    assert len(rows) == 31
+    assert sum(row["availability"] == "available" for row in rows) == 30
+    missing = next(row for row in rows if row["sector_code"] == missing_code)
+    assert missing["reason_code"] == "provider_absent"
+    assert missing["rotation_score"] is None
+    assert all(row["model_hash"] == model_hash for row in rows)
+    assert all(
+        len(row["feature_contributions"]) == len(subject.V14_FEATURES) + 1
+        for row in rows
+        if row["availability"] == "available"
+    )
+
+
+def test_v16_asset_entry_requests_target_free_moneyflow_source(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from backend.services.hmm_risk import rotation_l1_input_bundle
+
+    calendar = tuple(date(2026, 1, 1) + timedelta(days=index) for index in range(26))
+    trade_day, as_of = calendar[-1], calendar[-2]
+    stock = [
+        {
+            "source_date": day,
+            "sector_code": code,
+            "moneyflow_net_amount_cny": float(sector_index + day_index),
+            "moneyflow_traded_amount_cny": 100.0,
+            "moneyflow_reason_code": None,
+        }
+        for day_index, day in enumerate(calendar[:-1])
+        for sector_index, code in enumerate(SECTORS)
+    ]
+    captured = {}
+    source_body = {
+        "schema_version": "hmm_risk_rotation_l1_single_date_source_v2",
+        "model_contract_version": subject.V16_CONTRACT_VERSION,
+        "trade_date": trade_day.isoformat(),
+        "as_of_date": as_of.isoformat(),
+        "mapping_snapshot_sha256": "f" * 64,
+        "target_columns_read": False,
+        "market_context_used_for_score": False,
+        "sector_close_used_for_score": False,
+    }
+    source_receipt = {**source_body, "receipt_sha256": canonical_sha256(source_body)}
+
+    def build_source(**kwargs):
+        captured.update(kwargs)
+        return {
+            "schema_version": "hmm_risk_rotation_l1_single_date_source_v2",
+            "model_contract_version": subject.V16_CONTRACT_VERSION,
+            "feature_calendar": calendar,
+            "stock_daily_inputs": stock,
+            "sector_names": SECTORS,
+            "input_hash": source_receipt["receipt_sha256"],
+            "mapping_snapshot_hash": "f" * 64,
+            "source_receipt": source_receipt,
+        }
+
+    monkeypatch.setattr(rotation_l1_input_bundle, "build_rotation_l1_single_date_source_from_assets", build_source)
+    scoring_contract = subject._v16_scoring_contract()
+    model_text = subject.canonical_json_bytes(scoring_contract).decode("utf-8")
+    model_hash = canonical_sha256(scoring_contract)
+    result = subject.predict_single_date_from_assets(
+        direct_v2_candidate_root=(tmp_path / "candidate").resolve(),
+        security_identity_manifest=tmp_path / "security.json",
+        provider_absence_manifest=tmp_path / "provider.json",
+        industry_authority={},
+        forbidden_roots=(),
+        work_parent=tmp_path / "work",
+        trade_date=trade_day,
+        as_of_date=as_of,
+        model_text=model_text,
+        final_model={
+            "model_kind": "deterministic_cross_section_rank",
+            "model_sha256": model_hash,
+            "scoring_contract_sha256": model_hash,
+            "training_performed": False,
+        },
+        model_profile={"model_kind": "deterministic_cross_section_rank", "fit_required": False},
+        development_summary={
+            "mean_rank_ic": 0.039,
+            "hac_lower_two_sided_95pct": 0.001,
+            "hac_upper_two_sided_95pct": 0.077,
+        },
+        capability_status="RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED",
+        forward_power_status="INSUFFICIENT",
+        forward_confirmation="PENDING_INSUFFICIENT_POWER",
+    )
+
+    assert captured["market_start"] is None
+    assert captured["model_contract_version"] == subject.V16_CONTRACT_VERSION
+    assert len(result["rows"]) == 31
+    assert result["source_receipt"]["target_columns_read"] is False
 
 
 def test_single_date_asset_entry_binds_explicit_source_and_never_requests_targets(

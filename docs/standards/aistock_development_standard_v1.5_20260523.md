@@ -52,6 +52,7 @@
 3. `enforcement_phase` 使用 `changed_file_scan`、`task_planning`、`interactive_execution`、`pr_readiness`、`issue_lifecycle`、`design_delivery`、`standard_change`、`production_activation` 或 `release_deployment`。条件控制在不适用时记为 `noop`，禁止伪装成 pending gate。
 4. CI job、页面 check、测试计划和门禁分别计数。skipped job、warning、advisory、delegated plan、诊断 evidence publisher 和 telemetry collector 都不是合并硬门禁。
 5. 失败证据发布器保持 best-effort、可见和可审计，但禁止成为 `CI verdict` 的依赖或用自身故障覆盖真实测试结论。分支保护与自动合入器只消费绑定当前 PR HEAD 的稳定 `CI verdict`；PR Quality、Semgrep、密钥泄露与危险 workflow 检查作为该 verdict 内部的 fail-closed steps 执行，不再发布或等待重复合入上下文。CodeQL 属于 Nightly 安全扫描而不是 PR 合入门禁，其排队、失败或 runner 状态不得阻断白天 PR 合入。
+   Nightly 的 actionable 故障登记延期（例如 `deferred_registry_pr_capability`）必须在每个对应 Issue 持久化本地流水线 intake 角色、受影响模块、绑定 run/commit/fingerprint 的证据、未认领状态及精确接手命令，并在原汇总 step 显示 warning/摘要。成功发布 Issue 或步骤退出 0 不等于 BUG 已登记、已认领或已修复；本地 intake owner 复用正式 promotion 流程，在该 Issue 同步认领和登记结果，再交回模块 owner。认领记录仅作追溯，不是新增授权、前置验证或人工审批。已有 BUG 链接标为 `registered_not_fixed`，不得误报修复完成。重复发生时沿用同一 Issue，不扩大 Actions 权限、不新增 PR 门禁、审批或全仓扫描，也不因登记延期重跑无关测试。
 6. 共享 runner 的 PR/push workflow 必须按 workflow 与 PR/ref 配置 `concurrency`，并对同一目标启用 `cancel-in-progress: true`；新 commit 发布后，旧 commit 的 queued/in-progress run 属于 superseded 诊断状态，不得继续占用 runner 或要求人工重新授权。
 7. PR 失败诊断优先使用原失败 job 日志和 `GITHUB_STEP_SUMMARY`。禁止为报告、评论或重复上传证据单独排队一个 runner job，也不得让这类诊断额外下载 `upload-artifact`、`download-artifact` 或 `github-script` action；default-branch 的正式故障登记仍由独立 fail-closed workflow 负责。
 
@@ -81,6 +82,8 @@
 8. 成功只保存紧凑 cleanup receipt，包括目标 identity、artifact manifest SHA-256、删除类别/数量、四态读回和耗时；完整文件清单仅用于失败诊断，不进入 PR 正文、标准或长期 handoff。
 9. cleanup 对同一目标 worktree 只生成一次完整 ignored-artifact manifest；后续分类和删除复用该 manifest，并仅对实际删除的精确 roots 做漂移读回。除 manifest 漂移、路径身份变化或删除失败外，禁止重复遍历整个 ignored tree。
 10. 同一次 merge finalizer 内，source 与 close-sync cleanup 可复用已成功完成且没有中间 main 变更的 `fetch origin --prune` receipt，以及各自前序步骤已验证的精确 PR/HEAD receipt；branch remote SHA、目标 worktree、ignored-artifact、活动进程和删除后四态仍逐目标重新验证。root-sync 因 canonical root 脏而 deferred 时，直接复用首次完整阻断 payload 生成提示并执行一次 `sync_root=false` 安全重试，禁止为生成相同提示插入第二次完整 dry-run 预检。
+11. 未合入但已被权威替代的旧分支只能通过独立 `cleanup-superseded` 合同清理，禁止用普通 `cleanup-after-merge`、手工 `git branch -D` 或放宽 merged 判定绕过。命令必须绑定精确 worktree、完整 expected HEAD、授权引用和处置原因，确认没有开放 PR，并且只接受三种权威之一：canonical BUG 的 `fixed`/`verified` 记录与另一已合入 PR/fix commit 完全一致；仓库 `OWNER`/`MEMBER`/`COLLABORATOR` 在绑定同一 branch/HEAD 的关闭未合入 PR 上明确标注 superseded/obsolete/do-not-merge；或所有非 merge commit 均与 `origin/main` patch 等价且未合入 merge commit 引入的路径也与主线一致。删除前先在 worktree 外持久化 `aistock_superseded_cleanup_receipt_v1`，随后仍执行 clean、ignored/protected/unknown artifact、活动进程、remote SHA lease、manifest 漂移和四态读回；dirty、unknown/protected artifact、HEAD 漂移、开放 PR、独有提交或权威读取失败继续 fail closed。
+12. ignored-artifact 预检必须先折叠语义上整根可删除的固有 transient 目录（例如 `node_modules`、Python/测试缓存和 `.next*`），禁止为生成 manifest 逐个列举这些根内的全部文件；只有不能按根安全分类或需要内容约束验证的目录才做定向展开。折叠 inventory 仍须记录根级 manifest digest，并在 purge 前后使用相同范围重新读取；tracked file、protected/unknown artifact、symlink/junction/reparse point、内容上限与 schema 校验不得因折叠而放宽。
 
 ## 3. 风险与工作量分级
 
@@ -113,6 +116,8 @@
 3. 通用 gate 仅包含真正跨模块且成本低的检查，例如编译/静态检查、scope、catalog integrity 和 `git diff --check`。
 4. 其他模块的测试只在存在明确依赖边、共享契约变化或跨模块验收条款时加入，并在证据中说明原因。
 5. 同模块、同风险、同验证链的 issue 可批处理，保留每个 issue 的提交映射与关闭证据。
+6. 所有权只决定责任模块，不等于该模块全部测试均适用。一个模块登记两个及以上非 `l0` required plan 时，必须通过 plan 的 changed-file/layer/ownership-rule 适用条件区分；后端、前端、阶段、MCP 与 DEV 数据库计划只消费各自直接契约，混合修改取适用计划并集。
+7. DEV 数据库计划只由 repository、SQL、migration、事务、数据库调用契约或其直接 DEV 测试触发；普通服务计算、只读编排、文档和 Skill/command 不得继承 DEV 写库要求。
 
 ### 4.2 本地验证预算
 
@@ -121,6 +126,10 @@
 3. nightly 对当天合入变更按模块和计划去重，返回紧凑 receipt；PR 只记录直接相关的通过证据和委托计划。
 4. 过期、重复、只验证实现细节或与模块无依赖关系的测试从 active plan 移除或归档。
 5. workflow receipt 分别记录 active repair、local validation、runner queue、PR CI、merge/aftercare 的已知耗时；无法直接观测的阶段保持 `not_recorded`，禁止把相邻事件间隔伪装成代码开发时间。RTK telemetry 只消费调用方已提供的使用/回退信息，不额外探测或形成门禁。
+   pytest 执行统计复用 `scripts.ci_plan_coverage`，记录实际墙钟/测试阶段耗时、执行数及用例集合摘要；只有源码 HEAD、预构建环境指纹、计划、调用参数和用例集合均相同时才报告重复成功运行候选。PR CI 自动记录；本地/nightly 可通过该插件与 `AISTOCK_CI_TEST_COLLECTION_RECEIPT` 或 `AISTOCK_TEST_METRICS_RECEIPT` 接入，缺失数据保持未知，不宣称覆盖所有窗口。统计失败只告警，不替代真实测试结果，不自动复用或跳过测试，也不新增门禁、独立 job 或全量历史扫描。
+6. 同一计划在一个交付周期只进入一个权威执行阶段：本地仅保留 `l0`、changed-file/scope 和直接 fix-point；可在预构建 runner 执行的模块计划由 PR CI 一次完成；DEV/人工计划作为外部 pre-merge receipt；完整覆盖率、UI/business-flow 与跨模块深度回归由 nightly 去重执行。禁止为了取得 PR 前本地 receipt 重跑 CI 将要执行的完整模块套件。
+7. 阶段计划不得嵌套全模块回归或全局 catalog gate；全模块回归和 catalog integrity 在各自权威计划中各执行一次。全局 warning 只影响其自身 catalog 结果，不得把已通过的无关业务 session 改判为失败。
+8. 测试债务的真实比例检查按 changed files 的 primary owner 触发，包含该 owner 的生产/测试删除；不因仅有 impact_modules 关联、普通文档或无关 catalog 修改而要求验证另一模块比例。预算引擎本身变更运行其直接合同，Nightly 在所属权威计划保留完整预算回归；catalog integrity 不嵌套真实模块比例断言。保留诚实的生产分母及既定 30% 上限，不通过重命名归属、虚增分母或跳过相关检查规避。
 
 ### 4.3 测试价值标准
 
@@ -214,6 +223,8 @@ HTTP、subprocess、DB 长查询和批处理设置 timeout、取消、日志、�
 
 PR check watch、已完成 Actions run/job/log 诊断和 last-green 定位在 GraphQL/`gh run` 遇到 TLS、EOF、schannel、连接重置或超时时，先执行固定次数重试，再改用等价 GitHub REST endpoint；PR check 绑定 REST 回读的精确 HEAD SHA，Actions jobs 超过单页上限时 fail-closed。权限、策略、输入、404 或其他非传输错误不得改写成网络恢复。REST 与 GraphQL 都失败时返回结构化 unavailable/deferred 结果，不要求重新授权、不启动第二个 workflow、不循环重试。
 
+对同一任务已登记的 OPEN source PR，`run --mode pr` 先完成实际任务 HEAD 的 finish/收据校验，再通过 REST 核对本仓库、精确 branch/base 和旧 HEAD 为新 HEAD 的祖先；push 前同步生成的 PR body，避免 synchronize 事件固化旧收据。相同 HEAD/body 不重复写入；远端已是精确 task HEAD 时不重复 push，不重建已知 PR，也不因此重跑已完成的同 HEAD CI。更新传输结果不明时只作有限只读回查，不盲目重试 PATCH；身份漂移、外仓库或非祖先拒绝覆盖，保留已有状态。新 HEAD 始终需要自己的必需 CI，不得复用旧 HEAD 的绿灯。新任务没有已登记 PR 时仍走既有创建路径，不增加额外发现扫描、锁、安装或人工授权。
+
 <a id="rule-db-comment-001"></a>
 ### 6.11 [DB-COMMENT-001] 数据库语义
 
@@ -278,7 +289,7 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 <a id="rule-bug-restart-effective-001"></a>
 ### 6.22 [BUG-RESTART-EFFECTIVE-001] BUG 重启后立即生效
 
-所有影响 backend、worker 或 scheduler 运行时的 BUG 修复必须写入 Git 管理的持久来源或受控 migration/config；只依赖当前进程 monkey patch、热加载、手工缓存或未追踪文件的实现记为失败。task card 通过实际 changed files 和 runtime target catalog 的 `source_globs` 生成 lazy `runtime_contract`；显式字段只能补充或加强推断，不能降级实际影响，schema、target 集、持久化类型和位于 `docs/operations/` 的真实 runbook 不一致时 fail closed。当前单 receipt 模型遇到多 runtime target 或 runtime BUG batch 时要求拆分为单 BUG 流程。PR 前 fresh-process 证据写入 BUG JSON 和 PR body；runtime 源码 PR 只使用 `Refs` 并保持 Issue 打开。合入后由 workflow 输出 catalog target、operator runbook、预期 identity 和只读 smoke 引用，并先在 close-sync BUG JSON/PR 中固化与 source PR/merge commit 绑定的 `source_merge_receipt_v1`；该 receipt 只证明源码验证和 runtime pending，不能替代重启验证。用户完成重启后运行 `post-restart-verify`；probe 必须限定在 catalog origin，receipt 不保存响应正文，并绑定 runtime contract、catalog、完整 health/identity/业务 smoke 以及需要时的 DB readback digest，close-sync 逐项验证后才能标记 verified。等待用户重启期间状态为 `fixed_source_pending_user_restart`、`runtime_identity_match=pending`，GitHub Issue 保持打开；源码合入和已授权的 source cleanup 可独立完成，并分别保留其真实状态，close-sync PR 在重启验证前保持打开。runtime target catalog 缺失、冲突、probe/receipt 不完整或 close-sync worktree 未同步最新 `origin/main` 时显式阻断验证。
+所有影响 backend、worker 或 scheduler 运行时的 BUG 修复必须写入 Git 管理的持久来源或受控 migration/config；只依赖当前进程 monkey patch、热加载、手工缓存或未追踪文件的实现记为失败。task card 通过实际 changed files 和 runtime target catalog 的 `source_globs` 生成 lazy `runtime_contract`；显式字段只能补充或加强推断，不能降级实际影响，schema、target 集、持久化类型和位于 `docs/operations/` 的真实 runbook 不一致时 fail closed。catalog 通过 `source_role_rules` 声明结构化非运行时源码边界，不得持续为同类离线工具堆积逐文件例外：`scripts/` 下 Python/PowerShell 默认属于离线 operator/tooling，但更具体的 runtime target 仍优先；`backend/services/` 只允许精确文件或限定在单一 service 目录且具有明确文件名前缀的窄文件族，未命中的 backend Python 继续按运行时 fail closed。runtime target 与 source role 同时匹配时按精确路径、有效字面范围及通配符数量比较具体度；同等具体度冲突记为 `unknown`，禁止静默降级为非运行时。当前单 receipt 模型遇到多 runtime target 或 runtime BUG batch 时要求拆分为单 BUG 流程。PR 前 fresh-process 证据写入 BUG JSON 和 PR body；runtime 源码 PR 只使用 `Refs` 并保持 Issue 打开。合入后由 workflow 输出 catalog target、operator runbook、预期 identity 和只读 smoke 引用，并先在 close-sync BUG JSON/PR 中固化与 source PR/merge commit 绑定的 `source_merge_receipt_v1`；该 receipt 只证明源码验证和 runtime pending，不能替代重启验证。用户完成重启后运行 `post-restart-verify`；probe 必须限定在 catalog origin，receipt 不保存响应正文，并绑定 runtime contract、catalog、完整 health/identity/业务 smoke 以及需要时的 DB readback digest，close-sync 逐项验证后才能标记 verified。等待用户重启期间状态为 `fixed_source_pending_user_restart`、`runtime_identity_match=pending`，GitHub Issue 保持打开；源码合入和已授权的 source cleanup 可独立完成，并分别保留其真实状态，close-sync PR 在重启验证前保持打开。runtime target catalog 缺失、冲突、probe/receipt 不完整或 close-sync worktree 未同步最新 `origin/main` 时显式阻断验证。
 
 ## 7. 上下文、批处理和生产依赖
 
@@ -287,7 +298,7 @@ RD-Agent 运行状态统一写入 repo 外的 `RDAGENT_STATE_ROOT`，覆盖 QE w
 
 backend、frontend、Go、workflow validation、PR quality 和安全扫描等 CI 验证必须在预构建的 Windows self-hosted runner 上执行；运行前只允许执行环境身份、版本指纹和工具可用性检查。CI 禁止 `actions/setup-*`、`pip/conda/mamba install`、`npm ci/install`、`go mod download` 以及任何隐式依赖安装。环境缺失、指纹漂移或工具缺失时必须 fail-closed 并报告 `environment_mismatch`，不回退到 GitHub-hosted Linux、生产 `AIstock` 环境或临时安装环境。该规则是执行环境约束，不增加业务测试或人工审批。
 
-Windows runner 容量使用两个隔离角色：普通 PR/模块验证使用 `aistock-ci`，CodeQL 与 Code Intelligence 使用 `aistock-ci-security`。两个角色必须对应不同的在线 runner identity、独立安装目录与独立 `_work`；只允许共享经 fingerprint/hash 校验的只读 Conda 环境、Git object mirror 和安全工具缓存，禁止复制 runner credential、工作目录或运行态日志。单机默认总并行度为 2，增加更多实例前必须重新给出 CPU、内存、磁盘与现有业务负载证据。角色拓扑只由一次快速 policy/health receipt 验证，不得拆成逐 evidence job、人工审批或新的业务门禁。
+Windows runner 容量使用两个隔离 identity、工作目录与安全权限角色：普通 PR/模块验证使用 `aistock-ci`，CodeQL 与 Code Intelligence 额外要求 `aistock-ci-security`。普通 runner 只注册 `aistock-ci`，不得注册安全标签；安全 runner 同时注册 `aistock-ci` 与 `aistock-ci-security`，在没有安全作业时可领取普通 CI，避免空闲容量与普通 PR 长队并存。安全作业仍只能由安全 runner 领取，普通 CI 不获得安全权限；该共享标签不得重新引入逐 PR CodeQL/安全扫描。两个 identity 必须使用独立安装目录与独立 `_work`；只允许共享经 fingerprint/hash 校验的只读 Conda 环境、Git object mirror 和安全工具缓存，禁止复制 runner credential、工作目录或运行态日志。单机默认总并行度为 2，增加更多实例前必须重新给出 CPU、内存、磁盘与现有业务负载证据；若安全定时任务到点时安全 runner 正在完成普通作业，允许安全任务有限排队，不得取消已领取的普通作业。角色拓扑只由一次快速 policy/health receipt 验证，不得拆成逐 evidence job、人工审批或新的业务门禁。
 
 两个 Windows runner identity 必须在注册时使用 `--disableupdate`，并由独立版本号与 SHA-256 固定的本地安装包进行受控维护；禁止在 PR、Nightly、CodeQL 或 Code Intelligence 作业领取期间自动下载或应用 runner 更新。升级必须逐角色执行：确认目标角色无在途 job，停止该角色，校验安装包 hash，完成更新并取得 `online + canary accepted` 收据后，才能维护另一角色。禁用自动更新不等于永久冻结版本，维护 owner 必须在 GitHub 支持窗口内主动升级。每个角色必须通过 Windows service 或具有单实例 mutex、精确 stop sentinel、有限重启窗口和结构化状态/事件收据的受监督隐藏入口运行；一次性 `Start-Process`、仅靠 API `online` 状态或无限重启循环都不满足生命周期合同。健康检查发现匹配 runner 显示 online/idle、但对应 workflow 的 queued job 超过 10 分钟仍未分配时，必须分类为 `online_but_not_accepting_work` 基础设施故障并提示检查自更新/Listener，不得归因于业务测试、重复提交 PR、切换到 GitHub-hosted Linux、跨角色执行或增加人工合入门禁。
 
@@ -295,21 +306,31 @@ CodeQL CLI 属于预构建工具链而不是运行期依赖。CodeQL job 必须�
 
 其他确需 JavaScript Action 的 workflow 仅允许使用经 runner 实跑验证的原生 Node 24 主版本：`actions/checkout@v7`、`actions/upload-artifact@v7`、`actions/download-artifact@v8`、`actions/github-script@v9`；不得为了消除告警依赖 runner 的强制 Node 版本兼容层。版本升级必须同步 machine-policy evidence 与合同测试，但不得把这些远端 Action 重新引入 CodeQL 或 Code Intelligence 快速路径。
 
-main 必须启用“通过 PR 合入”的分支保护，并与自动合入器统一只消费 `CI verdict`。PR Quality 与 Semgrep 的实际强制检查必须作为唯一普通 runner `CI verdict` job 内的 fail-closed steps 执行；其独立 workflow 只保留手工诊断入口，不得在每个 PR 重复 checkout、分类或获取普通 runner。自动合入器禁止追加 GitHub 分支保护之外的 CodeQL、Security、报告或诊断上下文。仅修改 BUG registry JSON 的官方 close-sync PR 只运行 GitHub-hosted stdlib metadata `CI verdict`；其他 PR 继续执行 changed-file 分类和精确相关 CI，但都不触发 CodeQL。每日 Nightly CodeQL 与手工全量安全扫描独立于 PR 生命周期，安全 runner 离线、自更新或排队不得转换为 PR 阻断、重复提交、重复授权或跨角色 fallback。
+main 必须启用“通过 PR 合入”的分支保护，并与自动合入器统一只消费 `CI verdict`。PR Quality 与 Semgrep 的实际强制检查必须作为每个 PR 唯一的 `CI verdict` job 内的 fail-closed steps 执行，该 job 可由任一具备 `aistock-ci` 标签的合规 Windows runner 领取；其独立 workflow 只保留手工诊断入口，不得在每个 PR 重复 checkout、分类或获取普通 runner。自动合入器禁止追加 GitHub 分支保护之外的 CodeQL、Security、报告或诊断上下文。PR 与 Issue 的关闭关系直接使用 GitHub closing keywords，并由 issue workflow/finalizer 在合入前后校验，不得再为每次 PR 启动只做重复评论的 auto-link workflow；PR CI 失败保留在该 PR 的 `CI verdict`，Nightly 失败由 `full-summary` 的去重候选链处理，不得为每个已完成 CI 创建必然跳过的 `workflow_run` listener。仅修改 BUG registry JSON 的官方 close-sync PR 只运行 GitHub-hosted stdlib metadata `CI verdict`；其他 PR 继续执行 changed-file 分类和精确相关 CI，但都不触发 CodeQL。每日 Nightly CodeQL 与代码智能使用各自唯一的定时 owner；需要安全 runner 的 workflow 必须先在 GitHub-hosted 轻量 preflight 验证精确角色，离线时快速失败并留下证据，不得无限排队。每日 Nightly CodeQL 与手工全量安全扫描独立于 PR 生命周期，安全 runner 离线、自更新或排队不得转换为 PR 阻断、重复提交、重复授权或跨角色 fallback。
 
 Nox、测试 helper 和脚本内部同样受零安装约束：GitHub Actions 或 `AISTOCK_CI_INSTALL_FORBIDDEN=1` 下发现依赖缺失必须直接失败，禁止在 helper 内自动执行安装。CI policy scanner 同时检查 workflow YAML、Windows `AIstock-CI` runner/环境/DEV-DB 路由标记和 Nox 隐式安装边界；仅做关键词扫描不得宣称完整合同通过。
 
 PR CI 的评论、完整 artifact 上传和其他报告发布器属于非阻断诊断，不得要求 runner 在 job 初始化阶段下载额外 action archive。分类、静态检查、测试、UI 验收和 workflow policy 的真实质量结果直接写入原 job summary/stdout 和 commit-bound PR receipt；临时文件留在 job workspace，不以 `upload-artifact`/`download-artifact` 作为 PR 合入前置依赖。default-branch 正式故障登记、已批准的发布资产和独立运维备份不受此限制，但其发布失败不得覆盖测试结论，也不得延迟 required `CI verdict`。
 
-Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 WSL `System32\\bash.exe`）；runner wrapper 可配置只读本地 Git object mirror，并通过 `GIT_ALTERNATE_OBJECT_DIRECTORIES` 复用已验证对象。checkout 仍使用浅深度和当前 PR base SHA；仅在 mirror 缺少对象时远程补取。mirror、shell 和代理异常属于 runner 基础设施诊断，禁止转化为业务门禁或重复依赖安装。
+Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 WSL `System32\\bash.exe`）。每个使用远端 `actions/checkout` 的 self-hosted job 必须先清空 wrapper 遗留的 alternate 环境值，再在 checkout 前验证只读本地 Git object mirror 的 manifest、仓库 identity、bare 状态与 main commit；workspace 是否尚未初始化必须通过 `.git/HEAD` 文件存在性判断，禁止在 GitHub Actions 的 fail-fast PowerShell 中用预期失败的 `git rev-parse` 作为空目录探针。发现 workspace 为空仓库时，先从该 mirror 本地播种 main，再通过 job 级 `GIT_ALTERNATE_OBJECT_DIRECTORIES` 让 checkout 及其后的 base/changed-file Git 命令共享同一已验证对象视图。mirror 缺失或校验失败时必须把该变量明确置空、保留可见 warning、以成功的 preflight 状态降级为有界远程 checkout，不新增 PR 门禁；mirror 由单一维护 helper 从干净且 `main == origin/main` 的 canonical root 在互斥锁内离线更新，只写 runner prebuilt 根下的精确 bare repo 与 manifest，不访问网络、不控制 runner 或业务进程。checkout 仍使用浅深度和当前 PR base SHA；仅在 mirror 缺少对象时远程补取。所有 self-hosted workflow 必须设置 `GIT_HTTP_LOW_SPEED_LIMIT=1024`、`GIT_HTTP_LOW_SPEED_TIME=60`，并通过 `GIT_CONFIG_COUNT=1`、`GIT_CONFIG_KEY_0=http.version`、`GIT_CONFIG_VALUE_0=HTTP/1.1` 向 Git 子进程注入 HTTP/1.1：仅当传输连续 60 秒低于 1 KiB/s、已接近停滞时才终止当前 Git HTTP 请求，并只交由 checkout 的既有有限重试处理；该低速阈值是停滞探针，不得作为公网带宽 SLA。每个 `actions/checkout` step 必须设置 `timeout-minutes: 5`，由该 step 总时限兜底终止持续可用但异常缓慢的传输；随后以 `always()` 运行受 workspace 根目录约束的轻量清理，只枚举 `.git/objects/pack` 下的 `tmp_pack_*`，逐个通过 `Remove-Item -LiteralPath` 回收中断传输片段并报告数量/字节。该清理必须设置 `continue-on-error: true`：删除失败由 step 日志明确暴露并在下次 runner 分配时重试，不得覆盖业务测试结论或新增合入门禁。GitHub-hosted close-sync 不执行本机 pack 清理。禁止让冷克隆、TLS/EOF、握手停滞或残缺 pack 占用整个 job 超时或持续积累；该设置不是新的 PR 门禁，基础设施失败不得归因于业务测试。正常但暂时较慢的传输应继续完成，真正停滞连续失败时快速释放 runner并保留原始基础设施证据，禁止通过无限重试、完整历史 checkout 或重复依赖安装恢复。mirror、shell、Schannel 和代理异常属于 runner 基础设施诊断。
 
-PR base commit 已在 checkout 中且能够与当前 HEAD 证明 merge-base 时，才可直接更新本地 ref 而不执行远程请求；仅有 base 对象但浅克隆 ancestry 不完整不视为可用。确需补取时，仅对 pinned base ref 和当前 PR checkout/head ref 使用固定 3 次、短退避、有限 `--deepen` 的 bounded retry，每次补取后重新验证 merge-base，并在连续失败后以基础设施错误 fail-closed；禁止为解决该问题改成无界完整历史 checkout。单次 TLS/EOF 不得直接转化为人工重新授权、完整 CI 重跑或第二个 workflow；新 commit 仍由 concurrency 自动取代旧 run。
+canonical main 合入善后或清理完成主线同步并证明干净、`main == origin/main` 后，workflow 自动调用现有离线 mirror helper；维护总预算 60 秒，锁等待最多 5 秒，同 SHA 且有效 manifest 直接复用，不反复扫描 Git 历史。增量 fetch 禁用自动 GC/maintenance，不 force 回退、不 prune/repack 活动 CI 引用的对象；源 SHA 漂移不得发布 readiness manifest。helper 缺失、锁忙、维护失败或超时只留下可见 warning 并继续既有有界远程路径，不新增审批、PR 门禁、后台进程或逐 job 镜像更新。
+
+定时 Nightly、CodeQL 与 Code Intelligence 的 self-hosted job 排队不受 job `timeout-minutes` 约束，因此 GitHub-hosted 轻量 watchdog 与各自 preflight 必须对同一 workflow、`main`、原 `schedule` 或下述精确自动 `repository_dispatch` 事件中超过 30 分钟且仍为 queued、精确回读确认没有 `in_progress` job 的旧 run 执行有界终结，并留下结构化收据。自动 dispatch 必须匹配已登记 workflow、固定 run-name 和合法 cycle date，其他 repository dispatch 不得取消。watchdog 不 checkout 依赖、不领取 self-hosted runner、不运行测试；禁止取消普通 PR、手工 dispatch、其他分支、其他 workflow 或已经领取 runner 的 job。取消 API 失败时保持旧 run 并 fail closed。该队列终结属于基础设施维护，不增加 PR 门禁、业务测试、依赖安装或进程控制。
+
+定时后台重任务只在中国时间 00:00–07:00 的窗口内领取执行预算，保护白天两个共享 runner 的研发容量。Nightly、CodeQL、Code Intelligence 使用同一个 stdlib admission helper：GitHub-hosted preflight 检查完整重任务链的最坏预算，self-hosted job 领取 runner 后再次检查剩余窗口，预算不足即跳过后续重步骤并记录 `deferred / not_executed`、来源 SHA、run/job、预算、原因与下一窗口。延期不等于验证通过，不产生成功测试回执、不前移验证水位、不丢弃上一轮失败回执；汇总须区分延期与真实失败，并继续处理其他分支的真实失败。窗口检查不查询全量 Issue/worktree、不等待或终止活动作业、不新增 PR 门禁或人工审批；显式 `workflow_dispatch` 保留已有操作授权，不受定时窗口限制。该保护只保证新领取任务的最坏预算适配窗口，不能追溯中断已经运行的任务。
+
+Nightly、CodeQL、Code Intelligence 的自动触发统一由 Windows 单一计划任务 `AIstock Nightly Scheduled Dispatch` 负责，不再依赖 GitHub 不保证准点的 cron。中国时间分别为 03:07、04:27、02:30；02:30 起五分钟轻量恢复 tick 至 06:15，各 workflow 在自己的最坏预算截止点后禁止补发。安装入口为 canonical main 的 `scripts/configure_aistock_github_runner.ps1 -ScheduledDispatch -Apply`，只使用既有 AIstock-CI 的 pythonw、当前登录用户 gh 凭据；主机须保持开机且该用户已登录，不安装依赖、不启动业务进程。该任务仅向既有 workflow 发布三个固定类型的 `repository_dispatch`，与人工 `workflow_dispatch` 分离；自动事件的 cycle date 必须为执行当日，并始终经过原夜间 admission。关闭三个原 cron 避免双调度；任务和流水线迁移须在同一交付完成。
+
+调度收据保存在仓库外 `F:/Dev/aistock-nightly-scheduler`，以 workflow/cycle 绑定、OS 锁及原子写入保证单 owner。每个 workflow 每周期最多一次 POST，先持久化 intent；传输结果不明时仅回读精确 run-name/main 的有界 run 列表，不盲目重发、不取消活动 job。延迟、预算不足、请求歧义和运行失败记录到周期收据及 `last-tick.json`，任务以非零退出保持可见；计划任务安装须回读 action、触发器、权限、状态和下次时间，漂移不覆盖。Nightly 的 prior durable receipt 查询兼容旧 schedule、新自动 dispatch 与正式手工运行，只接受存在实际 session-results/execution-plan 的结果，保留原水位校验。已提交、run 可见、GitHub 绿色均不能替代实质验证收据；不得为此新增 PR 门禁、人工审批、全量 JSON/worktree 扫描或本地重型验证。
+
+PR base commit 与真实 source HEAD 必须证明 merge-base，source HEAD 必须属于当前 checkout；合成 merge HEAD 不能代替真实 source 归因。仅有对象但浅克隆 ancestry 不完整不视为可用。先复用已校验的本地 mirror 对象：对当前 checkout 的浅边界逐项忽略标记进行完整父提交遍历，只有无缺失父提交、路径属于本 checkout、独占 shallow.lock 且文件未漂移时才解除已证明完整的边界；不能修改共享 worktree Git 目录或镜像本身。确需补取时，仅对 pinned base SHA（手工 dispatch 尚未钉住时使用 base ref）和当前 PR checkout/head ref 使用最多 3 次、短退避、有限 `--deepen` 的 bounded retry；单次 fetch 最多 45 秒，按剩余 150 秒历史准备预算限制补取，自动 PR step 总上限 3 分钟，每次补取后重新验证 source ancestry。超时仅终结该 CI 自己创建的 Git/SSH 子进程树，不能停止 runner、后端或其他任务。已能证明不属于 checkout 的 source 立即失败，不为无效身份重复取数。连续失败仍以基础设施错误 fail-closed，禁止无界远程完整历史 checkout。单次 TLS/EOF 不得转化为重新授权、完整 CI 重跑或第二个 workflow；新 commit 仍由 concurrency 自动取代旧 run。
 
 Nightly 的验证/测试 job 与 PR CI 使用同一预构建 `AIstock-CI` Conda 环境，不得调用生产 `AIstock` 环境代替测试环境；独立 DR 运维 job 仍按其授权目标使用运维环境，不受此替换。一次性 Nightly checkout 需要前端依赖时，只能在 `package-lock.json` SHA-256 一致且锁定的直接 Playwright CLI 存在后，把 canonical 预构建 `frontend/node_modules` 以目录链接挂入 workspace；禁止每轮安装、复制大型依赖树、静默跳过 UI 计划或在锁文件漂移时继续运行。清理一次性 workspace 时只删除链接本身，不得递归删除依赖源。
 
 Scheduled Nightly 必须以显式仓库参数查询最近一次具备完整 `execution-plan.json` 与 `session-results.json` 的已完成定时运行，并分别检查命令退出码、JSON 解析、receipt 与 source HEAD 绑定以及本地 commit 可用性。下一轮 change window 从该 receipt HEAD 前进，只重跑 receipt 中失败或尚未写入结果的已选 session 与新 changed files 映射出的计划；change-scoped `l0` 必须继续使用失败 receipt 的原始文件范围并合并新增范围，通过短路径 scope 文件传递，禁止在干净 checkout 上重新猜测 changed files或把大批路径展开到 Windows 命令行。任一步失败或不存在有效 receipt 时以基础设施错误 fail-closed，不得静默转换为全量执行；`--full-run` 只允许由 `workflow_dispatch` 的 `full_nightly_run=true` 明确触发。自动故障恢复不得因单个长期失败而反复运行已经通过的数十个无关 session。
 
-source/mixed PR merge tree 的 changed-file 分类、静态 L0/catalog、被选中的 backend/frontend/Go/prompt/workflow 验证、workflow policy 与最终 `CI verdict` 必须复用一个 job、一次 checkout、一次 base-ref 准备和一次 AIstock-CI runner allocation；在只有一个普通 runner 的当前配置下，各选中 lane 在该 job 内顺序执行并以 step outcome fail-closed 汇总，禁止拆成会释放后重新争抢同一 runner 的 classifier、matrix/module 或 verdict job。新增或修改且仍存在于 merge tree 的 Python `test_*.py` 必须由其自身选中的至少一个可执行 backend nox plan 通过精确文件、nodeid 或父目录测试目标实际覆盖；classifier 先做静态可达性检查，所选 pytest session 再通过 collection receipt 记录实际收集文件，backend step 在 verdict 前精确比对 changed tests。仅命中 ownership/module、位于休眠分支或未由 runner 展开的 wildcard 而未进入实际 collection 的测试必须以 `unexecuted_test_blocked` 或 `changed_test_plan_coverage` fail-closed，禁止通过改名借用无关测试族制造假绿灯。DEV-DB-only 计划继续作为外部验证单独报告，不伪装为 PR CI 已执行。收据只包含仓库相对测试路径，不上传 artifact、不增加 job/runner allocation。docs-lite 记录同样在该 job 内生成。官方 close-sync 分支在同一动态 job 中切换到 `ubuntu-latest`，只使用系统 Python 标准库、一次 checkout/base-ref 准备和 `bug_registry_metadata_check.py --close-sync-only`，不得获取普通或安全 self-hosted runner，也不得执行环境/依赖安装。任一越界文件或任一选中 lane 失败都必须使稳定 `CI verdict` 失败；DEV DB 计划继续仅报告外部 DEV 验证要求，不在 CI 执行 DDL/DML。
+source/mixed PR merge tree 的 changed-file 分类、静态 L0/catalog、被选中的 backend/frontend/Go/prompt/workflow 验证、workflow policy 与最终 `CI verdict` 必须复用一个 job、一次 checkout、一次 base-ref 准备和一次 AIstock-CI runner allocation；在现有双 runner、单机总并行度不超过 2 的配置下，各选中 lane 在该 job 内顺序执行并以 step outcome fail-closed 汇总，禁止拆成会释放后重新争抢同一 runner 的 classifier、matrix/module 或 verdict job。分类、静态 L0/catalog、依赖表面、PR Quality 与 Semgrep 是重验证的前置条件：任一必需前置失败时必须保留最终 fail-closed 汇总并跳过 backend/frontend/Go/prompt/workflow 等重 lane，禁止为已确定不能合入的 commit 继续消耗 runner。测试计划 catalog 可用 `subsumes` 显式声明完整计划覆盖的较小计划；两者同时被 changed-file 规则选中时 classifier 只执行完整计划一次，并在 receipt 中记录被抑制计划，禁止通过隐式名称或模块猜测去重。新增或修改且仍存在于 merge tree 的 Python `test_*.py` 必须由其自身选中的至少一个可执行 backend nox plan 通过精确文件、nodeid 或父目录测试目标实际覆盖；classifier 先做静态可达性检查，所选 pytest session 再通过 collection receipt 记录实际收集文件，backend step 在 verdict 前精确比对 changed tests。仅命中 ownership/module、位于休眠分支或未由 runner 展开的 wildcard 而未进入实际 collection 的测试必须以 `unexecuted_test_blocked` 或 `changed_test_plan_coverage` fail-closed，禁止通过改名借用无关测试族制造假绿灯。DEV-DB-only 计划继续作为外部验证单独报告，不伪装为 PR CI 已执行。收据只包含仓库相对测试路径，不上传 artifact、不增加 job/runner allocation。docs-lite 记录同样在该 job 内生成。官方 close-sync 分支在同一动态 job 中切换到 `ubuntu-latest`，只使用系统 Python 标准库、一次 checkout/base-ref 准备和 `bug_registry_metadata_check.py --close-sync-only`，不得获取普通或安全 self-hosted runner，也不得执行环境/依赖安装。任一越界文件或任一选中 lane 失败都必须使稳定 `CI verdict` 失败；DEV DB 计划继续仅报告外部 DEV 验证要求，不在 CI 执行 DDL/DML。
 
 <a id="rule-ci-database-safety-001"></a>
 ### 6.24 [CI-DATABASE-SAFETY-001] CI 禁止独立数据库，DEV 数据库单独验证
@@ -318,8 +339,12 @@ CI workflow 不声明 `services`、启动 PostgreSQL/TimescaleDB 容器、创建
 
 Nightly 的 DR snapshot/restore-readback 属于独立运维 lane，只能连接已存在且已授权的目标并执行既定只读/备份 runbook；不得创建或启动数据库容器，也不得冒充 PR CI 或 DEV 验证。该 lane 必须使用独立名称、权限和 receipt，使 `AIstock` 运维环境与 `AIstock-CI` PR 环境不会被混淆。
 
+Nightly 研发验证不消费 DR 备份产物时，nightly-l3 只依赖 runner/receipt preflight，不等待 dr-snapshot 或 dr-validate。DR 仍按 snapshot → validate 独立执行，full-summary 必须等待两条分支并逐项保留结果；研发测试通过不代表备份成功，DR 失败仍使整体运行失败并进入既有故障处理。只复用现有两个 runner 的有界容量，不新增数据库、runner、验证门禁或人工授权。
+
 <a id="rule-context-budget-001"></a>
 ### 7.1 [CONTEXT-BUDGET-001] 上下文预算
+
+模块测试/生产代码比例检查按真实 primary ownership 选择范围：单模块验证只读取该模块的完整生产源码、测试及 fixture/helper，不读取其他模块内容；全仓债务审计保留显式入口。不得通过只统计 changed files、转移测试归属、排除 helper 或虚增分母降低比例，30% 上限保持不变。模块范围及跳过的非目标文件数量写入既有审计结果，不增加独立 job 或人工审批。
 
 - T0/T1 默认使用 task card、Context Pack、所有权映射、图摘要和目标代码片段。
 - T2/T3 按明确依赖加载设计和跨模块契约。
@@ -331,6 +356,10 @@ Nightly 的 DR snapshot/restore-readback 属于独立运维 lane，只能连接�
 ### 7.2 [ISSUE-BATCH-CONTEXT-001] 同模块批处理
 
 同模块、相同风险、相容 scope 和相同验证链的 issue 在安全时可优先使用一个 source batch worktree；不批处理时记录简短 split reason。Batch Context Pack 记录 issue 列表、共享文件、逐 issue 验收、提交映射、共享测试和拆分条件。
+
+多个窗口交接同一流水线根因时，沿用已有 owner、BUG/Issue、PR、source HEAD 和最小复现，不因窗口不同重复登记。登记遭遇传输失败时，恢复调用保留原始 intake 参数与指纹，先复验既有 reservation/Issue 状态；不得改写描述后把同一次登记当成新问题。不同根因、运行角色或不相容验收仍分开处理。此约定是交接与恢复规则，不新增全量 worktree/BUG JSON 扫描、全局等待队列或审批门禁。
+
+已有 source merge 与精确 cleanup 授权时，可从 canonical root 的安全工作目录执行 `run --mode merge --merge --merge-close-sync-pr --cleanup --sync-root`，同时传入准确的 `--pr-url`、`--branch`、`--worktree` 和真实验证证据，复用既有 finalizer 完成源码合入、close-sync 合入与自身工作树/分支清理，不必重新进入完整开发验证。未显式传入 cleanup 时默认不删除；源 PR 与 close-sync PR 仍各自满足当前 HEAD 的必需 CI，metadata-only 善后不重跑无关业务测试。尚未通过检查、产物未知、进程引用或调用方仍占用 source 工作目录时，保留既有阻断/延后与精确下一步，不为省一次调用绕过保护。runtime-pending BUG 不重启后端、不关闭 Issue，源工作树只按既有独立清理条件处理；删除完成后的状态记录写入 canonical root，不重新创建已清理的 source 目录。后续 resume 只补未完成阶段，不重复已证明完成的 source CI 或要求第二次相同授权。
 
 source batch 与 close-sync batch 是同一批次的两个阶段：source batch 允许多个 BUG 共用一个源 PR，但必须保持同模块、同风险、同验证链和共享 scope；`close-sync-batch` 只能把这些兼容 BUG 的独立记录同步到同一个已合入 PR/merge identity，并固化每个 BUG 的逐项证据与 compatibility key。不同模块、不同风险、不同 required verification、不同 runtime impact/activation policy、不同 production/dependency gate 或已有不同源 PR 的 BUG 不得通过 `close-sync-batch` 共享一个源身份。`backend_restart_required=true` 或需要 post-restart identity/business-smoke receipt 的 BUG 始终单独走 `finish`/`close-sync`；`none`/`client` 等无后端重启的 BUG 只有在 compatibility signature 完全一致时才可批处理。该规则是效率优化，不减少逐 BUG 的 Issue、状态、证据和门禁。
 

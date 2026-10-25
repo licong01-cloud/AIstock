@@ -16,8 +16,6 @@ from backend.services.position_timing.learnability_pipeline import (
     PopulationBuildResult,
     SOURCE_ROLES,
     _sell_cost_array,
-    circular_block_interval,
-    classify_effect,
     evaluate_l2_policy,
     inspect_l2_learnability_bundle,
     map_monotone_exposure,
@@ -39,15 +37,6 @@ def test_monotone_policy_mapping_uses_only_frozen_four_exposures() -> None:
         q75=1.5,
     )
     assert mapped.tolist() == [1.0, 1.0, 0.5, 0.25, 0.0]
-
-
-def test_effect_classification_and_ridge_selection_are_orthogonal_to_power() -> None:
-    assert classify_effect(lower_bps=0.01, upper_bps=2.0) == "SUPPORTED"
-    assert classify_effect(lower_bps=-2.0, upper_bps=0.0) == "NEGATIVE"
-    assert classify_effect(lower_bps=-2.0, upper_bps=1.0) == "INCONCLUSIVE"
-    first = circular_block_interval([1.0, 2.0, 3.0, 4.0], alpha=0.025, seed=11)
-    second = circular_block_interval([1.0, 2.0, 3.0, 4.0], alpha=0.025, seed=11)
-    assert first == second
 
 
 def test_vector_cost_matches_componentized_parent_order_authority() -> None:

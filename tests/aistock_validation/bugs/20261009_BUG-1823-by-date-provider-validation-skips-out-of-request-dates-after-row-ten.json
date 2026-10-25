@@ -1,0 +1,290 @@
+{
+  "actual": "rows第11行之后的越界trade_date未被验证。",
+  "allowed_write_scope": [
+    "backend/services/tushare_sync_engine.py",
+    "backend/tests/test_tushare_sync_engine.py",
+    "tests/aistock_validation/bugs/20261009_BUG-1823-by-date-provider-validation-skips-out-of-request-dates-after-row-ten.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1823",
+  "closed_at": "2026-10-25T08:07:18.288370Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-09T04:01:05.825458Z",
+  "description": "rows第11行之后的越界trade_date未被验证。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261009-52100427d719",
+      "timestamp": "2026-10-09T04:01:05.825458Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "任意位置的请求外日期均在写入之前按既有provider_contract_error失败，正常同日完整批次通过。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1823-by-date-provider-validation-skips-out-of-request-dates-after-row-ten.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261009_BUG-1823-by-date-provider-validation-skips-out-of-request-dates-after-row-ten.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/tushare_sync_engine.py",
+        "backend/tests/test_tushare_sync_engine.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/test_tushare_sync_engine.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/tushare_sync_engine.py",
+        "backend/tests/test_tushare_sync_engine.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py"
+    ]
+  },
+  "first_seen_at": "2026-10-09T04:01:05.825458Z",
+  "fix_branch": null,
+  "fix_commit": "897442a33e76f47b2b14ace86da5bc963195229f",
+  "fixed_at": "2026-10-09T04:19:52Z",
+  "github_issue_number": 5809,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5809",
+  "last_seen_at": "2026-10-09T04:01:05.825458Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5811",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "pytest backend/tests/test_tushare_sync_engine.py -k by_date",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/qlib/monthly-releases/dmr_63a313d97fd046a38d5a876265565014",
+    "fresh_process_evidence": [
+      "RED: out-of-request date at rows 11 and 15 accepted by old code; GREEN: exact failed nodeids passed; final related matrix 83 passed, Ruff/compile/diff-check/L0 PASS.",
+      "Fresh Python process imported tracked TushareSyncEngine: valid 15-row batch PASS, row15 wrong date REJECTED before persistence; database_opened=false; network_access=false; runtime_action=false.",
+      "Three review rounds: complete batch dates rather than first10; existing provider_contract_error and bounded 10-sample error unchanged; _sync_by_date validates before replace/upsert, no new dataset/strategy/whole-history checks or DDL/DML. Companion BUG-1822 binds completed date-scoped writer facts."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1823-facts.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1823",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_ready",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "45c7c6f3a06bdb4eed5a9b7b84c47eb9d5ae546939f1917e25bf971b11eadd61",
+      "expected_identity": "897442a33e76f47b2b14ace86da5bc963195229f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T08:07:15.550222Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "7e2b5917874cfad903af8e4545c1bcf7ae8bb4239737e7042a92dafc429b6888",
+      "receipt_sha256": "7d4b9ab288efa0d97fab41d4f3b78dc898c8470001e436ca5b28013b1cd0666c",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "4fb2c8442e68541f2a1919c6e99e907545217b8be5ab0a8c188a10752e8bb582",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "BY_DATE provider validation skips out-of-request dates after row ten",
+  "trigger_condition": {
+    "fingerprint": "52100427d7196b715b634653",
+    "source_event_id": "FE-20261009-52100427d719"
+  },
+  "validation_evidence": [
+    "Source PR current merge identity and source CI SUCCESS independently verified. RED: out-of-request date at rows 11 and 15 accepted by old code; GREEN: exact failed nodeids passed; final related matrix 83 passed, Ruff/compile/diff-check/L0 PASS.; Fresh Python process imported tracked TushareSyncEngine: valid 15-row batch PASS, row15 wrong date REJECTED before persistence; database_opened=false; network_access=false; runtime_action=false.; Three review rounds: complete batch dates rather than first10; existing provider_contract_error and bounded 10-sample error unchanged; _sync_by_date validates before replace/upsert, no new dataset/strategy/whole-history checks or DDL/DML. Companion BUG-1822 binds completed date-scoped writer facts."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

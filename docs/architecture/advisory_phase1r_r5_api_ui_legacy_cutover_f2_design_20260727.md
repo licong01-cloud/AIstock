@@ -788,7 +788,7 @@ R5 无 DDL，因此 `production_ddl_gate=noop`。DEV API mutation E2E 使用现�
 | design_item | implementation_refs | test_or_evidence | status | gap_or_exception |
 |---|---|---|---|---|
 | F-740 | `backend/services/advisory_historical_range/service.py`; `backend/routers/advisory.py` | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `python -m nox -s advisory_historical_range_backend` = 280 passed, 5 skipped | verified | none |
-| F-741 | `backend/routers/advisory.py`; `backend/services/advisory_historical_range/api_models.py` | `backend/tests/advisory_historical_range/test_r5_route_isolation.py`; `backend/tests/advisory_historical_range/test_r5_api_contracts.py` | verified | none |
+| F-741 | `backend/routers/advisory.py`; `backend/services/advisory_historical_range/api_models.py` | `backend/tests/advisory_historical_range/test_r5_api_contracts.py`; `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | verified | none |
 | F-742 | `service.py` response-bound dispatcher、DB-only typed pre-claim failure record 和 claimed-work receipt boundary | `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py`; `backend/tests/advisory_historical_range/test_r5_command_service.py` | verified | none |
 | F-743 | strict create/command DTOs in `api_models.py` | `backend/tests/advisory_historical_range/test_r5_api_contracts.py` covers both Program source kinds | verified | none |
 | F-744 | mutation routes and `service.py` exact-retry/CAS paths | `backend/tests/advisory_historical_range/test_r5_command_service.py` exact retry and stale PLANNING CAS | verified | none |
@@ -801,7 +801,7 @@ R5 无 DDL，因此 `production_ddl_gate=noop`。DEV API mutation E2E 使用现�
 | F-751 | multi-Program create UI and segmented historical evidence view | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` | verified | none |
 | F-752 | independent batch/operation polling and cursor loaders | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` terminal-batch and multi-page behavior | verified | none |
 | F-753 | legacy main-flow cutover in `page.tsx`; compatibility API retained | `frontend/tests/paper-v2/paper-v2-advisory-historical-range.spec.ts` no-replay-request guard | verified | none |
-| F-754 | additive top-level legacy deprecation metadata | `backend/tests/advisory_historical_range/test_r5_route_isolation.py` | verified | none |
+| F-754 | additive top-level legacy deprecation metadata | `backend/tests/advisory_historical_range/test_r5_api_contracts.py::test_legacy_replay_response_advertises_historical_range_replacement` | verified | none |
 | F-755 | protected import and service-boundary isolation | `backend/tests/advisory_historical_range/test_r5_protected_module_isolation.py` | verified | none |
 | F-756 | explicit runtime composition and reconstructable background identities | `backend/tests/advisory_historical_range/test_r5_composition.py`; `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py` | verified | none |
 | F-757 | no DDL；R1-R4 execution algorithms 不变；共享 operation 状态机仅 additive 增加 typed pre-claim `QUEUED -> RETRYABLE_FAILED`，不伪造 attempt | `backend/tests/advisory_historical_range/test_r5_service_boundaries.py`; `backend/tests/advisory_historical_range/test_r5_background_lifecycle.py`; `git diff --check` | verified | none |

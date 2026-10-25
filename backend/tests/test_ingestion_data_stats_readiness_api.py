@@ -1,5 +1,7 @@
 import datetime as dt
 
+import pytest
+
 from backend.routers import ingestion
 
 
@@ -50,6 +52,10 @@ def test_data_stats_overlays_audit_readiness_and_cache_state(monkeypatch):
     assert item["ready_date"] == "2026-05-18"
     assert item["audit_ready_date"] == "2026-05-18"
     assert item["stats_max_date"] == "2026-05-17"
+    assert item["physical_max_date"] is None
+    assert item["physical_max_date_source"] == "not_probed"
+    assert item["stats_date_source"] == "data_stats_cache"
+    assert item["readiness_status"] == "audit_success"
     assert item["cache_state"] == "stale"
     assert item["readiness_source"] == "dataset_date_refresh_audit"
     assert item["operator_action_required"] is False
@@ -247,7 +253,8 @@ def test_auto_range_with_audit_cursor_requires_reconcile_when_audit_missing(monk
 
 
 
-def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch):
+@pytest.mark.parametrize("updated_column", ["trade_time", "received_at", ""])
+def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch, updated_column):
     executed: list[tuple[str, tuple]] = []
 
     class _Cursor:
@@ -277,13 +284,14 @@ def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch):
                         "kline_minute_raw",
                         "market.kline_minute_raw",
                         "trade_time",
-                        "trade_time",
+                        updated_column,
                         {"desc": "minute raw"},
                     )
                 ]
             elif "COUNT(*)" in sql and "market" in sql and "kline_minute_raw" in sql:
                 self.description = [("count",), ("min",), ("max",)]
-                self._row = (123, dt.date(2026, 4, 2), dt.date(2026, 7, 1))
+                self._row = (123, dt.date(2026, 4, 2), dt.date(2026, 7, 1),
+                             dt.datetime(2026, 7, 1, 15, 0, tzinfo=dt.timezone.utc) if updated_column else None)
             elif "MAX(" in sql and "market" in sql and "kline_minute_raw" in sql:
                 self.description = [("max",)]
                 self._row = (dt.datetime(2026, 7, 1, 15, 0, tzinfo=dt.timezone.utc),)
@@ -323,12 +331,54 @@ def test_refresh_data_stats_uses_recent_window_for_minute_table(monkeypatch):
     assert count_params == ("3 months",)
     minute_scans = [sql for sql, _params in executed if "FROM \"market\".\"kline_minute_raw\"" in sql]
     assert minute_scans
+    assert len(minute_scans) == 1
+    assert (f'MAX("{updated_column}") AS last_updated_at' if updated_column
+            else 'NULL::timestamptz AS last_updated_at') in count_sql
     assert all("WHERE \"trade_time\" >= CURRENT_DATE - (%s::text)::interval" in sql for sql in minute_scans)
     insert_sql, insert_params = next((sql, params) for sql, params in executed if "INSERT INTO market.data_stats" in sql)
     assert insert_params[0] == "kline_minute_raw"
+    assert insert_params[7] == (dt.datetime(2026, 7, 1, 15, 0, tzinfo=dt.timezone.utc)
+                                if updated_column else None)
     assert '"stats_scope": "recent_window"' in insert_params[-1]
     assert '"window_months": 3' in insert_params[-1]
     assert '"full_history_count": false' in insert_params[-1]
+    size_sql, size_params = next((sql, params) for sql, params in executed if "pg_total_relation_size" in sql)
+    assert "hypertable_detailed_size" in size_sql
+    assert "total_bytes" in size_sql
+    assert size_params == ("market.kline_minute_raw",)
+
+
+def test_minute_gap_presence_is_bounded_in_exchange_timezone():
+    sql, params = ingestion._data_gap_presence_query(
+        "kline_minute_raw", "market.kline_minute_raw", "trade_time",
+        dt.date(2026, 10, 8), dt.date(2026, 10, 19),
+    )
+    assert '"trade_time"::date' not in sql
+    assert '"trade_time" >= (cal_date::timestamp AT TIME ZONE \'Asia/Shanghai\')' in sql
+    assert '"trade_time" < ((cal_date + 1)::timestamp AT TIME ZONE \'Asia/Shanghai\')' in sql
+    assert params == (dt.date(2026, 10, 8), dt.date(2026, 10, 19),
+                      dt.date(2026, 10, 8), dt.date(2026, 10, 20))
+
+
+def test_daily_gap_presence_preserves_date_semantics():
+    sql, params = ingestion._data_gap_presence_query(
+        "kline_daily_raw", "market.kline_daily_raw", "trade_date",
+        dt.date(2026, 10, 8), dt.date(2026, 10, 19),
+    )
+    assert '"trade_date"::date = cal_date' in sql
+    assert params == (dt.date(2026, 10, 8), dt.date(2026, 10, 19))
+
+
+@pytest.mark.parametrize("table,column", [
+    ("market.kline_minute_raw", "created_at"),
+    ("market.kline_minute_raw; SELECT 1", "trade_time"),
+    ("market.kline_minute_raw", 'trade_time" OR TRUE'),
+])
+def test_minute_gap_presence_rejects_invalid_configuration(table, column):
+    with pytest.raises(ValueError):
+        ingestion._data_gap_presence_query(
+            "kline_minute_raw", table, column, dt.date(2026, 10, 8), dt.date(2026, 10, 19),
+        )
 
 
 def test_refresh_data_stats_isolates_per_dataset_failure(monkeypatch):

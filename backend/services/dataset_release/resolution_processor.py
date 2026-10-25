@@ -95,6 +95,53 @@ INITIAL_SOURCE_GZIP_ADMISSION_BYTES = INITIAL_SOURCE_UNCOMPRESSED_ESTIMATE_BYTES
 CANDIDATE_OUTPUT_PREDICTED_BYTES = 128 * GIB
 INITIAL_SOURCE_AND_CANDIDATE_PREDICTED_BYTES = INITIAL_SOURCE_GZIP_ADMISSION_BYTES + CANDIDATE_OUTPUT_PREDICTED_BYTES
 
+
+def monthly_build_fingerprints(profile: DatasetProfile) -> dict[str, str]:
+    """Return the shared immutable producer/artifact/validation identities.
+
+    The unified monthly release bridge and the legacy candidate-only resolver
+    compile the same frozen source into the same physical BUILD contract.  A
+    single helper prevents those production entrypoints from drifting while
+    they share the existing materializers.
+    """
+
+    values = {
+        "producer_fingerprint": digest_named_fields(
+            "dataset_release_monthly_producer_contract_v1",
+            {
+                "profile": profile.profile,
+                "semantic_profile_digest": profile.semantic_profile_digest,
+                "source_authority_policy": SOURCE_AUTHORITY_POLICY_VERSION,
+                "components": [item.value for item in profile.components],
+                "qlib_toolchain_profile_digest": profile.qlib_toolchain.digest,
+                "qlib_dump_script_sha256": profile.qlib_toolchain.dump_script_sha256,
+            },
+        ),
+        "artifact_fingerprint": digest_named_fields(
+            "dataset_release_monthly_artifact_contract_v1",
+            {
+                "profile": profile.profile,
+                "semantic_profile_digest": profile.semantic_profile_digest,
+                "moneyflow_contract": profile.moneyflow_contract,
+                "static_column_count": profile.static_column_count,
+                "qlib_stock_schema_digest": profile.qlib_stock_schema_digest,
+                "index_codes": list(profile.index_codes),
+            },
+        ),
+        "validation_fingerprint": digest_named_fields(
+            "dataset_release_monthly_validation_contract_v1",
+            {
+                "profile": profile.profile,
+                "semantic_profile_digest": profile.semantic_profile_digest,
+                "required_components": [item.value for item in profile.components],
+                "sample_policy": SAMPLE_POLICY,
+            },
+        ),
+    }
+    for field, value in values.items():
+        ensure_sha256(value, field=field)
+    return values
+
 _MONTHLY_FIELDS = frozenset(
     {
         "schema_version",
@@ -500,36 +547,15 @@ class MonthlyResolutionProcessor:
             else SupervisedResolutionSourceStage(profile, store, cas)
         )
         self._now = now
-        self.producer_fingerprint = producer_fingerprint or digest_named_fields(
-            "dataset_release_monthly_producer_contract_v1",
-            {
-                "profile": profile.profile,
-                "semantic_profile_digest": profile.semantic_profile_digest,
-                "source_authority_policy": SOURCE_AUTHORITY_POLICY_VERSION,
-                "components": [item.value for item in profile.components],
-                "qlib_toolchain_profile_digest": profile.qlib_toolchain.digest,
-                "qlib_dump_script_sha256": (profile.qlib_toolchain.dump_script_sha256),
-            },
+        shared_fingerprints = monthly_build_fingerprints(profile)
+        self.producer_fingerprint = (
+            producer_fingerprint or shared_fingerprints["producer_fingerprint"]
         )
-        self.artifact_fingerprint = artifact_fingerprint or digest_named_fields(
-            "dataset_release_monthly_artifact_contract_v1",
-            {
-                "profile": profile.profile,
-                "semantic_profile_digest": profile.semantic_profile_digest,
-                "moneyflow_contract": profile.moneyflow_contract,
-                "static_column_count": profile.static_column_count,
-                "qlib_stock_schema_digest": profile.qlib_stock_schema_digest,
-                "index_codes": list(profile.index_codes),
-            },
+        self.artifact_fingerprint = (
+            artifact_fingerprint or shared_fingerprints["artifact_fingerprint"]
         )
-        self.validation_fingerprint = validation_fingerprint or digest_named_fields(
-            "dataset_release_monthly_validation_contract_v1",
-            {
-                "profile": profile.profile,
-                "semantic_profile_digest": profile.semantic_profile_digest,
-                "required_components": [item.value for item in profile.components],
-                "sample_policy": SAMPLE_POLICY,
-            },
+        self.validation_fingerprint = (
+            validation_fingerprint or shared_fingerprints["validation_fingerprint"]
         )
         for field in (
             "producer_fingerprint",
@@ -1926,4 +1952,5 @@ __all__ = [
     "VersionedResolutionRequest",
     "SupervisedResolutionSourceStage",
     "build_resolution_processor",
+    "monthly_build_fingerprints",
 ]

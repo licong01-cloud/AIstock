@@ -7,6 +7,7 @@ and the requirements in 模型权重文件定位方案_v2.md.
 """
 
 import inspect
+import io
 import hashlib
 import json
 import logging
@@ -20,6 +21,9 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from threading import RLock
+from contextlib import nullcontext
+from copy import deepcopy
 
 import numpy as np
 import pandas as pd
@@ -35,7 +39,23 @@ from .data_service.preprocessor import (
 )
 from .data_service.moneyflow_contract import MONEYFLOW_FIELD_MAP
 from .services.factor_validator import FactorValidator
-from .services.canonical_equity_pit import CanonicalPitAuthorityResolver, PitAuthorityStatus
+from .services.advisory_historical_range.alpha158_batch import Alpha158BatchEvaluator, supports_batch
+from .services.advisory_historical_range.factor_input_materialization import (
+    STATIC_ALIASES, FactorInputSession, materialize_factor_aliases,
+)
+from .services.advisory_historical_range.inference_session import (
+    FrozenInferProcessorBundle,
+    InferenceResourceSession,
+    InferenceStageTimings,
+    inference_temporary_environment,
+    frozen_model_code_environment,
+    frozen_code_identity,
+)
+from .services.advisory_historical_range.inference_inputs import InferenceInputSession, frame_identity
+from .services.advisory_historical_range.inference_features import InferenceFeatureSession
+from .services.canonical_equity_pit import (
+    CanonicalPitAuthorityResolver, PitAuthorityStatus, require_canonical_new_task_binding,
+)
 from .services.canonical_pit_inference_boundary import (
     CanonicalPitInferenceBoundaryError,
     InferencePitIdentity,
@@ -50,6 +70,7 @@ from .services.strategy_package.workspace_policy import (
 
 logger = logging.getLogger("aistock.inference")
 LAST_STRICT_FEATURE_FILTER: dict[str, Any] | None = None
+_INFERENCE_EXECUTION_LOCK = RLock()  # Legacy factor adapters temporarily change process cwd.
 
 
 def _resolve_inference_pit_identity_for_run(
@@ -63,7 +84,10 @@ def _resolve_inference_pit_identity_for_run(
     declared = pit_identity is not None or manifest_inference_pit_identity(manifest) is not None
     live_binding = None
     if not declared:
-        live_binding = (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding()
+        live_binding = require_canonical_new_task_binding(
+            (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding(),
+            consumer="inference",
+        )
     return resolve_inference_pit_identity(
         pit_identity,
         manifest=manifest,
@@ -84,8 +108,15 @@ def _load_admitted_strategy_package_pickle(path: Path) -> Any:
     manifest before reaching this loader.
     """
 
+    class CpuStorageUnpickler(pickle.Unpickler):
+        def find_class(self, module: str, name: str) -> Any:
+            if module == "torch.storage" and name == "_load_from_bytes":
+                import torch
+                return lambda data: torch.load(io.BytesIO(data), map_location="cpu", weights_only=False)
+            return super().find_class(module, name)
+
     with path.open("rb") as stream:
-        return pickle.Unpickler(stream).load()
+        return CpuStorageUnpickler(stream).load()
 
 
 def _fetch_inference_fundamental_data(
@@ -275,6 +306,22 @@ def _safe_get_datetime_level(df_or_index) -> pd.Index:
 # 可复用的模块级函数（从 _run_inference_impl 中提取）
 # ============================================================
 
+def _pytorch_input_feature_count(network: Any) -> int:
+    """Read the input-layer contract, not a convolution's kernel width."""
+    modules = network.named_modules() if callable(getattr(network, "named_modules", None)) else ()
+    for _name, layer in modules:
+        for attribute in ("input_size", "in_channels", "in_features"):
+            value = getattr(layer, attribute, None)
+            if isinstance(value, int) and not isinstance(value, bool) and value > 0:
+                return value
+    parameter = next(network.parameters(), None)
+    if parameter is None:
+        raise ValueError("PyTorch StrategyPackage model has no parameter dimension")
+    if len(parameter.shape) == 2:
+        return int(parameter.shape[1])
+    raise ValueError("PyTorch model input feature count cannot be inferred from an unknown tensor layout")
+
+
 def load_model_from_pkl(model_file: Path) -> Tuple[Any, str, Any, int]:
     """加载模型 pkl 文件，检测类型，返回 (model, model_kind, inner_model, num_features).
 
@@ -294,6 +341,8 @@ def load_model_from_pkl(model_file: Path) -> Tuple[Any, str, Any, int]:
         import torch
 
         device = "cuda" if torch.cuda.is_available() else "cpu"
+        if hasattr(model, "device"):
+            model.device = torch.device(device)
 
         if hasattr(model, "dnn_model") and hasattr(model.dnn_model, "parameters"):
             try:
@@ -335,13 +384,7 @@ def load_model_from_pkl(model_file: Path) -> Tuple[Any, str, Any, int]:
     elif hasattr(model, "dnn_model") and model.dnn_model is not None:
         inner_model = model.dnn_model
         model_kind = "pytorch"
-        first_layer = next(model.dnn_model.parameters(), None)
-        if first_layer is None or len(first_layer.shape) < 1:
-            raise ValueError(
-                "PyTorch StrategyPackage model has no parameter dimension from which "
-                "the required feature count can be established"
-            )
-        num_features_expected = int(first_layer.shape[-1])
+        num_features_expected = _pytorch_input_feature_count(inner_model)
         logger.info(f"检测到PyTorch模型 (inner: {type(inner_model).__name__}), 特征数={num_features_expected}")
     elif hasattr(model, "predict") and callable(model.predict):
         model_kind = "qlib_generic"
@@ -422,6 +465,8 @@ def predict_scores(
     inner_model: Any,
     model_kind: str,
     X: pd.DataFrame,
+    *,
+    sequence_data: np.ndarray | None = None,
 ) -> np.ndarray:
     """模型预测三分支: lgb / pytorch / qlib_generic → 返回 1-D scores 数组."""
     # 确保数值类型
@@ -455,12 +500,17 @@ def predict_scores(
 
         inner_model.eval()
         with torch.no_grad():
-            x_values = X.values.astype("float32")
+            x_values = (sequence_data if sequence_data is not None else X.values).astype("float32")
+            if sequence_data is not None:
+                if x_values.ndim != 3 or x_values.shape[0] != len(X) or x_values.shape[2] != X.shape[1]:
+                    raise ValueError("frozen QE sequence input does not match the scored feature schema")
+                if not np.isfinite(x_values).all():
+                    raise ValueError("frozen QE sequence input contains non-finite values")
             x_tensor = torch.tensor(x_values, dtype=torch.float32)
 
             model_type_name = type(inner_model).__name__
             is_seq = any(kw in model_type_name for kw in ["GRU", "LSTM", "RNN", "Sequence", "Recurrent"])
-            if is_seq:
+            if is_seq and sequence_data is None:
                 x_tensor = x_tensor.unsqueeze(1)
 
             if torch.cuda.is_available():
@@ -493,6 +543,7 @@ def _apply_saved_qe_infer_processors(
     *,
     task_dir: Path,
     primary_assets: dict[str, Any],
+    processor_bundle: FrozenInferProcessorBundle | None = None,
 ) -> pd.DataFrame:
     """Apply fitted Qlib infer processors packaged with the QE model."""
     relpath = primary_assets.get("dataset_processor_relpath") or primary_assets.get("dataset_relpath")
@@ -516,14 +567,22 @@ def _apply_saved_qe_infer_processors(
         if path_str not in sys.path:
             sys.path.insert(0, path_str)
 
-    dataset = _load_admitted_strategy_package_pickle(processor_path)
-    handler = getattr(dataset, "handler", None)
-    processors = list(getattr(handler, "infer_processors", []) or [])
+    if processor_bundle is None:
+        dataset = _load_admitted_strategy_package_pickle(processor_path)
+        handler = getattr(dataset, "handler", None)
+        processors = list(getattr(handler, "infer_processors", []) or [])
+    else:
+        processors = processor_bundle.for_call()
     if not processors:
         return X
 
     original_columns = list(X.columns)
-    processed = X.copy()
+    fitted_columns = _saved_qe_feature_order(processors)
+    if fitted_columns is not None:
+        if len(fitted_columns) != len(original_columns) or set(fitted_columns) != set(original_columns):
+            raise ValueError("saved QE fitted feature schema does not match inference inputs")
+        original_columns = fitted_columns
+    processed = X[original_columns].copy()
     if not isinstance(processed.columns, pd.MultiIndex):
         processed.columns = pd.MultiIndex.from_product([["feature"], original_columns])
     for processor in processors:
@@ -538,6 +597,55 @@ def _apply_saved_qe_infer_processors(
         [type(processor).__name__ for processor in processors],
     )
     return processed
+
+
+def _saved_qe_feature_order(processors: list[Any]) -> list[str] | None:
+    """Recover the feature order persisted by the fitted Qlib normalizer, never sort anew."""
+    for processor in processors:
+        columns = getattr(processor, "cols", None)
+        if columns is None or getattr(processor, "fields_group", "feature") not in (None, "feature"):
+            continue
+        names = [str(col[1]) for col in columns if isinstance(col, tuple) and len(col) == 2 and col[0] == "feature"]
+        if names:
+            if len(names) != len(set(names)):
+                raise ValueError("saved QE fitted feature schema contains duplicate columns")
+            return names
+    return None
+
+
+def _saved_qe_step_len(
+    task_dir: Path, primary_assets: dict[str, Any],
+    processor_bundle: FrozenInferProcessorBundle | None = None,
+) -> int:
+    relpath = primary_assets.get("dataset_processor_relpath") or primary_assets.get("dataset_relpath")
+    if not relpath:
+        return 1
+    dataset = processor_bundle if processor_bundle is not None else _load_admitted_strategy_package_pickle(task_dir / str(relpath))
+    step_len = int(getattr(dataset, "step_len", 1))
+    if step_len < 1:
+        raise ValueError("saved QE dataset has an invalid sequence length")
+    return step_len
+
+
+def _qe_sequence_inputs(
+    features: pd.DataFrame, *, trade_date: pd.Timestamp, step_len: int,
+) -> tuple[pd.DataFrame, np.ndarray]:
+    """Use the same causal TSDataSampler and fill policy as GeneralPTNN.predict."""
+    from qlib.data.dataset import TSDataSampler
+    dates = features.index.get_level_values("datetime")
+    history = features.loc[dates <= trade_date].sort_index()
+    if history.index.get_level_values("datetime").nunique() < step_len:
+        raise ValueError("frozen QE sequence history is shorter than its trained step_len")
+    # TSDataSampler consumes/clears its input frame; preserve the scored schema separately.
+    sampler = TSDataSampler(history.copy(), start=trade_date, end=trade_date, step_len=step_len, dtype=np.float32)
+    sampler.config(fillna_type="ffill+bfill")
+    index = sampler.get_index()
+    if len(index) == 0:
+        raise ValueError("frozen QE sequence has no samples on the exact target date")
+    batch = sampler[np.arange(len(index))]
+    if not np.isfinite(batch).all():
+        raise ValueError("frozen QE sequence contains unavailable historical features")
+    return history.loc[index], batch
 
 
 def save_signals_to_db(
@@ -610,7 +718,17 @@ def save_signals_to_db(
 class InferenceEngine:
     """Core engine to handle model loading and prediction."""
 
-    def __init__(self, factor_validator: Optional[FactorValidator] = None):
+    def __init__(
+        self, factor_validator: Optional[FactorValidator] = None, *,
+        resource_session: InferenceResourceSession | None = None,
+        performance_reference: bool = False,
+        input_session: InferenceInputSession | None = None,
+        feature_session: InferenceFeatureSession | None = None,
+        materialization_session: FactorInputSession | None = None,
+        temp_root: Path | None = None,
+        required_window_resolver: Any = None,
+        fundamental_reader: Any = None,
+    ):
         self.initialized = False
         self.validator = factor_validator or FactorValidator()
         self.assets_root = (Path(__file__).resolve().parents[1] / "rdagent_assets" / "rdagent_tasks").resolve()
@@ -618,9 +736,27 @@ class InferenceEngine:
         # read this from the same engine instance; existing score consumers keep
         # the original DataFrame return contract.
         self.last_inference_receipt: dict[str, Any] | None = None
+        self.resource_session = resource_session
+        self.performance_reference = performance_reference
+        self.input_session = input_session
+        self.feature_session = feature_session
+        self.materialization_session = materialization_session
+        self.temp_root = temp_root or (
+            (Path("X:/AIstock_temp") if os.name == "nt" else Path("/mnt/x/AIstock_temp"))
+            / "inference" / uuid.uuid4().hex)
+        self.required_window_resolver = required_window_resolver
+        self.fundamental_reader = fundamental_reader
+        self.last_inference_performance: dict[str, Any] | None = None
 
     def _get_latest_available_trade_date(self, target_date: datetime) -> datetime:
         """从数据库查询小于等于 target_date 的最近一个交易日"""
+        dataset = getattr(getattr(self, "input_session", None), "file_dataset", None)
+        if dataset is not None:
+            days = [day for day in dataset.calendar if day <= target_date.date()]
+            if not days or target_date.date() > dataset.calendar[-1]:
+                raise ValueError("inference date is outside the frozen file calendar")
+            dataset.assert_unchanged()
+            return datetime.combine(days[-1], datetime.min.time())
         sql = "SELECT cal_date FROM market.trading_calendar WHERE cal_date <= %s AND is_trading = TRUE ORDER BY cal_date DESC LIMIT 1"
         try:
             with get_conn() as conn:
@@ -648,6 +784,14 @@ class InferenceEngine:
         required_trading_days = required_window + buffer_days
         if required_trading_days <= 0:
             raise ValueError("required_window + buffer_days must be positive")
+
+        dataset = getattr(getattr(self, "input_session", None), "file_dataset", None)
+        if dataset is not None:
+            days = [day for day in dataset.calendar if day <= actual_date.date()]
+            if len(days) < required_trading_days:
+                raise ValueError("frozen file calendar cannot cover the native inference window")
+            dataset.assert_unchanged()
+            return datetime.combine(days[-required_trading_days], datetime.min.time()), "frozen_file_calendar"
 
         sql = """
             SELECT cal_date
@@ -785,6 +929,17 @@ class InferenceEngine:
                     f"detached PIT universe is bound to {pit_identity.universe_as_of}, not {effective_date}"
                 )
             return list(pit_identity.universe_codes)
+        reader = getattr(getattr(self, "input_session", None), "universe_reader", None)
+        if reader is not None:
+            if self.input_session.file_dataset.rule_version != pit_identity.binding.rule_version:
+                from .data_service.frozen_dataset import FrozenDatasetError
+                raise FrozenDatasetError("file universe does not match the native PIT rule version",
+                    reason_code="FROZEN_DATASET_PIT_IDENTITY_MISMATCH",
+                    native_rule_version=pit_identity.binding.rule_version,
+                    file_rule_version=self.input_session.file_dataset.rule_version,
+                    native_universe_key=pit_identity.binding.universe_key,
+                    file_universe_key=self.input_session.file_dataset.universe_key)
+            return reader(effective_date, pit_identity.binding.universe_key)
         from .services.stock_universe_pit_service import StockUniversePitService
 
         service = StockUniversePitService()
@@ -1239,7 +1394,32 @@ class InferenceEngine:
     def _compute_alpha158_subset(self, df_history: pd.DataFrame, col_list: List[str]) -> pd.DataFrame:
         """计算 Alpha158 的子集特征（已自动使用优化版本）"""
         # 直接调用优化版本，不再发出警告（这是正常的调用路径）
+        if not getattr(self, "performance_reference", False) and supports_batch(df_history, col_list):
+            return self._compute_alpha158_sequence(df_history, col_list, 1)
         return self._compute_alpha158_last_day_only(df_history, col_list)
+
+    def _compute_alpha158_sequence(
+        self, df_history: pd.DataFrame, col_list: List[str], sequence_length: int,
+    ) -> pd.DataFrame:
+        """Reuse causal indexed tails without rebuilding every history prefix."""
+        history_dates = _safe_get_datetime_level(df_history)
+        sequence_dates = sorted(history_dates.unique())[-sequence_length:]
+        if not getattr(self, "performance_reference", False) and supports_batch(df_history, col_list):
+            logger.info("Alpha158 execution mode=indexed_causal_batch dates=%s", len(sequence_dates))
+            evaluator = Alpha158BatchEvaluator(df_history)
+            cache = getattr(self, "feature_session", None)
+            if cache is None:
+                return evaluator.for_dates(sequence_dates, col_list)
+            return pd.concat([
+                cache.evaluate(identity=cache.alpha_identity(df_history, day, col_list),
+                               calculate=lambda day=day: evaluator.for_dates([day], col_list))
+                for day in sequence_dates
+            ])
+        logger.info("Alpha158 execution mode=existing_day_views; columns/order require original calculator")
+        return pd.concat([
+            self._compute_alpha158_subset(df_history.loc[history_dates <= day], col_list)
+            for day in sequence_dates
+        ])
 
     def _load_task_manifest(self, task_id: str) -> Optional[Dict[str, Any]]:
         """加载本地任务 manifest.json"""
@@ -1354,23 +1534,27 @@ class InferenceEngine:
         pit_identity: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         try:
-            return self._run_inference_impl(
-                strategy_id=strategy_id,
-                version_tag=version_tag,
-                trade_date=trade_date,
-                task_run_id=task_run_id,
-                loop_id=loop_id,
-                cutoff_date=cutoff_date,
-                experiment_id=experiment_id,
-                workspace_path=workspace_path,
-                persist_signals=persist_signals,
-                universe_ensure=universe_ensure,
-                receipt_admissibility=receipt_admissibility,
-                allow_external_market_fallback=allow_external_market_fallback,
-                use_selection_data_cache=use_selection_data_cache,
-                diagnostic_output_path=diagnostic_output_path,
-                pit_identity=pit_identity,
-            )
+            code_scope = frozen_model_code_environment(Path(workspace_path)) if workspace_path else nullcontext()
+            with _INFERENCE_EXECUTION_LOCK, inference_temporary_environment(self.temp_root), code_scope:
+                result = self._run_inference_impl(
+                    strategy_id=strategy_id,
+                    version_tag=version_tag,
+                    trade_date=trade_date,
+                    task_run_id=task_run_id,
+                    loop_id=loop_id,
+                    cutoff_date=cutoff_date,
+                    experiment_id=experiment_id,
+                    workspace_path=workspace_path,
+                    persist_signals=persist_signals,
+                    universe_ensure=universe_ensure,
+                    receipt_admissibility=receipt_admissibility,
+                    allow_external_market_fallback=allow_external_market_fallback,
+                    use_selection_data_cache=use_selection_data_cache,
+                    diagnostic_output_path=diagnostic_output_path,
+                    pit_identity=pit_identity,
+                )
+                self.last_strict_feature_filter = deepcopy(LAST_STRICT_FEATURE_FILTER)
+                return result
         except Exception as e:
             import traceback
             error_msg = f"推理失败: {e}"
@@ -1403,10 +1587,17 @@ class InferenceEngine:
         2. QE runtime cache mode: experiment_id + AIstock-owned runtime cache workspace_path.
         """
         self.last_inference_receipt = None
+        self.last_inference_performance = None
+        if self.feature_session is not None:
+            self.feature_session.bind_source((self.input_session.consumer_scope, self.input_session.run_id,
+                                              self.input_session.source_identity) if self.input_session is not None else None)
+        timings = InferenceStageTimings()
+        if self.performance_reference and (persist_signals or universe_ensure):
+            raise ValueError("performance reference must be read-only: disable signal persistence and universe maintenance")
         diagnostic_path = Path(
             diagnostic_output_path or "f:/Dev/AIstock/debug_tools/qe_diagnosis.txt"
         )
-        if receipt_admissibility not in {"PROSPECTIVE_FIRST_OBSERVED", "RETROSPECTIVE_DB_CONTENT_HASH"}:
+        if receipt_admissibility not in {"PROSPECTIVE_FIRST_OBSERVED", "RETROSPECTIVE_DB_CONTENT_HASH", "RETROSPECTIVE_FILE_CONTENT_HASH"}:
             raise ValueError(f"unsupported inference receipt admissibility: {receipt_admissibility}")
         observed_at = datetime.now(timezone.utc)
         target_date = trade_date
@@ -1441,6 +1632,11 @@ class InferenceEngine:
                 raise ValueError(f"未找到本地任务资产 manifest: {task_id}")
             task_dir = self.assets_root / task_id
 
+        source_route = getattr(self.input_session, "source_plan_route", None)
+        if source_route is not None:
+            from .services.advisory_historical_range.input_source_plan import session_pit_identity
+            pit_identity = session_pit_identity(self.input_session, request_identity=pit_identity,
+                                                manifest_identity=manifest_inference_pit_identity(manifest))
         resolved_pit_identity = _resolve_inference_pit_identity_for_run(
             manifest=manifest,
             pit_identity=pit_identity,
@@ -1449,14 +1645,16 @@ class InferenceEngine:
         )
 
         primary = manifest.get("primary_assets", {})
+        factor_order, alpha158_feats, dynamic_feats = self._infer_expected_features(task_dir, manifest)
         
-        factor_file = task_dir / primary["factor_entry_relpath"]
+        factor_file = task_dir / primary["factor_entry_relpath"] if primary.get("factor_entry_relpath") else None
         model_file = task_dir / primary["model_weight_relpath"]
 
         # 1. 加载因子模块
         # RDAgent原始因子接口: def calculate_xxx() 无参数，内部从 daily_pv.h5 读取数据
         # 推理引擎在调用前已将 daily_pv.h5 和 static_factors.parquet 写入临时工作目录
-        factor_module = self.validator.validate_and_load(task_id, str(factor_file))
+        from types import SimpleNamespace
+        factor_module = self.validator.validate_and_load(task_id, str(factor_file)) if factor_file else SimpleNamespace()
         # 收集所有 calculate_ 开头的函数（支持多SOTA因子场景）
         all_calc_funcs = {}
         for attr in sorted(dir(factor_module)):
@@ -1478,7 +1676,7 @@ class InferenceEngine:
             factor_func = getattr(factor_module, "compute", None)
             if factor_func:
                 factor_func_name = "compute"
-        if not factor_func:
+        if not factor_func and dynamic_feats:
             raise ValueError(
                 f"未找到合法的因子计算函数。"
                 f"期望 calculate_* 或 compute 函数，"
@@ -1487,7 +1685,7 @@ class InferenceEngine:
         logger.info(f"找到因子计算函数: {factor_func_name}")
 
         # 2. 从 factor_order.json 读取特征清单，区分Alpha158基线因子和SOTA动态因子
-        factor_order, alpha158_feats, dynamic_feats = self._infer_expected_features(task_dir, manifest)
+        timings.mark("resolve_manifest_factor_schema")
         logger.info(
             f"从 factor_order.json 获取到 {len(alpha158_feats)} 个 Alpha158 基线因子 + "
             f"{len(dynamic_feats)} 个 SOTA 动态因子，总计 {len(factor_order)} 个"
@@ -1507,7 +1705,30 @@ class InferenceEngine:
             logger.info(f"已将实验目录添加到sys.path: {task_dir_str}")
 
         # 使用提取的模块级函数加载模型
-        model, model_kind, inner_model, num_features_expected = load_model_from_pkl(model_file)
+        resource_namespace = _inference_receipt_sha256([manifest, frozen_code_identity(task_dir)])
+        resources_before = (
+            (self.resource_session.loads, self.resource_session.hits)
+            if self.resource_session is not None else (0, 0)
+        )
+        if self.resource_session is None or self.performance_reference:
+            model, model_kind, inner_model, num_features_expected = load_model_from_pkl(model_file)
+        else:
+            model, model_kind, inner_model, num_features_expected = self.resource_session.model(
+                path=model_file, namespace=resource_namespace, loader=load_model_from_pkl,
+            )
+        timings.mark("model_load")
+        processor_bundle = None
+        processor_relpath = primary.get("dataset_processor_relpath") or primary.get("dataset_relpath")
+        if processor_relpath and model_kind == "pytorch" and not self.performance_reference:
+            processor_path = task_dir / str(processor_relpath)
+            session = self.resource_session or InferenceResourceSession(max_entries=1)
+            processor_bundle = session.processors(
+                path=processor_path,
+                namespace=resource_namespace,
+                loader=_load_admitted_strategy_package_pickle,
+            )
+        sequence_length = _saved_qe_step_len(task_dir, primary, processor_bundle) if model_kind == "pytorch" else 1
+        timings.mark("processor_load_sequence_contract")
         
         # 4. 获取数据（支持内存缓存，同一交易日多次选股复用）
         universe = self._get_default_universe_excluding_st(
@@ -1518,10 +1739,14 @@ class InferenceEngine:
 
         # 4.1 检查因子所需的数据窗口
         # factor_order 已在步骤2中通过 _infer_expected_features 获取
-        required_window = get_required_data_window(factor_order)
+        required_window = (self.required_window_resolver or get_required_data_window)(factor_order) + sequence_length - 1
         start_date, start_date_source = self._resolve_inference_start_date(
             actual_date, required_window, buffer_days=5
         )
+        if source_route is not None:
+            from .services.advisory_historical_range.input_source_plan import validate_native_window
+            validate_native_window(source_route, start=start_date.date(), cutoff=actual_date.date(),
+                                   decision=requested_trade_date.date(), pit_binding=resolved_pit_identity.binding)
 
         logger.info(
             "因子所需数据窗口: %s交易日 + 5日安全余量, start_date=%s, source=%s",
@@ -1529,9 +1754,10 @@ class InferenceEngine:
             start_date.date(),
             start_date_source,
         )
+        timings.mark("universe_calendar_window")
 
         # 4.2 尝试从缓存获取数据
-        cache = get_selection_data_cache() if use_selection_data_cache else None
+        cache = get_selection_data_cache() if use_selection_data_cache and self.input_session is None else None
         cached_data = cache.get(actual_date.date(), universe) if cache is not None else None
 
         if cached_data is not None:
@@ -1551,7 +1777,16 @@ class InferenceEngine:
 
         if cached_data is None:
             # 4.3 缓存未命中或窗口不足，从数据库获取
-            df_history = get_history_window(
+            if self.input_session is not None:
+                if allow_external_market_fallback:
+                    raise ValueError("consumer input sessions require explicit DB-only source selection")
+                if self.input_session.price_reader is None or self.input_session.static_builder is None:
+                    raise ValueError("input session has no read-only daily view providers")
+                df_history = self.input_session.price_reader(universe, start_date.date(), actual_date.date())
+                df_fund_raw = self.input_session.static_builder(
+                    universe, start_date.date(), actual_date.date(), asof_fill_slow_static=True)
+            else:
+                df_history = get_history_window(
                 universe=universe,
                 start=start_date,
                 end=actual_date,
@@ -1560,21 +1795,17 @@ class InferenceEngine:
                 adj="front",
                 allow_xtquant_fallback=allow_external_market_fallback,
                 allow_tushare_adj_fallback=allow_external_market_fallback,
-            )
+                )
+                df_fund_raw = (self.fundamental_reader or _fetch_inference_fundamental_data)(
+                    universe=universe, start_date=start_date.date(), end_date=actual_date.date())
             if df_history.empty:
                 raise ValueError("获取历史数据为空")
-
-            # 从数据库获取基本面+资金流数据
-            df_fund_raw = _fetch_inference_fundamental_data(
-                universe=universe,
-                start_date=start_date.date(),
-                end_date=actual_date.date()
-            )
 
             # 存入缓存
             if cache is not None:
                 cache.put(actual_date.date(), universe, df_history, df_fund_raw)
             logger.info(f"✓ 数据已缓存: df_history={df_history.shape}, df_fund_raw={df_fund_raw.shape}")
+        timings.mark("market_and_fundamental_read")
         
         # 🔍 诊断：检查df_history初始列数
         logger.info(f"🔍 df_history初始列数: {len(df_history.columns)}, 列名: {list(df_history.columns)}")
@@ -1598,8 +1829,11 @@ class InferenceEngine:
 
         # 5. 验证数据时效性（修复：确保数据不滞后）
         self._validate_data_freshness(df_history, requested_trade_date, actual_date)
+        timings.mark("window_freshness_validation")
 
-        tmp_dir = Path(tempfile.mkdtemp(prefix="aistock_inf_"))
+        tmp_dir = Path(tempfile.mkdtemp(prefix="aistock_inf_", dir=self.temp_root))
+        factor_input_lease = None
+        materialization_counters: dict[str, int] = {}
         old_cwd = os.getcwd()
         try:
             os.chdir(tmp_dir)
@@ -1616,8 +1850,10 @@ class InferenceEngine:
             logger.info(f"df_history instrument样例: {df_pv.index.get_level_values('instrument').unique()[:3].tolist()}")
 
             t_h5 = time.time()
-            df_pv.to_hdf("daily_pv.h5", key="data", mode="w")
-            logger.info(f"✓ daily_pv.h5 写入完成，耗时: {time.time() - t_h5:.2f}s, 行数: {len(df_pv)}")
+            if self.materialization_session is None:
+                df_pv.to_hdf("daily_pv.h5", key="data", mode="w")
+                logger.info(f"✓ daily_pv.h5 写入完成，耗时: {time.time() - t_h5:.2f}s, 行数: {len(df_pv)}")
+            timings.mark("market_hdf_materialization")
             
             # 6. 处理基本面+资金流数据
             # 重命名字段以匹配因子代码期望的字段名
@@ -1671,7 +1907,7 @@ class InferenceEngine:
                     f.write(f"df_fund列数: {len(df_fund.columns)}\n")
                     f.write(f"df_fund前30列: {list(df_fund.columns)[:30]}\n")
             else:
-                if _strict_inference_enabled():
+                if _strict_inference_enabled() and dynamic_feats:
                     raise ValueError("strict inference requires fundamental/moneyflow/sector DB data")
                 logger.warning("数据库中没有找到资金流数据")
                 df_fund = pd.DataFrame()
@@ -1755,9 +1991,20 @@ class InferenceEngine:
                 else:
                     logger.info(f"✓ 共同instrument样例: {list(common_instruments)[:3]}")
                 
-                t_parquet = time.time()
-                df_fund.to_parquet("static_factors.parquet")
-                logger.info(f"✓ static_factors.parquet 写入完成，耗时: {time.time() - t_parquet:.2f}s")
+                adapter_files = getattr(factor_module, "_DATA_FILES", ())
+                compatible_aliases = (callable(getattr(factor_module, "_ensure_h5_aliases", None))
+                                      and set(STATIC_ALIASES).issubset(adapter_files))
+                if self.materialization_session is not None:
+                    factor_input_lease = self.materialization_session.acquire(
+                        root=tmp_dir, price=df_pv, fundamental=df_fund, aliases=compatible_aliases)
+                    materialization_counters = factor_input_lease.counters
+                else:
+                    t_parquet = time.time()
+                    df_fund.to_parquet("static_factors.parquet")
+                    logger.info(f"✓ static_factors.parquet 写入完成，耗时: {time.time() - t_parquet:.2f}s")
+                if compatible_aliases and factor_input_lease is None:
+                    factor_input_lease = materialize_factor_aliases(root=tmp_dir, price=df_pv, fundamental=df_fund)
+                    materialization_counters = factor_input_lease.counters
                 
                 # 🔍 诊断：检查df_history是否被df_fund污染
                 # df_history应该只包含OHLCV列，不应该包含df_fund的列
@@ -1767,6 +2014,10 @@ class InferenceEngine:
                     fund_cols_in_history = [col for col in df_history.columns if col in df_fund.columns]
                     if fund_cols_in_history:
                         logger.error(f"❌ df_history被污染！包含{len(fund_cols_in_history)}个df_fund的列: {fund_cols_in_history[:20]}")
+
+            if df_fund.empty and self.materialization_session is not None:
+                factor_input_lease = self.materialization_session.acquire(root=tmp_dir, price=df_pv, fundamental=df_fund, aliases=False)
+                materialization_counters = factor_input_lease.counters
 
             # 验证临时文件是否存在
             import os as _os
@@ -1787,6 +2038,20 @@ class InferenceEngine:
                 logger.info(f"✓ df_history已清理，当前列数: {len(df_history.columns)}, 列名: {list(df_history.columns)}")
 
             t_start = time.time()
+            timings.mark("precomputed_static_materialization")
+            legal_input_identity = (
+                getattr(factor_input_lease, "input_identity", None) or (frame_identity(df_pv) + ":" + frame_identity(df_fund))
+                if self.feature_session is not None and not self.performance_reference else None
+            )
+
+            def calculate_factor(function: Any) -> pd.DataFrame:
+                def invoke() -> pd.DataFrame:
+                    return function() if not inspect.signature(function).parameters else function(df_history)
+                identity = self.feature_session.dynamic_identity(
+                    module=factor_module, function=function, input_identity=legal_input_identity,
+                ) if legal_input_identity is not None else None
+                return self.feature_session.evaluate(identity=identity, calculate=invoke) if identity else invoke()
+
             # 多因子场景：逐个执行所有calculate_函数并合并结果
             if len(all_calc_funcs) > 1:
                 logger.info(f"开始逐个执行 {len(all_calc_funcs)} 个SOTA因子计算函数")
@@ -1794,13 +2059,7 @@ class InferenceEngine:
                 for fn_name, fn_obj in all_calc_funcs.items():
                     t_fn = time.time()
                     logger.info(f"开始执行SOTA因子计算函数: {fn_name}")
-                    sig = inspect.signature(fn_obj)
-                    if len(sig.parameters) == 0:
-                        logger.info("调用无参数因子函数...")
-                        part = fn_obj()
-                    else:
-                        logger.info("调用带参数因子函数...")
-                        part = fn_obj(df_history)
+                    part = calculate_factor(fn_obj)
                     logger.info(f"SOTA因子计算完成（{fn_name}），耗时: {time.time() - t_fn:.2f}s")
                     if isinstance(part, pd.DataFrame):
                         df_parts.append(part)
@@ -1822,14 +2081,13 @@ class InferenceEngine:
                 logger.info(f"开始执行SOTA因子计算函数: {factor_func_name}")
                 # RDAgent原始因子: calculate_xxx() 无参数，内部从 daily_pv.h5 读取
                 # 旧版兼容: compute(df_history) 接受DataFrame参数
-                sig = inspect.signature(factor_func)
-                if len(sig.parameters) == 0:
-                    logger.info("调用无参数因子函数...")
-                    df_factors_raw = factor_func()
+                if factor_func is None and not dynamic_feats:
+                    df_factors_raw = pd.DataFrame(index=pd.MultiIndex.from_arrays(
+                        [pd.DatetimeIndex([]), []], names=["datetime", "instrument"]))
                 else:
-                    logger.info("调用带参数因子函数...")
-                    df_factors_raw = factor_func(df_history)
+                    df_factors_raw = calculate_factor(factor_func)
                 logger.info(f"SOTA因子计算完成（{factor_func_name}），耗时: {time.time() - t_start:.2f}s")
+            timings.mark("dynamic_factors")
             
             # 验证返回类型必须是DataFrame
             if not isinstance(df_factors_raw, pd.DataFrame):
@@ -1845,7 +2103,7 @@ class InferenceEngine:
                         f"{dynamic_feats}"
                     )
                 logger.info("SOTA因子返回空DataFrame，将只使用Alpha158基线因子")
-                df_factors = pd.DataFrame()
+                df_factors = df_factors_raw.copy()
             else:
                 # 获取最后一天的日期
                 last_date = _safe_get_datetime_level(df_history).max()
@@ -1855,7 +2113,10 @@ class InferenceEngine:
                 
                 # 只保留最后一天的因子值（优化：选股只需要当天值）
                 if last_date in sota_dates:
-                    df_factors = df_factors_raw.loc[last_date]
+                    df_factors = (
+                        df_factors_raw.loc[sota_dates <= last_date].copy()
+                        if sequence_length > 1 else df_factors_raw.loc[last_date]
+                    )
                     logger.info(f"SOTA因子优化：使用目标日期 {last_date.date()} 的因子值")
                 else:
                     if _strict_inference_enabled():
@@ -1896,14 +2157,34 @@ class InferenceEngine:
             
         finally:
             os.chdir(old_cwd)
-            shutil.rmtree(tmp_dir, ignore_errors=True)
+            try:
+                if factor_input_lease is not None:
+                    factor_input_lease.verify()
+            finally:
+                if factor_input_lease is not None:
+                    factor_input_lease.release()
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+        timings.mark("dynamic_output_validation_cleanup")
+        fundamental_rows = len(df_fund_raw)
+        fundamental_input_hash = _frame_receipt_sha256(df_fund_raw)
+        if not self.performance_reference:
+            # Receipts retain the actual input identity, not the entire large
+            # static view. Neither Alpha158 nor frozen inference reads these
+            # objects again; arbitrary factor code has already completed.
+            del df_fund_raw, df_fund, df_pv, df_factors_raw
+            if len(all_calc_funcs) > 1:
+                del df_parts, part
+        timings.mark("completed_static_input_receipt_release")
         
         # 6. 计算 Alpha158 基线因子（优化版本：只计算最后一天）
         # 只计算alpha158_feats中的因子，不包含dynamic_feats
         if alpha158_feats:
             logger.info(f"开始计算 Alpha158 基线因子，请求的因子数量: {len(alpha158_feats)}")
             logger.info(f"请求的Alpha158因子列表: {alpha158_feats}")
-            alpha_subset = self._compute_alpha158_subset(df_history, alpha158_feats)
+            if sequence_length > 1:
+                alpha_subset = self._compute_alpha158_sequence(df_history, alpha158_feats, sequence_length)
+            else:
+                alpha_subset = self._compute_alpha158_subset(df_history, alpha158_feats)
             
             # 关键诊断：检查实际返回的列数
             logger.info(f"⚠️ Alpha158计算完成，实际返回列数: {len(alpha_subset.columns)}")
@@ -1932,6 +2213,7 @@ class InferenceEngine:
             # 如果没有Alpha158因子，创建空DataFrame（使用df_factors的索引）
             alpha_subset = pd.DataFrame(index=df_factors.index)
             logger.info("没有Alpha158基线因子，跳过计算")
+        timings.mark("alpha158_features")
         
         # 7. 按正确顺序组合特征（使用提取的模块级函数）
         df_factors_combined = assemble_features(
@@ -1996,18 +2278,30 @@ class InferenceEngine:
             f.write(f"df_today列名: {list(df_today.columns)[:50]}\n")
 
         # 7. 模型预测（使用提取的模块级函数）
+        timings.mark("feature_assembly_validation")
         df_today = _apply_saved_qe_infer_processors(
-            df_today,
+            df_factors_combined if sequence_length > 1 else df_today,
             task_dir=task_dir,
             primary_assets=primary,
+            processor_bundle=processor_bundle,
+        )
+        timings.mark("frozen_infer_processors")
+
+        sequence_data = None
+        if sequence_length > 1:
+            X, sequence_data = _qe_sequence_inputs(df_today, trade_date=actual_date, step_len=sequence_length)
+        else:
+            X = _drop_invalid_feature_rows_for_strict(df_today)
+        logger.info(f"模型预测: model_kind={model_kind}, X.shape={X.shape}")
+        timings.mark("sequence_sampling_strict_filter")
+
+        scores = (
+            predict_scores(model, inner_model, model_kind, X, sequence_data=sequence_data)
+            if sequence_data is not None else predict_scores(model, inner_model, model_kind, X)
         )
 
-        X = _drop_invalid_feature_rows_for_strict(df_today)
-        logger.info(f"模型预测: model_kind={model_kind}, X.shape={X.shape}")
-
-        scores = predict_scores(model, inner_model, model_kind, X)
-
         df_scores = _build_score_frame_for_scored_features(X, scores)
+        timings.mark("model_forward_score_frame")
 
         calendar_identity_payload = {
             "dataset_id": "market.trading_calendar",
@@ -2015,6 +2309,13 @@ class InferenceEngine:
             "calendar_version": "market.trading_calendar.v1",
             "calendar_source": "market.trading_calendar",
         }
+        file_dataset = getattr(getattr(self, "input_session", None), "file_dataset", None)
+        if file_dataset is not None:
+            file_dataset.assert_unchanged()
+            calendar_identity_payload = {
+                "dataset_id": "dataset_files.day_calendar", "effective_trade_date": actual_date.date().isoformat(),
+                "calendar_version": file_dataset.identity, "calendar_source": "FROZEN_DATASET_FILES",
+            }
         calendar_identity_hash = _inference_receipt_sha256(calendar_identity_payload)
         calendar_payload = {
             "calendar_identity_hash": calendar_identity_hash,
@@ -2023,9 +2324,15 @@ class InferenceEngine:
             "window_resolution": start_date_source,
         }
         calendar_hash = _inference_receipt_sha256(calendar_payload)
+        scored_members = set(df_scores.index.get_level_values("instrument"))
         self.last_inference_receipt = {
             "contract_version": "strategy_package_live_inference_receipt_v2",
             "universe_count": int(len(universe)),
+            "universe_members": list(universe),
+            "unscored_members": [
+                {"symbol": str(member), "availability": "UNKNOWN"}
+                for member in universe if member not in scored_members
+            ],
             "source_read_receipts": [
                 {
                     "source_role": "pit_universe",
@@ -2081,8 +2388,8 @@ class InferenceEngine:
                             "universe_hash": _inference_receipt_sha256(sorted(str(item) for item in universe)),
                         }
                     ),
-                    "row_count": int(len(df_fund_raw)),
-                    "content_hash": _frame_receipt_sha256(df_fund_raw),
+                    "row_count": int(fundamental_rows),
+                    "content_hash": fundamental_input_hash,
                     "first_observed_at": observed_at.isoformat(),
                     "admissibility": receipt_admissibility,
                 },
@@ -2125,9 +2432,43 @@ class InferenceEngine:
             },
         }
 
+        if file_dataset is not None:
+            context = self.last_inference_receipt["input_context"]
+            context.update(calendar_version=file_dataset.identity, calendar_source="FROZEN_DATASET_FILES",
+                           frozen_file_binding_hash=file_dataset.identity)
+            names = {"pit_universe": "day_selection_universe", "market_history": "daily_pv",
+                     "fundamental_moneyflow": "static_factor_h5", "trading_calendar": "day_calendar"}
+            for receipt in self.last_inference_receipt["source_read_receipts"]:
+                receipt["dataset_id"] = "dataset_files." + names[receipt["source_role"]]
+                receipt["query_template_id"] = "FrozenDataset." + names[receipt["source_role"]]
+                receipt["query_template_version"] = "frozen_market_dataset_files_v1"
+                receipt["parameter_hash"] = _inference_receipt_sha256({
+                    "native_parameters": receipt["parameter_hash"], "file_binding_hash": file_dataset.identity})
+        if source_route is not None:
+            from .services.advisory_historical_range.input_source_plan import input_receipt
+            self.last_inference_receipt["input_context"]["source_plan_receipt"] = input_receipt(
+                source_route, self.last_inference_receipt)
+        timings.mark("source_receipts")
         # 保存信号到数据库（使用提取的模块级函数）
         if persist_signals:
             save_signals_to_db(task_run_id, loop_id, requested_trade_date, df_scores)
+
+        timings.mark("legacy_signal_persistence")
+        self.last_inference_performance = timings.result(
+            price_rows=len(df_history), fundamental_rows=fundamental_rows,
+            universe_count=len(universe), score_count=len(df_scores),
+            feature_count=actual_count, sequence_length=sequence_length,
+            execution_profile="performance_reference" if self.performance_reference else "optimized",
+            resource_loads=(self.resource_session.loads - resources_before[0] if self.resource_session else None),
+            resource_hits=(self.resource_session.hits - resources_before[1] if self.resource_session else None),
+            resource_retained_bytes=(self.resource_session.cache_bytes if self.resource_session else 0),
+            feature_cache_hits=(self.feature_session.hits if self.feature_session else 0),
+            feature_computations=(self.feature_session.computations if self.feature_session else 0),
+            feature_retained_bytes=(self.feature_session.retained_bytes if self.feature_session else 0),
+            **(self.input_session.stats() if self.input_session else {}),
+            **materialization_counters,
+        )
+        logger.info("inference performance: %s", json.dumps(self.last_inference_performance, ensure_ascii=False))
 
         return df_scores
 

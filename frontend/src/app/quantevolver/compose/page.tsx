@@ -759,6 +759,10 @@ function ComposePageContent() {
       alert("单指数股票池必须选择一个指数。");
       return false;
     }
+    if (!blacklistEnabled && universeMode === "single_index" && universePoolIds[0] === "star50" && topk !== 20) {
+      alert("科创50单指数实验只允许 TopK=20；历史 Top50 仅保留展示，不能创建新任务。");
+      return false;
+    }
     if (!blacklistEnabled && universeMode === "index_union" && universePoolIds.length < 1) {
       alert("多指数并集至少选择一个指数。");
       return false;
@@ -892,6 +896,9 @@ function ComposePageContent() {
             task_name: `QE股票池对比-${new Date().toISOString().slice(0, 19)}`,
             target_desc: "同模型、因子、参数、seed与分钟执行，仅比较PIT指数股票池",
             pool_ids: universePoolIds,
+            topk_by_pool: Object.fromEntries(
+              universePoolIds.map(poolId => [poolId, poolId === "star50" ? 20 : topk]),
+            ),
             node_id: executionNodeId || undefined,
             auto_start: false,
             base_loop: {
@@ -2044,7 +2051,10 @@ function ComposePageContent() {
                         name={universeMode === "single_index" ? "qe-single-index-pool" : undefined}
                         checked={universePoolIds.includes(pool.pool_id)}
                         onChange={event => setUniversePoolIds(current => {
-                          if (universeMode === "single_index") return event.target.checked ? [pool.pool_id] : [];
+                          if (universeMode === "single_index") {
+                            if (event.target.checked && pool.pool_id === "star50") setTopk(20);
+                            return event.target.checked ? [pool.pool_id] : [];
+                          }
                           return event.target.checked
                             ? [...new Set([...current, pool.pool_id])].sort()
                             : current.filter(item => item !== pool.pool_id);

@@ -4,6 +4,7 @@ import logging
 from contextlib import AbstractContextManager
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
@@ -137,6 +138,7 @@ class PostgresRealtimeFeatureSource:
         *,
         connection_context_factory: ConnectionContextFactory | None = None,
         statement_timeout_ms: int = 300_000,
+        deadline_check: Callable[[], None] | None = None,
     ) -> None:
         if statement_timeout_ms <= 0:
             raise ValueError("statement_timeout_ms must be positive")
@@ -144,6 +146,7 @@ class PostgresRealtimeFeatureSource:
             lambda: get_conn(autocommit=False, manage_transaction=False)
         )
         self._statement_timeout_ms = int(statement_timeout_ms)
+        self._deadline_check = deadline_check
 
     def load(
         self,
@@ -155,6 +158,8 @@ class PostgresRealtimeFeatureSource:
         hmm_models: dict[str, Any],
         pit_universe_key: str | None = None,
     ) -> RealtimeFeatureInputs:
+        if self._deadline_check is not None:
+            self._deadline_check()
         normalized_symbols = tuple(sorted({str(symbol).strip().upper() for symbol in symbols if str(symbol).strip()}))
         if not normalized_symbols:
             raise AdvisoryModelFirstError(
@@ -275,6 +280,7 @@ class PostgresRealtimeFeatureSource:
                     continuation_cutoff=continuation_cutoff.isoformat(),
                     required_l2_code_ids=candidate_l2_codes,
                     precomputed_observations=hmm_observations,
+                    deadline_check=self._deadline_check,
                 )
                 try:
                     price_range_contexts, price_range_unavailable = self._price_range_contexts(
@@ -323,6 +329,8 @@ class PostgresRealtimeFeatureSource:
             finally:
                 cursor.close()
 
+        if self._deadline_check is not None:
+            self._deadline_check()
         return RealtimeFeatureInputs(
             candidate_daily=candidate_daily,
             candidate_static=candidate_static,
@@ -393,6 +401,22 @@ class PostgresRealtimeFeatureSource:
             and str(dividend_audit[0] or "").lower() == "success"
             and str(dividend_audit[1] or "").lower() in {"ok", "empty_valid"}
         )
+        cursor.execute(
+            """
+            SELECT status, quality_status
+              FROM market.dataset_date_refresh_audit
+             WHERE dataset = 'adj_factor' AND trade_date = %s
+             ORDER BY refreshed_at DESC
+             LIMIT 1
+            """,
+            (decision_as_of_trade_date,),
+        )
+        adjustment_audit = cursor.fetchone()
+        adjustment_ready = bool(
+            adjustment_audit
+            and str(adjustment_audit[0] or "").lower() == "success"
+            and str(adjustment_audit[1] or "").lower() in {"ok", "empty_valid"}
+        )
 
         cursor.execute(
             """
@@ -406,9 +430,13 @@ class PostgresRealtimeFeatureSource:
                         WHERE cal.is_trading = TRUE
                           AND cal.cal_date BETWEEN basic.list_date AND %s
                      )
-                   END AS listed_trading_days
+                   END AS listed_trading_days,
+                   adjustment.adj_factor
               FROM market.kline_daily_raw price
               LEFT JOIN market.stock_basic basic ON basic.ts_code = price.ts_code
+              LEFT JOIN market.adj_factor adjustment
+                ON adjustment.ts_code = price.ts_code
+               AND adjustment.trade_date = price.trade_date
              WHERE price.trade_date = %s
                AND price.ts_code = ANY(%s)
              ORDER BY price.ts_code
@@ -514,8 +542,11 @@ class PostgresRealtimeFeatureSource:
                 multiplier, corporate_action_source = _target_raw_price_multiplier(
                     symbol=normalized,
                     decision_raw_close=decision_raw_close,
+                    decision_adjustment_factor=row[4],
+                    decision_adjustment_ready=adjustment_ready,
                     rows=dividend_rows.get(normalized, []),
                     decision_as_of_trade_date=decision_as_of_trade_date,
+                    tick_size=0.01,
                 )
                 target_is_st = _project_target_st(st_events.get(normalized))
                 board_type = _board_type(normalized)
@@ -1003,8 +1034,11 @@ def _target_raw_price_multiplier(
     *,
     symbol: str,
     decision_raw_close: float,
+    decision_adjustment_factor: Any | None = None,
+    decision_adjustment_ready: bool = True,
     rows: Sequence[tuple[Any, ...]],
     decision_as_of_trade_date: date,
+    tick_size: float = 0.01,
 ) -> tuple[float, str]:
     if not rows:
         return 1.0, "market.dividend:target_ex_date:no_visible_action"
@@ -1067,17 +1101,50 @@ def _target_raw_price_multiplier(
             reason_code="ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE",
             context={"symbol": symbol, "economic_action_count": len(economic_actions)},
         )
+    if not decision_adjustment_ready:
+        raise AdvisoryModelFirstError(
+            "decision-date adjustment-factor refresh receipt is unavailable",
+            reason_code="ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE",
+            context={"symbol": symbol},
+        )
     stock_dividend, cash_dividend_tax = next(iter(economic_actions))
-    multiplier = (decision_raw_close - cash_dividend_tax) / (
-        decision_raw_close * (1.0 + stock_dividend)
-    )
-    if not np.isfinite(multiplier) or multiplier <= 0:
+    try:
+        raw_close = Decimal(str(decision_raw_close))
+        adjustment_factor = Decimal(str(decision_adjustment_factor))
+        tick = Decimal(str(tick_size))
+        theoretical_reference = (
+            raw_close - Decimal(str(cash_dividend_tax))
+        ) / (Decimal("1") + Decimal(str(stock_dividend)))
+        if raw_close <= 0 or adjustment_factor <= 0 or tick <= 0 or theoretical_reference <= 0:
+            raise ValueError("nonpositive adjustment-factor projection input")
+        rounded_reference = (
+            theoretical_reference / tick
+        ).quantize(Decimal("1"), rounding=ROUND_HALF_UP) * tick
+        if rounded_reference <= 0:
+            raise ValueError("nonpositive rounded ex-right reference")
+        projected_target_factor = (
+            adjustment_factor * raw_close / rounded_reference
+        ).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+        if projected_target_factor <= 0:
+            raise ValueError("nonpositive projected target factor")
+        multiplier = adjustment_factor / projected_target_factor
+    except (InvalidOperation, TypeError, ValueError, ZeroDivisionError) as exc:
+        raise AdvisoryModelFirstError(
+            "corporate-action adjustment-factor projection is unavailable",
+            reason_code="ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE",
+            context={"symbol": symbol},
+        ) from exc
+    multiplier_float = float(multiplier)
+    if not np.isfinite(multiplier_float) or multiplier_float <= 0:
         raise AdvisoryModelFirstError(
             "corporate-action target price multiplier is invalid",
             reason_code="ADVISORY_PRICE_RANGE_CORPORATE_ACTION_INPUT_UNAVAILABLE",
             context={"symbol": symbol},
         )
-    return float(multiplier), "market.dividend:decision_visible_implemented_action"
+    return (
+        multiplier_float,
+        "market.dividend+market.adj_factor:decision_visible_provider_projection_v2",
+    )
 
 
 def _optional_nonnegative_component(value: Any) -> float:

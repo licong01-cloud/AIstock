@@ -28,9 +28,218 @@ def test_runner_configure_helper_keeps_registration_token_out_of_arguments() -> 
     assert "--replace" not in text
     assert "--disableupdate" in text
     assert "automatic_update_disabled" in text
-    assert "if ($Role -eq 'general') { 'aistock-ci' } else { 'aistock-ci-security' }" in text
+    assert "@('aistock', 'aistock-ci', 'aistock-ci-security')" in text
+    assert "@('aistock-ci', 'aistock-ci-security')" in text
+    assert "General runner labels must not include aistock-ci-security" in text
     assert "AISTOCK_GITHUB_RUNNER_VERSION" in text
     assert "actions-runner-win-x64-2.334.0.zip" not in text
+    assert "GIT_ALTERNATE_OBJECT_DIRECTORIES" in text
+
+
+@pytest.mark.skipif(sys.platform != "win32" or not _powershell(), reason="PowerShell helper is Windows-only")
+@pytest.mark.parametrize("role,labels,message", [
+    ("security", "@('aistock','aistock-ci-security')", "must include aistock-ci"),
+    ("general", "@('aistock','aistock-ci','aistock-ci-security')", "must not include aistock-ci-security"),
+])
+def test_runner_configure_helper_enforces_work_conserving_role_labels(tmp_path: Path, role, labels, message) -> None:
+    allowed_root = tmp_path / "runners"
+    install_root = allowed_root / "security"
+    allowed_root.mkdir()
+
+    result = subprocess.run(
+        [
+            _powershell() or "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            (
+                f"& '{SCRIPT}' -AllowedRoot '{allowed_root}' -InstallRoot '{install_root}' "
+                f"-Role {role} -Labels {labels} -AuditOnly -Json"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode != 0
+    assert message in (result.stdout + result.stderr)
+
+
+@pytest.mark.skipif(sys.platform != "win32" or not _powershell(), reason="Windows SID translation")
+def test_scheduled_owner_normalization_preserves_exact_identity():
+    text = SCRIPT.read_text(encoding="utf-8")
+    function = text[text.index("function Resolve-ScheduledDispatchOwnerSid"):text.index("# Separate infrastructure-only")]
+    command = function + r"""
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$names = @($identity.Name.Split('\')[-1], $identity.Name, $identity.User.Value)
+$same = @($names | ForEach-Object { (Resolve-ScheduledDispatchOwnerSid $_) -eq $identity.User.Value })
+$different = (Resolve-ScheduledDispatchOwnerSid 'S-1-5-18') -ne $identity.User.Value
+try { Resolve-ScheduledDispatchOwnerSid 'S-1-invalid' | Out-Null; $invalid=$false } catch { $invalid=$true }
+@{same=$same;different=$different;invalid=$invalid} | ConvertTo-Json -Compress
+"""
+    result = subprocess.run([_powershell(), "-NoProfile", "-NonInteractive", "-Command", command],
+                            capture_output=True, text=True, timeout=20,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"same": [True, True, True], "different": True, "invalid": True}
+
+
+@pytest.mark.skipif(sys.platform != "win32" or not _powershell(), reason="PowerShell helper is Windows-only")
+def test_runner_audit_reports_lifecycle_drift_without_archive_inputs(tmp_path: Path) -> None:
+    allowed_root = tmp_path / "runners"
+    install_root = allowed_root / "security"
+    install_root.mkdir(parents=True)
+    (install_root / ".runner").write_text(
+        json.dumps(
+            {
+                "agentName": "test-host-aistock-security",
+                "gitHubUrl": "https://github.com/licong01-cloud/AIstock",
+                "workFolder": "_work",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (install_root / "run-aistock-runner-hidden.cmd").write_text(
+        '@echo off\r\nset "GIT_ALTERNATE_OBJECT_DIRECTORIES="\r\n',
+        encoding="ascii",
+    )
+
+    completed = subprocess.run(
+        [
+            _powershell() or "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(SCRIPT),
+            "-AllowedRoot",
+            str(allowed_root),
+            "-InstallRoot",
+            str(install_root),
+            "-Role",
+            "security",
+            "-AuditOnly",
+            "-Json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    assert completed.returncode == 2
+    assert payload["workflow_gate"] == "blocked"
+    assert payload["process_control_performed"] is False
+    assert any("disableUpdate=true" in item for item in payload["blocking"])
+    assert any("supervisor is missing" in item for item in payload["blocking"])
+    assert "ArchivePath" not in completed.stderr
+
+
+@pytest.mark.skipif(sys.platform != "win32" or not _powershell(), reason="PowerShell helper is Windows-only")
+def test_runner_audit_accepts_pinned_supervised_install_without_archive_inputs(tmp_path: Path) -> None:
+    allowed_root = tmp_path / "runners"
+    install_root = allowed_root / "security"
+    install_root.mkdir(parents=True)
+    (install_root / ".runner").write_text(
+        json.dumps(
+            {
+                "agentName": "test-host-aistock-security",
+                "gitHubUrl": "https://github.com/licong01-cloud/AIstock",
+                "workFolder": "_work",
+                "disableUpdate": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (install_root / "run-aistock-runner-hidden.cmd").write_text(
+        '@echo off\r\nset "GIT_ALTERNATE_OBJECT_DIRECTORIES="\r\n',
+        encoding="ascii",
+    )
+    (install_root / "supervise-aistock-runner.ps1").write_text("# supervisor\n", encoding="utf-8")
+    (install_root / ".aistock-runner-supervisor.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "aistock_github_runner_supervisor_state_v1",
+                "supervisor_pid": os.getpid(),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    completed = subprocess.run(
+        [
+            _powershell() or "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(SCRIPT),
+            "-AllowedRoot",
+            str(allowed_root),
+            "-InstallRoot",
+            str(install_root),
+            "-Role",
+            "security",
+            "-AuditOnly",
+            "-Json",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    assert payload["workflow_gate"] == "ready"
+    assert payload["automatic_update_disabled"] is True
+    assert payload["supervisor_alive"] is True
+    assert payload["blocking"] == []
+
+
+@pytest.mark.skipif(sys.platform != "win32" or not _powershell(), reason="PowerShell helper is Windows-only")
+def test_runner_audit_rejects_external_git_alternate_object_cache(tmp_path: Path) -> None:
+    allowed_root = tmp_path / "runners"
+    install_root = allowed_root / "security"
+    install_root.mkdir(parents=True)
+    (install_root / ".runner").write_text(
+        json.dumps(
+            {
+                "agentName": "test-host-aistock-security",
+                "gitHubUrl": "https://github.com/licong01-cloud/AIstock",
+                "workFolder": "_work",
+                "disableUpdate": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (install_root / "run-aistock-runner-hidden.cmd").write_text(
+        '@echo off\r\nset "GIT_ALTERNATE_OBJECT_DIRECTORIES=C:\\runner-cache\\objects"\r\n',
+        encoding="ascii",
+    )
+    (install_root / "supervise-aistock-runner.ps1").write_text("# supervisor\n", encoding="utf-8")
+
+    completed = subprocess.run(
+        [
+            _powershell() or "powershell.exe",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            str(SCRIPT),
+            "-AllowedRoot",
+            str(allowed_root),
+            "-InstallRoot",
+            str(install_root),
+            "-Role",
+            "security",
+            "-AuditOnly",
+            "-Json",
+        ],
+        capture_output=True,
+        text=True,
+    )
+
+    payload = json.loads(completed.stdout)
+    assert completed.returncode == 2
+    assert any("must clear GIT_ALTERNATE_OBJECT_DIRECTORIES" in item for item in payload["blocking"])
 
 
 @pytest.mark.skipif(sys.platform != "win32" or not _powershell(), reason="PowerShell helper is Windows-only")
@@ -180,6 +389,8 @@ def test_runner_configure_helper_registers_with_auto_update_disabled(
     assert payload["automatic_update_disabled"] is True
     assert "--disableupdate" in (install_root / "config-args.txt").read_text(encoding="utf-8")
     assert (install_root / "supervise-aistock-runner.ps1").read_text(encoding="utf-8-sig") == "# supervisor\n"
+    wrapper = (install_root / "run-aistock-runner-hidden.cmd").read_text(encoding="ascii")
+    assert wrapper.count('set "GIT_ALTERNATE_OBJECT_DIRECTORIES="') == 1
 
 
 @pytest.mark.skipif(sys.platform != "win32" or not _powershell(), reason="PowerShell helper is Windows-only")
@@ -255,6 +466,7 @@ def test_runner_configure_helper_reapply_start_uses_structured_receipt(tmp_path:
     assert payload["automatic_update_disabled"] is True
     wrapper = (install_root / "run-aistock-runner-hidden.cmd").read_text(encoding="ascii")
     assert (install_root / "supervise-aistock-runner.ps1").is_file()
+    assert wrapper.count('set "GIT_ALTERNATE_OBJECT_DIRECTORIES="') == 1
     assert wrapper.count('set "AISTOCK_RUNNER_ROLE=security"') == 1
     assert 'set "AISTOCK_RUNNER_ROLE=fast"' not in wrapper
 
