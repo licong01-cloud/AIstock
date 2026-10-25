@@ -1003,6 +1003,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         "backend/tests/dataset_release/test_shared_consumer_coverage.py",
         "backend/tests/dataset_release/test_canonical_pit_w6_contracts.py",
         "backend/tests/test_canonical_equity_pit.py",
+        "backend/tests/test_canonical_pit_release.py",
         "backend/tests/scripts/test_activate_canonical_pit_default.py",
         "backend/tests/dataset_release/test_monthly_source_producer.py",
         "backend/tests/dataset_release/test_monthly_unified_v2.py",
@@ -1048,6 +1049,7 @@ def qlib_data_backend(session: nox.Session) -> None:
         test_globs=(
             "backend/tests/qlib_exporter/test_*.py",
             "backend/tests/test_canonical_equity_pit.py",
+            "backend/tests/test_canonical_pit_release.py",
             "backend/tests/scripts/test_activate_canonical_pit_default.py",
             "backend/tests/dataset_release/test_*.py",
             "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",
@@ -1060,6 +1062,8 @@ def qlib_data_backend(session: nox.Session) -> None:
         ),
         overrides={
             "backend/services/canonical_equity_pit.py": "backend/tests/test_canonical_equity_pit.py",
+            "backend/services/canonical_pit_release.py": "backend/tests/test_canonical_pit_release.py",
+            "scripts/manage_canonical_pit_release.py": "backend/tests/test_canonical_pit_release.py",
             "scripts/activate_canonical_pit_default.py": "backend/tests/scripts/test_activate_canonical_pit_default.py",
             "scripts/build_dataset_release_successor.py": "backend/tests/dataset_release/test_release_successor.py",
             "scripts/repair_qe_adj_factor_candidate.py": "backend/tests/services/dataset_release/test_adj_factor_candidate_repair.py",

@@ -256,6 +256,8 @@ DIRECT_BACKEND_PLAN_KEYS_BY_FILE = {
     "scripts/audit_shared_dataset_consumer_coverage.py": ("qlib_data_backend",),
     "scripts/prepare_canonical_pit_activation.py": ("qlib_data_backend",),
     "scripts/activate_canonical_pit_default.py": ("qlib_data_backend",),
+    "scripts/manage_canonical_pit_release.py": ("qlib_data_backend",),
+    "backend/tests/test_canonical_pit_release.py": ("qlib_data_backend",),
     "backend/tests/scripts/test_activate_canonical_pit_default.py": ("qlib_data_backend",),
     "backend/db/pg_pool.py": ("platform_api_backend",),
     "backend/tests/test_pg_pool_audit.py": ("platform_api_backend",),
