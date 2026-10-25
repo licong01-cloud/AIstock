@@ -164,7 +164,7 @@
       "worker-scheduler"
     ],
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1736-remaining-r2.json",
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "worker_scheduler",
@@ -246,7 +246,8 @@
   },
   "validation_evidence": [
     "python -m pytest backend/tests/scripts/test_backfill_tushare_daily_basic_fields.py -q -> 32 passed",
-    "python -m pytest backend/tests/dataset_release/test_factor_materializer.py -q -> 8 passed"
+    "python -m pytest backend/tests/dataset_release/test_factor_materializer.py -q -> 8 passed",
+    "Source merge independently confirmed; official current runtime identity/business smoke PASS; metadata-only close-sync; original validations retained; no new data scans, DB writes or service control"
   ],
   "verification_budget": {
     "budget": "standard",
