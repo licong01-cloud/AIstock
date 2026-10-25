@@ -1,6 +1,9 @@
 {
   "actual": "月更 dmr_63a313d97fd046a38d5a876265565014 attempt267 已完成1019143917字节行业H5；static_factors.parquet自2026-10-14 02:56:40开始仍为0字节，worker存活且持续消耗CPU。真实首批100000行仅覆盖2018-08..2018-09，不是跨多年批次。同范围sector H5读取0.33秒、moneyflow H5读取0.16秒，不能将瓶颈归因于磁盘扫描。已证实独立context路径仍读取未消费的旧sector事实、每次remap重算月度全市场资金流，且static阶段无批次进度；这些是待量化优化点，尚未证明是首批长耗时的直接原因。不得据此宣称根因已确认。",
   "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_industry_history.py",
+    "backend/services/dataset_release/monthly_industry_static.py",
+    "backend/tests/dataset_release/test_monthly_sector_mapping.py",
     "tests/aistock_validation/bugs/20261013_BUG-1891-monthly-static-industry-repair-repeats-historical-cohort-work.json"
   ],
   "assigned_agent": null,
@@ -74,7 +77,15 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "in_progress",
+  "root_cause": "static writer and its readback called remap_context again after sector H5 was completed, repeating alias/PIT/cohort aggregation; no per-static-batch progress or sealed-batch reuse. The original attempt267 long stall is not reproduced and is not attributed to disk speed or a multi-year first batch.",
+  "fix_description": "Reuse exact stock/date facts from the completed sector output; input-bound sector and Parquet batch checkpoints preserve sealed work across interruption; missing static-only keys retain the previous authority path; unchanged columns, finite/NaN semantics, input drift and atomic publication remain verified. No full price export, dataset activation, database or runtime action.",
+  "validation_evidence": [
+    "RED: four parameterized materialization cases fail on old source; GREEN: same four cases pass, including interruption/reuse and changed retained-batch rejection.",
+    "Related matrix: test_monthly_sector_mapping.py 69 passed, 1 skipped; Ruff, changed-file L0/ownership and git diff --check passed.",
+    "Read-only current release first 100000 rows (2018-08-01..2018-09-11): old recompute 2.973526s versus exact completed-fact join 0.161728s, different industry cells=0, unrelated columns unchanged. X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/BUG-1891-bounded-100k-benchmark.json. Not a full-month runtime guarantee.",
+    "Three self-review rounds: exact-date and taxonomy/units parity; source-bound restart/cache drift and publication safety; actual bounded performance plus source/owner scope. DESIGN-COMPLIANCE-001: requirements matched, no mock-only completion, real frozen-file readback, no unapproved scope reduction."
+  ],
   "suspected_modules": [
     "qlib_data"
   ],
