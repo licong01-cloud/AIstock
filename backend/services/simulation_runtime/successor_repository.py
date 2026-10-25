@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from contextlib import AbstractContextManager
+from contextlib import AbstractContextManager, contextmanager
 from copy import deepcopy
 from datetime import UTC, date, datetime
 from enum import Enum
@@ -31,6 +31,10 @@ SuccessorConnFactory = Callable[[], AbstractContextManager[Any]]
 
 
 class LocalSimSuccessorRepositoryProtocol(Protocol):
+    def source_plan_creation(self, request_hash: str) -> AbstractContextManager: ...
+
+    def find_replay_by_source_request(self, request_hash: str) -> LocalSimReplayJobV1 | None: ...
+
     def create_account_bundle(
         self,
         *,
@@ -229,6 +233,27 @@ class LocalSimSuccessorRepository:
 
     def __init__(self, conn_factory: SuccessorConnFactory | None = None) -> None:
         self._conn_factory = conn_factory or _transaction_conn
+
+    @contextmanager
+    def source_plan_creation(self, request_hash: str):
+        # Serialize request registration, including active resolution. The
+        # existing bundle transaction still atomically publishes all five rows.
+        with self._conn_factory() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT pg_advisory_xact_lock(2432, hashtext(%s))", (request_hash,))
+            yield
+
+    def find_replay_by_source_request(self, request_hash: str) -> LocalSimReplayJobV1 | None:
+        with self._conn_factory() as conn:
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""SELECT j.* FROM paper_v2.localsim_replay_job_v1 j
+                    JOIN strategy_pkg.strategy_runtime_release r ON r.release_id = j.release_id
+                    WHERE r.release_config_json->'metadata'->'localsim_source_plan_request_v1'->>'request_hash' = %s
+                    ORDER BY j.created_at, j.replay_job_id LIMIT 2""", (request_hash,))
+                rows = cur.fetchall()
+        if len(rows) > 1:
+            raise InvalidStateTransitionError("LocalSIM source request has multiple replay identities")
+        return self._replay_from_row(dict(rows[0])) if rows else None
 
     def create_account_bundle(
         self,
@@ -1713,6 +1738,18 @@ class LocalSimSuccessorRepository:
             "runtime_profile_sha256", "daily_strategy_profile_version_id", "execution_policy_version_id",
             "execution_policy_sha256", "tail_policy_version_id", "tail_policy_sha256",
         )
+        from .localsim_input_source_plan import SOURCE_PLAN_ID, frozen_source_plan
+        planned = current.historical_source_id == SOURCE_PLAN_ID
+        if planned:
+            before = frozen_source_plan(base_release, job=current)
+            after = frozen_source_plan(release, job=successor_job)
+            if (before["native_policy"] != after["native_policy"] or before["run_id"] == after["run_id"]
+                    or [v for v in after["trading_calendar"]
+                        if before["trading_calendar"][0] <= v <= str(current.end_trade_date)]
+                    != before["trading_calendar"]
+                    or next((v for v in after["trading_calendar"] if v > str(current.end_trade_date)), None)
+                    != str(successor_job.start_trade_date)):
+                raise InvalidStateTransitionError("LocalSIM catch-up source plan does not continue its frozen predecessor")
         if (
             account.status is not SimulationAccountStatus.ACTIVE
             or current.status not in {LocalSimReplayStatus.CAUGHT_UP, LocalSimReplayStatus.READY_FOR_LIVE}
@@ -1732,7 +1769,7 @@ class LocalSimSuccessorRepository:
                 "end_trade_date": successor_job.end_trade_date.isoformat(),
             }
             or successor_job.historical_source_id != current.historical_source_id
-            or successor_job.historical_source_sha256 != current.historical_source_sha256
+            or (not planned and successor_job.historical_source_sha256 != current.historical_source_sha256)
             or successor_job.day_engine_contract_id != current.day_engine_contract_id
             or any(getattr(release, key) != getattr(base_release, key) for key in product_fields)
         ):
@@ -1937,6 +1974,20 @@ class InMemoryLocalSimSuccessorRepository:
         self.replay_jobs: dict[str, LocalSimReplayJobV1] = {}
         self.replay_hash_index: dict[str, str] = {}
         self.selection_links: dict[tuple[str, str], dict[str, Any]] = {}
+
+    @contextmanager
+    def source_plan_creation(self, request_hash: str):
+        # Direct fixtures are single-threaded; production uses the DB mutex.
+        yield
+
+    def find_replay_by_source_request(self, request_hash: str) -> LocalSimReplayJobV1 | None:
+        from .localsim_input_source_plan import REQUEST_KEY
+        jobs = [job for job in self.replay_jobs.values() if
+                (self.get_release(job.release_id).release_config_json.get("metadata", {}).get(REQUEST_KEY) or {}).get(
+                    "request_hash") == request_hash]
+        if len(jobs) > 1:
+            raise InvalidStateTransitionError("LocalSIM source request has multiple replay identities")
+        return jobs[0].model_copy(deep=True) if jobs else None
 
     def create_account_bundle(
         self,

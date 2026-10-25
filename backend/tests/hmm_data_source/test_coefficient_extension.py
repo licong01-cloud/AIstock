@@ -172,7 +172,7 @@ def test_monthly_release_extends_same_model_and_keeps_old_exact_windows(tmp_path
 
 
 def _completed_extension(tmp_path, monkeypatch):
-    plan, config, _, _ = _plan(tmp_path)
+    plan, config, snapshot, inputs = _plan(tmp_path)
     primary = ext.publish_window(_payload(plan), plan, plan["test_start"], plan["backtest_end"])
     config["coefficient_windows"] = [primary]
     job = {
@@ -188,9 +188,13 @@ def _completed_extension(tmp_path, monkeypatch):
     service = HMMTrainingService()
     registrations = []
     monkeypatch.setattr(service, "_get_config", lambda _: {"config_json": config})
+    monkeypatch.setattr(service, "get_snapshot", lambda _: snapshot)
+    monkeypatch.setattr(ext, "resolve_active_input", lambda: inputs)
 
     def register(p, windows):
-        assert p == plan
+        assert {k: v for k, v in p.items() if k not in {"config_json", "windows"}} == {
+            k: v for k, v in plan.items() if k not in {"config_json", "windows"}
+        }
         registrations.extend(windows)
         config["coefficient_windows"].extend(windows)
 
@@ -201,6 +205,105 @@ def _completed_extension(tmp_path, monkeypatch):
     monkeypatch.setattr(service, "_execute_coefficient_extension_plan", no_inference)
     monkeypatch.setattr("backend.services.hmm_training_service.subprocess.run", no_inference)
     return service, plan, config, job, primary, registrations
+
+
+@pytest.mark.parametrize(
+    "failure", [None, "temporary_database", "temporary_registration", "typed_identity", "terminal_job"]
+)
+def test_shared_startup_crops_completed_file_job_without_legacy_scheduler(tmp_path, monkeypatch, failure):
+    import sys
+    import psycopg2
+    from backend.ingestion import tdx_scheduler
+    from backend.routers import hmm_training
+
+    service, plan, config, job, primary, registrations = _completed_extension(tmp_path, monkeypatch)
+    inputs = ext.resolve_active_input()
+    inputs["qe_default_window"] = {"test_start": "2024-06-03", "backtest_end": "2024-07-02"}
+    job["job_id"] = "existing-primary"
+    if failure == "terminal_job":
+        job["status"] = "FAILED"
+    source = Path(plan["model_path"]).parent / primary["coefficient_filename"]
+    before = source.read_bytes(), deepcopy(job)
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, *args):
+            pass
+
+        def fetchall(self):
+            return [{"config_id": plan["config_id"], "config_json": config}]
+
+    @contextmanager
+    def connection():
+        yield SimpleNamespace(cursor=lambda **_: Cursor())
+
+    monkeypatch.setattr("backend.services.hmm_training_service.get_conn", connection)
+    monkeypatch.setattr(service, "_enqueue_coefficient_extension", lambda _: job)
+    monkeypatch.setattr(service, "get_daily_coefficient_job", lambda _: job)
+    monkeypatch.setattr(service, "reconcile_daily_coefficient_subscriptions", lambda: [])
+    monkeypatch.setattr(
+        service, "run_daily_coefficients_job", lambda *_: pytest.fail("terminal job must not reexecute")
+    )
+    attempts, snapshot_loader = [], service.get_snapshot
+
+    def snapshot(identity):
+        attempts.append(identity)
+        if len(attempts) == 1 and failure == "temporary_database":
+            raise psycopg2.OperationalError("temporary file subscription database outage")
+        if failure == "typed_identity":
+            raise ext.CoefficientExtensionError("hmm_coefficient_extension_contract_invalid", "identity conflict")
+        return snapshot_loader(identity)
+
+    monkeypatch.setattr(service, "get_snapshot", snapshot)
+    register = service._register_coefficient_extension_windows
+    registration_failures = []
+
+    def register_with_recovery(p, windows):
+        if failure == "temporary_registration" and not registration_failures:
+            registration_failures.append(True)
+            raise psycopg2.InterfaceError("temporary registry connection outage after artifact publication")
+        return register(p, windows)
+
+    monkeypatch.setattr(service, "_register_coefficient_extension_windows", register_with_recovery)
+    monkeypatch.setattr(hmm_training, "HMMTrainingService", lambda: service)
+    monkeypatch.setattr(tdx_scheduler, "DEFAULT_TEST_OUTPUT_DIR", tmp_path)
+    owner = tdx_scheduler.TDXScheduler()
+    monkeypatch.setattr(owner, "_fetchall", lambda *_: [])  # Unchanged audit watermark, including startup catch-up.
+    monkeypatch.setattr(tdx_scheduler, "scheduler", owner)
+    monkeypatch.setitem(sys.modules, "apscheduler.schedulers.asyncio", None)
+    monkeypatch.setattr(hmm_training, "_scheduler", None)
+    monkeypatch.setattr(hmm_training, "_completion_scheduler", None)
+
+    async def scenario():
+        hmm_training.init_hmm_scheduler()
+        entry = owner._completion_callbacks[hmm_training._HMM_COMPLETION_CALLBACK_ID]
+        owner._dispatch_completion_callbacks()
+        await asyncio.wrap_future(entry.future)
+        if failure in {"temporary_database", "temporary_registration"}:
+            assert entry.future.result() is False
+            owner._dispatch_completion_callbacks()
+            await asyncio.wrap_future(entry.future)
+        owner._dispatch_completion_callbacks()
+        assert entry.future is None
+        assert entry.completed_watermark == entry.dispatched_watermark
+        assert len(attempts) == (2 if failure in {"temporary_database", "temporary_registration"} else 1)
+        if failure in {None, "temporary_database", "temporary_registration"}:
+            assert len(registrations) == 1
+            assert (registrations[0]["test_start"], registrations[0]["backtest_end"]) == ("2024-07-01", "2024-07-02")
+        else:
+            assert registrations == []
+        assert source.read_bytes() == before[0] and job == before[1]
+        hmm_training.shutdown_hmm_scheduler()
+
+    try:
+        asyncio.run(scenario())
+    finally:
+        owner.shutdown()
 
 
 @pytest.mark.parametrize(

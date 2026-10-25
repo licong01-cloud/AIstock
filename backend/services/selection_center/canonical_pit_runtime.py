@@ -369,10 +369,10 @@ def require_canonical_pit_generation_current(
     if raw is None:
         raise CanonicalPitRuntimeError("canonical PIT runtime lease is required")
     lease = SelectionPitRuntimeLease.from_mapping(raw)
+    resolver = authority_resolver or CanonicalPitAuthorityResolver()
     try:
-        current = SelectionPitRuntimeLease.from_binding(
-            (authority_resolver or CanonicalPitAuthorityResolver()).resolve_live_binding()
-        )
+        current_binding = resolver.resolve_live_binding()
+        current = SelectionPitRuntimeLease.from_binding(current_binding)
     except Exception as exc:
         raise CanonicalPitGenerationDriftError(
             "canonical PIT authority cannot be re-read for generation validation",
@@ -380,6 +380,19 @@ def require_canonical_pit_generation_current(
         ) from exc
     expected = _runtime_identity(lease)
     observed = _runtime_identity(current)
+    # The policy/activation identity stays pinned. A maintenance-only extension
+    # is compatible solely when the shared producer verified the old membership
+    # prefix unchanged. Never rewrite the saved lease or extend its date scope.
+    if (observed != expected and observed[:8] == expected[:8]
+            and current.coverage_start == lease.coverage_start and current.coverage_end >= lease.coverage_end):
+        verify_prefix = getattr(resolver, "verifies_rolling_predecessor", None)
+        if verify_prefix is not None:
+            try:
+                if verify_prefix(current=current_binding, source_digest=lease.state_source_digest,
+                                 coverage_start=lease.coverage_start, coverage_end=lease.coverage_end):
+                    return lease
+            except Exception as exc:
+                raise CanonicalPitGenerationDriftError("PIT rolling predecessor cannot be verified") from exc
     if observed != expected:
         raise CanonicalPitGenerationDriftError(
             "canonical PIT authority changed during an active session",

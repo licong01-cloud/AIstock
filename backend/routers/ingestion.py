@@ -196,6 +196,7 @@ def _refresh_one_data_stats(cfg: Dict[str, Any]) -> Dict[str, Any]:
             table_name = _qualified_table_name(cfg.get("table_name"))
             date_column = str(cfg.get("date_column") or "").strip()
             updated_column = str(cfg.get("updated_column") or "").strip()
+            last_updated_at = None
 
             if data_kind == KLINE_MINUTE_RAW_KIND:
                 if date_column != "trade_time":
@@ -203,17 +204,21 @@ def _refresh_one_data_stats(cfg: Dict[str, Any]) -> Dict[str, Any]:
                         "reason_code=data_stats_minute_window_invalid_config "
                         f"data_kind={data_kind} date_column={date_column!r}"
                     )
+                updated_projection = (
+                    f"MAX({_quote_identifier(updated_column)})" if updated_column else "NULL::timestamptz"
+                )
                 cur.execute(
                     f"""
                     SELECT COUNT(*),
                            MIN({_quote_identifier(date_column)})::date,
-                           MAX({_quote_identifier(date_column)})::date
+                           MAX({_quote_identifier(date_column)})::date,
+                           {updated_projection} AS last_updated_at
                       FROM {table_name}
                      WHERE {_quote_identifier(date_column)} >= CURRENT_DATE - (%s::text)::interval
                     """,
                     (f"{KLINE_MINUTE_RAW_STATS_WINDOW_MONTHS} months",),
                 )
-                row_count, min_date, max_date = cur.fetchone()
+                row_count, min_date, max_date, last_updated_at = cur.fetchone()
                 extra_info = _merge_data_stats_extra_info(
                     cfg.get("extra_info"),
                     {
@@ -245,19 +250,8 @@ def _refresh_one_data_stats(cfg: Dict[str, Any]) -> Dict[str, Any]:
                 extra_info = _merge_data_stats_extra_info(cfg.get("extra_info"), {})
                 stats_scope = "full_table"
 
-            last_updated_at = None
-            if updated_column:
-                if data_kind == KLINE_MINUTE_RAW_KIND:
-                    cur.execute(
-                        f"""
-                        SELECT MAX({_quote_identifier(updated_column)})
-                          FROM {table_name}
-                         WHERE {_quote_identifier(date_column)} >= CURRENT_DATE - (%s::text)::interval
-                        """,
-                        (f"{KLINE_MINUTE_RAW_STATS_WINDOW_MONTHS} months",),
-                    )
-                else:
-                    cur.execute(f"SELECT MAX({_quote_identifier(updated_column)}) FROM {table_name}")
+            if updated_column and data_kind != KLINE_MINUTE_RAW_KIND:
+                cur.execute(f"SELECT MAX({_quote_identifier(updated_column)}) FROM {table_name}")
                 last_updated_at = cur.fetchone()[0]
 
             cur.execute(
@@ -1256,6 +1250,18 @@ def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
     if dataset not in {"kline_minute_raw", "kline_daily_raw_go"}:
         raise HTTPException(status_code=400, detail="unsupported dataset for init")
     options = dict(payload.options or {})
+    try:
+        population_start = dt.date.fromisoformat(str(options.get("start_date") or "1990-01-01"))
+    except ValueError:
+        raise HTTPException(status_code=400, detail="invalid start_date for Go init")
+    population_end = _latest_trading_day_on_or_before()
+    if population_end is None:
+        raise HTTPException(status_code=400, detail="no trading_calendar rows; please sync calendar first")
+    codes = scheduler._go_provider_codes(
+        population_start, population_end, requested_codes=options.get("codes") or None,
+    )
+    if not codes:
+        raise HTTPException(status_code=400, detail="no non-B-share TDX provider codes requested")
     summary = {"datasets": [dataset], **options}
     job_id = _create_init_job(summary)
 
@@ -1274,7 +1280,6 @@ def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
         workers = int(options.get("workers") or 1)
         truncate_before = bool(options.get("truncate"))
         max_rows_per_chunk = int(options.get("max_rows_per_chunk") or 500_000)
-        codes = options.get("codes") or []
 
         go_payload: Dict[str, Any] = {
             "job_id": str(job_id),
@@ -1357,7 +1362,6 @@ def start_ingestion_init(payload: IngestionInitRequest) -> Dict[str, Any]:
         workers = int(options.get("workers") or 1)
         truncate_before = bool(options.get("truncate"))
         max_rows_per_chunk = int(options.get("max_rows_per_chunk") or 500_000)
-        codes = options.get("codes") or []
 
         go_payload: Dict[str, Any] = {
             "job_id": str(job_id),
@@ -2996,6 +3000,9 @@ def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any]:
         latest_trading_date = latest
     
     workers = payload.workers if payload.workers and payload.workers > 0 else 1
+    codes = scheduler._go_provider_codes(start_date, latest_trading_date)
+    if not codes:
+        raise HTTPException(status_code=400, detail="no non-B-share TDX provider codes requested")
     
     summary: Dict[str, Any] = {
         "data_kind": data_kind,
@@ -3015,7 +3022,7 @@ def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any]:
         start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
         go_payload: Dict[str, Any] = {
             "job_id": str(job_id),
-            "codes": [],
+            "codes": codes,
             "start_time": start_dt.isoformat(),
             "workers": workers,
             "options": {
@@ -3029,7 +3036,7 @@ def trigger_go_incremental(payload: GoIncrementalRequest) -> Dict[str, Any]:
         start_dt = dt.datetime.combine(start_date, dt.time.min).replace(tzinfo=tz)
         go_payload = {
             "job_id": str(job_id),
-            "codes": [],
+            "codes": codes,
             "start_time": start_dt.isoformat(),
             "workers": workers,
             "options": {

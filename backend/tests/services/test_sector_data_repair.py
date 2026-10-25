@@ -124,6 +124,44 @@ def test_pit_geometry_extension_marks_only_tail_and_label_changes_mark_nothing()
     ]
 
 
+@pytest.mark.parametrize("universe_key,expected", [
+    ("aistock_equity_pit_canonical_v2", []),
+    ("shsz_st_pit_active_v1", None),
+    ("shsz_st_pit_qe_dataset_old_frozen", None),
+])
+def test_pit_revision_capture_follows_global_pointer_not_legacy_names(universe_key, expected):
+    from backend.services.sector_data_repair import capture_sector_pit_spans
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def execute(self, sql, params):
+            calls.append((sql, params))
+
+        def fetchone(self):
+            return ("aistock_equity_pit_canonical_v2", "shsz_a_252td_st_delist_asof_v2")
+
+        def fetchall(self):
+            return []
+
+    class Connection:
+        def cursor(self):
+            return Cursor()
+
+    calls = []
+    assert capture_sector_pit_spans(Connection(), universe_key) == expected
+    assert "stock_universe_pit_authority_pointer" in calls[0][0]
+    if expected is not None:
+        assert "rule_version=%s" in calls[1][0]
+        assert calls[1][1] == (universe_key, "shsz_a_252td_st_delist_asof_v2")
+    else:
+        assert len(calls) == 1
+
+
 def test_pit_geometry_detects_real_removed_dates_and_ignores_equivalent_splits():
     from backend.services.sector_data_repair import eligibility_revision_spans
 

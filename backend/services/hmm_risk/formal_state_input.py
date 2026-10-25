@@ -467,6 +467,7 @@ def prepare_file_request(
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(temp) / "months",
+            suspension_keys=suspension,
             window_start=SOURCE_START,
             window_end=SOURCE_END,
         )
@@ -687,6 +688,7 @@ def _bounded_l2_stock_facts(
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(temp) / "months",
+            suspension_keys=suspension,
             window_start=start,
             window_end=end,
         )

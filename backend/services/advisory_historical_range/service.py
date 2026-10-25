@@ -1230,8 +1230,14 @@ class HistoricalRangeApplicationService:
             program_specs=tuple(_domain_program_spec(item) for item in request.program_specs),
             start_trade_date=request.start_trade_date,
             end_trade_date=request.end_trade_date,
+            selection_input_source_mode=request.selection_input_source_mode,
         )
-        created = runtime.planning.create(domain_request)
+        from .input_source_plan import SourcePlanError
+
+        try:
+            created = runtime.planning.create(domain_request)
+        except SourcePlanError as exc:
+            raise HistoricalRangeServiceError(exc.reason_code, str(exc), context=exc.receipt) from exc
         batch = runtime.query.get_batch(created.batch_id)
         operation = runtime.query.get_operation(created.catalog_operation_id)
         scheduled = _operation_dispatchable(operation)

@@ -136,7 +136,8 @@ def _allowed(relative):
             or re.fullmatch(r"daily_bin/qlib/features/\d{6}\.(sz|sh)/prev_close\.day\.bin|minute_bin/qlib/features/\d{6}\.(sz|sh)/prev_close\.1min\.bin", relative) is not None)
 
 
-def recover_prev_close(*, root, journal, record, cas, schema=SCHEMA, intent_path=None, allowed_path=_allowed):
+def recover_prev_close(*, root, journal, record, cas, schema=SCHEMA, intent_path=None, allowed_path=_allowed,
+                       allow_create=False):
     intent = intent_path if intent_path is not None else _pending(root)
     _plain(intent)
     if not intent.exists():
@@ -148,9 +149,15 @@ def recover_prev_close(*, root, journal, record, cas, schema=SCHEMA, intent_path
         raise MonthlyBuildResumeError("prev_close commit identity differs")
     for relative, entry in commit["files"].items():
         path = root / relative
+        _plain(path)
+        absent_source = entry.get("original_signature") is None and entry.get("original_sha256") is None
+        if absent_source and not allow_create:
+            raise MonthlyBuildResumeError("correction cannot create an unapproved file")
+        cas.get_bytes(cas.validate_reference_metadata(entry["target_ref"]))
+        if not path.exists() and allow_create and absent_source:
+            continue
         signature = _signature(path)
         raw = path.read_bytes()
-        cas.get_bytes(cas.validate_reference_metadata(entry["target_ref"]))
         digest = hashlib.sha256(raw).hexdigest()
         if digest != entry["target_ref"]["sha256"] and (
                 digest != entry["original_sha256"] or list(signature) != entry["original_signature"]):
@@ -163,10 +170,17 @@ def recover_prev_close(*, root, journal, record, cas, schema=SCHEMA, intent_path
     for relative, entry in commit["files"].items():
         payload = cas.get_bytes(cas.validate_reference_metadata(entry["target_ref"]))
         path = root / relative
-        raw = path.read_bytes()
+        _plain(path)
+        absent = not path.exists()
+        raw = None if absent else path.read_bytes()
         if raw != payload:
-            if (hashlib.sha256(raw).hexdigest() != entry["original_sha256"]
-                    or list(_signature(path)) != entry["original_signature"]):
+            if absent:
+                if not (allow_create and entry.get("original_signature") is None and entry.get("original_sha256") is None):
+                    raise MonthlyBuildResumeError("correction creation lost original identity")
+                path.parent.mkdir(parents=True, exist_ok=True)
+                _plain(path)
+            elif (hashlib.sha256(raw).hexdigest() != entry["original_sha256"]
+                  or list(_signature(path)) != entry["original_signature"]):
                 raise MonthlyBuildResumeError("prev_close target changed before replacement")
             _replace(path, payload)
         result["files"][relative] = list(_signature(path))
@@ -308,6 +322,12 @@ def correction_pins(materialization, *, provider, cas):
             if later["original_sha256"] != ref["sha256"]:
                 raise MonthlyBuildResumeError("minute/prev_close correction lineage differs")
             ref = later["target_ref"]
+        quote = next((r for r in materialization.get("quote_fact_correction", {}).get("files", [])
+                      if r["relative_path"] == relative), None)
+        if quote is not None:
+            if quote["original_sha256"] != ref["sha256"]:
+                raise MonthlyBuildResumeError("quote/prev_close correction lineage differs")
+            ref = quote["target_ref"]
         if hashlib.sha256(raw).hexdigest() != ref["sha256"] or len(raw) != ref["size"] or _signature(path) != before:
             raise MonthlyBuildResumeError("prev_close corrected bytes differ")
         result[path] = {"target_sha256": ref["sha256"], "target_size": ref["size"], "target_signature": list(before)}
