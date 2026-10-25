@@ -134,11 +134,11 @@
     "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
-    "runtime_impact": "backend",
+    "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
-    "target_id": "backend-main",
+    "target_id": "worker-scheduler",
     "target_ids": [
-      "backend-main"
+      "worker-scheduler"
     ]
   },
   "schema_version": "aistock_validation_bug_v1",
