@@ -1,0 +1,350 @@
+{
+  "actual": "FAILED BUILD attempt292: native month feature bounds differ; exports complete and fresh-process Qlib smoke PASS.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_legacy_validation.py",
+    "backend/services/dataset_release/monthly_quote_fact_correction.py",
+    "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+    "tests/aistock_validation/bugs/20261022_BUG-2062-monthly-native-validator-rejects-sealed-bounded-quote-corrections-agains.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2062",
+  "closed_at": "2026-10-22T06:19:45.576923Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-22T05:55:04.640026Z",
+  "description": "September attempt292 incorrectly validates sealed missing-only quote corrections against old CSV bounds/NaNs. The same closure path also rejects byte-identical copied security_source_identity.json solely for a changed inode/mtime. Repair correction-aware month validation and metadata content identity together; preserve genuine drift rejection and all completed exports.",
+  "design_compliance_001": {
+    "no_business_semantic_change": "No PIT, price, quantity, model, training window, threshold, input dataset or active profile change.",
+    "no_new_gates": "Removes stale-CSV and stale-inode false blocks; adds no workflow, source, resource or approval gate.",
+    "no_silent_errors": "Exact correction SHA, original finite facts, untouched CSV values, dimensions and stable file reads remain enforced.",
+    "no_unapproved_partial_delivery": "Source repair and actual data validation are reported separately from pending runtime reload and publication."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261022-7e10fb75596b",
+      "timestamp": "2026-10-22T05:55:04.640026Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_release_control/attempt_runs/dmr_63a313d97fd046a38d5a876265565014-build-292"
+  ],
+  "expected": "Same retained operation resumes, approved repaired month bounds and values validate from exact source repair pins; unrelated drift still fails.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2062-monthly-native-validator-rejects-sealed-bounded-quote-corrections-agains.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2062-monthly-native-validator-rejects-sealed-bounded-quote-corrections-agains.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_legacy_validation.py",
+        "backend/services/dataset_release/monthly_quote_fact_correction.py",
+        "backend/tests/dataset_release/test_monthly_legacy_validation.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_legacy_validation.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/services/dataset_release/monthly_quote_fact_correction.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_legacy_validation.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_legacy_validation.py",
+        "backend/services/dataset_release/monthly_quote_fact_correction.py",
+        "backend/tests/dataset_release/test_monthly_legacy_validation.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_quote_fact_correction.py",
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_quote_fact_correction.py",
+      "backend/tests/dataset_release/test_monthly_legacy_validation.py"
+    ]
+  },
+  "first_seen_at": "2026-10-22T05:55:04.640026Z",
+  "fix_branch": null,
+  "fix_commit": "c7516f373760d2f0f269f55da5177c808a8733db",
+  "fix_summary": "Only correction-bound feature files use their verified target end/value identity; all original finite CSV cells remain exact checks, all untouched files retain original validation. Small metadata uses stable-read SHA/size instead of an obsolete inode while publication retains the actual new signature. No producer writes, no data re-export, no additional gate.",
+  "fixed_at": "2026-10-22T06:08:33Z",
+  "github_issue_number": 6579,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6579",
+  "last_seen_at": "2026-10-22T05:55:04.640026Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6581",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_rounds": [
+    {
+      "result": "RED reproduced both incorrect bounds and stale NaN comparisons in daily/minute fixtures; then GREEN direct regression.",
+      "round": 1
+    },
+    {
+      "result": "Exact target tampering, unbound target replacement, changed finite CSV values and unapproved tails remain rejected;190 related recovery/materialization tests passed.",
+      "round": 2
+    },
+    {
+      "result": "Read-only downstream closure probe found byte-identical metadata relocation rejected by inode; RED1 failed/1 passed then GREEN2 passed; retained real factor/index receipts PASS.",
+      "round": 3
+    }
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "2026-10-22 isolated AIstock Python loaded this worktree monthly_legacy_validation.py: retained September daily native validation PASS,103380 rows,65186 output pins,31.69 seconds; minute native validation PASS,24750720 rows,62786 output pins,320.99 seconds; retained factor10 and index14 writer pins PASS; no history business-value comparison; database_write=false,candidate_write=false,profile_write=false,service_process_control=false."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-2062\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2062",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "5d4d0f9c9d5abe149449170115c9575d5e1c7d59718d05ff06983895732a2435",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "c7516f373760d2f0f269f55da5177c808a8733db",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-22T06:18:59.963194Z",
+      "mode": "read_only",
+      "observed_identity": "c7516f373760d2f0f269f55da5177c808a8733db",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "d8252d5374c826079e0e63ba16b4461c82102d21be7fc8e802e72dc922b4ce03",
+      "receipt_sha256": "92dfd1117202bb8b7efb39d308a36595e22e19e9bce3dde1493ee80c419b094a",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "25560f765ada281506cdbecd8128e535b9ee28c9a028457b65632cb2e33b89c4",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2062",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e8a0c2fd2e2df9dd",
+    "recorded_at": "2026-10-22T06:09:11.743240Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6c6853e443e6f3cfafb241a17e26025ff47704f5",
+    "source_merge_commit": "c7516f373760d2f0f269f55da5177c808a8733db",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6581",
+    "validation_evidence": [
+      "validation-receipt: id=4e47e3f4f6bf7a7c commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+      "validation-receipt: id=921d1d452a971096 commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+      "validation-receipt: id=909e54f86340f600 commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_legacy_build_stage.py -q` result=`190 passed`",
+      "validation-receipt: id=0ec5d0ba3ab0e1ae commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py::test_native_factor_metadata_relocation_keeps_content_identity_not_old_inode -q` result=`2 passed`"
+    ],
+    "validation_evidence_digest": "aece85bc6d4081e19de061148427e0155f4fd0a99473ef55b6c6a29955428b98"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Monthly native validator rejects sealed bounded quote corrections against stale CSV tails",
+  "trigger_condition": {
+    "fingerprint": "7e10fb75596b56b31571f866",
+    "source_event_id": "FE-20261022-7e10fb75596b"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=4e47e3f4f6bf7a7c commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "validation-receipt: id=921d1d452a971096 commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=nox plan=guardrail_changed_files status=passed command=`python -m nox -s guardrail_changed_files -- --changed-only` result=`passed`",
+    "validation-receipt: id=909e54f86340f600 commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_legacy_build_stage.py -q` result=`190 passed`",
+    "validation-receipt: id=0ec5d0ba3ab0e1ae commit=6c6853e443e6f3cfafb241a17e26025ff47704f5 kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_legacy_validation.py::test_native_factor_metadata_relocation_keeps_content_identity_not_old_inode -q` result=`2 passed`",
+    "python -m nox -s l0 -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

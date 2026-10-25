@@ -70,6 +70,8 @@ SOURCE_ASSET_SCHEMA_VERSION = "hmm_risk_dataset_release_asset_binding_v1"
 SOURCE_INVENTORY_SCHEMA_VERSION = "hmm_risk_rotation_l1_source_inventory_v1"
 DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1 = "hmm_risk_qe_direct_v2_dataset_identity_v1"
 DIRECT_V2_IDENTITY_SCHEMA_VERSION = "hmm_risk_qe_direct_v2_dataset_identity_v3"
+MONTHLY_IDENTITY_SCHEMA_VERSION = "hmm_risk_qe_monthly_dataset_identity_v1"
+MONTHLY_SOURCE_REVISION = "hmm-risk-monthly-file-source-v1"
 DIRECT_V2_STATE_SCHEMA_VERSION_V2 = "qe_direct_monthly_state_v2"
 DIRECT_V2_STATE_SCHEMA_VERSION = "qe_direct_monthly_state_v3"
 DIRECT_V2_SUPPORTED_STATE_SCHEMA_VERSIONS = frozenset(
@@ -691,7 +693,9 @@ def _fixed_h5_inventory(
         }
 
 
-def _parse_instrument_spans(path: Path) -> dict[str, tuple[tuple[date, date], ...]]:
+def _parse_instrument_spans(
+    path: Path, *, allowed_nonstock_codes: Sequence[str] = ()
+) -> dict[str, tuple[tuple[date, date], ...]]:
     spans: dict[str, list[tuple[date, date]]] = defaultdict(list)
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
@@ -703,7 +707,7 @@ def _parse_instrument_spans(path: Path) -> dict[str, tuple[tuple[date, date], ..
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib instrument row schema differs", line=line_number)
         symbol = parts[0].strip().upper()
         _ascii(symbol, "instrument.symbol", width=16)
-        if _STOCK_CODE.fullmatch(symbol) is None:
+        if _STOCK_CODE.fullmatch(symbol) is None and symbol not in allowed_nonstock_codes:
             raise _fail(REASON_SOURCE_SCHEMA_INVALID, "Qlib instrument symbol is outside canonical sh/sz scope")
         start = _as_date(parts[1], "instrument.start")
         end = _as_date(parts[2], "instrument.end")
@@ -744,6 +748,7 @@ def _read_qlib_stock_rows(
     symbol: str,
     calendar: Sequence[date],
     active_spans: Sequence[tuple[date, date]],
+    suspension_keys: frozenset[tuple[date, str]] = frozenset(),
     window_start: date = SOURCE_START,
     window_end: date = SOURCE_END,
 ) -> np.ndarray:
@@ -781,11 +786,18 @@ def _read_qlib_stock_rows(
         if window_start <= day <= window_end
         and any(span_start <= day <= span_end for span_start, span_end in active_spans)
     ]
-    positions = [index for index in expected_positions if start_index <= index < start_index + length]
-    if positions != expected_positions:
-        raise _fail(REASON_SOURCE_RANGE_INCOMPLETE, f"Qlib stock feature omits active span dates: {symbol}")
-    calendar_positions = np.asarray(positions, dtype=np.int64)
-    local_positions = calendar_positions - start_index
+    # Selection PIT eligibility can outlive the physical quote range during a
+    # full-day suspension. Keep those exact, authority-backed dates as quote NA;
+    # neither truncate the PIT span nor invent a quote. Unproven gaps still fail.
+    for index in expected_positions:
+        if not start_index <= index < start_index + length and (calendar[index], symbol) not in suspension_keys:
+            raise _fail(
+                REASON_SOURCE_RANGE_INCOMPLETE,
+                f"Qlib stock feature omits active span dates: {symbol}/{calendar[index]}",
+            )
+    calendar_positions = np.asarray(expected_positions, dtype=np.int64)
+    physical = (calendar_positions >= start_index) & (calendar_positions < start_index + length)
+    local_positions = calendar_positions[physical] - start_index
     result = np.zeros(len(calendar_positions), dtype=_QLIB_SOURCE_DTYPE)
     result["trade_date"] = np.fromiter(
         (
@@ -797,10 +809,13 @@ def _read_qlib_stock_rows(
     )
     result["symbol"] = _ascii(symbol, "qlib.symbol", width=16)
     for field in QLIB_STOCK_FIELDS:
+        result[field] = np.nan
+        if not len(local_positions):
+            continue
         path, _field_start, field_length = inventories[field]
         mapped = np.memmap(path, dtype="<f4", mode="r", offset=4, shape=(field_length,))
         try:
-            result[field] = np.asarray(mapped[local_positions], dtype="<f4")
+            result[field][physical] = np.asarray(mapped[local_positions], dtype="<f4")
         finally:
             del mapped
     return result
@@ -1663,6 +1678,18 @@ def load_rotation_l1_direct_v2_source_assets(
     except OSError as exc:
         raise _fail(REASON_SOURCE_COMPONENT_MISSING, "direct-v2 candidate root does not exist") from exc
     state_path = root / "direct_monthly_state.json"
+    # Native monthly releases close through a manifest/receipt DAG, not the
+    # retired exporter state. Never hide an existing, invalid legacy state.
+    if not state_path.exists() and not _is_indirect_path(state_path):
+        from backend.services.hmm_risk.monthly_release_input import load_monthly_l2_source_assets
+
+        return load_monthly_l2_source_assets(
+            root,
+            security_identity_manifest=security_identity_manifest,
+            provider_absence_manifest=provider_absence_manifest,
+            data_window_end=data_window_end,
+            frozen_release_binding=frozen_release_binding,
+        )
     state = _read_json_object(state_path)
     validation = state.get("validation")
     state_schema_version = state.get("schema_version")
@@ -2292,6 +2319,7 @@ def _spool_qlib_months(
     calendar: Sequence[date],
     spans: Mapping[str, Sequence[tuple[date, date]]],
     spool_root: Path,
+    suspension_keys: frozenset[tuple[date, str]] = frozenset(),
     window_start: date = SOURCE_START,
     window_end: date = SOURCE_END,
     resource_started: float | None = None,
@@ -2313,6 +2341,7 @@ def _spool_qlib_months(
                 symbol=symbol,
                 calendar=calendar,
                 active_spans=active_spans,
+                suspension_keys=suspension_keys,
                 window_start=window_start,
                 window_end=window_end,
             )
@@ -2654,6 +2683,7 @@ def _strict_prior_price_state(
                 symbol=symbol,
                 calendar=calendar,
                 active_spans=current,
+                suspension_keys=suspension_keys,
                 window_start=days[first],
                 window_end=days[cursor - 1],
             )
@@ -3309,6 +3339,7 @@ def build_rotation_l1_inputs_from_assets(
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(raw_temporary) / "qlib-months",
+            suspension_keys=suspension_keys,
             resource_started=started,
         )
         resource_receipts.append(
@@ -3670,6 +3701,7 @@ def build_rotation_l1_single_date_source_from_assets(
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(raw_temporary) / "qlib-months",
+            suspension_keys=suspension_keys,
             window_start=stock_history_calendar[0],
             window_end=as_of_date,
         )
@@ -4397,6 +4429,7 @@ def _validated_source_identity(value: Any) -> dict[str, Any]:
     if release_identity.get("schema_version") in {
         DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1,
         DIRECT_V2_IDENTITY_SCHEMA_VERSION,
+        MONTHLY_IDENTITY_SCHEMA_VERSION,
     } and value.get("source_binding_manifest_sha256") != canonical_sha256(release_identity):
         raise _fail(REASON_HASH_MISMATCH, "direct-v2 source binding identity hash differs")
     for field in (
@@ -4416,6 +4449,11 @@ def _validated_source_identity(value: Any) -> dict[str, Any]:
 
 def _validated_release_identity(value: Any) -> tuple[dict[str, Any], str, str, str]:
     direct_schema = value.get("schema_version") if isinstance(value, Mapping) else None
+    if direct_schema == MONTHLY_IDENTITY_SCHEMA_VERSION:
+        from backend.services.hmm_risk.monthly_release_input import validate_monthly_release_identity
+
+        identity = validate_monthly_release_identity(value)
+        return identity, DIRECT_V2_UNIVERSE_KEY, identity["rule_version"], MONTHLY_SOURCE_REVISION
     if direct_schema in {DIRECT_V2_IDENTITY_SCHEMA_VERSION_V1, DIRECT_V2_IDENTITY_SCHEMA_VERSION}:
         expected = {
             "schema_version",

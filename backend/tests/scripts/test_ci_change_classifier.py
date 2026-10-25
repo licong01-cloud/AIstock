@@ -13,6 +13,27 @@ _WORKFLOW_BUDGET_NODE = (
     'test_workflow_automation_has_an_honest_production_denominator'
 )
 
+
+@pytest.mark.parametrize("path", [
+    "backend/services/manual_factor_service.py",
+    "scripts/register_manual_factor.py",
+    "backend/tests/test_manual_factor_service_wsl_output.py",
+])
+def test_manual_factor_registration_has_direct_ci_execution(path: str) -> None:
+    # Each path must route independently: a service change cannot conceal an
+    # unmapped CLI or a changed test that the selected nox session never runs.
+    payload = classifier.classify_changed_files([path])
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_sessions"] == ["platform_api_backend"]
+    assert payload["unmapped_code_files"] == []
+    assert payload["unexecuted_test_files"] == []
+    targets, error = classifier._selected_nox_test_targets(
+        repo_root=classifier.ROOT, sessions=payload["backend_sessions"],
+    )
+    assert error is None
+    assert "backend/tests/test_manual_factor_service_wsl_output.py" in targets["platform_api_backend"]
+
+
 def _assert_fields(payload: dict, **expected) -> None:
     """Check each explicit field, retaining boolean/None identity contracts."""
     for field, value in expected.items():

@@ -6,6 +6,7 @@ Historical current-revision input is never labelled historical-as-known.
 
 from __future__ import annotations
 
+from collections import Counter
 from contextlib import contextmanager, nullcontext
 from dataclasses import replace
 from datetime import datetime
@@ -333,6 +334,7 @@ def _aggregates(request, connection, frozen, plan):
         security_identity_manifest=security,
         provider_absence_manifest=provider,
         industry_pit_adapter=_BoundedIndustryProjection(adapter, window),
+        preserve_unavailable_classification=True,
     )
     source_identity = reader.validate_source()
     pit_preflight = reader.run_industry_pit_preflight(
@@ -341,26 +343,72 @@ def _aggregates(request, connection, frozen, plan):
     aggregates = {"L2": []}
     evidence = {"l2_domain_receipts": [], "l2_invalid_price_domain": []}
     day_hashes = []
+    classification_unavailable = []
+    classification_reasons = {}
 
     # Both sources are date ordered; C-013 projection need not preserve the old
     # SQL L1 ordering. Canonicalize within the day before arithmetic and hashing.
     rows = heapq.merge(reader.iter_stock_fact_rows(), reader.iter_missing_price_rows(), key=lambda r: r["trade_date"])
     for day, group in itertools.groupby(rows, key=lambda row: row["trade_date"]):
-        values = sorted(group, key=lambda r: (r["l1_code"], r["symbol"], r["l2_code"]))
+        values = sorted(group, key=lambda r: (r["l1_code"] or "", r["symbol"], r["l2_code"] or ""))
         require(day in window, "stock facts outside bounded context")
         require(len({r["symbol"] for r in values}) == len(values), "duplicate stock/date input")
+        unresolved = []
+        projected = []
+        for row in values:
+            projection = row.get("industry_pit_resolution")
+            if isinstance(projection, dict) and projection.get("status") == "unavailable":
+                require(
+                    row["l1_code"] is None
+                    and row["l2_code"] is None
+                    and projection.get("l1_code") is None
+                    and projection.get("l2_code") is None
+                    and projection.get("canonical_symbol") == row["symbol"]
+                    and projection.get("trade_date") == day.isoformat()
+                    and isinstance(projection.get("reason_code"), str)
+                    and bool(projection["reason_code"]),
+                    "classification NA must retain its exact authority reason and cannot carry fallback industry",
+                )
+                unresolved.append(row)
+            else:
+                projected.append(row)
         require(
-            all(r["l2_code"] in frozen["catalog"] for r in values), "stock industry identity outside official catalog"
+            all(r["l2_code"] in frozen["catalog"] for r in projected),
+            "stock industry identity outside official catalog",
         )
-        values = _align_provider_previous_close(connection, day, values)
+        if unresolved:
+            classification_unavailable.append(
+                {
+                    "trade_date": day.isoformat(),
+                    "count": len(unresolved),
+                    "symbol_sha256": canonical_sha256(sorted(r["symbol"] for r in unresolved)),
+                    "reason_counts": dict(
+                        sorted(Counter(r["industry_pit_resolution"]["reason_code"] for r in unresolved).items())
+                    ),
+                }
+            )
+            if not projected:
+                # The trading day exists. No stock can be assigned to any sector;
+                # leave the original feature kernel to propagate natural NA.
+                classification_reasons.update(
+                    {
+                        (day.isoformat(), code): "hmm_risk_industry_pit_classification_unavailable"
+                        for code in frozen["catalog"]
+                    }
+                )
+        projected = _align_provider_previous_close(connection, day, projected)
         _collect_domains(
-            day, values, eligibility=frozen["eligibility"], aggregates=aggregates, evidence=evidence, levels=("L2",)
+            day, projected, eligibility=frozen["eligibility"], aggregates=aggregates, evidence=evidence, levels=("L2",)
         )
-        day_hashes.append([day.isoformat(), canonical_sha256(_fact_identity(values))])
+        # Include excluded, unclassified facts and their authority provenance in
+        # lineage without ever assigning them a synthetic industry.
+        facts = sorted([*projected, *unresolved], key=lambda r: (r["l1_code"] or "", r["symbol"], r["l2_code"] or ""))
+        day_hashes.append([day.isoformat(), canonical_sha256(_fact_identity(facts))])
     require([d for d, _ in day_hashes] == [d.isoformat() for d in window], "stock-fact calendar has an internal gap")
     reasons = {
         (r["trade_date"], r["sector_code"]): r["price_domain_reason_code"] for r in evidence["l2_invalid_price_domain"]
     }
+    reasons.update(classification_reasons)
     return (
         window,
         aggregates["L2"],
@@ -370,6 +418,7 @@ def _aggregates(request, connection, frozen, plan):
             "pit_preflight_sha256": canonical_sha256(pit_preflight),
             "source_facts_sha256": canonical_sha256(day_hashes),
             "domain_lineage_sha256": canonical_sha256(evidence),
+            "classification_unavailable": classification_unavailable,
         },
     )
 

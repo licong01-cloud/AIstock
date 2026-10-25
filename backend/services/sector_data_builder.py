@@ -38,10 +38,7 @@ from .industry_pit.contracts import (
     UnavailableIndustryIdentity,
 )
 from .industry_pit.resolver import IndustryPitResolver, resolve_dual_authority
-from .stock_universe_pit_service import (
-    DEFAULT_ST_PIT_UNIVERSE_KEY,
-    IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX,
-)
+from .canonical_equity_pit import CANONICAL_PIT_AUTHORITY_ID
 
 
 logger = logging.getLogger(__name__)
@@ -1127,23 +1124,40 @@ def read_sector_data_candidate(
     )
 
 
-_PREFLIGHT_DAY_SQL = """\
+_AUTHORITATIVE_UNIVERSES_SQL = """\
 WITH authoritative_universes AS (
-    SELECT universe_key
-    FROM market.stock_universe_pit_state
-    WHERE status = 'ready'
-      AND dirty = FALSE
-      AND start_date <= %(trade_date)s
-      AND end_date >= %(trade_date)s
-      AND (
-          universe_key = %(live_universe_key)s
-          OR universe_key LIKE %(qe_universe_pattern)s
+    SELECT s.universe_key, s.rule_version
+    FROM market.stock_universe_pit_authority_pointer p
+    JOIN market.stock_universe_pit_authority_versions v
+      ON v.authority_id = p.authority_id
+     AND v.rule_version = p.current_rule_version
+     AND v.rolling_key = p.current_rolling_key
+    JOIN market.stock_universe_pit_state s
+      ON s.universe_key = p.current_rolling_key
+     AND s.rule_version = p.current_rule_version
+    WHERE p.authority_id = %(authority_id)s
+      AND v.status IN ('ACTIVE_CANONICAL', 'DEPLOYED_LEGACY_PENDING_MIGRATION', 'EMERGENCY_LEGACY_ROLLBACK')
+      AND s.status = 'ready'
+      AND s.dirty = FALSE
+      AND s.start_date <= %(trade_date)s
+      AND s.end_date >= %(trade_date)s
+      AND EXISTS (
+          SELECT 1 FROM market.stock_universe_pit_spans x
+          WHERE x.universe_key = s.universe_key AND x.rule_version = s.rule_version
       )
+      AND (v.status <> 'ACTIVE_CANONICAL' OR NOT EXISTS (
+          SELECT 1 FROM market.stock_universe_pit_spans x
+          WHERE x.universe_key = s.universe_key AND x.rule_version <> s.rule_version
+      ))
 ),
+"""
+
+
+_PREFLIGHT_DAY_SQL = _AUTHORITATIVE_UNIVERSES_SQL + """\
 eligible AS (
     SELECT DISTINCT spans.ts_code
     FROM market.stock_universe_pit_spans AS spans
-    JOIN authoritative_universes USING (universe_key)
+    JOIN authoritative_universes USING (universe_key, rule_version)
     WHERE spans.eligible_start <= %(trade_date)s
       AND spans.eligible_end >= %(trade_date)s
 ),
@@ -1293,23 +1307,11 @@ SELECT
 """
 
 
-_DELETE_STALE_DAY_SQL = """\
-WITH authoritative_universes AS (
-    SELECT universe_key
-    FROM market.stock_universe_pit_state
-    WHERE status = 'ready'
-      AND dirty = FALSE
-      AND start_date <= %(trade_date)s
-      AND end_date >= %(trade_date)s
-      AND (
-          universe_key = %(live_universe_key)s
-          OR universe_key LIKE %(qe_universe_pattern)s
-      )
-),
+_DELETE_STALE_DAY_SQL = _AUTHORITATIVE_UNIVERSES_SQL + """\
 eligible AS (
     SELECT DISTINCT spans.ts_code
     FROM market.stock_universe_pit_spans AS spans
-    JOIN authoritative_universes USING (universe_key)
+    JOIN authoritative_universes USING (universe_key, rule_version)
     WHERE spans.eligible_start <= %(trade_date)s
       AND spans.eligible_end >= %(trade_date)s
 ),
@@ -1338,23 +1340,11 @@ WHERE target.trade_date = %(trade_date)s
 """
 
 
-_BUILD_DAY_SQL = """\
-WITH authoritative_universes AS (
-    SELECT universe_key
-    FROM market.stock_universe_pit_state
-    WHERE status = 'ready'
-      AND dirty = FALSE
-      AND start_date <= %(trade_date)s
-      AND end_date >= %(trade_date)s
-      AND (
-          universe_key = %(live_universe_key)s
-          OR universe_key LIKE %(qe_universe_pattern)s
-      )
-),
+_BUILD_DAY_SQL = _AUTHORITATIVE_UNIVERSES_SQL + """\
 eligible AS (
     SELECT DISTINCT spans.ts_code
     FROM market.stock_universe_pit_spans AS spans
-    JOIN authoritative_universes USING (universe_key)
+    JOIN authoritative_universes USING (universe_key, rule_version)
     WHERE spans.eligible_start <= %(trade_date)s
       AND spans.eligible_end >= %(trade_date)s
 ),
@@ -1499,8 +1489,7 @@ class SectorDataBuilder:
                 cur.execute("LOCK TABLE market.sw_index_member IN SHARE MODE", None)
                 params = {
                     "trade_date": trade_date,
-                    "live_universe_key": DEFAULT_ST_PIT_UNIVERSE_KEY,
-                    "qe_universe_pattern": f"{IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX}%",
+                    "authority_id": CANONICAL_PIT_AUTHORITY_ID,
                 }
                 cur.execute(_PREFLIGHT_DAY_SQL, params)
                 (

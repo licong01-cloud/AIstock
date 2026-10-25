@@ -44,9 +44,25 @@ knowledge_mode 显式二选一：
 
 数据库源不绑定月度文件 manifest，不自动读取 active profile；文件源不因错误回退数据库。基础数据缺口交数据 owner，HMM 自行负责消费者构造及验证。
 
+### 4.1 已观测官方分类的 forward authority 重建（BUG-2081）
+
+月度文件的 C-013 eligibility 截止日不是股票分类缺失，也不能充当数据库入口的永久有效边界。数据库入口仍只接受标准 C-013 bundle，但可通过 HMM 自有 `observed_industry_authority.py` 与薄 CLI `scripts/hmm_risk/build_observed_industry_authority.py`，在独立外部目录重建目标只读窗口的 authority；不修改共享 industry_pit、数据集或 active profile，不只改 manifest 哈希，不查询数据库成员表替代官方分类。
+
+重建输入必须显式固定原 authority、来源映射/核查回执 SHA、官网留存 XLS 与抓取回执 SHA。逐行核对股票、源文件行号、唯一最新的来源计入记录、官方 taxonomy 与既有申万文本 L2 投影。目标日股票分母来自同一只读 repeatable-read 事务下的全局 PIT；不产生新的行业编号。来源不完整、歧义、未知投影、路径间接或哈希漂移均停止，不补默认行业。
+
+知识时间严格沿用 causal_daily_next_trade：带时区的实际抓取时间只证明该时刻已观察到，不证明首次发布；新记录仅从上海日期的下一交易日起可用。计入/更新日期保留为来源报告值，不能替代 known_from，FIRST_PUBLICATION_UNVERIFIED 不得清除。2026-10-12 23:04（上海）的官方留存，最早用于 2026-10-13；不得回填到来源声称的 2026-09-24 或更早日期。既有可因果解析的历史区间保留；旧 eligibility 不延长，观测前未知区间仍为 typed NA。index-membership 不因分类观测而延长。
+
+本次目标日 2026-10-22 的 4,918 只股票来源映射与数据库有两处差异：603336.SH 官方 801151.SI / DB 801016.SI；688328.SH 官方 801081.SI / DB 801074.SI。分类使用已核验官方来源，差异单列，不能静默混用。2026-10-12 后没有新修订并未得到证明，本次不将单份留存扩展为持续自动更新或实盘新鲜度已验收。
+
+CLI 要求干净已提交源码，读取完整所需上下文的 PIT/日历，复用共享构建器生成新分类/成员 receipt、分母闭合 preflight 与标准 bundle，再用正式 HMM adapter 读回，输出独立 authority 和重新计算 receipt 的请求。接着运行原数据库业务 prepare 预检，区分当前目标身份修复与历史上下文/20D可用性；前者通过不推导后者通过。模型、scaler、20D、训练窗口、seed、阈值、131 目录及消费者公式均不变。无训练、推断发布、数据库写入、服务控制或生产绑定激活。
+
 ## 5. D3：Implementation Plan / 共用特征与自然不可用
 
 数据库股票行与文件股票行进入同一 _collect_domains 和 build_c010_feature_domain_panel，再用同一特征载体构造与原参数推断函数。复用文件 reader 的 C-013 authority 区间索引，按真实变更边界缓存身份并恢复每条事实的实际日期，不复制分类实现或按股票日重复认证。全部 131 行始终保留。单成分、正常停牌、空成员、正式来源不可用沿原有 typed NA；不补 neutral/1.0，不新设最小股票数或每行业全成功门。
+
+BUG-2082 明确数据库消费者的日历事实与分类资格分离：仅该入口显式启用 reader 的 preserve_unavailable_classification；旧消费者默认行为不变。分类不可用的股票事实保留原交易日、股票、行情/资金流和 C-013 resolution（含 reason 与 authority pins），行业代码保持空值，绝不回退数据库旧成员表或后续观测分类。日期完整性和股票日去重在全部事实上核验；仅已解析到正式文本行业的行进入原聚合核。源日历真实缺日仍失败，合法 classification NA 不再误报为行情缺日。
+
+逐日 lineage 同时绑定已解析与未解析事实，附分类不可用数量、原因分布和股票集合摘要，不能将筛除后的集合冒称完整覆盖。整日无分类时仍保留原 131 行与该日分类 reason，原 264 日上下文和 C-010/A5 rolling/min_periods/mask 决定后续特征是否自然恢复；不补值、不删除交易日、不压缩窗口或放宽 coverage。预检成功只说明载体与身份闭合，可能仍有 typed unavailable，不代表模型效果或所有预测可用。
 
 未知身份、重复股票日期、错误目标、未来输入、缺少必要来源、非法数值或 authority 漂移明确失败。原观察域/coverage 规则保留，不把未完成执行包装成合法 NA。没有官方指数不自动否定已有批准的股票事实聚合版本，也不把聚合版伪称官方指数。
 

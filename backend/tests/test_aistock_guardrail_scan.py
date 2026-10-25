@@ -310,10 +310,10 @@ def test_restart_controls_and_runtime_target_catalog_fail_closed() -> None:
 def test_windows_backend_launcher_uses_the_aistock_interpreter_in_one_shared_path() -> None:
     text = WINDOWS_LAUNCHER_PATH.read_text(encoding="utf-8")
     helper = (ROOT / "scripts/start_ai_stock.py").read_text(encoding="utf-8")
-    assert '"%AISTOCK_BACKEND_PYTHON%" "%AIROOT%scripts\\start_ai_stock.py" %*' in text
+    assert '"%AISTOCK_BACKEND_PYTHON%" -X utf8 "%AIROOT%scripts\\start_ai_stock.py" %*' in text
     assert '[sys.executable, "-m", "uvicorn", "backend.main:app"' in helper
     assert '"--reload"' not in helper
-    assert "where wt" not in text
+    assert "where wt.exe >nul 2>nul" in text
     assert "call conda activate AIstock & uvicorn backend.main:app" not in text
     assert " & uvicorn backend.main:app" not in text
 
@@ -339,7 +339,15 @@ def test_windows_backend_launcher_fails_before_startup_when_runtime_paths_are_mi
     ) in text
     assert text.index('if not exist "%AISTOCK_CONDA_BAT%"') < text.index("scripts\\start_ai_stock.py")
     assert text.index('if not exist "%AISTOCK_BACKEND_PYTHON%"') < text.index("scripts\\start_ai_stock.py")
-    assert 'call "%AISTOCK_CONDA_BAT%" activate AIstock\nif errorlevel 1 (' in text
+    assert 'call "%AISTOCK_CONDA_BAT%" activate AIstock\nset "AISTOCK_CONDA_EXIT=%errorlevel%"' in text
+    assert (
+        'if not "%AISTOCK_CONDA_EXIT%"=="0" (\n'
+        "  echo ERROR: AIstock Conda activation failed. Backend not started; other service tabs are independent.\n"
+        "  pause\n"
+        "  exit /b 1\n"
+        ")"
+    ) in text
+    assert text.index('if not "%AISTOCK_CONDA_EXIT%"=="0"') < text.index("scripts\\start_ai_stock.py")
 
 
 def test_windows_backend_launcher_has_platform_config_ownership() -> None:
