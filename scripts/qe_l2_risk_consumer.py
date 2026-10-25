@@ -8,16 +8,13 @@ from pathlib import Path
 
 import pandas as pd
 
+from qe_l2_risk_admission import L2AdmissionError, validate_admission
+from qe_l2_risk_admission import APPROVED_RISK_SHA256 as APPROVED_RISK_SHA256
+
 CONTRACT = "QE-L2-RISK-ENTRY-GATE-D1..D7"
 POLICY = "qe_l2_risk_entry_gate_v1"
 THRESHOLD = 0.20
-APPROVED_RISK_SHA256 = "5e6a2784a304b2a34cb8cbf6859aab0a9c154a29ba5fac246ff35eebcd9ca0e5"
-
-
-class L2ContractError(ValueError):
-    def __init__(self, code, detail=""):
-        self.reason_code = code
-        super().__init__(f"{code}: {detail}")
+L2ContractError = L2AdmissionError
 
 
 def require(condition, code, detail=""):
@@ -51,7 +48,7 @@ def symbol_key(value):
 def validate_frozen_dataset(manifest):
     """Verify physical release metadata, including the actual minute calendar."""
     b, release, assets = manifest["dataset_binding"], manifest["release_identity"], manifest["assets"]
-    require(assets["risk"]["sha256"] == APPROVED_RISK_SHA256, "QE_L2_UNAPPROVED_RISK_ASSET")
+    validate_admission(manifest)
     require(b["release_id"] == release["release_id"] and b["cutoff"] == release["cutoff"]
             and b["day_pins"]["universe_key"] == release["universe_key"]
             and b["day_pins"]["rule_version"] == release["rule_version"]
@@ -99,6 +96,7 @@ class L2RiskInputs:
         require(m.get("start") == "2026-04-01" and m.get("end") == "2026-09-30"
                 and m.get("decision_days") == 125, "QE_L2_WINDOW_INVALID")
         require(m.get("threshold") == THRESHOLD, "QE_L2_THRESHOLD_INVALID")
+        validate_admission(m)
         assets = {name: checked_asset(ref) for name, ref in m["assets"].items()}
         required = {"risk", "mapping", "mapping_receipt", "authority", "prediction", "calendar", "pit"}
         require(required.issubset(assets), "QE_L2_ASSETS_MISSING")
