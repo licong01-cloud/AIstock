@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Callable, Iterator, Protocol
 
 from backend.db.pg_pool import get_conn
@@ -19,6 +19,7 @@ from backend.services.selection_center.prospective_evidence import (
     TradabilityResult,
     build_stage_receipt,
 )
+from backend.services.selection_center.suspension_provider import project_selection_suspension_days
 from backend.services.trading_core.errors import (
     ArtifactGenerationFailedError,
     DataUnavailableError,
@@ -31,6 +32,14 @@ ConnFactory = Callable[[], Iterator[Any]]
 class SuspendLookupProvider(Protocol):
     def get_suspended_symbols(self, symbols: list[str], trade_date: date) -> dict[str, dict[str, Any]]:
         ...
+
+
+class _SuspensionLookup(dict):
+    """One invocation's evidence, never mutable provider-wide cached state."""
+
+    def __init__(self, receipt):
+        super().__init__()
+        self.receipt = receipt
 
 
 class DbSuspendLookupProvider:
@@ -56,8 +65,7 @@ class DbSuspendLookupProvider:
                         FROM market.suspend_d
                         WHERE ts_code = ANY(%s)
                           AND trade_date = %s
-                          AND suspend_type = 'S'
-                        ORDER BY ts_code, suspend_timing NULLS FIRST
+                        ORDER BY ts_code, suspend_type, suspend_timing NULLS FIRST
                         """,
                         (normalized, trade_date),
                     )
@@ -67,16 +75,26 @@ class DbSuspendLookupProvider:
                 "suspend_d tradability lookup failed",
                 context={"trade_date": trade_date.isoformat(), "symbol_count": len(normalized)},
             ) from exc
-        suspended: dict[str, dict[str, Any]] = {}
-        for symbol, suspend_type, suspend_timing in rows:
-            suspended.setdefault(
-                str(symbol),
-                {
-                    "suspend_type": str(suspend_type) if suspend_type is not None else "S",
-                    "suspend_timing": str(suspend_timing) if suspend_timing is not None else None,
-                    "source": "market.suspend_d",
-                },
+        projected, receipt = project_selection_suspension_days(
+            [{"ts_code": str(symbol), "trade_date": trade_date, "suspend_type": kind, "suspend_timing": timing}
+             for symbol, kind, timing in rows],
+            symbols=normalized, required_dates=[trade_date], usage="D_EFFECTIVE_MARKET_STATE",
+        )
+        unresolved = [row for row in projected if row["state"] == "UNRESOLVED"]
+        if unresolved:
+            raise DataUnavailableError(
+                "suspend_d effective day is unresolved",
+                context={"trade_date": trade_date.isoformat(), "reason_code": "SUSPENSION_DAY_UNRESOLVED",
+                         "suspension_day_authority": receipt},
             )
+        suspended = _SuspensionLookup(receipt)
+        for row in projected:
+            if row["state"] in {"FULL_DAY_SUSPENDED", "INTRADAY_SUSPENDED"}:
+                facts = [r for r in receipt["raw_events"] if r["ts_code"] == row["ts_code"] and r["suspend_type"] == "S"]
+                suspended[row["ts_code"]] = {
+                    "suspend_type": "S", "suspend_timing": facts[0]["suspend_timing"] if facts else None,
+                    "source": "market.suspend_d", "suspension_day_authority": row,
+                }
         return suspended
 
 
@@ -130,8 +148,17 @@ class TradabilityFilter:
         industry_blacklist: list[str] | None = None,
         allow_empty: bool = False,
         exhaustive_evidence: bool = False,
+        industry_trade_date: date | None = None,
     ) -> TradabilityResult:
         """Run the current filter once and preserve its exact in-memory trace."""
+        # Eligibility remains labelled D. Only the PIT industry observation may
+        # be explicitly bounded by an earlier C; old direct calls stay unchanged.
+        if industry_trade_date is not None and (
+            not isinstance(industry_trade_date, date) or isinstance(industry_trade_date, datetime)
+            or industry_trade_date > trade_date
+        ):
+            raise RuntimeConfigInvalidError("industry observation date must not exceed eligibility trade_date")
+        industry_date = industry_trade_date if industry_trade_date is not None else trade_date
         if top_k <= 0:
             raise RuntimeConfigInvalidError(
                 "tradability filter requires positive top_k",
@@ -167,6 +194,7 @@ class TradabilityFilter:
                 trade_date=trade_date,
                 package_id=package_id,
                 manifest_sha256=manifest_sha256,
+                industry_trade_date=industry_trade_date,
             )
 
         suspended = (
@@ -181,7 +209,7 @@ class TradabilityFilter:
         if normalized_industry_blacklist:
             industry_map = self.industry_provider.get_industries(
                 [item.symbol for item in ordered],
-                trade_date,
+                industry_date,
             )
         selected: list[SelectionCandidate] = []
         excluded: list[SelectionExclusion] = []
@@ -215,6 +243,8 @@ class TradabilityFilter:
                             "raw_rank": candidate.rank,
                             "suspend_type": suspension.get("suspend_type"),
                             "suspend_timing": suspension.get("suspend_timing"),
+                            **({"suspension_day_authority": suspension["suspension_day_authority"]}
+                               if "suspension_day_authority" in suspension else {}),
                         },
                     )
                 )
@@ -234,6 +264,7 @@ class TradabilityFilter:
                             "symbol": candidate.symbol,
                             "raw_rank": candidate.rank,
                             "industry_provider": type(self.industry_provider).__name__,
+                            "industry_trade_date": industry_date.isoformat(),
                             "required_component_score_keys": [
                                 "industry",
                                 "sector",
@@ -262,6 +293,7 @@ class TradabilityFilter:
                                 "industry_blacklist": normalized_industry_blacklist,
                                 "matched_blacklist": matched_blacklist,
                                 "matched_level": matched_level,
+                                **({"industry_trade_date": industry_date.isoformat()} if industry_trade_date is not None else {}),
                                 **industry.to_context(),
                             },
                         )
@@ -282,6 +314,7 @@ class TradabilityFilter:
                     trade_date=trade_date,
                     package_id=package_id,
                     manifest_sha256=manifest_sha256,
+                    industry_trade_date=industry_trade_date,
                 )
             if reasons == ["suspended_by_suspend_d"]:
                 raise DataUnavailableError(
@@ -322,6 +355,8 @@ class TradabilityFilter:
             trade_date=trade_date,
             package_id=package_id,
             manifest_sha256=manifest_sha256,
+            industry_trade_date=industry_trade_date,
+            suspension_receipt=getattr(suspended, "receipt", None),
         )
 
     @staticmethod
@@ -399,6 +434,8 @@ class TradabilityFilter:
         trade_date: date,
         package_id: str,
         manifest_sha256: str,
+        industry_trade_date: date | None = None,
+        suspension_receipt: dict[str, Any] | None = None,
     ) -> TradabilityResult:
         if inspected_count != len(candidates) + len(exclusions):
             raise RuntimeConfigInvalidError(
@@ -422,6 +459,10 @@ class TradabilityFilter:
             "inspected_count": inspected_count,
             "unprocessed_tail_count": candidate_pool_count - inspected_count,
         }
+        if industry_trade_date is not None:
+            universe_metadata["industry_trade_date"] = industry_trade_date.isoformat()
+        if suspension_receipt is not None:
+            universe_metadata["suspension_day_authority"] = suspension_receipt
         receipt = build_stage_receipt(
             stage=CandidateStageName.SELECTION_EFFECTIVE,
             status=StageReceiptStatus.COMPLETE,

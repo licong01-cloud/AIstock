@@ -1,18 +1,21 @@
 "use client";
-
 import Link from "next/link";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { localSimApi } from "@/lib/simulation/localsim/api";
-import type { LocalSimReplay } from "@/lib/simulation/localsim/types";
+import { useLocalSimReadback } from "@/lib/simulation/localsim/use-readback";
+import { chinaTime, READ_ERROR, rememberAccount, rememberReplay, safeDate } from "@/lib/simulation/localsim/workbench";
+import { LocalSimReplayStatus } from "../../components/replay-status";
 import styles from "../../localsim.module.css";
-
-export default function LocalSimReplayDetailPage() {
-  const replayJobId = String(useParams<{ replayJobId: string }>().replayJobId || "");
-  const [replay, setReplay] = useState<LocalSimReplay | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const load = useCallback(() => localSimApi.getReplay(replayJobId).then((value) => setReplay(value.replay || null)).catch((exc) => setError(exc instanceof Error ? exc.message : String(exc))), [replayJobId]);
-  useEffect(() => { void load(); const timer = window.setInterval(load, 5000); return () => window.clearInterval(timer); }, [load]);
-  async function cancel() { if (!replay) return; try { await localSimApi.cancelReplay(replayJobId, replay.version); await load(); } catch (exc) { setError(exc instanceof Error ? exc.message : String(exc)); } }
-  return <main className={styles.shell}><header className={styles.header}><div><h1>回放任务</h1><p className={styles.code}>{replayJobId}</p></div><nav className={styles.nav}><Link href="/simulation/localsim/replays">返回回放列表</Link>{replay && <Link href={`/simulation/localsim/accounts/${replay.simulation_account_id}`}>查看账户</Link>}</nav></header>{error && <div className={styles.error}>{error}</div>}<section className={styles.card}>{replay ? <><p><span className={styles.badge}>{replay.status}</span> · CAS v{replay.version}</p><p>范围：{replay.start_trade_date} → {replay.end_trade_date}</p><p>已完成：{replay.completed_trade_date || "尚未开始"}；下一交易日：{replay.next_trade_date || "无"}</p><pre className={styles.code}>{JSON.stringify(replay.failure_context || {}, null, 2)}</pre>{!["LIVE_ACTIVE", "FAILED_TERMINAL", "CANCELLED"].includes(replay.status) && <button className={`${styles.button} ${styles.danger}`} onClick={cancel}>取消回放</button>}</> : <p>读取中…</p>}</section></main>;
+export default function ReplayDetailPage(){
+  const router=useRouter(),segment=String(useParams<{replayJobId:string}>().replayJobId||"");
+  const [id,setId]=useState(""),[error,setError]=useState(""),[busy,setBusy]=useState(false);
+  useEffect(()=>{setId(current=>segment==="details"?current||sessionStorage.getItem("localsim-replay-selection")||"":segment);},[segment]);
+  const load=useCallback(async(signal:AbortSignal)=>{try{if(!id)throw Error(READ_ERROR);const value=await localSimApi.getReplay(id,signal);if(!value.replay||value.replay.replay_job_id!==id)throw Error(READ_ERROR);if(!signal.aborted){rememberReplay(id);if(segment!=="details")history.replaceState(history.state,"","/simulation/localsim/replays/details");}return value.replay;}catch{if(id&&!signal.aborted&&segment!=="details"){sessionStorage.removeItem("localsim-replay-selection");history.replaceState(history.state,"","/simulation/localsim/replays/details");}throw Error(READ_ERROR);}},[id,segment]);
+  const readback=useLocalSimReadback(load),r=readback.data;
+  async function cancel(){if(!r||busy||readback.stale||readback.error)return;setBusy(true);setError("");try{await localSimApi.cancelReplay(id,r.version);await readback.refresh();}catch{setError("取消操作未通过原任务验证，请刷新后核查状态。");}finally{setBusy(false);}}
+  return <main className={styles.shell}><header className={styles.header}><div><h1>回放任务详情</h1><p>计划、执行与估值分别核验，页面读取不会恢复或重建回放。</p></div><nav className={styles.nav}><Link href="/simulation/localsim/replays">回放列表</Link><Link href="/simulation/localsim/workbench">交易工作台</Link></nav></header>
+    {(error||readback.error)&&<p role="alert" className={styles.error}>{error||READ_ERROR}</p>}<div className={styles.actions}><button className={styles.button} disabled={readback.refreshing||!id} onClick={()=>void readback.refresh()}>刷新回放状态</button><span>页面最近读取 {chinaTime(readback.updatedAt)}</span></div>{readback.stale&&<p className={styles.muted}>尚未取得最新核验，控制操作暂不可用。</p>}
+    <section className={styles.card} style={{marginTop:16}}>{r?<><LocalSimReplayStatus replay={r}/><p>计划区间：{safeDate(r.start_trade_date)} 至 {safeDate(r.end_trade_date)}</p><p>已完成交易日：{safeDate(r.completed_trade_date)}；下一交易日：{safeDate(r.next_trade_date)}</p><p>实时接续日：{safeDate(r.activation_trade_date)}</p><p>行情来源：{r.historical_source_id==="dataset_files.frozen_market.v1"?"数据集文件":r.historical_source_id==="market.kline_minute_raw.v1"?"行情数据库":"来源待核验"}</p><div className={styles.actions}><button className={styles.button} onClick={()=>{rememberAccount(r.simulation_account_id,"events");router.push("/simulation/localsim/workbench");}}>查看本账户进度与资产</button>{!["LIVE_ACTIVE","FAILED_TERMINAL","CANCELLED"].includes(r.status)&&<button className={styles.button+" "+styles.danger} disabled={busy||readback.stale||!!readback.error} onClick={()=>void cancel()}>取消回放</button>}</div></>:<p>{id?"正在核验原回放…":"请从回放列表选择任务；未自动选择其他任务。"}</p>}</section>
+  </main>;
 }

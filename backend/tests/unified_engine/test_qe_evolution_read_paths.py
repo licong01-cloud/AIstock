@@ -3,6 +3,7 @@ import asyncio
 
 from backend.routers import quantevolver_evolution as qe
 from backend.services.quantevolver import qe_evolution_service
+from backend.services.quantevolver.payload_summary import loop_summary_sql_projection
 
 
 def test_evolution_router_no_longer_reads_worker_workspace_paths() -> None:
@@ -23,7 +24,12 @@ def test_summary_read_path_uses_scalar_json_projection_without_returning_raw_pay
     comparison_source = source[comparison_start:payload_start]
 
     assert "config_json, metrics_json" not in detail_source
-    assert "config_json, metrics_json" in comparison_source
+    assert "loop_summary_sql_projection()" in comparison_source
+    projection = loop_summary_sql_projection()
+    assert "config_json" in projection and "metrics_json" in projection
+    assert "AS metrics_json" in projection
+    for heavy_field in ("all_stocks", "top_stocks", "bottom_stocks", "factor_analysis"):
+        assert f"- '{heavy_field}'" in projection
     assert "result[\"loops\"] = [compact_loop_row(loop_data)" in detail_source
     assert "loops = [compact_loop_row(dict(row))" in comparison_source
 

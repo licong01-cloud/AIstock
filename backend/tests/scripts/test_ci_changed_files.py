@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import subprocess
+import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -180,22 +180,22 @@ def test_prepare_pr_merge_base_fetches_only_exact_refs_with_bounded_deepening(
             return base_sha
         raise ChangedFilesError(f"{field} unavailable")
 
-    def fake_git(repo_root: Path, *args: str) -> str:
+    def fake_git(repo_root: Path, *args: str, **kwargs: object) -> str:
+        nonlocal fetched
+        if args[0] == "fetch":
+            commands.append(["git", *args])
+            assert kwargs["timeout"] <= 45
+            fetched = True
+            return ""
         if args[0] == "check-ref-format" or args[0] == "update-ref":
             return ""
         if args[0] == "merge-base" and fetched:
             return base_sha
         raise ChangedFilesError("merge base unavailable")
 
-    def fake_run(args: list[str], **kwargs: object) -> SimpleNamespace:
-        nonlocal fetched
-        commands.append(args)
-        fetched = True
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
     monkeypatch.setattr(changed_files_module, "_commit", fake_commit)
     monkeypatch.setattr(changed_files_module, "_git", fake_git)
-    monkeypatch.setattr(changed_files_module.subprocess, "run", fake_run)
+    monkeypatch.setattr(changed_files_module, "_restore_local_mirror_ancestry", lambda *args: {"status": "not_required"})
 
     receipt = prepare_pr_merge_base(
         repo_root=tmp_path,
@@ -213,9 +213,68 @@ def test_prepare_pr_merge_base_fetches_only_exact_refs_with_bounded_deepening(
         "--no-write-fetch-head",
         "--deepen=64",
         "origin",
-        "+refs/heads/main:refs/remotes/origin/main",
+        f"+{base_sha}:refs/remotes/origin/main",
         "+refs/pull/3884/merge:refs/remotes/origin/aistock-pr-checkout",
     ]]
+
+
+@pytest.mark.parametrize("extra_commits", [0, 3])
+def test_shallow_pr_restores_main_ancestry_from_verified_local_mirror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra_commits: int) -> None:
+    source, old_base, base, feature = _repo_with_stale_pr_base(tmp_path)
+    mirror = tmp_path / "mirror.git"
+    _git(tmp_path, "clone", "--bare", "--single-branch", "--branch", "main", "--no-local", source.as_uri(), str(mirror))
+    _git(mirror, "config", "aistock.repository", "licong01-cloud/AIstock")
+    Path(str(mirror) + ".aistock-mirror.json").write_text(json.dumps({
+        "schema_version": "aistock_git_object_mirror_v1", "repository": "licong01-cloud/AIstock",
+        "main_sha": base, "mirror_root": str(mirror), "object_directory": str(mirror / "objects")}), encoding="utf-8")
+    _git(source, "checkout", "feature")
+    for index in range(extra_commits):
+        _write(source, "docs/hmm.md", f"change {index}\n")
+        feature = _commit(source, "feature advances")
+    _git(source, "checkout", "main")
+    _git(source, "merge", "--no-ff", "feature", "-m", "integration")
+    workspace = tmp_path / "workspace"
+    _git(tmp_path, "clone", "--depth=2", source.as_uri(), str(workspace))
+    monkeypatch.setenv("GIT_ALTERNATE_OBJECT_DIRECTORIES", str(mirror / "objects"))
+    restored = changed_files_module._restore_local_mirror_ancestry(workspace, base)
+    assert restored["status"] == "restored", restored
+    receipt = prepare_pr_merge_base(repo_root=workspace, base_ref="main", base_sha=base,
+        checkout_ref="refs/heads/main", source_head_sha=feature)
+    assert receipt["fetch_used"] == bool(extra_commits)
+    files, _ = build_changed_files(repo_root=workspace, base_ref="main", base_sha=base, head_sha=feature)
+    assert files == ["docs/hmm.md", "tests/aistock_validation/bugs/BUG.json"]
+
+
+def test_git_timeout_and_fetch_budget_remain_fail_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def timeout(args: list[str], **kwargs: object) -> None:
+        assert kwargs["timeout"] == 0.01
+        raise subprocess.TimeoutExpired(args, 0.01)
+    monkeypatch.setattr(changed_files_module.subprocess, "run", timeout)
+    with pytest.raises(ChangedFilesError, match="timed out"):
+        changed_files_module._git(tmp_path, "rev-parse", timeout=0.01)
+
+
+@pytest.mark.parametrize("exhausted", [False, True])
+def test_failed_history_fetch_is_capped_without_weakening_ancestry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exhausted: bool) -> None:
+    calls: list[object] = []
+    def commit(root: Path, revision: str, field: str) -> str:
+        if revision == "HEAD":
+            return "b" * 40
+        raise ChangedFilesError("missing base")
+    def git(root: Path, *args: str, **kwargs: object) -> str:
+        if args[0] == "fetch":
+            calls.append(kwargs["timeout"])
+            raise ChangedFilesError("fetch timed out")
+        return ""
+    monkeypatch.setattr(changed_files_module, "_commit", commit)
+    monkeypatch.setattr(changed_files_module, "_git", git)
+    monkeypatch.setattr(changed_files_module, "_restore_local_mirror_ancestry", lambda *args: {"status": "not_required"})
+    monkeypatch.setattr(changed_files_module.time, "sleep", lambda seconds: None)
+    with pytest.raises(ChangedFilesError, match="history preparation failed"):
+        prepare_pr_merge_base(repo_root=tmp_path, base_ref="main", base_sha="a" * 40,
+            checkout_ref="refs/heads/feature", attempts=99, total_budget=0 if exhausted else 150)
+    assert len(calls) == (0 if exhausted else 3)
+    assert all(0 < timeout <= 45 for timeout in calls)
 
 
 def test_pull_request_workflows_use_shared_current_base_resolver() -> None:

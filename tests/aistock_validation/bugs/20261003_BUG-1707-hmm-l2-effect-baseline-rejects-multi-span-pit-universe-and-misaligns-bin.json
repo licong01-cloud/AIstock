@@ -1,0 +1,337 @@
+{
+  "actual": "effect-prepare failed: provider instrument spans are invalid; completed effect children=0/2, fits=0.",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/formal_state_input.py",
+    "backend/services/hmm_risk/rotation_l2_input.py",
+    "backend/tests/hmm_risk/test_formal_state_input.py",
+    "backend/tests/hmm_risk/test_rotation_l2_input.py",
+    "tests/aistock_validation/bugs/20261003_BUG-1707-hmm-l2-effect-baseline-rejects-multi-span-pit-universe-and-misaligns-bin.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1707",
+  "closed_at": "2026-10-03T19:03:32.995645Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-03T15:45:31.365296Z",
+  "description": "effect-prepare failed: provider instrument spans are invalid; completed effect children=0/2, fits=0.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261003-a374d2e567d5",
+      "timestamp": "2026-10-03T15:45:31.365283Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_runtime/hmm_formal_state/20261003-l2-postcalibration-effect-BUG1704/request.json.failure.json"
+  ],
+  "expected": "合法PIT多段按并集精确限定股票日期；Qlib Bin按完整冻结release calendar解释绝对索引，拒绝重叠/歧义，不读评价上界之后的数值。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/formal_state_input.py",
+      "backend/services/hmm_risk/rotation_l2_input.py",
+      "backend/tests/hmm_risk/test_formal_state_input.py",
+      "backend/tests/hmm_risk/test_rotation_l2_input.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1707-hmm-l2-effect-baseline-rejects-multi-span-pit-universe-and-misaligns-bin.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_risk/formal_state_input.py",
+      "backend/services/hmm_risk/rotation_l2_input.py",
+      "backend/tests/hmm_risk/test_formal_state_input.py",
+      "backend/tests/hmm_risk/test_rotation_l2_input.py",
+      "tests/aistock_validation/bugs/20261003_BUG-1707-hmm-l2-effect-baseline-rejects-multi-span-pit-universe-and-misaligns-bin.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/formal_state_input.py",
+        "backend/services/hmm_risk/rotation_l2_input.py",
+        "backend/tests/hmm_risk/test_formal_state_input.py",
+        "backend/tests/hmm_risk/test_rotation_l2_input.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_risk/formal_state_input.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/rotation_l2_input.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_formal_state_input.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_rotation_l2_input.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/formal_state_input.py",
+        "backend/services/hmm_risk/rotation_l2_input.py",
+        "backend/tests/hmm_risk/test_formal_state_input.py",
+        "backend/tests/hmm_risk/test_rotation_l2_input.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_risk/formal_state_input.py",
+      "backend/services/hmm_risk/rotation_l2_input.py",
+      "backend/tests/hmm_risk/test_formal_state_input.py",
+      "backend/tests/hmm_risk/test_rotation_l2_input.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/formal_state_input.py",
+      "backend/services/hmm_risk/rotation_l2_input.py",
+      "backend/tests/hmm_risk/test_formal_state_input.py",
+      "backend/tests/hmm_risk/test_rotation_l2_input.py"
+    ]
+  },
+  "first_seen_at": "2026-10-03T15:45:31.365296Z",
+  "fix_branch": null,
+  "fix_commit": "453e0c453490b27549b2c4189ff0eaa3f26c0d31",
+  "fixed_at": "2026-10-03T17:09:35Z",
+  "github_issue_number": 5373,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5373",
+  "last_seen_at": "2026-10-03T15:45:31.365296Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5374",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "hmm_risk_pr_slice"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/rotation-l2/overview?run_id=2657778e7c4c3e376874d7290897dc42d99f3ee05a9fa7bc8c36a2cddf817505",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/python.exe X:/AIstock_temp/hmm_l2_effect_20261003/bug1707_smoke.py F:/Dev/AIstock_worktrees/BUG-1707-hmm-l2-effect-baseline-rejects-multi-span-pit-un-20261003; explicit task PYTHONPATH -> PASS; backend.routers.hmm_risk, backend.routers.health and changed HMM imports loaded from task worktree; DB poison; 5144 instruments / 5449 PIT spans; fits=0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/hmm_l2_effect_20261003/BUG1707-post-restart-source.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1707",
+      "business_smoke_semantic": {
+        "contract_id": "hmm_rotation_l2_overview",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b99dd9080153762523fe5e2c761c4d7badd6c89331b062f5807c96b665623e48",
+      "contract_digest": "a58f2386cbc41e16fdd645269cd5e80f64f4543c61df4d94612ca20006e53607",
+      "expected_identity": "453e0c453490b27549b2c4189ff0eaa3f26c0d31",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-03T18:57:47.995698Z",
+      "mode": "read_only",
+      "observed_identity": "a0062f929528f5b88f3a92027399a7c30c908bdb",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "0ed4da8c90e4621862620b8e17739370c418fe4d248a3f823f17b78a37f4540e",
+      "receipt_sha256": "6e984be6caed464d3bb34a0e7aefb6b23acce0366a388b6ed1f302dd0823fa47",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "9b2c18b434a1b4f708d607d5dc9a9bb80cee383d8d36470fc8e4a1cb2a76c165",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1707",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d25dfc2f53327b8e",
+    "recorded_at": "2026-10-03T17:10:13.639884Z",
+    "runtime_contract_digest": "a58f2386cbc41e16fdd645269cd5e80f64f4543c61df4d94612ca20006e53607",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "cb7922c5731980d45addecf69c33acdae5ea3263",
+    "source_merge_commit": "453e0c453490b27549b2c4189ff0eaa3f26c0d31",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5374",
+    "validation_evidence": [
+      "validation-receipt: id=e33986d6ef75f078 commit=cb7922c5731980d45addecf69c33acdae5ea3263 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
+      "validation-receipt: id=2c91941bba5a5dba commit=cb7922c5731980d45addecf69c33acdae5ea3263 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_rotation_l2_input.py backend/tests/hmm_risk/test_formal_state_input.py` result=`33 passed; same reviewed source bytes; subsequent commit metadata-only`",
+      "validation-receipt: id=7d89835da74e94f8 commit=cb7922c5731980d45addecf69c33acdae5ea3263 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 l0` result=`passed; registry 8 passed`",
+      "validation-receipt: id=fbfbbeae6d90da49 commit=cb7922c5731980d45addecf69c33acdae5ea3263 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/hmm_risk/formal_state_input.py backend/services/hmm_risk/rotation_l2_input.py backend/tests/hmm_risk/test_formal_state_input.py backend/tests/hmm_risk/test_rotation_l2_input.py` result=`passed`",
+      "validation-receipt: id=99882f3e2069038a commit=cb7922c5731980d45addecf69c33acdae5ea3263 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/hmm_risk/formal_state_input.py backend/services/hmm_risk/rotation_l2_input.py backend/tests/hmm_risk/test_formal_state_input.py backend/tests/hmm_risk/test_rotation_l2_input.py` result=`passed`",
+      "validation-receipt: id=e47c0081babca572 commit=cb7922c5731980d45addecf69c33acdae5ea3263 kind=diff_check plan=direct status=passed command=`git diff --check origin/main...HEAD` result=`passed`"
+    ],
+    "validation_evidence_digest": "4a74640496ea6d08d4418509c1363699546ca4cff2bc63492f4614da73a2df79"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM L2 effect baseline rejects multi-span PIT universe and misaligns Bin calendar",
+  "trigger_condition": {
+    "fingerprint": "a374d2e567d5d4f427a25e45",
+    "source_event_id": "FE-20261003-a374d2e567d5"
+  },
+  "validation_evidence": [
+    "validation-receipt: id=e33986d6ef75f078 commit=cb7922c5731980d45addecf69c33acdae5ea3263 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
+    "validation-receipt: id=2c91941bba5a5dba commit=cb7922c5731980d45addecf69c33acdae5ea3263 kind=nox plan=hmm_risk_pr_slice status=passed command=`python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_rotation_l2_input.py backend/tests/hmm_risk/test_formal_state_input.py` result=`33 passed; same reviewed source bytes; subsequent commit metadata-only`",
+    "validation-receipt: id=7d89835da74e94f8 commit=cb7922c5731980d45addecf69c33acdae5ea3263 kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 l0` result=`passed; registry 8 passed`",
+    "validation-receipt: id=fbfbbeae6d90da49 commit=cb7922c5731980d45addecf69c33acdae5ea3263 kind=ruff plan=direct status=passed command=`rtk ruff check backend/services/hmm_risk/formal_state_input.py backend/services/hmm_risk/rotation_l2_input.py backend/tests/hmm_risk/test_formal_state_input.py backend/tests/hmm_risk/test_rotation_l2_input.py` result=`passed`",
+    "validation-receipt: id=99882f3e2069038a commit=cb7922c5731980d45addecf69c33acdae5ea3263 kind=compile plan=direct status=passed command=`python -m py_compile backend/services/hmm_risk/formal_state_input.py backend/services/hmm_risk/rotation_l2_input.py backend/tests/hmm_risk/test_formal_state_input.py backend/tests/hmm_risk/test_rotation_l2_input.py` result=`passed`",
+    "validation-receipt: id=e47c0081babca572 commit=cb7922c5731980d45addecf69c33acdae5ea3263 kind=diff_check plan=direct status=passed command=`git diff --check origin/main...HEAD` result=`passed`",
+    "python F:/Dev/AIstock/scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1707 --target backend-main --expected-identity c90aa3f5dbc5a0ba47d437aed3144d553f55d5ed -> verified; identity and business smoke passed",
+    "python F:/Dev/AIstock/scripts/aistock_issue_workflow.py post-restart-verify --bug-id BUG-1707 --target backend-main --expected-identity 453e0c453490b27549b2c4189ff0eaa3f26c0d31 -> verified; identity and business smoke passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

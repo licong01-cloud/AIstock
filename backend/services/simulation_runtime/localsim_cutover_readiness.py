@@ -29,6 +29,10 @@ _REQUIRED_RELATIONS = (
     "paper_v2.intraday_snapshots",
 )
 _LEGACY_TERMINAL_SESSION_STATUSES = ("STOPPED", "SUCCEEDED", "FAILED")
+LOCALSIM_IN_FLIGHT_ECONOMIC_RUN_STATUSES = (
+    "CREATED", "PRECHECKING", "SIGNAL_GENERATING", "TARGET_GENERATING", "PLANNING_EXECUTION",
+    "SUBMITTING", "INTRADAY_RUNNING", "TAIL_HANDLING", "RECONCILING",
+)
 
 
 class LocalSimCutoverReadinessV1(BaseModel):
@@ -156,12 +160,9 @@ class LocalSimCutoverReadiness:
                     SELECT count(*) AS count
                     FROM paper_v2.simulation_daily_run AS run
                     WHERE run.broker_backend = 'local_sim'
-                      AND run.status IN (
-                          'CREATED', 'PRECHECKING', 'SIGNAL_GENERATING', 'TARGET_GENERATING',
-                          'PLANNING_EXECUTION', 'SUBMITTING', 'INTRADAY_RUNNING',
-                          'TAIL_HANDLING', 'RECONCILING'
-                      )
-                    """
+                      AND run.status = ANY(%s::text[])
+                    """,
+                    (list(LOCALSIM_IN_FLIGHT_ECONOMIC_RUN_STATUSES),),
                 )
                 in_flight_count = int(cur.fetchone()["count"])
 
@@ -204,6 +205,30 @@ class LocalSimCutoverReadiness:
                 context={
                     "reason_code": "LOCALSIM_CUTOVER_NOT_READY",
                     "blockers": list(readiness.blockers),
+                    "readiness": readiness.model_dump(mode="json"),
+                },
+            )
+
+    def require_replay_recovery_ready(self) -> None:
+        """Keep global structural gates; the recovery transaction owns account activity checks.
+
+        Recovery restores one original historical job's scheduling eligibility. It
+        does not perform product cutover or live activation. Unrelated native
+        accounts may therefore keep executing, including market-blocked orders.
+        """
+        readiness = self.read()
+        global_activity_blocker = (
+            f"in_flight_economic_run_count:{readiness.in_flight_economic_run_count}"
+            if readiness.in_flight_economic_run_count else None
+        )
+        blockers = tuple(reason for reason in readiness.blockers if reason != global_activity_blocker)
+        if blockers:
+            raise DataUnavailableError(
+                "LocalSIM replay recovery prerequisites are not ready",
+                context={
+                    "reason_code": "LOCALSIM_CUTOVER_NOT_READY",
+                    "operation": "historical_replay_recovery",
+                    "blockers": list(blockers),
                     "readiness": readiness.model_dump(mode="json"),
                 },
             )

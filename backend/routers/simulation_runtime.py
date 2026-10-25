@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
+from backend.services.simulation_runtime.localsim_replay_recovery import (
+    LocalSimReplayRecoverRequestV1, LocalSimReplayRecoveryCheckV1,
+)
+
 from datetime import date
 from typing import Any, Literal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from backend.infra.qmt_client import get_qmt_client_singleton
 from backend.services.miniqmt_execution_runtime import (
@@ -21,10 +26,13 @@ from backend.services.simulation_runtime.localsim_cutover_readiness import Local
 from backend.services.simulation_runtime.localsim_dependencies import (
     build_localsim_product_service,
     build_localsim_profile_service,
+    build_localsim_pit_migration_service,
     build_localsim_query_service,
     build_localsim_economic_query_service,
 )
 from backend.services.simulation_runtime.localsim_economic_query import LocalSimEconomicQueryService
+from backend.services.simulation_runtime.localsim_workbench import LocalSimWorkbenchService
+from backend.services.simulation_runtime.localsim_workbench_models import WorkbenchOverview, WorkbenchResult
 from backend.services.simulation_runtime.localsim_product_control import (
     LocalSimAccountCreateRequestV1,
     LocalSimBulkLifecycleRequestV1,
@@ -42,6 +50,9 @@ from backend.services.simulation_runtime.localsim_product_control import (
 )
 from backend.services.simulation_runtime.localsim_query import LocalSimListResponseV1, LocalSimQueryService
 from backend.services.simulation_runtime.localsim_runtime_profile_service import LocalSimRuntimeProfileService
+from backend.services.simulation_runtime.localsim_pit_migration import (
+    LocalSimPitMigrationRequest, LocalSimPitMigrationService,
+)
 from backend.services.simulation_runtime.ops import SimulationRuntimeOpsService
 from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus, SimulationAccountStatus
 from backend.services.simulation_runtime.tca_read_api import ExecutionTcaReadService
@@ -98,12 +109,43 @@ def get_localsim_profile_service() -> LocalSimRuntimeProfileService:
     return build_localsim_profile_service()
 
 
+def get_localsim_pit_migration_service() -> LocalSimPitMigrationService:
+    return build_localsim_pit_migration_service()
+
+
+@router.get("/localsim/accounts/{account_id}/pit-migration")
+def plan_localsim_pit_migration(
+    account_id: str,
+    service: LocalSimPitMigrationService = Depends(get_localsim_pit_migration_service),
+):
+    try:
+        return service.plan(account_id)
+    except Exception as exc:
+        _raise_http(exc)
+
+
+@router.post("/localsim/accounts/{account_id}/pit-migration")
+def apply_localsim_pit_migration(
+    account_id: str,
+    request: LocalSimPitMigrationRequest,
+    service: LocalSimPitMigrationService = Depends(get_localsim_pit_migration_service),
+):
+    try:
+        return service.apply(account_id, request)
+    except Exception as exc:
+        _raise_http(exc)
+
+
 def get_localsim_query_service() -> LocalSimQueryService:
     return build_localsim_query_service()
 
 
 def get_localsim_economic_query_service() -> LocalSimEconomicQueryService:
     return build_localsim_economic_query_service()
+
+
+def get_localsim_workbench_service() -> LocalSimWorkbenchService:
+    return LocalSimWorkbenchService(repository=build_localsim_query_service().repository)
 
 
 def get_localsim_readiness() -> LocalSimCutoverReadiness:
@@ -281,7 +323,9 @@ def get_localsim_account(
 ) -> LocalSimControlResponseV1:
     try:
         account = service.repository.get_account(account_id)
-        return LocalSimControlResponseV1(account=account, ledger_scope=service.repository.get_ledger_scope(account_id))
+        return LocalSimControlResponseV1(
+            account=account, ledger_scope=service.repository.resolve_ledger_scope_for_account(account_id)
+        )
     except TradingCoreError as exc:
         _raise_localsim_http(exc)
 
@@ -446,6 +490,29 @@ def cancel_localsim_replay(
 ) -> LocalSimControlResponseV1:
     try:
         return service.cancel_replay(replay_job_id=replay_job_id, expected_version=request.expected_version)
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/replays/{replay_job_id}/recovery", response_model=LocalSimReplayRecoveryCheckV1)
+def inspect_localsim_replay_recovery(
+    replay_job_id: str,
+    service: LocalSimProductControlPlaneService = Depends(get_localsim_product_service),
+) -> LocalSimReplayRecoveryCheckV1:
+    try:
+        return service.inspect_replay_recovery(replay_job_id)
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.post("/localsim/replays/{replay_job_id}/recover", response_model=LocalSimControlResponseV1)
+def recover_localsim_replay(
+    replay_job_id: str,
+    request: LocalSimReplayRecoverRequestV1,
+    service: LocalSimProductControlPlaneService = Depends(get_localsim_product_service),
+) -> LocalSimControlResponseV1:
+    try:
+        return service.recover_replay(replay_job_id, request)
     except TradingCoreError as exc:
         _raise_localsim_http(exc)
 
@@ -952,3 +1019,49 @@ def execute_miniqmt_operator_command(
         "run_recovery": run_recovery,
         "production_runtime_restart_required": False,
     }
+
+
+@router.get("/localsim/workbench/overview", response_model=WorkbenchOverview)
+def localsim_workbench_overview(service: LocalSimWorkbenchService = Depends(get_localsim_workbench_service)):
+    try:
+        return service.overview()
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/accounts/{account_id}/export")
+def localsim_workbench_export(
+    account_id: str,
+    kind: Literal["positions", "trades", "orders", "cash-flows", "pnl"] = "trades",
+    start: date | None = None, end: date | None = None, as_of: date | None = None,
+    security: str | None = None, side: str | None = None, status: str | None = None,
+    group_by: Literal["date", "security"] = "date", snapshot_set: str | None = None,
+    order_key: str | None = None, search: str | None = Query(None, max_length=120), sort: str = "time", descending: bool = True,
+    service: LocalSimWorkbenchService = Depends(get_localsim_workbench_service),
+):
+    try:
+        output = service.export(account_id, kind, start=start, end=end, as_of=as_of,
+                                security=security, side=side, status=status, group_by=group_by, snapshot_set=snapshot_set,
+                                order_key=order_key, search=search, sort=sort, descending=descending)
+        return StreamingResponse((output[offset:offset+65536].encode("utf-8") for offset in range(0, len(output), 65536)), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": "attachment; filename*=UTF-8''%E6%A8%A1%E6%8B%9F%E7%9B%98%E6%98%8E%E7%BB%86.csv", "Cache-Control": "no-store"})
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)
+
+
+@router.get("/localsim/accounts/{account_id}/{view_kind}", response_model=WorkbenchResult)
+def localsim_workbench_view(
+    account_id: str, view_kind: Literal["summary", "positions", "trades", "orders", "cash-flows", "pnl", "events"],
+    start: date | None = None, end: date | None = None, as_of: date | None = None,
+    security: str | None = None, side: Literal["BUY", "SELL"] | None = None, status: str | None = None,
+    group_by: Literal["date", "security"] = "date", cursor: str | None = None,
+    page_size: int = Query(50, ge=1, le=200), snapshot_set: str | None = None,
+    order_key: str | None = None, search: str | None = Query(None, max_length=120), sort: str = "time", descending: bool = True,
+    service: LocalSimWorkbenchService = Depends(get_localsim_workbench_service),
+):
+    try:
+        return service.view(account_id, view_kind, start=start, end=end, as_of=as_of, security=security,
+                            side=side, status=status, group_by=group_by, cursor=cursor, page_size=page_size, snapshot_set=snapshot_set,
+                            order_key=order_key, search=search, sort=sort, descending=descending)
+    except TradingCoreError as exc:
+        _raise_localsim_http(exc)

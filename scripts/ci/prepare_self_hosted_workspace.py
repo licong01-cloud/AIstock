@@ -5,6 +5,7 @@ import errno
 import hashlib
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -267,8 +268,8 @@ def prepare_workspace(args: argparse.Namespace) -> dict[str, Any]:
         _fail(f"source repo does not exist: {source}", code="missing_source")
     if not (source / ".git").exists():
         _fail(f"source path is not a git checkout: {source}", code="invalid_source")
-    if not expected_commit:
-        _fail("--expected-commit is required", code="missing_expected_commit")
+    if not re.fullmatch(r"[0-9a-f]{40}", expected_commit):
+        _fail("--expected-commit must be a full lowercase commit SHA", code="invalid_expected_commit")
 
     _validate_destination(dest, source, allow_any_dest=args.allow_any_dest)
 
@@ -280,11 +281,9 @@ def prepare_workspace(args: argparse.Namespace) -> dict[str, Any]:
         )
 
     cat_file = _run(["git", "cat-file", "-e", f"{expected_commit}^{{commit}}"], cwd=source, timeout=30)
-    if cat_file.returncode != 0:
-        _fail(
-            f"expected commit {expected_commit} is not present in local source {source}; sync the root main checkout first",
-            code="missing_commit",
-        )
+    local_commit_available = cat_file.returncode == 0
+    if not local_commit_available and not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", args.repo):
+        _fail("expected repository must be owner/name for pinned fetch", code="invalid_repository")
 
     source_head = _git_stdout(["rev-parse", "HEAD"], cwd=source)
     _clear_directory(dest)
@@ -292,6 +291,24 @@ def prepare_workspace(args: argparse.Namespace) -> dict[str, Any]:
     clone = _run(["git", "clone", "--local", "--no-hardlinks", "--no-checkout", str(source), str(dest)], timeout=300)
     if clone.returncode != 0:
         _fail(f"local git clone failed: {clone.stderr.strip() or clone.stdout.strip()}", code="clone_failed")
+
+    if not local_commit_available:
+        # Never fetch into (or checkout) the user-owned runtime root. The event
+        # SHA, not a moving branch tip, is the only acceptable network fallback.
+        try:
+            fetched = _run(
+                ["git", "fetch", "--no-tags", "--depth=1",
+                 f"https://github.com/{args.repo}.git", expected_commit],
+                cwd=dest,
+                timeout=60,
+            )
+        except subprocess.TimeoutExpired:
+            _fail("pinned commit fetch exceeded 60 seconds", code="pinned_fetch_timeout")
+        if fetched.returncode != 0:
+            _fail("pinned commit fetch failed; canonical root was not modified", code="pinned_fetch_failed")
+        fetched_commit = _git_stdout(["rev-parse", "FETCH_HEAD^{commit}"], cwd=dest)
+        if fetched_commit != expected_commit:
+            _fail("fetched commit differs from event SHA", code="pinned_fetch_mismatch")
 
     _git_stdout(["checkout", "--detach", expected_commit], cwd=dest, timeout=120)
     checked_out = _git_stdout(["rev-parse", "HEAD"], cwd=dest)
@@ -325,6 +342,7 @@ def prepare_workspace(args: argparse.Namespace) -> dict[str, Any]:
         "repo": args.repo,
         "remote_url": remote_url,
         "root_worktree_written": False,
+        "commit_source": "local" if local_commit_available else "pinned_remote_fetch",
     }
     if package_asset_store is not None:
         payload["package_asset_store"] = package_asset_store

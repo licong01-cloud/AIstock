@@ -1,0 +1,395 @@
+{
+  "actual": "原生LSTM/TCN跨日回放完成日持久化快照仍为盘中，缺收盘序列。",
+  "allowed_write_scope": [
+    "backend/services/simulation_runtime/localsim_replay_runtime.py",
+    "backend/services/simulation_runtime/scheduler.py",
+    "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+    "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
+    "docs/analysis/localsim_replay_close_valuation_20261020.md",
+    "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json",
+    "backend/services/simulation_execution/localsim/persistence.py",
+    "backend/tests/simulation_runtime/test_lifecycle_scheduler.py",
+    "backend/tests/simulation_runtime/test_localsim_file_inputs.py",
+    "backend/services/paper_trading_v2/repository.py",
+    "backend/tests/paper_trading_v2/test_repository_position_authority.py"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1998",
+  "closed_at": "2026-10-20T03:41:17.413829Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-19T18:56:52.698859Z",
+  "description": "原生LSTM/TCN跨日回放完成日持久化快照仍为盘中，缺收盘序列。",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261019-f15037a69253",
+      "timestamp": "2026-10-19T18:56:52.698840Z"
+    },
+    {
+      "action": "archive_previous_source_merge_receipt",
+      "actor": "codex",
+      "note": "Authorized post-restart follow-up PR6403 supersedes PR6392 for the current fix. Preserve the previous immutable receipt in history; let the native finalizer generate the new receipt. No verified runtime state or post-restart evidence is carried over.",
+      "timestamp": "2026-10-20T02:57:52.377313+00:00"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_temp/LOCALSIM/BUG-1994/post-restart-20261020/post-restart-api-receipt.json",
+    "X:/AIstock_temp/LOCALSIM/post-restart-20261020-r2/tcn-account-truth-diff.json",
+    "X:/AIstock_temp/LOCALSIM/post-restart-20261020-r2/fresh-restored-tcn-truth-receipt.json"
+  ],
+  "expected": "每个新完成回放日具有同账户同日的原生15:00收盘估值证据；失败不推进、不重做成交；旧历史缺口保持明确。",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/paper_trading_v2/repository.py",
+      "backend/tests/paper_trading_v2/test_repository_position_authority.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
+      "docs/analysis/localsim_replay_close_valuation_20261020.md",
+      "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json"
+    ],
+    "added_files": [
+      "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
+      "docs/analysis/localsim_replay_close_valuation_20261020.md"
+    ],
+    "changed_files": [
+      "backend/services/paper_trading_v2/repository.py",
+      "backend/tests/paper_trading_v2/test_repository_position_authority.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
+      "docs/analysis/localsim_replay_close_valuation_20261020.md",
+      "tests/aistock_validation/bugs/20261019_BUG-1998-localsim.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/simulation_runtime/localsim_replay_runtime.py",
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+        "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
+        "docs/analysis/localsim_replay_close_valuation_20261020.md"
+      ],
+      "impacted_modules": [
+        "simulation_runtime",
+        "paper_v2",
+        "miniqmt_execution_runtime",
+        "docs.analysis"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/simulation_runtime/localsim_replay_runtime.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/services/simulation_runtime/scheduler.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
+          "impact_modules": [
+            "paper_v2",
+            "miniqmt_execution_runtime"
+          ],
+          "primary_module": "simulation_runtime",
+          "risk_level": "critical",
+          "rule_id": "simulation_runtime_core"
+        },
+        {
+          "file": "docs/analysis/localsim_replay_close_valuation_20261020.md",
+          "impact_modules": [],
+          "primary_module": "docs.analysis",
+          "risk_level": "low",
+          "rule_id": "docs_analysis"
+        }
+      ],
+      "risk_levels": [
+        "critical",
+        "low"
+      ],
+      "suggested_scope": [
+        "backend/services/simulation_runtime/localsim_replay_runtime.py",
+        "backend/services/simulation_runtime/scheduler.py",
+        "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+        "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
+        "docs/analysis/localsim_replay_close_valuation_20261020.md"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/simulation_runtime/localsim_replay_runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
+      "docs/analysis/localsim_replay_close_valuation_20261020.md"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/simulation_runtime/localsim_replay_runtime.py",
+      "backend/services/simulation_runtime/scheduler.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py",
+      "backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py",
+      "docs/analysis/localsim_replay_close_valuation_20261020.md"
+    ]
+  },
+  "first_seen_at": "2026-10-19T18:56:52.698859Z",
+  "fix_branch": null,
+  "fix_commit": "69d08095d115bd3024f27b9d2d6e1e3ab0306765",
+  "fixed_at": "2026-10-19T19:26:41Z",
+  "github_issue_number": 6385,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6385",
+  "last_seen_at": "2026-10-19T18:56:52.698859Z",
+  "module": "simulation_runtime",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6403",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "simulation_core_l2"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/simulation-runtime/localsim/workbench/overview",
+    "fresh_process_evidence": [
+      "X:/AIstock_temp/LOCALSIM/BUG-1998/fresh-native-close-receipt.json",
+      "X:/AIstock_temp/LOCALSIM/post-restart-20261020-r2/fresh-restored-tcn-truth-receipt.json"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_write_scope",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:/AIstock_temp/LOCALSIM/post-restart-20261020-r3/post-restart-1998.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1998",
+      "business_smoke_semantic": {
+        "contract_id": "localsim_workbench_valuation",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+      "expected_identity": "69d08095d115bd3024f27b9d2d6e1e3ab0306765",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-20T03:35:49.159484Z",
+      "mode": "read_only",
+      "observed_identity": "b1da91e5623cfd362ce185b2ae879f850d8febbd",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3eb0c5418331d3f602111d9cf93987f8266b012daf6553b548b0b3e954caf816",
+      "receipt_sha256": "68f445f3b687191a5a5cb04ed49bd4171f95f03b05764d759b432f7e8a723aca",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "d43c507bbe0fd7fc180fc9ea4123c041716d72db179017a30a1ad80e9d6af7a7",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "scope_expansion_note": "Original close-only persistence scope retained. Post-restart original TCN 2026-07-10 acceptance proved 18 otherwise identical projected positions were restored with snapshot trade_date instead of metadata.position_trade_date; cash, quantity and cost match. Extend scope to the existing Paper v2 repository read path and its position-authority tests to restore the already persisted lot date, preserve legacy rows without metadata, reject corrupt dates, and verify fresh-context close without duplicate execution. Do not weaken duplicate economic truth validation, change ledger semantics, or mutate production records.",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1998",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ea0c4eb13538592c",
+    "recorded_at": "2026-10-20T02:59:08.389721Z",
+    "runtime_contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6d109ef3d574b6b63b812c14f4a373db5e0a6f65",
+    "source_merge_commit": "69d08095d115bd3024f27b9d2d6e1e3ab0306765",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6403",
+    "validation_evidence": [
+      "pytest backend/tests/paper_trading_v2/test_repository_position_authority.py backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py backend/tests/simulation_runtime/test_localsim_file_inputs.py -q -> 63 passed",
+      "python -m nox -s l0 -> passed"
+    ],
+    "validation_evidence_digest": "0d7b288bc9607e1774caef7f6a3b90a6062871be647fba272d08939abc18ba2d"
+  },
+  "source_merge_receipt_history": [
+    {
+      "bug_id": "BUG-1998",
+      "production_gates": {
+        "production_backend_dependency_gate": "noop",
+        "production_ddl_gate": "noop",
+        "production_frontend_dependency_gate": "noop"
+      },
+      "receipt_id": "ee4cde1bfbd04687",
+      "recorded_at": "2026-10-19T19:28:34.123874Z",
+      "runtime_contract_digest": "07e19b1755c485fbb198d7f4ce65db780cfd719efb438820975c435651b0f609",
+      "runtime_identity_match": "pending",
+      "runtime_verification": "pending_user_restart",
+      "schema_version": "aistock_source_merge_receipt_v1",
+      "source_head_oid": "cf8a422b4087f94f2713f1fc55796b38f1203940",
+      "source_merge_commit": "67a0177ae02b1158d9faab7d96bc1c4bc3d4bd2b",
+      "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6392",
+      "validation_evidence": [
+        "pytest backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py and related matrix -> 52 passed"
+      ],
+      "validation_evidence_digest": "d24089d9fd4aca747e4905c9d0b28ffad74e02f242ef20c9fd23eaa28836449e"
+    }
+  ],
+  "status": "verified",
+  "suspected_modules": [
+    "simulation_runtime"
+  ],
+  "title": "LocalSIM历史回放未接续原生收盘估值即推进日期",
+  "trigger_condition": {
+    "fingerprint": "f15037a692539b3f43a64d35",
+    "source_event_id": "FE-20261019-f15037a69253"
+  },
+  "validation_evidence": [
+    "pytest backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py and related matrix -> 52 passed",
+    "pytest backend/tests/paper_trading_v2/test_repository_position_authority.py backend/tests/simulation_runtime/test_localsim_replay_close_valuation.py backend/tests/simulation_runtime/test_localsim_replay_lifecycle_owner.py backend/tests/simulation_runtime/test_localsim_file_inputs.py -q -> 63 passed",
+    "python -m nox -s l0 -> passed",
+    "Read-only verify-original-tcn-close.py -> PASSED 21 checks; original July10 close 15:00 projected; original 14 orders/42 fills/42 cash entries unchanged; cursor advanced to July13; native UI 4 checks passed. July13 PIT block remains separate."
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "simulation_runtime",
+        "simulation_core"
+      ],
+      "plans": [
+        "simulation_core_l2"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "simulation_runtime",
+          "simulation_core"
+        ],
+        "plans": [
+          "simulation_core_l2"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

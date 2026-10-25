@@ -404,3 +404,89 @@ def validate_calendar_evidence(value: Mapping[str, Any], model: Any, **source: A
     expected = evaluate_calendar_evidence(model, **source)
     if canonical_json_bytes(value) != canonical_json_bytes(expected):
         _fail("semantic write/readback differs from frozen carrier and model")
+
+
+def reinterpret_l2_evidence(
+    value: Mapping[str, Any],
+    *,
+    carrier: Mapping[str, Any],
+    dates: Sequence[str],
+    feature_names: Sequence[str],
+    source_identity_sha256: str,
+    source_receipt_sha256: str,
+    selected_identity: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Reinterpret pinned, previously model-verified evidence; never fit/filter/select.
+
+    The executor must authenticate the enclosing original acceptance before this
+    function is called. Self-hashing an arbitrary posterior is not authority.
+    """
+    from backend.services.hmm_risk.formal_state_model import (
+        L2_SEMANTIC_VERSION,
+        receipt,
+        semantic_posterior_evidence,
+    )
+
+    validate_calendar_carrier(
+        carrier,
+        dates=dates,
+        feature_names=feature_names,
+        source_identity_sha256=source_identity_sha256,
+        source_receipt_sha256=source_receipt_sha256,
+    )
+    if (
+        selected_identity.get("family") != "autocycle_all_core"
+        or selected_identity.get("level") != "L2"
+        or type(selected_identity.get("seed")) is not int
+        or selected_identity["seed"] != 47
+        or value.get("selected_identity") != dict(selected_identity)
+        or not _sha(value.get("selected_model_parameter_sha256"))
+        or value.get("receipt_sha256") != canonical_sha256({k: v for k, v in value.items() if k != "receipt_sha256"})
+        or value.get("input_manifest") != carrier["manifest"]
+        or value.get("ledger") != calendar_ledger(carrier)
+        or value.get("observation_available_mask") != carrier["observation_available_mask"]
+        or value.get("utility_available_mask") != carrier["utility_available_mask"]
+    ):
+        _fail("original L2 selected model/calendar identity differs")
+    arguments = dict(
+        dates=dates,
+        positions=carrier["observation_available_positions"],
+        components=semantic_components(carrier),
+    )
+    posterior = np.asarray(value["posterior"], dtype=np.float64)
+    original = semantic_posterior_evidence(posterior, **arguments)
+    if any(
+        canonical_json_bytes(value.get(k)) != canonical_json_bytes(v)
+        for k, v in original.items()
+        if k != "receipt_sha256"
+    ):
+        _fail("original semantic arithmetic differs from frozen carrier")
+    revised = semantic_posterior_evidence(posterior, **arguments, contract_version=L2_SEMANTIC_VERSION)
+    return receipt(
+        {
+            "contract_version": revised["contract_version"],
+            "selected_identity": dict(selected_identity),
+            "selected_model_parameter_sha256": value["selected_model_parameter_sha256"],
+            "original_semantic_receipt_sha256": value["receipt_sha256"],
+            "input_manifest_sha256": carrier["manifest"]["aggregate_sha256"],
+            "evidence_dates": [dates[p] for p in revised["evidence_positions"]],
+            "observation_count": len(carrier["observation_available_positions"]),
+            "utility_count": len(carrier["utility_available_positions"]),
+            "original_evidence_valid": value["semantic_evidence_valid"],
+            "original_reasons": value["reasons"],
+            **{
+                key: revised[key]
+                for key in (
+                    "assignment_status",
+                    "evidence_status",
+                    "semantic_assignment_valid",
+                    "semantic_evidence_valid",
+                    "states",
+                    "gaps",
+                    "reasons",
+                    "primary_reason",
+                    "mapping",
+                )
+            },
+        }
+    )
