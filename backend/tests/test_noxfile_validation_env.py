@@ -52,6 +52,8 @@ def test_offline_shards_isolate_receipts_preserve_failures_and_enforce_union_cov
         worker = kwargs["env"]
         assert command[:3] == [sys.executable, "-m", "pytest"]
         assert "--cov-fail-under=0" in command and "--cov-branch" in command
+        temporary = Path(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--basetemp=")))
+        assert temporary.is_relative_to(tmp_path) and temporary.name.startswith("pytest-")
         assert kwargs["cwd"] == tmp_path and worker["OMP_NUM_THREADS"] == "1"
         Path(worker["AISTOCK_TEST_METRICS_RECEIPT"]).write_text('{"executed_items":1}\n', encoding="utf8")
         if fault != "coverage_missing":

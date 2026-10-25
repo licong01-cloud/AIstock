@@ -214,8 +214,10 @@ def _run_nightly_pytest_shards(
         return False
     plan = env["AISTOCK_TEST_PLAN"]
     groups = _pytest_file_shards(roots)
-    directory = ROOT / "tmp" / "validation" / "nightly_shards" / plan / uuid4().hex
+    artifact_root = Path(env["AISTOCK_TEST_METRICS_RECEIPT"]).parent if env.get("AISTOCK_TEST_METRICS_RECEIPT") else ROOT / "tmp" / "validation"
+    directory = ROOT / artifact_root / "nightly_shards" / plan / uuid4().hex
     directory.mkdir(parents=True)
+    (directory / "assignment.json").write_text(json.dumps({"plan": plan, "groups": groups}), encoding="utf-8")
 
     def execute(index: int, files: list[str]) -> dict:
         worker_env = dict(env)
@@ -226,7 +228,7 @@ def _run_nightly_pytest_shards(
                 worker = destination.with_name(f"{destination.stem}.shard-{directory.name}-{index}{destination.suffix}")
                 worker_env[key] = str(worker)
                 receipts.append((destination, worker))
-        worker_args = list(args)
+        worker_args = [*args, f"--basetemp={directory / f'pytest-{index}'}"]
         if coverage_file is not None:
             worker_env["COVERAGE_FILE"] = str(directory / f".coverage.{index}")
             # Enforce the original threshold on the union, never on a partial shard.
@@ -238,8 +240,10 @@ def _run_nightly_pytest_shards(
                 [sys.executable, "-m", "pytest", *files, *worker_args],
                 cwd=ROOT, env=worker_env, stdout=output, stderr=subprocess.STDOUT, check=False,
             )
-        return {"index": index, "files": files, "returncode": result.returncode,
-                "seconds": round(time.monotonic() - started, 3), "log": str(log), "receipts": receipts}
+        row = {"index": index, "files": files, "returncode": result.returncode,
+               "seconds": round(time.monotonic() - started, 3), "log": str(log)}
+        (directory / f"result-{index}.json").write_text(json.dumps(row), encoding="utf-8")
+        return {**row, "receipts": receipts}
 
     with ThreadPoolExecutor(max_workers=len(groups)) as pool:
         futures = [pool.submit(execute, index, files) for index, files in enumerate(groups)]
