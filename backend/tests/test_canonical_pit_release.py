@@ -112,7 +112,7 @@ def test_offline_cli_can_verify_prior_version_without_live_source_or_default_cha
     assert len(json.loads(capsys.readouterr().out)["versions"]) == 1
 
 
-@pytest.mark.parametrize("mutation", ["none", "digest", "cutoff", "scope", "legacy_without_binding"])
+@pytest.mark.parametrize("mutation", ["none", "digest", "cutoff", "scope", "legacy_without_binding", "legacy_null_binding"])
 def test_independent_binding_compares_policy_not_physical_quote_catalog(mutation):
     live = policy.PitConsumerBinding(
         policy.CANONICAL_PIT_AUTHORITY_ID, policy.PitAuthorityStatus.ACTIVE_CANONICAL,
@@ -134,7 +134,11 @@ def test_independent_binding_compares_policy_not_physical_quote_catalog(mutation
         profile["pit_binding"]["scope"] = "sample"
     elif mutation == "legacy_without_binding":
         del profile["pit_binding"]
-    if mutation == "none":
+    elif mutation == "legacy_null_binding":
+        profile["pit_binding"] = None
+        profile["components"] = {name: {"universe_key": live.universe_key, "rule_version": live.rule_version}
+                                 for name in ("day_pins", "minute_pins")}
+    if mutation in {"none", "legacy_null_binding"}:
         assert policy.require_dataset_runtime_pit_policy(profile, live)["rule_version"] == live.rule_version
     else:
         with pytest.raises(policy.CanonicalPitContractError):

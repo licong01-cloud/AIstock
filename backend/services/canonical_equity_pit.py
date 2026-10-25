@@ -606,7 +606,7 @@ def require_dataset_runtime_pit_policy(
     components = profile.get("components")
     if not isinstance(components, Mapping):
         raise CanonicalPitContractError("dataset PIT components are missing")
-    if "pit_binding" in profile:
+    if profile.get("pit_binding") is not None:
         # Fact catalogs and selection eligibility are separate identities.
         # Lazy import avoids the frozen-primitives -> policy import cycle.
         from backend.services.dataset_release.pit import DatasetPitBinding, PitSnapshotError
