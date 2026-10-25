@@ -1,0 +1,306 @@
+{
+  "actual": "HTTP 400 missing 2 required keyword-only arguments classification_rows and quote_observations; no new daily job can be planned.",
+  "allowed_write_scope": [
+    "backend/services/hmm_data_source/daily_input.py",
+    "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+    "tests/aistock_validation/bugs/20261017_BUG-1955-hmm-database-daily-consumer-omits-shared-quote-publication-authority-inp.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1955",
+  "closed_at": "2026-10-17T16:32:22.961675Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-17T10:03:27.746874Z",
+  "description": "HTTP 400 missing 2 required keyword-only arguments classification_rows and quote_observations; no new daily job can be planned.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261017-7498088aa2ea",
+      "timestamp": "2026-10-17T10:03:27.746853Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Database daily preview uses the current shared quote-availability contract and explicit source identities without extrapolating nonpublished quotes.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1955-hmm-database-daily-consumer-omits-shared-quote-publication-authority-inp.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+      "tests/aistock_validation/bugs/20261017_BUG-1955-hmm-database-daily-consumer-omits-shared-quote-publication-authority-inp.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_data_source/daily_input.py",
+        "backend/tests/hmm_data_source/test_hmm_database_daily_input.py"
+      ],
+      "impacted_modules": [
+        "hmm",
+        "qe.core",
+        "selection_center",
+        "paper_v2"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_data_source/daily_input.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        },
+        {
+          "file": "backend/tests/hmm_data_source/test_hmm_database_daily_input.py",
+          "impact_modules": [
+            "qe.core",
+            "selection_center",
+            "paper_v2"
+          ],
+          "primary_module": "hmm",
+          "risk_level": "high",
+          "rule_id": "hmm_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_data_source/daily_input.py",
+        "backend/tests/hmm_data_source/test_hmm_database_daily_input.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_data_source/daily_input.py",
+      "backend/tests/hmm_data_source/test_hmm_database_daily_input.py"
+    ]
+  },
+  "first_seen_at": "2026-10-17T10:03:27.746874Z",
+  "fix_branch": null,
+  "fix_commit": "9fc2e6dcdd4cc0bb2b7c1a86ec2f3771fc5016fe",
+  "fixed_at": "2026-10-17T12:00:11Z",
+  "github_issue_number": 6240,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6240",
+  "last_seen_at": "2026-10-17T10:03:27.746874Z",
+  "module": "hmm",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6245",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "hmm_data_source_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/runtime-contracts/hmm-database-daily-dispatch",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -c isolated import of backend.services.hmm_data_source.daily_input, backend.routers.hmm_training, backend.routers.hmm_risk, backend.routers.health -> PASS; all resolved under BUG-1955 task worktree; database=0; fit=0; service_control=0",
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe -c isolated task-worktree imports daily_input,hmm_training,hmm_risk,health -> passed; DB=0; fit=0; process_control=0"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock_worktrees\\BUG-1955-close-sync-20261017\\tmp\\issue_workflow\\BUG-1955\\post-restart-verify-current.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1955",
+      "business_smoke_semantic": {
+        "contract_id": "object_liveness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "8687be61c68b0eca8c0324b40194d16eb6196e941b3ba3eab5015ed8beb28cb6",
+      "expected_identity": "9fc2e6dcdd4cc0bb2b7c1a86ec2f3771fc5016fe",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T16:30:33.541417Z",
+      "mode": "read_only",
+      "observed_identity": "cfccaab5b904f45d29bb54c57a33fcbf3793c153",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "1c8dfbc46c4860220c97d241be83d76041f7cae619229392615ea9dd403cde8f",
+      "receipt_sha256": "ddb858d2be1b316f888fc8c7fa04242080977c91ed78a2d0eb02fdec5ab31164",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "bb8a6bebbb5eacabe7967086cf05d461d60b60349ada9a7baf01d7196c0aef7b",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1955",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "ee71f4f9f28f9801",
+    "recorded_at": "2026-10-17T12:04:10.918433Z",
+    "runtime_contract_digest": "8687be61c68b0eca8c0324b40194d16eb6196e941b3ba3eab5015ed8beb28cb6",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "d350e76591a108788572a928c4601d78f99cb7f0",
+    "source_merge_commit": "9fc2e6dcdd4cc0bb2b7c1a86ec2f3771fc5016fe",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6245",
+    "validation_evidence": [
+      "python -m nox -s hmm_data_source_backend -> passed (272 passed, 1 skipped, coverage 77.38%; source PR commit-bound receipt 549136f9a4fd4c56)"
+    ],
+    "validation_evidence_digest": "4939219c3e59cd8219d8940bbc1ce4013ebe01ddaa3a4cb4b30e3d4c4bc4a21d"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM database daily consumer omits shared quote publication authority inputs",
+  "trigger_condition": {
+    "fingerprint": "7498088aa2eaa74c14db6317",
+    "source_event_id": "FE-20261017-7498088aa2ea"
+  },
+  "validation_evidence": [
+    "python -m nox -s hmm_data_source_backend -> passed (272 passed, 1 skipped, coverage 77.38%; source PR commit-bound receipt 549136f9a4fd4c56)",
+    "GET runtime identity and dispatch; POST daily-coefficients/preview as_of=2026-10-16 -> passed (VALIDATED, generation_available=true, existing registered artifact)",
+    "GET daily-coefficients/jobs/fcf9793b-c9f9-4ece-852d-dba7cd5cbbed and local SHA256/readback -> passed (COMPLETED/GENERATED, 2026-10-16 to 2026-10-19, 124 finite coefficients, REGISTERED_READBACK, SHA256 1d22a97578213497d325186f10b4063f68c66c4cba30ff7d461ba2187f8b793f)"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_data_source"
+      ],
+      "plans": [
+        "hmm_data_source_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_data_source"
+        ],
+        "plans": [
+          "hmm_data_source_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

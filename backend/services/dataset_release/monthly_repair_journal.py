@@ -51,6 +51,81 @@ MANAGED_SOURCE_DATASETS = frozenset(
     }
 )
 
+MANAGED_WRITER_SCOPE_POLICY = 'bounded_post_cutoff_proven_date_writers_v3'
+
+
+def _proven_date_writer_scope_sql(owner: str, *, sync_target: bool = False) -> str:
+    """Bind the registered BY_DATE writer to its own immutable start log.
+
+    The engine validates *every* returned date before replacing that requested
+    date. Its start log binds the resolved bounds, not a current schedule or a
+    claimed row count. Always overwrite the reserved proof key: a caller's
+    summary is not proof. This certifies non-overlap, never data completeness.
+    """
+    if owner not in {'job', 'owner', 'owner_job'}:
+        raise ValueError('unknown managed date-writer SQL alias')
+    target_proof = """AND target.dataset='suspend_d'
+        AND target.target_scope='{"query_mode":"by_date"}'::jsonb""" if sync_target else ''
+    return f"""(COALESCE({owner}.summary::jsonb, '{{}}'::jsonb)
+        || jsonb_build_object('_monthly_bounded_date_writer', COALESCE(
+            {owner}.job_type='incremental'
+            AND {owner}.summary->>'dataset'='suspend_d'
+            AND {owner}.summary->>'mode'='incremental'
+            {target_proof}
+            AND (
+                SELECT COUNT(*)>0 AND BOOL_AND(upper(writer_log.level)='INFO'
+                    AND writer_log.message='start tushare suspend_d incremental '
+                        || ({owner}.summary->>'start_date') || ' -> '
+                        || ({owner}.summary->>'end_date'))
+                  FROM market.ingestion_logs AS writer_log
+                 WHERE writer_log.job_id={owner}.job_id
+                   AND writer_log.message LIKE 'start tushare %%'
+            ), FALSE)))"""
+
+
+def _completed_suspend_job_sql(owner: str) -> str:
+    """Prove a whole registered date window from immutable completion events.
+
+    ``owner`` is a code-owned SQL alias, never a caller-provided identifier.
+    No physical market-data scan or mutable latest-attempt pointer is used.
+    """
+    if owner not in {'job', 'owner_job'}:
+        raise ValueError('unknown managed writer SQL alias')
+    return f"""(
+        {owner}.status='success' AND {owner}.finished_at IS NOT NULL
+        AND (SELECT COUNT(*)>0
+                    AND COUNT(*)=COUNT(DISTINCT completed_target.target_date)
+                    AND COUNT(*)::text={owner}.summary#>>'{{stats,total_batches}}'
+                    AND MIN(completed_target.target_date)::text={owner}.summary->>'refresh_start_date'
+                    AND MAX(completed_target.target_date)::text={owner}.summary->>'refresh_end_date'
+                    AND SUM(completed.rows_written)::text={owner}.summary->>'inserted_rows'
+                    AND BOOL_AND(COALESCE(completed_target.dataset='suspend_d'
+                        AND completed_target.target_scope='{{"query_mode":"by_date"}}'::jsonb
+                        AND completed.finished_at IS NOT NULL
+                        AND completed.rows_written=completed.rows_observed
+                        AND ((completed.rows_written=0
+                              AND completed.context_json->>'quality_status'='empty_valid')
+                             OR (completed.rows_written>0
+                                 AND completed.context_json->>'quality_status'='ok')), FALSE))
+               FROM market.data_sync_attempts AS completed
+               JOIN market.data_sync_targets AS completed_target
+                 ON completed_target.target_id=completed.target_id
+              WHERE completed.job_id={owner}.job_id::text
+                AND completed.status='reconciled')
+    )"""
+
+# Exact producer contracts registered in backend/db/init_tushare_schedules.py.
+# A schedule-name prefix or a date strategy alone cannot prove writer scope.
+_EMPTY_FUTURE_SUSPEND_SCHEDULES = frozenset({
+    ('suspend_d', 'current_and_next_trading_day'),
+    ('_suspend_d_tminus1_1730', 'next_trading_day'),
+    ('_suspend_d_morning_0730', 'current_or_next_trading_day'),
+    ('_suspend_d_preopen_0850', 'current_or_next_trading_day'),
+    ('_suspend_d_preopen_0905', 'current_or_next_trading_day'),
+    ('_suspend_d_midday_1240', 'current_or_next_trading_day'),
+    ('_suspend_d_close_1610', 'current_and_next_trading_day'),
+})
+
 
 def _watermark(value: str) -> datetime:
     prefix = "managed-writer-ledgers-v2:"
@@ -78,6 +153,77 @@ class ManagedRepairImpactJournal:
         if self.source_cutoff is not None and type(self.source_cutoff) is not date:
             raise ValueError("managed source cutoff must be an exact date")
 
+    def _bounded_future_suspend_date_writer(self, row: Sequence[object]) -> bool:
+        """Exclude only independently proven post-cutoff date replacements."""
+        if self.source_cutoff is None or len(row) != 10 or row[3] != 'suspend_d':
+            return False
+        ledger, _, status, _, _, _, _, scope, _, target = row
+        allowed_statuses = ({'running'} | TERMINAL_JOB_STATUSES) if ledger == 'ingestion_jobs' else (
+            {'started'} | TERMINAL_SYNC_STATUSES if ledger == 'data_sync_attempts' else set()
+        )
+        if status not in allowed_statuses or not isinstance(scope, Mapping):
+            return False
+        if scope.get('_monthly_bounded_date_writer') is not True:
+            return False
+        if scope.get('dataset') != 'suspend_d' or scope.get('mode') != 'incremental':
+            return False
+        if scope.get('actual_dataset') not in (None, 'suspend_d'):
+            return False
+        bounds = [scope.get(key) for key in ('start_date', 'end_date')]
+        if any(not isinstance(value, str) for value in bounds):
+            return False
+        try:
+            start, end = (date.fromisoformat(value) for value in bounds)
+        except ValueError:
+            return False
+        if bounds != [start.isoformat(), end.isoformat()] or not self.source_cutoff < start <= end:
+            return False
+        if any(key in scope and scope[key] != bounds[index] for index, key in enumerate(
+            ('refresh_start_date', 'refresh_end_date')
+        )):
+            return False
+        return target is None if ledger == 'ingestion_jobs' else type(target) is date and start <= target <= end
+
+    def _bounded_future_tdx(self, row: Sequence[object]) -> bool:
+        """Exclude only the bounded raw Go incremental producer, never a date claim alone.
+
+        TDXScheduler._run_tdx_go_api_sync supplies both bounds and disables
+        truncate_before. Go rawRows filters BEFORE insert/precision update.
+        This proves non-overlap, not job completion or next-month completeness.
+        adj_factor and other producers may rewrite history and are not eligible.
+        Sync events additionally require the exact owner job and target date.
+        """
+        if self.source_cutoff is None or len(row) != 10:
+            return False
+        ledger, _, _, dataset, _, _, _, scope, _, target_date = row
+        if ledger not in {'ingestion_jobs', 'data_sync_attempts'}:
+            return False
+        if dataset not in {'kline_daily_raw', 'kline_minute_raw'} or not isinstance(scope, Mapping):
+            return False
+        if any(scope.get(key) != value for key, value in {
+            'dataset': dataset, 'data_kind': dataset, 'mode': 'incremental', 'via': 'go_init',
+        }.items()):
+            return False
+        for key in ('actual_dataset', 'schedule_dataset'):
+            if key in scope and scope[key] not in (None, dataset):
+                return False
+        if 'datasets' in scope and scope['datasets'] != [dataset]:
+            return False
+        if 'truncate_before' in scope and scope['truncate_before'] is not False:
+            return False
+        bounds = [scope.get(key) for key in ('start_date', 'end_date')]
+        if any(not isinstance(value, str) for value in bounds):
+            return False
+        try:
+            start, end = (date.fromisoformat(value) for value in bounds)
+        except ValueError:
+            return False
+        if bounds != [start.isoformat(), end.isoformat()] or not self.source_cutoff < start <= end:
+            return False
+        if ledger == 'data_sync_attempts':
+            return type(target_date) is date and start <= target_date <= end
+        return target_date is None
+
     def _empty_future_suspend(self, row: Sequence[object]) -> bool:
         """Recognize only the registered empty BY_DATE replacement contract.
 
@@ -87,9 +233,9 @@ class ManagedRepairImpactJournal:
         Positive writes, failures, other producers and unknown scopes stay
         conservative until their own complete write bounds are registered.
         """
-        if self.source_cutoff is None or len(row) != 9 or row[3] != 'suspend_d':
+        if self.source_cutoff is None or len(row) not in (9, 10) or row[3] != 'suspend_d':
             return False
-        ledger, _, status, _, _, _, finished, scope, empty_completion = row
+        ledger, _, status, _, _, _, finished, scope, empty_completion = row[:9]
         expected_status = 'success' if ledger == 'ingestion_jobs' else 'reconciled'
         if status != expected_status or finished is None or empty_completion is not True:
             return False
@@ -97,10 +243,14 @@ class ManagedRepairImpactJournal:
             return False
         expected = {
             'dataset': 'suspend_d', 'actual_dataset': 'suspend_d',
-            'schedule_dataset': 'suspend_d', 'mode': 'incremental',
-            'date_strategy': 'current_and_next_trading_day',
+            'mode': 'incremental',
         }
         if any(scope.get(key) != value for key, value in expected.items()):
+            return False
+        schedule, strategy = scope.get('schedule_dataset'), scope.get('date_strategy')
+        if not isinstance(schedule, str) or not isinstance(strategy, str):
+            return False
+        if (schedule, strategy) not in _EMPTY_FUTURE_SUSPEND_SCHEDULES:
             return False
         stats = scope.get('stats')
         if type(scope.get('inserted_rows')) is not int or scope['inserted_rows'] != 0:
@@ -122,6 +272,60 @@ class ManagedRepairImpactJournal:
             return False
         return bounded_date.isoformat() == dates[0] and bounded_date > self.source_cutoff
 
+    def _completed_future_suspend(self, row: Sequence[object]) -> bool:
+        """Exclude a fully evidenced BY_DATE window strictly after the cutoff.
+
+        Positive rows and multi-day replacements are safe only when the exact
+        owner job, all dates and counts close against immutable ledger facts.
+        The registered producer validates every row's request date before any
+        write; row counts or a post-cutoff target date alone are insufficient.
+        """
+        if self.source_cutoff is None or len(row) != 10 or row[3] != 'suspend_d':
+            return False
+        ledger, _, status, _, _, _, finished, scope, completion, target = row
+        if completion is not True or not isinstance(scope, Mapping):
+            return False
+        if ledger == 'ingestion_jobs':
+            if status != 'success' or finished is None or target is not None:
+                return False
+        elif ledger == 'data_sync_attempts':
+            if status not in {'started', 'reconciled'} or type(target) is not date:
+                return False
+            if status == 'reconciled' and finished is None:
+                return False
+        else:
+            return False
+        if any(scope.get(key) != value for key, value in {
+            'dataset': 'suspend_d', 'actual_dataset': 'suspend_d', 'mode': 'incremental',
+        }.items()):
+            return False
+        schedule, strategy = scope.get('schedule_dataset'), scope.get('date_strategy')
+        if not isinstance(schedule, str) or not isinstance(strategy, str):
+            return False
+        if (schedule, strategy) not in _EMPTY_FUTURE_SUSPEND_SCHEDULES:
+            return False
+        bounds = [scope.get(key) for key in ('start_date', 'end_date')]
+        if any(not isinstance(value, str) for value in bounds):
+            return False
+        try:
+            start, end = (date.fromisoformat(value) for value in bounds)
+        except ValueError:
+            return False
+        if bounds != [start.isoformat(), end.isoformat()] or not self.source_cutoff < start <= end:
+            return False
+        if bounds != [scope.get('refresh_start_date'), scope.get('refresh_end_date')]:
+            return False
+        if ledger == 'data_sync_attempts' and not start <= target <= end:
+            return False
+        stats, inserted = scope.get('stats'), scope.get('inserted_rows')
+        if type(inserted) is not int or inserted < 0 or not isinstance(stats, Mapping):
+            return False
+        if stats.get('dataset') != 'suspend_d' or stats.get('mode') != 'incremental':
+            return False
+        expected = {'inserted_rows': inserted, 'total_batches': (end-start).days+1,
+                    'success_batches': (end-start).days+1, 'failed_batches': 0}
+        return all(type(stats.get(key)) is int and stats[key] == value for key, value in expected.items())
+
     def initial_watermark(self, connection: RepairJournalConnection) -> str:
         """Reject active managed writers and bind the watermark to snapshot time."""
 
@@ -139,7 +343,7 @@ class ManagedRepairImpactJournal:
             )
             row = cursor.fetchone()
             cursor.execute(
-                """
+                f"""
                 WITH active_ingestion AS (
                     SELECT 'ingestion_jobs'::text AS ledger_kind,
                            job_id::text AS ledger_identity,
@@ -148,7 +352,10 @@ class ManagedRepairImpactJournal:
                                NULLIF(summary->>'actual_dataset', ''),
                                NULLIF(summary->>'schedule_dataset', ''),
                                NULLIF(summary->>'dataset', '')
-                           ) AS dataset
+                           ) AS dataset,
+                           job.created_at,job.started_at,job.finished_at,
+                           {_proven_date_writer_scope_sql('job')} AS writer_scope,
+                           FALSE AS empty_date_completion,NULL::date AS target_date
                       FROM market.ingestion_jobs AS job
                      WHERE job.status IS NULL
                         OR lower(job.status) <> ALL(%s)
@@ -157,10 +364,15 @@ class ManagedRepairImpactJournal:
                     SELECT 'data_sync_attempts'::text AS ledger_kind,
                            attempt.attempt_id::text AS ledger_identity,
                            lower(attempt.status) AS status,
-                           target.dataset
+                           target.dataset,
+                           attempt.created_at,attempt.started_at,attempt.finished_at,
+                           {_proven_date_writer_scope_sql('owner', sync_target=True)} AS writer_scope,
+                           FALSE AS empty_date_completion,target.target_date
                       FROM market.data_sync_attempts AS attempt
                       JOIN market.data_sync_targets AS target
                         ON target.target_id=attempt.target_id
+                      LEFT JOIN market.ingestion_jobs AS owner
+                        ON owner.job_id::text=attempt.job_id
                      WHERE target.dataset = ANY(%s)
                        AND (
                             attempt.status IS NULL
@@ -186,7 +398,8 @@ class ManagedRepairImpactJournal:
                             ))
                        )
                 )
-                SELECT ledger_kind,ledger_identity,status,dataset
+                SELECT ledger_kind,ledger_identity,status,dataset,
+                       created_at,started_at,finished_at,writer_scope,empty_date_completion,target_date
                   FROM (
                         SELECT * FROM active_ingestion
                          WHERE dataset IS NULL OR dataset = ANY(%s)
@@ -208,6 +421,11 @@ class ManagedRepairImpactJournal:
             active = list(cursor.fetchall() or ())
         if not row or not isinstance(row[0], datetime) or row[0].tzinfo is None:
             raise MonthlyRepairJournalError("database did not return a timezone-aware journal watermark")
+        if len(active) >= 50:
+            raise MonthlyRepairJournalError("managed active query reached its bound; scope is incomplete")
+        active = [item for item in active if not (
+            self._bounded_future_tdx(item) or self._bounded_future_suspend_date_writer(item)
+        )]
         if active:
             identities = [f"{item[0]}:{item[1]}" for item in active[:3]]
             raise MonthlyRepairJournalError(
@@ -230,7 +448,7 @@ class ManagedRepairImpactJournal:
         observed_at = _watermark(watermark)
         with connection.cursor() as cursor:
             cursor.execute(
-                """
+                f"""
                 WITH ingestion_overlap AS (
                     SELECT 'ingestion_jobs'::text AS ledger_kind,
                            job_id::text AS ledger_identity,
@@ -241,20 +459,9 @@ class ManagedRepairImpactJournal:
                                NULLIF(summary->>'dataset', '')
                            ) AS dataset,
                            job.created_at,job.started_at,job.finished_at,
-                           job.summary AS writer_scope,
-                           EXISTS (
-                               SELECT 1 FROM market.data_sync_attempts AS completed
-                               JOIN market.data_sync_targets AS target
-                                 ON target.target_id=completed.target_id
-                                WHERE completed.job_id=job.job_id::text
-                                  AND target.dataset='suspend_d'
-                                  AND target.target_date::text=job.summary->>'refresh_start_date'
-                                  AND target.target_scope='{"query_mode":"by_date"}'::jsonb
-                                  AND completed.status='reconciled'
-                                  AND completed.finished_at IS NOT NULL
-                                  AND completed.rows_written=0 AND completed.rows_observed=0
-                                  AND completed.context_json->>'quality_status'='empty_valid'
-                           ) AS empty_date_completion
+                           {_proven_date_writer_scope_sql('job')} AS writer_scope,
+                           {_completed_suspend_job_sql('job')} AS empty_date_completion,
+                           NULL::date AS target_date
                       FROM market.ingestion_jobs AS job
                      WHERE job.created_at > %s OR job.started_at > %s OR job.finished_at > %s
                 ), sync_overlap AS (
@@ -263,14 +470,10 @@ class ManagedRepairImpactJournal:
                            lower(attempt.status) AS status,
                            target.dataset,
                            attempt.created_at,attempt.started_at,attempt.finished_at,
-                           owner_job.summary AS writer_scope,
-                           (
-                               owner_job.status='success' AND owner_job.finished_at IS NOT NULL
-                               AND target.target_date::text=owner_job.summary->>'refresh_start_date'
-                               AND target.target_scope='{"query_mode":"by_date"}'::jsonb
-                               AND attempt.rows_written=0 AND attempt.rows_observed=0
-                               AND attempt.context_json->>'quality_status'='empty_valid'
-                           ) AS empty_date_completion
+                           {_proven_date_writer_scope_sql('owner_job', sync_target=True)} AS writer_scope,
+                           ({_completed_suspend_job_sql('owner_job')}
+                            AND target.target_scope='{{"query_mode":"by_date"}}'::jsonb
+                           ) AS empty_date_completion,target.target_date
                       FROM market.data_sync_attempts AS attempt
                       JOIN market.data_sync_targets AS target
                         ON target.target_id=attempt.target_id
@@ -284,7 +487,7 @@ class ManagedRepairImpactJournal:
                        )
                 )
                 SELECT ledger_kind,ledger_identity,status,dataset,
-                       created_at,started_at,finished_at,writer_scope,empty_date_completion
+                       created_at,started_at,finished_at,writer_scope,empty_date_completion,target_date
                   FROM (
                         SELECT * FROM ingestion_overlap
                          WHERE dataset IS NULL OR dataset = ANY(%s)
@@ -318,7 +521,8 @@ class ManagedRepairImpactJournal:
                 raise MonthlyRepairJournalError("managed writer query returned an unknown dataset")
             if ledger_kind == "data_sync_attempts" and not dataset:
                 raise MonthlyRepairJournalError("managed sync writer lacks dataset identity")
-            if self._empty_future_suspend(row):
+            if (self._empty_future_suspend(row) or self._completed_future_suspend(row)
+                    or self._bounded_future_tdx(row) or self._bounded_future_suspend_date_writer(row)):
                 continue
             result.append(
                 f"{ledger_kind}:{identity}:{dataset or 'unclassified'}:{str(status).lower()}"
@@ -328,6 +532,7 @@ class ManagedRepairImpactJournal:
 
 __all__ = (
     "MANAGED_SOURCE_DATASETS",
+    "MANAGED_WRITER_SCOPE_POLICY",
     "ManagedRepairImpactJournal",
     "MonthlyRepairJournalError",
     "RepairJournalConnection",

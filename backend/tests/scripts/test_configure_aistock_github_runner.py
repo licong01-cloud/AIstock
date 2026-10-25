@@ -37,12 +37,16 @@ def test_runner_configure_helper_keeps_registration_token_out_of_arguments() -> 
 
 
 @pytest.mark.skipif(sys.platform != "win32" or not _powershell(), reason="PowerShell helper is Windows-only")
-def test_runner_configure_helper_enforces_work_conserving_role_labels(tmp_path: Path) -> None:
+@pytest.mark.parametrize("role,labels,message", [
+    ("security", "@('aistock','aistock-ci-security')", "must include aistock-ci"),
+    ("general", "@('aistock','aistock-ci','aistock-ci-security')", "must not include aistock-ci-security"),
+])
+def test_runner_configure_helper_enforces_work_conserving_role_labels(tmp_path: Path, role, labels, message) -> None:
     allowed_root = tmp_path / "runners"
     install_root = allowed_root / "security"
     allowed_root.mkdir()
 
-    missing_shared_capacity = subprocess.run(
+    result = subprocess.run(
         [
             _powershell() or "powershell.exe",
             "-NoProfile",
@@ -51,33 +55,33 @@ def test_runner_configure_helper_enforces_work_conserving_role_labels(tmp_path: 
             "-Command",
             (
                 f"& '{SCRIPT}' -AllowedRoot '{allowed_root}' -InstallRoot '{install_root}' "
-                "-Role security -Labels @('aistock','aistock-ci-security') -AuditOnly -Json"
+                f"-Role {role} -Labels {labels} -AuditOnly -Json"
             ),
         ],
         capture_output=True,
         text=True,
     )
-    assert missing_shared_capacity.returncode != 0
-    assert "must include aistock-ci" in (missing_shared_capacity.stdout + missing_shared_capacity.stderr)
+    assert result.returncode != 0
+    assert message in (result.stdout + result.stderr)
 
-    unsafe_general_labels = subprocess.run(
-        [
-            _powershell() or "powershell.exe",
-            "-NoProfile",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-Command",
-            (
-                f"& '{SCRIPT}' -AllowedRoot '{allowed_root}' -InstallRoot '{install_root}' "
-                "-Role general -Labels @('aistock','aistock-ci','aistock-ci-security') "
-                "-AuditOnly -Json"
-            ),
-        ],
-        capture_output=True,
-        text=True,
-    )
-    assert unsafe_general_labels.returncode != 0
-    assert "must not include aistock-ci-security" in (unsafe_general_labels.stdout + unsafe_general_labels.stderr)
+
+@pytest.mark.skipif(sys.platform != "win32" or not _powershell(), reason="Windows SID translation")
+def test_scheduled_owner_normalization_preserves_exact_identity():
+    text = SCRIPT.read_text(encoding="utf-8")
+    function = text[text.index("function Resolve-ScheduledDispatchOwnerSid"):text.index("# Separate infrastructure-only")]
+    command = function + r"""
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$names = @($identity.Name.Split('\')[-1], $identity.Name, $identity.User.Value)
+$same = @($names | ForEach-Object { (Resolve-ScheduledDispatchOwnerSid $_) -eq $identity.User.Value })
+$different = (Resolve-ScheduledDispatchOwnerSid 'S-1-5-18') -ne $identity.User.Value
+try { Resolve-ScheduledDispatchOwnerSid 'S-1-invalid' | Out-Null; $invalid=$false } catch { $invalid=$true }
+@{same=$same;different=$different;invalid=$invalid} | ConvertTo-Json -Compress
+"""
+    result = subprocess.run([_powershell(), "-NoProfile", "-NonInteractive", "-Command", command],
+                            capture_output=True, text=True, timeout=20,
+                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout) == {"same": [True, True, True], "different": True, "invalid": True}
 
 
 @pytest.mark.skipif(sys.platform != "win32" or not _powershell(), reason="PowerShell helper is Windows-only")

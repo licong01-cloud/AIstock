@@ -1,0 +1,538 @@
+{
+  "actual": "Initial load awaits roughly 33 broad endpoints via Promise.all and computes repeated scans and remote reads; missing fields use green/zero defaults.",
+  "allowed_write_scope": [
+    "frontend/src/app/validation-center/page.tsx",
+    "frontend/src/lib/validation/api.ts",
+    "frontend/src/components/validation/PipelineOverviewCards.tsx",
+    "frontend/tests/validation-center/validation-center.spec.ts",
+    "backend/routers/validation.py",
+    "backend/services/validation/pipeline_center.py",
+    "backend/services/validation/platform_health.py",
+    "backend/tests/test_validation_pipeline_center_phase1.py",
+    "backend/tests/test_validation_platform_health.py",
+    "backend/services/validation/overview_snapshot.py",
+    "backend/tests/test_validation_overview_snapshot.py",
+    "frontend/src/lib/validation/section-loader.ts",
+    "scripts/aistock_runtime_semantics.py",
+    "scripts/aistock_issue_workflow.py",
+    "backend/tests/scripts/test_aistock_issue_workflow_fast.py",
+    "tests/aistock_validation/bugs/20261016_BUG-1945-validation-center-overview-blocks-on-broad-fanout-and-reports-missing-da.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1945",
+  "closed_at": "2026-10-16T20:17:30.886712Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-16T17:51:15.479227Z",
+  "description": "Initial load awaits roughly 33 broad endpoints via Promise.all and computes repeated scans and remote reads; missing fields use green/zero defaults.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261016-b49fac79d3e7",
+      "timestamp": "2026-10-16T17:51:15.479227Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Independent bounded sections render available data immediately; missing/stale/failed data never implies success; first screen shares cached lightweight sources.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/validation.py",
+      "backend/services/validation/overview_snapshot.py",
+      "backend/tests/test_validation_pipeline_center_phase1.py",
+      "backend/tests/test_validation_platform_health.py",
+      "frontend/src/app/validation-center/page.tsx",
+      "frontend/src/components/validation/PipelineOverviewCards.tsx",
+      "frontend/src/lib/validation/api.ts",
+      "frontend/src/lib/validation/section-loader.ts",
+      "frontend/tests/validation-center/validation-center.spec.ts",
+      "tests/aistock_validation/bugs/20261016_BUG-1945-validation-center-overview-blocks-on-broad-fanout-and-reports-missing-da.json"
+    ],
+    "added_files": [
+      "backend/services/validation/overview_snapshot.py",
+      "backend/tests/test_validation_overview_snapshot.py",
+      "frontend/src/lib/validation/section-loader.ts"
+    ],
+    "changed_files": [
+      "backend/routers/validation.py",
+      "backend/services/validation/overview_snapshot.py",
+      "backend/tests/test_validation_pipeline_center_phase1.py",
+      "backend/tests/test_validation_platform_health.py",
+      "frontend/src/app/validation-center/page.tsx",
+      "frontend/src/components/validation/PipelineOverviewCards.tsx",
+      "frontend/src/lib/validation/api.ts",
+      "frontend/src/lib/validation/section-loader.ts",
+      "frontend/tests/validation-center/validation-center.spec.ts",
+      "tests/aistock_validation/bugs/20261016_BUG-1945-validation-center-overview-blocks-on-broad-fanout-and-reports-missing-da.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "frontend/src/app/validation-center/page.tsx",
+        "frontend/src/lib/validation/api.ts",
+        "frontend/src/components/validation/PipelineOverviewCards.tsx",
+        "frontend/tests/validation-center/validation-center.spec.ts",
+        "backend/routers/validation.py",
+        "backend/services/validation/pipeline_center.py",
+        "backend/services/validation/platform_health.py",
+        "backend/tests/test_validation_pipeline_center_phase1.py",
+        "backend/tests/test_validation_platform_health.py",
+        "backend/services/validation/overview_snapshot.py",
+        "backend/tests/test_validation_overview_snapshot.py",
+        "frontend/src/lib/validation/section-loader.ts"
+      ],
+      "impacted_modules": [
+        "validation.center",
+        "validation.module_quality",
+        "frontend_common",
+        "validation.runner",
+        "validation.coverage",
+        "validation.guardrails",
+        "validation.workflow_automation"
+      ],
+      "matched_rules": [
+        {
+          "file": "frontend/src/app/validation-center/page.tsx",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.center",
+          "risk_level": "medium",
+          "rule_id": "validation_frontend"
+        },
+        {
+          "file": "frontend/src/lib/validation/api.ts",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.center",
+          "risk_level": "medium",
+          "rule_id": "validation_frontend"
+        },
+        {
+          "file": "frontend/src/components/validation/PipelineOverviewCards.tsx",
+          "impact_modules": [
+            "validation.center"
+          ],
+          "primary_module": "frontend_common",
+          "risk_level": "medium",
+          "rule_id": "frontend_common"
+        },
+        {
+          "file": "frontend/tests/validation-center/validation-center.spec.ts",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.center",
+          "risk_level": "medium",
+          "rule_id": "validation_frontend"
+        },
+        {
+          "file": "backend/routers/validation.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.coverage",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.center",
+          "risk_level": "medium",
+          "rule_id": "validation_router"
+        },
+        {
+          "file": "backend/services/validation/pipeline_center.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.center",
+          "risk_level": "medium",
+          "rule_id": "validation_services"
+        },
+        {
+          "file": "backend/services/validation/platform_health.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.center",
+          "risk_level": "medium",
+          "rule_id": "validation_services"
+        },
+        {
+          "file": "backend/tests/test_validation_pipeline_center_phase1.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality",
+            "validation.workflow_automation"
+          ],
+          "primary_module": "validation.center",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "backend/tests/test_validation_platform_health.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality",
+            "validation.workflow_automation"
+          ],
+          "primary_module": "validation.center",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "backend/services/validation/overview_snapshot.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.center",
+          "risk_level": "medium",
+          "rule_id": "validation_services"
+        },
+        {
+          "file": "backend/tests/test_validation_overview_snapshot.py",
+          "impact_modules": [
+            "validation.runner",
+            "validation.coverage",
+            "validation.guardrails",
+            "validation.module_quality",
+            "validation.workflow_automation"
+          ],
+          "primary_module": "validation.center",
+          "risk_level": "medium",
+          "rule_id": "validation_backend_tests"
+        },
+        {
+          "file": "frontend/src/lib/validation/section-loader.ts",
+          "impact_modules": [
+            "validation.module_quality"
+          ],
+          "primary_module": "validation.center",
+          "risk_level": "medium",
+          "rule_id": "validation_frontend"
+        }
+      ],
+      "risk_levels": [
+        "medium"
+      ],
+      "suggested_scope": [
+        "frontend/src/app/validation-center/page.tsx",
+        "frontend/src/lib/validation/api.ts",
+        "frontend/src/components/validation/PipelineOverviewCards.tsx",
+        "frontend/tests/validation-center/validation-center.spec.ts",
+        "backend/routers/validation.py",
+        "backend/services/validation/pipeline_center.py",
+        "backend/services/validation/platform_health.py",
+        "backend/tests/test_validation_pipeline_center_phase1.py",
+        "backend/tests/test_validation_platform_health.py",
+        "backend/services/validation/overview_snapshot.py",
+        "backend/tests/test_validation_overview_snapshot.py",
+        "frontend/src/lib/validation/section-loader.ts"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "frontend/src/app/validation-center/page.tsx",
+      "frontend/src/lib/validation/api.ts",
+      "frontend/src/components/validation/PipelineOverviewCards.tsx",
+      "frontend/tests/validation-center/validation-center.spec.ts",
+      "backend/routers/validation.py",
+      "backend/services/validation/pipeline_center.py",
+      "backend/services/validation/platform_health.py",
+      "backend/tests/test_validation_pipeline_center_phase1.py",
+      "backend/tests/test_validation_platform_health.py",
+      "backend/services/validation/overview_snapshot.py",
+      "backend/tests/test_validation_overview_snapshot.py",
+      "frontend/src/lib/validation/section-loader.ts"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "frontend/src/app/validation-center/page.tsx",
+      "frontend/src/lib/validation/api.ts",
+      "frontend/src/components/validation/PipelineOverviewCards.tsx",
+      "frontend/tests/validation-center/validation-center.spec.ts",
+      "backend/routers/validation.py",
+      "backend/services/validation/pipeline_center.py",
+      "backend/services/validation/platform_health.py",
+      "backend/tests/test_validation_pipeline_center_phase1.py",
+      "backend/tests/test_validation_platform_health.py",
+      "backend/services/validation/overview_snapshot.py",
+      "backend/tests/test_validation_overview_snapshot.py",
+      "frontend/src/lib/validation/section-loader.ts"
+    ]
+  },
+  "first_seen_at": "2026-10-16T17:51:15.479227Z",
+  "fix_branch": null,
+  "fix_commit": "9a88f1e639b02496f931e6bf008b436012189c41",
+  "fixed_at": "2026-10-16T18:30:10Z",
+  "github_issue_number": 6201,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6201",
+  "last_seen_at": "2026-10-16T17:51:15.479227Z",
+  "module": "validation.center",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6211",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "validation_center_backend",
+    "frontend_type_lint"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/validation/overview/snapshot",
+    "fresh_process_evidence": [
+      "AIstock-CI independent Python imported task backend/routers/validation.py and real overview_snapshot; read returned aistock_pipeline_overview_v1 in 2.55 ms without waiting for collection"
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock_worktrees/BUG-1945-close-sync-20261016/tmp/issue_workflow/BUG-1945/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1945",
+      "business_smoke_semantic": {
+        "contract_id": "pipeline_overview_observations",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "1d00aa9cdebde7f6d2cfbbc7648964f18d13e9a558787e1706ceb937ed319bc9",
+      "expected_identity": "9a88f1e639b02496f931e6bf008b436012189c41",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-16T20:17:10.785954Z",
+      "mode": "read_only",
+      "observed_identity": "031fd53d409f2c260768e9345ced095f402022e4",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e6f797fef3116c962c8767d4f76815100a85bd9e570a60b6a676a6bcb6656204",
+      "receipt_sha256": "83571b51afbe0cc9b5f37d61128bc37d3c2d2128982fd1d20695a592740a2981",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "1670dd98008526ae2cba28dbfbd0d0a9643805fefa4d73b2893c0f087a584ab2",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1945",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "6a0ce7f922061739",
+    "recorded_at": "2026-10-16T18:30:44.633727Z",
+    "runtime_contract_digest": "1d00aa9cdebde7f6d2cfbbc7648964f18d13e9a558787e1706ceb937ed319bc9",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "7f009e8943a576b719d1f207fc7108d5426a3c97",
+    "source_merge_commit": "9a88f1e639b02496f931e6bf008b436012189c41",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6211",
+    "validation_evidence": [
+      "validation-receipt: id=a5a4c4e3c1d1f9e9 commit=7f009e8943a576b719d1f207fc7108d5426a3c97 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
+      "validation-receipt: id=670828fddbdba903 commit=7f009e8943a576b719d1f207fc7108d5426a3c97 kind=nox plan=validation_center_backend status=passed command=`python -m nox -s validation_center_backend` result=`291 passed; line=79.81 branch=62.86 passed`",
+      "validation-receipt: id=9345eca3a210fb03 commit=7f009e8943a576b719d1f207fc7108d5426a3c97 kind=nox plan=frontend_type_lint status=passed command=`python -m nox -s frontend_type_lint` result=`passed`"
+    ],
+    "validation_evidence_digest": "ff766157a47bef4b1ceb277b3b4bb3c35d7983b6f30a19bbb3700ef639f64285"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "validation.center"
+  ],
+  "title": "Validation Center overview blocks on broad fanout and reports missing data as healthy",
+  "trigger_condition": {
+    "fingerprint": "b49fac79d3e74d21dd693606",
+    "source_event_id": "FE-20261016-b49fac79d3e7"
+  },
+  "ui_intake_hints": {
+    "labels": [
+      "bug",
+      "ui",
+      "module:validation.center",
+      "type:bug"
+    ],
+    "recommended_verification": [
+      "l0"
+    ],
+    "reproduce_required": true,
+    "reproduce_template": [
+      "Open the affected AIstock page/route.",
+      "Perform the visible user action that currently fails or looks wrong.",
+      "Verify the expected visible state, table, dialog, or form behavior."
+    ],
+    "schema_version": "aistock_ui_issue_intake_hints_v1",
+    "scope_source": "inferred_from_module_route_and_changed_files",
+    "ui_component_scope": [
+      "frontend/src/app/validation-center/page.tsx",
+      "frontend/src/lib/validation/api.ts",
+      "frontend/src/components/validation/PipelineOverviewCards.tsx",
+      "frontend/tests/validation-center/validation-center.spec.ts",
+      "backend/routers/validation.py",
+      "backend/services/validation/pipeline_center.py",
+      "backend/services/validation/platform_health.py",
+      "backend/tests/test_validation_pipeline_center_phase1.py",
+      "backend/tests/test_validation_platform_health.py",
+      "backend/services/validation/overview_snapshot.py",
+      "backend/tests/test_validation_overview_snapshot.py",
+      "frontend/src/lib/validation/section-loader.ts"
+    ],
+    "ui_issue": true,
+    "ui_route": "/Runner",
+    "ui_routes": [
+      "/Runner"
+    ],
+    "visual_acceptance_required": true
+  },
+  "validation_evidence": [
+    "validation-receipt: id=a5a4c4e3c1d1f9e9 commit=7f009e8943a576b719d1f207fc7108d5426a3c97 kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed; blocking=0`",
+    "validation-receipt: id=670828fddbdba903 commit=7f009e8943a576b719d1f207fc7108d5426a3c97 kind=nox plan=validation_center_backend status=passed command=`python -m nox -s validation_center_backend` result=`291 passed; line=79.81 branch=62.86 passed`",
+    "validation-receipt: id=9345eca3a210fb03 commit=7f009e8943a576b719d1f207fc7108d5426a3c97 kind=nox plan=frontend_type_lint status=passed command=`python -m nox -s frontend_type_lint` result=`passed`",
+    "canonical post-restart-verify --bug-id BUG-1945 --target backend-main -> passed; expected 9a88f1e639b02496f931e6bf008b436012189c41 is ancestor of observed 031fd53d409f2c260768e9345ced095f402022e4; health identity and pipeline overview semantic passed; six sources available"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "validation.center",
+        "validation_center"
+      ],
+      "plans": [
+        "validation_center_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0",
+      "frontend_type_lint"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Use inferred UI route/scope to avoid broad repo scans; validate with frontend tsc and focused E2E when available.",
+      "Keep validation_center_backend only when the changed files actually affect Validation Center.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "validation.center",
+          "validation_center"
+        ],
+        "plans": [
+          "validation_center_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0",
+        "frontend_type_lint"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

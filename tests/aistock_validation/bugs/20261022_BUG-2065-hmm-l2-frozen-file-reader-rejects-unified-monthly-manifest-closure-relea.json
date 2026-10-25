@@ -1,0 +1,335 @@
+{
+  "actual": "RotationL1InputBundleError: cannot read JSON object: direct_monthly_state.json on 20260930-monthly-v2-correction-4ab0b48642c3",
+  "allowed_write_scope": [
+    "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+    "backend/services/hmm_risk/monthly_release_input.py",
+    "backend/tests/hmm_risk/test_monthly_release_input.py",
+    "tests/aistock_validation/bugs/20261022_BUG-2065-hmm-l2-frozen-file-reader-rejects-unified-monthly-manifest-closure-relea.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2065",
+  "closed_at": "2026-10-22T17:47:00.369214Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-22T16:24:10.732343Z",
+  "data_preflight_results": {
+    "business_acceptance": "source_asset_preflight_only_not_model_or_QE_acceptance",
+    "dataset_activation": "owned_by_data_preparation_window_not_performed_here",
+    "generation": "20260930-monthly-v2-unified-correction-4ab0b48642c3",
+    "manifest_identity": "522e8e35896e85fc9289ca2ceca1cd6127f4c7978a72766887c0429dc9b7f410",
+    "qlib_preflight_sha256": "7bd87cd6adf22727e4d09334b6ca60ee19586251487f8c9218c31a3f1fb49e78",
+    "windows_fresh_process": "PASS; 388.40s; 5343 PIT stocks, 64116 field files, benchmark numerical reads bounded through 2026-03-31; socket poison enabled; zero fit and no database access.",
+    "wsl_python310_fresh_process": "PASS; 29.76s; same manifest, metadata/component hashes and Qlib preflight identity as Windows; explicit task-worktree PYTHONPATH; socket poison enabled."
+  },
+  "description": "RotationL1InputBundleError: cannot read JSON object: direct_monthly_state.json on 20260930-monthly-v2-correction-4ab0b48642c3",
+  "design_compliance_review": {
+    "business_logic_unchanged": "Existing L2 20-dimensional stock-fact computation, canonical taxonomy, model, windows, seeds, thresholds, suspension and provider-absence semantics unchanged.",
+    "no_silent_errors": "Unknown schemas, receipt/manifest/hash conflicts, missing components and mutable files fail closed; no old release, database or default-state fallback.",
+    "no_simplified_delivery": "Complete native source asset reader and identity readback; no manufactured state, substitute L1 input or placeholder production data.",
+    "no_unapproved_gates": "Uses native producer contracts and existing HMM validation; no resource gates, dependency installation, new approval gate or data-production changes."
+  },
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261022-c8ac6bfdbef7",
+      "timestamp": "2026-10-22T16:24:10.732320Z"
+    }
+  ],
+  "evidence_uris": [
+    "X:/AIstock_dataset_candidates/backtest_dataset_candidates/20260930-qe_hmm_full_v2-direct-monthly-v2-unified-candidate-correction-4ab0b48642c3/release_closure_receipt.json"
+  ],
+  "expected": "HMM L2 reader consumes explicitly selected shared monthly release via native manifest/closure with fail-closed identity and bounded reads, while preserving legacy direct-v3 and G2-A L1 boundaries.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/hmm_risk/monthly_release_input.py",
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_monthly_release_input.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2065-hmm-l2-frozen-file-reader-rejects-unified-monthly-manifest-closure-relea.json"
+    ],
+    "added_files": [
+      "backend/services/hmm_risk/monthly_release_input.py",
+      "backend/tests/hmm_risk/test_monthly_release_input.py"
+    ],
+    "changed_files": [
+      "backend/services/hmm_risk/monthly_release_input.py",
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/tests/hmm_risk/test_monthly_release_input.py",
+      "tests/aistock_validation/bugs/20261022_BUG-2065-hmm-l2-frozen-file-reader-rejects-unified-monthly-manifest-closure-relea.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+        "backend/services/hmm_risk/monthly_release_input.py",
+        "backend/tests/hmm_risk/test_monthly_release_input.py"
+      ],
+      "impacted_modules": [
+        "hmm.risk"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/services/hmm_risk/monthly_release_input.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        },
+        {
+          "file": "backend/tests/hmm_risk/test_monthly_release_input.py",
+          "impact_modules": [],
+          "primary_module": "hmm.risk",
+          "risk_level": "high",
+          "rule_id": "hmm_risk_services"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+        "backend/services/hmm_risk/monthly_release_input.py",
+        "backend/tests/hmm_risk/test_monthly_release_input.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/services/hmm_risk/monthly_release_input.py",
+      "backend/tests/hmm_risk/test_monthly_release_input.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/hmm_risk/rotation_l1_input_bundle.py",
+      "backend/services/hmm_risk/monthly_release_input.py",
+      "backend/tests/hmm_risk/test_monthly_release_input.py"
+    ]
+  },
+  "first_seen_at": "2026-10-22T16:24:10.732343Z",
+  "fix_branch": null,
+  "fix_commit": "c8a6ad045fd38c3b57540b1d57fd3bd9e1a48b21",
+  "fix_summary": "Add a HMM-only native monthly consumer adapter, strictly bind active/frozen manifest identity and closure receipts, verify consumed file pins and unchanged readback, reuse the existing stock-fact/H5/index kernel, retain PIT membership while checking physical Bin layout against provider quote spans. Preserve legacy direct-v3/G2-A validation and every model/feature/seed/window/threshold.",
+  "fixed_at": "2026-10-22T17:29:42Z",
+  "github_issue_number": 6595,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6595",
+  "last_seen_at": "2026-10-22T16:24:10.732343Z",
+  "module": "hmm.risk",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6597",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "hmm_risk_pr_slice"
+  ],
+  "review_rounds": [
+    "Round 1: reproduced missing direct_monthly_state RED; native manifest/closure dispatch and strict identity/hash tests GREEN; real file readback exposed shared CSI provider codes, now admitted only in the provider catalog.",
+    "Round 2: separated PIT membership from normal suspended quote spans; added active/frozen identity, rehashed receipt, traversal/duplicate/indirect path, concurrent file mutation and bounded future-value tests. Filesystem errors remain typed and no database/release fallback exists."
+  ],
+  "risk_area": "bug",
+  "root_cause": "HMM frozen-file loader unconditionally required exporter direct-v3 state, legacy benchmark-only metadata and an unused L1 price panel. Native monthly releases instead authenticate files through their manifest/closure. Provider quote spans can also differ legitimately from PIT membership during suspensions.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/hmm-risk/risk-l2/overview?run_id=88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26",
+    "fresh_process_evidence": [
+      "C:/Users/lc999/miniconda3/envs/AIstock/python.exe isolated stdin import PASS; backend.routers.hmm_risk, backend.routers.health, rotation_l1_input_bundle and monthly_release_input loaded exclusively from BUG-2065 worktree; socket poison enabled; database/network attempts=0; service_started=false; fits=0; runtime_verified=false.",
+      "Windows and WSL Python 3.10 isolated native monthly dataset preflights PASS with explicit BUG-2065 PYTHONPATH; same manifest, metadata/component SHA and Qlib preflight hash; numerical benchmark read ends 2026-03-31; active profile/dataset/database/model untouched."
+    ],
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "tmp/issue_workflow/BUG-2065/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2065",
+      "business_smoke_semantic": {
+        "contract_id": "hmm_risk_l2_overview",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "6ed39c0110d4f78cf40a1e30ab2c7a65c41b686cfa91d51ee13d55137c37362f",
+      "contract_digest": "51084985982911a4051d381c15be5c641b53541271f1dad703657717eb0d4ba2",
+      "expected_identity": "c8a6ad045fd38c3b57540b1d57fd3bd9e1a48b21",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-22T17:44:51.286088Z",
+      "mode": "read_only",
+      "observed_identity": "c8a6ad045fd38c3b57540b1d57fd3bd9e1a48b21",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "b722c63ebd5a1415e768ae9b1d7780fd6374e8e60e88da448912ce7ad2cb792b",
+      "receipt_sha256": "6cc40ec2a0a750c20d45397aa01c4a1d19756e693353556b374d4cc840dffb8d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ceba65f58a899a7c435a084ec1a7f912740f6e9c2a05753649b5834b27ed822f",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2065",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "00179070da693a02",
+    "recorded_at": "2026-10-22T17:31:10.486711Z",
+    "runtime_contract_digest": "51084985982911a4051d381c15be5c641b53541271f1dad703657717eb0d4ba2",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "67fa82cca2969e91a99bc021d1b5681da8079a93",
+    "source_merge_commit": "c8a6ad045fd38c3b57540b1d57fd3bd9e1a48b21",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6597",
+    "validation_evidence": [
+      "python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_monthly_release_input.py -> passed 38 tests on final source HEAD 67fa82cca2969e91a99bc021d1b5681da8079a93; all six canonical finish receipts bound to that HEAD; no HMM source changes during main synchronization",
+      "python -m nox -s l0 -> passed zero findings on final source HEAD 67fa82cca2969e91a99bc021d1b5681da8079a93; isolated AIstock environment imports passed with network/database attempts=0, service_started=false, fits=0"
+    ],
+    "validation_evidence_digest": "d4aeba105e16c7407d2ef5d1680137e8f7d95655c19e73f81e3bc5c0107504a7"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "hmm.risk"
+  ],
+  "title": "HMM L2 frozen-file reader rejects unified monthly manifest closure releases",
+  "trigger_condition": {
+    "fingerprint": "c8ac6bfdbef75a02e7237c41",
+    "source_event_id": "FE-20261022-c8ac6bfdbef7"
+  },
+  "validation_evidence": [
+    "python -m nox -s hmm_risk_pr_slice -- backend/tests/hmm_risk/test_monthly_release_input.py -> passed 38 tests on final source HEAD 67fa82cca2969e91a99bc021d1b5681da8079a93; all six canonical finish receipts bound to that HEAD; no HMM source changes during main synchronization",
+    "python -m nox -s l0 -> passed zero findings on final source HEAD 67fa82cca2969e91a99bc021d1b5681da8079a93; isolated AIstock environment imports passed with network/database attempts=0, service_started=false, fits=0"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "hmm.risk",
+        "hmm_risk_pr_slice"
+      ],
+      "plans": [
+        "hmm_risk_pr_slice"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "hmm.risk",
+          "hmm_risk_pr_slice"
+        ],
+        "plans": [
+          "hmm_risk_pr_slice"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

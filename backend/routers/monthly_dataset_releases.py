@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 import hashlib
+import os
 from pathlib import Path
 from typing import Annotated, Any, Awaitable, Callable, Mapping, TypeVar
 
@@ -20,6 +21,7 @@ from backend.services.dataset_release.api_models import (
     UnifiedMonthlyAdoptRequest,
     UnifiedMonthlyAuthorizationIssueRequest,
     UnifiedMonthlyReleaseRequest,
+    UnifiedMonthlyRepairInputsRequest,
 )
 from backend.services.dataset_release.monthly_runtime import (
     MonthlyRuntimeConfigurationError,
@@ -34,6 +36,7 @@ from backend.services.dataset_release.monthly_unified import (
     MonthlyReleaseRequest,
     MonthlyReleaseRequestInvalid,
     MonthlyReleaseService,
+    _require_plain_existing_chain,
 )
 from backend.services.quantevolver.qe_active_dataset_profile import (
     QEActiveDatasetProfileError,
@@ -74,7 +77,6 @@ router = APIRouter(
 )
 T = TypeVar("T")
 MAX_RECEIPT_FILES = 64
-MAX_RECEIPT_BYTES = 32 * 1024 * 1024
 
 
 @lru_cache(maxsize=1)
@@ -142,6 +144,115 @@ def _request(value: UnifiedMonthlyReleaseRequest, idempotency_key: str) -> Month
     )
 
 
+@router.post("/{operation_id}/industry-history")
+def bind_monthly_industry_history(
+    operation_id: str,
+    request: EmptyCommandRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    del request
+    return {"schema_version": "aistock_monthly_industry_history_binding_response_v1",
+            "data": _call(lambda: service.bind_industry_history(operation_id, principal=principal.principal_id))}
+
+
+@router.post("/{operation_id}/industry-quotes/refresh")
+def refresh_monthly_industry_quotes(
+    operation_id: str,
+    request: EmptyCommandRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    del request
+    return {"schema_version": "aistock_monthly_industry_history_binding_response_v1",
+            "data": _call(lambda: service.bind_industry_history(operation_id,
+                principal=principal.principal_id, refresh_quotes=True))}
+
+
+@router.post("/{operation_id}/source-quality-inputs")
+def bind_monthly_source_quality_inputs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_source_quality_binding_response_v1",
+            "data": _call(lambda: service.bind_source_quality_inputs(operation_id,
+                inputs=request.inputs, principal=principal.principal_id))}
+
+
+@router.post("/{operation_id}/prev-close-repairs")
+def bind_monthly_prev_close_repairs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_prev_close_binding_response_v1",
+            "data": _call(lambda: service.bind_prev_close_repairs(operation_id,
+                inputs=request.inputs, principal=principal.principal_id))}
+
+
+@router.post("/{operation_id}/factor-repairs")
+def bind_monthly_factor_repairs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_factor_binding_response_v1",
+            "data": _call(lambda: service.bind_factor_repairs(operation_id,
+                inputs=request.inputs, principal=principal.principal_id))}
+
+
+@router.post("/{operation_id}/minute-repairs")
+def bind_monthly_minute_repairs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_minute_binding_response_v1",
+            "data": _call(lambda: service.bind_minute_repairs(operation_id,
+                inputs=request.inputs, principal=principal.principal_id))}
+
+
+@router.post("/{operation_id}/quote-repairs")
+def bind_monthly_quote_fact_repairs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_quote_fact_binding_response_v1",
+            "data": _call(lambda: service.bind_quote_fact_repairs(operation_id,
+                inputs=request.inputs, principal=principal.principal_id))}
+
+
+@router.post("/{operation_id}/index-repairs")
+def bind_monthly_index_fact_repairs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_index_fact_binding_response_v1",
+            "data": _call(lambda: service.bind_index_fact_repairs(operation_id,
+                inputs=request.inputs, principal=principal.principal_id))}
+
+
+@router.post("/{operation_id}/suspension-authority")
+def bind_monthly_suspension_authority(
+    operation_id: str,
+    request: EmptyCommandRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    del request
+    return {"schema_version": "aistock_monthly_suspension_binding_response_v1",
+            "data": _call(lambda: service.bind_suspension_authority(operation_id, principal=principal.principal_id))}
+
+
 @router.post("/plan")
 def preview_monthly_release(
     request: UnifiedMonthlyReleaseRequest,
@@ -177,6 +288,29 @@ def submit_monthly_release(
             "status_url": f"/api/v1/qlib/monthly-releases/{operation_id}",
         },
     }
+
+
+@router.post("/{operation_id}/repair-inputs")
+def bind_monthly_repair_inputs(
+    operation_id: str,
+    request: UnifiedMonthlyRepairInputsRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_repair_inputs_response_v1", "data": _call(
+        lambda: service.bind_repair_inputs(operation_id, inputs=request.inputs, principal=principal.principal_id)
+    )}
+
+
+@router.post("/{operation_id}/prepare-correction")
+def prepare_monthly_ready_correction(
+    operation_id: str,
+    request: EmptyCommandRequest,
+    principal: Annotated[DatasetReleasePrincipal, Depends(require_dataset_release_operator)],
+    service: Annotated[MonthlyReleaseService, Depends(get_monthly_release_service)],
+) -> dict[str, Any]:
+    return {"schema_version": "aistock_monthly_ready_correction_response_v1", "data": _call(lambda: service.prepare_ready_correction(
+        operation_id, principal=principal.principal_id))}
 
 
 @router.post("/adopt", status_code=201)
@@ -247,23 +381,44 @@ def get_monthly_release(
 def _receipt_index(root: Path) -> list[dict[str, Any]]:
     if not root.exists():
         return []
-    if root.is_symlink() or not root.is_dir():
+    _require_plain_existing_chain(root, label="monthly receipt root")
+    if not root.is_dir():
         raise MonthlyReleaseError("monthly receipt root is invalid")
     paths = sorted(root.glob("*.json"))
     if len(paths) > MAX_RECEIPT_FILES:
         raise MonthlyReleaseError("monthly receipt index exceeds the bounded contract")
     items: list[dict[str, Any]] = []
     for path in paths:
-        if path.is_symlink() or not path.is_file():
+        _require_plain_existing_chain(path, label="monthly receipt entry")
+        if not path.is_file():
             raise MonthlyReleaseError("monthly receipt entry is not a regular file")
-        size = path.stat().st_size
-        if size > MAX_RECEIPT_BYTES:
-            raise MonthlyReleaseError("monthly receipt entry exceeds the bounded contract")
+        # The response contains bounded metadata, not the JSON document. BUILD
+        # inventories legitimately exceed small request/control-message caps.
+        # Stream only the original file length and reject replacement/mutation.
+        def signature(value):
+            return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns
+
+        before = path.stat()
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            if signature(os.fstat(handle.fileno())) != signature(before):
+                raise MonthlyReleaseError("monthly receipt entry changed before read")
+            remaining = before.st_size
+            while remaining:
+                block = handle.read(min(1024 * 1024, remaining))
+                if not block:
+                    raise MonthlyReleaseError("monthly receipt entry changed during read")
+                digest.update(block)
+                remaining -= len(block)
+            after = os.fstat(handle.fileno())
+        _require_plain_existing_chain(path, label="monthly receipt entry")
+        if signature(after) != signature(before) or signature(path.stat()) != signature(before):
+            raise MonthlyReleaseError("monthly receipt entry changed during read")
         items.append(
             {
                 "name": path.name,
-                "size": size,
-                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                "size": before.st_size,
+                "sha256": digest.hexdigest(),
             }
         )
     return items

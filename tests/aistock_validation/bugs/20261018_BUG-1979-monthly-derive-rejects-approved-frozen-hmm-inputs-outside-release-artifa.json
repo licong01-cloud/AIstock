@@ -1,0 +1,248 @@
+{
+  "actual": "September operation dmr_63a313d97fd046a38d5a876265565014 attempt 279 sealed BUILD successfully, then OfficialDeriveAdapter._artifact rejected derive input because model/config/producer script returned by MonthlyHMMCoefficientExecutor are external to registered controller and control-artifact roots. This is stage evidence wiring, not missing market data. Fix generic monthly data-owned derivation evidence binding without changing HMM/QE contracts, broadening arbitrary path access, touching DB/active profile, or repeating successful BUILD exports. Preserve immutable candidate and resume same operation from DERIVE. Add RED/GREEN regression for production-shaped external frozen inputs, content drift and exact-byte retry.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_hmm_derive.py",
+    "backend/tests/dataset_release/test_monthly_official_adapters.py",
+    "tests/aistock_validation/bugs/20261018_BUG-1979-monthly-derive-rejects-approved-frozen-hmm-inputs-outside-release-artifa.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1979",
+  "closed_at": "2026-10-19T02:54:32.939825Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-18T20:09:16.404046Z",
+  "description": "September operation dmr_63a313d97fd046a38d5a876265565014 attempt 279 sealed BUILD successfully, then OfficialDeriveAdapter._artifact rejected derive input because model/config/producer script returned by MonthlyHMMCoefficientExecutor are external to registered controller and control-artifact roots. This is stage evidence wiring, not missing market data. Fix generic monthly data-owned derivation evidence binding without changing HMM/QE contracts, broadening arbitrary path access, touching DB/active profile, or repeating successful BUILD exports. Preserve immutable candidate and resume same operation from DERIVE. Add RED/GREEN regression for production-shaped external frozen inputs, content drift and exact-byte retry.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261018-e15335c39d94",
+      "timestamp": "2026-10-18T20:09:16.404046Z"
+    }
+  ],
+  "evidence_uris": [
+    "F:/Dev/AIstock_runtime_state/monthly-dataset-release-v2/monthly/dmr_63a313d97fd046a38d5a876265565014/state.json",
+    "F:/Dev/AIstock_runtime_state/monthly-dataset-release-v2/monthly/dmr_63a313d97fd046a38d5a876265565014/checkpoints/build.json"
+  ],
+  "expected": "Expected behavior should be restored.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_hmm_derive.py",
+      "backend/tests/dataset_release/test_monthly_official_adapters.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1979-monthly-derive-rejects-approved-frozen-hmm-inputs-outside-release-artifa.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_hmm_derive.py",
+      "backend/tests/dataset_release/test_monthly_official_adapters.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1979-monthly-derive-rejects-approved-frozen-hmm-inputs-outside-release-artifa.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [],
+      "impacted_modules": [],
+      "matched_rules": [],
+      "risk_levels": [],
+      "suggested_scope": [],
+      "unmatched_files": []
+    },
+    "planned_files": [],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": []
+  },
+  "first_seen_at": "2026-10-18T20:09:16.404046Z",
+  "fix_branch": null,
+  "fix_commit": "d2842fb9d3eb456c3bf46e1a722590c7558d547c",
+  "fixed_at": "2026-10-18T20:27:17Z",
+  "github_issue_number": 6335,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6335",
+  "last_seen_at": "2026-10-18T20:09:16.404046Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6336",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "python -m pytest backend/tests/dataset_release/test_monthly_official_adapters.py::test_formal_hmm_derive_accepts_external_frozen_authority_inputs -q",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_results": [
+    "Round 1: production-shaped disjoint release/control/external roots reproduced the exact adapter failure; three authority drift injections also failed RED. The four failed nodes passed GREEN after preserving exact approved input bytes under the existing attempt control root.",
+    "Round 2: reviewed root confinement, create-exclusive evidence, content hashes, config snapshot, and post-execution authority drift rejection before asset writes. No parent-root allowlist expansion, model/config/producer path change, model fit, database, candidate rebuild or active-profile write.",
+    "Round 3: exact-byte retry preserves existing coefficients including stable model_path; final adapter/composition/production/HMM-consumer matrix 41 passed. Ruff, compile and diff check passed in fresh processes.",
+    "DESIGN-COMPLIANCE-001: fixes the actual production-shaped contract without partial/fake readiness; strict root/content/output checks retained; model/QE semantics unchanged; no new approval, data gate, history audit or framework. September operation remains failed at DERIVE until merged worker is restarted by user and resumed through the existing API."
+  ],
+  "risk_area": "bug",
+  "root_cause": "Production DERIVE evidence returned approved model/config/producer files outside the two registered artifact roots. Tests placed those external sources inside one shared fixture root, hiding the composition defect. Successful BUILD and generated coefficients were not missing market data.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "fresh_process_evidence": [
+      "Fresh pytest RED: external-root adapter error and model/config/script execution drift, 4 failed. GREEN exact failed nodes: 4 passed. Final related adapter/composition/production/consumer matrix: 41 passed in 4.40s.",
+      "Fresh py_compile and Ruff on changed source/tests passed; git diff --check passed. No production database, candidate/profile writes or process control performed by verification."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1979/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1979",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "d2842fb9d3eb456c3bf46e1a722590c7558d547c",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-19T02:53:51.505952Z",
+      "mode": "read_only",
+      "observed_identity": "d2842fb9d3eb456c3bf46e1a722590c7558d547c",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "9ecc2793c3f0949a777f53957717d16c16dd294a06cf85c15a9e496e93ee9706",
+      "receipt_sha256": "085a3e21697074cc4195347c765c1d443e468b7007f257ba55cd8ba2a732036f",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "0fdadaa6bf5b2c77fabe914fbd03b7bc8e685f49014532e4b52a6f1f6bcff099",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly DERIVE rejects approved frozen HMM inputs outside release artifact roots after successful BUILD",
+  "trigger_condition": {
+    "fingerprint": "e15335c39d94795b5134b0bc",
+    "source_event_id": "FE-20261018-e15335c39d94"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 -- backend/services/dataset_release/monthly_hmm_derive.py backend/tests/dataset_release/test_monthly_official_adapters.py tests/aistock_validation/bugs/20261018_BUG-1979-monthly-derive-rejects-approved-frozen-hmm-inputs-outside-release-artifa.json -> passed"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  },
+  "workflow_gate": "triage_only_until_allowed_write_scope_is_set"
+}

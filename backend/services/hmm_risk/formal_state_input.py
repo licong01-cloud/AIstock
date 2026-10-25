@@ -467,6 +467,7 @@ def prepare_file_request(
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(temp) / "months",
+            suspension_keys=suspension,
             window_start=SOURCE_START,
             window_end=SOURCE_END,
         )
@@ -552,7 +553,7 @@ def prepare_file_request(
     )
 
 
-def _effect_stock_facts(
+def _l2_stock_facts(
     frozen: Mapping[str, Any],
     source: Mapping[str, Any],
     *,
@@ -564,21 +565,39 @@ def _effect_stock_facts(
     Only daily-basic is read before the lookback window to recover real strict
     predecessors. No forward-fill, same-day substitution or A5 refit occurs.
     """
-    from backend.services.hmm_risk import rotation_l1_input_bundle as reader
-    from backend.services.hmm_risk.formal_state_effect import CALENDAR_SHA, END, fail, validate_models
-    from backend.services.hmm_risk.formal_state_executor import validate_output_location
+    from backend.services.hmm_risk.formal_state_effect import END, fail
 
-    validate_models(frozen)
     if not SOURCE_START <= start <= end <= END:
         raise fail("effect source window exceeds its approved boundary")
+    return _bounded_l2_stock_facts(frozen, source, start=start, end=end)
+
+
+def _bounded_l2_stock_facts(
+    frozen,
+    source,
+    *,
+    start: date,
+    end: date,
+    prewarm_price_history: bool = False,
+    release_binding=None,
+    expected_calendar_sha256=None,
+):
+    """Shared source kernel; public dispatchers retain their distinct frozen boundaries."""
+    from backend.services.hmm_risk import rotation_l1_input_bundle as reader
+    from backend.services.hmm_risk.formal_state_effect import CALENDAR_SHA, fail
+    from backend.services.hmm_risk.formal_state_executor import validate_output_location
+
     assets = reader.load_rotation_l1_direct_v2_source_assets(
         Path(source["candidate_root"]),
         security_identity_manifest=Path(source["security_identity_manifest"]),
         provider_absence_manifest=Path(source["provider_absence_manifest"]),
         data_window_end=end,
-        frozen_release_binding=frozen_release_binding(),
+        frozen_release_binding=frozen_release_binding() if release_binding is None else release_binding,
     )
-    if assets["inventory"]["qlib"]["calendar_sha256"] != CALENDAR_SHA:
+    stamps = {key: (path.stat().st_size, path.stat().st_mtime_ns) for key, path in assets["files"].items()}
+    calendar_sha = CALENDAR_SHA if expected_calendar_sha256 is None else expected_calendar_sha256
+    reader._require_sha256(calendar_sha, "bounded L2 calendar SHA256")
+    if assets["inventory"]["qlib"]["calendar_sha256"] != calendar_sha:
         raise fail("effect calendar file changed", reason="identity_mismatch")
     calendar_all = tuple(reader._load_qlib_calendar(assets["qlib_root"] / "calendars/day.txt"))
     calendar = tuple(day for day in calendar_all if SOURCE_START <= day <= end)
@@ -614,6 +633,18 @@ def _effect_stock_facts(
         expected_release_cutoff=assets["release_cutoff"],
         expected_universe_key=assets["universe_key"],
         bounded=True,
+    )
+    price_context = (
+        reader._strict_prior_price_state(
+            assets["qlib_root"],
+            calendar=calendar_all,
+            spans=spans,
+            suspension_keys=suspension,
+            source_start=SOURCE_START,
+            window_start=start,
+        )
+        if prewarm_price_history
+        else None
     )
     initial = {}
     earlier = [day for day in calendar if day < start]
@@ -657,6 +688,7 @@ def _effect_stock_facts(
             calendar=calendar_all,
             spans=spans,
             spool_root=Path(temp) / "months",
+            suspension_keys=suspension,
             window_start=start,
             window_end=end,
         )
@@ -675,6 +707,7 @@ def _effect_stock_facts(
             build_feature_domain_aggregates=False,
             day_rows_callback=collect,
             initial_circ_state=initial,
+            initial_price_state=price_context,
         )
     window = tuple(day for day in calendar if start <= day <= end)
     if set(structural) != {day.isoformat() for day in window}:
@@ -695,8 +728,30 @@ def _effect_stock_facts(
         "structural_membership": structural,
         "domain_reasons": domain_reasons,
     }
+    if price_context is not None:
+        identity["strict_prior_price_context_sha256"] = canonical_sha256(
+            {
+                code: [span.isoformat(), [[day.isoformat(), value] for day, value in quotes]]
+                for code, (span, quotes) in sorted(price_context.items())
+            }
+        )
+    if any((path.stat().st_size, path.stat().st_mtime_ns) != stamps[key] for key, path in assets["files"].items()):
+        raise fail("effect source changed while read", reason="identity_mismatch")
     # Tuple keys are internal only and never passed to canonical JSON.
     return assets, window, aggregates["L2"], identity
+
+
+def _effect_stock_facts(
+    frozen: Mapping[str, Any],
+    source: Mapping[str, Any],
+    *,
+    start: date,
+    end: date,
+) -> tuple[dict[str, Any], tuple[date, ...], list[Any], dict[str, Any]]:
+    from backend.services.hmm_risk.formal_state_effect import validate_models
+
+    validate_models(frozen)
+    return _l2_stock_facts(frozen, source, start=start, end=end)
 
 
 def prepare_effect_observations(frozen: Mapping[str, Any], source: Mapping[str, Any]) -> dict[str, Any]:

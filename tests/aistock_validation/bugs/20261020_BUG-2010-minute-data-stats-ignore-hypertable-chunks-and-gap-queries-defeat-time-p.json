@@ -1,0 +1,318 @@
+{
+  "actual": "Minute gaps open hundreds of irrelevant relations; minute size ignores all child chunks.",
+  "allowed_write_scope": [
+    "backend/routers/ingestion.py",
+    "backend/tests/test_ingestion_data_stats_readiness_api.py",
+    "tests/aistock_validation/bugs/20261020_BUG-2010-minute-data-stats-ignore-hypertable-chunks-and-gap-queries-defeat-time-p.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-2010",
+  "closed_at": "2026-10-25T07:37:33.215995Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-20T04:25:53.181780Z",
+  "description": "Minute gaps open hundreds of irrelevant relations; minute size ignores all child chunks.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261020-330881d79d16",
+      "timestamp": "2026-10-20T04:25:53.181780Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Time-bounded gap probes and accurate compressed hypertable physical size; preserve non-minute behavior and explicit failures.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/routers/ingestion.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2010-minute-data-stats-ignore-hypertable-chunks-and-gap-queries-defeat-time-p.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/routers/ingestion.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2010-minute-data-stats-ignore-hypertable-chunks-and-gap-queries-defeat-time-p.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/routers/ingestion.py",
+        "backend/tests/test_ingestion_data_stats_readiness_api.py"
+      ],
+      "impacted_modules": [
+        "local_data",
+        "qlib_data",
+        "qe.core",
+        "paper_v2",
+        "selection_center"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/routers/ingestion.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2",
+            "selection_center"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_tushare_sync_engine"
+        },
+        {
+          "file": "backend/tests/test_ingestion_data_stats_readiness_api.py",
+          "impact_modules": [
+            "qlib_data",
+            "qe.core",
+            "paper_v2"
+          ],
+          "primary_module": "local_data",
+          "risk_level": "high",
+          "rule_id": "local_data_pipeline"
+        }
+      ],
+      "risk_levels": [
+        "high"
+      ],
+      "suggested_scope": [
+        "backend/routers/ingestion.py",
+        "backend/tests/test_ingestion_data_stats_readiness_api.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/routers/ingestion.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/routers/ingestion.py",
+      "backend/tests/test_ingestion_data_stats_readiness_api.py"
+    ]
+  },
+  "first_seen_at": "2026-10-20T04:25:53.181780Z",
+  "fix_branch": null,
+  "fix_commit": "251dac37958344eee25c5eeb185bcd2b4b37e22d",
+  "fixed_at": "2026-10-20T04:52:52Z",
+  "github_issue_number": 6420,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6420",
+  "last_seen_at": "2026-10-20T04:25:53.181780Z",
+  "module": "local_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6422",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "n/a",
+  "required_verification": [
+    "l0",
+    "data_sync_autonomy_backend"
+  ],
+  "risk_area": "bug",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "backend_restart_required": true,
+    "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
+    "fresh_process_evidence": [
+      "RED: three direct regressions failed on previous source. GREEN: 13 direct ingestion readiness tests passed in fresh AIstock-CI Python; Ruff and diff-check passed.",
+      "Existing DEV readonly queries: compressed September minute_1d16 full physical size 680288256 bytes, index bytes 191471616; ordinary stock_basic fallback returns 1507328/278528 bytes. No DDL or DML in SQL comparison.",
+      "Existing DEV presence queries on September 1 and 2 returned identical dates in UTC and Asia/Shanghai. Timestamp remains uncast, fixed bounds prune unrelated chunks; daily non-minute semantics unchanged.",
+      "No runtime deployment or backend process control. Post-restart local-data overview validates target-owned runtime readability; precise size/presence semantics are additionally bound to direct tests and DEV SQL, not inferred from health or HTTP status.",
+      "Fresh Python process loaded task ingestion module; direct 13-case regression matrix passed. Existing compressed DEV September presence SQL returns identical dates in UTC and Asia/Shanghai; chunk-inclusive and ordinary-table size queries passed. No production activation or service control.",
+      "Fresh AIstock-CI Python process loaded persistent task ingestion module and passed 13 direct tests; existing compressed DEV September SQL returns identical dates in UTC and Asia/Shanghai, accurate full compressed size and ordinary-table fallback. No runtime deployment or process control."
+    ],
+    "health_ref": "http://127.0.0.1:8001/api/v1/health",
+    "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "backend-main"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-2010-remaining.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2010",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+      "expected_identity": "251dac37958344eee25c5eeb185bcd2b4b37e22d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:29:45.624995Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "6df62e611fe7856d10c46bed2e45acf9f4fc3399f586146a62f0281858aaaf9c",
+      "receipt_sha256": "eedefcf4b4ae8ffff619c3e46f363a0e3f0bd2b44624027857e05e72ff8ce6d2",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "f4968a1cc571472eaa38ec05e81ceee7010960a3def00184dc0d9afecc63b805",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "backend",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "backend-main",
+    "target_ids": [
+      "backend-main"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2010",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "831b0501c09849c7",
+    "recorded_at": "2026-10-20T04:53:43.707760Z",
+    "runtime_contract_digest": "559d144bb2757f7df8a8a3dce716fc8e0c8f82b85dd1115eedf3cbd6a0c43784",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "6f92e90583fe22e2bbea68231f0cc4456c7a3991",
+    "source_merge_commit": "251dac37958344eee25c5eeb185bcd2b4b37e22d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6422",
+    "validation_evidence": [
+      "python -m pytest backend/tests/test_ingestion_data_stats_readiness_api.py -q -> 13 passed",
+      "GitHub CI run 39370456815 at 6f92e90583fe22e2bbea68231f0cc4456c7a3991 -> passed"
+    ],
+    "validation_evidence_digest": "8bb8c86513f5f4937b765676891129461762fd548ac9a11d1df395bfe63e2b3a"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "local_data"
+  ],
+  "title": "Minute data stats ignore hypertable chunks and gap queries defeat time pruning",
+  "trigger_condition": {
+    "fingerprint": "330881d79d165a036e35ae34",
+    "source_event_id": "FE-20261020-330881d79d16"
+  },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_ingestion_data_stats_readiness_api.py -q -> 13 passed",
+    "GitHub CI run 39370456815 at 6f92e90583fe22e2bbea68231f0cc4456c7a3991 -> passed",
+    "Source merge independently confirmed; official current runtime identity/business smoke PASS; metadata-only close-sync; original validations retained; no new data scans, DB writes or service control"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "local_data",
+        "data_sync_autonomy"
+      ],
+      "plans": [
+        "data_sync_autonomy_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "local_data",
+          "data_sync_autonomy"
+        ],
+        "plans": [
+          "data_sync_autonomy_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}
