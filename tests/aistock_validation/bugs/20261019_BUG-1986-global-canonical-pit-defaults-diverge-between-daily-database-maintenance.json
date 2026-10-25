@@ -299,7 +299,8 @@
   },
   "validation_evidence": [
     "python -m pytest backend/tests/test_canonical_equity_pit.py backend/tests/selection_center/test_canonical_pit_runtime.py backend/tests/test_tushare_sync_engine.py backend/tests/dataset_release/test_canonical_pit_w6_contracts.py backend/tests/test_qe_hmm_canonical_pit_integration.py -q -> 223 passed",
-    "nox -s validation_catalog_integrity -> passed; PR6365 current HEAD CI green"
+    "nox -s validation_catalog_integrity -> passed; PR6365 current HEAD CI green",
+    "Source PR current merge identity and source CI SUCCESS independently verified. Isolated AIstock python -B loaded canonical policy helpers, Selection admission, inference and canonical daily hook from persistent BUG-1986 source; no DB access or process control"
   ],
   "verification_budget": {
     "budget": "standard",
