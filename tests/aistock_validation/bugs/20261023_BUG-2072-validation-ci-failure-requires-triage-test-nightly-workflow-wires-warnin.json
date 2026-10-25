@@ -23,11 +23,11 @@
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-23T04:07:35.204764Z",
-  "description": "Failure summary: assert 'Materialize exhausted Nightly artifact transport receipt' in \"name: AIstock Nightly L3 + DR\\nrun-name: ${{ github.event_name == 'repository_dispatch' && format('AIstock schedule n... }}\\n          path: tmp/validation/nightly_summary/\\n          if-no-files-found: ignore\\n          overwrite: true\\n\"\n2026-10-23 user-authorized scope: remove retired miniQMT paper simulation from Nightly automatic/full/retry selection and live job; retain LocalSIM/shared core coverage. Implement exhausted download transport diagnostic without fabricated session results.",
+  "description": "Issue #6520 latest run 40123820570 fails the honest workflow test-debt ratio; existing PR also fixes retired miniQMT simulation admission and exhausted artifact transport receipts. Preserve LocalSIM and every original quality gate.",
   "design_compliance_review": {
-    "scope": "All offline regression files retained; at most four isolated pytest processes, with module fixtures kept together. Workflow tests share setup without dropping cases.",
-    "failure_semantics": "Original 180s Advisory / 1800s HMM limits, 6300s Nightly cap and combined 70 percent branch coverage retained; any shard failure or missing coverage fails the plan.",
-    "business_semantics": "No business source, model contract, training job, service control or database change. Retired miniQMT SIM remains excluded; LocalSIM retained.",
+    "scope": "Complete offline files retained; HMM four workers, Advisory six workers; workflow setup deduplicated with all original positive/negative cases retained.",
+    "failure_semantics": "Original 180s/1800s timeouts, 6300s overall cap, 0.30 ratio and branch-enabled combined coverage 70 retained. No failed/empty shard is accepted.",
+    "business_semantics": "Business source and model contracts unchanged; only synthetic unit fixtures. No formal research training, service control or database writes.",
     "new_gates": "None"
   },
   "events": [
@@ -169,7 +169,7 @@
   "suspected_modules": [
     "validation"
   ],
-  "title": "validation CI failure requires triage: test_nightly_workflow_wires_warning_only_adaptive_scheduler_job",
+  "title": "Nightly workflow retirement, transport receipts and test-debt gate regressions",
   "trigger_condition": {
     "fingerprint": "7c0b0b0ae939833fb8063f62",
     "source_event_id": "FE-20261023-7c0b0b0ae939"
@@ -290,13 +290,67 @@
     }
   },
   "nightly_repair_20261025": {
-    "source_run": "40123820570",
-    "status": "validation_pending",
-    "changes": [
-      "bounded file shards for complete offline regression",
-      "combine coverage and JUnit after every shard passes",
-      "independent worker diagnostics and metrics",
-      "workflow test setup deduplication; ratio threshold 0.30 retained"
-    ]
+    "status": "failed_sessions_verified",
+    "source_failure_run": "40123820570",
+    "sessions": [
+      {
+        "session": "validation_workflow_automation",
+        "result": "success",
+        "duration_seconds": 106.782,
+        "timeout_seconds": 300,
+        "execution_source_commit": "e3e4bbde90fec2f14876ef9cea60d05f3a18fb9a",
+        "passed": 847,
+        "test_to_production_ratio": 0.2998988749841992,
+        "ratio_gate": 0.3
+      },
+      {
+        "session": "advisory_modeling_backend",
+        "result": "success",
+        "duration_seconds": 146.187,
+        "timeout_seconds": 180,
+        "execution_source_commit": "a4ce72bc6ba27f8e139b45ed431dd2bc333a87e4",
+        "passed": 2762,
+        "skipped": 5,
+        "added_skip_rules": false
+      },
+      {
+        "session": "hmm_risk_backend",
+        "result": "success",
+        "duration_seconds": 1239.172,
+        "timeout_seconds": 1800,
+        "execution_source_commit": "e3e4bbde90fec2f14876ef9cea60d05f3a18fb9a",
+        "passed": 1103,
+        "deselected_integration": 6,
+        "branch_enabled_combined_coverage_percent": 76.66666666666667,
+        "coverage_gate_percent": 70,
+        "branch_coverage_percent": 67.43,
+        "line_coverage_percent": 80.08
+      }
+    ],
+    "code_review_rounds": [
+      {
+        "round": 1,
+        "kind": "source_and_scope",
+        "result": "passed",
+        "summary": "Workflow/test runner only; real business source and model contracts unchanged; original timeout, ratio and coverage gates retained."
+      },
+      {
+        "round": 2,
+        "kind": "failure_and_fixture_contracts",
+        "result": "passed",
+        "summary": "All files partitioned exactly once; failed/empty shards and missing coverage fail closed; JUnit/coverage merged; worker-owned short external scratch, Advisory X volume and matching temp environment verified; 121 direct runner tests passed."
+      },
+      {
+        "round": 3,
+        "kind": "complete_sessions_and_CI",
+        "result": "passed",
+        "source_ci_run": "40172273503",
+        "source_ci_commit": "a4ce72bc6ba27f8e139b45ed431dd2bc333a87e4",
+        "summary": "All three previously failing complete sessions passed within original budgets; no extra skips or relaxed business rules."
+      }
+    ],
+    "hmm_evidence_reuse": "HMM business source, tests and schema module have zero diff from the full-session execution commit; subsequent changes isolate fixture/temp paths and Advisory workers. Latest helper contracts passed 121 direct tests and source CI.",
+    "full_scheduled_nightly_result": "not_rerun_no_claim",
+    "production_runtime_or_database_changed": false
   }
 }
