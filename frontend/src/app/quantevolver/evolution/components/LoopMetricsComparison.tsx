@@ -265,7 +265,7 @@ const tdRightStyle: React.CSSProperties = {
   fontFamily: "monospace",
 };
 
-export default function LoopMetricsComparison({
+export default React.memo(function LoopMetricsComparison({
   loops,
   taskType,
   evolutionMode,
@@ -273,12 +273,11 @@ export default function LoopMetricsComparison({
   onLoopSelect,
   selectedLoopIndex,
 }: LoopMetricsComparisonProps) {
-  if (!loops || loops.length === 0) return null;
   const normalizedType = taskType || sourceType || "evolution";
   const isCombine = normalizedType === "multi_alpha_combine";
   const showAction = normalizedType === "evolution" && (evolutionMode || "auto") === "auto";
 
-  const rows: LoopRow[] = loops.map((loop, sourceIndex) => {
+  const rows: LoopRow[] = React.useMemo(() => (loops || []).map((loop, sourceIndex) => {
     const diagnostics = extractLoopDiagnostics(loop);
     const rank = buildRankMetrics(diagnostics);
     const configSummary = loop?.config_summary || {};
@@ -299,7 +298,8 @@ export default function LoopMetricsComparison({
       otherMetrics: scalarMetricEntries(diagnostics.metrics),
       bestEligible: hasCompleteRankMetrics(loop, diagnostics, rank, isCombine),
     };
-  });
+  }), [loops, isCombine]);
+  if (rows.length === 0) return null;
 
   const bestCandidateRows = rows.filter((row) => row.bestEligible);
   const bestLoop = bestCandidateRows.reduce<LoopRow | undefined>((best, current) => {
@@ -533,4 +533,4 @@ export default function LoopMetricsComparison({
       </div>
     </div>
   );
-}
+});

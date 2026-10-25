@@ -1,8 +1,13 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 from types import SimpleNamespace
+
+import pytest
+from psycopg2.extensions import adapt
+from psycopg2.extras import Json
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -32,7 +37,12 @@ from backend.services.qe_archive.payload_extractor import QEArchivePayloadExtrac
 from backend.services.qe_archive.policy import resolve_archive_policy
 from backend.services.qe_archive import realtime_ingestion as realtime_ingestion_module
 from backend.services.qe_archive.realtime_ingestion import QEArchiveRealtimeIngestion
-from backend.services.qe_archive.repository import QEArchiveRepository
+from backend.services.qe_archive.repository import (
+    MULTI_ALPHA_RUN_COLUMNS,
+    MULTI_ALPHA_RECOVERY_CHILD_COLUMNS,
+    MULTI_ALPHA_RECOVERY_ATTEMPT_COLUMNS,
+    QEArchiveRepository,
+)
 from backend.services.qe_archive.source_assembler import QEArchiveSourceAssembler
 from backend.services.qe_archive.worker import ArchiveWorkerEventResult, QEArchiveWorker
 from backend.services.qe_archive import worker_loop as worker_loop_module
@@ -63,6 +73,25 @@ QE_ARCHIVE_FILES = (
     REPO_ROOT / "backend" / "routers" / "qe_archive.py",
     REPO_ROOT / "scripts" / "qe_archive_backfill.py",
 )
+
+
+@pytest.mark.parametrize("column", sorted({
+    column for columns in (MULTI_ALPHA_RUN_COLUMNS, MULTI_ALPHA_RECOVERY_CHILD_COLUMNS,
+                           MULTI_ALPHA_RECOVERY_ATTEMPT_COLUMNS)
+    for column in columns if column.endswith("_json")
+}))
+def test_multi_alpha_json_columns_roundtrip_through_real_psycopg_adapter(column: str) -> None:
+    payload = {"identity": {"record_only": True, "missing": ["executor_code_commit"]},
+               "lineage": [None, {"source": "original_prediction", "sha256": "a" * 64}]}
+    value = QEArchiveRepository._adapt_value(column, payload)
+    assert isinstance(value, Json)
+    assert json.loads(value.dumps(value.adapted)) == payload
+    assert adapt(value).getquoted()  # Real driver adaptation, no DB/server needed.
+    unicode_payload = {"sector": "半导体"}
+    unicode_value = QEArchiveRepository._adapt_value(column, unicode_payload)
+    assert json.loads(unicode_value.dumps(unicode_value.adapted)) == unicode_payload
+    assert QEArchiveRepository._adapt_value(column, None) is None
+    assert QEArchiveRepository._adapt_value("execution_identity_hash", "b" * 64) == "b" * 64
 
 
 def test_canonical_json_hash_is_stable() -> None:

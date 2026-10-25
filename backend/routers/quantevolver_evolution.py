@@ -735,6 +735,14 @@ def _task_detail_contains_full_loop_payloads(detail_data: dict) -> bool:
     )
 
 
+@router.get("/tasks/status", summary="Read observed QE task statuses without loading history or artifacts")
+def get_evolution_task_status_batch(task_ids: list[str] = Query(..., max_length=200)):
+    ids = list(dict.fromkeys(task_ids))
+    rows = scheduler.get_task_status_batch(ids)
+    found = {row["task_id"] for row in rows}
+    return {"status": "success", "data": rows, "missing_ids": [item for item in ids if item not in found]}
+
+
 @router.get("/tasks/{task_id}", summary="获取单个演进任务的详细信息与所有 LOOP")
 async def get_evolution_task_detail(
     task_id: str,
@@ -1495,6 +1503,9 @@ class CustomEvoLoopConfig(BaseModel):
     disable_alpha158: bool = Field(False, description="Disable QE bundled Alpha158 20-factor baseline for this loop")
     model_id: str = Field(..., description="模型 ID")
     model_params: Optional[Dict[str, Any]] = Field(None, description="模型训练参数，如 ltr_loss_mode/topk_train_k 等")
+    feature_processing: Optional[Dict[str, Any]] = Field(
+        None, description="Request-local model input exclusions and clip_outlier; not model hyperparameters",
+    )
     strategy_id: Optional[str] = Field(None, description="交易策略ID，None=使用默认 TopkDropoutStrategy")
     strategy_params: Optional[Dict[str, Any]] = Field(None, description="策略参数: topk, n_drop, hold_thresh, risk_degree 等")
     runtime_flags: Optional[Dict[str, Any]] = Field(None, description="Runtime-only archive/seed/provenance flags")
@@ -4884,6 +4895,23 @@ def list_correlation_jobs(limit: int = 20):
     return {"items": rows}
 
 
+def _read_system_log_tail(log_file: Path, tail: int, level: str, max_bytes: int = 1024 * 1024) -> dict:
+    """Bound memory/IO for a UI tail read, with explicit partial-window metadata."""
+    with log_file.open("rb") as stream:
+        stream.seek(0, 2)
+        size = stream.tell()
+        offset = max(0, size - max_bytes)
+        stream.seek(offset)
+        content = stream.read(max_bytes)
+    lines = content.decode("utf-8", errors="replace").splitlines()
+    if offset and lines:
+        lines = lines[1:]  # first record can start before the bounded read window
+    if level:
+        lines = [line for line in lines if f" {level.upper()} " in line]
+    return {"ok": True, "lines": lines[-tail:] if tail > 0 else [],
+            "exists": True, "truncated": bool(offset), "bytes_scanned": len(content)}
+
+
 @router.get("/system/logs", summary="读取后端日志文件末尾")
 def get_system_logs(
     tail: int = 100,
@@ -4898,11 +4926,7 @@ def get_system_logs(
     log_file = Path(__file__).parent.parent / "logs" / ("errors.log" if errors_only else "aistock.log")
     if not log_file.exists():
         return {"ok": True, "lines": [], "exists": False}
-    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-        lines = f.readlines()
-    if level:
-        lines = [line for line in lines if f" {level.upper()} " in line]
-    return {"ok": True, "lines": [line.rstrip() for line in lines[-tail:]], "exists": True}
+    return _read_system_log_tail(log_file, tail, level)
 
 
 # ================================================================

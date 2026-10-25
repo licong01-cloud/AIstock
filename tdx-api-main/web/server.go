@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"unicode"
+	"sync/atomic"
 	"time"
 
 	"github.com/injoyai/tdx"
@@ -18,13 +18,17 @@ import (
 )
 
 var (
-	client      *tdx.Client
-	manager     *tdx.Manage
-	taskManager = NewTaskManager()
+	client        *tdx.Client
+	manager       *tdx.Manage
+	taskManager   = NewTaskManager()
+	metadataReady atomic.Bool
 )
 
-func init() {
+func bootstrapMarket() {
 	var err error
+	if dir := os.Getenv("TDX_DATA_DIR"); dir != "" {
+		tdx.DefaultDatabaseDir = dir
+	}
 	// 杩炴帴閫氳揪淇℃湇鍔″櫒
 	client, err = tdx.DialDefault(tdx.WithDebug(false))
 	if err != nil {
@@ -36,30 +40,20 @@ func init() {
 	if err = os.MkdirAll(tdx.DefaultDatabaseDir, 0755); err != nil {
 		log.Printf("鍒涘缓鏁版嵁鐩綍澶辫触: %v", err)
 	}
-	if codes, err := tdx.NewCodesSqlite(client); err != nil {
-		log.Printf("鍒濆鍖栦唬鐮佸簱澶辫触: %v", err)
-	} else {
-		tdx.DefaultCodes = codes
-		if err := tdx.DefaultCodes.Update(); err != nil {
-			log.Printf("鏇存柊浠ｇ爜搴撳け璐? %v", err)
-		} else {
-			log.Printf("已加载股票代码，共%d条", len(tdx.DefaultCodes.Map))
+	go func() {
+		m, err := tdx.NewManage(&tdx.ManageConfig{Number: 4})
+		if err != nil {
+			log.Printf("TDX metadata initialization failed: %v", err)
+			return
 		}
-	}
-
-	manager, err = tdx.NewManage(&tdx.ManageConfig{
-		Number: 4,
-	})
-	if err != nil {
-		log.Fatalf("鍒濆鍖栨暟鎹鐞嗗櫒澶辫触: %v", err)
-	}
-	if err := manager.Codes.Update(); err != nil {
-		log.Printf("鏇存柊绠＄悊鍣ㄤ唬鐮佸簱澶辫触: %v", err)
-	}
-	if err := manager.Workday.Update(); err != nil {
-		log.Printf("鏇存柊浜ゆ槗鏃ユ暟鎹け璐? %v", err)
-	}
-	manager.Cron.Start()
+		manager = m
+		tdx.DefaultCodes = m.Codes
+		metadataReady.Store(true)
+		// Isolated validation must not schedule unrelated collection dates.
+		if os.Getenv("TDX_RUNTIME_ENV") != "dev" {
+			m.Cron.Start()
+		}
+	}()
 }
 
 // Response 缁熶竴鍝嶅簲缁撴瀯
@@ -149,9 +143,12 @@ func handleGetKline(w http.ResponseWriter, r *http.Request) {
 		}
 	case "day":
 		fallthrough
-	default:
+	case "":
 		// 鏃绾夸娇鐢ㄥ墠澶嶆潈鏁版嵁
 		resp, err = getQfqKlineDay(code)
+	default:
+		errorResponse(w, "unsupported kline type")
+		return
 	}
 
 	if err != nil {
@@ -176,7 +173,7 @@ func getQfqKlineDay(code string) (*protocol.KlineResp, error) {
 
 	// 杞崲涓?protocol.KlineResp 鏍煎紡
 	resp := &protocol.KlineResp{
-		Count: uint16(len(klines)),
+		Count: len(klines),
 		List:  make([]*protocol.Kline, 0, len(klines)),
 	}
 
@@ -215,9 +212,10 @@ func convertToWeekKline(dayKline *protocol.KlineResp) *protocol.KlineResp {
 
 	for _, k := range dayKline.List {
 		year, week := k.Time.ISOWeek()
+		lastYear, lastWeek := lastWeekDay.ISOWeek()
 
 		// 鍒ゆ柇鏄惁鏄柊鐨勪竴鍛?
-		if currentWeek == nil || lastWeekDay.Year() != year || getISOWeek(lastWeekDay) != week {
+		if currentWeek == nil || lastYear != year || lastWeek != week {
 			// 淇濆瓨涓婁竴鍛ㄧ殑鏁版嵁
 			if currentWeek != nil {
 				weekResp.List = append(weekResp.List, currentWeek)
@@ -254,7 +252,7 @@ func convertToWeekKline(dayKline *protocol.KlineResp) *protocol.KlineResp {
 		weekResp.List = append(weekResp.List, currentWeek)
 	}
 
-	weekResp.Count = uint16(len(weekResp.List))
+	weekResp.Count = len(weekResp.List)
 	return weekResp
 }
 
@@ -312,7 +310,7 @@ func convertToMonthKline(dayKline *protocol.KlineResp) *protocol.KlineResp {
 		monthResp.List = append(monthResp.List, currentMonth)
 	}
 
-	monthResp.Count = uint16(len(monthResp.List))
+	monthResp.Count = len(monthResp.List)
 	return monthResp
 }
 
@@ -666,6 +664,19 @@ func getMinuteWithFallback(code, date string) (*protocol.MinuteResp, string, err
 }
 
 func main() {
+	addr, err := listenAddress()
+	if err != nil {
+		log.Fatal(err)
+	}
+	if err := configureDatabase(); err != nil {
+		log.Fatal(err)
+	}
+	defer pgPool.Close()
+	bootstrapMarket()
+	// Read-only identity is tied to the binary build, not a runtime Git checkout.
+	http.HandleFunc("/api/runtime-identity", func(w http.ResponseWriter, r *http.Request) {
+		successResponse(w, map[string]any{"schema_version": "aistock_tdx_runtime_identity_v1", "git_sha": buildRevision, "source_revision": buildRevision, "database_target": os.Getenv("TDX_RUNTIME_ENV"), "listen_address": addr})
+	})
 	// 闈欐€佹枃浠舵湇鍔?
 	http.Handle("/", http.FileServer(http.Dir("./static")))
 
@@ -705,30 +716,18 @@ func main() {
 	http.HandleFunc("/api/tasks", handleListTasks)
 	http.HandleFunc("/api/tasks/", handleTaskOperations)
 
-	port := os.Getenv("TDX_HTTP_PORT")
-	port = strings.TrimSpace(port)
-	if port == "" {
-		port = "8080"
-	} else {
-		// allow values like "tcp/19080", ":19080", "http://localhost:19080"
-		port = strings.TrimPrefix(port, "tcp/")
-		port = strings.TrimPrefix(port, ":")
-		if i := strings.LastIndex(port, ":"); i >= 0 {
-			port = port[i+1:]
-		}
-		// keep digits only
-		b := strings.Builder{}
-		for _, r := range port {
-			if unicode.IsDigit(r) {
-				b.WriteRune(r)
+	log.Printf("TDX HTTP listening on %s revision=%s", addr, buildRevision)
+	log.Fatal(http.ListenAndServe(addr, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") && !metadataReady.Load() {
+			switch r.URL.Path {
+			case "/api/health", "/api/runtime-identity", "/api/kline-all/tdx", "/api/kline-all", "/api/kline", "/api/quote", "/api/batch-quote", "/api/tasks/ingest-minute-raw-init", "/api/tasks/ingest-daily-raw-init", "/api/tasks", "/api/minute", "/api/trade", "/api/kline-history", "/api/index", "/api/index/all":
+			default:
+				if !strings.HasPrefix(r.URL.Path, "/api/tasks/") {
+					errorResponse(w, "TDX metadata not ready")
+					return
+				}
 			}
 		}
-		port = b.String()
-		if port == "" {
-			port = "8080"
-		}
-	}
-	addr := ":" + port
-	log.Printf("鏈嶅姟鍚姩鎴愬姛锛岃闂?http://localhost:%s\n", port)
-	log.Fatal(http.ListenAndServe(addr, nil))
+		http.DefaultServeMux.ServeHTTP(w, r)
+	})))
 }

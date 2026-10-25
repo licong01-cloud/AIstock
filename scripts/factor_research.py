@@ -36,6 +36,16 @@ def configure(env_file: Path, target: str):
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     sub = result.add_subparsers(dest="command", required=True)
+    for command in ("experience", "proposal-prepare", "proposal-inspect"):
+        item = sub.add_parser(command)
+        item.add_argument("--input", type=Path, required=True)
+        item.add_argument("--format", choices=("summary", "json"), default="summary")
+        if command == "proposal-inspect":
+            item.add_argument("--request", type=Path, required=True)
+        if command in {"proposal-prepare", "proposal-inspect"}:
+            item.add_argument("--context", type=Path)
+        if command == "proposal-prepare":
+            item.add_argument("--producer", choices=("codex", "claude"), default="codex")
     salvage = sub.add_parser("salvage")
     salvage.add_argument("--input", type=Path, required=True)
     salvage.add_argument("--artifact-root", type=Path, required=True)
@@ -56,12 +66,14 @@ def parser():
     salvage_correlate.add_argument("--input", type=Path, required=True)
     salvage_correlate.add_argument("--artifact-root", type=Path, required=True)
     salvage_correlate.add_argument("--format", choices=("summary", "json"), default="summary")
-    for command in ("create", "list", "show", "record", "context", "run", "attach", "quality"):
+    for command in ("create", "list", "show", "record", "context", "run", "attach", "quality", "memory-search"):
         item = sub.add_parser(command)
         item.add_argument("--env-file", type=Path, required=True)
         item.add_argument("--target", choices=("dev", "production"), required=True,
                           help="Explicit connection target, not production-write authorization")
         item.add_argument("--format", choices=("summary", "json"), default="summary")
+        if command == "memory-search":
+            item.add_argument("--input", type=Path, required=True)
         if command in {"create", "record", "run", "attach"}:
             item.add_argument("--input", type=Path, required=True)
             item.add_argument("--dry-run", action="store_true", help="Show requested action without database/file writes")
@@ -89,6 +101,17 @@ def parser():
 
 
 def dispatch(args):
+    if args.command in {"experience", "proposal-prepare", "proposal-inspect"}:
+        from backend.services.factor_research.assistance import experience, inspect_proposal, prepare_proposal
+
+        payload = read_json(args.input)
+        if args.command == "experience":
+            result = experience(payload)
+        else:
+            context = read_json(args.context) if args.context else None
+            result = prepare_proposal(payload, context, producer=args.producer) if args.command == "proposal-prepare" else inspect_proposal(
+                payload, read_json(args.request), context)
+        return response(result=result)
     if args.command == "salvage":
         from backend.services.factor_research.rdagent_salvage import run_salvage
 
@@ -114,6 +137,13 @@ def dispatch(args):
 
         summary = run_salvage_reference_correlation(read_json(args.input), args.artifact_root)
         return response(result=summary)
+    if args.command == "memory-search":
+        from backend.services.factor_research.memory import validate_query
+        payload = read_json(args.input)
+        validate_query(payload)  # Reject invalid requests before configuration or DB access.
+        configure(args.env_file, args.target)
+        from backend.services.factor_research.repository import ResearchRepository
+        return response(result=ResearchRepository().memory_search(payload, target=args.target))
     target = configure(args.env_file, args.target)
     payload = read_json(args.input) if hasattr(args, "input") else None
     if getattr(args, "dry_run", False):

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import hashlib
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import pytest
@@ -16,12 +17,16 @@ from backend.services.dataset_release.monthly_unified import (
     REQUIRED_NODES,
     SOURCE_GATES,
     TELEMETRY_COUNT_FIELDS,
+    MonthlyReleaseBusy,
+    MonthlyReleaseError,
+    MonthlyReleaseSourceBlocked,
     classify_component_actions,
 )
 from backend.services.dataset_release.canonical import canonical_json_bytes
 from backend.services.dataset_release.monthly_worker import (
     PRODUCER_EVIDENCE_SCHEMA,
     MonthlyProducerError,
+    MonthlyReleaseWorker,
     ProducerContext,
     RegisteredMonthlyPipeline,
     SubprocessStageProducer,
@@ -33,6 +38,209 @@ from backend.services.dataset_release.profile_contract import (
 
 SHA = "a" * 64
 MANIFEST = "b" * 64
+
+
+def test_build_resume_verifies_manifest_anchor_not_bulk_bytes(tmp_path, monkeypatch):
+    producer = SimpleNamespace(produce=lambda context: None)
+    pipeline = RegisteredMonthlyPipeline({stage: producer for stage in
+        ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,))
+    manifest = tmp_path / "candidate" / "qe_dataset_manifest.json"
+    manifest.parent.mkdir()
+    manifest.write_bytes(b"manifest\n")
+    anchor = {"id": "candidate/qe_dataset_manifest.json", "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+              "size": manifest.stat().st_size}
+    bulk = manifest.parent / "large.bin"
+    bulk.write_bytes(b"exported")
+    receipt = {"scope": {"dataset_manifest_ref": anchor}, "input_refs": [], "output_refs": [anchor,
+        {"id": "candidate/large.bin", "sha256": hashlib.sha256(bulk.read_bytes()).hexdigest(), "size": 8}]}
+    real_hash = hashlib.sha256
+    reads = []
+    def hashed(path):
+        reads.append(path)
+        assert path != bulk, "resume must not repeat the full BUILD content audit"
+        return real_hash(path.read_bytes()).hexdigest()
+    monkeypatch.setattr("backend.services.dataset_release.monthly_worker._file_sha256", hashed)
+    assert pipeline.checkpoint_is_valid("BUILD", receipt)
+    assert reads == [manifest]
+    manifest.write_bytes(b"changed!\n")
+    with pytest.raises(MonthlyProducerError, match="retained"):
+        pipeline.checkpoint_is_valid("BUILD", receipt)
+
+
+@pytest.mark.parametrize("failure", ["missing", "outside", "unlisted"])
+def test_build_resume_bad_anchor_stops_without_invalidating_exports(tmp_path, failure):
+    producer = SimpleNamespace(produce=lambda context: pytest.fail("completed exports must not run"))
+    pipeline = RegisteredMonthlyPipeline({stage: producer for stage in
+        ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,))
+    anchor = {"id": "missing.json" if failure == "missing" else "../outside.json",
+              "sha256": "a" * 64, "size": 1}
+    receipt = {"scope": {"dataset_manifest_ref": anchor}, "input_refs": [],
+               "output_refs": [] if failure == "unlisted" else [anchor]}
+    with pytest.raises(MonthlyProducerError, match="retained"):
+        pipeline.checkpoint_is_valid("BUILD", receipt)
+
+
+def test_local_resume_checks_outputs_without_rereading_upstream_inventory(tmp_path, monkeypatch):
+    producer = SimpleNamespace(produce=lambda context: None)
+    pipeline = RegisteredMonthlyPipeline({stage: producer for stage in
+        ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,))
+    profile = tmp_path / "profile.json"
+    profile.write_bytes(b"{}\n")
+    ref = {"id": profile.name, "sha256": hashlib.sha256(profile.read_bytes()).hexdigest(), "size": 3}
+    calls = []
+    monkeypatch.setattr("backend.services.dataset_release.monthly_worker._file_sha256",
+                        lambda path: calls.append(path) or ref["sha256"])
+    assert pipeline.checkpoint_is_valid("LOCAL_VALIDATE", {
+        "input_refs": [{"id": "large.bin", "sha256": "b" * 64, "size": 10**9}], "output_refs": [ref],
+    })
+    assert calls == [profile]
+
+
+@pytest.mark.parametrize("group", ["input_refs", "output_refs"])
+@pytest.mark.parametrize("failure", [None, "missing", "changed"])
+def test_derive_resume_verifies_frozen_artifacts_without_regeneration(tmp_path, group, failure):
+    producer = SimpleNamespace(produce=lambda context: pytest.fail("sealed DERIVE must not rerun"))
+    pipeline = RegisteredMonthlyPipeline(
+        {stage: producer for stage in ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,),
+    )
+    artifact = tmp_path / "sealed.json"
+    artifact.write_bytes(b"sealed\n")
+    ref = {"id": artifact.name, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(), "size": 7}
+    receipt = {"input_refs": [], "output_refs": [], group: [ref]}
+    if failure == "missing":
+        artifact.unlink()
+    elif failure == "changed":
+        artifact.write_bytes(b"drift!\n")
+    if failure is None:
+        assert pipeline.checkpoint_is_valid("DERIVE", receipt)
+    else:
+        with pytest.raises(MonthlyProducerError, match="retained"):
+            pipeline.checkpoint_is_valid("DERIVE", receipt)
+
+
+def test_registered_pipeline_delivers_stage_control_and_checks_before_validation(tmp_path):
+    events = []
+
+    def checkpoint():
+        events.append("checkpoint")
+
+    def progress(value):
+        events.append(dict(value))
+
+    def produce(context):
+        context.progress({"phase": "RAW_SOURCE"})
+        context.checkpoint()
+        return {}  # Deliberately invalid evidence; control must run before validation.
+
+    producer = SimpleNamespace(produce=produce)
+    pipeline = RegisteredMonthlyPipeline(
+        {name: producer for name in ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,),
+    )
+    with pytest.raises(MonthlyProducerError, match="evidence fields"):
+        pipeline.run_stage_with_control(
+            stage="SOURCE", operation_id="dmr_" + "1" * 32, attempt=1,
+            request={}, plan={}, prior_receipts={}, checkpoint=checkpoint, progress=progress,
+        )
+    assert events == ["checkpoint", {"phase": "RAW_SOURCE"}, "checkpoint", "checkpoint"]
+
+
+@pytest.mark.parametrize("cancel_at", [1, 2])
+def test_registered_pipeline_does_not_swallow_stage_control_interruption(tmp_path, cancel_at):
+    calls = []
+    checks = 0
+
+    def checkpoint():
+        nonlocal checks
+        checks += 1
+        if checks == cancel_at:
+            raise RuntimeError("controlled cancellation")
+
+    def produce(context):
+        calls.append(context.stage)
+        return {}
+
+    pipeline = RegisteredMonthlyPipeline(
+        {name: SimpleNamespace(produce=produce) for name in
+         ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,),
+    )
+    with pytest.raises(RuntimeError, match="controlled cancellation"):
+        pipeline.run_stage_with_control(
+            stage="SOURCE", operation_id="dmr_" + "1" * 32, attempt=1,
+            request={}, plan={}, prior_receipts={}, checkpoint=checkpoint, progress=lambda _value: None,
+        )
+    assert calls == ([] if cancel_at == 1 else ["SOURCE"])
+
+
+@pytest.mark.parametrize("queue,busy,expected,calls_expected", [
+    ((), set(), None, []),
+    (("busy",), {"busy"}, None, ["busy"]),
+    (("busy", "ready"), {"busy"}, "ready", ["busy", "ready"]),
+    (("ready", "busy"), {"busy"}, "ready", ["ready"]),
+])
+def test_worker_skips_only_typed_busy_and_processes_at_most_one(
+    queue: tuple[str, ...], busy: set[str], expected: str | None, calls_expected: list[str]
+) -> None:
+    calls = []
+    requests = []
+
+    def run(operation_id: str):
+        calls.append(operation_id)
+        if operation_id in busy:
+            raise MonthlyReleaseBusy("owned by another worker")
+        return {"status": "READY_TO_ACTIVATE", "operation_id": operation_id}
+
+    def read_request(operation_id: str):
+        assert operation_id not in busy
+        requests.append(operation_id)
+        return {"activation_mode": "prepare_only"}
+
+    store = SimpleNamespace(pending_operation_ids=lambda: queue, read_request=read_request)
+    result = MonthlyReleaseWorker(SimpleNamespace(store=store, run=run)).run_once()
+    assert result == (None if expected is None else {"status": "READY_TO_ACTIVATE", "operation_id": expected})
+    assert calls == calls_expected
+    assert requests == ([] if expected is None else [expected])
+
+
+def test_worker_continues_same_operation_after_busy_owner_releases() -> None:
+    busy = True
+    attempts = 0
+
+    def run(operation_id: str):
+        nonlocal attempts
+        if busy:
+            raise MonthlyReleaseBusy("owned by another worker")
+        attempts += 1
+        return {"status": "READY_TO_ACTIVATE", "operation_id": operation_id, "attempt": attempts}
+
+    store = SimpleNamespace(pending_operation_ids=lambda: ("same",),
+                            read_request=lambda operation_id: {"activation_mode": "prepare_only"})
+    worker = MonthlyReleaseWorker(SimpleNamespace(store=store, run=run))
+    assert worker.run_once() is None
+    assert worker.run_once() is None
+    assert attempts == 0
+    busy = False
+    assert worker.run_once() == {"status": "READY_TO_ACTIVATE", "operation_id": "same", "attempt": 1}
+
+
+@pytest.mark.parametrize("failure", [
+    MonthlyReleaseSourceBlocked("source incomplete"),
+    MonthlyReleaseError("invalid operation"),
+    PermissionError("real file permission failure"),
+])
+def test_worker_never_swallows_real_source_or_filesystem_errors(failure: Exception) -> None:
+    def run(operation_id: str):
+        raise failure
+
+    store = SimpleNamespace(pending_operation_ids=lambda: ("broken",))
+    with pytest.raises(type(failure)) as raised:
+        MonthlyReleaseWorker(SimpleNamespace(store=store, run=run)).run_once()
+    assert raised.value is failure
 
 
 @dataclass
