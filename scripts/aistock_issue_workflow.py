@@ -33,6 +33,13 @@ except ModuleNotFoundError as exc:
 import yaml
 
 try:
+    import scripts.aistock_runtime_semantics as _runtime_semantics
+except ModuleNotFoundError as exc:  # Direct script entry without the repository on sys.path.
+    if exc.name not in {"scripts", "scripts.aistock_runtime_semantics"}:
+        raise
+    import aistock_runtime_semantics as _runtime_semantics
+
+try:
     from scripts.aistock_bug_id_allocator import (
         FINGERPRINT_INDEX_VERSION,
         BugIdLockError,
@@ -250,7 +257,7 @@ WORKTREE_BACKEND_LOG_LINE_RE = re.compile(
 )
 RTK_COMMAND_PREFIX = r"(?:rtk(?:\.exe)?\s+)?"
 VALIDATION_COMMAND_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = (
-    ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plan>[A-Za-z0-9_-]+)\b", re.IGNORECASE)),
+    ("nox", re.compile(rf"^{RTK_COMMAND_PREFIX}(?:python(?:\.exe)?\s+-m\s+)?nox\s+-s\s+(?P<plans>[A-Za-z0-9_][A-Za-z0-9_-]*(?:\s+[A-Za-z0-9_][A-Za-z0-9_-]*)*)(?=\s+-|$)", re.IGNORECASE)),
     (
         "pytest",
         re.compile(
@@ -784,43 +791,46 @@ def _build_validation_receipts(
             errors.append(f"validation result is not an explicit pass: {item}")
             continue
         evidence_kind = ""
-        plan = ""
+        plans = [""]
         for kind, pattern in VALIDATION_COMMAND_PATTERNS:
             match = pattern.search(command)
             if not match:
                 continue
+            if kind == "nox" and re.search(r"\s(?:-s|--sessions)(?:\s|=|$)", command[match.end():]):
+                break  # Repeated selectors can override each other; never infer executed plans.
             evidence_kind = kind
-            plan = str(match.groupdict().get("plan") or "")
+            plans = list(dict.fromkeys(str(match.groupdict().get("plans") or match.groupdict().get("plan") or "").split())) or [""]
             break
         if not evidence_kind:
             errors.append(f"validation command is not allowlisted: {command}")
             continue
-        identity_inputs = {
-            "commit": commit,
-            "changed_files_digest": changed_files_digest,
-            "command": command,
-            "result": result,
-            "evidence_kind": evidence_kind,
-            "plan": plan or None,
-            "environment": environment_identity,
-        }
-        normalized = json.dumps(identity_inputs, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
-        receipts.append(
-            {
-                "schema_version": VALIDATION_RECEIPT_SCHEMA,
-                "receipt_id": hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16],
-                "reuse_key": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+        for plan in plans:
+            identity_inputs = {
                 "commit": commit,
                 "changed_files_digest": changed_files_digest,
-                "environment_identity": environment_identity,
                 "command": command,
                 "result": result,
-                "status": "passed",
                 "evidence_kind": evidence_kind,
                 "plan": plan or None,
-                "recorded_at": _utc_now(),
+                "environment": environment_identity,
             }
-        )
+            normalized = json.dumps(identity_inputs, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+            receipts.append(
+                {
+                    "schema_version": VALIDATION_RECEIPT_SCHEMA,
+                    "receipt_id": hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16],
+                    "reuse_key": hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+                    "commit": commit,
+                    "changed_files_digest": changed_files_digest,
+                    "environment_identity": environment_identity,
+                    "command": command,
+                    "result": result,
+                    "status": "passed",
+                    "evidence_kind": evidence_kind,
+                    "plan": plan or None,
+                    "recorded_at": _utc_now(),
+                }
+            )
     return receipts, errors
 
 
@@ -984,6 +994,9 @@ def _compact_phase_summary(value: Any) -> dict[str, Any] | None:
         "event_count",
         "known_duration_seconds",
         "inferred_elapsed_seconds",
+        "measurement_scope",
+        "measurement_status",
+        "queue_measurement_scope",
         "code_repair_seconds",
         "total_estimated_tokens",
         "context_estimated_tokens",
@@ -1289,7 +1302,11 @@ def _compact_triage_ci_issue(value: Any) -> dict[str, Any] | None:
 def _compact_promote_ci_issue(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, dict):
         return None
-    compact = _pick(value, "dry_run")
+    compact = _pick(value, "dry_run", "excluded_scope_paths", "blocking")
+    if isinstance(value.get("registry_pr_capability"), dict):
+        compact["registry_pr_capability"] = _pick(value["registry_pr_capability"], "allowed", "source", "reason")
+    if isinstance(value.get("local_intake"), dict):
+        compact["local_intake"] = _pick(value["local_intake"], "status", "owner_role", "claim_status", "repair_module", "next_command")
     triage = _compact_triage_ci_issue(value.get("triage"))
     if triage:
         compact["triage"] = triage
@@ -2000,11 +2017,46 @@ def _load_runtime_target_catalog(root: Path | None = None) -> dict[str, Any]:
                 raise WorkflowError(
                     f"runtime target {target_id} probe route {route_id} requires sources outside its route"
                 )
+            route_mode = route.get("probe_mode")
+            if route_mode == "http":
+                # HTTP business defaults belong to exact existing backend sources,
+                # never a broad backend/** fallback or a Worker route.
+                if target.get("runtime_kind") != "backend" or probe_mode != "http":
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route requires a backend HTTP target")
+                if any(
+                    any(character in path for character in "*?[\\")
+                    or Path(path).is_absolute()
+                    or ".." in Path(path).parts
+                    or not (root / path).is_file()
+                    or not any(_runtime_glob_matches(path, str(pattern)) for pattern in target["source_globs"])
+                    for path in route_globs
+                ):
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route requires exact target-owned sources")
+                runbook_error = _validate_operator_runbook_ref(route.get("operator_runbook_ref"), root=root)
+                if runbook_error:
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route {runbook_error}")
+                route_probes = route.get("probes")
+                if not isinstance(route_probes, dict):
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route probes must be a mapping")
+                for field in ("health_ref", "identity_ref", "business_smoke_ref"):
+                    error = _validate_runtime_probe_ref(
+                        field, route_probes.get(field), allowed_origins=flow._as_list(target.get("probe_origins"))
+                    )
+                    if error:
+                        raise WorkflowError(f"runtime target {target_id} HTTP probe route {error}")
+                smoke_path = urllib.parse.urlsplit(route_probes["business_smoke_ref"]).path
+                semantic = _business_smoke_semantic_contract(smoke_path)
+                contract_id = route.get("business_smoke_contract_id")
+                if (
+                    not contract_id or semantic is None or semantic[0] != contract_id
+                    or contract_id in {"health_ok", "openapi_document", "object_liveness", "research_pipeline_readiness_only"}
+                ):
+                    raise WorkflowError(f"runtime target {target_id} HTTP probe route requires a bound business semantic contract")
+                continue
             if not set(route_globs).issubset(set(flow._as_list(target.get("source_globs")))):
                 raise WorkflowError(
                     f"runtime target {target_id} probe route {route_id} contains sources outside its target"
                 )
-            route_mode = route.get("probe_mode")
             if route_mode not in {
                 _DATASET_RELEASE_WORKER_HEARTBEAT_MODE,
                 _MONTHLY_RELEASE_WORKER_PROCESS_MODE,
@@ -2294,7 +2346,10 @@ def _classify_runtime_impact(changed_files: Iterable[str], *, root: Path | None 
         if path == "scripts/aistock_issue_workflow.py":
             impacts.add("none")
             continue
-        if path in catalog_non_runtime_files or lower.startswith(known_non_runtime_prefixes):
+        if (
+            path in catalog_non_runtime_files or lower.startswith(known_non_runtime_prefixes)
+            or (lower.startswith("tdx-api-main/") and lower.endswith("_test.go"))
+        ):
             impacts.add("none")
             continue
         matched_targets: list[tuple[str, str, str]] = []
@@ -2517,6 +2572,10 @@ def _runtime_contract_digest(contract: dict[str, Any]) -> str:
         "local_probe": target.get("local_probe") or None,
         "probes": target.get("probes") or {},
     }
+    # Preserve legacy receipt digests, but bind new HTTP routes to their
+    # source-owned business contract as well as their endpoint references.
+    if target.get("business_smoke_contract_id"):
+        payload["business_smoke_contract_id"] = target["business_smoke_contract_id"]
     encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
@@ -2551,11 +2610,14 @@ def _select_runtime_probe_route(
         if partially_matched:
             return (
                 selected,
-                "runtime files mix routed and non-routed Worker sources: "
+                "runtime files mix routed and non-routed sources: "
                 + json.dumps(partially_matched, ensure_ascii=False),
             )
         return selected, None
     route = fully_matched[0]
+    if route.get("probe_mode") == "http":
+        selected["operator_runbook_ref"] = route["operator_runbook_ref"]
+        selected["business_smoke_contract_id"] = route["business_smoke_contract_id"]
     selected.update(
         {
             "probe_route_id": str(route.get("route_id")),
@@ -2657,11 +2719,22 @@ def build_runtime_contract(
                 if probe_route_error:
                     blocking.append(f"runtime target {target_id} {probe_route_error}")
                 probes = raw_target.get("probes") if isinstance(raw_target.get("probes"), dict) else {}
+                # HTTP routes provide defaults only. Keep explicit BUG references
+                # (including invalid/empty ones) subject to the normal strict gate.
+                http_route = raw_target.get("probe_route_id") and raw_target.get("probe_mode") == "http"
+                runbook = (
+                    explicit["operator_runbook_ref"]
+                    if http_route and "operator_runbook_ref" in explicit
+                    else raw_target.get("operator_runbook_ref")
+                )
                 target = {
                     **raw_target,
                     "target_id": target_id,
-                    "operator_runbook_ref": _resolve_runtime_ref(raw_target.get("operator_runbook_ref"), explicit),
-                    "probes": {key: _resolve_runtime_ref(value, explicit) for key, value in probes.items()},
+                    "operator_runbook_ref": _resolve_runtime_ref(runbook, explicit),
+                    "probes": {
+                        key: _resolve_runtime_ref(explicit[key] if http_route and key in explicit else value, explicit)
+                        for key, value in probes.items()
+                    },
                 }
                 if not target.get("operator_runbook_ref"):
                     blocking.append(f"runtime target {target_id} operator runbook ref is incomplete")
@@ -2709,6 +2782,10 @@ def build_runtime_contract(
                             f"runtime target {target_id} has no target-owned business-smoke "
                             f"semantic contract registered for endpoint path: {smoke_path}"
                         )
+                    elif smoke_ref and target.get("business_smoke_contract_id"):
+                        semantic = _business_smoke_semantic_contract(smoke_path)
+                        if semantic[0] != target["business_smoke_contract_id"]:
+                            blocking.append(f"runtime target {target_id} business smoke conflicts with its source-owned semantic contract")
                     if database_ref:
                         probe_error = _validate_runtime_probe_ref(
                             "database_readback_ref",
@@ -2788,6 +2865,8 @@ def build_runtime_contract(
         "backend_restart_owner": "user",
         "target_id": target_id,
         "target_ids": target_ids,
+        # Diagnostic only: excluded from runtime receipt digest and gate decisions.
+        "inferred_runtime_files": list(inferred.get("runtime_files") or []),
         "catalog_ref": catalog_ref,
         "operator_runbook_ref": (target or {}).get("operator_runbook_ref"),
         "expected_identity_ref": (target or {}).get("expected_identity_ref"),
@@ -3354,1163 +3433,87 @@ def _read_monthly_release_worker_process_probes(
 # no HTTP-only fallback.
 # ---------------------------------------------------------------------------
 
-BUSINESS_SMOKE_SEMANTIC_SCHEMA = "aistock_business_smoke_semantic_verdict_v1"
-SCHEDULER_VERIFICATION_STATUS_SCHEMA = "simulation_scheduler_verification_status_v1"
-SCHEDULER_VERIFICATION_SCOPE_SCHEMA = "simulation_scheduler_verification_scope_v1"
-_SCHEDULER_VERIFICATION_RUN_ID_RE = re.compile(r"^simrun_[0-9a-f]{16}$")
-EXPECTED_TERMINAL_OUTCOME_SCHEMA = "aistock_expected_terminal_outcome_v1"
-SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA = "simulation_run_terminal_evidence_v1"
-_EXPECTATION_CAPABLE_CONTRACT_IDS = frozenset({"run_terminal_evidence"})
-_EXPECTED_TERMINAL_OUTCOME_FIELDS = (
-    "schema_version",
-    "contract_id",
-    "expected_status",
-    "expected_previous_status",
-    "expected_reason_code",
-    "expected_evidence_schema",
-    "expected_run_id",
-)
-_EXPECTED_REASON_CODE_RE = re.compile(r"^[A-Z][A-Z0-9_]{2,127}$")
-_EXPECTED_EVIDENCE_SCHEMA_RE = re.compile(r"^[a-z][a-z0-9_]{2,127}$")
-_EXPECTED_RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_\-]{2,127}$")
-
-_RUN_STATUS_SUCCESS = frozenset({
-    "APPLIED",
-    "CLOSED",
-    "COMPLETED",
-    "DONE",
-    "FILLED",
-    "PASSED",
-    "READY",
-    "SUCCESS",
-    "SUCCEEDED",
-})
-_RUN_STATUS_FAILURE = frozenset({
-    "ABORTED",
-    "BLOCKED",
-    "CANCELED",
-    "CANCELLED",
-    "DEAD",
-    "ERROR",
-    "FAILED",
-    "FAILED_RETRYABLE",
-    "FAILED_TERMINAL",
-    "REJECTED",
-    "TIMED_OUT",
-    "TIMEOUT",
-})
-_HEALTH_FAILURE_STATUSES = _RUN_STATUS_FAILURE | {"DEGRADED", "DOWN", "STALLED", "UNHEALTHY"}
-_HEALTH_SUCCESS_STATUSES = frozenset({"healthy", "ok", "passed", "ready", "success", "succeeded", "up"})
-_CONTAINER_KEYS = ("run", "result", "batch", "task", "plan", "operation", "data", "scheduler", "summary")
-_STATUS_FIELD_NAMES = ("status", "state", "verdict")
-
-_COLLECTION_LIST_KEYS = (
-    "items",
-    "runs",
-    "tasks",
-    "nodes",
-    "schedules",
-    "entries",
-    "results",
-    "rows",
-    "records",
-    "batches",
-    "experiments",
-    "strategies",
-    "programs",
-    "data",
-)
-_SCHEDULER_BLOCKING_LIST_KEYS = frozenset({
-    "blockers",
-    "blocking_reasons",
-    "errors",
-    "failure_reasons",
-    "last_result_errors",
-})
-_SCHEDULER_CURRENT_TRADE_DATE_BLOCKERS_KEY = "current_trade_date_blockers"
-_SCHEDULER_BLOCKING_VALUE_KEYS = frozenset({"blocking_result", "last_blocking_result"})
-_SCHEDULER_REASON_KEYS = frozenset({
-    "blocked_reason",
-    "blocking_reason",
-    "failure_reason",
-    "recovery_failure_reason",
-})
-
-
-def _collect_status_fields(payload: Any) -> dict[str, str]:
-    """Collect status/state/verdict fields from a payload and known containers."""
-    found: dict[str, str] = {}
-    queue: list[tuple[str, Any]] = [("", payload)]
-    depth = 0
-    while queue and depth <= 4:
-        depth += 1
-        label, container = queue.pop(0)
-        if not isinstance(container, dict):
-            continue
-        for field in _STATUS_FIELD_NAMES:
-            value = container.get(field)
-            if isinstance(value, str) and value.strip():
-                name = f"{label}.{field}" if label else field
-                found.setdefault(name, value.strip())
-        for key in _CONTAINER_KEYS:
-            nested = container.get(key)
-            if isinstance(nested, dict):
-                nested_label = f"{label}.{key}" if label else key
-                queue.append((nested_label, nested))
-    return found
-
-
-def _normalize_expected_terminal_outcome(raw: Any) -> tuple[dict[str, Any] | None, list[str]]:
-    """Validate and normalize a declared expected terminal outcome.
-
-    The declaration is the only channel through which a failure-class terminal
-    status may satisfy a run-class business-smoke semantic contract. It is
-    fail-closed: any schema violation yields blocking errors and no
-    expectation. Normalization emits the fixed field set in canonical order so
-    digests are stable.
-    """
-    if raw is None:
-        return None, []
-    if not isinstance(raw, dict):
-        return None, ["expected_terminal_outcome must be an object"]
-    errors: list[str] = []
-    unknown_fields = sorted(set(raw) - set(_EXPECTED_TERMINAL_OUTCOME_FIELDS))
-    if unknown_fields:
-        errors.append(f"expected_terminal_outcome has unknown fields: {unknown_fields}")
-    if raw.get("schema_version") != EXPECTED_TERMINAL_OUTCOME_SCHEMA:
-        errors.append(f"expected_terminal_outcome schema_version must be {EXPECTED_TERMINAL_OUTCOME_SCHEMA}")
-    contract_id = str(raw.get("contract_id") or "").strip()
-    if contract_id not in _EXPECTATION_CAPABLE_CONTRACT_IDS:
-        errors.append(
-            "expected_terminal_outcome contract_id is not expectation-capable: "
-            f"{contract_id or 'missing'}"
-        )
-    expected_status = str(raw.get("expected_status") or "").strip().upper()
-    if expected_status not in _RUN_STATUS_FAILURE:
-        errors.append(
-            "expected_terminal_outcome expected_status must be a declared failure-class "
-            f"terminal status: {expected_status or 'missing'}"
-        )
-    expected_previous_status = str(raw.get("expected_previous_status") or "").strip().upper()
-    if expected_previous_status not in (_RUN_STATUS_FAILURE | _RUN_STATUS_SUCCESS):
-        errors.append(
-            "expected_terminal_outcome expected_previous_status must be a known terminal "
-            f"status: {expected_previous_status or 'missing'}"
-        )
-    expected_reason_code = str(raw.get("expected_reason_code") or "").strip()
-    if not _EXPECTED_REASON_CODE_RE.fullmatch(expected_reason_code):
-        errors.append(
-            "expected_terminal_outcome expected_reason_code must be an upper snake-case "
-            f"reason code: {expected_reason_code or 'missing'}"
-        )
-    expected_evidence_schema = str(raw.get("expected_evidence_schema") or "").strip()
-    if not _EXPECTED_EVIDENCE_SCHEMA_RE.fullmatch(expected_evidence_schema):
-        errors.append(
-            "expected_terminal_outcome expected_evidence_schema must be a lower snake-case "
-            f"schema id: {expected_evidence_schema or 'missing'}"
-        )
-    expected_run_id = str(raw.get("expected_run_id") or "").strip()
-    if not _EXPECTED_RUN_ID_RE.fullmatch(expected_run_id):
-        errors.append(
-            "expected_terminal_outcome expected_run_id must be a non-empty run id "
-            f"(alphanumeric, underscore or dash): {expected_run_id or 'missing'}"
-        )
-    if errors:
-        return None, errors
-    normalized = {
-        "schema_version": EXPECTED_TERMINAL_OUTCOME_SCHEMA,
-        "contract_id": contract_id,
-        "expected_status": expected_status,
-        "expected_previous_status": expected_previous_status,
-        "expected_reason_code": expected_reason_code,
-        "expected_evidence_schema": expected_evidence_schema,
-        "expected_run_id": expected_run_id,
-    }
-    return normalized, []
-
-
-def _expectation_outcome_digest(expectation: dict[str, Any] | None) -> str | None:
-    if expectation is None:
-        return None
-    encoded = json.dumps(expectation, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
-
-
-def _validate_run_terminal_success(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Run-class payloads must prove terminal target closure."""
-    if not isinstance(payload, dict):
-        return "failed", "run payload must be a JSON object", {}
-    if payload.get("ok") is False:
-        return "failed", "run payload reports ok=false", {}
-    statuses = _collect_status_fields(payload)
-    if not statuses:
-        return "failed", "run payload is missing a status/state field to prove target closure", {}
-    normalized = {name: value.upper() for name, value in statuses.items()}
-    failures = {name: value for name, value in normalized.items() if value in _RUN_STATUS_FAILURE}
-    if failures:
-        detail = ", ".join(f"{name}={value}" for name, value in sorted(failures.items()))
-        return "failed", f"run payload reports failure status: {detail}", {"statuses": normalized}
-    open_states = {name: value for name, value in normalized.items() if value not in _RUN_STATUS_SUCCESS}
-    if open_states:
-        detail = ", ".join(f"{name}={value}" for name, value in sorted(open_states.items()))
-        return (
-            "failed",
-            f"run payload has not reached terminal target closure: {detail}",
-            {"statuses": normalized},
-        )
-    return "passed", None, {"statuses": normalized}
-
-
-def _validate_run_terminal_evidence(
-    payload: Any,
-    *,
-    expectation: dict[str, Any] | None = None,
-) -> tuple[str, str | None, dict[str, Any]]:
-    """Bounded terminal-evidence payloads prove an exact expected terminal outcome.
-
-    Without a declared expectation this contract is exactly as strict as
-    ``run_terminal_success``: every status/state/verdict field in the payload
-    and its known containers is scanned, and failure-class or non-terminal
-    values fail closed. With a declared expectation the verdict passes only
-    when the subject run id, the run status, the evidence carrier schema, the
-    terminal reason code and the previous status all match the declaration
-    exactly; every mismatch fails closed with the specific drift.
-    """
-    if not isinstance(payload, dict):
-        return "failed", "run terminal-evidence payload must be a JSON object", {}
-    if payload.get("ok") is False:
-        return "failed", "run terminal-evidence payload reports ok=false", {}
-    if payload.get("schema_version") != SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA:
-        return (
-            "failed",
-            "run terminal-evidence payload schema mismatch: "
-            f"expected {SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA}, "
-            f"observed {payload.get('schema_version')!r}",
-            {},
-        )
-    run = payload.get("run")
-    if not isinstance(run, dict):
-        return "failed", "run terminal-evidence payload is missing the run object", {}
-    raw_status = run.get("status")
-    if not isinstance(raw_status, str) or not raw_status.strip():
-        return "failed", "run terminal-evidence payload is missing run.status", {}
-    status = raw_status.strip().upper()
-    facts: dict[str, Any] = {"statuses": {"run.status": status}}
-    if expectation is None:
-        statuses = _collect_status_fields(payload)
-        statuses.setdefault("run.status", status)
-        normalized = {name: value.upper() for name, value in statuses.items()}
-        facts = {"statuses": normalized}
-        failures = {name: value for name, value in normalized.items() if value in _RUN_STATUS_FAILURE}
-        if failures:
-            detail = ", ".join(f"{name}={value}" for name, value in sorted(failures.items()))
-            return "failed", f"run payload reports failure status: {detail}", facts
-        open_states = {name: value for name, value in normalized.items() if value not in _RUN_STATUS_SUCCESS}
-        if open_states:
-            detail = ", ".join(f"{name}={value}" for name, value in sorted(open_states.items()))
-            return (
-                "failed",
-                f"run payload has not reached terminal target closure: {detail}",
-                facts,
-            )
-        return "passed", None, facts
-    expected_status = str(expectation.get("expected_status") or "").strip().upper()
-    if expected_status not in _RUN_STATUS_FAILURE:
-        return (
-            "failed",
-            "declared expected terminal status is not failure-class: "
-            f"{expected_status or 'missing'}",
-            facts,
-        )
-    expected_run_id = str(expectation.get("expected_run_id") or "").strip()
-    observed_run_id = str(run.get("run_id") or "").strip()
-    facts["run_id"] = observed_run_id
-    if not expected_run_id or observed_run_id != expected_run_id:
-        return (
-            "failed",
-            "run id does not match the declared expected terminal outcome subject: "
-            f"observed={observed_run_id or 'missing'} expected={expected_run_id or 'missing'}",
-            facts,
-        )
-    if status != expected_status:
-        return (
-            "failed",
-            f"run status does not match the declared expected terminal status: "
-            f"run.status={status} expected={expected_status}",
-            facts,
-        )
-    carriers = run.get("terminal_evidence")
-    if not isinstance(carriers, list):
-        return (
-            "failed",
-            "run terminal-evidence payload is missing the terminal_evidence carrier list",
-            facts,
-        )
-    expected_schema = str(expectation.get("expected_evidence_schema") or "").strip()
-    carrier = next(
-        (
-            item
-            for item in carriers
-            if isinstance(item, dict) and str(item.get("schema_version") or "").strip() == expected_schema
-        ),
-        None,
-    )
-    if carrier is None:
-        return (
-            "failed",
-            f"expected terminal evidence carrier is absent: schema={expected_schema}",
-            facts,
-        )
-    facts["matched_evidence"] = {
-        "schema_version": expected_schema,
-        "reason_code": carrier.get("reason_code"),
-        "previous_status": carrier.get("previous_status"),
-        "terminal_status": carrier.get("terminal_status"),
-    }
-    expected_reason = str(expectation.get("expected_reason_code") or "").strip()
-    if str(carrier.get("reason_code") or "").strip() != expected_reason:
-        return (
-            "failed",
-            f"terminal evidence reason code does not match the declaration: "
-            f"observed={carrier.get('reason_code')!r} expected={expected_reason}",
-            facts,
-        )
-    expected_previous = str(expectation.get("expected_previous_status") or "").strip().upper()
-    observed_previous = str(carrier.get("previous_status") or "").strip().upper()
-    if observed_previous != expected_previous:
-        return (
-            "failed",
-            f"terminal evidence previous status does not match the declaration: "
-            f"observed={observed_previous or 'missing'} expected={expected_previous}",
-            facts,
-        )
-    observed_terminal = str(carrier.get("terminal_status") or "").strip().upper()
-    if observed_terminal != expected_status:
-        return (
-            "failed",
-            f"terminal evidence terminal status does not match the declaration: "
-            f"observed={observed_terminal or 'missing'} expected={expected_status}",
-            facts,
-        )
-    return "passed", None, facts
-
-
-def _structured_current_trade_date_blockers_are_clear(value: Any) -> bool:
-    """Accept only the scheduler's explicit, internally consistent CLEAR shape."""
-    if not isinstance(value, dict):
-        return False
-    return bool(
-        str(value.get("status") or "").strip().upper() == "CLEAR"
-        and type(value.get("blocker_count")) is int
-        and value["blocker_count"] == 0
-        and type(value.get("observed_blocker_count")) is int
-        and value["observed_blocker_count"] == 0
-        and value.get("blockers") == []
-        and value.get("execution_gate") is False
-        and value.get("truncated") is False
-    )
-
-
-def _scheduler_failure_markers(payload: Any) -> list[str]:
-    """Scan a scheduler/health-class payload for blocking or failure markers."""
-    markers: list[str] = []
-    queue: list[tuple[str, Any]] = [("", payload)]
-    visited = 0
-    while queue and visited < 400:
-        prefix, node = queue.pop(0)
-        if isinstance(node, dict):
-            visited += 1
-            for key, value in node.items():
-                name = f"{prefix}.{key}" if prefix else str(key)
-                lowered = str(key).lower()
-                if lowered == _SCHEDULER_CURRENT_TRADE_DATE_BLOCKERS_KEY:
-                    if isinstance(value, list):
-                        if value:
-                            markers.append(name)
-                    elif not _structured_current_trade_date_blockers_are_clear(value):
-                        markers.append(name)
-                elif lowered in _SCHEDULER_BLOCKING_LIST_KEYS and value:
-                    markers.append(name)
-                elif lowered in _SCHEDULER_BLOCKING_VALUE_KEYS and isinstance(value, dict) and value:
-                    markers.append(name)
-                elif lowered in _SCHEDULER_REASON_KEYS and isinstance(value, str) and value.strip():
-                    markers.append(name)
-                elif lowered in _STATUS_FIELD_NAMES and isinstance(value, str) and value.strip().upper() in _HEALTH_FAILURE_STATUSES:
-                    markers.append(f"{name}={value.strip()}")
-                if isinstance(value, (dict, list)) and len(str(prefix).split(".")) < 8:
-                    queue.append((name, value))
-        elif isinstance(node, list):
-            visited += 1
-            for index, value in enumerate(node):
-                if isinstance(value, (dict, list)):
-                    queue.append((f"{prefix}[{index}]", value))
-    return sorted(set(markers))
-
-
-def _validate_scheduler_status(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Scheduler/health-class payloads must prove ok=true without blockers."""
-    if not isinstance(payload, dict):
-        return "failed", "scheduler payload must be a JSON object", {}
-    if payload.get("ok") is not True:
-        if "ok" not in payload:
-            return "failed", "scheduler payload is missing the required ok=true envelope", {}
-        return "failed", "scheduler payload reports ok=false", {}
-    markers = _scheduler_failure_markers(payload)
-    if markers:
-        return (
-            "failed",
-            "scheduler payload exposes blocking/failure markers: " + ", ".join(markers[:8]),
-            {"markers": markers},
-        )
-    return "passed", None, {}
-
-
-def _validate_scheduler_verification_status(
-    payload: Any,
-    *,
-    url: str,
-) -> tuple[str, str | None, dict[str, Any]]:
-    """Bind a scoped scheduler verdict to the exact broker/run subject in the probe URL."""
-
-    verdict, reason, facts = _validate_scheduler_status(payload)
-    if verdict != "passed":
-        return verdict, reason, facts
-    scheduler = payload.get("scheduler") if isinstance(payload, dict) else None
-    if not isinstance(scheduler, dict):
-        return "failed", "scheduler verification payload is missing scheduler object", {}
-    if scheduler.get("schema_version") != SCHEDULER_VERIFICATION_STATUS_SCHEMA:
-        return "failed", "scheduler verification payload schema_version is invalid", {}
-    if scheduler.get("read_only") is not True:
-        return "failed", "scheduler verification payload is not read-only", {}
-    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
-    unknown_query = sorted(set(query) - {"broker_backend", "run_id"})
-    if unknown_query:
-        return "failed", f"scheduler verification probe has unknown subject query fields: {unknown_query}", {}
-    if not query or any(len(values) != 1 for values in query.values()):
-        return "failed", "scheduler verification probe must declare one value per broker/run subject field", {}
-    broker_backend = query.get("broker_backend", [None])[0]
-    run_id = query.get("run_id", [None])[0]
-    if broker_backend not in {None, "local_sim", "minqmt_sim"}:
-        return "failed", "scheduler verification probe broker_backend is invalid", {}
-    if run_id is not None and _SCHEDULER_VERIFICATION_RUN_ID_RE.fullmatch(run_id) is None:
-        return "failed", "scheduler verification probe run_id is invalid", {}
-    if broker_backend is None and run_id is None:
-        return "failed", "scheduler verification probe subject is missing", {}
-    scope = scheduler.get("verification_scope")
-    blockers = scheduler.get("current_trade_date_blockers")
-    blocker_scope = blockers.get("verification_scope") if isinstance(blockers, dict) else None
-    if not isinstance(scope, dict) or scope.get("schema_version") != SCHEDULER_VERIFICATION_SCOPE_SCHEMA:
-        return "failed", "scheduler verification response scope schema is invalid", {}
-    if scope.get("active") is not True:
-        return "failed", "scheduler verification response scope is not active", {}
-    observed_scope = {
-        "broker_backend": scope.get("broker_backend"),
-        "run_id": scope.get("run_id"),
-    }
-    if broker_backend is None and observed_scope["broker_backend"] not in {"local_sim", "minqmt_sim"}:
-        return "failed", "scheduler verification response resolved broker_backend is invalid", {}
-    expected_scope = {
-        "broker_backend": broker_backend or observed_scope["broker_backend"],
-        "run_id": run_id,
-    }
-    if observed_scope != expected_scope:
-        return (
-            "failed",
-            "scheduler verification response scope does not match probe subject: "
-            f"observed={observed_scope} expected={expected_scope}",
-            {"verification_scope": observed_scope},
-        )
-    if blocker_scope != scope:
-        return "failed", "scheduler verification blocker scope does not match response scope", {}
-    return "passed", None, {"verification_scope": observed_scope}
-
-
-def _validate_health_ok(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Health endpoints must report ok=true or an explicitly healthy status."""
-    if not isinstance(payload, dict):
-        return "failed", "health payload must be a JSON object", {}
-    if payload.get("ok") is False:
-        return "failed", "health payload reports ok=false", {}
-    status = payload.get("status") or payload.get("state")
-    if isinstance(status, str) and status.strip().upper() in _HEALTH_FAILURE_STATUSES:
-        return "failed", f"health payload reports unhealthy status: {status.strip()}", {}
-    errors = payload.get("errors")
-    if errors:
-        return "failed", "health payload reports errors", {}
-    if payload.get("ok") is True:
-        return "passed", None, {}
-    if isinstance(status, str) and status.strip().lower() in _HEALTH_SUCCESS_STATUSES:
-        return "passed", None, {"status": status.strip()}
-    return "failed", "health payload is missing ok=true or an explicitly healthy status", {}
-
-
-def _validate_collection_payload(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Collection endpoints must return a list or a non-error list envelope."""
-    if isinstance(payload, list):
-        return "passed", None, {"kind": "array", "size": len(payload)}
-    if not isinstance(payload, dict):
-        return "failed", "collection payload must be a JSON array or object", {}
-    if payload.get("ok") is False:
-        return "failed", "collection payload reports ok=false", {}
-    errors = payload.get("errors")
-    if errors:
-        return "failed", "collection payload reports errors", {}
-    for field in _STATUS_FIELD_NAMES:
-        value = payload.get(field)
-        if isinstance(value, str) and value.strip().upper() in _RUN_STATUS_FAILURE:
-            return "failed", f"collection payload reports failure {field}={value.strip()}", {}
-    for key in _COLLECTION_LIST_KEYS:
-        value = payload.get(key)
-        if isinstance(value, list):
-            return "passed", None, {"items_key": key, "size": len(value)}
-    if payload.get("ok") is True:
-        return "passed", None, {"ok": True}
-    for field in _STATUS_FIELD_NAMES:
-        value = payload.get(field)
-        if isinstance(value, str) and value.strip().lower() in _HEALTH_SUCCESS_STATUSES:
-            return "passed", None, {field: value.strip()}
-    return "failed", "collection payload is missing an items array or an explicit ok/success marker", {}
-
-
-def _validate_object_liveness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Object endpoints must return a non-error object or array payload."""
-    if isinstance(payload, list):
-        return "passed", None, {"kind": "array", "size": len(payload)}
-    if not isinstance(payload, dict):
-        return "failed", "object payload must be a JSON object or array", {}
-    if payload.get("ok") is False:
-        return "failed", "object payload reports ok=false", {}
-    errors = payload.get("errors")
-    if errors:
-        return "failed", "object payload reports errors", {}
-    for field in _STATUS_FIELD_NAMES:
-        value = payload.get(field)
-        if isinstance(value, str) and value.strip().upper() in _RUN_STATUS_FAILURE:
-            return "failed", f"object payload reports failure {field}={value.strip()}", {}
-    return "passed", None, {"kind": "object"}
-
-
-def _validate_advisory_entry_price_status(
-    payload: Any,
-    *,
-    url: str,
-) -> tuple[str, str | None, dict[str, Any]]:
-    """Bind the Entry Price status readback to the requested Advisory program."""
-
-    if not isinstance(payload, dict):
-        return "failed", "Entry Price status payload must be a JSON object", {}
-    if payload.get("ok") is not True or payload.get("errors"):
-        return "failed", "Entry Price status payload must report ok=true without errors", {}
-    if payload.get("schema_version") != "advisory_entry_price_status_v1":
-        return "failed", "Entry Price status schema_version is invalid", {}
-
-    path = urllib.parse.urlsplit(url).path
-    match = re.fullmatch(r"/api/v1/advisory/programs/([^/]+)/entry-price/status", path)
-    if match is None:
-        return "failed", "Entry Price status probe path is invalid", {}
-    requested_program_id = urllib.parse.unquote(match.group(1))
-    observed_program_id = payload.get("program_id")
-    if not isinstance(observed_program_id, str) or observed_program_id != requested_program_id:
-        return "failed", "Entry Price status program_id does not match the requested program", {}
-
-    configured = payload.get("configured")
-    database_written = payload.get("database_written")
-    status = payload.get("status")
-    if type(configured) is not bool:
-        return "failed", "Entry Price status configured must be boolean", {}
-    if database_written is not False:
-        return "failed", "Entry Price status must prove database_written=false", {}
-    if not isinstance(status, str):
-        return "failed", "Entry Price status must be a string", {}
-    if configured:
-        if status not in {"CONFIGURED", "QUALITY_REVIEW_REQUIRED"}:
-            return "failed", "configured Entry Price status is invalid", {}
-        if payload.get("binding_activated") is not False:
-            return "failed", "configured Entry Price status must prove binding_activated=false", {}
-    elif status != "NOT_CONFIGURED":
-        return "failed", "unconfigured Entry Price status must be NOT_CONFIGURED", {}
-
-    return (
-        "passed",
-        None,
-        {
-            "program_id": observed_program_id,
-            "configured": configured,
-            "status": status,
-            "database_written": database_written,
-        },
-    )
-
-
-def _validate_hmm_rotation_l2_overview(
-    payload: Any,
-    *,
-    url: str,
-) -> tuple[str, str | None, dict[str, Any]]:
-    """Bind Rotation L2 overview readback to one complete persisted run."""
-
-    if (
-        not isinstance(payload, dict)
-        or payload.get("status") != "ok"
-        or payload.get("ok") is False
-        or payload.get("errors")
-    ):
-        return "failed", "Rotation L2 overview must report status=ok", {}
-    data = payload.get("data")
-    if not isinstance(data, dict):
-        return "failed", "Rotation L2 overview is missing data", {}
-
-    parsed = urllib.parse.urlsplit(url)
-    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-    requested_values = query.get("run_id") or []
-    if len(requested_values) != 1 or not str(requested_values[0]).strip():
-        return "failed", "Rotation L2 overview probe requires exactly one non-empty run_id query value", {}
-    requested_run_id = str(requested_values[0]).strip()
-    if re.fullmatch(r"[0-9a-f]{64}", requested_run_id) is None:
-        return "failed", "Rotation L2 overview probe run_id must be a lowercase SHA-256", {}
-    if data.get("run_id") != requested_run_id:
-        return "failed", "Rotation L2 overview run_id does not match the requested run", {}
-
-    facts: dict[str, Any] = {"run_id": requested_run_id}
-    for field in ("model_hash", "canonical_row_sha256"):
-        value = data.get(field)
-        if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None:
-            return "failed", f"Rotation L2 overview data.{field} must be a lowercase SHA-256", facts
-        facts[field] = value
-
-    parsed_dates: dict[str, str] = {}
-    for field in ("trade_date", "as_of_date"):
-        value = data.get(field)
-        if not isinstance(value, str):
-            return "failed", f"Rotation L2 overview data.{field} must be an ISO date", facts
-        try:
-            parsed_dates[field] = datetime.strptime(value, "%Y-%m-%d").date().isoformat()
-        except ValueError:
-            return "failed", f"Rotation L2 overview data.{field} must be an ISO date", facts
-        if parsed_dates[field] != value:
-            return "failed", f"Rotation L2 overview data.{field} must be an ISO date", facts
-    if parsed_dates["as_of_date"] >= parsed_dates["trade_date"]:
-        return "failed", "Rotation L2 overview as_of_date must precede trade_date", facts
-
-    sector_count = data.get("sector_count")
-    available_count = data.get("available_count")
-    if type(sector_count) is not int or sector_count != 131:
-        return "failed", "Rotation L2 overview must contain the complete 131-sector catalog", facts
-    if type(available_count) is not int or not 0 <= available_count <= sector_count:
-        return "failed", "Rotation L2 overview available_count is outside the sector catalog", facts
-
-    facts.update(
-        {
-            **parsed_dates,
-            "sector_count": sector_count,
-            "available_count": available_count,
-        }
-    )
-    return "passed", None, facts
-
-
-def _validate_qe_dataset_profile(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """QE dataset-profile must identify one usable active profile."""
-    if not isinstance(payload, dict) or payload.get("ok") is not True:
-        return "failed", "QE dataset profile must report ok=true", {}
-    data = payload.get("data")
-    if not isinstance(data, dict) or data.get("mode") != "active_profile":
-        return "failed", "QE dataset profile must contain data.mode=active_profile", {}
-    required = {}
-    for field in ("generation", "release_id", "cutoff"):
-        value = data.get(field)
-        if not isinstance(value, str) or not value.strip():
-            return "failed", f"QE dataset profile is missing non-empty data.{field}", {}
-        required[field] = value.strip()
-    universes = data.get("universes")
-    if not isinstance(universes, list) or not universes:
-        return "failed", "QE dataset profile must contain a non-empty universes list", required
-    pool_ids: list[str] = []
-    for universe in universes:
-        if not isinstance(universe, dict):
-            return "failed", "QE dataset profile contains a malformed universe", required
-        pool_id = universe.get("pool_id")
-        gap_count = universe.get("gap_count")
-        if not isinstance(pool_id, str) or not pool_id.strip():
-            return "failed", "QE dataset profile contains a universe without pool_id", required
-        if type(gap_count) is not int or gap_count != 0:
-            return "failed", f"QE dataset profile universe {pool_id.strip()} has non-zero or invalid gap_count", required
-        pool_ids.append(pool_id.strip())
-    if len(pool_ids) != len(set(pool_ids)):
-        return "failed", "QE dataset profile contains duplicate pool_id values", required
-    return "passed", None, {**required, "universe_count": len(pool_ids)}
-
-
-def _validate_openapi_document(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """The OpenAPI document smoke must prove the app serves its route schema."""
-    if not isinstance(payload, dict):
-        return "failed", "openapi payload must be a JSON object", {}
-    version = payload.get("openapi")
-    if not isinstance(version, str) or not version.strip():
-        return "failed", "openapi payload is missing the openapi version field", {}
-    paths = payload.get("paths")
-    if not isinstance(paths, dict) or not paths:
-        return "failed", "openapi payload is missing a non-empty paths mapping", {}
-    return "passed", None, {"openapi": version.strip(), "paths": len(paths)}
-
-
-def _validate_correlation_status(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Correlation status reports idle/computing plus explicit refresh errors."""
-    if not isinstance(payload, dict):
-        return "failed", "correlation status payload must be a JSON object", {}
-    status = payload.get("status")
-    if not isinstance(status, str) or not status.strip():
-        return "failed", "correlation status payload is missing the status field", {}
-    normalized = status.strip()
-    if normalized.upper() in _HEALTH_FAILURE_STATUSES:
-        return "failed", f"correlation status payload reports failure status: {normalized}", {}
-    refresh_errors = payload.get("refresh_errors")
-    if refresh_errors:
-        count = len(refresh_errors) if isinstance(refresh_errors, list) else 1
-        return "failed", "correlation status payload reports refresh errors", {"refresh_errors": count}
-    if normalized.lower() in {"idle", "computing"}:
-        return "passed", None, {"status": normalized}
-    return "failed", f"correlation status payload reports unknown status: {normalized}", {}
-
-
-def _validate_factor_metrics_results(
-    payload: Any, *, url: str,
-) -> tuple[str, str | None, dict[str, Any]]:
-    """Verify a bound metrics readback, not offline algorithm acceptance."""
-    if (not isinstance(payload, dict) or payload.get("ok") is not True
-            or payload.get("domain") != "factor_metrics.result" or payload.get("errors")
-            or payload.get("error") or payload.get("success") is False
-            or ("status" in payload and payload["status"] not in ("ok", "success", "completed"))
-            or payload.get("summary_first") is not True):
-        return "failed", "factor metrics results require a successful summary envelope", {}
-    query = urllib.parse.parse_qs(urllib.parse.urlsplit(url).query, keep_blank_values=True)
-    bindings = {
-        "factor_name": "factor_name", "calc_batch_id": "calc_batch_id", "eval_window": "eval_window",
-        "snapshot_date": "expected_snapshot_date", "universe": "expected_universe",
-        "return_horizon": "expected_return_horizon",
-    }
-    expected: dict[str, str] = {}
-    for field, key in bindings.items():
-        values = query.get(key) or []
-        if len(values) != 1 or not values[0].strip():
-            return "failed", f"factor metrics probe requires exactly one non-empty {key}", {}
-        expected[field] = values[0]
-    try:
-        snapshot = datetime.strptime(expected["snapshot_date"], "%Y-%m-%d").date()
-    except ValueError:
-        return "failed", "factor metrics expected_snapshot_date must be an ISO date", {}
-    if snapshot.isoformat() != expected["snapshot_date"]:
-        return "failed", "factor metrics expected_snapshot_date must be an ISO date", {}
-    limits = query.get("limit") or []
-    offsets = query.get("offset", ["0"])
-    if (len(limits) != 1 or not re.fullmatch(r"[1-9][0-9]{0,2}", limits[0])
-            or not 1 <= int(limits[0]) <= 100 or offsets != ["0"]):
-        return "failed", "factor metrics probe requires limit=1..100 and offset=0", {}
-    limit = int(limits[0])
-    items, total, page = payload.get("items"), payload.get("total"), payload.get("pagination")
-    if not isinstance(items, list) or not items or type(total) is not int or total <= 0:
-        return "failed", "factor metrics readback must contain non-empty persisted results", {}
-    if not isinstance(page, dict):
-        return "failed", "factor metrics readback is missing pagination", {}
-    for field, value in {"limit": limit, "offset": 0, "next_offset": limit, "total": total}.items():
-        if type(page.get(field)) is not int or page[field] != value:
-            return "failed", f"factor metrics pagination.{field} contradicts the probe/results", {}
-    if page.get("has_more") is not (total > limit) or len(items) != min(limit, total):
-        return "failed", "factor metrics pagination contradicts item count", {}
-    row_ids: set[int] = set()
-    for row in items:
-        if not isinstance(row, dict):
-            return "failed", "factor metrics result must be an object", {}
-        for field, value in expected.items():
-            if row.get(field) != value:
-                return "failed", f"factor metrics {field} does not match the declared probe", {}
-        row_id, days = row.get("id"), row.get("n_trading_days")
-        if type(row_id) is not int or row_id <= 0 or row_id in row_ids:
-            return "failed", "factor metrics ids must be unique positive integers", {}
-        row_ids.add(row_id)
-        if type(days) is not int or days <= 0:
-            return "failed", "factor metrics n_trading_days must be positive", {}
-        for field, value in row.items():
-            if type(value) in {int, float} and (abs(value) > sys.float_info.max or not math.isfinite(value)):
-                return "failed", f"factor metrics {field} must be finite", {}
-        for field, bounds in {
-            "ic_mean": (-1, 1), "rank_ic_mean": (-1, 1),
-            "ic_positive_ratio": (0, 1), "coverage": (0, 1),
-            "icir": None, "rank_icir": None,
-        }.items():
-            value = row.get(field)
-            if (type(value) not in {int, float} or abs(value) > sys.float_info.max
-                    or not math.isfinite(value) or (bounds and not bounds[0] <= value <= bounds[1])):
-                return "failed", f"factor metrics {field} is missing, non-finite or out of range", {}
-        calculated_at = row.get("calculated_at")
-        try:
-            calculated = datetime.fromisoformat(calculated_at.replace("Z", "+00:00"))
-        except (AttributeError, TypeError, ValueError):
-            return "failed", "factor metrics calculated_at must be a timezone-aware timestamp", {}
-        if calculated.tzinfo is None or calculated.utcoffset() is None or calculated.date() < snapshot:
-            return "failed", "factor metrics calculated_at precedes the snapshot or lacks timezone", {}
-    return "passed", None, {
-        **expected, "row_ids": sorted(row_ids), "row_count": len(items), "total": total,
-        "acceptance_scope": "bound_metrics_readback_only",
-        "offline_algorithm_acceptance": "requires_separate_bug_specific_evidence",
-    }
-
-
-def _validate_factor_lifecycle_detail(
-    payload: Any,
-    *,
-    url: str,
-) -> tuple[str, str | None, dict[str, Any]]:
-    """Bind factor-library detail readback to an explicit lifecycle expectation."""
-
-    if not isinstance(payload, dict):
-        return "failed", "factor detail payload must be a JSON object", {}
-    if payload.get("ok") is not True or payload.get("domain") != "factor_library":
-        return "failed", "factor detail payload must report ok=true and domain=factor_library", {}
-    factor = payload.get("factor")
-    if not isinstance(factor, dict):
-        return "failed", "factor detail payload is missing factor", {}
-
-    parsed = urllib.parse.urlsplit(url)
-    path_match = re.fullmatch(r"/api/v1/factor-library/factors/([^/]+)", parsed.path)
-    if path_match is None:
-        return "failed", "factor detail probe path is invalid", {}
-    requested_name = urllib.parse.unquote(path_match.group(1)).strip()
-    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
-
-    def required_query_value(name: str) -> tuple[str | None, str | None]:
-        values = query.get(name) or []
-        if len(values) != 1 or not str(values[0]).strip():
-            return None, f"factor detail probe requires exactly one non-empty {name} query value"
-        return str(values[0]).strip(), None
-
-    requested_source, query_error = required_query_value("source")
-    if query_error:
-        return "failed", query_error, {}
-    expected_available_text, query_error = required_query_value("expected_is_available")
-    if query_error:
-        return "failed", query_error, {}
-    expected_available_normalized = str(expected_available_text).lower()
-    if expected_available_normalized not in {"true", "false"}:
-        return "failed", "factor detail expected_is_available must be true or false", {}
-    expected_available = expected_available_normalized == "true"
-
-    factor_id = factor.get("id")
-    factor_name = factor.get("factor_name")
-    source = factor.get("source")
-    available = factor.get("is_available")
-    if type(factor_id) is not int or factor_id <= 0:
-        return "failed", "factor detail id must be a positive integer", {}
-    if not isinstance(factor_name, str) or factor_name.strip() != requested_name:
-        return "failed", "factor detail factor_name does not match the requested factor", {}
-    if not isinstance(source, str) or source.strip() != requested_source:
-        return "failed", "factor detail source does not match the requested source", {}
-    if type(available) is not bool:
-        return "failed", "factor detail is_available must be boolean", {}
-    if available is not expected_available:
-        return (
-            "failed",
-            f"factor detail availability mismatch: expected={expected_available} observed={available}",
-            {},
-        )
-
-    facts: dict[str, Any] = {
-        "factor_id": factor_id,
-        "factor_name": factor_name.strip(),
-        "source": source.strip(),
-        "is_available": available,
-    }
-    expected_reason_code_values = query.get("expected_disable_reason_code") or []
-    expected_batch_id_values = query.get("expected_disable_batch_id") or []
-    if expected_available:
-        if expected_reason_code_values or expected_batch_id_values:
-            return "failed", "available factor detail must not declare disable expectations", facts
-        return "passed", None, facts
-
-    expected_reason_code, query_error = required_query_value("expected_disable_reason_code")
-    if query_error:
-        return "failed", query_error, facts
-    expected_batch_id, query_error = required_query_value("expected_disable_batch_id")
-    if query_error:
-        return "failed", query_error, facts
-    if not re.fullmatch(r"[A-Z][A-Z0-9_]{2,127}", str(expected_reason_code)):
-        return "failed", "factor detail expected_disable_reason_code is invalid", facts
-    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.\-]{2,127}", str(expected_batch_id)):
-        return "failed", "factor detail expected_disable_batch_id is invalid", facts
-
-    disable_reason = factor.get("disable_reason")
-    disable_batch_id = factor.get("disable_batch_id")
-    disable_at = factor.get("disable_at")
-    rehab_candidate = factor.get("rehab_candidate")
-    if not isinstance(disable_reason, str) or not disable_reason.strip():
-        return "failed", "disabled factor detail is missing disable_reason", facts
-    reason_prefix = f"{expected_reason_code}:"
-    if not disable_reason.strip().startswith(reason_prefix):
-        return "failed", "factor detail disable reason code does not match the declared expectation", facts
-    observed_reason_code = expected_reason_code
-    if not isinstance(disable_batch_id, str) or disable_batch_id.strip() != expected_batch_id:
-        return "failed", "factor detail disable_batch_id does not match the declared expectation", facts
-    if not isinstance(disable_at, str) or not disable_at.strip():
-        return "failed", "disabled factor detail is missing disable_at", facts
-    try:
-        parsed_disable_at = datetime.fromisoformat(disable_at.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return "failed", "factor detail disable_at must be a timezone-aware timestamp", facts
-    if parsed_disable_at.tzinfo is None or parsed_disable_at.utcoffset() is None:
-        return "failed", "factor detail disable_at must be a timezone-aware timestamp", facts
-    if rehab_candidate is not False:
-        return "failed", "quarantined factor detail must report rehab_candidate=false", facts
-
-    facts.update(
-        {
-            "disable_reason_code": observed_reason_code,
-            "disable_batch_id": disable_batch_id.strip(),
-            "disable_at": parsed_disable_at.isoformat(),
-            "rehab_candidate": rehab_candidate,
-        }
-    )
-    return "passed", None, facts
-
-
-_LOCALSIM_CUTOVER_REQUIRED_RELATIONS = frozenset({
-    "paper_v2.simulation_account_v1",
-    "paper_v2.legacy_localsim_account_lineage_v1",
-    "paper_v2.localsim_replay_job_v1",
-    "paper_v2.localsim_runtime_profile_v1",
-    "paper_v2.localsim_runtime_profile_version_v1",
-    "paper_v2.simulation_ledger_scope_v1",
-    "strategy_pkg.strategy_runtime_release",
-    "paper_v2.simulation_release_binding",
-    "paper_v2.simulation_daily_run",
-    "paper_v2.run",
-    "paper_v2.intraday_snapshots",
-})
-
-
-def _validate_localsim_cutover_readiness(payload: Any) -> tuple[str, str | None, dict[str, Any]]:
-    """Require the complete LocalSIM cutover authority to report a safe boundary."""
-    if not isinstance(payload, dict):
-        return "failed", "LocalSIM cutover-readiness payload must be a JSON object", {}
-    if payload.get("ok") is not True:
-        return "failed", "LocalSIM cutover-readiness payload must report ok=true", {}
-    readiness = payload.get("readiness")
-    if not isinstance(readiness, dict):
-        return "failed", "LocalSIM cutover-readiness payload is missing readiness", {}
-    if readiness.get("schema_version") != "localsim_cutover_readiness_v1":
-        return "failed", "LocalSIM cutover-readiness schema_version is invalid", {}
-    checked_at = readiness.get("checked_at")
-    if not isinstance(checked_at, str) or not checked_at.strip():
-        return "failed", "LocalSIM cutover-readiness checked_at must be a timezone-aware timestamp", {}
-    try:
-        parsed_checked_at = datetime.fromisoformat(checked_at.strip().replace("Z", "+00:00"))
-    except ValueError:
-        return "failed", "LocalSIM cutover-readiness checked_at must be a timezone-aware timestamp", {}
-    if parsed_checked_at.tzinfo is None:
-        return "failed", "LocalSIM cutover-readiness checked_at must be a timezone-aware timestamp", {}
-
-    ready = readiness.get("ready")
-    blockers = readiness.get("blockers")
-    if type(ready) is not bool:
-        return "failed", "LocalSIM cutover-readiness ready must be boolean", {}
-    if not isinstance(blockers, list) or any(not isinstance(item, str) or not item.strip() for item in blockers):
-        return "failed", "LocalSIM cutover-readiness blockers must be a list of non-empty strings", {}
-    if ready != (not blockers):
-        return "failed", "LocalSIM cutover-readiness ready and blockers are inconsistent", {}
-
-    relation_presence = readiness.get("relation_presence")
-    if (
-        not isinstance(relation_presence, dict)
-        or not relation_presence
-        or any(not isinstance(name, str) or type(present) is not bool for name, present in relation_presence.items())
-    ):
-        return "failed", "LocalSIM cutover-readiness relation_presence is invalid", {}
-    relation_names = set(relation_presence)
-    if relation_names != _LOCALSIM_CUTOVER_REQUIRED_RELATIONS:
-        missing = sorted(_LOCALSIM_CUTOVER_REQUIRED_RELATIONS - relation_names)
-        unexpected = sorted(relation_names - _LOCALSIM_CUTOVER_REQUIRED_RELATIONS)
-        return (
-            "failed",
-            f"LocalSIM cutover-readiness relation_presence keys are invalid: missing={missing}, unexpected={unexpected}",
-            {},
-        )
-    missing_relations = sorted(name for name, present in relation_presence.items() if not present)
-
-    count_fields = (
-        "runtime_fk_count",
-        "orphan_ledger_scope_count",
-        "invalid_ledger_scope_count",
-        "legacy_active_session_count",
-        "legacy_auto_run_count",
-        "legacy_sentinel_count",
-        "in_flight_economic_run_count",
-    )
-    counts: dict[str, int] = {}
-    for field in count_fields:
-        value = readiness.get(field)
-        if type(value) is not int or value < 0:
-            return "failed", f"LocalSIM cutover-readiness {field} must be a non-negative integer", {}
-        counts[field] = value
-
-    retained_accounts = readiness.get("retained_legacy_account_ids")
-    missing_lineages = readiness.get("missing_lineage_account_ids")
-    for field, value in (
-        ("retained_legacy_account_ids", retained_accounts),
-        ("missing_lineage_account_ids", missing_lineages),
-    ):
-        if not isinstance(value, list) or any(not isinstance(item, str) or not item.strip() for item in value):
-            return "failed", f"LocalSIM cutover-readiness {field} must be a list of non-empty strings", {}
-
-    facts = {
-        "ready": ready,
-        "checked_at": parsed_checked_at.isoformat(),
-        "blockers": list(blockers),
-        "relation_count": len(relation_presence),
-        "missing_relations": missing_relations,
-        **counts,
-        "retained_legacy_account_count": len(retained_accounts),
-        "missing_lineage_account_count": len(missing_lineages),
-    }
-    invariant_failures: list[str] = []
-    if missing_relations:
-        invariant_failures.append(f"missing_relations={missing_relations}")
-    if counts["runtime_fk_count"] != 2:
-        invariant_failures.append(f"runtime_fk_count={counts['runtime_fk_count']}")
-    for field in count_fields[1:]:
-        if counts[field]:
-            invariant_failures.append(f"{field}={counts[field]}")
-    if missing_lineages:
-        invariant_failures.append(f"missing_lineage_account_count={len(missing_lineages)}")
-    if blockers:
-        invariant_failures.append(f"blockers={blockers}")
-    if invariant_failures:
-        return "failed", "LocalSIM cutover is not ready: " + "; ".join(invariant_failures), facts
-    return "passed", None, facts
-
-
-def _validate_local_data_freshness(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
-    """Verify freshness evidence, not overall health or a cached physical MAX.
-
-    Overview collections are capped by the producer; counters cover all rows.
-    Unknown audit evidence and unrelated red alerts are legitimate readback,
-    not proof of missing prices and not grounds to fabricate a green result.
-    """
-    path = urllib.parse.urlsplit(url).path
-    overview = path.endswith('/overview')
-    operation = 'local_data_health_overview' if overview else 'local_data_list_data_stats'
-    if not isinstance(payload, dict) or payload.get('success') is not True:
-        return 'failed', 'local-data requires success=true', {}
-    if payload.get('operation') != operation or payload.get('risk_level') != 'read_only':
-        return 'failed', 'local-data operation/read-only identity differs', {}
-    data = payload.get('data')
-    if not isinstance(data, dict):
-        return 'failed', 'local-data data object missing', {}
-    rows = data.get('datasets' if overview else 'items')
-    if not isinstance(rows, list) or not rows:
-        return 'failed', 'local-data dataset evidence missing', {}
-    seen: set[str] = set()
-    counts = {'stale': 0, 'unknown': 0, 'quality_blocked': 0}
-    for row in rows:
-        if not isinstance(row, dict) or not isinstance(row.get('data_kind'), str) or not row['data_kind']:
-            return 'failed', 'local-data dataset identity missing', {}
-        if row['data_kind'] in seen:
-            return 'failed', 'local-data duplicate dataset identity', {}
-        seen.add(row['data_kind'])
-        required = ('stats_max_date', 'audit_ready_date', 'ready_date', 'physical_max_date',
-                    'physical_max_date_source', 'stats_date_source', 'readiness_source',
-                    'cache_state', 'readiness_status', 'operator_action_required')
-        if any(key not in row for key in required):
-            return 'failed', 'local-data freshness fields missing', {}
-        if (row['stats_date_source'] != 'data_stats_cache'
-                or row['readiness_source'] != 'dataset_date_refresh_audit'
-                or row['physical_max_date_source'] != 'not_probed'
-                or row['physical_max_date'] is not None):
-            return 'failed', 'local-data cache/audit was misrepresented as physical evidence', {}
-        for key in ('stats_max_date', 'audit_ready_date'):
-            value = row[key]
-            if value is not None:
-                try:
-                    if not isinstance(value, str) or datetime.strptime(value, '%Y-%m-%d').strftime('%Y-%m-%d') != value:
-                        raise ValueError('non-canonical date')
-                except ValueError:
-                    return 'failed', 'local-data date evidence invalid', {}
-        ready, cached = row['audit_ready_date'], row['stats_max_date']
-        quality = row.get('audit_quality_status')
-        if quality is not None and not isinstance(quality, str):
-            return 'failed', 'local-data audit quality evidence invalid', {}
-        expected_readiness = ('unknown' if not ready else 'quality_blocked'
-                              if quality in {'error', 'empty_invalid', 'low_coverage', 'unproven'} else 'audit_success')
-        expected_cache = ('fresh' if cached >= ready else 'stale') if ready and cached else (
-            'stale' if ready else 'audit_missing' if cached else 'unknown')
-        if (row['ready_date'] != ready or row['cache_state'] != expected_cache
-                or row['readiness_status'] != expected_readiness
-                or type(row['operator_action_required']) is not bool):
-            return 'failed', 'local-data cache/readiness semantics differ', {}
-        counts['stale'] += expected_cache == 'stale'
-        counts['unknown'] += expected_readiness == 'unknown'
-        counts['quality_blocked'] += expected_readiness == 'quality_blocked'
-    facts: dict[str, Any] = {'dataset_evidence_count': len(rows), **counts}
-    if overview:
-        fields = ('dataset_count', 'stale_dataset_count', 'stale_stats_cache_count',
-                  'readiness_unknown_count', 'quality_blocked_dataset_count',
-                  'running_job_count', 'active_alert_count', 'blocked_target_count', 'retry_target_count')
-        if any(type(data.get(k)) is not int or data[k] < 0 for k in fields):
-            return 'failed', 'local-data overview counters invalid', {}
-        if (data['dataset_count'] < len(rows)
-                or data['stale_dataset_count'] != data['stale_stats_cache_count']):
-            return 'failed', 'local-data overview cache counters differ', {}
-        for name, key in [('stale', 'stale_stats_cache_count'), ('unknown', 'readiness_unknown_count'),
-                          ('quality_blocked', 'quality_blocked_dataset_count')]:
-            if not counts[name] <= data[key] <= data['dataset_count'] or (
-                    len(rows) == data['dataset_count'] and counts[name] != data[key]):
-                return 'failed', 'local-data overview counters contradict dataset evidence', {}
-        status = data.get('status')
-        if not isinstance(status, str) or status not in {'green', 'yellow', 'red'} or (
-                (data['blocked_target_count'] or data['quality_blocked_dataset_count']) and status != 'red') or (
-                status == 'green' and any(data[k] for k in fields if k not in {'dataset_count', 'running_job_count'})):
-            return 'failed', 'local-data overview health status contradicts blockers', {}
-        facts.update({key: data[key] for key in fields})
-        facts['health_status'] = status
-    return 'passed', None, facts
-
-
-def _validate_monthly_release_ready(payload: Any, *, url: str) -> tuple[str, str | None, dict[str, Any]]:
-    """A readable operation is not a successfully prepared monthly release."""
-    from backend.services.dataset_release.monthly_unified import STATE_SCHEMA, STAGES
-
-    if not isinstance(payload, dict) or payload.get("schema_version") != "aistock_monthly_release_status_v1":
-        return "failed", "monthly release status schema differs", {}
-    data = payload.get("data")
-    if not isinstance(data, dict) or data.get("schema_version") != STATE_SCHEMA:
-        return "failed", "monthly release state schema differs", {}
-    operation_id = urllib.parse.urlsplit(url).path.rsplit("/", 1)[-1]
-    if data.get("operation_id") != operation_id:
-        return "failed", "monthly release operation identity differs", {}
-    facts = {"operation_id": operation_id, "status": data.get("status")}
-    if not isinstance(data.get("status"), str) or data["status"] not in {"READY_TO_ACTIVATE", "ACTIVATED_VERIFIED"}:
-        return "failed", "monthly release has not completed prepare/verification", facts
-    if (
-        data.get("cancel_requested") is not False
-        or "last_error" not in data or data["last_error"] not in (None, {})
-        or "current_stage" not in data or data["current_stage"] is not None
-        or type(data.get("attempt")) is not int or data["attempt"] < 0
-    ):
-        return "failed", "monthly release ready state contradicts cancellation/error/progress", facts
-    for key in ("plan_sha256", "ready_receipt_sha256"):
-        value = data.get(key)
-        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
-            return "failed", "monthly release ready content identity missing", facts
-        facts[key] = value
-    checkpoints = data.get("checkpoints")
-    if (
-        not isinstance(checkpoints, dict) or set(checkpoints) != set(STAGES)
-        or any(value is not True for value in checkpoints.values())
-    ):
-        return "failed", "monthly release does not have all six successful checkpoints", facts
-    facts.update(attempt=data["attempt"], completed_stage_count=len(STAGES))
-    return "passed", None, facts
+# Keep historical workflow entry points; implementation lives in one indexable module.
+BUSINESS_SMOKE_SEMANTIC_SCHEMA = _runtime_semantics.BUSINESS_SMOKE_SEMANTIC_SCHEMA
+SCHEDULER_VERIFICATION_STATUS_SCHEMA = _runtime_semantics.SCHEDULER_VERIFICATION_STATUS_SCHEMA
+SCHEDULER_VERIFICATION_SCOPE_SCHEMA = _runtime_semantics.SCHEDULER_VERIFICATION_SCOPE_SCHEMA
+_SCHEDULER_VERIFICATION_RUN_ID_RE = _runtime_semantics._SCHEDULER_VERIFICATION_RUN_ID_RE
+EXPECTED_TERMINAL_OUTCOME_SCHEMA = _runtime_semantics.EXPECTED_TERMINAL_OUTCOME_SCHEMA
+SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA = _runtime_semantics.SIMULATION_RUN_TERMINAL_EVIDENCE_PAYLOAD_SCHEMA
+_EXPECTATION_CAPABLE_CONTRACT_IDS = _runtime_semantics._EXPECTATION_CAPABLE_CONTRACT_IDS
+_EXPECTED_TERMINAL_OUTCOME_FIELDS = _runtime_semantics._EXPECTED_TERMINAL_OUTCOME_FIELDS
+_EXPECTED_REASON_CODE_RE = _runtime_semantics._EXPECTED_REASON_CODE_RE
+_EXPECTED_EVIDENCE_SCHEMA_RE = _runtime_semantics._EXPECTED_EVIDENCE_SCHEMA_RE
+_EXPECTED_RUN_ID_RE = _runtime_semantics._EXPECTED_RUN_ID_RE
+_RUN_STATUS_SUCCESS = _runtime_semantics._RUN_STATUS_SUCCESS
+_RUN_STATUS_FAILURE = _runtime_semantics._RUN_STATUS_FAILURE
+_HEALTH_FAILURE_STATUSES = _runtime_semantics._HEALTH_FAILURE_STATUSES
+_HEALTH_SUCCESS_STATUSES = _runtime_semantics._HEALTH_SUCCESS_STATUSES
+_CONTAINER_KEYS = _runtime_semantics._CONTAINER_KEYS
+_STATUS_FIELD_NAMES = _runtime_semantics._STATUS_FIELD_NAMES
+_COLLECTION_LIST_KEYS = _runtime_semantics._COLLECTION_LIST_KEYS
+_SCHEDULER_BLOCKING_LIST_KEYS = _runtime_semantics._SCHEDULER_BLOCKING_LIST_KEYS
+_SCHEDULER_CURRENT_TRADE_DATE_BLOCKERS_KEY = _runtime_semantics._SCHEDULER_CURRENT_TRADE_DATE_BLOCKERS_KEY
+_SCHEDULER_BLOCKING_VALUE_KEYS = _runtime_semantics._SCHEDULER_BLOCKING_VALUE_KEYS
+_SCHEDULER_REASON_KEYS = _runtime_semantics._SCHEDULER_REASON_KEYS
+_collect_status_fields = _runtime_semantics._collect_status_fields
+_normalize_expected_terminal_outcome = _runtime_semantics._normalize_expected_terminal_outcome
+_expectation_outcome_digest = _runtime_semantics._expectation_outcome_digest
+_validate_run_terminal_success = _runtime_semantics._validate_run_terminal_success
+_validate_run_terminal_evidence = _runtime_semantics._validate_run_terminal_evidence
+_structured_current_trade_date_blockers_are_clear = _runtime_semantics._structured_current_trade_date_blockers_are_clear
+_scheduler_failure_markers = _runtime_semantics._scheduler_failure_markers
+_validate_scheduler_status = _runtime_semantics._validate_scheduler_status
+_validate_scheduler_verification_status = _runtime_semantics._validate_scheduler_verification_status
+_validate_health_ok = _runtime_semantics._validate_health_ok
+_validate_collection_payload = _runtime_semantics._validate_collection_payload
+_validate_tdx_raw_kline = _runtime_semantics._validate_tdx_raw_kline
+_validate_object_liveness = _runtime_semantics._validate_object_liveness
+_validate_pipeline_overview = _runtime_semantics._validate_pipeline_overview
+_validate_advisory_entry_price_status = _runtime_semantics._validate_advisory_entry_price_status
+_validate_advisory_returns = _runtime_semantics._validate_advisory_returns
+_validate_advisory_trading_day_defaults = _runtime_semantics._validate_advisory_trading_day_defaults
+_validate_advisory_historical_operations = _runtime_semantics._validate_advisory_historical_operations
+_validate_advisory_sector_entry_original_list = _runtime_semantics._validate_advisory_sector_entry_original_list
+_validate_hmm_rotation_l2_overview = _runtime_semantics._validate_hmm_rotation_l2_overview
+_validate_hmm_daily_coefficient_jobs = _runtime_semantics._validate_hmm_daily_coefficient_jobs
+_validate_hmm_coefficient_extension = _runtime_semantics._validate_hmm_coefficient_extension
+_validate_hmm_workers = _runtime_semantics._validate_hmm_workers
+_validate_hmm_risk_l2_overview = _runtime_semantics._validate_hmm_risk_l2_overview
+_validate_research_pipeline_health = _runtime_semantics._validate_research_pipeline_health
+_validate_hmm_research_records = _runtime_semantics._validate_hmm_research_records
+_validate_selection_artifacts = _runtime_semantics._validate_selection_artifacts
+_validate_qe_dataset_profile = _runtime_semantics._validate_qe_dataset_profile
+_validate_openapi_document = _runtime_semantics._validate_openapi_document
+_validate_correlation_status = _runtime_semantics._validate_correlation_status
+_validate_factor_metrics_results = _runtime_semantics._validate_factor_metrics_results
+_validate_factor_lifecycle_detail = _runtime_semantics._validate_factor_lifecycle_detail
+_LOCALSIM_CUTOVER_REQUIRED_RELATIONS = _runtime_semantics._LOCALSIM_CUTOVER_REQUIRED_RELATIONS
+_validate_localsim_cutover_readiness = _runtime_semantics._validate_localsim_cutover_readiness
+_validate_local_data_freshness = _runtime_semantics._validate_local_data_freshness
+_validate_monthly_release_ready = _runtime_semantics._validate_monthly_release_ready
 
 
 _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...] = (
+    (re.compile(r"^/api/v1/simulation-runtime/localsim/replays/[^/]+/recovery$"),
+     "localsim_replay_recovery", _runtime_semantics._validate_localsim_replay_recovery),
+    (re.compile(r"^/api/v1/simulation-runtime/localsim/workbench/overview$"),
+     "localsim_workbench_valuation", _runtime_semantics._validate_localsim_workbench),
+    (re.compile(r"^/api/v1/advisory/trading-days/defaults$"),
+     "advisory_calendar_defaults_only", _validate_advisory_trading_day_defaults),
+    (re.compile(r"^/api/v1/advisory/historical-range-batches/[^/]+/operations$"),
+     "advisory_historical_operation_status_readback", _validate_advisory_historical_operations),
+    (re.compile(r"^/api/v1/strategy-packages/[^/]+/selection-artifacts$"),
+     "strategy_package_selection_artifact_readback", _validate_selection_artifacts),
+    (re.compile(r"^/api/v1/hmm-training/snapshots/[^/]+/daily-coefficients/jobs$"),
+     "hmm_database_daily_coefficient_jobs", _validate_hmm_daily_coefficient_jobs),
+    (re.compile(r"^/api/v1/hmm-training/configs/[^/]+/coefficient-extension$"),
+     "hmm_frozen_coefficient_extension", _validate_hmm_coefficient_extension),
+    (re.compile(r"^/api/kline-all/tdx$"), "tdx_raw_kline_facts", _validate_tdx_raw_kline),
+    (re.compile(r"^/api/v1/hmm-evolution/workers$"), "hmm_worker_liveness", _validate_hmm_workers),
+    (re.compile(r"^/api/v1/hmm-risk/risk-l2/overview$"), "hmm_risk_l2_overview", _validate_hmm_risk_l2_overview),
+    (re.compile(r"^/api/v1/research-pipeline/health$"), "research_pipeline_readiness_only", _validate_research_pipeline_health),
+    (re.compile(r"^/api/v1/research-pipeline/experiments/[^/]+/backtest-records$"), "hmm_research_records", _validate_hmm_research_records),
     (re.compile(r"^/api/v1/qlib/monthly-releases/dmr_[0-9a-f]{32}$"), "monthly_release_ready", _validate_monthly_release_ready),
     (re.compile(r"^/api/v1/local-data/(?:overview|data-stats)$"), "local_data_freshness", _validate_local_data_freshness),
     (re.compile(r"^/api/v1/health$"), "health_ok", _validate_health_ok),
@@ -4528,6 +3531,10 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
         _validate_localsim_cutover_readiness,
     ),
     (re.compile(r"^/api/v1/advisory/forward/status$"), "scheduler_status", _validate_scheduler_status),
+    (re.compile(r"^/api/v1/advisory/programs/[^/]+/sector-entry-price$"),
+     "advisory_sector_entry_original_list", _validate_advisory_sector_entry_original_list),
+    (re.compile(r"^/api/v1/advisory/programs/[^/]+/returns$"),
+     "advisory_returns_metrics_v2", _validate_advisory_returns),
     (
         re.compile(r"^/api/v1/advisory/programs/[^/]+/entry-price/status$"),
         "advisory_entry_price_status",
@@ -4574,6 +3581,7 @@ _BUSINESS_SMOKE_SEMANTIC_CONTRACTS: tuple[tuple[re.Pattern[str], str, Any], ...]
     (re.compile(r"^/api/v1/qlib/config$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/runtime-contracts/[^/]+$"), "object_liveness", _validate_object_liveness),
     (re.compile(r"^/api/v1/validation/plans/[^/]+$"), "object_liveness", _validate_object_liveness),
+    (re.compile(r"^/api/v1/validation/overview/snapshot$"), "pipeline_overview_observations", _validate_pipeline_overview),
     (re.compile(r"^/openapi\.json$"), "openapi_document", _validate_openapi_document),
 )
 
@@ -4667,11 +3675,21 @@ def _evaluate_business_smoke_semantics(
             return schema, semantic
         verdict, reason, facts = validator(payload, expectation=expectation)
     elif contract_id in {
+        "strategy_package_selection_artifact_readback",
+        "hmm_worker_liveness",
+        "hmm_risk_l2_overview",
+        "hmm_research_records",
         "scheduler_verification_status",
         "factor_lifecycle_detail",
         "factor_metrics_results",
         "hmm_rotation_l2_overview",
+        "hmm_database_daily_coefficient_jobs",
+        "hmm_frozen_coefficient_extension",
         "advisory_entry_price_status",
+        "advisory_sector_entry_original_list",
+        "advisory_returns_metrics_v2",
+        "advisory_calendar_defaults_only",
+        "advisory_historical_operation_status_readback",
         "local_data_freshness",
         "monthly_release_ready",
     }:
@@ -5057,7 +4075,7 @@ def _git_fetch_with_transport_retry(
     attempts: int = 2,
     timeout: int = 60,
 ) -> str:
-    """Retry only transport-class failures for an idempotent git fetch."""
+    """Bound transport/remote-ref CAS retries to this idempotent fetch only."""
 
     total = max(1, int(attempts))
     for index in range(total):
@@ -5065,7 +4083,12 @@ def _git_fetch_with_transport_retry(
         if result.get("ok"):
             return str(result.get("stdout") or "").strip()
         message = str(result.get("stderr") or result.get("stdout") or "git fetch failed")
-        if not _looks_like_github_transport_failure(message) or index + 1 >= total:
+        ref_race = re.search(
+            r"(?:fetching ref|cannot lock ref) ['\"]?refs/remotes/[^'\"\s:]+['\"]?(?: failed)?: "
+            r"(?:incorrect old value provided|is at [0-9a-f]+ but expected [0-9a-f]+)",
+            message,
+        ) is not None
+        if not (ref_race or _looks_like_github_transport_failure(message)) or index + 1 >= total:
             raise WorkflowError(message)
         time.sleep(0.5 * (index + 1))
     raise AssertionError("unreachable git fetch retry state")
@@ -5532,6 +4555,7 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
             {
                 "event_count": 0,
                 "known_duration_seconds": 0.0,
+                "recorded_duration_event_count": 0,
                 "inferred_since_previous_seconds": 0.0,
                 "inferred_until_next_seconds": 0.0,
                 "first_at": event.get("timestamp"),
@@ -5541,8 +4565,9 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         bucket["event_count"] += 1
         bucket["last_at"] = event.get("timestamp")
         duration = event.get("duration_seconds")
-        if isinstance(duration, (int, float)):
+        if isinstance(duration, (int, float)) and not isinstance(duration, bool) and math.isfinite(duration) and duration >= 0:
             bucket["known_duration_seconds"] = round(float(bucket["known_duration_seconds"]) + float(duration), 3)
+            bucket["recorded_duration_event_count"] += 1
             known_duration += float(duration)
         if ts and previous_ts and previous_phase:
             delta = max(0.0, (ts - previous_ts).total_seconds())
@@ -5568,12 +4593,16 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         1 for event in events if (event.get("tooling") or {}).get("rtk_used") == "not_recorded"
     )
 
-    queue_seconds = _phase_seconds(phases, "discovered")
-    context_seconds = _phase_seconds(phases, "context_ready")
-    active_fix_seconds = _phase_seconds(phases, "fix_in_progress") + _phase_seconds(phases, "fix_applied") + context_seconds
-    local_validation_seconds = _phase_seconds(phases, "validation_planned") + _phase_seconds(phases, "validation_running") + _phase_seconds(phases, "validation_passed")
-    pr_ci_seconds = _phase_seconds(phases, "pr_opened") + _phase_seconds(phases, "ci_running") + _phase_seconds(phases, "ci_green") + _phase_seconds(phases, "gh_pr_create")
-    merge_aftercare_seconds = sum(_phase_seconds(phases, phase) for phase in ("merged", "close_synced", "cleanup_done", "complete", "close_sync_apply", "close_sync_persisted"))
+    def known_seconds(*names: str) -> float | None:
+        values = [_phase_seconds(phases, name) for name in names]
+        observed = [value for value in values if value is not None]
+        return round(sum(observed), 3) if observed else None
+
+    queue_seconds = known_seconds("discovered")
+    active_fix_seconds = known_seconds("fix_in_progress", "fix_applied")
+    local_validation_seconds = known_seconds("validation_planned", "validation_running", "validation_passed")
+    pr_ci_seconds = known_seconds("pr_opened", "ci_running", "ci_green", "gh_pr_create")
+    merge_aftercare_seconds = known_seconds("merged", "close_synced", "cleanup_done", "complete", "close_sync_apply", "close_sync_persisted")
 
     return {
         "schema_version": "aistock_issue_workflow_timing_summary_v1",
@@ -5584,12 +4613,16 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         "known_duration_seconds": round(known_duration, 3),
         "inferred_elapsed_seconds": round(inferred_duration, 3),
         "phases": phases,
-        "queue_seconds": round(queue_seconds, 3) if queue_seconds else None,
-        "active_fix_seconds": round(active_fix_seconds, 3) if active_fix_seconds else None,
-        "local_validation_seconds": round(local_validation_seconds, 3) if local_validation_seconds else None,
-        "pr_ci_seconds": round(pr_ci_seconds, 3) if pr_ci_seconds else None,
-        "merge_aftercare_seconds": round(merge_aftercare_seconds, 3) if merge_aftercare_seconds else None,
-        "code_repair_seconds": round(active_fix_seconds, 3) if active_fix_seconds else None,
+        "queue_seconds": queue_seconds,
+        "active_fix_seconds": active_fix_seconds,
+        "local_validation_seconds": local_validation_seconds,
+        "pr_ci_seconds": pr_ci_seconds,
+        "merge_aftercare_seconds": merge_aftercare_seconds,
+        "code_repair_seconds": active_fix_seconds,
+        "measurement_scope": "recorded_commands_only; null means not_recorded",
+        "measurement_status": {name: ("recorded_command_time" if value is not None else "not_recorded")
+                               for name, value in (("active_fix", active_fix_seconds), ("local_validation", local_validation_seconds),
+                                                   ("pr_ci", pr_ci_seconds), ("merge_aftercare", merge_aftercare_seconds))},
         "rtk_telemetry": {
             "used_event_count": rtk_used_count,
             "fallback_event_count": rtk_fallback_count,
@@ -5599,7 +4632,7 @@ def _workflow_timing_summary(bug_id: str, root: Path | None = None) -> dict[str,
         "notes": [
             "known_duration_seconds comes from command-level telemetry when available",
             "inferred_elapsed_seconds is wall-clock distance between recorded events and may include human/CI wait time",
-            "code_repair_seconds is an upper bound between automatic repair-start and finish-plan boundaries and may include local validation run before finish",
+            "phase execution fields sum observed command durations only; inferred event gaps never count as development or testing",
         ],
     }
 
@@ -5621,6 +4654,7 @@ def _augment_timing_with_issue_record(timing: dict[str, Any], state: dict[str, A
         queue_seconds = round((started_at - created_at).total_seconds(), 3)
         existing = float(timing.get("queue_seconds") or 0)
         timing["queue_seconds"] = max(existing, queue_seconds)
+        timing["queue_measurement_scope"] = "BUG creation to first workflow event; wall elapsed, not command time"
         timing["issue_created_at"] = record.get("created_at") or record.get("first_seen_at")
         timing["active_work_started_at"] = timing.get("started_at")
         timing.setdefault("notes", []).append(
@@ -5629,14 +4663,13 @@ def _augment_timing_with_issue_record(timing: dict[str, Any], state: dict[str, A
     return timing
 
 
-def _phase_seconds(phases: dict[str, Any], phase: str) -> float:
+def _phase_seconds(phases: dict[str, Any], phase: str) -> float | None:
     item = phases.get(phase)
     if not isinstance(item, dict):
-        return 0.0
-    return max(
-        float(item.get("known_duration_seconds") or 0),
-        float(item.get("inferred_until_next_seconds") or item.get("inferred_since_previous_seconds") or 0),
-    )
+        return None
+    if not item.get("recorded_duration_event_count"):
+        return None
+    return float(item.get("known_duration_seconds") or 0)
 
 
 def _phase_cost_table(timing: dict[str, Any]) -> list[dict[str, Any]]:
@@ -8122,6 +7155,7 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
     if not isinstance(runs, list):
         return None
     current_id = int(run_id)
+    receipt_checks = 0
     for item in runs:
         if not isinstance(item, dict):
             continue
@@ -8132,6 +7166,19 @@ def _find_superseding_main_success(summary: dict[str, Any]) -> dict[str, Any] | 
             continue
         if str(item.get("conclusion") or "").lower() != "success":
             continue
+        if workflow == ci_failure_summary.NIGHTLY_RESEARCH_WORKFLOW:
+            if receipt_checks >= ci_failure_summary.MAX_NIGHTLY_RECEIPT_CANDIDATES:
+                break
+            receipt_checks += 1
+            eligibility = ci_failure_summary.nightly_success_receipt_eligibility(
+                repo=GITHUB_REPO, run_id=candidate_id, source_head=str(item.get("headSha") or ""),
+                run_provider=lambda args, **kwargs: _run_command(args, cwd=REPO_ROOT, **kwargs),
+                required_job_names=ci_failure_summary.nightly_required_failure_jobs(summary),
+            )
+            if not eligibility["eligible"]:
+                if eligibility["reason"] == "receipt_index_unavailable":
+                    return None  # Do not infer recovery during an external evidence outage.
+                continue
         return {
             "run_id": candidate_id,
             "run_url": item.get("url"),
@@ -9569,6 +8616,7 @@ def build_task_card(
             runtime_contract,
             "schema_version",
             "runtime_impact",
+            "inferred_runtime_files",
             "backend_restart_required",
             "backend_restart_owner",
             "target_id",
@@ -9664,6 +8712,11 @@ def render_task_card_markdown(task_card: dict[str, Any]) -> str:
         f"- backend_restart_required: `{str(bool(runtime_contract.get('backend_restart_required'))).lower()}`",
         f"- backend_restart_owner: `{runtime_contract.get('backend_restart_owner') or 'user'}`",
         f"- target_id: `{runtime_contract.get('target_id') or 'none'}`",
+        *[f"- runtime_source: `{path}`" for path in (runtime_contract.get("inferred_runtime_files") or [])[:10]],
+        *([f"- runtime_source_count: `{len(runtime_contract['inferred_runtime_files'])}` (at most 10 paths shown; full list in task-card.json)"]
+          if len(runtime_contract.get("inferred_runtime_files") or []) > 10 else []),
+        *(["- source_role_review: inferred source attribution only; suspected offline tools need call-closure review, not health/HTTP-200 substitution or automatic exemption."]
+          if runtime_contract.get("inferred_runtime_files") else []),
         f"- catalog_ref: `{runtime_contract.get('catalog_ref') or 'none'}`",
         f"- operator_runbook_ref: `{runtime_contract.get('operator_runbook_ref') or 'none'}`",
         f"- post_restart_effective_gate: `{runtime_contract.get('post_restart_effective_gate') or 'unknown'}`",
@@ -13719,6 +12772,7 @@ def build_triage_ci_issue_plan(
         context_pack["failure_event"] = failure_event
         handoff = context_pack.get("agent_handoff") if isinstance(context_pack.get("agent_handoff"), dict) else {}
         handoff["needs_bug_json"] = False
+        handoff["registry_intake"] = None
         handoff["handoff_mode"] = "triage_only"
         handoff["workflow_entrypoints"] = {
             "triage": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue.get('number')}",
@@ -14252,6 +13306,9 @@ def build_promote_ci_issue_plan(
                 "dry_run": False,
                 "triage": triage,
                 "registry_pr_capability": registry_pr_capability,
+                "local_intake": ci_failure_summary.build_agent_handoff(
+                    triage["summary"], github_issue_number=issue_number
+                )["registry_intake"],
                 "warnings": [
                     "Nightly failure remains an actionable GitHub Issue; BUG allocation is deferred until a registry PR can be persisted"
                 ],
@@ -14266,7 +13323,23 @@ def build_promote_ci_issue_plan(
     failed_tests = first_job.get("failed_tests") or []
     error_signature = first_job.get("error_signature")
     details = ci_failure_summary.render_issue_markdown(summary, github_issue_number=issue_number)
-    changed_files = list(suggested.get("allowed_write_scope") or [])
+    # Diagnostic module roots are context, not permission to recursively edit.
+    # Resolve only the bounded candidate list; submit-bug still validates every
+    # accepted file for repository containment and ownership before allocation.
+    scope = flow._unique_strings(suggested.get("allowed_write_scope") or [])
+    changed_files = [path for path in scope if (REPO_ROOT / path).is_file()]
+    excluded_scope_paths = [path for path in scope if path not in changed_files]
+    if not changed_files:
+        return {
+            "schema_version": "aistock_issue_workflow_promote_ci_issue_v1",
+            "generated_at": _utc_now(),
+            "workflow_gate": "blocked_exact_file_scope_required",
+            "dry_run": not apply,
+            "triage": triage,
+            "excluded_scope_paths": excluded_scope_paths,
+            "blocking": ["Diagnostic roots contain no existing exact files; triage must identify the repair files before BUG allocation."],
+            "next_command": f"python scripts/aistock_issue_workflow.py triage-ci-issue --issue {issue_number}",
+        }
     evidence_refs = flow._unique_strings(
         [
             str(summary.get("run_url") or ""),
@@ -14303,6 +13376,7 @@ def build_promote_ci_issue_plan(
         "dry_run": not apply,
         "triage": triage,
         "submit_bug": plan,
+        "excluded_scope_paths": excluded_scope_paths,
         "next_command": plan.get("next_command"),
     }
 
@@ -16235,6 +15309,11 @@ def build_watch_ci_plan(
     }
 
 
+def _pr_body_matches(actual: Any, expected: str) -> bool:
+    """GitHub may return CRLF Markdown; normalize no content except that transport representation."""
+    return isinstance(actual, str) and actual.replace("\r\n", "\n") == expected.replace("\r\n", "\n")
+
+
 def _sync_owned_pr_body(*, pr_url: str, branch: str, body_path: Path, expected_head: str, before_push: bool) -> dict[str, Any]:
     """Publish validated receipts before synchronize; never overwrite a foreign PR."""
     number = _github_pr_number_from_url(pr_url)
@@ -16255,14 +15334,14 @@ def _sync_owned_pr_body(*, pr_url: str, branch: str, body_path: Path, expected_h
         if not ancestor.get("ok"):
             raise WorkflowError("existing PR head is not an ancestor of validated task HEAD; refuse receipt overwrite")
     body = body_path.read_text(encoding="utf-8")
-    updated = current.get("body") != body
+    updated = not _pr_body_matches(current.get("body"), body)
     if updated:
         result = _run_command(["gh", "api", "--method", "PATCH", f"repos/{GITHUB_REPO}/pulls/{current['pr_number']}",
                                "-F", f"body=@{body_path}"], cwd=REPO_ROOT, timeout=30)
         if result.get("ok"):
             response = _parse_rest_object(result, context="owned PR receipt update")
             head = response.get("head") or {}
-            if (response.get("body") != body or response.get("state") != "open"
+            if (not _pr_body_matches(response.get("body"), body) or response.get("state") != "open"
                     or response.get("number") != current["pr_number"] or response.get("html_url") != pr_url
                     or head.get("sha") != old_head or head.get("ref") != branch
                     or (head.get("repo") or {}).get("full_name") != GITHUB_REPO
@@ -16270,7 +15349,7 @@ def _sync_owned_pr_body(*, pr_url: str, branch: str, body_path: Path, expected_h
                 raise WorkflowError("PR changed during receipt update; refuse push")
         elif _looks_like_github_transport_failure(f"{result.get('stderr')}\n{result.get('stdout')}"):
             recovered = _github_pull_rest_readback(pr_url)
-            if (recovered.get("head_sha") != old_head or recovered.get("body") != body or recovered.get("state") != "OPEN"
+            if (recovered.get("head_sha") != old_head or not _pr_body_matches(recovered.get("body"), body) or recovered.get("state") != "OPEN"
                     or recovered.get("head_ref") != branch or recovered.get("base_ref") != "main"
                     or recovered.get("head_repo") != GITHUB_REPO or recovered.get("url") != pr_url):
                 raise WorkflowError("PR receipt update outcome unavailable; do not push or repeat mutation")
@@ -17811,7 +16890,9 @@ def _run_merge_read_with_retry(
     event: str,
 ) -> dict[str, Any]:
     started = time.monotonic()
-    result = _run_transport_read_with_retry(args, cwd=REPO_ROOT, timeout=60, attempts=2)
+    # Both callers have a head-bound REST recovery path. Repeating GraphQL
+    # delays that recovery; mutations and generic REST/Git retries stay unchanged.
+    result = _run_transport_read_with_retry(args, cwd=REPO_ROOT, timeout=30, attempts=1)
     if bug_id:
         _append_event(
             bug_id,
@@ -18345,6 +17426,20 @@ def _complete_pr_merge_attempt(
     }
 
 
+def _required_check_poll_schedule(attempts: int, delay_seconds: int, *, adaptive: bool = False) -> tuple[int, ...]:
+    """Short initial polls within the existing total wait budget, never an unbounded watcher."""
+    count, delay = max(1, int(attempts)) - 1, max(0, int(delay_seconds))
+    if not adaptive or not delay:
+        return (delay,) * count
+    remaining, interval, schedule = count * delay, min(5, delay), []
+    while remaining:
+        wait = min(interval, remaining)
+        schedule.append(wait)
+        remaining -= wait
+        interval = min(interval * 2, delay)
+    return tuple(schedule)
+
+
 def _await_required_pr_checks(
     pr_url: str,
     *,
@@ -18352,6 +17447,7 @@ def _await_required_pr_checks(
     bug_id: str | None = None,
     attempts: int = 6,
     delay_seconds: int = 10,
+    adaptive: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any] | None, dict[str, list[str]], list[dict[str, Any]]]:
     """Poll queued required checks briefly instead of forcing manual retries.
 
@@ -18361,13 +17457,12 @@ def _await_required_pr_checks(
     becomes a long ``gh pr checks --watch`` loop.
     """
 
-    max_attempts = max(1, int(attempts))
-    wait_seconds = max(0, int(delay_seconds))
+    schedule = _required_check_poll_schedule(attempts, delay_seconds, adaptive=adaptive)
     history: list[dict[str, Any]] = []
     latest_result: dict[str, Any] = {"ok": False, "stdout": "[]", "stderr": "not run"}
     latest_fallback: dict[str, Any] | None = None
     latest_summary: dict[str, list[str]] = {"failed": [], "pending": [], "non_blocking": [], "passed": []}
-    for index in range(1, max_attempts + 1):
+    for index in range(1, len(schedule) + 2):
         latest_result, latest_fallback = _merge_required_check_result_with_transport_fallback(
             pr_url,
             payload=payload,
@@ -18384,8 +17479,8 @@ def _await_required_pr_checks(
         )
         if latest_summary["failed"] or not latest_summary["pending"]:
             return latest_result, latest_fallback, latest_summary, history
-        if index < max_attempts and wait_seconds:
-            time.sleep(wait_seconds)
+        if index <= len(schedule) and schedule[index - 1]:
+            time.sleep(schedule[index - 1])
     if bug_id:
         _append_event(
             bug_id,
@@ -18432,6 +17527,7 @@ def _merge_pr_if_ready_for_bug(
     *,
     required_check_attempts: int = 6,
     required_check_delay_seconds: int = 10,
+    adaptive_required_checks: bool = False,
 ) -> dict[str, Any]:
     payload, view_fallback = _merge_pr_view_with_transport_fallback(pr_url, bug_id=bug_id)
     if payload.get("state") == "MERGED":
@@ -18445,6 +17541,7 @@ def _merge_pr_if_ready_for_bug(
         bug_id=bug_id,
         attempts=required_check_attempts,
         delay_seconds=required_check_delay_seconds,
+        adaptive=adaptive_required_checks,
     )
     failed = check_summary["failed"]
     pending = check_summary["pending"]
@@ -19632,14 +18729,14 @@ def _merge_close_sync_pr_if_ready(
             "next_command": f"gh pr merge {pr_url} --squash",
         }
     try:
-        # Close-sync CI normally queues behind the source merge's default-branch
-        # Keep the stable CI verdict wait bounded, but long enough to avoid a
-        # guaranteed second manual finalizer invocation for an active CI job.
+        # Metadata-only CI is normally short: poll early without extending the
+        # existing total wait budget or weakening exact-HEAD required checks.
         result = _merge_pr_if_ready_for_bug(
             bug_id,
             pr_url,
             required_check_attempts=16,
             required_check_delay_seconds=30,
+            adaptive_required_checks=True,
         )
     except WorkflowError as exc:
         return {

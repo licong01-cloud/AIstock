@@ -656,7 +656,7 @@ def test_inference_run_uses_singleton_pointer_only_when_manifest_has_no_identity
 
         def resolve_live_binding(self) -> PitConsumerBinding:
             self.calls += 1
-            return _live_binding(canonical=False)
+            return _live_binding(canonical=True)
 
     resolver = Resolver()
     identity = _resolve_inference_pit_identity_for_run(
@@ -667,7 +667,7 @@ def test_inference_run_uses_singleton_pointer_only_when_manifest_has_no_identity
         authority_resolver=resolver,  # type: ignore[arg-type]
     )
     assert resolver.calls == 1
-    assert identity.receipt_mode == "deployed_legacy_pending_migration"
+    assert identity.binding.rule_version == CANONICAL_PIT_RULE_VERSION
 
 
 def test_inference_run_does_not_read_pointer_for_detached_frozen_identity() -> None:
@@ -700,7 +700,7 @@ def test_strategy_package_training_binding_is_not_misread_as_runtime_identity() 
 
         def resolve_live_binding(self) -> PitConsumerBinding:
             self.calls += 1
-            return _live_binding(canonical=False)
+            return _live_binding(canonical=True)
 
     resolver = Resolver()
     identity = _resolve_inference_pit_identity_for_run(
@@ -717,7 +717,20 @@ def test_strategy_package_training_binding_is_not_misread_as_runtime_identity() 
         authority_resolver=resolver,  # type: ignore[arg-type]
     )
     assert resolver.calls == 1
-    assert identity.receipt_mode == "deployed_legacy_pending_migration"
+    assert identity.binding.rule_version == CANONICAL_PIT_RULE_VERSION
+
+
+def test_new_inference_run_rejects_legacy_default_without_rewriting_history() -> None:
+    from backend.services.canonical_equity_pit import CanonicalPitContractError
+
+    class Resolver:
+        def resolve_live_binding(self):
+            return _live_binding(canonical=False)
+
+    with pytest.raises(CanonicalPitContractError, match="non-canonical"):
+        _resolve_inference_pit_identity_for_run(
+            manifest={}, pit_identity=None, version_tag="strategy_package_live",
+            receipt_admissibility="PROSPECTIVE_FIRST_OBSERVED", authority_resolver=Resolver())
 
 
 def test_malformed_explicit_manifest_inference_identity_fails_without_pointer_fallback() -> None:

@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1723",
-  "closed_at": null,
+  "closed_at": "2026-10-04T12:09:27.733772Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -37,13 +37,13 @@
   "file_scope_contract": {
     "actual_changed_files": [
       "backend/services/qe_archive/repository.py",
-      "backend/tests/qe_archive/test_multi_alpha_recovery_archive.py",
+      "backend/tests/test_qe_archive_repository_static.py",
       "tests/aistock_validation/bugs/20261004_BUG-1723-p1-qe-archive-multi-alpha-recovery-json-dictionaries-are-not-adapted-for.json"
     ],
     "added_files": [],
     "changed_files": [
       "backend/services/qe_archive/repository.py",
-      "backend/tests/qe_archive/test_multi_alpha_recovery_archive.py",
+      "backend/tests/test_qe_archive_repository_static.py",
       "tests/aistock_validation/bugs/20261004_BUG-1723-p1-qe-archive-multi-alpha-recovery-json-dictionaries-are-not-adapted-for.json"
     ],
     "changed_files_source": "git_finish",
@@ -117,8 +117,8 @@
   },
   "first_seen_at": "2026-10-04T01:56:08.594057Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "3e1801efea327b8a5048235550bb15f53890858d",
+  "fixed_at": "2026-10-04T02:47:52Z",
   "github_issue_number": 5431,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5431",
   "last_seen_at": "2026-10-04T01:56:08.594057Z",
@@ -126,6 +126,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5435",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -149,9 +150,32 @@
     "planned_target_ids": [
       "backend-main"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:\\Dev\\AIstock\\tmp\\issue_workflow\\BUG-1723\\post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1723",
+      "business_smoke_semantic": {
+        "contract_id": "collection",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b99dd9080153762523fe5e2c761c4d7badd6c89331b062f5807c96b665623e48",
+      "contract_digest": "1db464dc1064ba85837d4ab3ccf2f37b7336c4f500fba4cef87631bcf92913a0",
+      "expected_identity": "3e1801efea327b8a5048235550bb15f53890858d",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-04T12:03:03.685107Z",
+      "mode": "read_only",
+      "observed_identity": "5c51aac49d7cf951f2835a5e68a04c837f803162",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "96f049026d133bb0d1799cc485442b7fdaf3ec7b1a4252e8099286c5e515ac54",
+      "receipt_sha256": "182797f1cb7336cba381cc3a3f1d67f46b9bdd42c90621b872445eb174a0df65",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a9ba6ecf66647446f1ad9b643c59a110265730659534758bb3486b734e95fa0d",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -161,7 +185,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1723",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "e4e89e0cbf7bbfa8",
+    "recorded_at": "2026-10-04T02:48:31.270505Z",
+    "runtime_contract_digest": "1db464dc1064ba85837d4ab3ccf2f37b7336c4f500fba4cef87631bcf92913a0",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "0386daefbba3e09776f22508dd6a7e50a5b9287a",
+    "source_merge_commit": "3e1801efea327b8a5048235550bb15f53890858d",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/5435",
+    "validation_evidence": [
+      "python -m pytest backend/tests/test_qe_archive_repository_static.py -k json_columns_roundtrip -q -> 9 passed at final HEAD",
+      "python -m nox -s l0 -- exact changed files -> passed blocking=0"
+    ],
+    "validation_evidence_digest": "297e9a25e3b14bed884aca97b728441dc2c71731c0d51c2eb3fe459c5fad363a"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qe.archive"
   ],
@@ -170,6 +216,11 @@
     "fingerprint": "e4333e218a9b8e2d603b7de0",
     "source_event_id": "FE-20261004-e4333e218a9b"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/test_qe_archive_repository_static.py -k json_columns_roundtrip -q -> 9 passed at final HEAD",
+    "python -m nox -s l0 -- exact changed files -> passed blocking=0",
+    "post-restart-verify BUG-1723 backend-main verified"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

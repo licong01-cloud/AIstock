@@ -60,6 +60,76 @@ CONTRACT = {
     "validation_basis": BASIS,
 }
 
+NEUTRAL_VERSION = "hmm_risk_l2_neutral_centered_effect_v1"
+NEUTRAL_CONTRACT = {
+    **CONTRACT,
+    "version": NEUTRAL_VERSION,
+    "score_formula": "frozen_utility[hard_state]-frozen_utility[mapping_neutral_state]",
+    "validation_basis": "POST_CALIBRATION_RETROSPECTIVE_DEVELOPMENT_RESCORED",
+}
+NEUTRAL_SOURCE_ACCEPTANCE_SHA = "309b770ccf8ae11477412970e07e222cac3fd275d9de88e020d57e503625d1b7"
+
+
+def neutral_rescore(original: Mapping[str, Any]) -> dict[str, Any]:
+    """Rescore sealed hard states; never restores, filters or fits a model."""
+    validate_acceptance(original)
+    if original["acceptance_sha256"] != NEUTRAL_SOURCE_ACCEPTANCE_SHA:
+        raise fail("neutral score requires the approved sealed source", reason="identity_mismatch")
+    semantics = original["evaluation_input_identity"]["semantic_mapping_and_utility_by_sector"]
+    rows = []
+    for old in original["predictions"]:
+        row = dict(old)
+        row["outcome_status"] = "PENDING_EVALUATION"
+        row["feature_contributions"] = None
+        if old["availability"] == "available":
+            mapping, utility = semantics[row["sector_code"]]
+            neutral = [state for state, name in mapping.items() if name == "neutral"]
+            if len(neutral) != 1:
+                raise fail("neutral mapping must be unique")
+            center = utility[neutral[0]]
+            score = utility[str(row["hard_state"])] - center
+            if not math.isfinite(score):
+                raise fail("neutral-centered score is not finite")
+            row["raw_score"] = score
+            row["feature_contributions"] = {
+                "hard_state": row["hard_state"],
+                "frozen_utility_mean": old["raw_score"],
+                "neutral_hidden_state": int(neutral[0]),
+                "neutral_utility_mean": center,
+                "centered_utility": score,
+                "semantic_state": row["semantic_state"],
+                "model_parameter_sha256": row["model_parameter_sha256"],
+            }
+        rows.append(row)
+    by_day = {}
+    for row in rows:
+        by_day.setdefault(row["trade_date"], []).append(row)
+    for day_rows in by_day.values():
+        raw = {r["sector_code"]: r["raw_score"] for r in day_rows if r["availability"] == "available"}
+        scores, groups = _score_and_states(raw) if len(raw) >= 2 else ({}, {})
+        for row in day_rows:
+            code = row["sector_code"]
+            if row["availability"] == "available" and code not in scores:
+                raise fail("rescore cannot change the frozen prediction population")
+            row["rotation_score"] = scores.get(code)
+            row["daily_rank_group"] = groups.get(code)
+            if row["feature_contributions"] is not None:
+                row["feature_contributions"].update(average_rank_score=scores[code], daily_rank_group=groups[code])
+    return receipt(
+        {
+            "schema_version": NEUTRAL_VERSION + "_predictions",
+            "contract": NEUTRAL_CONTRACT,
+            "source_acceptance_sha256": original["acceptance_sha256"],
+            "model_set_sha256": original["model_hash"],
+            "observation_sha256": original["input_hash"],
+            "predictions": rows,
+            "fits": 0,
+            "selection_performed": False,
+            "target_accessed": False,
+            "tail_accessed": False,
+        }
+    )
+
 
 def fail(message: str, *, reason: str = "input_invalid") -> FormalStateError:
     return FormalStateError(f"hmm_risk_l2_effect_{reason}", message)
@@ -500,12 +570,17 @@ def evaluate(
     sealed: Mapping[str, Any],
     labels: Mapping[str, Any],
     baseline: Sequence[Mapping[str, Any]],
+    *,
+    score_version: str = VERSION,
 ) -> dict[str, Any]:
+    if score_version not in (VERSION, NEUTRAL_VERSION):
+        raise fail("unknown score contract")
+    score_contract = CONTRACT if score_version == VERSION else NEUTRAL_CONTRACT
     verify_receipt(sealed)
     verify_receipt(labels)
     if (
-        sealed.get("schema_version") != VERSION + "_predictions"
-        or sealed.get("contract") != CONTRACT
+        sealed.get("schema_version") != score_version + "_predictions"
+        or sealed.get("contract") != score_contract
         or sealed.get("target_accessed") is not False
         or sealed.get("tail_accessed") is not False
         or type(sealed.get("fits")) is not int
@@ -708,6 +783,102 @@ def evaluate(
             },
         },
     }
+
+
+def neutral_effect_repeat(
+    original: Mapping[str, Any],
+    labels: Mapping[str, Any],
+    baseline: Mapping[str, Any],
+    *,
+    numeric_environment: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Labels must be an existing hash-pinned source; no label construction here."""
+    sealed = neutral_rescore(original)
+    identity = original["evaluation_input_identity"]
+    verify_receipt(labels, identity["outcome_sha256"])
+    verify_receipt(baseline, identity["baseline_sha256"])
+    if baseline.get("tail_accessed") is not False:
+        raise fail("baseline crosses the approved boundary")
+    result = evaluate(sealed, labels, baseline["predictions"], score_version=NEUTRAL_VERSION)
+    original_daily = {r["trade_date"]: r["rank_ic"] for r in original["metrics"]["daily"]}
+    paired = {
+        date.fromisoformat(r["trade_date"]): r["rank_ic"] - original_daily[r["trade_date"]]
+        for r in result["metrics"]["daily"]
+        if r["rank_ic"] is not None and original_daily[r["trade_date"]] is not None
+    }
+    days = [date.fromisoformat(d) for d in calendar_contract(labels["calendar"])["maturity"]["20"]]
+    result["metrics"]["original_score_diagnostic"] = {
+        "overall": original["metrics"]["overall"],
+        "paired_delta_hac": _newey_west(days, paired, lag=19),
+        "promotion_gate": False,
+    }
+    result["metrics"]["same_score_days"] = sum(
+        len(
+            {r["raw_score"] for r in sealed["predictions"] if r["trade_date"] == d and r["availability"] == "available"}
+        )
+        == 1
+        for d in calendar_contract(labels["calendar"])["decisions"]
+    )
+    return receipt(
+        {
+            "schema_version": NEUTRAL_VERSION + "_repeat",
+            "contract": NEUTRAL_CONTRACT,
+            "source_acceptance_sha256": original["acceptance_sha256"],
+            "source_model_sha256": original["model_hash"],
+            "source_input_sha256": original["input_hash"],
+            "source_prediction_sha256": identity["prediction_sha256"],
+            "label_sha256": labels["receipt_sha256"],
+            "baseline_sha256": baseline["receipt_sha256"],
+            "sealed_prediction_sha256": sealed["receipt_sha256"],
+            "numeric_environment": dict(numeric_environment),
+            "result": result,
+            "fits": 0,
+            "selection_performed": False,
+            "tail_accessed": False,
+        }
+    )
+
+
+def close_neutral_processes(first: Mapping[str, Any], second: Mapping[str, Any]) -> dict[str, Any]:
+    for payload in (first, second):
+        verify_receipt(payload)
+        if (
+            payload.get("schema_version") != NEUTRAL_VERSION + "_repeat"
+            or payload.get("contract") != NEUTRAL_CONTRACT
+            or payload.get("source_acceptance_sha256") != NEUTRAL_SOURCE_ACCEPTANCE_SHA
+            or type(payload.get("fits")) is not int
+            or payload["fits"] != 0
+            or payload.get("selection_performed") is not False
+            or payload.get("tail_accessed") is not False
+        ):
+            raise fail("neutral repeat authority differs", reason="identity_mismatch")
+    if canonical_json_bytes(first) != canonical_json_bytes(second):
+        raise fail("neutral fresh processes differ", reason="repeat_mismatch")
+    return receipt(
+        {
+            "schema_version": NEUTRAL_VERSION + "_acceptance",
+            "contract": NEUTRAL_CONTRACT,
+            "evaluation_contract_hash": canonical_sha256(NEUTRAL_CONTRACT),
+            "source_acceptance_sha256": first["source_acceptance_sha256"],
+            "model_hash": first["source_model_sha256"],
+            "input_hash": first["source_input_sha256"],
+            "numeric_environment": first["numeric_environment"],
+            "label_sha256": first["label_sha256"],
+            "fresh_process_bitwise_equal": True,
+            "result": first["result"],
+            "planned_fits": 0,
+            "completed_fits": 0,
+            "execution_status": "COMPLETED",
+            "research_surface_status": "NOT_AVAILABLE",
+            "advisory_status": "NOT_AVAILABLE",
+            "validation_basis": NEUTRAL_CONTRACT["validation_basis"],
+            "selection_performed": False,
+            "tail_accessed": False,
+            "database_write": False,
+            "runtime_action": False,
+            "ready": False,
+        }
+    )
 
 
 def close_effect_processes(first: Mapping[str, Any], second: Mapping[str, Any]) -> dict[str, Any]:

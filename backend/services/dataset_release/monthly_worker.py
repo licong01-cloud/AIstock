@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import date, datetime, timezone
 import hashlib
 import json
 import os
@@ -31,9 +31,15 @@ from .monthly_unified import (
     classify_component_actions,
 )
 from .canonical import canonical_json_bytes
+from .monthly_file_identity import file_sha256
+from .monthly_subprocess import headless_process_options
+from .monthly_source_quality import (
+    SOURCE_GATE_QUALITY_FIELDS, SOURCE_GATE_SCHEMA, validate_source_gate_quality,
+)
 from .profile_contract import ACTIVE_PROFILE_V4_CONSUMER_REQUIREMENTS
 
 
+UTC = timezone.utc
 PRODUCER_EVIDENCE_SCHEMA = "aistock_monthly_release_producer_evidence_v1"
 
 
@@ -90,6 +96,9 @@ class ProducerContext:
     request: Mapping[str, Any]
     plan: Mapping[str, Any]
     prior_receipts: Mapping[str, Mapping[str, Any]]
+    # Observational/control hooks only; neither is a release identity or receipt.
+    checkpoint: Callable[[], None] = lambda: None
+    progress: Callable[[Mapping[str, Any]], None] = lambda _value: None
 
 
 class StageProducer(Protocol):
@@ -189,6 +198,7 @@ class SubprocessStageProducer:
             text=True,
             encoding="utf-8",
             errors="replace",
+            **headless_process_options(),
         )
         (exchange / f"{context.stage.lower()}-stdout.log").write_text(
             completed.stdout[-1024 * 1024 :], encoding="utf-8"
@@ -211,11 +221,7 @@ class SubprocessStageProducer:
 
 
 def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    return file_sha256(path)
 
 
 def _artifact_refs(value: Any, *, roots: Sequence[Path], label: str) -> tuple[list[dict[str, Any]], dict[str, Path]]:
@@ -372,25 +378,16 @@ def _validate_semantics(
             raise MonthlyProducerError("source gate artifact coverage differs")
         observed_gates: set[str] = set()
         pinned_artifact_ids = {str(item["id"]) for item in (*input_refs, *output_refs)}
+        pinned_sha256s = {str(item["sha256"]) for item in (*input_refs, *output_refs)}
+        base_gate_fields = {
+            "schema_version", "gate_id", "snapshot_group_id", "expectation_contract_ref",
+            "readback_ref", "expected_count", "observed_count", "explained_missing_count",
+            "unexplained_missing_count", "duplicate_count", "invalid_value_count", "status", "exception_refs",
+        }
         for gate in gate_evidence:
             if (
-                set(gate)
-                != {
-                    "schema_version",
-                    "gate_id",
-                    "snapshot_group_id",
-                    "expectation_contract_ref",
-                    "readback_ref",
-                    "expected_count",
-                    "observed_count",
-                    "explained_missing_count",
-                    "unexplained_missing_count",
-                    "duplicate_count",
-                    "invalid_value_count",
-                    "status",
-                    "exception_refs",
-                }
-                or gate.get("schema_version") != "aistock_monthly_source_gate_v2"
+                set(gate) not in (base_gate_fields, base_gate_fields | SOURCE_GATE_QUALITY_FIELDS)
+                or gate.get("schema_version") != SOURCE_GATE_SCHEMA
             ):
                 raise MonthlyProducerError("source gate artifact schema differs")
             gate_id = str(gate.get("gate_id") or "")
@@ -421,6 +418,11 @@ def _validate_semantics(
                 or bool(gate["explained_missing_count"]) != bool(gate["exception_refs"])
             ):
                 raise MonthlyProducerError("source gate artifact did not close its domain")
+            try:
+                validate_source_gate_quality(gate, plan, pinned_sha256s=pinned_sha256s)
+            except (ValueError, TypeError, KeyError, OSError) as exc:
+                raise MonthlyProducerError("source gate quality-warning artifact is invalid",
+                    context={"gate_id": gate_id, "reason": str(exc)}) from exc
             observed_gates.add(gate_id)
         if observed_gates != set(SOURCE_GATES):
             raise MonthlyProducerError("source gate artifact identities differ")
@@ -878,25 +880,53 @@ class RegisteredMonthlyPipeline(MonthlyPipeline):
         return hashlib.sha256(canonical_json_bytes(identity)).hexdigest()
 
     def checkpoint_is_valid(self, stage: str, receipt: Mapping[str, Any]) -> bool:
-        del stage
-        for group in ("input_refs", "output_refs"):
-            for ref in receipt.get(group, []):
+        # The operation store already verified the durable receipt's digest and
+        # request/plan/producer binding. Resume is not another whole-release
+        # content audit: LOCAL_VALIDATE and DEPLOY own that verification.
+        retained_stage = stage in {"BUILD", "DERIVE", "LOCAL_VALIDATE"}
+        if stage == "BUILD":
+            anchor = receipt.get("scope", {}).get("dataset_manifest_ref")
+            if not isinstance(anchor, Mapping) or anchor not in receipt.get("output_refs", []):
+                raise MonthlyProducerError("retained BUILD manifest anchor is missing")
+            groups = (receipt.get("input_refs", []), [anchor])
+        elif stage == "LOCAL_VALIDATE":
+            groups = (receipt.get("output_refs", []),)
+        else:
+            groups = (receipt.get("input_refs", []), receipt.get("output_refs", []))
+        for refs in groups:
+            for ref in refs:
                 relative = Path(str(ref["id"]))
                 matches = [(root, root / relative) for root in self.artifact_roots if (root / relative).is_file()]
                 if len(matches) != 1:
+                    if retained_stage:
+                        raise MonthlyProducerError("retained stage artifact is missing or ambiguous; exports preserved")
                     return False
                 root, path = matches[0]
                 try:
                     _require_plain_path_under(root, path, label="checkpoint")
                 except MonthlyProducerError:
+                    if retained_stage:
+                        raise MonthlyProducerError("retained stage artifact path differs; exports preserved") from None
                     return False
                 if (
                     _is_link_or_junction(path)
                     or path.stat().st_size != ref["size"]
                     or _file_sha256(path) != ref["sha256"]
                 ):
+                    if retained_stage:
+                        raise MonthlyProducerError("retained stage artifact bytes differ; exports preserved")
                     return False
         return True
+
+    def run_stage_with_control(
+        self,
+        *,
+        checkpoint: Callable[[], None],
+        progress: Callable[[Mapping[str, Any]], None],
+        **stage_arguments: Any,
+    ) -> Mapping[str, Any]:
+        """Code-owned service controls; API callers cannot inject callbacks."""
+        return self.run_stage(**stage_arguments, checkpoint=checkpoint, progress=progress)
 
     def run_stage(
         self,
@@ -907,9 +937,12 @@ class RegisteredMonthlyPipeline(MonthlyPipeline):
         request: Mapping[str, Any],
         plan: Mapping[str, Any],
         prior_receipts: Mapping[str, Mapping[str, Any]],
+        checkpoint: Callable[[], None] = lambda: None,
+        progress: Callable[[Mapping[str, Any]], None] = lambda _value: None,
     ) -> Mapping[str, Any]:
         producer = self.producers[stage]
         started = datetime.now(UTC).isoformat()
+        checkpoint()
         evidence = dict(
             producer.produce(
                 ProducerContext(
@@ -919,9 +952,12 @@ class RegisteredMonthlyPipeline(MonthlyPipeline):
                     request=request,
                     plan=plan,
                     prior_receipts=prior_receipts,
+                    checkpoint=checkpoint,
+                    progress=progress,
                 )
             )
         )
+        checkpoint()
         if evidence.get("schema_version") != PRODUCER_EVIDENCE_SCHEMA or set(evidence) != {
             "schema_version",
             "scope",
@@ -988,7 +1024,8 @@ class MonthlyReleaseWorker:
                 # state, consume its request or turn contention into an exit.
                 continue
             request = self.service.store.read_request(operation_id)
-            if state.get("status") == "READY_TO_ACTIVATE" and request.get("activation_mode") == "activate_when_ready":
+            if (state.get("status") == "READY_TO_ACTIVATE" and request.get("activation_mode") == "activate_when_ready"
+                    and self.service.store.read_plan(operation_id).get("monthly_ready_correction") is None):
                 if self.authorization_store is None or self.activation_verifier is None:
                     return self.service.store.update_state(
                         operation_id,

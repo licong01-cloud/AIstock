@@ -16,6 +16,7 @@ from bisect import bisect_left, bisect_right
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
+from decimal import Decimal
 from types import MappingProxyType
 from typing import Any, Callable
 from zoneinfo import ZoneInfo
@@ -24,6 +25,7 @@ from .canonical import digest_named_fields
 from .errors import DatasetReleaseError
 from .index_contract import DOMESTIC_INDEX_DEFINITIONS
 from .pit import FrozenPitSnapshot
+from .source_fact_history import is_a_share
 from .stock_schema import QLIB_STOCK_FIELDS, qlib_stock_schema_digest
 
 
@@ -32,6 +34,7 @@ QFQ_DENOMINATOR_AUTHORITY_SCHEMA = "dataset_release_qfq_denominator_authority_v1
 PRICE_UNIT_DIVISOR = 1000.0
 VALUE_COMPARE_ABS_TOL = 1e-4
 MINUTE_FREQ = "1m"
+PRECISION_FIELDS = ('volume_shares', 'volume_shares_source', 'volume_shares_sha256')
 _STOCK_CODE = re.compile(r"[0-9]{6}\.(?:SH|SZ)\Z")
 _INDEX_CODES = frozenset(item.daily_code for item in DOMESTIC_INDEX_DEFINITIONS)
 _SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -47,6 +50,31 @@ _RAW_VALUE_FIELDS = (
 
 class CanonicalStockTransformError(DatasetReleaseError):
     code = "BLOCKED_CANONICAL_STOCK_TRANSFORM_INVALID"
+
+
+def raw_volume_shares(row: Mapping[str, Any]) -> float:
+    """Use authoritative database share precision, independent of supplier tags.
+
+    Present invalid precision is an error, never a reason to silently revert
+    to whole hands. This function is shared by frozen audit and bin transform.
+    """
+    hand = row.get('volume_hand')
+    if isinstance(hand, bool) or not isinstance(hand, (int, float, Decimal)):
+        raise ValueError('legacy raw volume must be numeric hands')
+    legacy = float(hand) * 100
+    if not math.isfinite(legacy) or legacy < 0:
+        raise ValueError('legacy raw volume is invalid')
+    shares = row.get('volume_shares')
+    if shares is None:
+        return legacy
+    if isinstance(shares, bool) or not isinstance(shares, (int, float, Decimal)):
+        raise ValueError('raw share precision must be numeric')
+    value = float(shares)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError('raw share precision is invalid')
+    # Ingestion owns supplier provenance. Export validates the numeric database
+    # fact, not an evolving whitelist of source labels or a supplier receipt.
+    return value
 
 
 def _minute_session_times() -> tuple[time, ...]:
@@ -206,6 +234,8 @@ class CanonicalStockTransformSpec:
     qfq_denominators: QfqDenominatorAuthority
     instrument_filter: tuple[str, ...] | None = None
     initial_adj_factors: Mapping[str, float] | None = None
+    quote_days: tuple[tuple[str, date], ...] = ()
+    fact_stock_codes: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if self.pit_snapshot.cutoff != self.cutoff:
@@ -223,7 +253,12 @@ class CanonicalStockTransformSpec:
             or days[-1] > self.cutoff
         ):
             raise CanonicalStockTransformError("frozen trading days must be sorted, unique and scope-bounded")
-        codes = {span.ts_code for span in self.pit_snapshot.spans}
+        pit_codes = {span.ts_code for span in self.pit_snapshot.spans}
+        codes = set(self.fact_stock_codes or self.qfq_denominators.by_code)
+        if (self.fact_stock_codes != tuple(sorted(set(self.fact_stock_codes)))
+                or not pit_codes.issubset(codes)
+                or any(re.fullmatch(r"\d{6}\.(SH|SZ)", code) is None for code in codes)):
+            raise CanonicalStockTransformError("frozen factual stock population is invalid")
         if codes.intersection(_INDEX_CODES):
             raise CanonicalStockTransformError("domestic index codes cannot enter the stock PIT contract")
         if set(self.qfq_denominators.by_code) != codes:
@@ -232,6 +267,12 @@ class CanonicalStockTransformSpec:
             selected = tuple(sorted(set(self.instrument_filter)))
             if selected != self.instrument_filter or not selected or not set(selected).issubset(codes):
                 raise CanonicalStockTransformError("transform instrument filter is invalid")
+        if (tuple(sorted(set(self.quote_days))) != self.quote_days or any(
+            code not in codes or day not in days
+            or (self.instrument_filter is not None and code not in self.instrument_filter)
+            for code, day in self.quote_days
+        )):
+            raise CanonicalStockTransformError("observed quote days differ from frozen population/calendar")
         seeds = dict(self.initial_adj_factors or {})
         if not set(seeds).issubset(codes) or any(
             not math.isfinite(float(value)) or float(value) <= 0 for value in seeds.values()
@@ -251,6 +292,8 @@ class CanonicalStockTransformSpec:
                 "initial_adj_factors": {
                     code: float(value) for code, value in sorted((self.initial_adj_factors or {}).items())
                 },
+                "quote_days": self.quote_days,
+                **({"fact_stock_codes": self.fact_stock_codes} if self.fact_stock_codes else {}),
                 "qlib_stock_schema_digest": qlib_stock_schema_digest(),
             },
         )
@@ -286,12 +329,18 @@ def build_qfq_denominator_authority(
     *,
     pit_snapshot: FrozenPitSnapshot,
     cutoff: date,
+    fact_stock_codes: tuple[str, ...] = (),
 ) -> QfqDenominatorAuthority:
     """Compute exact per-stock QFQ bases in one O(instruments) streaming pass."""
 
     if pit_snapshot.cutoff != cutoff:
         raise CanonicalStockTransformError("QFQ cutoff differs from PIT cutoff")
-    expected_codes = {span.ts_code for span in pit_snapshot.spans}
+    expected_codes = set(fact_stock_codes) if fact_stock_codes else None
+    pit_codes = {span.ts_code for span in pit_snapshot.spans}
+    if (fact_stock_codes != tuple(sorted(set(fact_stock_codes)))
+            or (expected_codes is not None and not pit_codes.issubset(expected_codes))
+            or any(re.fullmatch(r"\d{6}\.(SH|SZ)", code) is None for code in (expected_codes or ()))):
+        raise CanonicalStockTransformError("QFQ factual stock population is invalid")
     maxima: dict[str, float] = {}
     per_code_digests: dict[str, Any] = {}
     per_code_counts: dict[str, int] = {}
@@ -306,7 +355,8 @@ def build_qfq_denominator_authority(
         previous = key
         code = row["ts_code"]
         observed_date = row["trade_date"]
-        if code not in expected_codes or observed_date > cutoff:
+        if (not is_a_share(code) or (expected_codes is not None and code not in expected_codes)
+                or observed_date > cutoff):
             continue
         value = row["adj_factor"]
         maxima[code] = max(value, maxima.get(code, value))
@@ -323,7 +373,7 @@ def build_qfq_denominator_authority(
         source_digest.update(canonical_row)
         per_code_digests.setdefault(code, hashlib.sha256()).update(canonical_row)
         per_code_counts[code] = per_code_counts.get(code, 0) + 1
-    missing = sorted(expected_codes.difference(maxima))
+    missing = sorted((expected_codes if expected_codes is not None else pit_codes).difference(maxima))
     if missing:
         raise CanonicalStockTransformError(
             "adj_factor cannot establish every PIT stock denominator",
@@ -413,7 +463,7 @@ class CanonicalStockTransformer:
             key=lambda row: (row["ts_code"], row["trade_date"]),
         )
         latest_adj_by_code = {code: float(value) for code, value in (spec.initial_adj_factors or {}).items()}
-        for code, trading_day in context.expected_code_days():
+        for code, trading_day in context.observed_and_expected_code_days(raw):
             target = (code, trading_day)
             _consume_adj_through(adj, target, latest_adj_by_code)
             qfq = _qfq_for_day(spec, latest_adj_by_code, code, trading_day)
@@ -456,6 +506,7 @@ class CanonicalStockTransformer:
         adj_factor_rows: Iterable[Mapping[str, Any]],
         stk_limit_rows: Iterable[Mapping[str, Any]],
         suspend_rows: Iterable[Mapping[str, Any]],
+        daily_rows: Iterable[Mapping[str, Any]] | None = None,
         checkpoint: Callable[[], None] = lambda: None,
         checkpoint_rows: int = 10_000,
         metrics: CanonicalStockTransformMetrics | None = None,
@@ -512,7 +563,15 @@ class CanonicalStockTransformer:
             key=lambda row: (row["ts_code"], row["trade_date"]),
         )
         latest_adj_by_code = {code: float(value) for code, value in (spec.initial_adj_factors or {}).items()}
-        for code, trading_day in context.expected_code_days():
+        daily = None if daily_rows is None else _Cursor(
+            _iter_normalized(
+                daily_rows, source="kline_daily_raw", normalizer=_normalize_daily_row,
+                sort_key=lambda row: (row["ts_code"], row["trade_date"]),
+                include=lambda row: context.is_expected_day(row["ts_code"], row["trade_date"]),
+                report=report,
+            ), key=lambda row: (row["ts_code"], row["trade_date"]),
+        )
+        for code, trading_day in context.observed_and_expected_code_days(raw):
             target = (code, trading_day)
             _consume_adj_through(adj, target, latest_adj_by_code)
             qfq = _qfq_for_day(spec, latest_adj_by_code, code, trading_day)
@@ -522,6 +581,7 @@ class CanonicalStockTransformer:
             suspend = _pop_group(suspends, target)
             full_day_suspend = _is_full_day_suspend(suspend)
             raw_day_rows = _pop_group(raw, target, hard_limit=241)
+            daily_facts = None if daily is None else _pop_group(daily, target)
             report.peak_minute_stock_day_rows = max(
                 report.peak_minute_stock_day_rows,
                 len(raw_day_rows),
@@ -540,6 +600,23 @@ class CanonicalStockTransformer:
                 if row["trade_time"].time() not in MINUTE_SESSION_TIMES
                 and row["trade_time"].time() != MINUTE_OPENING_AUCTION_TIME
             )
+            if (
+                unexpected
+                and all(row["trade_time"].time().isoformat() == "13:00:00"
+                        for row in raw_day_rows if row["trade_time"].isoformat() in unexpected)
+                and daily_facts is not None
+                and suspended_zero_turnover_placeholder(
+                    full_day_suspend=full_day_suspend, has_1300=True,
+                    all_minute_turnover_zero=all(
+                        raw_volume_shares(row) == 0 and row["amount_li"] == 0 for row in raw_day_rows
+                    ), daily_rows=daily_facts,
+                )
+            ):
+                # Use the existing non-trading suspended-day representation,
+                # never shift raw timestamps or invent source trading bars.
+                raw_day_rows = ()
+                auction_rows = ()
+                unexpected = ()
             if unexpected:
                 raise CanonicalStockTransformError(
                     "minute stock-day contains an out-of-session row",
@@ -592,17 +669,44 @@ class CanonicalStockTransformer:
                 if report.output_rows % checkpoint_rows == 0:
                     checkpoint()
         _finish_cursors(raw, limits, suspends)
+        if daily is not None:
+            _finish_cursors(daily)
         adj.drain()
         checkpoint()
+
+
+def suspended_zero_turnover_placeholder(
+    *, full_day_suspend: bool, has_1300: bool,
+    all_minute_turnover_zero: bool, daily_rows: Iterable[Mapping[str, Any]],
+) -> bool:
+    """Frozen equivalent of the ingestion guard's independently proven no-trade case."""
+    values = tuple(daily_rows)
+    try:
+        volumes_zero = all(raw_volume_shares(row) == 0 for row in values)
+    except ValueError:
+        return False
+    return (
+        full_day_suspend and has_1300 and all_minute_turnover_zero and len(values) <= 1 and volumes_zero
+        and all(
+            not isinstance(row.get(field), bool)
+            and isinstance(row.get(field), (int, float, Decimal))
+            and math.isfinite(float(row[field])) and row[field] == 0
+            for row in values for field in ("amount_li",)
+        )
+    )
 
 
 class _TransformContext:
     def __init__(self, spec: CanonicalStockTransformSpec) -> None:
         self.spec = spec
-        all_codes = frozenset(span.ts_code for span in spec.pit_snapshot.spans)
+        all_codes = frozenset(spec.fact_stock_codes or spec.qfq_denominators.by_code)
         self.codes = frozenset(spec.instrument_filter) if spec.instrument_filter is not None else all_codes
         self._trading_days = spec.trading_days
         self._trading_day_set = frozenset(spec.trading_days)
+        self._quote_days = frozenset(spec.quote_days)
+        self._quote_days_by_code: dict[str, set[date]] = {}
+        for code, day in spec.quote_days:
+            self._quote_days_by_code.setdefault(code, set()).add(day)
         spans: dict[str, list[tuple[date, date]]] = {}
         for span in spec.pit_snapshot.spans:
             if span.ts_code not in self.codes:
@@ -613,15 +717,31 @@ class _TransformContext:
     def is_expected_day(self, code: str, observed: date) -> bool:
         if code not in self.codes or observed not in self._trading_day_set:
             return False
-        return any(start <= observed <= end for start, end in self._spans[code])
+        # A normalized real source row is itself evidence of a factual day.
+        # PIT is used below only to detect missing required days, never to
+        # discard facts outside buy-eligible intervals.
+        return True
+
+    def observed_and_expected_code_days(self, raw) -> Iterator[tuple[str, date]]:
+        """Streaming union; no code x full-history Cartesian product."""
+        expected = iter(self.expected_code_days())
+        required = next(expected, None)
+        while required is not None or raw.current_key is not None:
+            actual = raw.current_key
+            target = actual if required is None else required if actual is None else min(required, actual)
+            yield target
+            if required == target:
+                required = next(expected, None)
 
     def expected_code_days(self) -> Iterator[tuple[str, date]]:
-        for code in sorted(self._spans):
-            for start, end in self._spans[code]:
+        for code in sorted(self.codes):
+            days = set(self._quote_days_by_code.get(code, ()))
+            for start, end in self._spans.get(code, ()):
                 left = bisect_left(self._trading_days, start)
                 right = bisect_right(self._trading_days, end)
-                for observed in self._trading_days[left:right]:
-                    yield code, observed
+                days.update(self._trading_days[left:right])
+            for observed in sorted(days):
+                yield code, observed
 
 
 class _Cursor:
@@ -703,6 +823,12 @@ def _normalize_raw_values(raw: Mapping[str, Any], *, source: str, ordinal: int) 
         if field_name in {"volume_hand", "amount_li"} and value < 0:
             raise CanonicalStockTransformError(f"{source} {field_name} must be nonnegative at ordinal {ordinal}")
         output[field_name] = value
+    try:
+        raw_volume_shares(raw)
+    except ValueError as exc:
+        raise CanonicalStockTransformError(f"{source} {exc} at ordinal {ordinal}") from exc
+    if raw.get('volume_shares') is not None:
+        output.update({field: raw.get(field) for field in PRECISION_FIELDS})
     return output
 
 
@@ -914,7 +1040,7 @@ def _transform_raw_row(
         "high": raw_high * qfq,
         "low": raw_low * qfq,
         "close": raw_close * qfq,
-        "volume": float(row["volume_hand"]) * 100.0 / qfq,
+        "volume": raw_volume_shares(row) / qfq,
         "amount": float(row["amount_li"]) / PRICE_UNIT_DIVISOR,
         "factor": qfq,
         "up_limit_price": float(limit["up_limit"]),

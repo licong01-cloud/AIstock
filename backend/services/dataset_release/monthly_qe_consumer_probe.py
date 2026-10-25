@@ -105,7 +105,7 @@ def _selection(consumer_id: str) -> Mapping[str, Any]:
     if consumer_id == "qe_custom":
         return {"mode": "single_index", "pool_ids": ["csi300"]}
     if consumer_id == "qe_multi_alpha":
-        return {"mode": "union", "pool_ids": ["csi500", "csi1000"]}
+        return {"mode": "index_union", "pool_ids": ["csi500", "csi1000"]}
     raise MonthlyConsumerValidationError(f"unsupported QE consumer probe: {consumer_id}")
 
 

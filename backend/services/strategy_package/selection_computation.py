@@ -28,7 +28,7 @@ from backend.services.selection_center.runtime_profile import (
     parse_selection_runtime_profile,
 )
 from backend.services.strategy_package.models import AlphaMode
-from backend.services.trading_core.errors import ArtifactGenerationFailedError, RuntimeConfigInvalidError
+from backend.services.trading_core.errors import ArtifactGenerationFailedError, DataUnavailableError, RuntimeConfigInvalidError
 
 if TYPE_CHECKING:
     from backend.services.selection_center.risk_policy import RiskDecision
@@ -524,6 +524,22 @@ class StrategyPackageSelectionComputation:
                     "CANDIDATES_PRESENT" if selection_result.candidates else "VALID_NO_CANDIDATE"
                 )
 
+            # A raw non-TopK row can be promoted by native filtering. Validate
+            # priced consumers here, before any consumer target-quantity stage.
+            prices_required = any(row.component_scores.get("reference_price_required") is True
+                                  for row in prepared.alpha_raw_candidates)
+            missing = [row.symbol for row in selection_result.candidates if row.reference_price is None]
+            if prices_required and missing:
+                raise DataUnavailableError(
+                    "reference prices are missing for effective selection candidates",
+                    context={"package_id": package_id, "trade_date": request.trade_date.isoformat(),
+                             "reason_code": "SELECTION_EFFECTIVE_REFERENCE_PRICE_MISSING",
+                             "missing_price_count": len(missing), "missing_price_examples": missing[:20],
+                             "reference_price_availability": {
+                                 row.symbol: row.component_scores.get("reference_price_availability")
+                                 for row in selection_result.candidates if row.symbol in missing[:20]
+                             }},
+                )
             package_results[package_id] = tuple(selection_result.candidates)
             excluded_results[package_id] = tuple([*risk_result.exclusions, *selection_result.exclusions])
             manifest_sha256_by_package[package_id] = prepared.manifest_sha256
