@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1650",
-  "closed_at": null,
+  "closed_at": "2026-10-25T07:58:53.598644Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,11 +28,22 @@
   "evidence_uris": [],
   "expected": "All nine SOURCE gates use independently frozen calendar/PIT/key/field contracts, bounded verified source streams and real blocking counts. They must not infer completeness from observed partition row counts. No data repair or runtime mutation is performed by the auditor.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_source_audit.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1650-monthly-postgresql-source-gates-fabricate-zero-gap-pass-from-observed-pa.json"
+    ],
     "added_files": [],
     "changed_files": [
-      "backend/services/dataset_release/monthly_postgres_source.py"
+      "backend/services/dataset_release/monthly_frozen_source_audit.py",
+      "backend/services/dataset_release/monthly_postgres_source.py",
+      "backend/services/dataset_release/monthly_source_audit.py",
+      "backend/tests/dataset_release/test_monthly_postgres_source.py",
+      "tests/aistock_validation/bugs/20261001_BUG-1650-monthly-postgresql-source-gates-fabricate-zero-gap-pass-from-observed-pa.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_postgres_source.py"
@@ -108,10 +119,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1650-corrected-contract-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1650",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "d5dfe9b718d3a23de3da51d528eeabf83fab50bec97eae9bfb76acd819e74c9c",
+      "expected_identity": "479d97d6e8ec586c1dc73587301278abebb4fdb2",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:58:49.984660Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "4c079b614c8644b7285e87ce7538b1db559cb193e779c776fbd00c6e22e5d0ca",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "3ceaeef3520d99699faa180fd808d7f3acb58cc83cd68556625f87e53c819a8c",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -143,7 +176,7 @@
     ],
     "validation_evidence_digest": "27fde291357701205cba9f12ebeea1e390641b2c80df909e978178af0d52efc8"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -154,7 +187,8 @@
   },
   "validation_evidence": [
     "python -m pytest backend/tests/dataset_release/test_monthly_postgres_source.py -q -> 27 passed",
-    "python -m nox -s l0 --no-install -> passed"
+    "python -m nox -s l0 --no-install -> passed",
+    "Exact merged source scope and canonical-root supervised Worker probe PASS; target metadata correction reviewed twice; original source checks retained; no data/source/gate/runtime changes."
   ],
   "verification_budget": {
     "budget": "standard",
