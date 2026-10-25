@@ -29,15 +29,15 @@
   "expected": "A batch with valid limit bounds but no published positive pre_close must remain retryable low_coverage, with field observation in audit; partially valid batches retain legitimate NULLs.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261007_BUG-1780-stk-limit-ingestion-marks-an-entirely-unpublished-pre-close-field-as-suc.json",
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1780-stk-limit-ingestion-marks-an-entirely-unpublished-pre-close-field-as-suc.json"
     ],
     "added_files": [],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261007_BUG-1780-stk-limit-ingestion-marks-an-entirely-unpublished-pre-close-field-as-suc.json",
       "backend/services/tushare_sync_engine.py",
-      "backend/tests/test_tushare_sync_engine.py"
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20261007_BUG-1780-stk-limit-ingestion-marks-an-entirely-unpublished-pre-close-field-as-suc.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -99,8 +99,8 @@
   },
   "first_seen_at": "2026-10-07T02:42:00.636545Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "f70e56a1d793978223ae5c7c957fa75e3ef046b1",
+  "fixed_at": "2026-10-07T02:56:12Z",
   "github_issue_number": 5652,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/5652",
   "last_seen_at": "2026-10-07T02:42:00.636545Z",
@@ -108,6 +108,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/5654",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -134,6 +135,7 @@
       "backend-main"
     ],
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -145,7 +147,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -154,6 +156,9 @@
     "fingerprint": "276d45c09f81c43af4eefe5a",
     "source_event_id": "FE-20261007-276d45c09f81"
   },
+  "validation_evidence": [
+    "Source PR current merge identity and source CI SUCCESS independently verified. AIstock python fresh process imported task-worktree tushare_sync_engine; frozen official stk_limit responses for September 1..4 returned ok with 5546/5547/5549/5548 positive pre_close values; database_write=false. RED 9 failed then GREEN 9 passed; additional partial-row audit preservation check 2 passed.; AIstock python task-worktree import + four pinned official September stk_limit response readbacks PASS; no database/service writes; AIstock python fresh-process import + actual pinned official September 1..4 stk_limit responses -> PASS; no database/service writes"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
