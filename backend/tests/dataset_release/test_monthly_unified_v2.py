@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from dataclasses import replace
 import errno
 import hashlib
 import importlib
@@ -8,6 +9,7 @@ import json
 import os
 from pathlib import Path
 from typing import Any, Mapping
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -36,9 +38,34 @@ from backend.services.dataset_release.monthly_unified import (
     build_stage_receipt,
 )
 from backend.services.dataset_release.monthly_worker import MonthlyReleaseWorker
+from backend.services.dataset_release.monthly_ready_correction import seed_completed_exports
+from backend.services.dataset_release.monthly_build_resume import MonthlyBuildResume, retained_staging_root
+from backend.tests.dataset_release.test_monthly_mature_build_runner import _cas, _native_month_fixture, _Finalizer
+from backend.services.canonical_equity_pit import (
+    CANONICAL_PIT_AUTHORITY_ID, CANONICAL_PIT_UNIVERSE_KEY, CANONICAL_PIT_RULE_VERSION,
+    PitAuthorityStatus, PitConsumerBinding, canonical_rule_parameters_digest,
+)
 
 
 HEX = "a" * 64
+
+
+def _pit_pins() -> dict[str, Any]:
+    return {name: {"universe_key": CANONICAL_PIT_UNIVERSE_KEY,
+                   "rule_version": CANONICAL_PIT_RULE_VERSION}
+            for name in ("day_pins", "minute_pins")}
+
+
+def _runtime_pit(**overrides) -> PitConsumerBinding:
+    values = dict(authority_id=CANONICAL_PIT_AUTHORITY_ID,
+                  authority_status=PitAuthorityStatus.ACTIVE_CANONICAL,
+                  universe_key=CANONICAL_PIT_UNIVERSE_KEY, rule_version=CANONICAL_PIT_RULE_VERSION,
+                  rule_parameters_digest=canonical_rule_parameters_digest(),
+                  activation_generation=1, activation_envelope_digest="a" * 64,
+                  expected_source_commit="source-commit", state_source_digest="b" * 64,
+                  coverage_start=date(2018, 8, 1), coverage_end=date(2026, 9, 30))
+    values.update(overrides)
+    return PitConsumerBinding(**values)
 
 
 def _canonical(path: Path, value: Mapping[str, Any]) -> None:
@@ -64,6 +91,7 @@ def _active(path: Path, *, cutoff: str = "2026-08-31") -> None:
             "cutoff": cutoff,
             "controller_paths": {"candidate_root": str(baseline)},
             "components": {
+                **_pit_pins(),
                 "dataset_manifest_sha256": HEX,
                 "dataset_manifest_file_sha256": _sha(manifest),
             },
@@ -139,6 +167,7 @@ class Pipeline:
                     "release_id": plan["release_id"],
                     "cutoff": plan["target_cutoff"],
                     "components": {
+                        **_pit_pins(),
                         "dataset_manifest_sha256": self.manifest,
                         "release_closure_sha256": HEX,
                         "derived_asset_registry_sha256": HEX,
@@ -279,6 +308,7 @@ def _service(tmp_path: Path, pipeline: Pipeline) -> MonthlyReleaseService:
         generation_factory=lambda request: f"{request.target_cutoff:%Y%m%d}-v2",
         revision_factory=lambda request: f"{request.target_cutoff:%Y%m%d}-unified",
         allowed_cutoff_resolver=lambda: date(2026, 9, 30),
+        pit_authority_resolver=_runtime_pit,
     )
 
 
@@ -288,6 +318,122 @@ def _request(*, key: str = "monthly-202609") -> MonthlyReleaseRequest:
         product_profile="qe_hmm_full_v2",
         idempotency_key=key,
     )
+
+
+def test_status_reads_checkpoint_presence_without_parsing_or_hashing(tmp_path, monkeypatch):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    state_before = service.store.read_state(operation)
+    checkpoint = service.store.operation_root(operation) / "checkpoints" / "build.json"
+    checkpoint.parent.mkdir(exist_ok=True)
+    checkpoint.write_text("large receipt contents are not needed by status", encoding="utf-8")
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("status must not load or hash checkpoint contents")
+
+    monkeypatch.setattr(service.store, "read_checkpoint", forbidden)
+    monkeypatch.setattr(monthly_subject, "_file_sha256", forbidden)
+    result = service.status(operation)
+    assert result == {
+        **state_before,
+        "checkpoints": {stage: stage == "BUILD" for stage in STAGES},
+        "checkpoint_details_verified": False,
+    }
+
+
+def test_status_presence_does_not_accept_corrupt_checkpoint_for_resume(tmp_path):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    checkpoint = service.store.operation_root(operation) / "checkpoints" / "build.json"
+    checkpoint.parent.mkdir(exist_ok=True)
+    checkpoint.write_text("{}", encoding="utf-8")
+    assert service.status(operation)["checkpoints"]["BUILD"] is True
+    with pytest.raises(MonthlyReleaseError, match="checkpoint schema differs"):
+        service.store.read_checkpoint(operation, "BUILD")
+
+
+@pytest.mark.parametrize("non_regular", ["directory", "link"])
+def test_status_rejects_non_regular_checkpoint_paths(tmp_path, monkeypatch, non_regular):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    checkpoint = service.store.operation_root(operation) / "checkpoints" / "build.json"
+    checkpoint.parent.mkdir(exist_ok=True)
+    if non_regular == "directory":
+        checkpoint.mkdir()
+    else:
+        checkpoint.write_text("{}", encoding="utf-8")
+        # Exercise the link/reparse guard without requiring Windows symlink privileges.
+        original = monthly_subject._is_link_or_junction
+        monkeypatch.setattr(
+            monthly_subject, "_is_link_or_junction",
+            lambda path: path == checkpoint or original(path),
+        )
+    with pytest.raises(MonthlyReleaseError, match="regular|link or junction"):
+        service.status(operation)
+
+
+@pytest.mark.parametrize(
+    "planned,observed,ready",
+    [
+        ("2026-10-10T00:40:27.465665+00:00", "2026-10-10T08:40:27.465665+08:00", True),
+        ("2026-10-10T00:40:27.465665Z", "2026-10-10T00:40:27.465665+00:00", True),
+        ("2026-10-10T00:40:27.465665+00:00", "2026-10-10T08:40:27.465666+08:00", False),
+        ("2026-10-10T00:40:27+00:00", "2026-10-10T00:40:27+08:00", False),
+        ("2026-10-10T00:40:27", "2026-10-10T00:40:27", False),
+        ("invalid", "invalid", False),
+        ("", "", False),
+    ],
+)
+def test_ready_source_as_of_compares_aware_instants(tmp_path, planned, observed, ready):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())["operation_id"]
+    assert service.run(operation)["status"] == "READY_TO_ACTIVATE"
+    plan = service.store.read_plan(operation)
+    plan["source_as_of"] = planned
+    receipts = {stage: service.store.read_checkpoint(operation, stage) for stage in STAGES}
+    receipts["SOURCE"]["scope"]["source_as_of"] = observed
+    active_before = service.active_profile.read_bytes()
+    if ready:
+        result = service._close_ready(
+            operation, request=service.store.read_request(operation), plan=plan, receipts=receipts
+        )
+        assert result["status"] == "READY_TO_ACTIVATE"
+        assert result["source_as_of"] == observed
+    else:
+        with pytest.raises(monthly_subject.MonthlyReleaseNotReady, match="source_as_of"):
+            service._close_ready(
+                operation, request=service.store.read_request(operation), plan=plan, receipts=receipts
+            )
+    assert service.active_profile.read_bytes() == active_before
+
+
+def test_timezone_closure_resume_reuses_every_completed_stage(tmp_path, monkeypatch):
+    class OffsetSource(Pipeline):
+        def run_stage(self, **kwargs):
+            receipt = dict(super().run_stage(**kwargs))
+            if kwargs["stage"] == "SOURCE":
+                receipt["scope"]["source_as_of"] = "2026-10-01T08:00:00+08:00"
+                receipt["canonical_sha256"] = monthly_subject._digest(
+                    {key: value for key, value in receipt.items() if key != "canonical_sha256"}
+                )
+            return receipt
+
+    pipeline = OffsetSource()
+    service = _service(tmp_path, pipeline)
+    operation = service.submit(_request())["operation_id"]
+    close_ready = service._close_ready
+
+    def interrupted_closure(*args, **kwargs):
+        raise RuntimeError("closure interrupted after all stages")
+
+    monkeypatch.setattr(service, "_close_ready", interrupted_closure)
+    assert service.run(operation)["status"] == "FAILED"
+    checkpoints = {stage: service.store.read_checkpoint(operation, stage) for stage in STAGES}
+    monkeypatch.setattr(service, "_close_ready", close_ready)
+    service.resume(operation)
+    assert service.run(operation)["status"] == "READY_TO_ACTIVATE"
+    assert pipeline.calls == list(STAGES)
+    assert {stage: service.store.read_checkpoint(operation, stage) for stage in STAGES} == checkpoints
 
 
 @pytest.mark.parametrize("supplement_name", ["monthly_industry_history", "monthly_prev_close_repairs", "monthly_suspension_authority"])
@@ -474,8 +620,11 @@ def test_prev_close_binding_retains_source_and_is_idempotent(tmp_path, monkeypat
             authority, provenance = correction.build_authority(
                 cas, SimpleNamespace(source_manifest_ref=cas.put_json({})),
                 plan=plan, operation_id=operation, source_bundle_sha256=HEX)
-            assert [(row["ts_code"], row["trade_date"]) for row in authority["entries"]] == [
-                ("601238.SH", "2026-09-15")]
+            from backend.data_service.suspension_day_authority import load_authority
+            # Explicitly reviewed historical entries must survive a monthly
+            # binding; only entries beyond the release cutoff are excluded.
+            assert authority["entries"] == [row for row in load_authority()["entries"]
+                if row["trade_date"] <= "2026-09-30"]
             assert provenance["source_bundle_sha256"] == HEX
         path = service.store.operation_root(operation) / plan[correction.BINDING + "_ref"]["id"]
         path.write_bytes(path.read_bytes() + b" ")
@@ -550,6 +699,7 @@ def _adoptable_successor(
                 "rdagent-node1": {"candidate_root": "/home/releases/v15-candidate"},
             },
             "components": {
+                **_pit_pins(),
                 "dataset_manifest_sha256": manifest_identity,
                 "dataset_manifest_file_sha256": _sha(manifest),
             },
@@ -673,6 +823,9 @@ def _quote_only_successor(tmp_path: Path, service: MonthlyReleaseService) -> dic
     active = json.loads(service.active_profile.read_text(encoding='utf-8'))
     active['components'].update(dataset_manifest_sha256=old['dataset_manifest_sha256'],
                                 dataset_manifest_file_sha256=_sha(baseline / 'qe_dataset_manifest.json'))
+    active['components']['minute_pins'].update(
+        instruments_sha256=pins['minute_provider_catalog']['sha256'],
+        meta_export_sha256=pins['minute_meta_export']['sha256'])
     active['node_bindings'] = {'wsl2-5080': {'candidate_root': '/mnt/releases/baseline'},
                               'rdagent-node1': {'candidate_root': '/home/releases/baseline'}}
     _canonical(service.active_profile, active)
@@ -705,7 +858,10 @@ def _quote_only_successor(tmp_path: Path, service: MonthlyReleaseService) -> dic
     _canonical(candidate / 'qe_dataset_manifest.json', new)
     target = json.loads(values['profile_candidate'].read_text(encoding='utf-8'))
     _canonical(values['profile_candidate'], {**active, **{k: target[k] for k in ['generation', 'controller_paths', 'node_bindings']},
-        'components': {**active['components'], 'dataset_manifest_sha256': new['dataset_manifest_sha256'],
+        'components': {**active['components'], 'minute_pins': {**active['components']['minute_pins'],
+                       'instruments_sha256': new_pins['minute_provider_catalog']['sha256'],
+                       'meta_export_sha256': new_pins['minute_meta_export']['sha256']},
+                       'dataset_manifest_sha256': new['dataset_manifest_sha256'],
                        'dataset_manifest_file_sha256': _sha(candidate / 'qe_dataset_manifest.json')}})
     readback = {'schema_version': 'aistock_minute_quote_catalog_readback_v1', 'status': 'PASS',
                 'dataset_manifest_sha256': new['dataset_manifest_sha256'],
@@ -916,6 +1072,42 @@ def test_resume_reuses_completed_stage_checkpoints(tmp_path: Path) -> None:
     assert pipeline.calls.count("BUILD") == 1
     assert pipeline.calls.count("DERIVE") == 1
     assert pipeline.calls.count("LOCAL_VALIDATE") == 2
+
+
+@pytest.mark.parametrize("retained_valid", [True, "raises", "rejects"])
+def test_resume_keeps_sealed_derivation_when_default_producer_changes(tmp_path, retained_valid):
+    pipeline = Pipeline(fail_once_at="CONSUMER_VALIDATE")
+    version = {"DERIVE": "old"}
+    pipeline.stage_identity = lambda stage: hashlib.sha256(
+        f"{stage}:{version.get(stage, 'stable')}".encode()
+    ).hexdigest()
+    verified = []
+
+    def validate(stage, receipt):
+        verified.append(stage)
+        if stage == "DERIVE":
+            if retained_valid == "raises":
+                raise MonthlyReleaseError("retained DERIVE artifact bytes differ")
+            if retained_valid == "rejects":
+                return False
+        return True
+
+    pipeline.checkpoint_is_valid = validate
+    service = _service(tmp_path, pipeline)
+    operation_id = service.submit(_request())["operation_id"]
+    assert service.run(operation_id)["status"] == "FAILED"
+    checkpoint = service.store.operation_root(operation_id) / "checkpoints/derive.json"
+    before = checkpoint.read_bytes()
+    version["DERIVE"] = "new"
+    service.resume(operation_id)
+    if retained_valid is True:
+        assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
+    else:
+        with pytest.raises(MonthlyReleaseError, match="retained DERIVE"):
+            service.run(operation_id)
+    assert "DERIVE" in verified
+    assert pipeline.calls.count("DERIVE") == 1
+    assert checkpoint.read_bytes() == before
 
 
 def test_cancel_is_observed_at_stage_boundary(tmp_path: Path) -> None:
@@ -1167,6 +1359,69 @@ def test_blocked_cancel_finishes_without_another_source_attempt(
     assert service.status(operation_id)["attempt"] == first["attempt"]
     assert pipeline.calls == ["SOURCE"]
     assert service.resume(operation_id)["status"] == "PLANNED"
+
+
+def _activate_ready(service: MonthlyReleaseService, operation_id: str, *, verify_after=None):
+    plan = service.store.read_plan(operation_id)
+    auth_root = service.store.root / "authorizations"
+    auth_root.mkdir(exist_ok=True)
+    authorization_id = "dsauth_" + "e" * 32
+    auth_path = auth_root / f"{authorization_id}.json"
+    if not auth_path.exists():
+        _authorization(auth_path, authorization_id=authorization_id, operation_id=operation_id,
+                       action="ACTIVATE", principal="operator", cutoff=plan["target_cutoff"],
+                       predecessor=plan["predecessor"]["profile_sha256"],
+                       target=_sha(Path(plan["profile_candidate"])))
+    return service.activate(operation_id, authorization_store=ActionAuthorizationStore(auth_root),
+                            authorization_ref=authorization_id, principal="operator",
+                            verify_after=verify_after or (lambda ready: {
+                                "status": "PASS", "dataset_manifest_sha256": ready["dataset_manifest_sha256"]}))
+
+
+@pytest.mark.parametrize("overrides", [
+    {"rule_version": "legacy"}, {"activation_generation": 0},
+    {"coverage_end": date(2026, 8, 31)},
+])
+def test_activation_rejects_mixed_runtime_pit_before_profile_cas(tmp_path: Path, overrides) -> None:
+    service = _service(tmp_path, Pipeline())
+    operation_id = service.submit(_request())["operation_id"]
+    assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
+    before = service.active_profile.read_bytes()
+    service.pit_authority_resolver = lambda: _runtime_pit(**overrides)
+    with pytest.raises(MonthlyReleaseError, match="PIT"):
+        _activate_ready(service, operation_id)
+    assert service.active_profile.read_bytes() == before
+    assert service.store.read_state(operation_id)["status"] == "READY_TO_ACTIVATE"
+
+
+def test_activation_readback_detects_policy_generation_drift(tmp_path: Path) -> None:
+    service = _service(tmp_path, Pipeline())
+    operation_id = service.submit(_request())["operation_id"]
+    assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
+
+    def drift(ready):
+        service.pit_authority_resolver = lambda: _runtime_pit(activation_generation=2)
+        return {"status": "PASS", "dataset_manifest_sha256": ready["dataset_manifest_sha256"]}
+
+    assert _activate_ready(service, operation_id, verify_after=drift)["status"] == "ACTIVATED_VERIFY_FAILED"
+    service.pit_authority_resolver = _runtime_pit
+    assert _activate_ready(service, operation_id)["status"] == "ACTIVATED_VERIFIED"
+    receipt = json.loads((service.store.operation_root(operation_id) / "receipts/activation.json").read_text())
+    assert receipt["apply_state"] == "ALREADY_APPLIED"
+    assert receipt["runtime_pit_policy"]["activation_generation"] == 1
+
+
+def test_activation_allows_same_policy_watermark_extension(tmp_path: Path) -> None:
+    service = _service(tmp_path, Pipeline())
+    operation_id = service.submit(_request())["operation_id"]
+    assert service.run(operation_id)["status"] == "READY_TO_ACTIVATE"
+
+    def advance(ready):
+        service.pit_authority_resolver = lambda: _runtime_pit(
+            coverage_end=date(2026, 10, 19), state_source_digest="c" * 64)
+        return {"status": "PASS", "dataset_manifest_sha256": ready["dataset_manifest_sha256"]}
+
+    assert _activate_ready(service, operation_id, verify_after=advance)["status"] == "ACTIVATED_VERIFIED"
 
 
 def test_activation_requires_exact_authorization_and_supports_safe_rollback(tmp_path: Path) -> None:
@@ -1474,3 +1729,284 @@ def test_release_closure_failure_is_durable_instead_of_crashing_worker(tmp_path:
     assert state["status"] == "FAILED"
     assert state["current_stage"] == "RELEASE_CLOSURE"
     assert state["last_error"]["code"] == "MONTHLY_RELEASE_NOT_READY"
+
+
+def test_ready_correction_retains_source_and_does_not_reuse_ready(tmp_path: Path):
+    pipeline = Pipeline()
+    service = _service(tmp_path, pipeline)
+    operation = service.submit(_request())['operation_id']
+    assert service.run(operation)['status'] == 'READY_TO_ACTIVATE'
+    root = service.store.operation_root(operation)
+    source = (root / 'checkpoints/source.json').read_bytes()
+    active = service.active_profile.read_bytes()
+    original_plan = service.store.read_plan(operation)
+    target = Path(original_plan['candidate_root'])
+    target.mkdir()
+    baseline_manifest = json.dumps({'dataset_manifest_sha256': pipeline.manifest})
+    (target / 'qe_dataset_manifest.json').write_text(baseline_manifest, encoding='utf-8')
+
+    result = service.prepare_ready_correction(operation, principal='data-owner')
+
+    assert result['status'] == 'CORRECTION_PREPARED'
+    plan = service.store.read_plan(operation)
+    assert plan['candidate_root'] != original_plan['candidate_root']
+    assert service.active_profile.read_bytes() == active
+    assert (root / 'checkpoints/source.json').read_bytes() == source
+    assert service.store.read_state(operation)['status'] == 'FAILED'
+    assert service.store.read_checkpoint(operation, 'BUILD') is None
+    assert (target / 'qe_dataset_manifest.json').read_text() == baseline_manifest
+    assert service.prepare_ready_correction(operation, principal='data-owner') == result
+    service.resume(operation)
+    pipeline.calls.clear()
+    assert service.run(operation)['status'] == 'READY_TO_ACTIVATE'
+    assert pipeline.calls == ['BUILD', 'DERIVE', 'LOCAL_VALIDATE', 'DEPLOY', 'CONSUMER_VALIDATE']
+    assert (root / 'checkpoints/source.json').read_bytes() == source
+
+
+def test_ready_correction_rejects_non_ready_without_mutation(tmp_path: Path):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())['operation_id']
+    before = service.store.read_plan(operation)
+    with pytest.raises(MonthlyReleaseConflict):
+        service.prepare_ready_correction(operation, principal='data-owner')
+    assert service.store.read_plan(operation) == before
+
+
+def test_correction_rejects_different_completed_manifest_without_retiring_evidence(tmp_path):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())['operation_id']
+    service.run(operation)
+    plan = service.store.read_plan(operation)
+    target = Path(plan['candidate_root'])
+    target.mkdir()
+    (target / 'qe_dataset_manifest.json').write_text(json.dumps({'dataset_manifest_sha256': 'f' * 64}))
+    with pytest.raises(MonthlyReleaseConflict, match='completed BUILD'):
+        service.prepare_ready_correction(operation, principal='operator')
+    assert service.store.read_plan(operation) == plan
+    assert service.store.read_checkpoint(operation, 'BUILD') is not None
+    assert service.store.read_state(operation)['status'] == 'READY_TO_ACTIVATE'
+
+
+@pytest.mark.parametrize('crash', [False, True])
+def test_completed_exports_seed_is_private_metadata_and_reuses_all_writers(tmp_path, monkeypatch, crash):
+    release = tmp_path / 'releases'
+    base = release / 'old'
+    base.mkdir(parents=True)
+    for name in ('daily_bin', 'minute_bin', 'factor_bundle'):
+        (base / name).mkdir()
+        (base / name / 'data.bin').write_bytes(b'unchanged-market-data')
+        (base / name / 'meta_export.json').write_text('{}')
+    cas = _cas(tmp_path)
+    refs = {name: cas.put_json({'stage': name, 'status': 'PASS'}).as_dict()
+            for name in ('prepare', 'qlib_dump_daily', 'qlib_dump_minute', 'finalize_bins')}
+    operation_id = 'dmr_' + '1' * 32
+    (base / 'reports').mkdir()
+    evidence = base / 'reports/monthly_candidate_build_evidence.json'
+    evidence.write_text(json.dumps({'operation_id': operation_id, 'source_bundle_sha256': 'a' * 64,
+                                   'stage_refs': refs}))
+    manifest = base / 'qe_dataset_manifest.json'
+    manifest.write_text(json.dumps({'components': {'build': {'path': 'reports/monthly_candidate_build_evidence.json',
+        'sha256': hashlib.sha256(evidence.read_bytes()).hexdigest(), 'size': evidence.stat().st_size}}}))
+    plan = {'candidate_root': str(release / 'corrected'), 'release_id': 'shared', 'target_cutoff': '2026-09-30',
+            'predecessor': {}, 'monthly_ready_correction': {'base_plan': {'candidate_root': str(base)},
+            'base_manifest_ref': {'sha256': hashlib.sha256(manifest.read_bytes()).hexdigest()}}}
+    context = SimpleNamespace(operation_id=operation_id, attempt=3, plan=plan,
+                              checkpoint=lambda: None, progress=lambda _: None)
+    compiled = SimpleNamespace(source_bundle_sha256='a' * 64, physical_plan={'action_plan_digest': 'b' * 64})
+    staging = release / '.staging' / f'.corrected.{operation_id}.attempt-3.building'
+
+    if crash:
+        original_link = os.link
+        calls = []
+        def interrupted_link(source, target):
+            if calls:
+                raise OSError('injected seed interruption')
+            calls.append(str(source))
+            original_link(source, target)
+        monkeypatch.setattr(os, 'link', interrupted_link)
+        with pytest.raises(OSError, match='injected seed'):
+            seed_completed_exports(context=context, staging_root=staging, compiled=compiled, cas=cas)
+        monkeypatch.setattr(os, 'link', original_link)
+        context.attempt = 4
+    default = staging.with_name(staging.name.replace('attempt-3', f'attempt-{context.attempt}'))
+    assert seed_completed_exports(context=context, staging_root=default, compiled=compiled, cas=cas)
+    assert retained_staging_root(context, compiled, release, staging) == staging
+    resume = MonthlyBuildResume(context=context, compiled=compiled, release_root=release,
+                                staging_root=staging, cas=cas)
+    assert set(resume.record['steps']) == {'prepare', 'qlib_dump_daily', 'qlib_dump_minute', 'finalize-bins'}
+    assert os.path.samefile(base / 'minute_bin/data.bin', staging / 'minute_bin/data.bin')
+    assert not os.path.samefile(base / 'minute_bin/meta_export.json', staging / 'minute_bin/meta_export.json')
+    replacement = staging / 'replacement.bin'
+    replacement.write_bytes(b'exact-repair')
+    os.replace(replacement, staging / 'minute_bin/data.bin')
+    assert (base / 'minute_bin/data.bin').read_bytes() == b'unchanged-market-data'
+
+
+def test_preparation_can_recover_after_plan_commit_interruption(tmp_path, monkeypatch):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())['operation_id']
+    service.run(operation)
+    target = Path(service.store.read_plan(operation)['candidate_root'])
+    target.mkdir()
+    (target / 'qe_dataset_manifest.json').write_text(json.dumps({'dataset_manifest_sha256': service.pipeline.manifest}))
+    original = service.store.replace_plan
+
+    def interrupted(*args, **kwargs):
+        original(*args, **kwargs)
+        raise OSError('interrupted after durable plan')
+
+    monkeypatch.setattr(service.store, 'replace_plan', interrupted)
+    with pytest.raises(OSError):
+        service.prepare_ready_correction(operation, principal='data-owner')
+    monkeypatch.setattr(service.store, 'replace_plan', original)
+    result = service.prepare_ready_correction(operation, principal='data-owner')
+    assert service.store.read_state(operation)['status'] == 'FAILED'
+    assert service.store.read_plan(operation)['candidate_root'] == result['candidate_root']
+    assert service.store.read_checkpoint(operation, 'BUILD') is None
+
+
+def test_correction_cas_and_rollback_use_current_active_not_physical_parent(tmp_path):
+    service = _service(tmp_path, Pipeline())
+    operation = service.submit(_request())['operation_id']
+    service.run(operation)
+    base = service.store.read_plan(operation)
+    target = Path(base['candidate_root'])
+    target.mkdir()
+    (target / 'qe_dataset_manifest.json').write_text(json.dumps({'dataset_manifest_sha256': service.pipeline.manifest}))
+    # An independently published August repair advanced the default meanwhile.
+    current = json.loads(service.active_profile.read_bytes())
+    current['generation'] = 'august-repaired'
+    service.active_profile.write_text(json.dumps(current))
+    previous = service.active_profile.read_bytes()
+    service.prepare_ready_correction(operation, principal='operator')
+    plan = service.store.read_plan(operation)
+    assert plan['predecessor'] == base['predecessor']
+    assert plan['activation_predecessor']['profile_sha256'] == hashlib.sha256(previous).hexdigest()
+    service.resume(operation)
+    service.run(operation)
+    auth_root = tmp_path / 'auth'
+    auth_root.mkdir()
+    store = ActionAuthorizationStore(auth_root)
+    authorization = service.issue_action_authorization(operation, authorization_store=store,
+                                                       action='ACTIVATE', principal='operator')
+    issued = json.loads((auth_root / (authorization['authorization_id'] + '.json')).read_bytes())
+    assert issued['predecessor_profile_sha256'] == _sha(service.active_profile)
+    result = service.activate(operation, authorization_store=store,
+        authorization_ref=authorization['authorization_id'], principal='operator',
+        verify_after=lambda ready: {'status': 'PASS', 'dataset_manifest_sha256': ready['dataset_manifest_sha256']})
+    assert result['status'] == 'ACTIVATED_VERIFIED'
+    rollback_id = 'dsauth_' + '2' * 32
+    _authorization(auth_root / f'{rollback_id}.json', authorization_id=rollback_id, operation_id=operation,
+        action='ROLLBACK', principal='operator', cutoff=plan['target_cutoff'],
+        predecessor=_sha(service.active_profile), target=hashlib.sha256(previous).hexdigest())
+    service.rollback(operation, authorization_store=store, authorization_ref=rollback_id,
+        principal='operator', verify_after=lambda _: {'profile_sha256': _sha(service.active_profile)})
+    assert service.active_profile.read_bytes() == previous
+
+
+def test_ready_correction_reuses_native_bins_but_repeats_consumer_validation(tmp_path, monkeypatch):
+    from backend.services.dataset_release import monthly_mature_build_runner as subject
+    runner, context, initial, compiled, operation, _, _ = _native_month_fixture(tmp_path)
+    captured = {}
+    class Finalizer(_Finalizer):
+        def execute(self, **kwargs):
+            captured.update(kwargs['stage_refs'])
+            return super().execute(**kwargs)
+    runner = replace(runner, finalizer=Finalizer())
+    def first(invocation):
+        value = {'schema_version': 'dataset_release_build_stage_result_v1', 'stage': invocation.stage, 'status': 'PASS'}
+        if invocation.stage == 'prepare':
+            value['qlib_dump_operations'] = [operation]
+        return value
+    monkeypatch.setattr(subject, 'run_build_stage', first)
+    runner.execute(context=context, staging_root=initial, compiled=compiled)
+    base = tmp_path / 'complete'
+    initial.rename(base)
+    (base / 'reports').mkdir()
+    evidence = base / 'reports/monthly_candidate_build_evidence.json'
+    evidence.write_text(json.dumps({'operation_id': context.operation_id, 'source_bundle_sha256': compiled.source_bundle_sha256,
+                                   'stage_refs': {name: ref.as_dict() for name, ref in captured.items()}}))
+    manifest = base / 'qe_dataset_manifest.json'
+    manifest.write_text(json.dumps({'components': {'evidence': {'path': 'reports/monthly_candidate_build_evidence.json',
+        'size': evidence.stat().st_size, 'sha256': _sha(evidence)}}}))
+    corrected = replace(context, attempt=3, plan={**context.plan, 'candidate_root': str(tmp_path / 'corrected'),
+        'monthly_ready_correction': {'base_plan': {'candidate_root': str(base)}, 'base_manifest_ref': {'sha256': _sha(manifest)}}})
+    staging = tmp_path / '.staging' / f'.corrected.{context.operation_id}.attempt-3.building'
+    seed_completed_exports(context=corrected, staging_root=staging, compiled=compiled, cas=runner.cas)
+    calls = []
+    def validate(invocation):
+        calls.append(invocation.stage)
+        assert invocation.stage == 'validate'
+        return {'schema_version': 'dataset_release_build_stage_result_v1', 'stage': 'validate', 'status': 'PASS'}
+    monkeypatch.setattr(subject, 'run_build_stage', validate)
+    monkeypatch.setattr(subject.MatureMonthlyPhysicalBuildRunner, '_append_inherited_month',
+                        lambda *a, **k: pytest.fail('completed native BIN was re-exported'))
+    before = (base / 'daily_bin/qlib/features/000001.sz/close.day.bin').read_bytes()
+    runner.execute(context=corrected, staging_root=staging, compiled=compiled)
+    assert calls == ['validate']
+    assert (staging / 'daily_bin/qlib/features/000001.sz/close.day.bin').read_bytes() == before
+    assert (base / 'daily_bin/qlib/features/000001.sz/close.day.bin').read_bytes() == before
+
+
+def test_minute_correction_extends_only_exact_ready_base(tmp_path):
+    from backend.tests.dataset_release.test_monthly_build_resume import prepared, facts, CODE, DAY
+    from backend.services.dataset_release import monthly_minute_repair as subject
+    from backend.services.dataset_release.monthly_build_resume import MonthlyBuildResumeError, _atomic
+    import numpy as np
+    resume, finalized, original = prepared(tmp_path)
+    provider = resume.root / 'minute_bin/qlib'
+    first_rows = facts()
+    next_day = '2026-08-19' if DAY != '2026-08-19' else '2026-08-20'
+    second_rows = [{**r, 'trade_time': next_day + r['trade_time'][10:]} for r in first_rows]
+    (provider / 'calendars/1min.txt').write_text('\n'.join(r['trade_time'] for r in first_rows + second_rows) + '\n')
+    daily = resume.root / 'daily_bin/qlib'
+    (daily / 'calendars/day.txt').write_text(DAY + '\n' + next_day + '\n')
+    for field in subject.QLIB_STOCK_FIELDS:
+        np.array([0, *([np.nan] * 480)], dtype='<f4').tofile(provider / f'features/{CODE.lower()}/{field}.1min.bin')
+    first = subject.apply_minute_corrections(resume, finalized=finalized, cas=resume.cas, plan=original)
+    authority = {'schema_version': subject.SCHEMA, 'facts': second_rows, 'row_count': 240, 'stock_dates': 1}
+    binding = {**original[subject.BINDING], 'authority_ref': resume.cas.put_json(authority).as_dict()}
+    plan = {**original, subject.BINDING: binding}
+    with pytest.raises(MonthlyBuildResumeError, match='completed base'):
+        subject.apply_minute_corrections(resume, finalized=first, cas=resume.cas, plan=plan)
+    plan['monthly_ready_correction'] = {'base_plan': original}
+    second = subject.apply_minute_corrections(resume, finalized=first, cas=resume.cas, plan=plan)
+    materialized = resume.cas.get_json(resume.cas.get_json(second['finalize_receipt_ref'])['minute_receipt_ref'])
+    assert materialized['minute_correction']['previous_correction_ref']
+    assert len(subject.correction_pins(materialized, provider=provider, cas=resume.cas)) == 12
+    assert np.isfinite(np.fromfile(provider / f'features/{CODE.lower()}/close.1min.bin', dtype='<f4')).all()
+    _atomic(resume.path, resume.record)
+    assert subject.apply_minute_corrections(resume, finalized=second, cas=resume.cas, plan=plan) == second
+
+
+def test_prepare_correction_route_uses_shared_operator_identity(tmp_path):
+    from backend.tests.routers.test_monthly_dataset_releases import _client
+    from backend.routers import monthly_dataset_releases as api
+    client, _, app = _client(tmp_path)
+    calls = []
+    def prepare(operation, *, principal):
+        calls.append((operation, principal))
+        return {'status': 'CORRECTION_PREPARED', 'activation_authorized': False}
+    app.dependency_overrides[api.get_monthly_release_service] = lambda: SimpleNamespace(prepare_ready_correction=prepare)
+    response = client.post('/api/v1/qlib/monthly-releases/dmr_' + '1' * 32 + '/prepare-correction', json={})
+    assert response.status_code == 200
+    assert calls == [('dmr_' + '1' * 32, 'dataset-operator:test')]
+    assert response.json()['data']['activation_authorized'] is False
+
+
+def test_ready_correction_never_inherits_old_automatic_activation(tmp_path):
+    service = _service(tmp_path, Pipeline())
+    request = replace(_request(), activation_mode='activate_when_ready', activation_authorization_ref='dsauth_' + '1' * 32)
+    operation = service.submit(request)['operation_id']
+    service.run(operation)
+    target = Path(service.store.read_plan(operation)['candidate_root'])
+    target.mkdir()
+    (target / 'qe_dataset_manifest.json').write_text(json.dumps({'dataset_manifest_sha256': service.pipeline.manifest}))
+    active = service.active_profile.read_bytes()
+    service.prepare_ready_correction(operation, principal='operator')
+    service.resume(operation)
+    result = MonthlyReleaseWorker(service).run_once()
+    assert result['status'] == 'READY_TO_ACTIVATE'
+    assert result['last_error'] is None
+    assert service.active_profile.read_bytes() == active
+    assert operation not in service.store.pending_operation_ids()

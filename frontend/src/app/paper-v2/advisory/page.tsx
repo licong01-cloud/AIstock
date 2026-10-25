@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, Suspense, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Fragment, Suspense, memo, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import {
   advisoryApi,
@@ -717,6 +717,37 @@ function deliveryPreflightSummary(result: AdvisoryDeliveryPreflight): ReactNode 
     </>
   );
 }
+
+// Keep cumulative history out of unrelated form/model renders. Pagination is
+// presentation-only: retain the original rows, ordering and financial values.
+const EpisodeReturnsTable = memo(function EpisodeReturnsTable({ rows }: { rows: AdvisoryEpisode[] }) {
+  const pageSize = 25;
+  const [page, setPage] = useState(1);
+  const totalPages = Math.max(1, Math.ceil(rows.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const visibleRows = rows.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  useEffect(() => { setPage(1); }, [rows]);
+  return <>
+    <div className="pv2-table-wrap">
+      <table className="pv2-table" data-testid="advisory-returns-table">
+        <thead><tr><th>股票</th><th>入选口径</th><th>入选生效日</th><th>退出原因</th><th>涨跌幅</th><th>胜负</th><th>回撤</th></tr></thead>
+        <tbody>
+          {visibleRows.map((row) => (
+            <tr key={row.episode_id}><td>{stockLabel(row)}</td><td>{row.entry_price_basis}</td><td>{row.effective_entry_date}</td><td>{row.exit_reason || row.status}</td><td>{fmtBps(row.return_bps)}</td><td>{row.is_win === true ? "Y" : row.is_win === false ? "N" : "-"}</td><td>{fmtBps(row.max_drawdown_bps)}</td></tr>
+          ))}
+          {!rows.length ? <tr><td colSpan={7}>暂无 episode 收益。</td></tr> : null}
+        </tbody>
+      </table>
+    </div>
+    <nav className="pv2-pagination" aria-label="Episode 收益分页">
+      <button className="pv2-button-ghost" disabled={currentPage <= 1} onClick={() => setPage(1)} type="button">首页</button>
+      <button className="pv2-button-ghost" disabled={currentPage <= 1} onClick={() => setPage(currentPage - 1)} type="button">上一页</button>
+      <span className="pv2-muted" aria-live="polite">第 {currentPage} / {totalPages} 页，共 {rows.length} 条 · 每页 {pageSize} 条</span>
+      <button className="pv2-button-ghost" disabled={currentPage >= totalPages} onClick={() => setPage(currentPage + 1)} type="button">下一页</button>
+      <button className="pv2-button-ghost" disabled={currentPage >= totalPages} onClick={() => setPage(totalPages)} type="button">末页</button>
+    </nav>
+  </>;
+});
 
 function AdvisoryPageContent() {
   const params = useSearchParams();
@@ -2628,17 +2659,7 @@ function AdvisoryPageContent() {
 
       <section className="pv2-card">
         <div className="pv2-card-head"><div><div className="pv2-kicker">荐股收益</div><h2>Episode 收益与胜率证据</h2><p className="pv2-muted">默认入选价格口径为 next_open_executable；signal_close 与 next_close 仅作敏感性口径。</p></div></div>
-        <div className="pv2-table-wrap">
-          <table className="pv2-table">
-            <thead><tr><th>股票</th><th>入选口径</th><th>入选生效日</th><th>退出原因</th><th>涨跌幅</th><th>胜负</th><th>回撤</th></tr></thead>
-            <tbody>
-              {returns.map((row) => (
-                <tr key={row.episode_id}><td>{stockLabel(row)}</td><td>{row.entry_price_basis}</td><td>{row.effective_entry_date}</td><td>{row.exit_reason || row.status}</td><td>{fmtBps(row.return_bps)}</td><td>{row.is_win === true ? "Y" : row.is_win === false ? "N" : "-"}</td><td>{fmtBps(row.max_drawdown_bps)}</td></tr>
-              ))}
-              {!returns.length ? <tr><td colSpan={7}>暂无 episode 收益。</td></tr> : null}
-            </tbody>
-          </table>
-        </div>
+        <EpisodeReturnsTable key={selectedProgramId} rows={returns} />
       </section>
 
       <section className="pv2-card">

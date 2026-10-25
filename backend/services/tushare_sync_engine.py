@@ -816,15 +816,15 @@ class TushareSyncEngine:
             conn.autocommit = previous_autocommit
         return inserted
 
-    def _count_code_rows(self, conn, spec: DatasetSpec, code_val: str) -> int:
-        """Count local rows for one BY_CODE value (empty-mirror guard)."""
+    def _has_code_rows(self, conn, spec: DatasetSpec, code_val: str) -> bool:
+        """Probe one BY_CODE key; empty-mirror guards do not need a full count."""
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT COUNT(*) FROM {spec.target_table} WHERE {spec.code_param_name} = %s",
+                f"SELECT EXISTS(SELECT 1 FROM {spec.target_table} WHERE {spec.code_param_name} = %s)",
                 (code_val,),
             )
             row = cur.fetchone()
-        return int(row[0]) if row else 0
+        return bool(row[0]) if row else False
 
     def _validate_rows_for_date(
         self,
@@ -1935,25 +1935,34 @@ class TushareSyncEngine:
             )
 
     def _run_stock_universe_pit_post_sync_hook(self, dataset: str) -> Dict[str, Any]:
-        """Mark/rebuild derived ST PIT universe after source-table sync succeeds."""
+        """Maintain the shared canonical PIT after source-table sync succeeds."""
 
         try:
-            from .stock_universe_pit_service import StockUniversePitService
+            from .stock_universe_pit_service import StockUniversePitService, DEFAULT_ST_PIT_START_DATE
 
-            service = StockUniversePitService()
-            marked = service.mark_dirty(
-                reason="tushare_source_sync_success",
-                source_dataset=dataset,
+            service = StockUniversePitService(existing_schema_only=True)
+            plan = service.plan_canonical_pit_universe(
+                start_date=DEFAULT_ST_PIT_START_DATE,
+                end_date=service.resolve_default_end_date(),
             )
-            result: Dict[str, Any] = {"marked_dirty": marked}
-            result["ensure"] = service.ensure_st_pit_universe(
+            if plan.get("coverage_satisfied") is True and plan.get("needs_rebuild") is False:
+                return {"ok": True, "ensure": {"status": "ready", "rebuilt": False,
+                                                "reason": "canonical_already_current"}}
+            # The builder now commits spans and ready state atomically. Do not
+            # invalidate the published view before the replacement is validated.
+            result: Dict[str, Any] = {"published_state_preserved_during_build": True}
+            result["ensure"] = service.ensure_canonical_pit_universe(
+                start_date=DEFAULT_ST_PIT_START_DATE,
                 strict=False,
-                refresh_policy="source_fingerprint",
             )
-            return {"ok": True, **result}
+            ready = result["ensure"].get("status") == "ready"
+            if not ready:
+                _logger.warning("canonical PIT maintenance incomplete after %s: %s", dataset, result["ensure"])
+            return {"ok": ready, **result}
         except Exception as exc:  # noqa: BLE001
             # Source sync success must not be turned into a fake failure. The
-            # strict export / paper paths call ensure_st_pit_universe again.
+            # Online consumers never repair facts. Preserve the derived failure
+            # separately so maintenance can retry without re-fetching the source.
             return {"ok": False, "error": str(exc), "source_dataset": dataset}
 
     # -- BY_CODE batched (分批连接，避免长时间持有) -------------------------
@@ -1999,8 +2008,6 @@ class TushareSyncEngine:
                                 if any(row.get("is_new") != is_new for row in returned):
                                     raise RuntimeError("SW provider ignored requested current/history identity; local facts preserved")
                                 rows.extend(returned)
-                            if not rows and self._count_code_rows(conn, spec, code_val) > 0:
-                                raise RuntimeError("SW history refresh returned no rows; local facts preserved")
                         else:
                             rows = self._fetch_from_tushare(spec, params)
                         # Row limit check (e.g. index_daily 8000-row cap)
@@ -2009,6 +2016,12 @@ class TushareSyncEngine:
                                    f"(>= {spec.row_limit}); narrow date range and rerun")
                             self._log(conn, job_id, "error", msg)
                             raise RuntimeError(msg)
+                        # All empty-response guards ask the same question for
+                        # this code. Probe once and reuse; nonempty responses
+                        # need no local-history query at all.
+                        local_history_exists = not rows and self._has_code_rows(conn, spec, code_val)
+                        if spec.name == "sw_index_member" and local_history_exists:
+                            raise RuntimeError("SW history refresh returned no rows; local facts preserved")
                         # BUG-930: never mirror an empty upstream payload
                         # over local rows; a transient upstream gap would
                         # otherwise wipe the whole code. BUG-941: a code that
@@ -2017,7 +2030,7 @@ class TushareSyncEngine:
                         # 801786.SI that never had members) is a legitimate
                         # no-op mirror and must not fail the batch.
                         if spec.replace_by_code and not rows:
-                            if self._count_code_rows(conn, spec, code_val) == 0:
+                            if not local_history_exists:
                                 self._log(
                                     conn,
                                     job_id,
@@ -2037,7 +2050,7 @@ class TushareSyncEngine:
                         if spec.replace_by_code:
                             inserted = self._replace_code_batch(conn, spec, code_val, rows)
                         else:
-                            if not rows and self._count_code_rows(conn, spec, code_val) > 0:
+                            if not rows and local_history_exists:
                                 # BUG-947: upsert-mode datasets (e.g. sw_daily)
                                 # accept empty payloads silently; with the HTTP
                                 # error unmasking above a genuine empty here is

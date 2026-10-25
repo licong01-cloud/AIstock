@@ -28,9 +28,10 @@ const pagePath = path.resolve(process.cwd(), "src/app/quantevolver/evolution/pag
 const pageSource = fs.readFileSync(pagePath, "utf8");
 
 test("QE summary loops preserve compact enhanced metrics for trajectory comparison", async () => {
-  expect(pageSource).toContain("const metricsJson = loop.metrics_json || {");
+  expect(pageSource).toContain("const metricsJson = {");
   expect(pageSource).toContain("...metricsSummary,");
-  expect(pageSource).toContain("sharpe: metricsSummary.sharpe ?? metricsSummary.information_ratio");
+  expect(pageSource).toContain("sharpe: metricsSummary.sharpe ?? rawMetricsJson.sharpe ?? (loop as any).sharpe");
+  expect(pageSource.includes("sharpe: metricsSummary.sharpe ?? metricsSummary.information_ratio")).toBe(false);
   expect(pageSource).toContain("strategy_params: configSummary.strategy_params || {}");
   expect(pageSource).toContain("unfilled_handler_params: configSummary.unfilled_handler_params || {}");
   expect(pageSource).toContain("metrics_json: metricsJson");

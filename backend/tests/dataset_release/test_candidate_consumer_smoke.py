@@ -54,6 +54,51 @@ def test_native_raw_index_and_frozen_month_returns_are_read_without_old_schema_i
         load_hmm_index_contract_smoke(result.h5_path, cutoff=date(2026, 9, 2), max_rows=1000, checkpoint=lambda: None)
 
 
+@pytest.mark.parametrize("fault", [None, "nonfinite", "duplicate", "missing", "price"])
+def test_raw_index_smoke_reads_target_month_from_full_history_parquet(tmp_path, monkeypatch, fault):
+    from backend.tests.dataset_release.test_monthly_legacy_index import _inputs
+    from backend.services.dataset_release.monthly_legacy_index import append_legacy_index_context
+
+    prefix, source, _, _ = _inputs(tmp_path)
+    result = append_legacy_index_context(prefix, source=source, output_root=tmp_path / "september",
+                                        cutoff=date(2026, 9, 2), source_bundle_sha256="e" * 64)
+    month = pd.read_parquet(result.parquet_path)
+    history = month.iloc[:1].copy()
+    history.index = pd.MultiIndex.from_tuples([(pd.Timestamp("2026-08-31"), "000300.SH")],
+                                            names=month.index.names)
+    history.iloc[0, 0] = float("nan")  # Historical facts are outside this monthly check.
+    if fault == "nonfinite":
+        month.loc[(pd.Timestamp("2026-09-02"), "000300.SH"), "idx_return_1d"] = float("nan")
+    if fault == "duplicate":
+        month = pd.concat([month, month.iloc[:1]])
+    if fault == "missing":
+        month = month.drop((pd.Timestamp("2026-09-02"), "000300.SH"))
+    if fault == "price":
+        month.loc[(pd.Timestamp("2026-09-02"), "000300.SH"), "idx_close_point"] += 1
+    pd.concat([history, month]).to_parquet(result.parquet_path)
+    before = result.parquet_path.read_bytes()
+    read = pd.read_parquet
+    filters_seen = []
+
+    def bounded_read(path, **kwargs):
+        filters_seen.append(kwargs.get("filters"))
+        return read(path, **kwargs)
+
+    monkeypatch.setattr(pd, "read_parquet", bounded_read)
+    if fault:
+        with pytest.raises(CandidateConsumerSmokeError, match="normalized index month|raw/normalized"):
+            load_hmm_index_contract_smoke(result.h5_path, cutoff=date(2026, 9, 2),
+                                         max_rows=1000, checkpoint=lambda: None)
+    else:
+        actual = load_hmm_index_contract_smoke(result.h5_path, cutoff=date(2026, 9, 2),
+                                              max_rows=1000, checkpoint=lambda: None)
+        assert actual["rows"] == 2 and actual["historical_values_validated"] == 0
+        assert actual["raw_normalized_month_values_match"] is True
+    assert filters_seen == [[("datetime", ">=", pd.Timestamp("2026-09-01")),
+                             ("datetime", "<=", pd.Timestamp("2026-09-02"))]]
+    assert result.parquet_path.read_bytes() == before
+
+
 class _FakeQlib:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []

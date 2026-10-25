@@ -7,7 +7,24 @@
 现有一键启动与 `tdx-api-main/web/start.bat` 使用 `scripts/start_tdx_go_backend.py`，
 显式传递 `--database-target production --env-file <repo>/.env`；只读取数据库配置，
 不打印凭据，不继承其他目标的 DSN，按完整 Git SHA 编译整个 Go web package。
-手工 `go run .` 仍要求操作者先提供完整环境变量，不再依赖源码内生产默认密码。
+启动器使用固定 `tdx-backend.exe`，不再使用临时 `go run` 程序。默认运行目录为
+repo 相邻的 `AIstock_runtime/tdx/production`；可通过绝对、源码目录外的
+`AISTOCK_TDX_RUNTIME_DIR` 指定基础目录。DEV 必须显式指定 X 盘基础目录，
+按 `dev-19081` / `dev-19082` 隔离，不复用生产二进制、配置或缓存。
+
+正常启动先校验 TDX 跟踪输入和二进制 SHA256：输入未变直接运行 EXE，不调用 Go；
+无关模块合入不触发重编译，也不把当前 HEAD 冒充旧二进制的构建身份。
+缺少构建或输入变化时离线构建整个 web package 一次，保留实际构建提交及 Go 版本。
+不完整/损坏的 EXE 或收据明确失败，不静默启动旧版本。
+`--build-only` 仅准备构建不启动服务；修复损坏收据或主动升级工具链使用
+`--build-only --rebuild`。`--check` 不构建、不创建运行目录、不启动服务。
+构建使用 OS 锁；候选输出先构建完成并复核输入，再替换固定 EXE 和收据。
+运行中 EXE 不原地覆盖，Windows 拒绝替换时明确失败；中断导致的文件/收据不匹配
+在下次启动时拒绝执行。临时构建文件放在运行目录，不再生成 C 盘临时服务路径。
+旧 `web/tdx-api.exe` 不是已验证构建，不得直接复用。
+
+固定路径可以配置一次精确的防火墙程序规则（必要配置文件/来源 + TCP 19080）。
+启动器不修改防火墙、不停止旧服务，也不自动安装依赖。固定路径首次使用仍可能提示授权。
 `--check` 只核验配置与源码身份，不启动服务。DEV 使用同一入口与依赖，
 改为 `--database-target dev`、`TDX_HTTP_PORT=19081/19082` 及独立 X 盘 `TDX_DATA_DIR`。
 

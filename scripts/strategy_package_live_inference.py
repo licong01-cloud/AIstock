@@ -35,6 +35,7 @@ from backend.inference_engine import InferenceEngine  # noqa: E402
 from backend.services.advisory_historical_range.factor_input_materialization import FactorInputSession  # noqa: E402
 from backend.services.advisory_historical_range.inference_session import InferenceResourceSession, inference_output_lease, frozen_code_identity  # noqa: E402
 from backend.services.advisory_historical_range.inference_inputs import database_input_session, file_input_session  # noqa: E402
+from backend.services.advisory_historical_range import input_source_plan as source_plans  # noqa: E402
 from backend.services.advisory_historical_range.inference_features import InferenceFeatureSession  # noqa: E402
 from backend.services.advisory_historical_range.selection_signal_kernel import SelectionSignalDayV1  # noqa: E402
 from backend.services.strategy_package.advisory_input_projection import (  # noqa: E402
@@ -133,6 +134,7 @@ def main() -> int:
     parser.add_argument("--run-id", help="This consumer's independent run identity")
     parser.add_argument("--input-revision", help="Read-only source/revision identity; not a package approval")
     parser.add_argument("--dataset-binding", help="Frozen file binding JSON, registered by this consumer")
+    parser.add_argument("--source-plan-file", help="This consumer/run's frozen shared source plan; never resolve active profile on retry")
     parser.add_argument("--dataset-root", help="Verified node locator for the same frozen release, without copying assets")
     parser.add_argument("--resume", action="store_true", help="Resume this same consumer/run's exact input and code only")
     parser.add_argument("--performance-reference", action="store_true", help="Isolated read-only comparison with the pre-optimization algorithms")
@@ -148,8 +150,11 @@ def main() -> int:
         parser.error("--performance-reference is read-only and cannot publish business signals")
     if args.dataset_binding and not args.historical_read_only:
         parser.error("--dataset-binding is an explicit historical read-only input")
-    if args.dataset_root and not args.dataset_binding:
-        parser.error("--dataset-root requires --dataset-binding")
+    if args.source_plan_file and (not args.historical_plan or not args.historical_read_only
+                                 or not args.run_id or args.dataset_binding):
+        parser.error("--source-plan-file requires a read-only historical plan and run-id, without dataset-binding")
+    if args.dataset_root and not (args.dataset_binding or args.source_plan_file):
+        parser.error("--dataset-root requires --dataset-binding or --source-plan-file")
     default_temp = ((Path("X:/AIstock_temp") if os.name == "nt" else Path("/mnt/x/AIstock_temp"))
                     / "advisory_inference" / args.consumer_scope / (args.run_id or uuid.uuid4().hex))
     temporary_root = _configure_temporary_root(args.temp_root or str(default_temp))
@@ -374,6 +379,16 @@ def _run_owned_historical_plan(args: argparse.Namespace, runtime_workspace: Path
     binding_value = _file_binding(args)
     if binding_value is not None:
         source_revision = binding_value["binding_hash"]
+    source_plan = None
+    if getattr(args, "source_plan_file", None):
+        source_plan = source_plans.load_source_plan(args.source_plan_file, consumer_scope=args.consumer_scope, run_id=run_id)
+        if args.input_revision and args.input_revision != source_plan["plan_hash"]:
+            raise ValueError("input revision differs from the frozen source plan")
+        # Native date-bound workspaces may execute one explicit sub-block.
+        # This index covers exactly that requested block, not the whole task.
+        for clocks in dict.fromkeys(item[0] for item in parsed):
+            source_plans.resolve_day_source(source_plan, clocks)
+        source_revision = source_plan["plan_hash"]
     binding = _plan_binding(plan, parsed, args.consumer_scope, run_id, source_revision, args.performance_reference)
     started = time.perf_counter()
     index: dict[str, Any] = {"ok": False, "status": "RUNNING", "execution_mode": "historical_resource_session",
@@ -405,9 +420,11 @@ def _run_owned_historical_plan(args: argparse.Namespace, runtime_workspace: Path
     try:
         session = InferenceResourceSession(max_bytes=args.resource_cache_mib * 1024 * 1024)
         stack.callback(session.close)
-        inputs = _input_session(args, run_id=run_id, source_identity=source_revision,
-                               max_bytes=0 if args.performance_reference else args.data_cache_mib * 1024**2)
-        stack.callback(inputs.close)
+        inputs = None
+        input_budget = 0 if args.performance_reference else args.data_cache_mib * 1024**2
+        if source_plan is None:
+            inputs = _input_session(args, run_id=run_id, source_identity=source_revision, max_bytes=input_budget)
+            stack.callback(inputs.close)
         features = InferenceFeatureSession(max_bytes=0 if args.performance_reference else args.feature_cache_mib * 1024**2)
         stack.callback(features.close)
         # The reference keeps the original calculations, not an unsafe
@@ -425,15 +442,35 @@ def _run_owned_historical_plan(args: argparse.Namespace, runtime_workspace: Path
             day_output = _day_output(results_root, clocks, request_id)
             if not day_output.is_relative_to(results_root):
                 raise ValueError("daily artifact path escaped its own run")
+            route = None
+            if source_plan is not None:
+                stage = "source_plan_session"
+                route = source_plans.resolve_day_source(source_plan, clocks)
+                # DB days always reread mutable data, including on resume.
+                # A file session retains frozen raw partitions across dates.
+                if inputs is None or (route["source"] == "DATABASE"
+                                      and getattr(inputs, "source_plan_route", None) != route):
+                    if inputs is not None:
+                        inputs.close()
+                    inputs = source_plans.create_input_session(
+                        source_plan, clocks, consumer_scope=args.consumer_scope, run_id=run_id,
+                        max_bytes=input_budget, root_override=getattr(args, "dataset_root", None))
+                    stack.callback(inputs.close)
+                inputs.source_plan_route = route
+                engine.input_session = inputs
             if ordinal < len(index["results"]):
                 if index["results"][ordinal]["trade_date"] != clocks.decision_date.isoformat():
                     raise ValueError("own-run checkpoint dates are not the planned prefix")
+                if route is not None:
+                    _verify_planned_retry(engine, workspace, clocks, pit_identity, day_output, route, root)
                 continue
             commit = day_output.with_name("commit.json")
             if day_output.exists() or commit.exists():
                 # Recover a publish-before-index crash only from this run's
                 # exact content-bound commit, never from arbitrary file presence.
                 _verify_owned_day(day_output, clocks=clocks, binding=binding, consumer_scope=args.consumer_scope, run_id=run_id, request_id=request_id)
+                if route is not None:
+                    _verify_planned_retry(engine, workspace, clocks, pit_identity, day_output, route, root)
                 day_hash = hashlib.sha256(day_output.read_bytes()).hexdigest()
                 marker = json.loads(commit.read_text(encoding="utf-8")) if commit.exists() else None
                 if marker is not None and (marker.get("binding") != binding or marker.get("clocks") != clocks.to_dict() or marker.get("sha256") != day_hash):
@@ -446,6 +483,8 @@ def _run_owned_historical_plan(args: argparse.Namespace, runtime_workspace: Path
                     engine, workspace, clocks.decision_date.isoformat(), clocks.data_cutoff.isoformat(),
                     True, day_output, pit_identity=pit_identity,
                 )
+                if route is not None:
+                    _bind_source_receipt(payload, route)
                 payload["metadata"].update(consumer_scope=args.consumer_scope, run_id=run_id, clocks=clocks.to_dict(), binding=binding, request_id=request_id)
                 stage = "daily_publication"
                 _atomic_json(day_output, payload)
@@ -461,6 +500,9 @@ def _run_owned_historical_plan(args: argparse.Namespace, runtime_workspace: Path
     except Exception as exc:
         index.update(status="FAILED", error_type=type(exc).__name__, reason_code=getattr(exc, "reason_code", type(exc).__name__),
                      failed_stage=stage, failed_clocks=clocks.to_dict(), failed_request_id=request_id)
+        if source_plan is not None:
+            index["source_gap_receipt"] = source_plans.gap_receipt(
+                exc, stage=stage, clocks=clocks, plan_hash=source_plan["plan_hash"])
         try:
             _atomic_json(output, index)
         except OSError:
@@ -476,6 +518,29 @@ def _day_output(root: Path, clocks: SelectionSignalDayV1, request_id: str | None
     if request_id is not None:
         directory /= hashlib.sha256(request_id.encode()).hexdigest()
     return (directory / "scores.json").resolve()
+
+
+def _bind_source_receipt(payload, route):
+    payload["input_context"]["source_plan_receipt"] = source_plans.input_receipt(route, payload)
+
+
+def _verify_planned_retry(engine, workspace, clocks, pit_identity, day_output, route, root):
+    previous = json.loads(day_output.read_bytes())
+    receipt = previous.get("input_context", {}).get("source_plan_receipt")
+    if receipt is None or receipt != source_plans.input_receipt(route, previous):
+        raise source_plans.SourcePlanError("SOURCE_CHECKPOINT_RECEIPT_MISMATCH")
+    if route["source"] == "DATASET_FILES":
+        for key in engine.input_session.file_dataset.binding["files"]:
+            engine.input_session.file_dataset.file(key)
+        engine.input_session.file_dataset.assert_unchanged()
+        return
+    # No publication or overwrite. Native inference consumes the full DB window
+    # again; use a distinct diagnostics location even when verification fails.
+    check_path = root / "source-retry-checks" / uuid.uuid4().hex / "scores.json"
+    current = _run_request(engine, workspace, str(clocks.decision_date), str(clocks.data_cutoff),
+                           True, check_path, pit_identity=pit_identity)
+    _bind_source_receipt(current, route)
+    source_plans.verify_retry_inputs(previous, current)
 
 
 def _verify_owned_day(path: Path, *, clocks: SelectionSignalDayV1, binding: str, consumer_scope: str, run_id: str, request_id: str | None) -> None:
@@ -496,7 +561,7 @@ def _plan_binding(plan, parsed, consumer_scope, run_id, source_revision, referen
     files = [Path(__file__), Path(inference_engine_module.__file__), REPO_ROOT / "backend/data_service/frozen_dataset.py"]
     leaf = REPO_ROOT / "backend/services/advisory_historical_range"
     files += [leaf / (name + ".py") for name in (
-        "alpha158_batch", "inference_session", "inference_inputs", "inference_features", "selection_signal_kernel", "factor_input_materialization")]
+        "alpha158_batch", "inference_session", "inference_inputs", "inference_features", "selection_signal_kernel", "factor_input_materialization", "input_source_plan")]
     assets = {}
     for _, workspace, _, _ in parsed:
         manifest = json.loads((workspace / "manifest.json").read_text(encoding="utf-8"))

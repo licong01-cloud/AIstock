@@ -1,6 +1,8 @@
 ﻿"use client";
 
-import React, { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import React, { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { QEReadCache } from "../../../components/read-cache";
+import { useActiveRefresh, isExecutingTask } from "../../../components/use-active-refresh";
 import { Activity, ArrowLeft, DownloadCloud, PackagePlus, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
@@ -15,6 +17,7 @@ import { canonicalMultiAlphaEvolutionUrl } from "../../../evolution/components/m
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 type CombineTask = {
   task_id: string;
+  run_ids: string[];
   task_name: string;
   task_type: "multi_alpha_combine";
   status: string;
@@ -188,17 +191,27 @@ function MultiAlphaCombineBacktestDetailWorkspace({ taskKey: rawTaskKey }: { tas
   const [packageExportMessage, setPackageExportMessage] = useState<{ ok: boolean; text: string; packageId?: string } | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [refreshInterval, setRefreshInterval] = useState(5);
+  const [refreshInterval, setRefreshInterval] = useState(60);
   const selectionRunId = searchParams.get("selection_run_id");
 
-  const loadDetail = useCallback(async (preferredRunId?: string) => {
+  const reads = useRef(new QEReadCache());
+  const requestGeneration = useRef(0);
+  useEffect(() => () => { requestGeneration.current += 1; reads.current.clear(); }, [taskKey]);
+  const loadDetail = useCallback(async (preferredRunId?: string, observedRunIds?: string[], strict = false) => {
+    const generation = ++requestGeneration.current;
     setLoading(true);
     setError(null);
-    const query = selectedScheme ? `?scheme=${encodeURIComponent(selectedScheme)}` : "";
+    const params = new URLSearchParams();
+    if (selectedScheme) params.set("scheme", selectedScheme);
+    observedRunIds?.forEach(id => params.append("run_ids", id));
+    const query = params.size ? `?${params}` : "";
     try {
-      const data = await fetchJson<CombineTaskDetail>(`${API}/multi-alpha/combine/tasks/${encodeURIComponent(taskKey)}${query}`);
+      const url = `${API}/multi-alpha/combine/tasks/${encodeURIComponent(taskKey)}${query}`;
+      const response = await reads.current.read(url, url, false);
+      if (generation !== requestGeneration.current) return;
+      const data = response.data as CombineTaskDetail;
       setDetail(data);
-      setSelectedScheme(data.scheme || selectedScheme || "ic_weighted");
+      // Use the resolved default from detail, without a duplicate initial GET.
       setSelectedLoopIndex((current) => {
         if (preferredRunId) {
           const preferred = data.loops.find((loop) => exportRunId(loop) === preferredRunId);
@@ -215,10 +228,11 @@ function MultiAlphaCombineBacktestDetailWorkspace({ taskKey: rawTaskKey }: { tas
       });
       setLastLoadedAt(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     } catch (exc) {
-      setDetail(null);
+      if (generation !== requestGeneration.current) return;
       setError(exc instanceof Error ? exc.message : String(exc));
+      if (strict) throw exc;
     } finally {
-      setLoading(false);
+      if (generation === requestGeneration.current) setLoading(false);
     }
   }, [selectedScheme, taskKey]);
 
@@ -234,20 +248,24 @@ function MultiAlphaCombineBacktestDetailWorkspace({ taskKey: rawTaskKey }: { tas
   const loops = useMemo(() => detail?.loops || [], [detail?.loops]);
   const task = detail?.task || null;
 
-  useEffect(() => {
-    if (!autoRefresh || task?.status !== "running") return;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void loadDetail();
-    }, refreshInterval * 1000);
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") void loadDetail();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [autoRefresh, loadDetail, refreshInterval, task?.status]);
+  useActiveRefresh(async () => {
+    try {
+      if (!task?.run_ids?.length) throw new Error("运行任务缺少 run_ids，请手动刷新");
+      const generation = requestGeneration.current;
+      const query = new URLSearchParams();
+      task.run_ids.forEach(id => query.append("run_ids", id));
+      const url = `${API}/multi-alpha/combine/tasks/status?${query}`;
+      const response = await reads.current.read(url, url, false);
+      if (generation !== requestGeneration.current) return;
+      if (response.data.missing_ids?.length) throw new Error("运行记录缺失，请刷新核对");
+      const observed = response.data.tasks.find((row: CombineTask) => row.task_id === taskKey);
+      if (!observed) throw new Error("任务状态响应缺失");
+      if (observed.updated_at !== task.updated_at || observed.status !== task.status
+          || observed.current_loop !== task.current_loop) await loadDetail(undefined, task.run_ids, true);
+      else setDetail(previous => previous ? { ...previous, task: { ...previous.task, ...observed } } : previous);
+      setError(null);
+    } catch (reason) { setError(String(reason)); throw reason; }
+  }, autoRefresh && isExecutingTask(task), taskKey, refreshInterval * 1000);
   const activeLoopData = useMemo(() => {
     if (selectedLoopIndex == null) return undefined;
     return loops.find((loop) => loop.loop_index === selectedLoopIndex);
@@ -336,12 +354,12 @@ function MultiAlphaCombineBacktestDetailWorkspace({ taskKey: rawTaskKey }: { tas
             disabled={!autoRefresh}
             style={{ padding: "7px 8px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "11px", color: "#475569", backgroundColor: "#fff" }}
           >
-            <option value={5}>5秒</option>
-            <option value={10}>10秒</option>
-            <option value={30}>30秒</option>
+            <option value={60}>60秒</option>
+            <option value={120}>120秒</option>
+            <option value={300}>300秒</option>
           </select>
           <select
-            value={selectedScheme}
+            value={selectedScheme || detail?.scheme || ""}
             onChange={(event) => { setSelectedScheme(event.target.value); setRightPanelView("trajectory"); }}
             disabled={!detail?.available_schemes?.length}
             style={{ padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "13px", color: "#475569", backgroundColor: "#fff" }}

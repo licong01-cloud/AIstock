@@ -99,6 +99,29 @@ def test_local_resume_checks_outputs_without_rereading_upstream_inventory(tmp_pa
     assert calls == [profile]
 
 
+@pytest.mark.parametrize("group", ["input_refs", "output_refs"])
+@pytest.mark.parametrize("failure", [None, "missing", "changed"])
+def test_derive_resume_verifies_frozen_artifacts_without_regeneration(tmp_path, group, failure):
+    producer = SimpleNamespace(produce=lambda context: pytest.fail("sealed DERIVE must not rerun"))
+    pipeline = RegisteredMonthlyPipeline(
+        {stage: producer for stage in ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,),
+    )
+    artifact = tmp_path / "sealed.json"
+    artifact.write_bytes(b"sealed\n")
+    ref = {"id": artifact.name, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(), "size": 7}
+    receipt = {"input_refs": [], "output_refs": [], group: [ref]}
+    if failure == "missing":
+        artifact.unlink()
+    elif failure == "changed":
+        artifact.write_bytes(b"drift!\n")
+    if failure is None:
+        assert pipeline.checkpoint_is_valid("DERIVE", receipt)
+    else:
+        with pytest.raises(MonthlyProducerError, match="retained"):
+            pipeline.checkpoint_is_valid("DERIVE", receipt)
+
+
 def test_registered_pipeline_delivers_stage_control_and_checks_before_validation(tmp_path):
     events = []
 

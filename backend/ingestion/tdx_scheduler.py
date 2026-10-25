@@ -325,6 +325,8 @@ class TDXScheduler:
         self._tracker = _FutureTracker()
         self._delayed_retry_keys: set[str] = set()
         self._completion_callbacks: dict[str, _CompletionCallback] = {}
+        self._canonical_pit_roll_future: Future | None = None
+        self._canonical_pit_roll_next_check = 0.0
         DEFAULT_TEST_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     def register_completion_callback(
@@ -985,6 +987,7 @@ class TDXScheduler:
     # schedule management
     def refresh_schedules(self) -> None:
         """Reload enabled schedules from database and update in-memory jobs."""
+        self._dispatch_canonical_pit_roll()
         try:
             self._reconcile_lost_go_jobs()
         except Exception:  # noqa: BLE001 - never infer absence from a transport failure.
@@ -1033,6 +1036,32 @@ class TDXScheduler:
         except Exception as exc:  # noqa: BLE001
             _logger.warning("data sync target reconciliation failed: %s", exc)
         self._dispatch_completion_callbacks()
+
+    def _dispatch_canonical_pit_roll(self) -> None:
+        """Reuse the maintenance executor; never block collection or business loops."""
+        if getattr(self, "_schedule_thread", None) is None:
+            return
+        now = time.monotonic()
+        with self._lock:
+            pending = getattr(self, "_canonical_pit_roll_future", None)
+            if pending is not None and not pending.done():
+                return
+            if now < getattr(self, "_canonical_pit_roll_next_check", 0.0):
+                return
+            self._canonical_pit_roll_next_check = now + 60.0
+            self._canonical_pit_roll_future = self._executor.submit(self._run_canonical_pit_roll)
+
+    @staticmethod
+    def _run_canonical_pit_roll() -> dict[str, Any]:
+        from backend.services.stock_universe_pit_service import StockUniversePitService
+        try:
+            result = StockUniversePitService(existing_schema_only=True).advance_canonical_trade_day()
+            if result.get("rebuilt"):
+                _logger.info("canonical PIT daily roll: %s", _json_dump(result))
+            return result
+        except Exception as exc:  # noqa: BLE001 - retry maintenance, never re-fetch source facts.
+            _logger.warning("canonical PIT daily roll waiting: %s", exc)
+            return {"status": "waiting", "error": str(exc)}
 
     def _reconcile_lost_go_jobs(self) -> int:
         """Release only expired jobs whose accepted native task is explicitly gone.
@@ -1680,6 +1709,25 @@ class TDXScheduler:
             availability_date = self._next_trading_day(availability_date)
         return availability_date
 
+    def _minute_replay_start(self) -> dt.date:
+        """Locate committed recent facts, not a completeness watermark.
+
+        Use the time index with chunk-prunable bounds, never full-history MAX.
+        Legacy success audits may predate whole-population/bar checks, so they
+        cannot justify advancing past this day. Existing repair targets retain
+        responsibility for holes before it; exact requested windows bypass it.
+        """
+        rows = self._fetchall(
+            """SELECT (trade_time AT TIME ZONE 'Asia/Shanghai')::date AS mx
+                 FROM market.kline_minute_raw
+                WHERE trade_time >= CURRENT_DATE - INTERVAL '45 days' AND freq='1m'
+                ORDER BY trade_time DESC LIMIT 1"""
+        )
+        value = rows[0].get("mx") if rows else None
+        if value is None:
+            raise RuntimeError("TDX incremental has no recent cursor; specify an exact date window")
+        return value if isinstance(value, dt.date) else dt.date.fromisoformat(str(value))
+
     def _compute_auto_range(self, dataset: str) -> Tuple[Optional[dt.date], Optional[dt.date]]:
         """Return (start_date, end_date) for incremental catch-up.
 
@@ -1716,6 +1764,15 @@ class TDXScheduler:
         }
         if not table_name:
             return None, None
+
+        if dataset == "kline_minute_raw":
+            latest_date = self._latest_completed_trading_day()
+            if latest_date is None:
+                return None, None
+            start_date = self._minute_replay_start()
+            if start_date > latest_date:
+                raise RuntimeError("TDX source maximum date is beyond latest trading date")
+            return start_date, latest_date
 
         current_max: Optional[dt.date] = None
         if use_refresh_audit_cursor:
@@ -3669,7 +3726,9 @@ class TDXScheduler:
                        WHERE volume_ratio IS NOT NULL
                          AND volume_ratio::text NOT IN ('NaN', 'Infinity', '-Infinity')
                    )::bigint AS required_volume_ratio_count"""
-        rows = self._fetchall(
+        # Raw observations already aggregate each date for cross-provider
+        # completeness. Reuse their counts/maxima rather than scan the range twice.
+        rows = [] if dataset in _GO_INCREMENTAL_DATASETS else self._fetchall(
             f"""
             SELECT {date_col}::date AS trade_date,
                    COUNT(*)::bigint AS row_count,
@@ -3710,15 +3769,18 @@ class TDXScheduler:
         with _get_conn(self._db_cfg) as conn:
             for row in target_dates:
                 trade_date = row.get("cal_date")
-                row_count = int(counts.get(trade_date, 0))
-                data_max_at = max_at.get(trade_date)
+                completeness = None
+                if dataset in _GO_INCREMENTAL_DATASETS:
+                    row_count, data_max_at, completeness = self._raw_date_observation(dataset, trade_date)
+                else:
+                    row_count = int(counts.get(trade_date, 0))
+                    data_max_at = max_at.get(trade_date)
                 if not isinstance(data_max_at, dt.datetime):
                     data_max_at = None
                 row_metadata = dict(base_metadata)
                 quality_status = "ok"
                 failure_category = None
                 if dataset in _GO_INCREMENTAL_DATASETS and row_count > 0:
-                    completeness = self._raw_date_completeness(dataset, trade_date)
                     row_metadata["raw_date_completeness"] = completeness
                     if completeness["expected_symbols"] <= 0 or completeness["incomplete_symbols"]:
                         quality_status = "low_coverage"
@@ -3801,6 +3863,14 @@ class TDXScheduler:
 
     def _raw_date_completeness(self, dataset: str, trade_date: dt.date) -> Dict[str, int]:
         """Bounded cross-provider key/bar evidence; never a full-history scan."""
+        return self._raw_date_observation(dataset, trade_date)[2]
+
+    def _raw_date_observation(
+        self, dataset: str, trade_date: dt.date,
+    ) -> Tuple[int, Optional[dt.datetime], Dict[str, int]]:
+        """Observe raw totals and the existing 1m completeness contract once."""
+        from scripts.build_stock_universe_pit_spans import is_b_share_ts_code
+
         # Keep hypertable scans independently time-prunable. Joining them
         # together can produce a nested-loop scan over thousands of chunks.
         daily_rows = self._fetchall(
@@ -3809,7 +3879,7 @@ class TDXScheduler:
         )
         day_start = dt.datetime.combine(trade_date, dt.time.min, tzinfo=_CN_TZ)
         minute_rows = self._fetchall(
-            """SELECT ts_code,COUNT(*) AS bars,
+            """SELECT ts_code,freq,COUNT(*) AS bars,MAX(trade_time) AS data_max_at,
                 BOOL_OR(volume_hand > 0 OR volume_shares > 0) AS traded,
                 COUNT(*) FILTER (WHERE NOT (
                     ((trade_time AT TIME ZONE 'Asia/Shanghai')::time BETWEEN TIME '09:31' AND TIME '11:30') OR
@@ -3817,11 +3887,15 @@ class TDXScheduler:
                     OR open_li <= 0 OR low_li <= 0 OR high_li <= 0 OR close_li <= 0
                     OR volume_hand < 0 OR amount_li < 0) AS bad_bars
               FROM market.kline_minute_raw
-             WHERE trade_time >= %s AND trade_time < %s AND freq='1m' GROUP BY ts_code""",
+             WHERE trade_time >= %s AND trade_time < %s GROUP BY ts_code,freq""",
             (day_start, day_start + dt.timedelta(days=1)),
         )
+        # Old B-share facts remain stored, but must not re-enter the completion
+        # population after their collection has been disabled.
+        daily_rows = [row for row in daily_rows if not is_b_share_ts_code(row["ts_code"])]
+        minute_rows = [row for row in minute_rows if not is_b_share_ts_code(row["ts_code"])]
         daily = {str(row["ts_code"]).strip(): row for row in daily_rows}
-        minute = {str(row["ts_code"]).strip(): row for row in minute_rows}
+        minute = {str(row["ts_code"]).strip(): row for row in minute_rows if row["freq"] == "1m"}
         if dataset == "kline_daily_raw":
             population = {str(row["ts_code"]).strip() for row in self._fetchall(
                 "SELECT ts_code FROM market.stock_basic WHERE list_date<=%s "
@@ -3829,12 +3903,16 @@ class TDXScheduler:
             )}
             expected = {code for code, row in minute.items() if row["traded"] and code in population}
             incomplete = len(expected.difference(daily))
+            row_count, data_max_at = len(daily_rows), None
         else:
             expected = {code for code, row in daily.items()
                         if (row["volume_hand"] or 0) > 0 or (row["volume_shares"] or 0) > 0}
             incomplete = sum(code not in minute or minute[code]["bars"] != 240
                              or minute[code]["bad_bars"] > 0 for code in expected)
-        return {"expected_symbols": len(expected), "incomplete_symbols": incomplete}
+            row_count = sum(int(row["bars"]) for row in minute_rows)
+            data_max_at = max((row["data_max_at"] for row in minute_rows
+                               if row["data_max_at"] is not None), default=None)
+        return row_count, data_max_at, {"expected_symbols": len(expected), "incomplete_symbols": incomplete}
 
     def _retry_range_for_health_failure(
         self,
@@ -5079,13 +5157,16 @@ class TDXScheduler:
                 if start_date > end_date or end_date > latest_trading:
                     raise RuntimeError("explicit TDX date window is invalid")
             else:
-                max_rows = self._fetchall(
-                    f"SELECT MAX({spec['date_col']})::date AS mx FROM {spec['table']} "
-                    f"WHERE {spec['date_col']} >= CURRENT_DATE - INTERVAL '45 days'"
-                )
-                current_max = max_rows[0]["mx"] if max_rows else None
-                if current_max is None:
-                    raise RuntimeError("TDX incremental has no recent cursor; specify an exact date window")
+                if dataset == "kline_minute_raw":
+                    current_max = self._minute_replay_start()
+                else:
+                    max_rows = self._fetchall(
+                        f"SELECT MAX({spec['date_col']})::date AS mx FROM {spec['table']} "
+                        f"WHERE {spec['date_col']} >= CURRENT_DATE - INTERVAL '45 days'"
+                    )
+                    current_max = max_rows[0]["mx"] if max_rows else None
+                    if current_max is None:
+                        raise RuntimeError("TDX incremental has no recent cursor; specify an exact date window")
                 # A MAX timestamp proves neither a complete day nor all symbols.
                 # Re-read the latest observed day; Go inserts identical keys
                 # idempotently and rejects conflicting existing raw facts.
@@ -5098,14 +5179,13 @@ class TDXScheduler:
 
             # 2) create job record (or reuse one from _scheduled_ingestion_run)
             workers = int(options.get("workers") or spec["default_workers"])
-            codes = options.get("codes")
+            # Provider population is independent of buy eligibility. Explicit
+            # requests must obey the same B-share exclusion as scheduled runs.
+            codes = self._go_provider_codes(
+                start_date, end_date, requested_codes=options.get("codes") or None,
+            )
             if not codes:
-                # Provider population, not a strategy stock pool: retain ST and
-                # historical delisted stocks intersecting an explicit window,
-                # but do not request pre-listing dates or unrelated instruments.
-                codes = self._go_provider_codes(start_date, end_date)
-                if not codes:
-                    raise RuntimeError("date-valid TDX provider population is unavailable")
+                raise RuntimeError("date-valid non-B-share TDX provider population is unavailable")
             summary.update({
                 "data_kind": spec["data_kind"],
                 "start_date": start_date.isoformat(),
@@ -5361,12 +5441,24 @@ class TDXScheduler:
                     return None
         return None
 
-    def _go_provider_codes(self, start_date: dt.date, end_date: dt.date) -> List[str]:
+    def _go_provider_codes(
+        self, start_date: dt.date, end_date: dt.date,
+        *, requested_codes: Optional[List[str]] = None,
+    ) -> List[str]:
+        # Reuse the existing global PIT board identity, not its buy-eligible
+        # members: ST/exit-period quotes and Beijing provider scope stay intact.
+        from scripts.build_stock_universe_pit_spans import a_share_ts_code_filter, is_b_share_ts_code
+
+        if requested_codes is not None:
+            return [str(code).strip() for code in requested_codes if not is_b_share_ts_code(code)]
         # The stock-basic directory may lag an IPO. A real same-window daily
         # quote is also provider-population evidence, never PIT buy eligibility.
-        rows = self._fetchall(r"""WITH bounds AS (SELECT %s::date AS end_day,%s::date AS start_day)
+        # delist_date is the effective terminal boundary, not a final trading
+        # day. Retain a multi-day repair reaching earlier sessions and let real
+        # positive quotes override the directory if its boundary is stale.
+        sql = r"""WITH bounds AS (SELECT %s::date AS end_day,%s::date AS start_day), population AS (
             SELECT ts_code FROM market.stock_basic,bounds WHERE list_date<=end_day
-              AND (delist_date IS NULL OR delist_date>=start_day)
+              AND (delist_date IS NULL OR delist_date>start_day)
             UNION
             SELECT DISTINCT k.ts_code FROM market.kline_daily_raw k,bounds
              WHERE k.trade_date BETWEEN start_day AND end_day AND k.adjust_type='none'
@@ -5374,8 +5466,10 @@ class TDXScheduler:
                AND (k.ts_code ~ '^(00|20|30)[0-9]{4}\.SZ$'
                  OR k.ts_code ~ '^(6[0-9]{5}|900[0-9]{3})\.SH$'
                  OR k.ts_code ~ '^[489][0-9]{5}\.BJ$')
-            ORDER BY ts_code""", (end_date, start_date))
-        return [str(row["ts_code"]).strip() for row in rows]
+            ) SELECT ts_code FROM population WHERE TRUE"""
+        sql += a_share_ts_code_filter("ts_code") + " ORDER BY ts_code"
+        rows = self._fetchall(sql, (end_date, start_date))
+        return [str(row["ts_code"]).strip() for row in rows if not is_b_share_ts_code(row["ts_code"])]
 
     def _update_ingestion_job_status(
         self, job_id: uuid.UUID, status: str, start_ts: dt.datetime, summary: Dict[str, Any]

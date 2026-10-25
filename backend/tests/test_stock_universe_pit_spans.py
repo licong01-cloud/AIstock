@@ -469,14 +469,13 @@ def test_confirmed_delisting_event_can_close_st_snapshot_gap() -> None:
     assert result["reconstructed_snapshot_day_count"] == 1
 
 
-def test_canonical_terminal_evidence_rejects_unclassified_delisted_security() -> None:
+def test_canonical_terminal_date_does_not_require_announcement_events() -> None:
     stock = StockRow("600000.SH", "sample", "SSE", "D", dt.date(2000, 1, 1), dt.date(2025, 1, 1))
-    try:
-        audit_canonical_terminal_evidence([stock], announcement_events=[])
-    except RuntimeError as exc:
-        assert "600000.SH" in str(exc)
-    else:
-        raise AssertionError("delisted security without announcement evidence must fail closed")
+    receipt = audit_canonical_terminal_evidence([stock], announcement_events=[])
+    assert receipt["status"] == "ready"
+    assert receipt["stock_basic_terminal_date_count"] == 1
+    assert receipt["announcement_terminal_evidence_count"] == 0
+    assert receipt["missing_terminal_evidence_count"] == 0
     receipt = audit_canonical_terminal_evidence(
         [stock],
         announcement_events=[
@@ -519,20 +518,45 @@ def test_terminal_evidence_reports_but_does_not_require_pre_window_delisting() -
     assert receipt["status"] == "ready"
 
 
-def test_terminal_evidence_still_requires_in_window_delisting() -> None:
+def test_terminal_date_accepts_in_window_delisting_and_single_pass_stocks() -> None:
     stock = StockRow("600000.SH", "in-window", "SSE", "D", dt.date(2000, 1, 1), dt.date(2025, 1, 1))
+    receipt = audit_canonical_terminal_evidence(
+        iter([stock]),
+        announcement_events=[],
+        start_date=dt.date(2018, 8, 1),
+        end_date=dt.date(2026, 7, 31),
+    )
+    assert receipt["required_terminal_security_count"] == 1
+    assert receipt["stock_basic_terminal_date_count"] == 1
+    assert receipt["status"] == "ready"
 
-    try:
-        audit_canonical_terminal_evidence(
-            [stock],
-            announcement_events=[],
-            start_date=dt.date(2018, 8, 1),
-            end_date=dt.date(2026, 7, 31),
-        )
-    except RuntimeError as exc:
-        assert "600000.SH" in str(exc)
-    else:
-        raise AssertionError("in-window delisting without announcement evidence must fail closed")
+
+def test_paused_security_still_needs_actual_effective_date_not_event_chain() -> None:
+    stock = StockRow("600000.SH", "paused", "SSE", "P", dt.date(2000, 1, 1), None)
+    with pytest.raises(RuntimeError, match="terminal effective date is unavailable"):
+        audit_canonical_terminal_evidence([stock], announcement_events=[])
+    dated = StockRow(stock.ts_code, stock.name, stock.exchange, "P", stock.list_date, dt.date(2025, 1, 1))
+    assert audit_canonical_terminal_evidence([dated], announcement_events=[])["status"] == "ready"
+
+
+def test_lifecycle_rejects_terminal_date_before_listing() -> None:
+    stock = StockRow("600000.SH", "invalid", "SSE", "D", dt.date(2025, 1, 2), dt.date(2025, 1, 1))
+    with pytest.raises(RuntimeError, match="lifecycle evidence is incomplete"):
+        audit_canonical_stock_lifecycle([stock])
+
+
+def test_authoritative_delist_date_preserves_history_and_closes_only_on_date() -> None:
+    days = [dt.date(2026, 10, 15), dt.date(2026, 10, 16), dt.date(2026, 10, 19)]
+    stock = StockRow("601059.SH", "sample", "SSE", "D", dt.date(2023, 2, 1), days[-1])
+    calendar = TradingCalendar(days)
+    events = _stock_basic_terminal_events([stock], calendar, allow_paused_list_date_fallback=False)
+    spans = _build_spans(
+        [stock], events, universe_key="canonical", start_date=days[0], end_date=days[-1],
+        ipo_filter_days=0, ipo_filter_unit="trading_sessions", calendar=calendar,
+    )
+    assert [(span.eligible_start, span.eligible_end, span.exit_reason) for span in spans] == [
+        (days[0], days[1], "delisted")
+    ]
 
 
 class _FakeCursor:
@@ -586,6 +610,33 @@ def test_is_b_share_ts_code() -> None:
         assert not is_b_share_ts_code(code), code
     assert not is_b_share_ts_code("")
     assert not is_b_share_ts_code(None)
+
+
+def test_global_canonical_pit_policy_explicitly_excludes_b_shares() -> None:
+    from backend.services.canonical_equity_pit import CANONICAL_RULE_PARAMETERS
+
+    assert CANONICAL_RULE_PARAMETERS["security_type"] == "A_SHARE_EQUITY"
+    assert "B_SHARE" in CANONICAL_RULE_PARAMETERS["excluded_boards"]
+    assert is_b_share_ts_code("200706.SZ")
+
+
+def test_live_roll_preserves_prior_membership_and_rejects_historical_revision() -> None:
+    old_end = dt.date(2026, 10, 20)
+    old = [("000001.SZ", dt.date(2020, 1, 2), old_end)]
+    span = pit_builder.SpanRow(
+        "test", "000001.SZ", dt.date(2020, 1, 2), dt.date(2026, 10, 21),
+        "ipo", "generation_end", dt.date(1991, 4, 3), dt.date(1992, 4, 3),
+    )
+    assert pit_builder._membership_prefix_matches(old, [span], old_end)
+    assert not pit_builder._membership_prefix_matches([], [span], old_end)
+    assert not pit_builder._membership_prefix_matches(old, [], old_end)
+
+
+def test_live_source_boundary_is_previous_trade_day_not_a_synthetic_snapshot() -> None:
+    calendar = TradingCalendar([dt.date(2026, 10, 16), dt.date(2026, 10, 19), dt.date(2026, 10, 20)])
+    assert pit_builder._live_source_boundary(calendar, dt.date(2026, 10, 19), "2026-10-16") == dt.date(2026, 10, 16)
+    with pytest.raises(ValueError, match="previous trading"):
+        pit_builder._live_source_boundary(calendar, dt.date(2026, 10, 19), "2026-10-19")
 
 
 def test_a_share_ts_code_filter_fragment() -> None:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import replace
 from datetime import date
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +18,8 @@ from backend.services.canonical_equity_pit import (
 from backend.services.selection_center.canonical_pit_runtime import (
     CANONICAL_PIT_RUNTIME_LEASE_KEY,
     CanonicalPitGenerationDriftError,
+    CanonicalPitRuntimeError,
+    SelectionPitRuntimeLease,
     migrate_runtime_config_to_canonical_pointer,
 )
 from backend.services.selection_center.models import SelectionMode, SelectionRunStatus
@@ -222,6 +226,102 @@ class DriftingPitAuthorityResolver(StaticPitAuthorityResolver):
     def resolve_live_binding(self) -> PitConsumerBinding:
         self.calls += 1
         return _pit_binding(4 if self.calls == 1 else 5)
+
+
+class RollingPitAuthorityResolver(StaticPitAuthorityResolver):
+    def __init__(self, *, verified=True):
+        super().__init__()
+        self.previous = replace(_pit_binding(4), coverage_end=date(2026, 10, 21))
+        self.binding = replace(self.previous, coverage_end=date(2026, 10, 23), state_source_digest="c" * 64)
+        self.verified = verified
+
+    def resolve_live_binding(self):
+        self.calls += 1
+        return self.binding
+
+    def verifies_rolling_predecessor(self, *, current, source_digest, coverage_start, coverage_end):
+        return (self.verified and current == self.binding
+                and (source_digest, coverage_start, coverage_end)
+                == (self.previous.state_source_digest, self.previous.coverage_start, self.previous.coverage_end))
+
+
+def _frozen_pit_release_case():
+    rows = [
+        {"symbol": "000001.SZ", "score": 0.9, "rank": 1, "reference_price": 10.0},
+        {"symbol": "000002.SZ", "score": 0.8, "rank": 2, "reference_price": 11.0},
+    ]
+    packages, artifacts, manifest, runtime = _package_with_artifact(rows)
+    repository = InMemorySimulationRuntimeRepository()
+    resolver = RollingPitAuthorityResolver()
+    config = migrate_runtime_config_to_canonical_pointer(_runtime_config())
+    config[CANONICAL_PIT_RUNTIME_LEASE_KEY] = SelectionPitRuntimeLease.from_binding(resolver.previous).as_dict()
+    _seed_artifact(artifacts, manifest, rows, runtime_config=config)
+    release = _release_for(manifest, config, repository, release_metadata={"selection_runtime_config": config})
+    computation = RecordingSelectionComputation()
+    service = _selection_service(packages, runtime, repository,
+        selection_computation=computation, pit_authority_resolver=resolver)
+    return SimpleNamespace(service=service, repository=repository, resolver=resolver,
+        release=release, config=config, computation=computation,
+        kwargs=dict(package_ids=[manifest.package_id], mode=SelectionMode.SINGLE_PACKAGE,
+            trade_date=date(2024, 1, 2), data_source="DB_HISTORICAL", runtime_config={}, runtime_release=release))
+
+
+def test_release_selection_inherits_verified_rolling_pit_without_rebinding():
+    case = _frozen_pit_release_case()
+    original = case.release.model_dump(mode="json")
+    result = case.service.run_selection(**case.kwargs)
+    lease = case.config[CANONICAL_PIT_RUNTIME_LEASE_KEY]
+    assert result.runtime_config[CANONICAL_PIT_RUNTIME_LEASE_KEY] == lease
+    assert case.release.model_dump(mode="json") == original
+    assert [(row.symbol, row.score) for row in result.aggregate_results] == [("000001.SZ", 0.9), ("000002.SZ", 0.8)]
+    evidence = next(iter(result.evidence_by_package.values()))
+    assert evidence.evidence_payload_json[CANONICAL_PIT_RUNTIME_LEASE_KEY] == lease
+    assert evidence.release_hash == case.release.release_hash
+    assert case.resolver.calls == 2
+
+
+@pytest.mark.parametrize("fault", ["unverified_prefix", "generation", "request_lease", "request_profile", "day_outside_lease"])
+def test_release_pit_inheritance_rejects_unproven_or_rebound_identity_before_compute(fault):
+    case = _frozen_pit_release_case()
+    if fault == "unverified_prefix":
+        case.resolver.verified = False
+    elif fault == "generation":
+        case.resolver.binding = replace(case.resolver.binding, activation_generation=5)
+    elif fault == "request_lease":
+        case.kwargs["runtime_config"] = {
+            CANONICAL_PIT_RUNTIME_LEASE_KEY: SelectionPitRuntimeLease.from_binding(case.resolver.binding).as_dict()}
+    elif fault == "request_profile":
+        case.kwargs["runtime_config"] = {"canonical_pit_authority_profile": {"authority_id": "other"}}
+    else:
+        case.kwargs["trade_date"] = date(2026, 10, 23)
+    error = CanonicalPitGenerationDriftError if fault in {"unverified_prefix", "generation"} else RuntimeConfigInvalidError
+    with pytest.raises(error):
+        case.service.run_selection(**case.kwargs)
+    assert not case.computation.calls
+
+
+def test_release_pit_drift_during_computation_still_blocks_evidence_write(monkeypatch):
+    case = _frozen_pit_release_case()
+    compute = case.computation.compute
+
+    def drift(**kwargs):
+        result = compute(**kwargs)
+        case.resolver.binding = replace(case.resolver.binding, activation_generation=5)
+        return result
+
+    monkeypatch.setattr(case.computation, "compute", drift)
+    monkeypatch.setattr(case.service, "_build_operational_evidence_by_package",
+        lambda **_: pytest.fail("evidence must not be written after PIT drift"))
+    with pytest.raises(CanonicalPitGenerationDriftError):
+        case.service.run_selection(**case.kwargs)
+
+
+def test_unbound_new_selection_does_not_inherit_an_old_lease():
+    case = _frozen_pit_release_case()
+    case.kwargs.update(runtime_release=None, runtime_config=case.config)
+    with pytest.raises(CanonicalPitRuntimeError, match="supplied canonical PIT lease differs"):
+        case.service.run_selection(**case.kwargs)
+    assert not case.computation.calls
 
 
 def test_strategy_package_selection_freezes_canonical_pit_generation_once() -> None:
