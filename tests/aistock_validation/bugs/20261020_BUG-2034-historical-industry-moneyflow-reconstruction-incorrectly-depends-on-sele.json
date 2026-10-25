@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2034",
-  "closed_at": null,
+  "closed_at": "2026-10-25T07:33:49.174292Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -26,12 +26,18 @@
   "evidence_uris": [],
   "expected": "Aggregate all finite shared source moneyflow under causal versioned industry classification, resolve historical source aliases for every factual security, preserve legitimate NA and official quotes; selection PIT cannot change shared factual sector values.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_industry_facts.py",
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2034-historical-industry-moneyflow-reconstruction-incorrectly-depends-on-sele.json"
+    ],
     "added_files": [],
     "changed_files": [
       "backend/services/dataset_release/monthly_industry_facts.py",
-      "backend/tests/dataset_release/test_monthly_sector_mapping.py"
+      "backend/tests/dataset_release/test_monthly_sector_mapping.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2034-historical-industry-moneyflow-reconstruction-incorrectly-depends-on-sele.json"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/services/dataset_release/monthly_industry_facts.py",
@@ -88,8 +94,8 @@
   },
   "first_seen_at": "2026-10-20T10:48:24.299174Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "9295c7e417a4ed0fa52385f01de20f2088ecca25",
+  "fixed_at": "2026-10-20T11:04:16Z",
   "github_issue_number": 6486,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6486",
   "last_seen_at": "2026-10-20T10:48:24.299174Z",
@@ -97,6 +103,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6487",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -113,11 +120,34 @@
       "python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py -q --tb=short -> 66 passed, 1 skipped"
     ],
     "inference_basis": "actual_changed_files",
-    "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "provisional": false,
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
-    "runtime_identity_match": "pending",
+    "persistence_basis": "git_tracked_source",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-2034-remaining.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2034",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "9295c7e417a4ed0fa52385f01de20f2088ecca25",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:29:41.531884Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "d1f08d072ab47de7e0c07e063890160e56a20c9ad2e0cfacb45c8b467e2fea50",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "ef0c05c5e5993500b0436750a08d5dca89c9157e8214c6eb33c8d060c37e9913",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -127,7 +157,29 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2034",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "3b29813153ce90e8",
+    "recorded_at": "2026-10-20T11:05:10.702549Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "3b02de4ef8d5387a3001f3342ae3402d5282acca",
+    "source_merge_commit": "9295c7e417a4ed0fa52385f01de20f2088ecca25",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6487",
+    "validation_evidence": [
+      "validation-receipt: id=f63d7721b58c981d commit=3b02de4ef8d5387a3001f3342ae3402d5282acca kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py -q --tb=short` result=`66 passed, 1 skipped`",
+      "validation-receipt: id=a38efe8392cd1eeb commit=3b02de4ef8d5387a3001f3342ae3402d5282acca kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_industry_facts.py backend/tests/dataset_release/test_monthly_sector_mapping.py` result=`passed`"
+    ],
+    "validation_evidence_digest": "4a129e4a48a1cd09e810344fe8d76a3157d3ecd73533ec23e2d59e3f793752be"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -136,6 +188,11 @@
     "fingerprint": "89284bfbd1f556df5b85933c",
     "source_event_id": "FE-20261020-89284bfbd1f5"
   },
+  "validation_evidence": [
+    "validation-receipt: id=f63d7721b58c981d commit=3b02de4ef8d5387a3001f3342ae3402d5282acca kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/dataset_release/test_monthly_sector_mapping.py -q --tb=short` result=`66 passed, 1 skipped`",
+    "validation-receipt: id=a38efe8392cd1eeb commit=3b02de4ef8d5387a3001f3342ae3402d5282acca kind=nox plan=l0 status=passed command=`python -m nox -s l0 -- backend/services/dataset_release/monthly_industry_facts.py backend/tests/dataset_release/test_monthly_sector_mapping.py` result=`passed`",
+    "Source merge independently confirmed; official current runtime identity/business smoke PASS; metadata-only close-sync; original validations retained; no new data scans, DB writes or service control"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],

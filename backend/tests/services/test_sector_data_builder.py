@@ -100,17 +100,32 @@ def test_build_date_uses_dynamic_industry_mapping_without_persisted_identity(mon
     for _, params in cursor.executed[2:5]:
         assert params == {
             "trade_date": dt.date(2026, 7, 22),
-            "live_universe_key": module.DEFAULT_ST_PIT_UNIVERSE_KEY,
-            "qe_universe_pattern": f"{module.IMMUTABLE_QE_ST_PIT_UNIVERSE_PREFIX}%",
+            "authority_id": "aistock_equity_pit_canonical",
         }
     assert "sector_dependency_revision" in cursor.executed[5][0]
     assert cursor.executed[5][1] == (dt.date(2026, 7, 22), 7, dt.date(2026, 7, 22))
     assert "market.stock_universe_pit_spans" in module._BUILD_DAY_SQL
-    assert "JOIN authoritative_universes USING (universe_key)" in module._BUILD_DAY_SQL
+    assert "JOIN authoritative_universes USING (universe_key, rule_version)" in module._BUILD_DAY_SQL
     assert "market.sw_index_member" in module._BUILD_DAY_SQL
     assert "l1_code, l2_code, mapping_in_date" not in module._BUILD_DAY_SQL
     assert "mapping_in_date     = EXCLUDED.mapping_in_date" not in module._BUILD_DAY_SQL
     assert "DISTINCT ON" not in module._BUILD_DAY_SQL
+
+
+def test_all_sector_mutations_follow_one_active_pointer_without_frozen_or_legacy_union():
+    for sql in (module._PREFLIGHT_DAY_SQL, module._DELETE_STALE_DAY_SQL, module._BUILD_DAY_SQL):
+        assert sql.startswith(module._AUTHORITATIVE_UNIVERSES_SQL)
+        assert "market.stock_universe_pit_authority_pointer" in sql
+        assert "s.universe_key = p.current_rolling_key" in sql
+        assert "s.rule_version = p.current_rule_version" in sql
+        assert "v.rule_version = p.current_rule_version" in sql
+        assert "s.status = 'ready'" in sql and "s.dirty = FALSE" in sql
+        assert "s.end_date >= %(trade_date)s" in sql
+        assert "qe_universe_pattern" not in sql and "live_universe_key" not in sql
+    from scripts.repair_sw_sector_revision import params
+    assert params(dt.date(2026, 10, 23)) == {
+        "trade_date": dt.date(2026, 10, 23), "authority_id": "aistock_equity_pit_canonical",
+    }
 
 
 @pytest.mark.parametrize(
