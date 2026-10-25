@@ -20,6 +20,15 @@ ADMISSIONS = MappingProxyType({
         "dataset_binding_sha256": "f87e12b7dec5b432952c47e2db8c91defc124ccdef1223a9cbd3cefed85d21ec",
         "authority_canonical_sha256": "344dddef0d729ff231d697eb70d0d362195c3e2c2b30597c51f4e5d182b00e4c",
     }),
+    # H1 formal frozen-file inference: original accepted model, 125 dates,
+    # full 131-sector catalog, two fresh processes with byte-identical output.
+    # Acceptance receipt 9a68086cd466eae97ffe0cd1ea61d440d0688ee4716ac9daa5762f8f09865a99.
+    "l2-risk-afa9158-h1-v1": MappingProxyType({
+        "risk_sha256": "a21f228d22f37aea474bd61a6dd4601bc2818db0da52ebbf1873256b4af2d5d2",
+        "release_identity_sha256": "d14af18f26dd60130dbe51b20ca821a7590812d63cdbf130ece1f573f95bbe18",
+        "dataset_binding_sha256": "4332b123f09f004176b81aeeb3265ae00e49123ece7f9d86b8b114e36c9b8ecd",
+        "authority_canonical_sha256": "344dddef0d729ff231d697eb70d0d362195c3e2c2b30597c51f4e5d182b00e4c",
+    }),
 })
 
 

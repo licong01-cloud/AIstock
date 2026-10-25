@@ -20,8 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 NODE = "rdagent-node1"
 SEEDS = (42, 2024, 2026)
-H1_GENERATION = "20260930-monthly-v2-unified-correction-4ab0b48642c3-margin1-facts1-suspend1"
-H1_MANIFEST = "ded1c29b48ba5a5d836b6d2c025c737a4293c8ded3e9fa6b1d78e179ebc13eae"
+H1_GENERATION = "20260930-monthly-v2-unified-correction-4ab0b48642c3-margin1-facts1-suspend1-suspendfacts1"
+H1_MANIFEST = "afa9158b9b1d8cc76ec1e40a6efdb2060365bb3039ea791a0b5caa2bae8c5337"
 
 
 def read(path):
@@ -186,7 +186,7 @@ def compose(evidence):
                 "shared_prediction_receipt_sha256": hashlib.sha256((evidence / "shared_prediction_receipt.json").read_bytes()).hexdigest(),
                 "mode": "external_frozen_prediction_replay", "model_fits": 0, "processor_fits": 0,
                 "non_as_known_taxonomy": True, "untouched_holdout": False,
-                "formal_account_limit": 6, "base_model_task": reference["task_id"]}
+                "formal_account_limit": 6, "base_model_task": asset.get("source_model_task", reference["task_id"])}
             # Do not feed study metadata or stale research flags into model kwargs.
             compose_params = deepcopy(params)
             compose_params.update(qe_l2_study_manifest=manifest, qe_l2_risk_enabled=(arm == "L"))
