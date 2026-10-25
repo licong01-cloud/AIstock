@@ -7,7 +7,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2048",
-  "closed_at": null,
+  "closed_at": "2026-10-25T07:30:48.183521Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -155,10 +155,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-2048-remaining.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2048",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "fe95c87ca020006a4f421838a213f466b27b648f",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:29:39.725298Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "6f17c11f48c324504245208e0e06015161bff23025dd033ec9b3c2c7037dc212",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "e104d26de678d2adc9c613cb8890773bcfb2ed8b617b8da0a181f1d0b7bf2780",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -190,7 +212,7 @@
     ],
     "validation_evidence_digest": "a4a5f6d20d2377a4c615dbb6402b9b89ad69e768d23f1469189baf6edfc6fcf4"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -201,7 +223,8 @@
   },
   "validation_evidence": [
     "python -m nox -s l0 --no-venv -> passed",
-    "pytest backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_source_audit.py -q -> passed, related136 and focused11; DEV723 full-column readback passed"
+    "pytest backend/tests/dataset_release/test_monthly_postgres_source.py backend/tests/dataset_release/test_monthly_source_audit.py -q -> passed, related136 and focused11; DEV723 full-column readback passed",
+    "Source merge independently confirmed; official current runtime identity/business smoke PASS; metadata-only close-sync; original validations retained; no new data scans, DB writes or service control"
   ],
   "verification_budget": {
     "budget": "standard",
