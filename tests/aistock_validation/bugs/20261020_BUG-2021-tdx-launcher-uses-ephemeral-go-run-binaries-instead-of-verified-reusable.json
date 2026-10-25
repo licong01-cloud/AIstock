@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2021",
-  "closed_at": null,
+  "closed_at": "2026-10-25T07:35:09.598544Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -148,10 +148,32 @@
     "planned_target_ids": [
       "tdx-go-backend"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-2021-remaining.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2021",
+      "business_smoke_semantic": {
+        "contract_id": "tdx_raw_kline_facts",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "8e84d23a7488a9dcc2ba085fd5f95911f7edd24ec29d563387578e993c848263",
+      "expected_identity": "a28c40092bfb0853b450ae82ea91f7af78fbc176",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T07:29:44.572517Z",
+      "mode": "read_only",
+      "observed_identity": "b222c628add6476222e754b945454f017ba89c40",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "24a181586df01666101239b2a1dbdadf20b13dcae210151630b7c2a76dce6e0c",
+      "receipt_sha256": "9225d67c7e4b8c935447fb5edb9d580c00aca252f26156d942a590847b964958",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "65d8da98e70bb9bb743c6a69fe186f020fbc722b4ba9fc477dc26fd4762d4f45",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "tdx-go-backend"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "tdx-go-backend",
@@ -183,7 +205,7 @@
     ],
     "validation_evidence_digest": "d11e719fd9932d16521856099c445137f257f4f9a0d4dfc5578c7afa2126e509"
   },
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "local_data"
   ],
@@ -194,7 +216,8 @@
   },
   "validation_evidence": [
     "validation-receipt: id=5a87f0f3fa1102a8 commit=5deb969e071c32075e815899d9dd07132a7427df kind=pytest plan=direct status=passed command=`python -m pytest backend/tests/scripts/test_start_tdx_go_backend.py -q --no-cov` result=`18 passed`",
-    "validation-receipt: id=7c244654190cf8e5 commit=5deb969e071c32075e815899d9dd07132a7427df kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`"
+    "validation-receipt: id=7c244654190cf8e5 commit=5deb969e071c32075e815899d9dd07132a7427df kind=nox plan=l0 status=passed command=`python -m nox -s l0` result=`passed`",
+    "Source merge independently confirmed; official current runtime identity/business smoke PASS; metadata-only close-sync; original validations retained; no new data scans, DB writes or service control"
   ],
   "verification_budget": {
     "budget": "light",
