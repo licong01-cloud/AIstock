@@ -95,6 +95,7 @@ class CombineLoopRow(BaseModel):
 
 class CombineTaskItem(BaseModel):
     task_id: str
+    run_ids: list[str] = Field(default_factory=list)
     task_name: str
     task_type: str = "multi_alpha_combine"
     status: str
@@ -140,7 +141,7 @@ class CombineCustomEvoConfigResp(BaseModel):
 
 
 class CombineUIRepository(Protocol):
-    def list_run_headers(self) -> list[dict[str, Any]]:
+    def list_run_headers(self, *, run_ids: Sequence[str] | None = None) -> list[dict[str, Any]]:
         ...
 
     def get_run_bundle(self, run_id: str) -> dict[str, Any] | None:
@@ -153,7 +154,9 @@ class PostgresCombineUIRepository:
     def __init__(self, connection_provider=get_conn) -> None:
         self._connection_provider = connection_provider
 
-    def list_run_headers(self) -> list[dict[str, Any]]:
+    def list_run_headers(self, *, run_ids: Sequence[str] | None = None) -> list[dict[str, Any]]:
+        if run_ids is not None and not run_ids:
+            return []
         with self._connection_provider() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
                 cur.execute(
@@ -184,8 +187,10 @@ class PostgresCombineUIRepository:
                         FROM strategy_pkg.multi_alpha_combine_backtest_child_attempt AS attempt
                         WHERE attempt.run_id = run.id
                     ) AS attempts ON TRUE
+                    WHERE (%s::text[] IS NULL OR run.id = ANY(%s::text[]))
                     ORDER BY run.created_at DESC
-                    """
+                    """,
+                    (list(run_ids) if run_ids is not None else None,) * 2,
                 )
                 return [dict(row) for row in cur.fetchall()]
 
@@ -233,27 +238,24 @@ class MultiAlphaCombineUIAdapter:
         limit = max(1, min(int(limit), 200))
         offset = max(0, int(offset))
         groups = self._load_groups()
-        tasks = [
-            self._task_item(
-                task_key,
-                rows,
-                available_schemes=self._available_schemes_for_rows(task_key, rows),
-            )
-            for task_key, rows in groups
-        ]
+        tasks = [(key, rows, self._task_item(key, rows)) for key, rows in groups]
         if status:
-            tasks = [task for task in tasks if task.status == status]
+            tasks = [item for item in tasks if item[2].status == status]
         page = tasks[offset : offset + limit]
         return {
-            "tasks": [task.model_dump() for task in page],
+            "tasks": [
+                self._task_item(key, rows, available_schemes=self._available_schemes_for_rows(key, rows)).model_dump()
+                for key, rows, _task in page
+            ],
             "count": len(page),
             "total": len(tasks),
             "limit": limit,
             "offset": offset,
         }
 
-    def get_task(self, task_key: str, *, scheme: str | None = None) -> dict[str, Any]:
-        rows = self._require_task_rows(task_key)
+    def get_task(self, task_key: str, *, scheme: str | None = None,
+                 run_ids: Sequence[str] | None = None) -> dict[str, Any]:
+        rows = self._require_task_rows(task_key, run_ids=run_ids)
         loops, selected_scheme, available_schemes, warning = self._build_loops(task_key, rows, scheme=scheme)
         task = self._task_item(task_key, rows, available_schemes=available_schemes, default_scheme=selected_scheme)
         return CombineTaskDetailResp(
@@ -323,8 +325,20 @@ class MultiAlphaCombineUIAdapter:
             context={"task_key": task_key, "loop_index": loop_index},
         )
 
-    def _load_groups(self) -> list[tuple[str, list[dict[str, Any]]]]:
-        rows = [_normalize_run_status(row) for row in self._repository.list_run_headers()]
+    def get_observed_status(self, run_ids: Sequence[str]) -> dict[str, Any]:
+        """No scheme/LOO/artifact reads, no unrelated historical run scans."""
+        groups = self._load_groups(run_ids=run_ids)
+        keys = ("task_id", "run_ids", "status", "current_loop", "max_loops", "updated_at",
+                "phase", "running_count", "queued_count", "reconciling_count",
+                "completed_count", "partial_failed_count", "failed_count", "progress", "heartbeat_at")
+        rows = [self._task_item(key, runs).model_dump() for key, runs in groups]
+        found = {item for row in rows for item in row["run_ids"]}
+        return {"tasks": [{key: row[key] for key in keys} for row in rows],
+                "missing_ids": [item for item in run_ids if item not in found]}
+
+    def _load_groups(self, *, run_ids: Sequence[str] | None = None) -> list[tuple[str, list[dict[str, Any]]]]:
+        headers = self._repository.list_run_headers() if run_ids is None else self._repository.list_run_headers(run_ids=run_ids)
+        rows = [_normalize_run_status(row) for row in headers]
         grouped: dict[str, list[dict[str, Any]]] = {}
         for row in rows:
             grouped.setdefault(task_key_for_run(row), []).append(row)
@@ -334,9 +348,14 @@ class MultiAlphaCombineUIAdapter:
         ordered.sort(key=lambda item: _parse_timestamp(_task_updated_at(item[1])), reverse=True)
         return ordered
 
-    def _require_task_rows(self, task_key: str) -> list[dict[str, Any]]:
-        for key, rows in self._load_groups():
+    def _require_task_rows(self, task_key: str, *, run_ids: Sequence[str] | None = None) -> list[dict[str, Any]]:
+        for key, rows in self._load_groups(run_ids=run_ids):
             if key == task_key:
+                if run_ids is not None and set(run_ids) != {str(row["id"]) for row in rows}:
+                    raise CombineUIAdapterError(
+                        "observed run set changed", reason_code="combine_ui_observed_runs_missing",
+                        context={"task_key": task_key},
+                    )
                 return rows
         raise CombineUIAdapterError(
             "combine UI task key not found",
@@ -398,6 +417,7 @@ class MultiAlphaCombineUIAdapter:
         first = rows[0]
         return CombineTaskItem(
             task_id=task_key,
+            run_ids=[str(row["id"]) for row in rows],
             task_name=_task_name(first),
             status=status,
             current_loop=terminal_count if status == "running" else len(rows),

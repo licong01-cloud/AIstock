@@ -21,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from backend.db.pg_pool import get_conn
+from backend.services.hmm_risk.product_validation_store import ProductValidationStoreError, find_receipt, read_receipt
 from backend.services.dataset_release.cas_store import canonical_json_bytes
 from backend.services.hmm_risk.jump_model import Preprocessor, causal_states
 from backend.services.hmm_risk.rotation_l1_gbdt import (
@@ -450,14 +451,9 @@ def build_oof_prediction_rows(
 def _load_surface_receipt(path: Path | None) -> Mapping[str, Any] | None:
     if path is None:
         return None
-    if not path.is_absolute() or path.is_symlink():
-        raise RotationL1PredictionError(REASON_READBACK, "rotation product validation receipt path is indirect")
     try:
-        resolved = path.resolve(strict=True)
-        if not resolved.is_file():
-            raise OSError("not a regular file")
-        raw = json.loads(resolved.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raw = read_receipt(path)
+    except (OSError, ValueError, ProductValidationStoreError) as exc:
         raise RotationL1PredictionError(REASON_READBACK, "rotation product validation receipt cannot be read") from exc
     if not isinstance(raw, Mapping):
         raise RotationL1PredictionError(REASON_READBACK, "rotation product validation receipt is not an object")
@@ -829,6 +825,7 @@ class RotationL1PredictionRepository:
         autocommit=False, manage_transaction=True
     )
     surface_validation_receipt_path: Path | None = None
+    surface_validation_store_root: Path | None = None
 
     def write_rows(self, rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
         validated = [_validate_row(row) for row in rows]
@@ -1065,6 +1062,18 @@ class RotationL1PredictionRepository:
         )
         if any(row[field] != head[field] for row in rows[1:] for field in invariant_fields):
             raise RotationL1PredictionError(REASON_READBACK, "rotation prediction overview state is inconsistent")
+        if surface_receipt is None:
+            try:
+                path = find_receipt(
+                    "rotation_l1",
+                    identity=selected_model,
+                    trade_date=detail["trade_date"],
+                    row_hash=canonical_sha256([_row_identity_payload(row) for row in rows]),
+                    root=self.surface_validation_store_root,
+                )
+                surface_receipt = _load_surface_receipt(path)
+            except (OSError, ProductValidationStoreError) as exc:
+                raise RotationL1PredictionError(REASON_READBACK, "rotation validation store cannot be read") from exc
         surface_status = _surface_status_from_receipt(
             rows,
             receipt=surface_receipt,

@@ -40,12 +40,14 @@ def test_private_freeze_uses_production_row_sealer_and_bracket(monkeypatch, tmp_
     schemas = {key: SourceTableSchema(query.table_identity, query.required_columns) for key, query in queries.items()}
     streamed = []
     payloads = {
-        "sw_index_classify": {"index_code": "801011.SI", "level": "L2"},
+        "sw_index_classify": {"index_code": "801011.SI", "level": "L2", "src": "SW2021", "is_pub": "0"},
         "sw_index_member": {"ts_code": "000001.SZ", "in_date": "2026-09-01", "l2_code": "801011.SI", "out_date": None},
         "kline_daily_raw": {
             "ts_code": "000001.SZ",
             "trade_date": "2026-09-30",
             **{key: 1000 for key in queries["kline_daily_raw"].value_columns},
+            "volume_shares_source": "provider_exact_shares_v1",
+            "volume_shares_sha256": "a" * 64,
         },
         "margin_detail": {
             "ts_code": "000001.SZ",

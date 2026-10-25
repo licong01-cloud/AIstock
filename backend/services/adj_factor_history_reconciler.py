@@ -420,7 +420,12 @@ class PostgresAdjFactorHistoryRepository:
                 ), scoped AS (
                     SELECT ts_code, min(first_date) AS expected_start
                     FROM observed
-                    WHERE ts_code ~ '^[0-9]{{6}}\\.(SZ|SH|BJ)$'
+                    -- Match the A-share provider contract, not PIT buy eligibility.
+                    -- Raw quote catalogs also contain B shares, funds and indices
+                    -- for which Tushare adj_factor does not publish histories.
+                    WHERE (ts_code ~ '^(00|30)[0-9]{{4}}\\.SZ$'
+                        OR ts_code ~ '^6[0-9]{{5}}\\.SH$'
+                        OR ts_code ~ '^[489][0-9]{{5}}\\.BJ$')
                     GROUP BY ts_code
                 )
                 SELECT ts_code, expected_start

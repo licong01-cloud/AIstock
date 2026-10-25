@@ -121,7 +121,8 @@ class EconomicSectorPriceDailyFamilyV1:
             keys = original_daily_keys_v1(packet['candidates'])
             if (not isinstance(features, pd.DataFrame) or list(features.columns) != [*KEY, *FEATURES]
                     or not isinstance(receipt, dict)
-                    or not features[KEY].reset_index(drop=True).equals(keys.reset_index(drop=True))
+                    or len(features) != len(keys)
+                    or len(keys) and not features[KEY].reset_index(drop=True).equals(keys.reset_index(drop=True))
                     or receipt.get('candidate_count') != len(keys)
                     or receipt.get('semantics_sha256') != sha(RECIPE)
                     or receipt.get('feature_sha256') != sha(_records(features))

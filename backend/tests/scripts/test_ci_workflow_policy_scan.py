@@ -12,11 +12,28 @@ import noxfile
 from scripts.ci_workflow_policy_scan import (
     build_contract_evidence,
     has_event_bound_base_preparation,
+    has_owned_wall_clock_trigger,
     scan_environment_contracts,
     scan_nox_text,
     scan_workflow_text,
     scan_workflows,
 )
+
+
+def test_hmm_nox_bounds_parent_threads_without_reducing_verification(monkeypatch, tmp_path):
+    calls = []
+    class Session:
+        def run(self, *args, **kwargs):
+            calls.append((args, kwargs))
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setattr(noxfile, "_env", lambda extra: {"OPENBLAS_NUM_THREADS": "24", **extra})
+    noxfile.hmm_risk_backend(Session())
+    args, kwargs = next(call for call in calls if "pytest" in call[0])
+    assert all(kwargs["env"].get(key) == "1" for key in (
+        "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"))
+    assert {"backend/tests/hmm_risk", "--cov-branch", "--cov-fail-under=70", "--durations=10"} <= set(args)
+    assert "not integration" in args and "-x" not in args
 
 
 def test_nightly_dr_failure_does_not_suppress_research_or_disappear_from_summary() -> None:
@@ -31,9 +48,9 @@ def test_nightly_dr_failure_does_not_suppress_research_or_disappear_from_summary
     failure = next(step for step in summary["steps"] if step.get("name") == "Build Nightly failure issue context")
     assert "needs.dr-snapshot.result == 'failure'" in failure["if"]
     assert "needs.dr-validate.result == 'failure'" in failure["if"]
-    assert failure["env"]["L3_RESULT"] == "${{ needs.nightly-l3.result }}"
-    assert failure["env"]["DR_RESULT"] == "${{ needs.dr-snapshot.result }}"
-    assert failure["env"]["DR_VALIDATE_RESULT"] == "${{ needs.dr-validate.result }}"
+    for key, job in (("L3_RESULT", "nightly-l3"), ("DR_RESULT", "dr-snapshot"), ("DR_VALIDATE_RESULT", "dr-validate")):
+        assert failure["env"][key] == ("${{ needs." + job + ".outputs.background_admitted == 'false' && 'deferred' || needs."
+                                      + job + ".result }}")
 
 
 def test_policy_test_has_one_owner_matching_its_guardrail_source() -> None:
@@ -42,6 +59,44 @@ def test_policy_test_has_one_owner_matching_its_guardrail_source() -> None:
     owner = catalog.match_path("backend/tests/scripts/test_ci_workflow_policy_scan.py")
     assert owner.ownership_status == "mapped"
     assert owner.primary_module == catalog.match_path("scripts/ci_workflow_policy_scan.py").primary_module
+
+
+def test_nightly_workflow_validation_requires_prebuilt_ci_and_x_temp() -> None:
+    jobs = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))["jobs"]
+    steps = jobs["code-intelligence-weekly"]["steps"]
+    validation_index = next(i for i, step in enumerate(steps)
+                            if step.get("name") == "Validate CI/Nightly issue workflow automation")
+    verify = steps[validation_index - 1]
+    validation = steps[validation_index]
+    assert verify["name"] == "Verify prebuilt environment for workflow validation"
+    assert verify["env"] == {"AISTOCK_CI_ENV_NAME": "AIstock-CI", "AISTOCK_CI_TEST_TEMP_REQUIRED": "1"}
+    assert "conda run -n AIstock-CI python scripts/ci_environment_verify.py" in verify["run"]
+    assert "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }" in verify["run"]
+    assert validation["run"].strip() == "conda run -n AIstock-CI python -m nox -s validation_workflow_automation"
+    for step in (verify, validation):
+        assert not step.get("continue-on-error", False)
+        assert step["if"] == "steps.background_window.outputs.background_admitted == 'true'"
+        # No status override: default success() still prevents running after failed preflight.
+
+
+def test_tdx_ci_is_offline_and_builds_web_module() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    step = next(s for s in workflow["jobs"]["ci-verdict"]["steps"] if s.get("id") == "go_validation")
+    assert str(step["env"]["GOPROXY"]).lower() in {"off", "false"}
+    assert str(step["env"]["GOSUMDB"]).lower() in {"off", "false"}
+    assert step["env"]["GOTOOLCHAIN"] == "local"
+    assert "go test -mod=readonly ./protocol -count=1" in step["run"]
+    assert "go test -mod=readonly . -run '^TestPagination' -count=1" in step["run"]
+    assert "go test -mod=readonly . -count=1" in step["run"]
+    assert "go build -mod=readonly ./..." in step["run"]
+    assert "cd web" in step["run"]
+    assert 'go build -mod=readonly -o "${TMP}/aistock-tdx-web.exe" .' in step["run"]
+    assert "go test ./..." not in step["run"]
+    from backend.services.validation.file_ownership import FileOwnershipCatalog
+    catalog = FileOwnershipCatalog()
+    for path in ("tdx-api-main/protocol/unit.go", "tdx-api-main/web/server.go",
+                 "tdx-api-main/web/go.mod", "tdx-api-main/protocol/unit_test.go"):
+        assert catalog.match_path(path).primary_module == "local_data"
 
 
 @pytest.mark.parametrize("mutation", ["empty-base", "wrong-head", "pr-only-condition"])
@@ -102,6 +157,19 @@ def test_repository_workflows_pass_zero_install_and_database_service_policy() ->
     assert findings == []
 
 
+@pytest.mark.parametrize("old,new", [
+    ("types: [aistock_codeql]", "types: [arbitrary]"),
+    ("repository_dispatch:", "schedule:"),
+    ("repository_dispatch:", "push:"),
+    ("AIstock schedule codeql.yml", "arbitrary"),
+    ("scheduled-admission", "missing-admission"),
+])
+def test_daily_trigger_policy_rejects_unowned_or_unprotected_dispatch(old, new):
+    text = Path(".github/workflows/codeql.yml").read_text(encoding="utf-8")
+    assert has_owned_wall_clock_trigger(text, "codeql.yml", "aistock_codeql")
+    assert not has_owned_wall_clock_trigger(text.replace(old, new), "codeql.yml", "aistock_codeql")
+
+
 def test_nox_dependency_bootstrap_requires_ci_fail_closed_guard() -> None:
     findings = scan_nox_text('session.run("npm", "ci", external=True)')
     assert findings and findings[0]["reason"].startswith("Nox contains npm ci")
@@ -110,6 +178,21 @@ def test_nox_dependency_bootstrap_requires_ci_fail_closed_guard() -> None:
 def test_repository_runner_contract_is_explicit() -> None:
     findings = scan_environment_contracts(sorted(Path(".github/workflows").glob("*.yml")))
     assert findings == []
+
+
+def test_pr_ci_substantive_steps_stop_when_cancelled_but_keep_failure_aggregation() -> None:
+    job = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))["jobs"]["ci-verdict"]
+    substantive = {"dependency_validation", "pr_quality_validation", "semgrep_validation", "backend_validation",
+                   "frontend_dependencies", "frontend_validation", "go_validation", "prompt_validation",
+                   "workflow_validation", "workflow_policy"}
+    steps = {step.get("id"): step for step in job["steps"]}
+    for step_id in substantive:
+        condition = steps[step_id]["if"]
+        assert condition.startswith("${{ !cancelled() && "), step_id
+        assert "success()" not in condition and "always()" not in condition, step_id
+    assert steps["prerequisite_gate"]["if"] == "always()"
+    verdict = next(step for step in job["steps"] if step.get("name") == "Require every selected CI lane to pass")
+    assert verdict["if"] == "always()" and "exit 1" in verdict["run"]
 
 
 def test_self_hosted_checkout_requires_verified_git_mirror_with_bounded_fallback(tmp_path: Path) -> None:
@@ -274,36 +357,25 @@ def test_repository_contract_evidence_matches_machine_standard() -> None:
     assert "pr_quality_no_external_report_action_dependency" in evidence
     assert "superseded_pr_runs_cancel_in_progress" in evidence
     assert "bounded_pr_base_fetch_retry" in evidence
-    assert evidence["merge_quality_contexts_are_change_scoped"] is True
-    assert "pr_ci_no_separate_failure_publisher_job" in evidence
-    assert "pr_ci_no_external_artifact_action_dependency" in evidence
-    assert evidence["pr_ci_static_gate_reuses_classifier_checkout"] is True
-    assert evidence["pr_ci_selected_lanes_reuse_ci_verdict_runner"] is True
-    assert evidence["changed_tests_reachable_from_selected_ci_plan"] is True
-    assert evidence["dependency_update_pr_validation_reuses_ci_verdict"] is True
-    assert evidence["pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout"] is True
-    assert evidence["codeql_reuses_single_security_runner_allocation"] is True
-    assert evidence["codeql_bundle_path_is_runner_independent"] is True
-    assert evidence["security_workflows_fail_fast_before_runner_allocation"] is True
-    assert evidence["nightly_code_intelligence_has_single_scheduled_owner"] is True
-    assert evidence["nightly_preflight_requires_distinct_runner_roles"] is True
-    assert evidence["redundant_issue_event_workflows_retired"] is True
-    assert "pr_workflows_no_external_report_action_dependency" in evidence
-    assert "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database" in evidence
-    assert evidence["nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies"] is True
-    assert evidence["self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe"] is True
-    assert evidence["nightly_retry_receipt_is_repo_scoped_bound_and_fail_closed"] is True
-    assert evidence["nightly_retries_failed_or_missing_sessions_plus_new_impact"] is True
-    assert evidence["nightly_change_scoped_l0_uses_explicit_receipt_paths"] is True
-    assert evidence["bounded_dual_runner_roles"] is True
-    assert evidence["runner_lifecycle_is_pinned_and_supervised"] is True
-    assert evidence["self_hosted_workflows_use_verified_git_object_mirror"] is True
-    assert evidence["git_object_mirror_maintenance_is_bounded_and_offline"] is True
-    assert evidence["self_hosted_git_http_stalls_are_bounded"] is True
-    assert evidence["pr_ci_heavy_lanes_short_circuit_after_prerequisites"] is True
-    assert evidence["selected_validation_plans_are_subsumed_once"] is True
-    assert evidence["policy_evidence_remains_one_scanner_step"] is True
-    assert evidence["javascript_actions_use_approved_native_node24_majors"] is True
+    required = (
+        "merge_quality_contexts_are_change_scoped", "pr_ci_no_separate_failure_publisher_job",
+        "pr_ci_no_external_artifact_action_dependency", "pr_ci_static_gate_reuses_classifier_checkout",
+        "pr_ci_selected_lanes_reuse_ci_verdict_runner", "changed_tests_reachable_from_selected_ci_plan",
+        "dependency_update_pr_validation_reuses_ci_verdict", "pr_ci_frontend_dependencies_are_lockfile_matched_after_checkout",
+        "codeql_reuses_single_security_runner_allocation", "codeql_bundle_path_is_runner_independent",
+        "security_workflows_fail_fast_before_runner_allocation", "nightly_code_intelligence_has_single_scheduled_owner",
+        "nightly_preflight_requires_distinct_runner_roles", "redundant_issue_event_workflows_retired",
+        "pr_workflows_no_external_report_action_dependency", "nightly_dr_operational_lane_is_explicit_and_does_not_create_or_start_database",
+        "nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies", "self_hosted_workspace_frontend_link_is_lockfile_verified_and_cleanup_safe",
+        "nightly_retry_receipt_is_repo_scoped_bound_and_fail_closed", "nightly_retries_failed_or_missing_sessions_plus_new_impact",
+        "nightly_change_scoped_l0_uses_explicit_receipt_paths", "bounded_dual_runner_roles",
+        "runner_lifecycle_is_pinned_and_supervised", "self_hosted_workflows_use_verified_git_object_mirror",
+        "git_object_mirror_maintenance_is_bounded_and_offline", "self_hosted_git_http_stalls_are_bounded",
+        "pr_ci_heavy_lanes_short_circuit_after_prerequisites", "selected_validation_plans_are_subsumed_once",
+        "policy_evidence_remains_one_scanner_step", "javascript_actions_use_approved_native_node24_majors",
+    )
+    for key in required:
+        assert evidence[key] is True, key
 
 
 def test_runner_lifecycle_contract_rejects_missing_supervisor(tmp_path: Path) -> None:
@@ -624,8 +696,8 @@ def test_codeql_is_nightly_only_before_runner_allocation() -> None:
         assert set(workflow[True]) == {"workflow_dispatch"}
 
     codeql = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
-    assert set(codeql[True]) == {"schedule", "workflow_dispatch"}
-    assert codeql[True]["schedule"] == [{"cron": "27 20 * * *"}]
+    assert set(codeql[True]) == {"repository_dispatch", "workflow_dispatch"}
+    assert codeql[True]["repository_dispatch"] == {"types": ["aistock_codeql"]}
     assert list(codeql["jobs"]) == ["security-runner-preflight", "codeql-nightly"]
     assert codeql["jobs"]["security-runner-preflight"]["runs-on"] == "ubuntu-latest"
     assert codeql["jobs"]["codeql-nightly"]["needs"] == "security-runner-preflight"
@@ -638,7 +710,8 @@ def test_code_intelligence_and_nightly_do_not_schedule_the_same_refresh() -> Non
     nightly = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
     refresh = yaml.safe_load(Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8"))
 
-    assert refresh[True]["schedule"] == [{"cron": "30 18 * * *"}]
+    assert refresh[True]["repository_dispatch"] == {"types": ["aistock_code_intelligence"]}
+    assert "schedule" not in refresh[True]
     assert refresh["jobs"]["refresh-after-main"]["needs"] == "security-runner-preflight"
     assert "concurrency" not in refresh
     assert refresh["jobs"]["refresh-after-main"]["concurrency"] == {
@@ -646,7 +719,8 @@ def test_code_intelligence_and_nightly_do_not_schedule_the_same_refresh() -> Non
         "cancel-in-progress": True,
     }
     legacy = nightly["jobs"]["code-intelligence-weekly"]
-    assert legacy["if"] == "github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence"
+    assert legacy["if"] == ("github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence"
+                            " && needs.runner-preflight.outputs.background_admitted == 'true'")
     assert legacy["concurrency"]["cancel-in-progress"] is True
     assert nightly[True]["workflow_dispatch"]["inputs"]["run_code_intelligence"]["default"] is False
 

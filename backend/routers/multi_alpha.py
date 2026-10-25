@@ -964,10 +964,22 @@ def list_multi_alpha_combine_ui_tasks(
     return {"status": "success", "data": data}
 
 
-@router.get("/combine/tasks/{task_key}", summary="Get one combine-backtest UI task with loops")
-def get_multi_alpha_combine_ui_task(task_key: str, scheme: str | None = None) -> dict:
+@router.get("/combine/tasks/status", summary="Read observed multi-alpha status without loading historical results")
+def get_multi_alpha_observed_status(run_ids: list[str] = Query(..., max_length=200)) -> dict:
     try:
-        data = MultiAlphaCombineUIAdapter().get_task(task_key, scheme=scheme)
+        data = MultiAlphaCombineUIAdapter().get_observed_status(list(dict.fromkeys(run_ids)))
+    except CombineUIAdapterError as exc:
+        raise HTTPException(status_code=400, detail=combine_ui_error_payload(exc)) from exc
+    return {"status": "success", "data": data}
+
+
+@router.get("/combine/tasks/{task_key}", summary="Get one combine-backtest UI task with loops")
+def get_multi_alpha_combine_ui_task(
+    task_key: str, scheme: str | None = None, run_ids: list[str] | None = Query(None),
+) -> dict:
+    try:
+        options = {"run_ids": run_ids} if isinstance(run_ids, list) else {}
+        data = MultiAlphaCombineUIAdapter().get_task(task_key, scheme=scheme, **options)
     except CombineUIAdapterError as exc:
         status_code = 404 if exc.reason_code == "combine_ui_task_not_found" else 400
         raise HTTPException(status_code=status_code, detail=combine_ui_error_payload(exc)) from exc

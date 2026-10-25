@@ -1629,8 +1629,9 @@ def _normalize_component(
     if set(pit_span_digest_by_code) != set(pit_instruments):
         raise ComponentArtifactManifestError("PIT instruments and per-code span digests differ")
     source_affected = {code for item in source for code in item.affected_instruments}
-    if source_affected.difference(pit_instruments):
-        raise ComponentArtifactManifestError("source affected instruments are outside the frozen PIT universe")
+    factual_instruments = {code for item in artifacts for code in item.instruments}
+    if source_affected.difference(factual_instruments.union(pit_instruments)):
+        raise ComponentArtifactManifestError("source affected instruments are outside the frozen factual population")
     adj_raw = value["adj_series"]
     adj = (
         None

@@ -9,10 +9,12 @@ from fastapi.testclient import TestClient
 
 from backend.routers import simulation_runtime as simulation_runtime_router
 from backend.services.simulation_runtime.localsim_control import LocalSimControlPlaneService
+from backend.services.simulation_runtime.localsim_cutover_readiness import LocalSimCutoverReadiness
 from backend.services.simulation_runtime.localsim_product_control import (
     LocalSimAccountCreateRequestV1,
     LocalSimBulkLifecycleRequestV1,
     LocalSimHistoricalSourceResolutionV1,
+    LocalSimHistoricalSourceAuthority,
     LocalSimProductControlPlaneService,
     LocalSimReplayCreateRequestV1,
     LocalSimSelectionLinkContextV1,
@@ -22,12 +24,39 @@ from backend.services.simulation_runtime.localsim_runtime_profile_repository imp
     InMemoryLocalSimRuntimeProfileRepository,
 )
 from backend.services.simulation_runtime.successor_repository import InMemoryLocalSimSuccessorRepository
+from backend.services.simulation_runtime.successor_models import SimulationLedgerScopeV1
+from backend.services.simulation_runtime.models import canonical_json_sha256
 from backend.services.strategy_package.execution_policy import ValidatedExecutionPolicy
-from backend.services.trading_core.errors import InvalidStateTransitionError
+from backend.services.trading_core.errors import DataUnavailableError, InvalidStateTransitionError
 
 
 NOW = datetime(2026, 8, 31, 5, 0, tzinfo=UTC)
 MANIFEST = "a" * 64
+
+
+def test_frozen_historical_range_can_resume_across_days_without_relaxing_create_or_current_day_guard() -> None:
+    days = (date(2026, 8, 27), date(2026, 8, 28), date(2026, 8, 31), date(2026, 9, 1))
+
+    class Calendar:
+        def list_trading_days(self, start, end):
+            return tuple(day for day in days if start <= day <= end)
+
+        def latest_trading_day_on_or_before(self, value):
+            return max(day for day in days if day <= value)
+
+    authority = LocalSimHistoricalSourceAuthority(
+        calendar=Calendar(), clock=lambda: datetime(2026, 9, 2, 0, 0, tzinfo=UTC),
+    )
+    kwargs = {"historical_source_id": "market.kline_minute_raw.v1",
+              "start_trade_date": days[0], "end_trade_date": days[1]}
+    with pytest.raises(InvalidStateTransitionError, match="latest completed"):
+        authority.resolve(**kwargs)
+    old = authority.resolve(**kwargs, require_latest_completed=False)
+    latest = authority.resolve(**{**kwargs, "end_trade_date": days[-1]})
+    assert old.trading_days == days[:2] and old.latest_completed_trade_date == days[-1]
+    assert old.historical_source_sha256 == latest.historical_source_sha256
+    with pytest.raises(InvalidStateTransitionError, match="current or future"):
+        authority.resolve(**{**kwargs, "end_trade_date": date(2026, 9, 2)}, require_latest_completed=False)
 
 
 class _Readiness:
@@ -40,9 +69,13 @@ class _Readiness:
         if not self.ready:
             raise RuntimeError("cutover not ready")
 
+    def require_replay_recovery_ready(self) -> None:
+        self.require_ready()
+
 
 class _Authority:
-    def __init__(self) -> None:
+    def __init__(self, *, canonical: bool = True) -> None:
+        self.canonical = canonical
         self.policy = ValidatedExecutionPolicy(
             policy_id="execpol_twap",
             package_id="pkg_alpha",
@@ -69,8 +102,24 @@ class _Authority:
             profile_version_id="lsrpv_001",
             config_sha256="b" * 64,
             daily_strategy_profile_version_id="lsdaily_001",
-            config_json={"schema_version": "localsim_runtime_profile_config_v1", "daily_strategy": {"top_k": 20}},
+            config_json={
+                "schema_version": "localsim_runtime_profile_config_v1",
+                "daily_strategy": {"strategy_id": "score_weighted_topk_v2", "strategy_version": "v2", "top_k": 20},
+                "hmm": {"enabled": False}, "risk_policy": {"enabled": False}, "fee_policy": {},
+            },
         )
+        if self.canonical:
+            from backend.services.canonical_equity_pit import CANONICAL_PIT_AUTHORITY_ID
+            from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_POINTER_PROFILE_SCHEMA
+            from backend.services.simulation_runtime.localsim_runtime_profile import LocalSimRuntimeProfileConfigV1
+
+            version.config_json["canonical_pit_authority_profile"] = {
+                "schema_version": CANONICAL_PIT_POINTER_PROFILE_SCHEMA, "authority_id": CANONICAL_PIT_AUTHORITY_ID,
+            }
+            native = LocalSimRuntimeProfileConfigV1.model_validate(version.config_json)
+            version.config_json = native.model_dump(mode="json")
+            version.config_sha256 = canonical_json_sha256(version.config_json)
+            version.daily_strategy_profile_version_id = f"lsdaily_{canonical_json_sha256(native.daily_strategy.model_dump(mode='json'))[:16]}"
         return SimpleNamespace(
             package_id=package_id,
             manifest_sha256=MANIFEST,
@@ -110,15 +159,19 @@ class _FailAfterAccountBundleRepository(InMemoryLocalSimSuccessorRepository):
         raise RuntimeError("injected selection link insert failure")
 
 
-def _service(repository=None):
+def _service(repository=None, *, canonical=True):
+    from backend.tests.simulation_runtime.test_localsim_native_context import _canonical_resolver
+
     repository = repository or InMemoryLocalSimSuccessorRepository()
     readiness = _Readiness()
-    control = LocalSimControlPlaneService(repository=repository, clock=lambda: NOW)
+    control = LocalSimControlPlaneService(
+        repository=repository, clock=lambda: NOW, pit_authority_resolver=_canonical_resolver(),
+    )
     return (
         LocalSimProductControlPlaneService(
             repository=repository,
             control=control,
-            authority=_Authority(),
+            authority=_Authority(canonical=canonical),
             readiness=readiness,
             historical_source_authority=_HistoricalAuthority(),
         ),
@@ -185,6 +238,44 @@ def test_replay_product_commits_five_entities_in_one_repository_transaction() ->
     assert len(repository.releases) == 1
     assert len(repository.bindings) == 1
     assert len(repository.replay_jobs) == 1
+
+
+def test_new_canonical_replay_freezes_binding_before_atomic_creation() -> None:
+    from backend.services.simulation_runtime.localsim_native_context import frozen_localsim_profile
+
+    service, repository, _ = _service()
+    result = service.create_replay(_replay_request(), created_by="test")
+    metadata = result.release.release_config_json["metadata"]
+    assert metadata["canonical_pit_authority"] == metadata["selection_runtime_config"]["canonical_pit_authority"]
+    assert metadata["canonical_pit_authority"]["authority_status"] == "ACTIVE_CANONICAL"
+    assert service.control.pit_authority_resolver.calls == 1
+    assert frozen_localsim_profile(repository.get_release(result.release.release_id)) is not None
+    assert repository.get_replay_job(result.replay.replay_job_id) == result.replay
+
+
+def test_new_replay_does_not_silently_migrate_a_legacy_profile() -> None:
+    from backend.services.trading_core.errors import RuntimeConfigInvalidError
+
+    service, repository, _ = _service(canonical=False)
+    with pytest.raises(RuntimeConfigInvalidError) as caught:
+        service.create_replay(_replay_request(), created_by="test")
+    assert caught.value.context["reason_code"] == "LOCALSIM_REPLAY_CANONICAL_PIT_PROFILE_REQUIRED"
+    assert not repository.accounts and not repository.ledger_scopes
+    assert not repository.releases and not repository.bindings and not repository.replay_jobs
+    assert service.control.pit_authority_resolver.calls == 0
+
+
+def test_new_replay_rejects_uncovered_end_without_partial_entities() -> None:
+    from dataclasses import replace
+    from backend.services.selection_center.canonical_pit_runtime import CanonicalPitRuntimeError
+
+    service, repository, _ = _service()
+    resolver = service.control.pit_authority_resolver
+    resolver.binding = replace(resolver.binding, coverage_end=date(2026, 8, 27))
+    with pytest.raises(CanonicalPitRuntimeError, match="cover"):
+        service.create_replay(_replay_request(), created_by="test")
+    assert not repository.accounts and not repository.ledger_scopes
+    assert not repository.releases and not repository.bindings and not repository.replay_jobs
 
 
 def test_replay_product_rolls_back_account_scope_release_and_binding_when_job_insert_fails() -> None:
@@ -295,6 +386,29 @@ def test_product_router_exposes_only_successor_commands_and_stable_cursor_querie
     assert response.status_code == 200
     assert response.json()["schema_version"] == "localsim_control_response_v1"
     assert response.json()["account"]["package_id"] == "pkg_alpha"
+    account_id = response.json()["account"]["account_id"]
+    native_detail = client.get(f"/api/v1/simulation-runtime/localsim/accounts/{account_id}")
+    assert native_detail.status_code == 200
+    assert native_detail.json()["ledger_scope"]["ledger_scope_id"] == account_id
+
+    # A retained successor resolves its scope through lineage, not account_id.
+    native_scope = repository.resolve_ledger_scope_for_account(account_id)
+    legacy_identity = {
+        "schema_version": "simulation_ledger_scope_v1", "ledger_scope_id": "legacy_portfolio",
+        "scope_kind": "LEGACY_PORTFOLIO", "source_identity": "legacy_portfolio", "native_account_id": None,
+    }
+    legacy_scope = SimulationLedgerScopeV1(
+        **legacy_identity, ledger_scope_hash=canonical_json_sha256(legacy_identity),
+        created_by=native_scope.created_by, created_at=native_scope.created_at,
+    )
+    original_resolver = repository.resolve_ledger_scope_for_account
+    repository.resolve_ledger_scope_for_account = lambda requested: (
+        legacy_scope
+        if requested == account_id else original_resolver(requested)
+    )
+    retained_detail = client.get(f"/api/v1/simulation-runtime/localsim/accounts/{account_id}")
+    assert retained_detail.status_code == 200
+    assert retained_detail.json()["ledger_scope"]["ledger_scope_id"] == "legacy_portfolio"
 
     forged = _account_request().model_dump(mode="json")
     forged["manifest_sha256"] = MANIFEST
@@ -306,3 +420,57 @@ def test_product_router_exposes_only_successor_commands_and_stable_cursor_querie
     assert client.post("/api/v1/simulation-runtime/scheduler/start").status_code == 404
     assert client.post("/api/v1/simulation-runtime/scheduler/stop").status_code == 404
     assert client.post("/api/v1/simulation-runtime/scheduler/tick").status_code == 404
+
+
+@pytest.mark.parametrize("structural_blocker", [
+    None, "ledger_scope_runtime_fk_count:1", "orphan_ledger_scope_count:1", "invalid_ledger_scope_count:1",
+    "retained_lineage_missing:1", "legacy_active_session_count:1", "legacy_auto_run_count:1",
+    "legacy_sentinel_count:1", "required_relation_missing:paper_v2.run", "unknown_readiness_fact",
+    "in_flight_economic_run_count:0", "in_flight_economic_run_count:2",
+])
+def test_recovery_routes_allow_independent_activity_and_preserve_other_cutover_gates(monkeypatch, structural_blocker):
+    from backend.services.simulation_runtime.localsim_replay_recovery import LocalSimReplayRecoveryCheckV1
+    from backend.services.simulation_runtime.successor_models import LocalSimReplayStatus
+
+    service, _, _ = _service()
+    original = service.create_replay(_replay_request(), created_by="test").replay
+    original = original.model_copy(update={"status": LocalSimReplayStatus.FAILED_TERMINAL,
+        "failure_code": "BrokerConnectivityError", "failure_context": {"trade_date": original.next_trade_date.isoformat()}})
+    readiness = LocalSimCutoverReadiness()
+    blockers = ("in_flight_economic_run_count:1",) + ((structural_blocker,) if structural_blocker else ())
+    snapshot = readiness._result(blockers=blockers, relation_presence={}, runtime_fk_count=2,
+                                 in_flight_economic_run_count=1)
+    monkeypatch.setattr(readiness, "read", lambda: snapshot)
+    service.readiness = readiness
+    calls = []
+
+    def inspect(job_id):
+        calls.append(("inspect", job_id))
+        return LocalSimReplayRecoveryCheckV1(replay_job_id=job_id, version=original.version, ready=True,
+            reason_codes=[], snapshot_sha256="a" * 64, economic_counts={})
+
+    def recover(job_id, request):
+        calls.append(("recover", job_id))
+        assert request.expected_version == original.version and request.snapshot_sha256 == "a" * 64
+        return original.model_copy(update={"status": LocalSimReplayStatus.FAILED_RETRYABLE,
+                                           "version": original.version + 1})
+
+    service.replay_recovery = SimpleNamespace(inspect=inspect, recover=recover)
+    app = FastAPI()
+    app.include_router(simulation_runtime_router.router, prefix="/api/v1")
+    app.dependency_overrides[simulation_runtime_router.get_localsim_product_service] = lambda: service
+    client = TestClient(app)
+    path = f"/api/v1/simulation-runtime/localsim/replays/{original.replay_job_id}"
+    check = client.get(path + "/recovery")
+    result = client.post(path + "/recover", json={"expected_version": original.version, "snapshot_sha256": "a" * 64})
+    if structural_blocker:
+        assert check.status_code == result.status_code == 503
+        assert result.json()["detail"]["context"]["blockers"] == [structural_blocker]
+        assert calls == []
+    else:
+        assert check.status_code == result.status_code == 200
+        assert check.json()["ready"] and result.json()["replay"]["status"] == "FAILED_RETRYABLE"
+        assert calls == [("inspect", original.replay_job_id), ("recover", original.replay_job_id)]
+    # Product cutover/live activation continues to require global quiescence.
+    with pytest.raises(DataUnavailableError, match="cutover is not ready"):
+        readiness.require_ready()

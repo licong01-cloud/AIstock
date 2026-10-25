@@ -30,27 +30,11 @@ _ROUTER_SPEC.loader.exec_module(validation)
 
 
 def _write_catalog(path: Path, *, runner_enabled: bool = True, writes_business_state: bool = False) -> None:
-    path.write_text(
-        "schema_version: aistock_validation_plans_v1\n"
-        "plans:\n"
-        "  - plan_key: l0\n"
-        "    title: L0 static guardrail gate\n"
-        "    module: development_guardrails\n"
-        "    level: L0\n"
-        "    command_key: nox_l0\n"
-        "    nox_session: l0\n"
-        "    enabled: true\n"
-        "    requires_backend: false\n"
-        "    requires_frontend: false\n"
-        "    allowed_backend_ports: []\n"
-        "    allowed_frontend_ports: []\n"
-        "    writes_database: false\n"
-        "    writes_artifacts: true\n"
-        f"    writes_business_state: {'true' if writes_business_state else 'false'}\n"
-        f"    requires_confirmation: {'true' if writes_business_state else 'false'}\n"
-        f"    runner_enabled: {'true' if runner_enabled else 'false'}\n"
-        "    max_duration_seconds: 60\n",
-        encoding="utf-8",
+    _write_named_catalog(
+        path, plan_key="l0", command_key="nox_l0", nox_session="l0",
+        title="L0 static guardrail gate", module="development_guardrails",
+        runner_enabled=runner_enabled, writes_business_state=writes_business_state,
+        requires_confirmation=writes_business_state,
     )
 
 
@@ -62,31 +46,33 @@ def _write_named_catalog(
     nox_session: str,
     backend_ports: list[int] | None = None,
     runner_enabled: bool = True,
+    title: str | None = None,
+    module: str = "validation_center",
+    level: str = "L0",
+    frontend_ports: list[int] | None = None,
+    writes_business_state: bool = False,
+    requires_confirmation: bool | None = False,
+    max_duration_seconds: int = 60,
+    nox_posargs: list[str] | None = None,
 ) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    backend_ports = backend_ports or []
-    path.write_text(
-        "schema_version: aistock_validation_plans_v1\n"
-        "plans:\n"
-        f"  - plan_key: {plan_key}\n"
-        f"    title: {plan_key}\n"
-        "    module: validation_center\n"
-        "    level: L0\n"
-        f"    command_key: {command_key}\n"
-        f"    nox_session: {nox_session}\n"
-        "    enabled: true\n"
-        f"    requires_backend: {'true' if backend_ports else 'false'}\n"
-        "    requires_frontend: false\n"
-        f"    allowed_backend_ports: {json.dumps(backend_ports)}\n"
-        "    allowed_frontend_ports: []\n"
-        "    writes_database: false\n"
-        "    writes_artifacts: true\n"
-        "    writes_business_state: false\n"
-        "    requires_confirmation: false\n"
-        f"    runner_enabled: {'true' if runner_enabled else 'false'}\n"
-        "    max_duration_seconds: 60\n",
-        encoding="utf-8",
-    )
+    plan = {
+        "plan_key": plan_key, "title": title or plan_key, "module": module,
+        "level": level, "command_key": command_key, "nox_session": nox_session,
+        "enabled": True, "requires_backend": bool(backend_ports),
+        "requires_frontend": bool(frontend_ports),
+        "allowed_backend_ports": backend_ports or [],
+        "allowed_frontend_ports": frontend_ports or [],
+        "writes_database": False, "writes_artifacts": True,
+        "writes_business_state": writes_business_state, "runner_enabled": runner_enabled,
+        "max_duration_seconds": max_duration_seconds,
+    }
+    if requires_confirmation is not None:
+        plan["requires_confirmation"] = requires_confirmation
+    if nox_posargs is not None:
+        plan["nox_posargs"] = nox_posargs
+    # JSON is valid YAML; preserve the exact loaded mapping without repeated text.
+    path.write_text(json.dumps({"schema_version": "aistock_validation_plans_v1", "plans": [plan]}), encoding="utf-8")
 
 
 def _write_workspace_plan_allowlist(path: Path, mapping: dict[str, str]) -> None:
@@ -100,75 +86,28 @@ def _write_workspace_plan_allowlist(path: Path, mapping: dict[str, str]) -> None
 
 
 def _write_guardrail_catalog(path: Path) -> None:
-    path.write_text(
-        "schema_version: aistock_validation_plans_v1\n"
-        "plans:\n"
-        "  - plan_key: guardrail_changed_files\n"
-        "    title: Changed files guardrail gate\n"
-        "    module: development_guardrails\n"
-        "    level: L0\n"
-        "    command_key: nox_guardrail_changed_files\n"
-        "    nox_session: guardrail_changed_files\n"
-        "    enabled: true\n"
-        "    requires_backend: false\n"
-        "    requires_frontend: false\n"
-        "    allowed_backend_ports: []\n"
-        "    allowed_frontend_ports: []\n"
-        "    writes_database: false\n"
-        "    writes_artifacts: true\n"
-        "    writes_business_state: false\n"
-        "    runner_enabled: true\n"
-        "    max_duration_seconds: 60\n"
-        "    nox_posargs: [--changed-only]\n",
-        encoding="utf-8",
+    _write_named_catalog(
+        path, plan_key="guardrail_changed_files", command_key="nox_guardrail_changed_files",
+        nox_session="guardrail_changed_files", title="Changed files guardrail gate",
+        module="development_guardrails", requires_confirmation=None,
+        nox_posargs=["--changed-only"],
     )
 
 
 def _write_backend_catalog(path: Path) -> None:
-    path.write_text(
-        "schema_version: aistock_validation_plans_v1\n"
-        "plans:\n"
-        "  - plan_key: qe_read_l3\n"
-        "    title: QE read-only local L3 validation\n"
-        "    module: qe\n"
-        "    level: L3\n"
-        "    command_key: nox_qe_read_l3\n"
-        "    nox_session: qe_read_l3\n"
-        "    enabled: true\n"
-        "    requires_backend: true\n"
-        "    requires_frontend: true\n"
-        "    allowed_backend_ports: [8011]\n"
-        "    allowed_frontend_ports: [3011]\n"
-        "    writes_database: false\n"
-        "    writes_artifacts: true\n"
-        "    writes_business_state: false\n"
-        "    runner_enabled: true\n"
-        "    max_duration_seconds: 60\n",
-        encoding="utf-8",
+    _write_named_catalog(
+        path, plan_key="qe_read_l3", command_key="nox_qe_read_l3", nox_session="qe_read_l3",
+        title="QE read-only local L3 validation", module="qe", level="L3",
+        backend_ports=[8011], frontend_ports=[3011], requires_confirmation=None,
     )
 
 
 def _write_data_sync_catalog(path: Path) -> None:
-    path.write_text(
-        "schema_version: aistock_validation_plans_v1\n"
-        "plans:\n"
-        "  - plan_key: data_sync_autonomy_backend\n"
-        "    title: Data sync autonomy backend regression\n"
-        "    module: local_data_management\n"
-        "    level: L2\n"
-        "    command_key: nox_data_sync_autonomy_backend\n"
-        "    nox_session: data_sync_autonomy_backend\n"
-        "    enabled: true\n"
-        "    requires_backend: false\n"
-        "    requires_frontend: false\n"
-        "    allowed_backend_ports: []\n"
-        "    allowed_frontend_ports: []\n"
-        "    writes_database: false\n"
-        "    writes_artifacts: true\n"
-        "    writes_business_state: false\n"
-        "    runner_enabled: true\n"
-        "    max_duration_seconds: 300\n",
-        encoding="utf-8",
+    _write_named_catalog(
+        path, plan_key="data_sync_autonomy_backend", command_key="nox_data_sync_autonomy_backend",
+        nox_session="data_sync_autonomy_backend", title="Data sync autonomy backend regression",
+        module="local_data_management", level="L2", max_duration_seconds=300,
+        requires_confirmation=None,
     )
 
 
@@ -446,19 +385,21 @@ def test_validation_execution_api_starts_and_lists_job(tmp_path: Path) -> None:
     assert rejected.status_code == 400
 
 
-def _init_git_repo(path: Path) -> None:
-    subprocess.run(["git", "init", "-q"], cwd=str(path), check=True, shell=False)
-    subprocess.run(["git", "config", "user.email", "test@test"], cwd=str(path), check=True, shell=False)
-    subprocess.run(["git", "config", "user.name", "test"], cwd=str(path), check=True, shell=False)
+def _init_git_repo(path: Path, *, branch: str = "feature/test-branch") -> None:
+    # Keep real independent repositories; don't inherit template hooks/fsmonitor
+    # or commit-signing requirements from the interactive user's Git settings.
+    git = ["git", "-c", "core.fsmonitor=false", "-c", "core.hooksPath="]
+    subprocess.run([*git, "init", "-q", "--template=", f"--initial-branch={branch}"], cwd=str(path), check=True, shell=False)
     (path / "dummy.txt").write_text("hello", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=str(path), check=True, shell=False)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=str(path), check=True, shell=False)
-    subprocess.run(["git", "checkout", "-q", "-b", "feature/test-branch"], cwd=str(path), check=True, shell=False)
+    subprocess.run([*git, "add", "."], cwd=str(path), check=True, shell=False)
+    subprocess.run(
+        [*git, "-c", "user.email=test@test", "-c", "user.name=test", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "init"],
+        cwd=str(path), check=True, shell=False,
+    )
 
 
 def _init_git_main_repo(path: Path) -> None:
-    _init_git_repo(path)
-    subprocess.run(["git", "checkout", "-q", "-B", "main"], cwd=str(path), check=True, shell=False)
+    _init_git_repo(path, branch="main")
 
 
 def _init_registered_worktree(repo_root: Path, worktree: Path, *, branch: str = "feature/ra-baseline") -> None:

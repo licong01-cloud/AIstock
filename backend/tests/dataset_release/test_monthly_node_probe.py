@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 from typing import Any, Mapping
 
 import pytest
@@ -17,6 +19,76 @@ from backend.services.dataset_release.monthly_node_probe import (
 
 
 MANIFEST = "a" * 64
+
+
+@pytest.fixture
+def qlib_frames(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
+    import pandas as pd
+
+    state: dict[str, Any] = {
+        "day": pd.DataFrame([[1.0, 1.1, 100.0]], index=pd.to_datetime(["2026-09-29"])),
+        "1min": pd.DataFrame(
+            [[1.0, 1.1, 10.0]] * 5,
+            index=pd.date_range("2026-09-29 09:31:00", periods=5, freq="min"),
+        ),
+        "calls": [],
+    }
+
+    def features(codes: list[str], fields: list[str], **kwargs: Any) -> Any:
+        assert codes == ["000001.SZ"]
+        assert fields == ["$open", "$close", "$volume"]
+        state["calls"].append(kwargs)
+        frame = state[kwargs["freq"]]
+        return frame.loc[
+            (frame.index >= pd.Timestamp(kwargs["start_time"]))
+            & (frame.index <= pd.Timestamp(kwargs["end_time"]))
+        ]
+
+    monkeypatch.setitem(sys.modules, "qlib", SimpleNamespace(init=lambda **kwargs: None))
+    monkeypatch.setitem(sys.modules, "qlib.constant", SimpleNamespace(REG_CN="cn"))
+    monkeypatch.setitem(sys.modules, "qlib.data", SimpleNamespace(D=SimpleNamespace(features=features)))
+    return state
+
+
+@pytest.mark.parametrize(
+    "window",
+    [
+        {"backtest_end": "2026-09-29", "test_end": "2026-09-30"},
+        {"test_end": "2026-09-29"},
+    ],
+)
+def test_qlib_probe_uses_explicit_minute_session(
+    tmp_path: Path, qlib_frames: dict[str, Any], window: dict[str, str],
+) -> None:
+    assert node_probe._qlib_counts(tmp_path, window) == {
+        "qlib_daily_row_count": 1, "qlib_minute_row_count": 5,
+    }
+    assert qlib_frames["calls"][0]["start_time"] == "2026-09-29"
+    assert qlib_frames["calls"][1]["start_time"] == "2026-09-29 09:31:00"
+    assert qlib_frames["calls"][1]["end_time"] == "2026-09-29 15:00:00"
+
+
+@pytest.mark.parametrize(
+    ("frequency", "problem", "message"),
+    [
+        ("day", "empty", "daily read returned no rows"),
+        ("1min", "empty", "minute read returned no rows"),
+        ("day", "nan", "daily read contains non-finite"),
+        ("1min", "inf", "minute read contains non-finite"),
+        ("1min", "few", "row count differs"),
+    ],
+)
+def test_qlib_probe_preserves_real_data_failures(
+    tmp_path: Path, qlib_frames: dict[str, Any], frequency: str, problem: str, message: str,
+) -> None:
+    if problem == "empty":
+        qlib_frames[frequency] = qlib_frames[frequency].iloc[:0]
+    elif problem == "few":
+        qlib_frames[frequency] = qlib_frames[frequency].iloc[:4]
+    else:
+        qlib_frames[frequency].iloc[0, 1] = float(problem)
+    with pytest.raises(MonthlyNodeProbeError, match=message):
+        node_probe._qlib_counts(tmp_path, {"backtest_end": "2026-09-29"})
 
 
 def _file(path: Path, content: bytes) -> dict[str, Any]:
