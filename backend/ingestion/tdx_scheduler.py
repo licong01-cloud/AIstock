@@ -5453,9 +5453,12 @@ class TDXScheduler:
             return [str(code).strip() for code in requested_codes if not is_b_share_ts_code(code)]
         # The stock-basic directory may lag an IPO. A real same-window daily
         # quote is also provider-population evidence, never PIT buy eligibility.
+        # delist_date is the effective terminal boundary, not a final trading
+        # day. Retain a multi-day repair reaching earlier sessions and let real
+        # positive quotes override the directory if its boundary is stale.
         sql = r"""WITH bounds AS (SELECT %s::date AS end_day,%s::date AS start_day), population AS (
             SELECT ts_code FROM market.stock_basic,bounds WHERE list_date<=end_day
-              AND (delist_date IS NULL OR delist_date>=start_day)
+              AND (delist_date IS NULL OR delist_date>start_day)
             UNION
             SELECT DISTINCT k.ts_code FROM market.kline_daily_raw k,bounds
              WHERE k.trade_date BETWEEN start_day AND end_day AND k.adjust_type='none'

@@ -35,6 +35,7 @@ from .sector_enrichment import FrozenSectorEnricher, UNKNOWN_L2_CODE_ID
 from .monthly_sector_mapping import (
     build_bound_sector_enricher, frozen_sector_mapping_binding, sector_mapping_catalog_receipt,
 )
+from .monthly_suspension_prefix import refresh_prefix
 from .shared_sector_context import (
     MARKET_CONTEXT_SCHEMA,
     MARKET_VOLUME_DEFINITION,
@@ -304,18 +305,38 @@ def _build_suspend(
 
     month_start = cutoff.replace(day=1)
     effective_calendar = tuple(day for day in calendar if month_start <= day <= cutoff) if prefix is not None else tuple(calendar)
-    calendar_set = set(effective_calendar)
+    calendar_set = set(calendar)
     # ``pit_rows`` is retained for call compatibility only. A stock leaving
     # the buy universe must not hide a real suspension from held-position
     # valuation/exit consumers. The sealed SOURCE defines factual population.
     normalized: list[dict[str, Any]] = []
     keys: set[tuple[str, date]] = set()
     authority = load_authority(suspension_authority)
+    old = None
+    old_raw, old_resolutions, reviewed_keys, legacy_inputs = [], [], [], []
+    if prefix is not None:
+        if prefix.cutoff != month_start - date.resolution or not effective_calendar:
+            raise MonthlySharedComponentsError("suspend prefix is not the preceding month")
+        old = pd.read_parquet(io.BytesIO(_read_prefix_sidecar(prefix, "suspend_data")))
+        old_meta = json.loads(_read_prefix_sidecar(prefix, "suspend_meta"))
+        old_counts = old_meta.get("daily_row_counts")
+        if (tuple(old.columns) != ("trade_date", "ts_code", "suspend_type", "suspend_timing")
+            or old_meta.get("end") != prefix.cutoff.isoformat() or old_meta.get("row_count") != len(old)
+            or not isinstance(old_counts, Mapping)
+            or set(old_counts).intersection(day.isoformat() for day in effective_calendar)):
+            raise MonthlySharedComponentsError("inherited suspend metadata differs")
+        try:
+            old, authority, old_raw, old_resolutions, reviewed_keys, legacy_inputs = refresh_prefix(
+                old, old_meta, authority=authority, calendar=calendar, cutoff=prefix.cutoff)
+        except ValueError as exc:
+            raise MonthlySharedComponentsError(str(exc)) from exc
     raw_events = [{"trade_date": day_value(row["trade_date"]).isoformat(), "ts_code": row["ts_code"],
                    "suspend_type": row.get("suspend_type"), "suspend_timing": row.get("suspend_timing")}
                   for row in rows if day_value(row["trade_date"]) in calendar_set]
     by_key = {(row["ts_code"], day_value(row["trade_date"])): row for row in raw_events
               if row.get("suspend_type") == "S"}
+    # SOURCE may contain old facts absent from an eligibility-clipped prefix.
+    # Never silently discard them merely because their month has already passed.
     resolutions = project_suspension_days(raw_events, authority=authority, required_dates=effective_calendar)
     for resolution in resolutions:
         symbol, day = resolution["ts_code"], day_value(resolution["trade_date"])
@@ -341,26 +362,26 @@ def _build_suspend(
         normalized,
         columns=["trade_date", "ts_code", "suspend_type", "suspend_timing"],
     )
-    counts = frame.groupby("trade_date").size().to_dict() if not frame.empty else {}
-    daily_counts = {day.isoformat(): int(counts.get(pd.Timestamp(day), 0)) for day in effective_calendar}
     lineage = {}
     if prefix is not None:
-        if prefix.cutoff != month_start - date.resolution or not effective_calendar:
-            raise MonthlySharedComponentsError("suspend prefix is not the preceding month")
-        old = pd.read_parquet(io.BytesIO(_read_prefix_sidecar(prefix, "suspend_data")))
-        old_meta = json.loads(_read_prefix_sidecar(prefix, "suspend_meta"))
-        old_counts = old_meta.get("daily_row_counts")
-        if (tuple(old.columns) != tuple(frame.columns) or old_meta.get("end") != prefix.cutoff.isoformat()
-            or old_meta.get("row_count") != len(old) or not isinstance(old_counts, Mapping)
-            or set(old_counts).intersection(daily_counts)):
-            raise MonthlySharedComponentsError("inherited suspend metadata differs")
-        frame = pd.concat([old, frame], ignore_index=True)
-        daily_counts = {**old_counts, **daily_counts}
+        replaced = {(r["ts_code"], r["trade_date"]) for r in resolutions}
+        old = old.loc[[(r.ts_code, day_value(r.trade_date).isoformat()) not in replaced for r in old.itertuples(index=False)]]
+        frame = pd.concat([part for part in (old, frame) if not part.empty], ignore_index=True) if len(old) or len(frame) else frame
+        incoming_keys = {(r["ts_code"], r["trade_date"]) for r in raw_events}
+        raw_events = [r for r in old_raw if (r["ts_code"], r["trade_date"]) not in incoming_keys] + raw_events
+        resolutions = [r for r in old_resolutions if (r["ts_code"], r["trade_date"]) not in replaced] + resolutions
         lineage = {
             "validation_scope": "month_delta", "historical_values_validated": 0,
             "predecessor_manifest_sha256": prefix.manifest_sha256,
             "inherited_suspend_sha256": prefix.manifest["components"]["suspend_data"]["sha256"],
+            "historical_authority_reprojected_keys": reviewed_keys,
+            "historical_projection_legacy_normalized_inputs": legacy_inputs,
         }
+    frame = frame.sort_values(["trade_date", "ts_code"]).reset_index(drop=True)
+    if frame.duplicated(["ts_code", "trade_date"]).any():
+        raise MonthlySharedComponentsError("suspend_d stock-date is duplicated")
+    counts = frame.groupby("trade_date").size().to_dict() if not frame.empty else {}
+    daily_counts = {day.isoformat(): int(counts.get(pd.Timestamp(day), 0)) for day in calendar}
     component = root / "components" / "suspend_d_daily_candidate_v2"
     component.mkdir(parents=True, exist_ok=False)
     parquet = component / "suspend_d.parquet"

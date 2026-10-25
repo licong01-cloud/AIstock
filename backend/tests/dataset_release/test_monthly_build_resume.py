@@ -404,6 +404,30 @@ def test_capture_authoritative_database_session_without_supplier_gates(defect):
     assert all(not isinstance(c, tuple) or c[0].startswith("SELECT ") for c in calls)
 
 
+@pytest.mark.parametrize('calendar_has_auction', [True, False])
+def test_capture_follows_frozen_timestamps_not_source_row_count(calendar_has_auction):
+    from unittest.mock import MagicMock
+    rows = [{**facts()[0], 'trade_time': f'{DAY} 09:30:00'}, *facts()]
+    records = [tuple((datetime.fromisoformat(row[f]).replace(tzinfo=ZoneInfo('Asia/Shanghai'))
+                     if f == 'trade_time' else row[f]) for f in minute_repair_subject._FIELDS) for row in rows]
+    connection = MagicMock()
+    cursor = connection.cursor.return_value.__enter__.return_value
+    cursor.fetchone.return_value = ('aistock', 'same_source_snapshot')
+    cursor.fetchall.return_value = records
+    stamps = [r['trade_time'] for r in (rows if calendar_has_auction else rows[1:])]
+    result = minute_repair_subject.capture_database_minutes(
+        {'stock_dates': [{'ts_code': CODE, 'trade_date': DAY}]}, cutoff=date(2026,9,30),
+        frozen_sessions={DAY: stamps}, connection=connection)
+    assert result['row_count'] == (241 if calendar_has_auction else 240)
+    assert result['non_calendar_source_rows_ignored'] == (0 if calendar_has_auction else 1)
+    assert [r['trade_time'] for r in result['facts']] == stamps
+    assert "ts_code=ANY(%s::bpchar[])" in cursor.execute.call_args_list[1].args[0]
+    assert "adjust_type='none'" in cursor.execute.call_args_list[1].args[0]
+    connection.set_session.assert_not_called()  # Does not replace the exported SOURCE snapshot.
+    connection.rollback.assert_not_called()
+    connection.close.assert_not_called()
+
+
 def prepared(tmp_path):
     artifact_root = tmp_path / "cas"
     ControlStore.initialize(artifact_root)
