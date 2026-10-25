@@ -1,6 +1,6 @@
 # HMM Evolution Phase 2：L2轮动P0完整详细设计
 
-> 版本：v1.5；修订日期：2026-10-06；tier：F2；owner：HMM。
+> 版本：v1.6；修订日期：2026-10-06；tier：F2；owner：HMM。
 > 父蓝图：`hmm_evolution_and_risk_management_system_design_20260716.md` v2.59及其后保持本L2方向的版本。
 > P0基线：`9640cf67c5c40884e0f99074224cff0f0270e1f6`。用户随后明确要求按本文开始P1完整实现，D1～D6因此作为本版本获准实施的精确合同；生产DDL/DML、runtime activation、服务重启、QE实验及tail读取仍未授权。
 > 当前状态：原P1资金流基线已完成历史评价并持久化/API可读，mean Rank IC=`0.02973212294698707`（原10D/358日口径），研究页面当前验证尚未闭合；2026-09-22的输入阻断只作历史。原冻结HMM效果IC=`0.009072776767716752 < 0.02`。§8.2设计#5433及源码/结果#5444均已合入，#5444 merge=`2fa41eab6b7efc76173ae3a0ced4143006b1671c`；R1双process零fit终态`BELOW_BINDING_MBE`，IC=`-0.009341302842128188`。独立risk双process共2fit达到development效果要求：precision lift=`0.1174666556015582`、recall=`0.4121112481161803`，仍`FORWARD_UNCONFIRMED`；其完整产品#5449已合入并完成DEV/生产55,544行和用户重启后真实API/UI，详见直接risk产品设计v1.3，不能代替本轮动run的surface验收。原标签经单独批准只重建一次并严格匹配`61600e85…`。两候选已停止，模型、§8.2公式和阈值不改；当前任务复用已有资金流产品，不重训/重导。
@@ -206,6 +206,8 @@ writer接受parent已核对的prediction payload，事务内回读canonical逻�
 run摘要（指标、日期计数、目录/资格统计、身份、effect与工程状态）用一个compact manifest供repository读取，与行hash一致，不另建数据资产平台。研究表`validation_basis=HISTORICAL_CAUSAL_REPLAY_ZERO_FIT`，不冒称训练fold OOF。本P1历史模式不支持新增实时写入；未来单日可复用同一feature函数但需明确执行范围。
 
 运行有效性`execution_status`、`effect_status`、`research_surface_status`与`rotation_l2_capability_status`为独立字段；production表不使用占位L1字段。run摘要在全部日期提交且API/UI验收前只能是PENDING_PRODUCT_VALIDATION。surface验证可通过外部紧凑验证记录绑定run及行hash，不回写旧预测来循环证明自己已通过；读端缺该记录时保持surface NOT_AVAILABLE。不得将数据库行中自报的AVAILABLE作为唯一验收依据。
+
+BUG-1753（2026-10-06用户明确要求修复）：实验/产品验证结果是业务记录，不是部署配置；禁止用`AISTOCK_HMM_*_PRODUCT_VALIDATION_RECEIPT`或其他环境变量选择某份记录。默认文件存储为后端服务账户的`~/.aistock/hmm/product_validation`，不在源码或数据集目录内。已有验证结果由`scripts/hmm_risk/register_product_validation.py --receipt <已验证记录>`登记并原子读回；同identity同内容幂等，不同内容冲突拒绝。registration不运行验收、不伪造通过、不重新训练或改写预测。L2轮动按产品域/run_id/完整行hash定位，L2风险另保留部署commit身份；L1历史产品按model_hash/日期/行hash定位，不通过记录自动选择最新模型。读端每次请求查找，不缓存“无记录”；同一进程的新记录下次请求生效，不改`.env`、不需要重启。记录缺失只保留表面未验收状态，不阻断模型研发、回放或既有预测读回；存在却损坏/间接路径/读取漂移/身份不符报typed错误。不改变任何effect/capability/forward/advisory晋升合同。首次加载这项持久化源码修复与以后登记业务结果是两回事，服务启停仍归用户。
 
 状态字段域按§6冻结：`execution_status=COMPLETED|FAILED`；`effect_status=EVIDENCE_INSUFFICIENT|BELOW_BINDING_MBE|DEVELOPMENT_EFFECT_QUALIFIED|NO_USABLE_PREDICTIONS`；`research_surface_status=NOT_AVAILABLE|AVAILABLE_EXPERIMENTAL`；`rotation_l2_capability_status=NOT_AVAILABLE|RESEARCH_PREDICTION_AVAILABLE_FORWARD_UNCONFIRMED`。只有完整执行、coverage/效果达标才允许后一个capability值；有真实工程展示但效果不达标仍是前一个值。产品验证阶段PENDING_PRODUCT_VALIDATION属于产品验证记录，不混写execution_status。本版不实现forward/advisory晋升分支。
 

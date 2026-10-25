@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+import pytest
+
 from backend.services.qe_archive.handlers.multi_alpha_combine_archive_handler import (
     MULTI_ALPHA_COMBINE_EVENT_TYPE,
     MULTI_ALPHA_COMBINE_SCHEMA_VERSION,
@@ -142,6 +144,54 @@ class FakeMultiAlphaArchiveRepository:
 
     def list_multi_alpha_combine_run_ids(self, **_kwargs):
         return list(self.multi_alpha_run_ids)
+
+
+@pytest.mark.parametrize(
+    "case,expected_skip",
+    [("negative_result", None), ("zero_result", None), ("partial_valid", None),
+     ("failed_empty", "qe_lifecycle_terminal_without_result"),
+     ("partial_empty", "qe_lifecycle_terminal_without_result"),
+     ("unselected_attempt", "qe_lifecycle_terminal_without_result"),
+     ("nonfinite", "qe_lifecycle_no_evaluable_result"),
+     ("succeeded_empty", "qe_lifecycle_no_evaluable_result"),
+     ("smoke", "qe_lifecycle_purpose_smoke"),
+     ("skip", "policy_skip"), ("manual", "policy_manual_only")],
+)
+def test_automatic_delivery_preserves_valid_results_and_excludes_x(monkeypatch, case, expected_skip):
+    repo = FakeMultiAlphaArchiveRepository()
+    source = repo.fetch_multi_alpha_combine_run("macb_1")
+    run = source["run"]
+    run["backtest_config_json"] = {}
+    if case not in {"partial_valid", "partial_empty"}:
+        run.update(status="succeeded", reason={})
+    if case == "negative_result":
+        source["scheme_results"][0]["cagr"] = -0.1
+    elif case in {"zero_result", "nonfinite"}:
+        for key in ("cagr", "sharpe", "max_drawdown", "calmar"):
+            source["scheme_results"][0][key] = 0.0 if case == "zero_result" else float("nan")
+    elif case in {"partial_empty", "unselected_attempt"}:
+        run.update(status="failed", reason={"logical_status": "partial_failed"})
+        source["scheme_results"] = []
+        if case == "unselected_attempt":
+            source["children"] = [{"status": "succeeded", "selected_attempt_id": "chosen"}]
+            source["attempts"] = [{"status": "succeeded", "attempt_id": "stale",
+                                   "result_manifest_json": {"metrics": {"sharpe": 2.0}}}]
+    elif case in {"failed_empty", "succeeded_empty"}:
+        run["status"] = "failed" if case == "failed_empty" else "succeeded"
+        source["scheme_results"] = [source["scheme_results"][1]]  # skipped scheme is not a result
+    elif case == "smoke":
+        run["backtest_config_json"] = {"_qe_run_registration": {"purpose": "smoke"}}
+    elif case in {"skip", "manual"}:
+        run["backtest_config_json"] = {"archive_policy": "SKIP" if case == "skip" else "MANUAL_ONLY"}
+    monkeypatch.setattr(repo, "fetch_multi_alpha_combine_run", lambda _: source)
+    handler = MultiAlphaCombineArchiveHandler(repository=repo)
+    for dry_run in (True, False):
+        report = handler.archive_run("macb_1", dry_run=dry_run, automatic=True)
+        assert report.get("skipped_reason") == expected_skip
+        assert report.get("written", False) == (not dry_run and expected_skip is None)
+    assert len(repo.writes) == int(expected_skip is None)
+    if case == "manual":
+        assert handler.archive_run("macb_1")["written"] is True
 
 
 def test_multi_alpha_provenance_resolves_archive_run_id_and_evolution_loop_id() -> None:
@@ -344,7 +394,12 @@ def test_multi_alpha_archive_worker_registration_and_dispatch() -> None:
     assert repo.completed_jobs == ["job_macb"]
 
 
-def test_multi_alpha_archive_worker_missing_source_is_audited_skip() -> None:
+@pytest.mark.parametrize("case,reason", [
+    ("missing", "multi_alpha_source_run_missing"),
+    ("smoke", "qe_lifecycle_purpose_smoke"),
+    ("manual", "policy_manual_only"),
+])
+def test_multi_alpha_archive_worker_missing_source_is_audited_skip(case, reason) -> None:
     event = ClaimedOutboxEvent(
         event_id="evt_missing_macb",
         event_type=MULTI_ALPHA_COMBINE_EVENT_TYPE,
@@ -360,6 +415,16 @@ def test_multi_alpha_archive_worker_missing_source_is_audited_skip() -> None:
             self.completed_events: list[str] = []
             self.completed_jobs: list[tuple[str, dict | None]] = []
             self.skipped_events: list[tuple[str, str, str]] = []
+
+        def fetch_multi_alpha_combine_run(self, run_id):
+            if case == "missing":
+                return None
+            source = super().fetch_multi_alpha_combine_run("macb_1")
+            source["run"]["backtest_config_json"] = (
+                {"_qe_run_registration": {"purpose": "smoke"}} if case == "smoke"
+                else {"archive_policy": "MANUAL_ONLY"}
+            )
+            return source
 
         def claim_outbox_events(self, **kwargs):
             if kwargs.get("event_types"):
@@ -392,6 +457,7 @@ def test_multi_alpha_archive_worker_missing_source_is_audited_skip() -> None:
     assert result["skipped"] == 1
     assert result["failed"] == 0
     assert repo.completed_events == []
-    assert repo.skipped_events == [("evt_missing_macb", "multi_alpha_source_run_missing", "realtime")]
+    assert repo.skipped_events == [("evt_missing_macb", reason, "realtime")]
+    assert repo.writes == []
     assert repo.completed_jobs[0][0] == "job_missing_macb"
     assert repo.completed_jobs[0][1]["terminal_outbox_status"] == "skipped"

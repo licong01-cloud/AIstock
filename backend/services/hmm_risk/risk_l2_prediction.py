@@ -1,4 +1,4 @@
-"""Immutable historical L2 risk persistence; never generates predictions."""
+"""Immutable L2 risk persistence; historical evaluation and date inference stay separate."""
 
 from __future__ import annotations
 
@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from backend.db.pg_pool import get_conn
 from backend.services.hmm_risk.contracts import canonical_json_bytes, canonical_sha256
+from backend.services.hmm_risk.product_validation_store import find_receipt
 from backend.services.hmm_risk.formal_state_effect import verify_receipt
 from backend.services.hmm_risk.formal_state_model import FormalStateError
 from backend.services.hmm_risk import risk_l2 as risk
@@ -195,7 +196,7 @@ def validate_row(raw: Mapping[str, Any]) -> dict:
         )
     else:
         _require(
-            row["outcome_status"] in {"OUTCOME_LEGAL_NA", "OUTCOME_NOT_MATURE"}
+            row["outcome_status"] in {"OUTCOME_LEGAL_NA", "OUTCOME_NOT_MATURE", "OUTCOME_NOT_EVALUATED"}
             and all(row[k] is None for k in ("event", "realized_drawdown", "realized_return")),
             "legal NA/immature outcome must not become a negative label",
         )
@@ -219,6 +220,16 @@ def _validate_day(run: Mapping[str, Any], rows: Sequence[Mapping[str, Any]], day
     _require(
         canonical_sha256(validated) == run["compact_summary"]["day_row_hashes"][day],
         "stored date identity differs",
+        REASON_READBACK,
+    )
+    expected_outcomes = (
+        {"OUTCOME_NOT_EVALUATED"}
+        if run["validation_basis"] == "CAUSAL_DATE_INFERENCE_NO_OUTCOMES"
+        else {"AVAILABLE", "OUTCOME_LEGAL_NA", "OUTCOME_NOT_MATURE"}
+    )
+    _require(
+        all(row["outcome_status"] in expected_outcomes for row in validated),
+        "outcome status does not belong to this product basis",
         REASON_READBACK,
     )
     return validated
@@ -378,6 +389,17 @@ def _run_hash(run: Mapping[str, Any]) -> str:
 
 def _validate_run(run: Mapping[str, Any]) -> None:
     _require(set(run) == set(RUN_COLUMNS), "run fields differ", REASON_READBACK)
+    historical = run["validation_basis"] == risk.BASIS
+    mapping_keys = (
+        ("pit_bundle_sha256", "industry_authority_sha256")
+        if historical
+        else ("industry_authority_sha256", "security_identity_sha256")
+    )
+    _require(
+        isinstance(run["input_identity"], Mapping) and all(key in run["input_identity"] for key in mapping_keys),
+        "stored historical research input identity differs" if historical else "stored inference mapping differs",
+        REASON_READBACK,
+    )
     _require(
         all(_sha(run[k]) for k in RUN_COLUMNS[:8]) and run["run_id"] == run["acceptance_hash"],
         "run identity differs",
@@ -385,28 +407,36 @@ def _validate_run(run: Mapping[str, Any]) -> None:
     )
     _require(
         run["model_version"] == risk.VERSION
-        and run["validation_basis"] == risk.BASIS
         and run["contract_hash"] == canonical_sha256(risk.CONTRACT)
         and run["forward_power_status"] == "UNAVAILABLE"
         and run["forward_confirmation"] == "NOT_STARTED"
         and run["advisory_status"] == "NOT_AVAILABLE"
-        and run["effect_status"] in {EFFECT, "BELOW_BINDING_RISK_MBE", "EVIDENCE_INSUFFICIENT"}
-        and run["risk_l2_capability_status"] == (CAPABILITY if run["effect_status"] == EFFECT else "NOT_AVAILABLE")
         and len(run["catalog"]) == 131
         and run["catalog"] == sorted(set(run["catalog"]))
-        and len(run["dates"]) == 424
-        and run["dates"] == sorted(set(run["dates"]))
-        and run["dates"][0] == risk.DEV_START
-        and run["dates"][-1] == risk.DEV_END
-        and run["expected_row_count"] == 131 * 424
+        and re.fullmatch(r"[0-9a-f]{40}", run["executor_commit"]) is not None
         and set(run["compact_summary"]["day_row_hashes"]) == set(run["dates"])
         and _run_hash(run) == run["compact_summary"]["run_identity_hash"]
         and canonical_sha256(run["input_identity"]) == run["input_hash"]
-        and canonical_sha256({k: run["input_identity"][k] for k in ("pit_bundle_sha256", "industry_authority_sha256")})
-        == run["mapping_hash"],
+        and canonical_sha256({k: run["input_identity"][k] for k in mapping_keys}) == run["mapping_hash"],
         "stored run schema/summary/state differs",
         REASON_READBACK,
     )
+    if run["validation_basis"] == risk.BASIS:
+        _require(
+            run["effect_status"] in {EFFECT, "BELOW_BINDING_RISK_MBE", "EVIDENCE_INSUFFICIENT"}
+            and run["risk_l2_capability_status"] == (CAPABILITY if run["effect_status"] == EFFECT else "NOT_AVAILABLE")
+            and len(run["dates"]) == 424
+            and run["dates"] == sorted(set(run["dates"]))
+            and run["dates"][0] == risk.DEV_START
+            and run["dates"][-1] == risk.DEV_END
+            and run["expected_row_count"] == 131 * 424,
+            "stored historical research contract differs",
+            REASON_READBACK,
+        )
+    else:
+        from backend.services.hmm_risk.risk_l2_date_product import validate_run
+
+        validate_run(run)
 
 
 def validate_product(product: RiskL2Product) -> None:
@@ -428,6 +458,12 @@ def validate_product(product: RiskL2Product) -> None:
 def load_product(request_path: Path) -> RiskL2Product:
     try:
         request, stamp = _read(request_path)
+        from backend.services.hmm_risk import risk_l2_date_product
+
+        if request.get("schema_version") == risk_l2_date_product.REQUEST_SCHEMA:
+            result = risk_l2_date_product.load(request_path)
+            _stable(request_path, stamp)
+            return result
         assets, stamps = {}, {}
         for name in ("acceptance", "sealed", "features"):
             path = Path(request[name + "_path"])
@@ -475,6 +511,7 @@ class RiskL2PredictionRepository:
         autocommit=False, manage_transaction=True
     )
     surface_validation_receipt_path: Path | None = None
+    surface_validation_store_root: Path | None = None
     deployment_commit: str | None = None
     runtime_target: str = "backend-main"
 
@@ -534,10 +571,17 @@ class RiskL2PredictionRepository:
             raise RiskL2PredictionError(REASON_WRITER, "L2 risk transaction failed") from exc
 
     def _surface(self, run: Mapping[str, Any]) -> str:
-        path = self.surface_validation_receipt_path
-        if path is None:
-            return "NOT_AVAILABLE"
         try:
+            path = self.surface_validation_receipt_path
+            if path is None:
+                path = find_receipt(
+                    "risk_l2",
+                    identity=run["run_id"],
+                    row_hash=run["compact_summary"]["row_hash"],
+                    root=self.surface_validation_store_root,
+                )
+            if path is None:
+                return "NOT_AVAILABLE"
             try:
                 path.lstat()
             except FileNotFoundError:
@@ -548,7 +592,6 @@ class RiskL2PredictionRepository:
             expected.update(
                 row_hash=run["compact_summary"]["row_hash"],
                 schema_version=SURFACE_SCHEMA,
-                deployment_commit=self.deployment_commit,
                 target=self.runtime_target,
             )
             zero_dates = [d["trade_date"] for d in run["compact_summary"]["daily"] if d["warning_count"] == 0]
@@ -556,7 +599,8 @@ class RiskL2PredictionRepository:
             if zero_dates:
                 required_dates.add(zero_dates[0])
             _require(
-                self.deployment_commit is not None
+                isinstance(receipt.get("deployment_commit"), str)
+                and re.fullmatch(r"[0-9a-f]{40}", receipt["deployment_commit"]) is not None
                 and all(receipt.get(k) == v for k, v in expected.items())
                 and all(receipt.get(k) is True for k in ("writer_readback", "api_readback", "browser_no_mock"))
                 and isinstance(receipt.get("day_row_hashes"), dict)

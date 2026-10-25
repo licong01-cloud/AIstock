@@ -146,6 +146,22 @@ export type LocalSimCutoverReadiness = {
   in_flight_economic_run_count: number;
 };
 
+export type LocalSimSchedulerVerification = {
+  running: boolean;
+  thread_alive: boolean;
+  scheduler_loop_health?: {
+    status: string;
+    reason_code: string;
+    consecutive_failure_count: number;
+  } | null;
+  current_trade_date_blockers?: {
+    trade_date: string;
+    status: string;
+    blocker_count: number;
+  } | null;
+  effective_runtime_health?: string | null;
+};
+
 export type TradingCalendarStatus = {
   ok: true;
   as_of_date: string;

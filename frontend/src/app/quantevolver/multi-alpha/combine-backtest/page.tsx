@@ -1,16 +1,20 @@
 ﻿"use client";
 
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Activity, DownloadCloud, Plus, RefreshCw } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import MultiAlphaCreateComposer from "../../evolution/components/MultiAlphaCreateComposer";
+import dynamic from "next/dynamic";
+import { QEReadCache, mergeTaskUpdates } from "../../components/read-cache";
+import { useActiveRefresh, isExecutingTask } from "../../components/use-active-refresh";
+const MultiAlphaCreateComposer = dynamic(() => import("../../evolution/components/MultiAlphaCreateComposer"), { ssr: false });
 import { canonicalMultiAlphaEvolutionUrl, type MultiAlphaCreateResult } from "../../evolution/components/multiAlphaEvolutionAdapter";
 
 const API = process.env.NEXT_PUBLIC_API_BASE || "http://127.0.0.1:8001/api/v1";
 const PAGE_SIZE = 50;
 type CombineTask = {
   task_id: string;
+  run_ids: string[];
   task_name: string;
   task_type: "multi_alpha_combine";
   status: string;
@@ -146,25 +150,31 @@ function MultiAlphaCombineBacktestWorkspace() {
   const [error, setError] = useState<string | null>(null);
   const [lastLoadedAt, setLastLoadedAt] = useState<string | null>(null);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [refreshInterval, setRefreshInterval] = useState(5);
+  const [refreshInterval, setRefreshInterval] = useState(60);
   const [showCreate, setShowCreate] = useState(false);
 
+  const reads = useRef(new QEReadCache());
+  const generation = useRef(0);
+  useEffect(() => () => { generation.current += 1; reads.current.clear(); }, []);
   const loadTasks = useCallback(async () => {
+    const requestGeneration = ++generation.current;
     setLoading(true);
     setError(null);
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
     if (statusFilter !== "all") params.set("status", statusFilter);
     try {
-      const data = await fetchJson<TaskListResponse>(`${API}/multi-alpha/combine/tasks?${params.toString()}`);
+      const url = `${API}/multi-alpha/combine/tasks?${params.toString()}`;
+      const response = await reads.current.read(url, url, false);
+      if (requestGeneration !== generation.current) return;
+      const data = response.data as TaskListResponse;
       setTasks(data.tasks || []);
       setTotal(data.total || 0);
       setLastLoadedAt(new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit" }));
     } catch (exc) {
-      setTasks([]);
-      setTotal(0);
+      if (requestGeneration !== generation.current) return;
       setError(exc instanceof Error ? exc.message : String(exc));
     } finally {
-      setLoading(false);
+      if (requestGeneration === generation.current) setLoading(false);
     }
   }, [offset, statusFilter]);
 
@@ -172,22 +182,28 @@ function MultiAlphaCombineBacktestWorkspace() {
     void loadTasks();
   }, [loadTasks]);
 
-  const hasRunningTask = useMemo(() => tasks.some((task) => task.status === "running"), [tasks]);
+  const executingTasks = useMemo(() => tasks.filter(isExecutingTask), [tasks]);
+  const hasRunningTask = executingTasks.length > 0;
 
-  useEffect(() => {
-    if (!autoRefresh || !hasRunningTask) return;
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === "visible") void loadTasks();
-    }, refreshInterval * 1000);
-    const onVisibility = () => {
-      if (document.visibilityState === "visible") void loadTasks();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener("visibilitychange", onVisibility);
-    };
-  }, [autoRefresh, hasRunningTask, loadTasks, refreshInterval]);
+  useActiveRefresh(async () => {
+    const currentGeneration = generation.current;
+    // Keep a task's runs in one response so group counters cannot become partial.
+    try {
+      const updates: Partial<CombineTask>[] = [];
+      for (const task of executingTasks) {
+        if (!task.run_ids?.length) throw new Error("运行任务缺少 run_ids，请手动刷新");
+        const query = new URLSearchParams();
+        task.run_ids.forEach(id => query.append("run_ids", id));
+        const url = `${API}/multi-alpha/combine/tasks/status?${query}`;
+        const response = await reads.current.read(url, url, false);
+        if (response.data.missing_ids?.length) throw new Error("运行记录缺失，请刷新核对");
+        updates.push(...response.data.tasks);
+      }
+      if (currentGeneration !== generation.current) return;
+      setTasks(previous => mergeTaskUpdates(previous, updates));
+      setError(null);
+    } catch (reason) { setError(String(reason)); throw reason; }
+  }, autoRefresh && hasRunningTask, executingTasks.map(task => task.task_id).sort().join(","), refreshInterval * 1000);
   const currentPage = Math.floor(offset / PAGE_SIZE) + 1;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -232,9 +248,9 @@ function MultiAlphaCombineBacktestWorkspace() {
             disabled={!autoRefresh}
             style={{ padding: "7px 10px", borderRadius: "6px", border: "1px solid #cbd5e1", fontSize: "12px", color: "#475569", backgroundColor: "#fff", width: "100%" }}
           >
-            <option value={5}>每 5 秒</option>
-            <option value={10}>每 10 秒</option>
-            <option value={30}>每 30 秒</option>
+            <option value={60}>每 60 秒</option>
+            <option value={120}>每 120 秒</option>
+            <option value={300}>每 300 秒</option>
           </select>
           <button
             onClick={() => void loadTasks()}

@@ -40,6 +40,88 @@ SHA = "a" * 64
 MANIFEST = "b" * 64
 
 
+def test_build_resume_verifies_manifest_anchor_not_bulk_bytes(tmp_path, monkeypatch):
+    producer = SimpleNamespace(produce=lambda context: None)
+    pipeline = RegisteredMonthlyPipeline({stage: producer for stage in
+        ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,))
+    manifest = tmp_path / "candidate" / "qe_dataset_manifest.json"
+    manifest.parent.mkdir()
+    manifest.write_bytes(b"manifest\n")
+    anchor = {"id": "candidate/qe_dataset_manifest.json", "sha256": hashlib.sha256(manifest.read_bytes()).hexdigest(),
+              "size": manifest.stat().st_size}
+    bulk = manifest.parent / "large.bin"
+    bulk.write_bytes(b"exported")
+    receipt = {"scope": {"dataset_manifest_ref": anchor}, "input_refs": [], "output_refs": [anchor,
+        {"id": "candidate/large.bin", "sha256": hashlib.sha256(bulk.read_bytes()).hexdigest(), "size": 8}]}
+    real_hash = hashlib.sha256
+    reads = []
+    def hashed(path):
+        reads.append(path)
+        assert path != bulk, "resume must not repeat the full BUILD content audit"
+        return real_hash(path.read_bytes()).hexdigest()
+    monkeypatch.setattr("backend.services.dataset_release.monthly_worker._file_sha256", hashed)
+    assert pipeline.checkpoint_is_valid("BUILD", receipt)
+    assert reads == [manifest]
+    manifest.write_bytes(b"changed!\n")
+    with pytest.raises(MonthlyProducerError, match="retained"):
+        pipeline.checkpoint_is_valid("BUILD", receipt)
+
+
+@pytest.mark.parametrize("failure", ["missing", "outside", "unlisted"])
+def test_build_resume_bad_anchor_stops_without_invalidating_exports(tmp_path, failure):
+    producer = SimpleNamespace(produce=lambda context: pytest.fail("completed exports must not run"))
+    pipeline = RegisteredMonthlyPipeline({stage: producer for stage in
+        ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,))
+    anchor = {"id": "missing.json" if failure == "missing" else "../outside.json",
+              "sha256": "a" * 64, "size": 1}
+    receipt = {"scope": {"dataset_manifest_ref": anchor}, "input_refs": [],
+               "output_refs": [] if failure == "unlisted" else [anchor]}
+    with pytest.raises(MonthlyProducerError, match="retained"):
+        pipeline.checkpoint_is_valid("BUILD", receipt)
+
+
+def test_local_resume_checks_outputs_without_rereading_upstream_inventory(tmp_path, monkeypatch):
+    producer = SimpleNamespace(produce=lambda context: None)
+    pipeline = RegisteredMonthlyPipeline({stage: producer for stage in
+        ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,))
+    profile = tmp_path / "profile.json"
+    profile.write_bytes(b"{}\n")
+    ref = {"id": profile.name, "sha256": hashlib.sha256(profile.read_bytes()).hexdigest(), "size": 3}
+    calls = []
+    monkeypatch.setattr("backend.services.dataset_release.monthly_worker._file_sha256",
+                        lambda path: calls.append(path) or ref["sha256"])
+    assert pipeline.checkpoint_is_valid("LOCAL_VALIDATE", {
+        "input_refs": [{"id": "large.bin", "sha256": "b" * 64, "size": 10**9}], "output_refs": [ref],
+    })
+    assert calls == [profile]
+
+
+@pytest.mark.parametrize("group", ["input_refs", "output_refs"])
+@pytest.mark.parametrize("failure", [None, "missing", "changed"])
+def test_derive_resume_verifies_frozen_artifacts_without_regeneration(tmp_path, group, failure):
+    producer = SimpleNamespace(produce=lambda context: pytest.fail("sealed DERIVE must not rerun"))
+    pipeline = RegisteredMonthlyPipeline(
+        {stage: producer for stage in ("SOURCE", "BUILD", "DERIVE", "LOCAL_VALIDATE", "DEPLOY", "CONSUMER_VALIDATE")},
+        artifact_roots=(tmp_path,),
+    )
+    artifact = tmp_path / "sealed.json"
+    artifact.write_bytes(b"sealed\n")
+    ref = {"id": artifact.name, "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(), "size": 7}
+    receipt = {"input_refs": [], "output_refs": [], group: [ref]}
+    if failure == "missing":
+        artifact.unlink()
+    elif failure == "changed":
+        artifact.write_bytes(b"drift!\n")
+    if failure is None:
+        assert pipeline.checkpoint_is_valid("DERIVE", receipt)
+    else:
+        with pytest.raises(MonthlyProducerError, match="retained"):
+            pipeline.checkpoint_is_valid("DERIVE", receipt)
+
+
 def test_registered_pipeline_delivers_stage_control_and_checks_before_validation(tmp_path):
     events = []
 

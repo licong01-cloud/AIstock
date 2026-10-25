@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import nullcontext
 from datetime import date
+import logging
 from typing import Any, Protocol
 
 from backend.services.advisory_historical_range.artifact_store import HistoricalRangeArtifactStore
@@ -29,6 +31,12 @@ from backend.services.advisory_historical_range.models import (
     normalize_hmm_binding_metadata,
 )
 from backend.services.advisory_historical_range.source_roles import CANDIDATE_SOURCE_ROLES_V2
+from backend.services.advisory_historical_range.selection_signal_kernel import (
+    SelectionSignalDayV1, SelectionSignalKernel, SelectionSignalRequestV1,
+)
+from backend.services.advisory_historical_range.task_input_sources import (
+    PLAN_SOURCE_ROLES, selection_day_providers, validate_program_source_plan, validate_task_raw_inputs,
+)
 from backend.services.strategy_package.selection_computation import (
     SelectionMode,
     StrategyPackageSelectionComputation,
@@ -73,6 +81,7 @@ class HistoricalRangeCandidateProducer:
         source_verifier: HistoricalRangeSourceRevisionVerifier,
         artifact_store: HistoricalRangeArtifactStore,
         projector: HistoricalRangeCandidateProjector | None = None,
+        batch_inference_provider: Any | None = None,
     ) -> None:
         dependencies = (signal_preparation, computation, providers, source_verifier, artifact_store)
         if any(item is None for item in dependencies):
@@ -80,17 +89,79 @@ class HistoricalRangeCandidateProducer:
         self._signal_preparation = signal_preparation
         self._computation = computation
         self._providers = providers
+        self._signal_kernel = SelectionSignalKernel(computation=computation, providers=providers)
         self._source_verifier = source_verifier
         self._artifact_store = artifact_store
         self._projector = projector or HistoricalRangeCandidateProjector()
+        self._batch_inference_provider = batch_inference_provider
 
-    def produce(
+    def produce_dates(self, *, request_payload, research_program_id: str,
+                      decision_trade_dates: tuple[date, ...], current_trade_date: date,
+                      request_artifact_ref=None) -> dict[date, HistoricalRangeCandidateProductionResultV1]:
+        """Bounded raw batching; existing per-day projection/writer is unchanged.
+
+        Future-day prefetch failures stay explicit but never turn the claimed
+        current day into a failure. Each failed day is retried by the native
+        ordered executor, not removed or relabelled as no-candidate.
+        """
+        if (not decision_trade_dates or current_trade_date not in decision_trade_dates
+                or any(left >= right for left, right in zip(decision_trade_dates, decision_trade_dates[1:]))):
+            raise ValueError("candidate batch must preserve its increasing dates and claimed day")
+        run_id = derive_prefixed_id("ahrr", {"resolved_request_hash": request_payload.resolved_request.request_payload_sha256,
+                                            "research_program_id": research_program_id})
+        plan = self._source_plan(request_payload, research_program_id)
+        scope = self._batch_inference_provider.batch_dates(
+            trade_dates=decision_trade_dates, run_id=plan["run_id"] if plan else run_id,
+            source_revision=plan["plan_hash"] if plan else str(request_payload.source_revision_catalog.catalog_hash),
+            **({"source_plan": plan} if plan else {}),
+        ) if self._batch_inference_provider is not None else nullcontext()
+        results = {}
+        with scope:
+            for day in decision_trade_dates:
+                try:
+                    results[day] = self.produce(request_payload=request_payload, research_program_id=research_program_id,
+                                               decision_trade_date=day, request_artifact_ref=request_artifact_ref)
+                except Exception as exc:
+                    if day == current_trade_date:
+                        raise
+                    logging.getLogger(__name__).warning("candidate batch future day failed; day=%s error_type=%s", day, type(exc).__name__)
+        return results
+
+    def _source_plan(self, request_payload, research_program_id):
+        program = next((p for p in getattr(request_payload.resolved_request, "frozen_programs", ())
+                        if p.research_program_id == research_program_id), None)
+        if program is None:
+            return None  # The ordinary producer retains its original missing-Program error.
+        plan = validate_program_source_plan(program=program, date_plan=request_payload.resolved_request.date_plan)
+        if plan is not None and self._batch_inference_provider is None:
+            raise RuntimeConfigInvalidError("planned task requires its explicit native batch inference provider")
+        return plan
+
+    def produce(self, *, request_payload, research_program_id: str, decision_trade_date: date,
+                request_artifact_ref=None, expected_candidate_ref=None) -> HistoricalRangeCandidateProductionResultV1:
+        plan = self._source_plan(request_payload, research_program_id)
+        scope = (self._batch_inference_provider.batch_dates(
+            trade_dates=(decision_trade_date,), run_id=plan["run_id"],
+            source_revision=plan["plan_hash"], source_plan=plan) if plan else nullcontext())
+        with scope:
+            return self._produce(request_payload=request_payload, research_program_id=research_program_id,
+                decision_trade_date=decision_trade_date, request_artifact_ref=request_artifact_ref,
+                expected_candidate_ref=expected_candidate_ref)
+
+    def revalidate_candidate(self, *, request_payload, research_program_id, decision_trade_date,
+                             request_artifact_ref, candidate_ref):
+        return self.produce(request_payload=request_payload, research_program_id=research_program_id,
+            decision_trade_date=decision_trade_date, request_artifact_ref=request_artifact_ref,
+            expected_candidate_ref=candidate_ref).candidate_artifact_ref
+
+    def _produce(
         self,
         *,
         request_payload: HistoricalRangeResolvedRequestArtifactPayloadV1,
         research_program_id: str,
         decision_trade_date: date,
         request_artifact_ref: HistoricalRangeArtifactRefV1 | None = None,
+        expected_candidate_ref: HistoricalRangeArtifactRefV1 | None = None,
     ) -> HistoricalRangeCandidateProductionResultV1:
         resolved = request_payload.resolved_request
         program = next(
@@ -117,6 +188,8 @@ class HistoricalRangeCandidateProducer:
             },
         )
         day_run_id = derive_day_run_id(range_run_id, decision_trade_date, ordinal)
+        plan = self._source_plan(request_payload, research_program_id)
+        source_roles = PLAN_SOURCE_ROLES if plan else CANDIDATE_SOURCE_ROLES_V2
         component_ids = {item.component_id for item in program.admitted_package_projection.components}
         source_refs = self._source_verifier.verify_program_day(
             catalog=request_payload.source_revision_catalog,
@@ -124,7 +197,7 @@ class HistoricalRangeCandidateProducer:
             package_id=program.package_id,
             component_ids=component_ids,
             decision_trade_date=decision_trade_date,
-            source_roles=CANDIDATE_SOURCE_ROLES_V2,
+            source_roles=source_roles,
         )
         runtime_config = _resolved_runtime_config_for_day(
             program=program,
@@ -141,7 +214,20 @@ class HistoricalRangeCandidateProducer:
         profile = parse_selection_runtime_profile_for_computation(runtime_config)
         runtime_profile_hash = selection_runtime_profile_sha256(profile)
         top_k = _resolved_top_k(profile=profile, raw_metadata=prepared.raw.artifact.metadata)
-        computation = self._computation.compute(
+        input_evidence = None
+        kernel_result = None
+        if plan:
+            input_evidence = validate_task_raw_inputs(plan=plan, prepared=prepared, program=program,
+                date_plan=resolved.date_plan, decision_trade_date=decision_trade_date)
+            with selection_day_providers(plan=plan, day=decision_trade_date, database_providers=self._providers) as providers:
+                kernel_result = SelectionSignalKernel(computation=self._computation, providers=providers).run(
+                    request=SelectionSignalRequestV1(consumer_scope="ADVISORY", run_id=range_run_id,
+                        date_plan=(SelectionSignalDayV1(decision_trade_date, decision_trade_date, decision_trade_date),),
+                        ordered_package_ids=(program.package_id,), manifest_hashes={program.package_id: program.manifest_sha256},
+                        runtime_configs={program.package_id: runtime_config}, package_top_k={program.package_id: top_k},
+                        source_identity=plan["plan_hash"]),
+                    prepare_day=lambda **_: prepared)[0]
+        computation = kernel_result.computation if kernel_result else self._signal_kernel.compute_prepared(
             request=StrategyPackageSelectionComputationRequestV1(
                 trade_date=decision_trade_date,
                 data_source="DB_HISTORICAL",
@@ -153,7 +239,6 @@ class HistoricalRangeCandidateProducer:
                 exhaustive_selection_evidence=True,
             ),
             prepared_signals={program.package_id: prepared.prepared_signal},
-            providers=self._providers,
         )
         facts, stage_trace = self._projector.project(
             frozen_program=program,
@@ -174,19 +259,20 @@ class HistoricalRangeCandidateProducer:
         input_context = prepared.raw.artifact.metadata.get("artifact_input_context")
         if not isinstance(input_context, dict):
             raise ArtifactGenerationFailedError("historical raw artifact has no input context")
-        _validate_raw_input_catalog_alignment(
-            program=program,
-            catalog=catalog,
-            input_context=input_context,
-            decision_trade_date=decision_trade_date,
-        )
-        _validate_source_read_receipts_against_catalog(
-            program=program,
-            catalog=catalog,
-            receipts=prepared.raw.source_read_receipts,
-            input_context=input_context,
-            decision_trade_date=decision_trade_date,
-        )
+        if not plan:
+            _validate_raw_input_catalog_alignment(
+                program=program,
+                catalog=catalog,
+                input_context=input_context,
+                decision_trade_date=decision_trade_date,
+            )
+            _validate_source_read_receipts_against_catalog(
+                program=program,
+                catalog=catalog,
+                receipts=prepared.raw.source_read_receipts,
+                input_context=input_context,
+                decision_trade_date=decision_trade_date,
+            )
         universe_identity_hash = str(input_context.get("universe_input_hash") or "")
         raw_header = {
             **dict(prepared.raw.semantic_header),
@@ -195,6 +281,9 @@ class HistoricalRangeCandidateProducer:
             "code_release_hash": program.code_release_hash,
             "calendar_identity_hash": catalog.calendar_identity_hash,
             "universe_identity_hash": universe_identity_hash,
+            **({"selection_input_evidence_hash": canonical_json_sha256(input_evidence),
+                "shared_kernel_identity": kernel_result.semantic_identity,
+                "provider_clock_evidence": kernel_result.provider_clock_evidence} if plan else {}),
         }
         raw_signal_identity_hash = canonical_json_sha256(raw_header)
         candidate_input_hash = build_candidate_input_hash(
@@ -229,7 +318,8 @@ class HistoricalRangeCandidateProducer:
             universe_count=prepared.raw.artifact.universe_count,
             raw_signal_identity_hash=raw_signal_identity_hash,
             raw_signal_semantic_header=raw_header,
-            raw_inference_receipt=dict(prepared.raw.raw_inference_receipt),
+            raw_inference_receipt={**dict(prepared.raw.raw_inference_receipt),
+                **({"selection_input_evidence": input_evidence} if plan else {})},
             source_read_receipt_hashes=receipt_hashes,
             stage_trace=stage_trace,
             candidate_outcome=candidate_outcome,
@@ -245,10 +335,19 @@ class HistoricalRangeCandidateProducer:
             package_id=program.package_id,
             component_ids=component_ids,
             decision_trade_date=decision_trade_date,
-            source_roles=CANDIDATE_SOURCE_ROLES_V2,
+            source_roles=source_roles,
         )
         if final_refs != source_refs:
             raise ArtifactGenerationFailedError("historical source refs changed during candidate computation")
+        if expected_candidate_ref is not None:
+            old = self._artifact_store.load(expected_candidate_ref)
+            if (old.resolved_request_hash != resolved.request_payload_sha256
+                    or old.range_run_id != range_run_id or old.day_run_id != day_run_id
+                    or canonical_json_sha256(old.payload) != canonical_json_sha256(payload_document)):
+                from .input_source_plan import SourcePlanError
+
+                raise SourcePlanError("SOURCE_INPUT_DRIFT", stage="UNCOMMITTED_CANDIDATE_RESTORE",
+                                      decision_date=str(decision_trade_date))
         upstream_refs = (request_artifact_ref,) if request_artifact_ref is not None else ()
         stored = self._artifact_store.publish_payload(
             artifact_kind=HistoricalRangeArtifactKind.CANDIDATE_ARTIFACT,
@@ -581,11 +680,20 @@ def _validate_source_read_receipts_against_catalog(
         if member.source_role == "pit_universe" and member.decision_trade_date == decision_trade_date
     ]
     universe_receipts = [receipt for receipt in normalized if receipt.get("source_role") == "pit_universe"]
+    # Native PIT v2 qualifies its dataset identity with the frozen pool key;
+    # the catalog stores that key separately. Preserve both exact spellings,
+    # not arbitrary suffixes, and leave the original receipts unchanged.
+    universe_dataset_ids = ("market.stock_universe_pit",)
+    if len(universe_members) == 1:
+        universe_key = universe_members[0].bound_parameters.get("universe_key")
+        if isinstance(universe_key, str) and universe_key:
+            universe_dataset_ids += (f"market.stock_universe_pit:{universe_key}",)
     if (
         len(universe_members) != 1
         or not universe_receipts
         or any(
-            receipt.get("dataset_id") != "market.stock_universe_pit"
+            receipt.get("dataset_id") not in universe_dataset_ids
+            or receipt.get("partition_ref") != decision_trade_date.isoformat()
             or receipt.get("content_hash") != universe_members[0].content_hash
             or receipt.get("row_count") != universe_members[0].row_count
             for receipt in universe_receipts
@@ -593,7 +701,13 @@ def _validate_source_read_receipts_against_catalog(
     ):
         raise ArtifactGenerationFailedError(
             "historical PIT universe receipts differ from the frozen catalog",
-            context={"reason_code": "ADVISORY_HR_SOURCE_REVISION_MISMATCH"},
+            context={
+                "reason_code": "ADVISORY_HR_SOURCE_REVISION_MISMATCH",
+                "decision_trade_date": decision_trade_date.isoformat(),
+                "expected_dataset_ids": list(universe_dataset_ids),
+                "actual_dataset_ids": [receipt.get("dataset_id") for receipt in universe_receipts],
+                "actual_partitions": [receipt.get("partition_ref") for receipt in universe_receipts],
+            },
         )
     components = {
         item.component_id: item for item in program.admitted_package_projection.components

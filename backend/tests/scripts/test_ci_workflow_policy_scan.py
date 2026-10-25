@@ -12,11 +12,28 @@ import noxfile
 from scripts.ci_workflow_policy_scan import (
     build_contract_evidence,
     has_event_bound_base_preparation,
+    has_owned_wall_clock_trigger,
     scan_environment_contracts,
     scan_nox_text,
     scan_workflow_text,
     scan_workflows,
 )
+
+
+def test_hmm_nox_bounds_parent_threads_without_reducing_verification(monkeypatch, tmp_path):
+    calls = []
+    class Session:
+        def run(self, *args, **kwargs):
+            calls.append((args, kwargs))
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setattr(noxfile, "_env", lambda extra: {"OPENBLAS_NUM_THREADS": "24", **extra})
+    noxfile.hmm_risk_backend(Session())
+    args, kwargs = next(call for call in calls if "pytest" in call[0])
+    assert all(kwargs["env"].get(key) == "1" for key in (
+        "OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS", "VECLIB_MAXIMUM_THREADS", "BLIS_NUM_THREADS"))
+    assert {"backend/tests/hmm_risk", "--cov-branch", "--cov-fail-under=70", "--durations=10"} <= set(args)
+    assert "not integration" in args and "-x" not in args
 
 
 def test_nightly_dr_failure_does_not_suppress_research_or_disappear_from_summary() -> None:
@@ -31,9 +48,9 @@ def test_nightly_dr_failure_does_not_suppress_research_or_disappear_from_summary
     failure = next(step for step in summary["steps"] if step.get("name") == "Build Nightly failure issue context")
     assert "needs.dr-snapshot.result == 'failure'" in failure["if"]
     assert "needs.dr-validate.result == 'failure'" in failure["if"]
-    assert failure["env"]["L3_RESULT"] == "${{ needs.nightly-l3.result }}"
-    assert failure["env"]["DR_RESULT"] == "${{ needs.dr-snapshot.result }}"
-    assert failure["env"]["DR_VALIDATE_RESULT"] == "${{ needs.dr-validate.result }}"
+    for key, job in (("L3_RESULT", "nightly-l3"), ("DR_RESULT", "dr-snapshot"), ("DR_VALIDATE_RESULT", "dr-validate")):
+        assert failure["env"][key] == ("${{ needs." + job + ".outputs.background_admitted == 'false' && 'deferred' || needs."
+                                      + job + ".result }}")
 
 
 def test_policy_test_has_one_owner_matching_its_guardrail_source() -> None:
@@ -42,6 +59,44 @@ def test_policy_test_has_one_owner_matching_its_guardrail_source() -> None:
     owner = catalog.match_path("backend/tests/scripts/test_ci_workflow_policy_scan.py")
     assert owner.ownership_status == "mapped"
     assert owner.primary_module == catalog.match_path("scripts/ci_workflow_policy_scan.py").primary_module
+
+
+def test_nightly_workflow_validation_requires_prebuilt_ci_and_x_temp() -> None:
+    jobs = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))["jobs"]
+    steps = jobs["code-intelligence-weekly"]["steps"]
+    validation_index = next(i for i, step in enumerate(steps)
+                            if step.get("name") == "Validate CI/Nightly issue workflow automation")
+    verify = steps[validation_index - 1]
+    validation = steps[validation_index]
+    assert verify["name"] == "Verify prebuilt environment for workflow validation"
+    assert verify["env"] == {"AISTOCK_CI_ENV_NAME": "AIstock-CI", "AISTOCK_CI_TEST_TEMP_REQUIRED": "1"}
+    assert "conda run -n AIstock-CI python scripts/ci_environment_verify.py" in verify["run"]
+    assert "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }" in verify["run"]
+    assert validation["run"].strip() == "conda run -n AIstock-CI python -m nox -s validation_workflow_automation"
+    for step in (verify, validation):
+        assert not step.get("continue-on-error", False)
+        assert step["if"] == "steps.background_window.outputs.background_admitted == 'true'"
+        # No status override: default success() still prevents running after failed preflight.
+
+
+def test_tdx_ci_is_offline_and_builds_web_module() -> None:
+    workflow = yaml.safe_load(Path(".github/workflows/test.yml").read_text(encoding="utf-8"))
+    step = next(s for s in workflow["jobs"]["ci-verdict"]["steps"] if s.get("id") == "go_validation")
+    assert str(step["env"]["GOPROXY"]).lower() in {"off", "false"}
+    assert str(step["env"]["GOSUMDB"]).lower() in {"off", "false"}
+    assert step["env"]["GOTOOLCHAIN"] == "local"
+    assert "go test -mod=readonly ./protocol -count=1" in step["run"]
+    assert "go test -mod=readonly . -run '^TestPagination' -count=1" in step["run"]
+    assert "go test -mod=readonly . -count=1" in step["run"]
+    assert "go build -mod=readonly ./..." in step["run"]
+    assert "cd web" in step["run"]
+    assert 'go build -mod=readonly -o "${TMP}/aistock-tdx-web.exe" .' in step["run"]
+    assert "go test ./..." not in step["run"]
+    from backend.services.validation.file_ownership import FileOwnershipCatalog
+    catalog = FileOwnershipCatalog()
+    for path in ("tdx-api-main/protocol/unit.go", "tdx-api-main/web/server.go",
+                 "tdx-api-main/web/go.mod", "tdx-api-main/protocol/unit_test.go"):
+        assert catalog.match_path(path).primary_module == "local_data"
 
 
 @pytest.mark.parametrize("mutation", ["empty-base", "wrong-head", "pr-only-condition"])
@@ -100,6 +155,19 @@ def test_repository_workflows_pass_zero_install_and_database_service_policy() ->
     findings = scan_workflows(sorted(Path(".github/workflows").glob("*.yml")))
 
     assert findings == []
+
+
+@pytest.mark.parametrize("old,new", [
+    ("types: [aistock_codeql]", "types: [arbitrary]"),
+    ("repository_dispatch:", "schedule:"),
+    ("repository_dispatch:", "push:"),
+    ("AIstock schedule codeql.yml", "arbitrary"),
+    ("scheduled-admission", "missing-admission"),
+])
+def test_daily_trigger_policy_rejects_unowned_or_unprotected_dispatch(old, new):
+    text = Path(".github/workflows/codeql.yml").read_text(encoding="utf-8")
+    assert has_owned_wall_clock_trigger(text, "codeql.yml", "aistock_codeql")
+    assert not has_owned_wall_clock_trigger(text.replace(old, new), "codeql.yml", "aistock_codeql")
 
 
 def test_nox_dependency_bootstrap_requires_ci_fail_closed_guard() -> None:
@@ -628,8 +696,8 @@ def test_codeql_is_nightly_only_before_runner_allocation() -> None:
         assert set(workflow[True]) == {"workflow_dispatch"}
 
     codeql = yaml.safe_load(Path(".github/workflows/codeql.yml").read_text(encoding="utf-8"))
-    assert set(codeql[True]) == {"schedule", "workflow_dispatch"}
-    assert codeql[True]["schedule"] == [{"cron": "27 20 * * *"}]
+    assert set(codeql[True]) == {"repository_dispatch", "workflow_dispatch"}
+    assert codeql[True]["repository_dispatch"] == {"types": ["aistock_codeql"]}
     assert list(codeql["jobs"]) == ["security-runner-preflight", "codeql-nightly"]
     assert codeql["jobs"]["security-runner-preflight"]["runs-on"] == "ubuntu-latest"
     assert codeql["jobs"]["codeql-nightly"]["needs"] == "security-runner-preflight"
@@ -642,7 +710,8 @@ def test_code_intelligence_and_nightly_do_not_schedule_the_same_refresh() -> Non
     nightly = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))
     refresh = yaml.safe_load(Path(".github/workflows/code-intelligence-refresh.yml").read_text(encoding="utf-8"))
 
-    assert refresh[True]["schedule"] == [{"cron": "30 18 * * *"}]
+    assert refresh[True]["repository_dispatch"] == {"types": ["aistock_code_intelligence"]}
+    assert "schedule" not in refresh[True]
     assert refresh["jobs"]["refresh-after-main"]["needs"] == "security-runner-preflight"
     assert "concurrency" not in refresh
     assert refresh["jobs"]["refresh-after-main"]["concurrency"] == {
@@ -650,7 +719,8 @@ def test_code_intelligence_and_nightly_do_not_schedule_the_same_refresh() -> Non
         "cancel-in-progress": True,
     }
     legacy = nightly["jobs"]["code-intelligence-weekly"]
-    assert legacy["if"] == "github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence"
+    assert legacy["if"] == ("github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence"
+                            " && needs.runner-preflight.outputs.background_admitted == 'true'")
     assert legacy["concurrency"]["cancel-in-progress"] is True
     assert nightly[True]["workflow_dispatch"]["inputs"]["run_code_intelligence"]["default"] is False
 

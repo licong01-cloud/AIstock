@@ -52,6 +52,7 @@
 3. `enforcement_phase` 使用 `changed_file_scan`、`task_planning`、`interactive_execution`、`pr_readiness`、`issue_lifecycle`、`design_delivery`、`standard_change`、`production_activation` 或 `release_deployment`。条件控制在不适用时记为 `noop`，禁止伪装成 pending gate。
 4. CI job、页面 check、测试计划和门禁分别计数。skipped job、warning、advisory、delegated plan、诊断 evidence publisher 和 telemetry collector 都不是合并硬门禁。
 5. 失败证据发布器保持 best-effort、可见和可审计，但禁止成为 `CI verdict` 的依赖或用自身故障覆盖真实测试结论。分支保护与自动合入器只消费绑定当前 PR HEAD 的稳定 `CI verdict`；PR Quality、Semgrep、密钥泄露与危险 workflow 检查作为该 verdict 内部的 fail-closed steps 执行，不再发布或等待重复合入上下文。CodeQL 属于 Nightly 安全扫描而不是 PR 合入门禁，其排队、失败或 runner 状态不得阻断白天 PR 合入。
+   Nightly 的 actionable 故障登记延期（例如 `deferred_registry_pr_capability`）必须在每个对应 Issue 持久化本地流水线 intake 角色、受影响模块、绑定 run/commit/fingerprint 的证据、未认领状态及精确接手命令，并在原汇总 step 显示 warning/摘要。成功发布 Issue 或步骤退出 0 不等于 BUG 已登记、已认领或已修复；本地 intake owner 复用正式 promotion 流程，在该 Issue 同步认领和登记结果，再交回模块 owner。认领记录仅作追溯，不是新增授权、前置验证或人工审批。已有 BUG 链接标为 `registered_not_fixed`，不得误报修复完成。重复发生时沿用同一 Issue，不扩大 Actions 权限、不新增 PR 门禁、审批或全仓扫描，也不因登记延期重跑无关测试。
 6. 共享 runner 的 PR/push workflow 必须按 workflow 与 PR/ref 配置 `concurrency`，并对同一目标启用 `cancel-in-progress: true`；新 commit 发布后，旧 commit 的 queued/in-progress run 属于 superseded 诊断状态，不得继续占用 runner 或要求人工重新授权。
 7. PR 失败诊断优先使用原失败 job 日志和 `GITHUB_STEP_SUMMARY`。禁止为报告、评论或重复上传证据单独排队一个 runner job，也不得让这类诊断额外下载 `upload-artifact`、`download-artifact` 或 `github-script` action；default-branch 的正式故障登记仍由独立 fail-closed workflow 负责。
 
@@ -125,8 +126,10 @@
 3. nightly 对当天合入变更按模块和计划去重，返回紧凑 receipt；PR 只记录直接相关的通过证据和委托计划。
 4. 过期、重复、只验证实现细节或与模块无依赖关系的测试从 active plan 移除或归档。
 5. workflow receipt 分别记录 active repair、local validation、runner queue、PR CI、merge/aftercare 的已知耗时；无法直接观测的阶段保持 `not_recorded`，禁止把相邻事件间隔伪装成代码开发时间。RTK telemetry 只消费调用方已提供的使用/回退信息，不额外探测或形成门禁。
+   pytest 执行统计复用 `scripts.ci_plan_coverage`，记录实际墙钟/测试阶段耗时、执行数及用例集合摘要；只有源码 HEAD、预构建环境指纹、计划、调用参数和用例集合均相同时才报告重复成功运行候选。PR CI 自动记录；本地/nightly 可通过该插件与 `AISTOCK_CI_TEST_COLLECTION_RECEIPT` 或 `AISTOCK_TEST_METRICS_RECEIPT` 接入，缺失数据保持未知，不宣称覆盖所有窗口。统计失败只告警，不替代真实测试结果，不自动复用或跳过测试，也不新增门禁、独立 job 或全量历史扫描。
 6. 同一计划在一个交付周期只进入一个权威执行阶段：本地仅保留 `l0`、changed-file/scope 和直接 fix-point；可在预构建 runner 执行的模块计划由 PR CI 一次完成；DEV/人工计划作为外部 pre-merge receipt；完整覆盖率、UI/business-flow 与跨模块深度回归由 nightly 去重执行。禁止为了取得 PR 前本地 receipt 重跑 CI 将要执行的完整模块套件。
 7. 阶段计划不得嵌套全模块回归或全局 catalog gate；全模块回归和 catalog integrity 在各自权威计划中各执行一次。全局 warning 只影响其自身 catalog 结果，不得把已通过的无关业务 session 改判为失败。
+8. 测试债务的真实比例检查按 changed files 的 primary owner 触发，包含该 owner 的生产/测试删除；不因仅有 impact_modules 关联、普通文档或无关 catalog 修改而要求验证另一模块比例。预算引擎本身变更运行其直接合同，Nightly 在所属权威计划保留完整预算回归；catalog integrity 不嵌套真实模块比例断言。保留诚实的生产分母及既定 30% 上限，不通过重命名归属、虚增分母或跳过相关检查规避。
 
 ### 4.3 测试价值标准
 
@@ -303,7 +306,7 @@ CodeQL CLI 属于预构建工具链而不是运行期依赖。CodeQL job 必须�
 
 其他确需 JavaScript Action 的 workflow 仅允许使用经 runner 实跑验证的原生 Node 24 主版本：`actions/checkout@v7`、`actions/upload-artifact@v7`、`actions/download-artifact@v8`、`actions/github-script@v9`；不得为了消除告警依赖 runner 的强制 Node 版本兼容层。版本升级必须同步 machine-policy evidence 与合同测试，但不得把这些远端 Action 重新引入 CodeQL 或 Code Intelligence 快速路径。
 
-main 必须启用“通过 PR 合入”的分支保护，并与自动合入器统一只消费 `CI verdict`。PR Quality 与 Semgrep 的实际强制检查必须作为唯一普通 runner `CI verdict` job 内的 fail-closed steps 执行；其独立 workflow 只保留手工诊断入口，不得在每个 PR 重复 checkout、分类或获取普通 runner。自动合入器禁止追加 GitHub 分支保护之外的 CodeQL、Security、报告或诊断上下文。PR 与 Issue 的关闭关系直接使用 GitHub closing keywords，并由 issue workflow/finalizer 在合入前后校验，不得再为每次 PR 启动只做重复评论的 auto-link workflow；PR CI 失败保留在该 PR 的 `CI verdict`，Nightly 失败由 `full-summary` 的去重候选链处理，不得为每个已完成 CI 创建必然跳过的 `workflow_run` listener。仅修改 BUG registry JSON 的官方 close-sync PR 只运行 GitHub-hosted stdlib metadata `CI verdict`；其他 PR 继续执行 changed-file 分类和精确相关 CI，但都不触发 CodeQL。每日 Nightly CodeQL 与代码智能使用各自唯一的定时 owner；需要安全 runner 的 workflow 必须先在 GitHub-hosted 轻量 preflight 验证精确角色，离线时快速失败并留下证据，不得无限排队。每日 Nightly CodeQL 与手工全量安全扫描独立于 PR 生命周期，安全 runner 离线、自更新或排队不得转换为 PR 阻断、重复提交、重复授权或跨角色 fallback。
+main 必须启用“通过 PR 合入”的分支保护，并与自动合入器统一只消费 `CI verdict`。PR Quality 与 Semgrep 的实际强制检查必须作为每个 PR 唯一的 `CI verdict` job 内的 fail-closed steps 执行，该 job 可由任一具备 `aistock-ci` 标签的合规 Windows runner 领取；其独立 workflow 只保留手工诊断入口，不得在每个 PR 重复 checkout、分类或获取普通 runner。自动合入器禁止追加 GitHub 分支保护之外的 CodeQL、Security、报告或诊断上下文。PR 与 Issue 的关闭关系直接使用 GitHub closing keywords，并由 issue workflow/finalizer 在合入前后校验，不得再为每次 PR 启动只做重复评论的 auto-link workflow；PR CI 失败保留在该 PR 的 `CI verdict`，Nightly 失败由 `full-summary` 的去重候选链处理，不得为每个已完成 CI 创建必然跳过的 `workflow_run` listener。仅修改 BUG registry JSON 的官方 close-sync PR 只运行 GitHub-hosted stdlib metadata `CI verdict`；其他 PR 继续执行 changed-file 分类和精确相关 CI，但都不触发 CodeQL。每日 Nightly CodeQL 与代码智能使用各自唯一的定时 owner；需要安全 runner 的 workflow 必须先在 GitHub-hosted 轻量 preflight 验证精确角色，离线时快速失败并留下证据，不得无限排队。每日 Nightly CodeQL 与手工全量安全扫描独立于 PR 生命周期，安全 runner 离线、自更新或排队不得转换为 PR 阻断、重复提交、重复授权或跨角色 fallback。
 
 Nox、测试 helper 和脚本内部同样受零安装约束：GitHub Actions 或 `AISTOCK_CI_INSTALL_FORBIDDEN=1` 下发现依赖缺失必须直接失败，禁止在 helper 内自动执行安装。CI policy scanner 同时检查 workflow YAML、Windows `AIstock-CI` runner/环境/DEV-DB 路由标记和 Nox 隐式安装边界；仅做关键词扫描不得宣称完整合同通过。
 
@@ -313,7 +316,13 @@ Windows runner 的 workflow shell 必须显式解析到 Git Bash（禁止落到 
 
 canonical main 合入善后或清理完成主线同步并证明干净、`main == origin/main` 后，workflow 自动调用现有离线 mirror helper；维护总预算 60 秒，锁等待最多 5 秒，同 SHA 且有效 manifest 直接复用，不反复扫描 Git 历史。增量 fetch 禁用自动 GC/maintenance，不 force 回退、不 prune/repack 活动 CI 引用的对象；源 SHA 漂移不得发布 readiness manifest。helper 缺失、锁忙、维护失败或超时只留下可见 warning 并继续既有有界远程路径，不新增审批、PR 门禁、后台进程或逐 job 镜像更新。
 
-定时 Nightly、CodeQL 与 Code Intelligence 的 self-hosted job 排队不受 job `timeout-minutes` 约束，因此 GitHub-hosted 轻量 watchdog 与各自 preflight 必须对同一 workflow、`main`、`schedule` 事件中超过 30 分钟且仍为 queued、精确回读确认没有 `in_progress` job 的旧 run 执行有界终结，并留下结构化收据。watchdog 不 checkout 依赖、不领取 self-hosted runner、不运行测试；禁止取消普通 PR、手工 dispatch、其他分支、其他 workflow 或已经领取 runner 的 job。取消 API 失败时保持旧 run 并 fail closed。该队列终结属于基础设施维护，不增加 PR 门禁、业务测试、依赖安装或进程控制。
+定时 Nightly、CodeQL 与 Code Intelligence 的 self-hosted job 排队不受 job `timeout-minutes` 约束，因此 GitHub-hosted 轻量 watchdog 与各自 preflight 必须对同一 workflow、`main`、原 `schedule` 或下述精确自动 `repository_dispatch` 事件中超过 30 分钟且仍为 queued、精确回读确认没有 `in_progress` job 的旧 run 执行有界终结，并留下结构化收据。自动 dispatch 必须匹配已登记 workflow、固定 run-name 和合法 cycle date，其他 repository dispatch 不得取消。watchdog 不 checkout 依赖、不领取 self-hosted runner、不运行测试；禁止取消普通 PR、手工 dispatch、其他分支、其他 workflow 或已经领取 runner 的 job。取消 API 失败时保持旧 run 并 fail closed。该队列终结属于基础设施维护，不增加 PR 门禁、业务测试、依赖安装或进程控制。
+
+定时后台重任务只在中国时间 00:00–07:00 的窗口内领取执行预算，保护白天两个共享 runner 的研发容量。Nightly、CodeQL、Code Intelligence 使用同一个 stdlib admission helper：GitHub-hosted preflight 检查完整重任务链的最坏预算，self-hosted job 领取 runner 后再次检查剩余窗口，预算不足即跳过后续重步骤并记录 `deferred / not_executed`、来源 SHA、run/job、预算、原因与下一窗口。延期不等于验证通过，不产生成功测试回执、不前移验证水位、不丢弃上一轮失败回执；汇总须区分延期与真实失败，并继续处理其他分支的真实失败。窗口检查不查询全量 Issue/worktree、不等待或终止活动作业、不新增 PR 门禁或人工审批；显式 `workflow_dispatch` 保留已有操作授权，不受定时窗口限制。该保护只保证新领取任务的最坏预算适配窗口，不能追溯中断已经运行的任务。
+
+Nightly、CodeQL、Code Intelligence 的自动触发统一由 Windows 单一计划任务 `AIstock Nightly Scheduled Dispatch` 负责，不再依赖 GitHub 不保证准点的 cron。中国时间分别为 03:07、04:27、02:30；02:30 起五分钟轻量恢复 tick 至 06:15，各 workflow 在自己的最坏预算截止点后禁止补发。安装入口为 canonical main 的 `scripts/configure_aistock_github_runner.ps1 -ScheduledDispatch -Apply`，只使用既有 AIstock-CI 的 pythonw、当前登录用户 gh 凭据；主机须保持开机且该用户已登录，不安装依赖、不启动业务进程。该任务仅向既有 workflow 发布三个固定类型的 `repository_dispatch`，与人工 `workflow_dispatch` 分离；自动事件的 cycle date 必须为执行当日，并始终经过原夜间 admission。关闭三个原 cron 避免双调度；任务和流水线迁移须在同一交付完成。
+
+调度收据保存在仓库外 `F:/Dev/aistock-nightly-scheduler`，以 workflow/cycle 绑定、OS 锁及原子写入保证单 owner。每个 workflow 每周期最多一次 POST，先持久化 intent；传输结果不明时仅回读精确 run-name/main 的有界 run 列表，不盲目重发、不取消活动 job。延迟、预算不足、请求歧义和运行失败记录到周期收据及 `last-tick.json`，任务以非零退出保持可见；计划任务安装须回读 action、触发器、权限、状态和下次时间，漂移不覆盖。Nightly 的 prior durable receipt 查询兼容旧 schedule、新自动 dispatch 与正式手工运行，只接受存在实际 session-results/execution-plan 的结果，保留原水位校验。已提交、run 可见、GitHub 绿色均不能替代实质验证收据；不得为此新增 PR 门禁、人工审批、全量 JSON/worktree 扫描或本地重型验证。
 
 PR base commit 与真实 source HEAD 必须证明 merge-base，source HEAD 必须属于当前 checkout；合成 merge HEAD 不能代替真实 source 归因。仅有对象但浅克隆 ancestry 不完整不视为可用。先复用已校验的本地 mirror 对象：对当前 checkout 的浅边界逐项忽略标记进行完整父提交遍历，只有无缺失父提交、路径属于本 checkout、独占 shallow.lock 且文件未漂移时才解除已证明完整的边界；不能修改共享 worktree Git 目录或镜像本身。确需补取时，仅对 pinned base SHA（手工 dispatch 尚未钉住时使用 base ref）和当前 PR checkout/head ref 使用最多 3 次、短退避、有限 `--deepen` 的 bounded retry；单次 fetch 最多 45 秒，按剩余 150 秒历史准备预算限制补取，自动 PR step 总上限 3 分钟，每次补取后重新验证 source ancestry。超时仅终结该 CI 自己创建的 Git/SSH 子进程树，不能停止 runner、后端或其他任务。已能证明不属于 checkout 的 source 立即失败，不为无效身份重复取数。连续失败仍以基础设施错误 fail-closed，禁止无界远程完整历史 checkout。单次 TLS/EOF 不得转化为重新授权、完整 CI 重跑或第二个 workflow；新 commit 仍由 concurrency 自动取代旧 run。
 
