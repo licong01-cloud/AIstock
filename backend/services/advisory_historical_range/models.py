@@ -15,11 +15,11 @@ from enum import Enum
 from typing import Annotated, Any, Literal, TypeAlias
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_serializer, model_validator
 
 from backend.services.strategy_package.models import StrategyPackageCanonicalPitBindingV2
 
-from backend.services.advisory_historical_range.canonical import canonical_json_sha256
+from backend.services.advisory_historical_range.canonical import canonical_json_sha256, canonicalize
 
 
 BATCH_REQUEST_SCHEMA_VERSION = "advisory_historical_range_batch_request_v1"
@@ -71,6 +71,7 @@ REASON_HASH_INVALID = "ADVISORY_HISTORICAL_RANGE_HASH_INVALID"
 REASON_STATE_TRANSITION_INVALID = "ADVISORY_HISTORICAL_RANGE_STATE_TRANSITION_INVALID"
 REASON_IDENTITY_CONFLICT = "ADVISORY_HISTORICAL_RANGE_IDENTITY_CONFLICT"
 REASON_IDEMPOTENCY_CONFLICT = "ADVISORY_HISTORICAL_RANGE_IDEMPOTENCY_CONFLICT"
+REASON_OPERATION_INFLIGHT_CONFLICT = "ADVISORY_HISTORICAL_RANGE_OPERATION_INFLIGHT_CONFLICT"
 REASON_ROW_VERSION_CONFLICT = "ADVISORY_HISTORICAL_RANGE_ROW_VERSION_CONFLICT"
 REASON_DAY_PLAN_CONFLICT = "ADVISORY_HISTORICAL_RANGE_DAY_PLAN_CONFLICT"
 REASON_REPOSITORY_CONFLICT = "ADVISORY_HISTORICAL_RANGE_REPOSITORY_CONFLICT"
@@ -112,6 +113,43 @@ class HistoricalRangeContractError(RuntimeError):
 
 class _StrictContract(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class _ReadOnlyDict(dict):
+    """JSON-compatible immutable view, only created after native validation."""
+
+    def _deny(self, *args, **kwargs):
+        raise TypeError("validated artifact payload is read-only")
+
+    __setitem__ = __delitem__ = clear = pop = popitem = setdefault = update = __ior__ = _deny
+
+    def __deepcopy__(self, memo):
+        from copy import deepcopy
+        return {key: deepcopy(value, memo) for key, value in self.items()}
+
+
+class _ReadOnlyList(list):
+    def _deny(self, *args, **kwargs):
+        raise TypeError("validated artifact payload is read-only")
+
+    __setitem__ = __delitem__ = append = clear = extend = insert = pop = remove = reverse = sort = __iadd__ = __imul__ = _deny
+
+    def __deepcopy__(self, memo):
+        from copy import deepcopy
+        return [deepcopy(value, memo) for value in self]
+
+
+def sealed_json_view(value: Any) -> Any:
+    """Seal nested JSON without changing lists, numbers or canonical identity."""
+    if isinstance(value, (_ReadOnlyDict, _ReadOnlyList)):
+        return value
+    if isinstance(value, dict):
+        return _ReadOnlyDict({key: sealed_json_view(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return _ReadOnlyList(sealed_json_view(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(sealed_json_view(item) for item in value)
+    return value
 
 
 def require_sha256(value: str, *, field_name: str) -> str:
@@ -450,6 +488,7 @@ class HistoricalRangeResearchBatchRequestV1(_StrictContract):
     program_specs: tuple[HistoricalRangeProgramSpecV1, ...] = Field(min_length=1)
     start_trade_date: date
     end_trade_date: date
+    selection_input_source_mode: Literal["FILE_ONLY", "DATABASE_ONLY", "FILE_THEN_DATABASE"] | None = None
     data_source: Literal[HISTORICAL_RANGE_DATA_SOURCE] = HISTORICAL_RANGE_DATA_SOURCE
     origin: Literal[HISTORICAL_RANGE_ORIGIN] = HISTORICAL_RANGE_ORIGIN
     research_scope: Literal[HISTORICAL_RANGE_RESEARCH_SCOPE] = HISTORICAL_RANGE_RESEARCH_SCOPE
@@ -458,6 +497,13 @@ class HistoricalRangeResearchBatchRequestV1(_StrictContract):
     requested_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     requested_by: str = Field(default="local-user", min_length=1, max_length=160)
     user_request_semantic_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @model_serializer(mode="wrap")
+    def _serialize_legacy_source(self, serializer: Any) -> dict[str, Any]:
+        payload = serializer(self)
+        if self.selection_input_source_mode is None:
+            payload.pop("selection_input_source_mode", None)
+        return payload
 
     @field_validator("request_id", "client_idempotency_key", "requested_by")
     @classmethod
@@ -493,6 +539,8 @@ class HistoricalRangeResearchBatchRequestV1(_StrictContract):
         return {
             "schema_version": self.schema_version,
             "program_specs": [item.semantic_payload() for item in self.program_specs],
+            **({"selection_input_source_mode": self.selection_input_source_mode}
+               if self.selection_input_source_mode is not None else {}),
             "start_trade_date": self.start_trade_date,
             "end_trade_date": self.end_trade_date,
             "data_source": self.data_source,
@@ -733,6 +781,14 @@ class HistoricalRangeFrozenProgramV1(_StrictContract):
     resolved_hmm_binding_set_ref: HistoricalRangeArtifactRefV1 | None = None
     resolved_hmm_binding_set_hash: str | None = Field(default=None, min_length=64, max_length=64)
     frozen_program_hash: str | None = Field(default=None, min_length=64, max_length=64)
+    selection_input_source_plan: dict[str, Any] | None = None
+
+    @model_serializer(mode="wrap")
+    def _serialize_legacy_source(self, serializer: Any) -> dict[str, Any]:
+        payload = serializer(self)
+        if self.selection_input_source_plan is None:
+            payload.pop("selection_input_source_plan", None)
+        return payload
 
     @field_validator("research_program_id", "package_id", "package_version", "code_release_id")
     @classmethod
@@ -760,6 +816,11 @@ class HistoricalRangeFrozenProgramV1(_StrictContract):
 
     @model_validator(mode="after")
     def _close_program(self) -> "HistoricalRangeFrozenProgramV1":
+        if self.selection_input_source_plan is not None:
+            from .input_source_plan import validate_source_plan
+
+            plan = self.selection_input_source_plan
+            validate_source_plan(plan, consumer_scope="ADVISORY", run_id=str(plan.get("run_id") or ""))
         source_values = (
             self.source_program_id,
             self.source_program_version,
@@ -2903,7 +2964,16 @@ class HistoricalRangeOutcomeRefreshRequestV1(_StrictContract):
     max_items_per_slice: int = Field(default=500, ge=1, le=10000)
     max_parallel_runs: int = Field(default=2, ge=1, le=64)
     lease_seconds: int = Field(default=300, ge=30, le=3600)
+    file_source_binding: dict[str, Any] | None = None
+    summary_mode: Literal["REFRESH", "DEFER", "ONLY"] = "REFRESH"
     request_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @model_serializer(mode="wrap")
+    def _legacy_summary_identity(self, handler):
+        data = handler(self)
+        if self.summary_mode == "REFRESH":
+            data.pop("summary_mode", None)
+        return data
 
     @field_validator("policy_bundle_hash", "producer_code_hash", "request_hash")
     @classmethod
@@ -2912,6 +2982,10 @@ class HistoricalRangeOutcomeRefreshRequestV1(_StrictContract):
 
     @model_validator(mode="after")
     def _request_identity(self) -> "HistoricalRangeOutcomeRefreshRequestV1":
+        if self.summary_mode == "ONLY" and (
+            not self.range_run_ids or self.requested_outcome_logical_ids or self.correction_reason is not None
+        ):
+            raise ValueError("summary-only requires explicit runs and no financial selection/correction")
         if (
             self.policy_bundle_ref.artifact_kind is not HistoricalRangeArtifactKind.REQUEST
             or self.policy_bundle_ref.payload_sha256 != self.policy_bundle_hash
@@ -2939,7 +3013,14 @@ class HistoricalRangeOutcomeRefreshRequestV1(_StrictContract):
             HistoricalRangeOutcomeRevisionReason.CALCULATION_CORRECTION,
         }:
             raise ValueError("refresh correction reason must be SOURCE or CALCULATION correction")
-        digest = canonical_json_sha256(self.model_dump(mode="json", exclude={"request_hash"}))
+        exclusions = {"request_hash"}
+        if self.file_source_binding is None:
+            exclusions.add("file_source_binding")
+        else:
+            source = self.file_source_binding
+            if canonical_json_sha256({key: value for key, value in source.items() if key != "binding_hash"}) != source.get("binding_hash"):
+                raise ValueError("outcome file source binding hash differs")
+        digest = canonical_json_sha256(self.model_dump(mode="json", exclude=exclusions))
         if self.request_hash is not None and self.request_hash != digest:
             raise ValueError("request_hash does not match outcome refresh request")
         object.__setattr__(self, "request_hash", digest)
@@ -3121,6 +3202,9 @@ AdvisoryPhase1LineageIdentity: TypeAlias = Annotated[
 
 
 class HistoricalRangeOutcomeFactV1(_StrictContract):
+    _validated_artifact: Any = PrivateAttr(default=None)
+    _validated_json_identity: Any = PrivateAttr(default=None)
+    _canonical_outcome: Any = PrivateAttr(default=None)
     outcome_version_id: str = Field(min_length=1, max_length=160)
     outcome_logical_id: str = Field(min_length=1, max_length=160)
     outcome_version: int = Field(ge=1)
@@ -3151,6 +3235,28 @@ class HistoricalRangeOutcomeFactV1(_StrictContract):
     outcome_artifact_ref: HistoricalRangeArtifactRefV1
     outcome_json: dict[str, Any]
     outcome_content_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    def __eq__(self, other: Any) -> bool:
+        # Cache population is not a financial fact. Pydantic otherwise includes
+        # PrivateAttr values in equality, making a read change semantic equality.
+        if type(other) is not type(self):
+            return NotImplemented
+        return self.__dict__ == other.__dict__
+
+    @property
+    def validated_artifact(self) -> "HistoricalRangeOutcomeArtifactV2":
+        # model_copy(update=...) is deliberately not trusted as validation.
+        if self.outcome_json is not self._validated_json_identity:
+            return HistoricalRangeOutcomeArtifactV2.model_validate(self.outcome_json)
+        return self._validated_artifact
+
+    @property
+    def canonical_outcome_json(self) -> dict[str, Any]:
+        if self.outcome_json is not self._validated_json_identity:
+            return canonicalize(self.outcome_json)
+        if self._canonical_outcome is None:
+            self._canonical_outcome = sealed_json_view(canonicalize(self.outcome_json))
+        return self._canonical_outcome
 
     @field_validator(
         "historical_range_policy_bundle_hash",
@@ -3240,6 +3346,11 @@ class HistoricalRangeOutcomeFactV1(_StrictContract):
         if self.outcome_content_hash is not None and self.outcome_content_hash != digest:
             raise ValueError("outcome_content_hash does not match outcome facts")
         object.__setattr__(self, "outcome_content_hash", digest)
+        object.__setattr__(self, "outcome_json", sealed_json_view(self.outcome_json))
+        self._validated_json_identity = self.outcome_json
+        self._validated_artifact = artifact.model_copy(update={
+            "calculation_results": sealed_json_view(artifact.calculation_results),
+        })
         return self
 
 
@@ -3527,8 +3638,16 @@ class HistoricalRangeOutcomeRefreshReceiptV1(_StrictContract):
     processed_count: int = Field(ge=0)
     outcome_refs: tuple[HistoricalRangeArtifactRefV1, ...] = ()
     summary_refs: tuple[HistoricalRangeArtifactRefV1, ...] = ()
+    summary_deferred: bool = False
     reason_codes: tuple[str, ...] = ()
     receipt_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @model_serializer(mode="wrap")
+    def _legacy_summary_identity(self, handler):
+        data = handler(self)
+        if not self.summary_deferred:
+            data.pop("summary_deferred", None)
+        return data
 
     @field_validator("request_hash", "receipt_hash")
     @classmethod
@@ -3537,6 +3656,8 @@ class HistoricalRangeOutcomeRefreshReceiptV1(_StrictContract):
 
     @model_validator(mode="after")
     def _identity(self) -> "HistoricalRangeOutcomeRefreshReceiptV1":
+        if self.summary_deferred and self.summary_refs:
+            raise ValueError("deferred summary cannot claim SUMMARY artifacts")
         if any(item.artifact_kind is not HistoricalRangeArtifactKind.OUTCOME for item in self.outcome_refs):
             raise ValueError("outcome refresh receipt can reference only OUTCOME artifacts")
         if any(item.artifact_kind is not HistoricalRangeArtifactKind.SUMMARY for item in self.summary_refs):

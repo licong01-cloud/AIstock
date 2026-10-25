@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import subprocess
 import sys
@@ -65,6 +66,34 @@ def test_public_ci_prepares_x_only_temp_before_any_tests():
     assert index < next(i for i, step in enumerate(steps) if step.get("id") == "l0_validation")
 
 
+@pytest.mark.parametrize("job,execution", [
+    ("nightly-l3", "Run selected Nightly sessions once"),
+    ("paper-v2-live", "nox -s paper_v2_live"),
+    ("code-intelligence-weekly", "Validate CI/Nightly issue workflow automation"),
+])
+def test_nightly_prepares_same_x_only_job_storage_before_tests(job, execution):
+    import yaml
+
+    steps = yaml.safe_load(Path(".github/workflows/nightly.yml").read_text(encoding="utf-8"))["jobs"][job]["steps"]
+    index, prep = next((i, step) for i, step in enumerate(steps)
+                       if step.get("env", {}).get("AISTOCK_CI_TEST_TEMP_REQUIRED") == "1")
+    assert prep["env"]["AISTOCK_CI_ENV_NAME"] == "AIstock-CI"
+    assert not prep.get("continue-on-error")
+    assert "conda run -n AIstock-CI python scripts/ci_environment_verify.py" in prep["run"]
+    assert "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }" in prep["run"]
+    execution_index = next(i for i, step in enumerate(steps) if step.get("name") == execution)
+    assert index < execution_index
+    bootstrap_index, bootstrap = next((i, step) for i, step in enumerate(steps)
+                                      if step.get("name") == "Prepare X-only temporary storage before Conda")
+    assert not bootstrap.get("continue-on-error")
+    assert bootstrap["if"] == prep["if"]
+    assert "python scripts/ci_environment_verify.py --prepare-temp-only" in bootstrap["run"]
+    assert "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }" in bootstrap["run"]
+    assert bootstrap_index < next(i for i, step in enumerate(steps) if "conda run" in step.get("run", ""))
+    if job == "paper-v2-live":
+        assert "conda run -n AIstock-CI python -m nox" in steps[execution_index]["run"]
+
+
 @pytest.mark.parametrize("key,value", [("GITHUB_RUN_ID", "2"), ("GITHUB_RUN_ATTEMPT", "2"),
                                       ("GITHUB_JOB", "other-job"), ("GITHUB_REPOSITORY", "other/repo")])
 def test_job_temp_isolation(tmp_path, monkeypatch, key, value):
@@ -110,47 +139,48 @@ def test_job_temp_missing_drive_and_cross_job_redirect_fail(tmp_path, monkeypatc
         ci_env.prepare_test_temp(_job_env())
 
 
-def test_main_publishes_temp_only_after_successful_preflight(tmp_path, monkeypatch):
+@pytest.mark.parametrize("mode", ["verify", "bootstrap", "unwritable"])
+def test_main_publishes_temp_only_after_successful_preflight(tmp_path, monkeypatch, capsys, mode):
+    bootstrap = mode != "verify"
     monkeypatch.setattr(ci_env, "TEST_TEMP_ROOT", tmp_path / "ci-temp")
-    monkeypatch.setattr(ci_env, "verify_environment", lambda: {"status": "ready", "failure_reasons": []})
+    def verify():
+        assert not bootstrap, "bootstrap must not require activated Conda"
+        return {"status": "ready", "failure_reasons": []}
+    monkeypatch.setattr(ci_env, "verify_environment", verify)
     for key, value in _job_env().items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("AISTOCK_CI_TEST_TEMP_REQUIRED", "1")
     output = tmp_path / "github-env"
     monkeypatch.setenv("GITHUB_ENV", str(output))
-    assert ci_env.main() == 0
-    assert "PYTEST_DEBUG_TEMPROOT=" in output.read_text(encoding="utf-8")
-    prior = output.read_bytes()
-    monkeypatch.setenv("GITHUB_JOB", "../escape")
-    assert ci_env.main() == 1
-    assert output.read_bytes() == prior
+    if mode == "unwritable":
+        monkeypatch.setattr(ci_env, "prepare_test_temp", lambda _: (_ for _ in ()).throw(PermissionError("X unavailable")))
+    assert ci_env.main(prepare_temp_only=bootstrap) == (1 if mode == "unwritable" else 0)
+    receipt = json.loads(capsys.readouterr().out)
+    if bootstrap:
+        assert receipt["schema_version"] == "aistock_ci_temp_bootstrap_v1" and receipt["environment_verified"] is False
+    assert output.exists() is (mode != "unwritable")
+    if mode == "unwritable":
+        assert "X-only" in receipt["failure_reasons"][0]
+    else:
+        assert "PYTEST_DEBUG_TEMPROOT=" in output.read_text(encoding="utf-8")
+        prior = output.read_bytes()
+        monkeypatch.setenv("GITHUB_JOB", "../escape")
+        assert ci_env.main(prepare_temp_only=bootstrap) == 1
+        assert output.read_bytes() == prior
 
 
-def test_prebuilt_windows_environment_is_ready_without_installing(tmp_path: Path) -> None:
-    payload = verify_environment(_env(tmp_path), system="Windows", prefix=str(tmp_path), required_modules=())
-
-    assert payload["status"] == "ready"
-    assert payload["environment_name"] == "AIstock-CI"
-    assert payload["missing_modules"] == []
-
-
-def test_environment_fingerprint_mismatch_fails_closed(tmp_path: Path) -> None:
-    payload = verify_environment(
-        _env(tmp_path, AISTOCK_CI_ENV_FINGERPRINT="fp-old"),
-        system="Windows",
-        prefix=str(tmp_path),
-        required_modules=(),
-    )
-
-    assert payload["status"] == "environment_mismatch"
-    assert "environment fingerprint mismatch" in payload["failure_reasons"]
-
-
-def test_non_windows_environment_fails_closed_without_fallback(tmp_path: Path) -> None:
-    payload = verify_environment(_env(tmp_path), system="Linux", prefix=str(tmp_path), required_modules=())
-
-    assert payload["status"] == "environment_mismatch"
-    assert any("expected Windows" in reason for reason in payload["failure_reasons"])
+@pytest.mark.parametrize("system,fingerprint,reason", [
+    ("Windows", "fp-v1", None), ("Windows", "fp-old", "environment fingerprint mismatch"),
+    ("Linux", "fp-v1", "expected Windows"),
+])
+def test_prebuilt_environment_identity_without_installing(tmp_path, system, fingerprint, reason):
+    payload = verify_environment(_env(tmp_path, AISTOCK_CI_ENV_FINGERPRINT=fingerprint),
+                                 system=system, prefix=str(tmp_path), required_modules=())
+    assert payload["status"] == ("environment_mismatch" if reason else "ready")
+    if reason:
+        assert any(reason in item for item in payload["failure_reasons"])
+    else:
+        assert payload["environment_name"] == "AIstock-CI" and not payload["missing_modules"]
 
 
 def test_named_environment_cannot_mask_a_production_prefix(tmp_path: Path) -> None:

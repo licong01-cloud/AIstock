@@ -90,11 +90,18 @@ def classify_holding_period(half_life) -> str:
 # update_freq:       因子更新频率（决定时序窗口有效性）
 # linearity:         因子-收益的线性关系强度（决定用 Ridge 还是 LGB）
 
+# 与 QE margin_detail 的八个正式字段一致；两融归入现有资金类别，
+# 但不能把融资借贷余额/买入偿还描述为主力订单资金流。
+_MARGIN_DETAIL_FIELDS = frozenset({
+    "md_rzye", "md_rqye", "md_rzmre", "md_rqyl",
+    "md_rzche", "md_rqchl", "md_rqmcl", "md_rzrqye",
+})
+
 # 数据源字段映射（基于 static_factors.parquet 90字段 + price_volume 基础字段）
 _DATA_SOURCE_FIELD_MAP = {
     "price_volume": {"open", "close", "high", "low", "volume", "amount", "vwap",
                      "pre_close", "change", "pct_chg"},
-    "money_flow":   None,   # 动态: 前缀 mf_
+    "money_flow":   _MARGIN_DETAIL_FIELDS,   # 两融精确字段 + mf_ 前缀
     "fundamental":  None,   # 动态: 前缀 bb_
     "valuation":    {"db_pe", "db_pb", "db_ps", "db_ps_ttm", "db_pe_ttm",
                      "db_dv_ratio", "db_dv_ttm", "db_total_mv", "db_circ_mv"},
@@ -152,6 +159,8 @@ def _extract_fields_from_code(code_text: Optional[str],
     for prefix in known_prefixes:
         for m in re.finditer(rf'\b({re.escape(prefix)}\w+)', text_clean):
             fields.add(m.group(1))
+    fields.update(m.group(0) for m in re.finditer(r'\bmd_\w+\b', text_clean)
+                  if m.group(0) in _MARGIN_DETAIL_FIELDS)
 
     return fields
 
@@ -493,6 +502,9 @@ def _classify_by_rules(factor_name: str, code_text: Optional[str] = None,
         ]
         # 扫描所有数据列规则，统计命中的不同类别
         data_col_hits = []  # [(category, reason, keywords_matched)]
+        margin_fields = sorted(_extract_fields_from_code(code_text, expression) & _MARGIN_DETAIL_FIELDS)
+        if margin_fields:
+            data_col_hits.append(("MF", "使用融资融券借贷/余额数据列", margin_fields))
         for keywords, category, reason_hint in _DATA_COL_RULES:
             matched = [kw for kw in keywords if kw in code_combined]
             if matched:
@@ -723,6 +735,15 @@ def _generate_description_by_rules(factor_name: str, category: str,
         code_combined += expression.lower() + " "
     if code_text:
         code_combined += code_text.lower()
+
+    if category == "MF" and (_extract_fields_from_code(code_text, expression) & _MARGIN_DETAIL_FIELDS):
+        return (
+            "该因子利用融资融券买入、偿还或余额等数据刻画杠杆资金的变化，"
+            "属于现有资金类别，其中两融借贷数据并非主力订单资金流。借贷变化的预测方向与"
+            "有效期限应依据因子公式和正式多周期评价判断，不能仅由资金类别"
+            "推定上涨或下跌。使用时应遵循两融数据的实际可得时点，并与价格、"
+            "波动及流动性信息区分，相关性和交易价值需独立验证。"
+        )
 
     # ── 1. 识别因子使用的数据源 ──
     data_sources = []

@@ -508,8 +508,10 @@ def test_load_frozen_coefficient_inputs_rejects_quote_mapping_authority_drift(tm
         )
 
 
+@pytest.mark.parametrize("test_start", [date(2026, 6, 1), date(2026, 6, 3)])
 def test_load_frozen_coefficient_inputs_distinguishes_stopped_quote_from_missing_published_row(
     tmp_path,
+    test_start,
 ) -> None:
     bundle = _write_frozen_input_fixture(
         tmp_path,
@@ -531,24 +533,36 @@ def test_load_frozen_coefficient_inputs_distinguishes_stopped_quote_from_missing
     result = load_frozen_coefficient_inputs(
         bundle,
         history_start=date(2026, 6, 1),
-        test_start=date(2026, 6, 1),
+        test_start=test_start,
         backtest_end=date(2026, 6, 3),
     )
 
-    assert result["quote_available_sector_codes_by_date"] == {
+    available = {
         "2026-06-01": ["801783.SI"],
         "2026-06-02": [],
         "2026-06-03": [],
     }
-    assert result["quote_unavailable_sector_codes_by_date"] == {
+    unavailable = {
         "2026-06-01": [],
         "2026-06-02": ["801783.SI"],
         "2026-06-03": ["801783.SI"],
     }
+    assert result["quote_available_sector_codes_by_date"] == {
+        day: codes for day, codes in available.items() if day >= test_start.isoformat()
+    }
+    assert result["quote_unavailable_sector_codes_by_date"] == {
+        day: codes for day, codes in unavailable.items() if day >= test_start.isoformat()
+    }
     assert set(result["sector_data"]["801783.SI"]) == {date(2026, 6, 1)}
 
 
-def test_load_frozen_coefficient_inputs_rejects_quote_values_after_authority_end(tmp_path) -> None:
+@pytest.mark.parametrize("test_start", [date(2026, 6, 1), date(2026, 6, 3)])
+@pytest.mark.parametrize("quote_field", ["sw2_pct_change", "sw2_vol", "sw2_amount"])
+def test_load_frozen_coefficient_inputs_rejects_quote_values_after_authority_end(
+    tmp_path,
+    test_start,
+    quote_field,
+) -> None:
     bundle = _write_frozen_input_fixture(
         tmp_path,
         quote_spans_by_code={
@@ -561,7 +575,7 @@ def test_load_frozen_coefficient_inputs_rejects_quote_values_after_authority_end
     stopped_mask = sector.index.get_level_values("datetime") > pd.Timestamp("2026-06-01")
     quote_columns = ["sw2_pct_change", "sw2_vol", "sw2_amount"]
     sector.loc[stopped_mask, quote_columns] = float("nan")
-    sector.loc[stopped_mask, "sw2_amount"] = 1.0
+    sector.loc[stopped_mask, quote_field] = 0.0
     sector.to_hdf(sector_path, key="data", format="table", data_columns=True, mode="w")
     sector_spec["sha256"] = _sha256(sector_path)
 
@@ -569,9 +583,66 @@ def test_load_frozen_coefficient_inputs_rejects_quote_values_after_authority_end
         load_frozen_coefficient_inputs(
             bundle,
             history_start=date(2026, 6, 1),
-            test_start=date(2026, 6, 1),
+            test_start=test_start,
             backtest_end=date(2026, 6, 3),
         )
+
+
+def test_stopped_burn_in_quote_keeps_other_sectors_and_full_pit_membership(tmp_path) -> None:
+    bundle = _write_frozen_input_fixture(
+        tmp_path,
+        code_map_entries=[
+            {"l2_code_id": 7, "canonical_l2_code": "801019.SI"},
+            {"l2_code_id": 133, "canonical_l2_code": "801783.SI"},
+        ],
+        quote_spans_by_code={
+            "801019.SI": [{"start_date": "2020-01-01", "end_date": "2026-06-01"}],
+            "801783.SI": [{"start_date": "2020-01-01", "end_date": "2099-12-31"}],
+        },
+    )
+    root = Path(bundle["dataset_root"])
+    sector_spec = bundle["files"]["sector_data_h5"]
+    sector_path = root / sector_spec["relative_path"]
+    sector = pd.read_hdf(sector_path, key="data")
+    stopped = sector.copy()
+    stopped.index = pd.MultiIndex.from_product(
+        [sector.index.get_level_values("datetime"), ["000002.SZ"]],
+        names=sector.index.names,
+    )
+    stopped["l2_code_id"] = 7
+    after_stop = stopped.index.get_level_values("datetime") > pd.Timestamp("2026-06-01")
+    stopped.loc[after_stop, ["sw2_pct_change", "sw2_vol", "sw2_amount"]] = float("nan")
+    pd.concat([sector, stopped]).sort_index().to_hdf(
+        sector_path,
+        key="data",
+        format="table",
+        data_columns=True,
+        mode="w",
+    )
+    sector_spec["sha256"] = _sha256(sector_path)
+    membership_spec = bundle["files"]["sector_membership_spans_parquet"]
+    membership_path = root / membership_spec["relative_path"]
+    membership = pd.read_parquet(membership_path)
+    stopped_membership = membership.assign(instrument="000002.SZ", l2_code_id=7)
+    pd.concat([membership, stopped_membership]).to_parquet(membership_path, index=False)
+    membership_spec["sha256"] = _sha256(membership_path)
+
+    result = load_frozen_coefficient_inputs(
+        bundle,
+        history_start=date(2026, 6, 1),
+        test_start=date(2026, 6, 3),
+        backtest_end=date(2026, 6, 3),
+    )
+
+    assert result["ordered_sector_codes"] == ["801019.SI", "801783.SI"]
+    assert result["active_sector_codes"] == ["801019.SI", "801783.SI"]
+    assert result["coefficient_sector_codes"] == ["801783.SI"]
+    assert result["quote_unavailable_sector_codes_by_date"] == {"2026-06-03": ["801019.SI"]}
+    assert result["stock_sector_maps_by_date"]["2026-06-03"]["000002.SZ"] == "801019.SI"
+    assert len(result["stock_sector_membership_spans"]) == 2
+    assert len(result["sector_rows"]["801783.SI"]) == 3
+    assert [row["trade_date"] for row in result["sector_rows"]["801019.SI"]] == [date(2026, 6, 1)]
+    pd.testing.assert_frame_equal(pd.read_hdf(sector_path, key="data"), pd.concat([sector, stopped]).sort_index())
 
 
 def test_load_frozen_coefficient_inputs_rejects_missing_quote_inside_availability_span(tmp_path) -> None:
@@ -610,11 +681,12 @@ def test_load_frozen_coefficient_inputs_accepts_complete_burn_in_before_output_a
     }
 
 
-def test_load_frozen_coefficient_inputs_rejects_incomplete_burn_in_quote(tmp_path) -> None:
+@pytest.mark.parametrize("authority_start", ["2026-06-01", "2026-06-02"])
+def test_load_frozen_coefficient_inputs_rejects_incomplete_burn_in_quote(tmp_path, authority_start) -> None:
     bundle = _write_frozen_input_fixture(
         tmp_path,
         quote_spans_by_code={
-            "801783.SI": [{"start_date": "2026-06-02", "end_date": "2026-06-03"}],
+            "801783.SI": [{"start_date": authority_start, "end_date": "2026-06-03"}],
         },
     )
     sector_spec = bundle["files"]["sector_data_h5"]

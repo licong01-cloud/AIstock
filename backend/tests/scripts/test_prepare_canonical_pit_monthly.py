@@ -93,6 +93,28 @@ def test_plan_is_zero_write_and_does_not_call_ensure(tmp_path: Path) -> None:
     assert "password" not in receipt.read_text(encoding="utf-8").lower()
 
 
+def test_default_operator_service_disables_schema_bootstrap(tmp_path: Path, monkeypatch) -> None:
+    calls = []
+
+    class Service:
+        def __init__(self, *, reports_dir, existing_schema_only=False):
+            assert reports_dir == tmp_path / "operator_reports"
+            calls.append(existing_schema_only)
+            assert existing_schema_only is True
+
+        def plan_canonical_pit_universe(self, **_kwargs):
+            return _plan(needs_rebuild=False)
+
+    monkeypatch.setattr(operator, "StockUniversePitService", Service)
+    operator.main(
+        ["--database", "dev", "--cutoff", CUTOFF, "--mode", "verify",
+         "--receipt-path", str(tmp_path / "operator_receipts" / "verify.json")],
+        profile_loader=lambda _path: _profile(tmp_path),
+        config_loader=lambda database, _path: _config(database),
+    )
+    assert calls == [True]
+
+
 def test_dev_apply_rebuilds_once_and_requires_exact_readback(tmp_path: Path) -> None:
     class Service:
         def __init__(self):

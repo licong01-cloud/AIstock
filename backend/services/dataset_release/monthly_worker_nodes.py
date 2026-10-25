@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from functools import lru_cache
 import os
 from pathlib import Path, PurePosixPath
 import re
@@ -24,6 +25,8 @@ from .monthly_node_probe_runner import (
     build_wsl_node_probe_runner,
 )
 from .monthly_runtime import MonthlyRuntimeConfigurationError, MonthlyRuntimeSettings
+from .monthly_node_tools import MonthlyNodeTools
+from .monthly_subprocess import run_headless
 
 
 _NAME = re.compile(r"^[A-Za-z0-9_.-]{1,128}$")
@@ -50,8 +53,8 @@ class MonthlyNodeRuntimeSettings:
     node1_host: str
     node1_project_root: str
     node1_python: str
-    wsl_qe_api_base_url: str = "http://127.0.0.1:5080/api/v1/qe_workspace"
-    node1_qe_api_base_url: str = "http://rdagent-node1:5080/api/v1/qe_workspace"
+    wsl_qe_api_base_url: str = "http://127.0.0.1:9000/api/v1/qe_workspace"
+    node1_qe_api_base_url: str = "http://rdagent-node1:9000/api/v1/qe_workspace"
 
     def __post_init__(self) -> None:
         if _NAME.fullmatch(self.wsl_distro) is None or _HOST.fullmatch(self.node1_host) is None:
@@ -91,10 +94,10 @@ class MonthlyNodeRuntimeSettings:
         wsl_url = str(os.getenv("AISTOCK_MONTHLY_WSL_QE_API_BASE_URL") or "").strip()
         node1_url = str(os.getenv("AISTOCK_MONTHLY_NODE1_QE_API_BASE_URL") or "").strip()
         if not wsl_url:
-            wsl_url = "http://127.0.0.1:5080/api/v1/qe_workspace"
+            wsl_url = "http://127.0.0.1:9000/api/v1/qe_workspace"
         if not node1_url:
             host = values["node1_host"].split("@", 1)[-1]
-            node1_url = f"http://{host}:5080/api/v1/qe_workspace"
+            node1_url = f"http://{host}:9000/api/v1/qe_workspace"
         return cls(
             **values,
             wsl_qe_api_base_url=wsl_url.rstrip("/"),
@@ -110,6 +113,13 @@ class MonthlyNodeRuntimeSettings:
         )
 
     def probe_runners(self) -> Mapping[str, MonthlyNodeProbeRunner]:
+        tools = self._node1_tools()
+        node1 = build_ssh_node_probe_runner(
+            host=self.node1_host,
+            project_root=self.node1_project_root,
+            python_executable=self.node1_python,
+        )
+        node1 = replace(node1, command_factory=lambda: tools.command("monthly_node_probe"))
         return MappingProxyType(
             {
                 "wsl2-5080": build_wsl_node_probe_runner(
@@ -117,11 +127,7 @@ class MonthlyNodeRuntimeSettings:
                     project_root=self.wsl_project_root,
                     python_executable=self.wsl_python,
                 ),
-                "rdagent-node1": build_ssh_node_probe_runner(
-                    host=self.node1_host,
-                    project_root=self.node1_project_root,
-                    python_executable=self.node1_python,
-                ),
+                "rdagent-node1": node1,
             }
         )
 
@@ -129,6 +135,7 @@ class MonthlyNodeRuntimeSettings:
         self,
         runtime: MonthlyRuntimeSettings,
     ) -> Mapping[str, MonthlyNodeReleaseTransport]:
+        tools = self._node1_tools()
         remote = (
             "cd -- "
             + shlex.quote(self.node1_project_root)
@@ -168,8 +175,19 @@ class MonthlyNodeRuntimeSettings:
                         self.node1_host,
                         remote,
                     ),
+                    command_factory=lambda: tools.command("monthly_remote_deploy"),
                 ),
             }
+        )
+
+    @lru_cache(maxsize=16)
+    def _node1_tools(self) -> MonthlyNodeTools:
+        return MonthlyNodeTools(
+            host=self.node1_host,
+            legacy_project_root=self.node1_project_root,
+            python_executable=self.node1_python,
+            source_root=Path(__file__).resolve().parents[3],
+            executor=run_headless,
         )
 
     def consumer_executor(

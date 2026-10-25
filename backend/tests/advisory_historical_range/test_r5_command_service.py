@@ -21,9 +21,11 @@ from backend.services.advisory_historical_range.dataset_bridge import (
 )
 from backend.services.advisory_historical_range.models import (
     REASON_DATASET_BRIDGE_VALID_EMPTY,
+    REASON_OPERATION_INFLIGHT_CONFLICT,
     HistoricalRangeArtifactKind,
     HistoricalRangeArtifactRefV1,
     HistoricalRangeBridgeResultStatus,
+    HistoricalRangeContractError,
     HistoricalRangeDatasetBridgeRequestV1,
     HistoricalRangeDatasetBridgeReceiptV1,
     HistoricalRangeOperationAttemptV1,
@@ -170,6 +172,33 @@ def test_resume_identity_freezes_the_configured_candidate_prefetch_width() -> No
             "lease_seconds": 3600,
         }
     )
+
+
+def test_resume_conflict_preserves_recovery_context_without_dispatch(monkeypatch) -> None:
+    repository = _Repository()
+    context = {
+        "existing_operation_id": "old-operation",
+        "operation_idempotency_key": "old-key",
+        "expected_row_version": 3,
+        "recovery_action": "EXACT_RETRY",
+    }
+
+    def reject_competing_identity(_request):
+        raise HistoricalRangeContractError(
+            REASON_OPERATION_INFLIGHT_CONFLICT, "existing unfinished resume", context=context
+        )
+
+    monkeypatch.setattr(repository, "get_or_create_operation", reject_competing_identity)
+    service = HistoricalRangeApplicationService(runtime_factory=lambda: _runtime(repository))
+    background = _Background()
+    with pytest.raises(HistoricalRangeContractError) as caught:
+        service.resume_batch(
+            "ahrb_1",
+            HistoricalRangeCommandRequest(operation_idempotency_key="new-key", expected_row_version=7),
+            background_tasks=background,
+        )
+    assert caught.value.context == context
+    assert background.tasks == []
 
 
 def test_dispatcher_uses_the_same_candidate_prefetch_width_as_resume_identity() -> None:
@@ -757,3 +786,35 @@ def test_bridge_parent_receipt_preserves_child_and_artifact_lineage(tmp_path) ->
         resolved_request_hash="a" * 64,
         operation_type=HistoricalRangeOperationType.BUILD_DATASET_BRIDGE,
     )
+
+
+@pytest.mark.parametrize("status", ["RETRYABLE_FAILED", "FAILED", "WAITING_INPUT", "COMPLETED"])
+def test_outcome_parent_keeps_failure_error_and_attempt_consistent(tmp_path, status):
+    transition = {}
+    receipt = SimpleNamespace(
+        status=status, outcome_refs=(), summary_refs=(),
+        reason_codes=("ADVISORY_HR_DATABASE_UNAVAILABLE",) if "FAILED" in status else (),
+    )
+    store = HistoricalRangeArtifactStore(root=tmp_path / "outcome-parent")
+    runtime = SimpleNamespace(
+        artifact_store=store, outcome_service_factory=None,
+        outcome=SimpleNamespace(refresh_until_stable_boundary=lambda **_: (receipt, None)),
+        query=SimpleNamespace(resolved_request_hash=lambda _: "a" * 64),
+        repository=SimpleNamespace(transition_operation=lambda **kw: transition.update(kw)),
+    )
+    claimed = {"attempt_no": 1, "fencing_token": 1, "worker_id": "worker",
+               "lease_token": str(uuid4()), "row_version": 2, "started_at": datetime.now(UTC)}
+    ResponseBoundHistoricalRangeDispatcher._execute_claimed_outcome_plan(
+        runtime=runtime,
+        plan=SimpleNamespace(request_hash="b" * 64, requests=(SimpleNamespace(range_run_ids=("run",)),)),
+        operation_id="parent", batch_id="batch", worker_id="worker", claimed=claimed,
+        parent_heartbeat=SimpleNamespace(stop=lambda: None),
+    )
+    assert transition["target_status"].value == status
+    assert transition["result_status"] == (None if status == "RETRYABLE_FAILED" else status)
+    assert transition["attempt"].error_json == transition["error_json"]
+    if "FAILED" in status:
+        assert transition["error_json"] is not None
+        assert transition["error_json"]["reason_codes"] == ["ADVISORY_HR_DATABASE_UNAVAILABLE"]
+    else:
+        assert transition["error_json"] is None

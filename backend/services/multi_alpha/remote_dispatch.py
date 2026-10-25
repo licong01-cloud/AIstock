@@ -658,7 +658,12 @@ def _require_remote_linux_path(*, path_name: str, value: str, node: ComputeNodeI
 def _is_remote_linux_path_allowed(*, value: str, node: ComputeNodeInfo | None) -> bool:
     windows_mount = value.startswith("/mnt/")
     allowed_wsl_mount = (
-        _WSL_DRIVE_MOUNT_RE.match(value) is not None
+        (
+            _WSL_DRIVE_MOUNT_RE.match(value) is not None
+            # WSL native EXT4 releases are mounted under /mnt/wsl, not a
+            # Windows drive.  Keep this exception node-local, just like /mnt/x.
+            or value.startswith("/mnt/wsl/")
+        )
         and node is not None
         and _is_loopback_wsl_node(node)
     )
