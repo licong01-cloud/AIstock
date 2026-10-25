@@ -198,7 +198,6 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "business_smoke_ref": "http://127.0.0.1:8001/api/v1/local-data/overview",
-    "database_readback_ref": "noop:no_database_change",
     "post_restart_effective_gate": "pending_user_restart",
     "fresh_process_evidence": [
       "New process: 53 direct canonical policy/release/frozen consumer tests passed; actual DEV read-only capture verified 5343 securities/5662 spans through 2026-09-30, DEV live legacy generation zero unchanged. Production/active dataset/PIT writes and process control remain false."
