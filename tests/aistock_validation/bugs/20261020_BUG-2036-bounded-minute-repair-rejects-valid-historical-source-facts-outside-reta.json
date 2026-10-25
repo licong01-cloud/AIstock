@@ -9,7 +9,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2036",
-  "closed_at": null,
+  "closed_at": "2026-10-25T08:05:47.890995Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -52,7 +52,13 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
-    "planned_files": [],
+    "planned_files": [
+      "backend/services/dataset_release/monthly_legacy_validation.py",
+      "backend/services/dataset_release/monthly_minute_repair.py",
+      "backend/services/dataset_release/monthly_prev_close_repair.py",
+      "backend/tests/dataset_release/test_monthly_build_resume.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2036-bounded-minute-repair-rejects-valid-historical-source-facts-outside-reta.json"
+    ],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
@@ -94,10 +100,32 @@
     "inference_basis": "actual_changed_files",
     "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-2036-facts-r2.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-2036",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "3bff3c426c46d9b5b35c1e2f3660cfe20311cd5825e5adbd7263194a8a8f8f5d",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "55ad19aefcbe5aa66fc2e045d462fd5a3d325f95",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T08:05:45.134595Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "212ae16e42b327d327c27910359876288ef7144614de6fcb7eb5bf0e24787ec3",
+      "receipt_sha256": "27803700e715fa45af9f88cc38ccd166e208ce2515f4e4ee89f6d955749b87ba",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a1ace686f15c0783f34517a7ae4d6d9718cbd78e2bb5641a07b605f2c4ef6ae6",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -107,7 +135,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
