@@ -690,6 +690,84 @@ def test_qlib_stock_reader_validates_release_range_but_materializes_only_develop
     assert 999_999.0 not in rows["close"].tolist()
 
 
+@pytest.fixture
+def suspended_quote_edges(tmp_path: Path):
+    root, symbol = tmp_path / "qlib", "601028.SH"
+    calendar = tuple(date(2025, 3, 24) + timedelta(days=i) for i in range(5))
+    feature_root = root / "features" / symbol.lower()
+    feature_root.mkdir(parents=True)
+    for i, field in enumerate(subject.QLIB_STOCK_FIELDS, start=1):
+        values = (0.0, 0.0) if field in {"limit_up", "limit_down"} else (1.0, 1.0) if field == "factor" else (i, i + 1)
+        np.asarray([1.0, *values], dtype="<f4").tofile(feature_root / f"{field}.day.bin")
+    suspension = frozenset((calendar[i], symbol) for i in (0, 3, 4))
+    return root, symbol, calendar, suspension
+
+
+def test_qlib_spool_keeps_authority_backed_edge_suspension_as_na_without_dropping_pit(
+    suspended_quote_edges, tmp_path, monkeypatch
+):
+    root, symbol, calendar, suspension = suspended_quote_edges
+    paths = subject._spool_qlib_months(
+        root,
+        calendar=calendar,
+        spans={symbol: ((calendar[0], calendar[-1]),)},
+        suspension_keys=suspension,
+        spool_root=tmp_path / "months",
+        window_start=calendar[0],
+        window_end=calendar[-1],
+    )
+    rows = np.fromfile(paths[0], dtype=subject._QLIB_SOURCE_DTYPE)
+    assert rows["trade_date"].tolist() == [20250324, 20250325, 20250326, 20250327, 20250328]
+    assert set(rows["symbol"]) == {symbol.encode("ascii")}
+    for field in subject.QLIB_STOCK_FIELDS:
+        original = np.fromfile(root / "features" / symbol.lower() / f"{field}.day.bin", dtype="<f4")[1:]
+        np.testing.assert_equal(rows[field], [np.nan, *original, np.nan, np.nan])
+    assert all(subject._qlib_row_is_fully_missing(rows[i]) for i in (0, 3, 4))
+    state = subject._strict_prior_price_state(
+        root,
+        calendar=calendar,
+        spans={symbol: ((calendar[0], calendar[-1]),)},
+        suspension_keys=suspension,
+        source_start=calendar[0],
+        window_start=calendar[-1],
+    )
+    close_index = subject.QLIB_STOCK_FIELDS.index("close") + 1
+    assert state[symbol] == (calendar[0], ((calendar[1], float(close_index)), (calendar[2], float(close_index + 1))))
+    monkeypatch.setattr(subject.np, "memmap", lambda *_a, **_kw: pytest.fail("all-suspended window read quote values"))
+    only_na = subject._read_qlib_stock_rows(
+        root,
+        symbol=symbol,
+        calendar=calendar,
+        active_spans=((calendar[0], calendar[-1]),),
+        suspension_keys=suspension,
+        window_start=calendar[3],
+        window_end=calendar[4],
+    )
+    assert len(only_na) == 2 and all(subject._qlib_row_is_fully_missing(row) for row in only_na)
+
+
+@pytest.mark.parametrize("proof", ["none", "one_date_missing", "other_symbol"])
+def test_qlib_quote_edge_gap_without_exact_full_day_suspension_still_fails(suspended_quote_edges, proof):
+    root, symbol, calendar, suspension = suspended_quote_edges
+    if proof == "none":
+        suspension = frozenset()
+    elif proof == "one_date_missing":
+        suspension = suspension - {(calendar[-1], symbol)}
+    else:
+        suspension = frozenset((day, "000001.SZ") for day, _ in suspension)
+    with pytest.raises(subject.RotationL1InputBundleError) as error:
+        subject._read_qlib_stock_rows(
+            root,
+            symbol=symbol,
+            calendar=calendar,
+            active_spans=((calendar[0], calendar[-1]),),
+            suspension_keys=suspension,
+            window_start=calendar[0],
+            window_end=calendar[-1],
+        )
+    assert error.value.reason_code == subject.REASON_SOURCE_RANGE_INCOMPLETE
+
+
 def test_fixed_h5_label_lower_bound_uses_bounded_scalar_reads() -> None:
     class Labels:
         shape = (8,)

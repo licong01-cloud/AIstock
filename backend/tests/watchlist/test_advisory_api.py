@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from backend.routers import advisory as advisory_router
 from backend.services.advisory_program import AdvisoryProgramService, InMemoryAdvisoryProgramRepository
 from backend.services.selection_center.models import SelectionCandidate, SelectionMode, SelectionRun, SelectionRunStatus
+from backend.services.trading_core.errors import DataUnavailableError
 
 
 class FakeTradingCalendar:
@@ -31,6 +32,69 @@ def _client(selection_service=None) -> tuple[TestClient, AdvisoryProgramService]
     )
     app.dependency_overrides[advisory_router.get_advisory_program_service] = lambda: service
     return TestClient(app), service
+
+
+@pytest.mark.parametrize("as_of", ["2026-06-08", "2026-06-07"])
+def test_advisory_daily_defaults_use_authoritative_calendar_without_minute_readiness(as_of: str) -> None:
+    client, service = _client()
+    days = [date(2026, 6, day) for day in (2, 3, 4, 5, 8, 9)]
+
+    class Calendar:
+        def status(self, *, as_of_date=None):
+            assert as_of_date == date.fromisoformat(as_of)
+            return {
+                "as_of_date": as_of,
+                "is_trading_day": as_of_date in days,
+                "previous_trading_day": max(day for day in days if day < as_of_date).isoformat(),
+                "next_trading_day": min(day for day in days if day > as_of_date).isoformat(),
+                "source": "market.trading_calendar:file_cache",
+            }
+
+        def list_trading_days(self, start_date, end_date):
+            assert end_date == date.fromisoformat(as_of)
+            return [day for day in days if start_date <= day <= end_date]
+
+    service.calendar_provider = Calendar()
+    response = client.get(f"/api/v1/advisory/trading-days/defaults?as_of_date={as_of}&lookback_trading_days=2")
+
+    assert response.status_code == 200
+    payload = response.json()
+    expected = ["2026-06-05", "2026-06-08"] if as_of == "2026-06-08" else ["2026-06-04", "2026-06-05"]
+    assert payload["trading_days"] == expected
+    assert payload["latest_trading_day"] == payload["replay_end_date"] == expected[-1]
+    assert payload["replay_start_date"] == expected[0]
+    assert payload["next_trading_day"] == ("2026-06-09" if as_of == "2026-06-08" else "2026-06-08")
+    assert payload["as_of_date"] == as_of
+    assert payload["calendar_only"] is True
+    assert payload.get("data_ready_latest_date") is None
+
+
+@pytest.mark.parametrize("lookback", [0, 251])
+def test_advisory_daily_defaults_reject_invalid_lookback(lookback: int) -> None:
+    client, _service = _client()
+    response = client.get(f"/api/v1/advisory/trading-days/defaults?lookback_trading_days={lookback}")
+    assert response.status_code == 422
+
+
+@pytest.mark.parametrize("missing_rows", [False, True])
+def test_advisory_daily_defaults_do_not_invent_dates_when_calendar_unavailable(missing_rows: bool) -> None:
+    client, service = _client()
+
+    class Calendar:
+        def status(self, *, as_of_date=None):
+            return {"as_of_date": "2026-06-08", "next_trading_day": "2026-06-09"}
+
+        def list_trading_days(self, start_date, end_date):
+            if missing_rows:
+                raise DataUnavailableError("official calendar rows missing")
+            return []
+
+    service.calendar_provider = Calendar()
+    response = client.get("/api/v1/advisory/trading-days/defaults?as_of_date=2026-06-08")
+    assert response.status_code == 404
+    message = response.json()["detail"]["message"]
+    assert ("official calendar rows missing" if missing_rows else "authoritative trading calendar dates") in message
+    assert "trading_days" not in response.json()
 
 
 def test_advisory_universe_options_expose_qe_compatible_core_index_contract() -> None:

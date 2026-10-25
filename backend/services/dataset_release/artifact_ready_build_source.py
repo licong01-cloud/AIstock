@@ -224,6 +224,7 @@ class ArtifactReadyBuildSource:
         effective: bool = True,
         date_ranges: Sequence[tuple[date, date]] = (),
         instruments: Sequence[str] = (),
+        quote_days: tuple[tuple[str, date], ...] = (),
     ) -> tuple[OrderedMappingPartition, ...]:
         manifest = self.component_manifests[component]
         entries = [
@@ -272,7 +273,7 @@ class ArtifactReadyBuildSource:
             if effective and dataset == "adj_factor" and not construction:
                 rows = self._effective_adj_rows(component, descriptor, rows)
             elif effective and dataset == "stk_limit" and self.profile.pit_authority_status == "ACTIVE_CANONICAL":
-                rows = self._effective_limit_rows(component, descriptor, rows)
+                rows = self._effective_limit_rows(component, descriptor, rows, quote_days=quote_days)
             elif effective and dataset == "kline_daily_raw" and self.profile.pit_authority_status == "ACTIVE_CANONICAL":
                 rows = self._effective_daily_rows(component, descriptor, rows)
             elif effective and dataset == "kline_minute_raw":
@@ -340,7 +341,7 @@ class ArtifactReadyBuildSource:
             )
         buffered: list[Mapping[str, Any]] = []
         requested = {
-            str(value).upper() for value in (instruments or tuple(span.ts_code for span in self.pit_snapshot.spans))
+            str(value).upper() for value in (instruments or tuple(self.qfq_authority.by_code))
         }
         source_requested = (
             set(
@@ -556,6 +557,7 @@ class ArtifactReadyBuildSource:
         component: Component,
         descriptor: Mapping[str, Any],
         database_rows: Iterable[Mapping[str, Any]],
+        *, quote_days: tuple[tuple[str, date], ...] = (),
     ) -> Iterator[Mapping[str, Any]]:
         matches = [
             item
@@ -565,7 +567,7 @@ class ArtifactReadyBuildSource:
             and item.get("partition_key") == str(descriptor["partition_key"])
         ]
         if not matches:
-            yield from _filter_stk_limit_rows_to_pit(database_rows, self.pit_snapshot)
+            yield from _filter_stk_limit_rows_to_pit(database_rows, self.pit_snapshot, quote_days=quote_days)
             return
         if len(matches) != 1:
             raise ArtifactReadyBuildSourceError("stk_limit rule overlay entry is ambiguous")
@@ -593,6 +595,7 @@ class ArtifactReadyBuildSource:
                 expected_completion_rows=int(receipt["database_completion_rows"]),
             ),
             self.pit_snapshot,
+            quote_days=quote_days,
         )
 
     def _effective_minute_rows(
@@ -787,12 +790,14 @@ def _require_limit_completion_match(
 def _filter_stk_limit_rows_to_pit(
     rows: Iterable[Mapping[str, Any]],
     pit_snapshot: FrozenPitSnapshot,
+    *, quote_days: tuple[tuple[str, date], ...] = (),
 ) -> Iterator[Mapping[str, Any]]:
-    """Expose only canonical PIT stock-days after validating global order.
+    """Expose PIT stock-days and explicitly observed holding quote days.
 
     Sealed ``stk_limit`` rows intentionally retain non-PIT history so the
     artifact stage can prove source identity.  Nullable repair fields are
-    allowed there, but only PIT rows may enter the final Qlib normalizer.
+    allowed there. Additional exact quote keys must pass the same normalizer;
+    they never change buy eligibility or imply a synthetic price-limit value.
     """
 
     mutable_ranges: dict[str, list[tuple[date, date]]] = {}
@@ -802,12 +807,13 @@ def _filter_stk_limit_rows_to_pit(
         code: tuple(sorted(ranges)) for code, ranges in mutable_ranges.items()
     }
     previous: tuple[str, date] | None = None
+    observed_keys = frozenset(quote_days)
     for row in rows:
         key = (str(row.get("ts_code", "")).upper(), _as_date(row.get("trade_date")))
         if previous is not None and key <= previous:
             raise ArtifactReadyBuildSourceError("stk_limit effective rows are duplicated or unordered")
         previous = key
-        if any(start <= key[1] <= end for start, end in ranges_by_code.get(key[0], ())):
+        if key in observed_keys or any(start <= key[1] <= end for start, end in ranges_by_code.get(key[0], ())):
             yield row
 
 

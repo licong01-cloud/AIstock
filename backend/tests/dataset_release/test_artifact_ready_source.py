@@ -69,13 +69,36 @@ def test_minute_preparation_preserves_proven_suspended_placeholder(tmp_path, dai
     assert providers == () and len(derived) == 2
     assert summary["suspended_full_day"] == 1
     assert summary["excluded_zero_turnover_placeholder_rows"] == 240
-    assert reads == ["kline_daily_raw", "kline_minute_raw"]
+    # One independent factual-population read, one suspension proof read.
+    assert reads == ["kline_daily_raw", "kline_daily_raw", "kline_minute_raw"]
     assert data["kline_minute_raw"] == before
+
+
+def test_minute_source_keeps_observed_never_pit_security(tmp_path):
+    builder, view, snapshot, data, _, key = _suspended_source(tmp_path)
+    other = "002871.SZ"
+    day = key[1]
+    data["kline_daily_raw"][0].update(volume_hand=240, amount_li=240000)
+    first = data["kline_daily_raw"][0]
+    data["kline_daily_raw"].append({**first, "ts_code": other})
+    data["kline_minute_raw"] = [
+        {**first, "ts_code": code, "trade_time": stamp.isoformat(), "freq": "1m",
+         "volume_hand": 1, "amount_li": 1000}
+        for code in (key[0], other) for stamp in canonical_session_times(day)
+    ]
+    entries, providers, _, summary = builder._minute_entries(
+        view, snapshot=snapshot, trading_dates=(day,), suspended=frozenset(), checkpoint=lambda: None)
+    assert summary["expected_days"] == summary["database_complete"] == 2
+    assert summary["pit_excluded_stock_days"] == 0
+    assert providers == ()
+    coverage = builder.cas.get_json(entries[0]["rows_ref"])
+    assert {row["ts_code"] for row in coverage["days"]} == {key[0], other}
+    assert {span.ts_code for span in snapshot.pit_snapshot.spans} == {key[0]}
 
 
 @pytest.mark.parametrize("defect", [
     "daily_volume", "daily_amount", "daily_precision", "daily_duplicate", "minute_volume", "minute_amount",
-    "minute_null", "minute_precision", "precision_provenance", "duplicate", "other_label", "price_null",
+    "minute_null", "minute_precision", "duplicate", "other_label", "price_null",
     "price_bounds", "too_many", "no_suspend", "no_daily_partition", "old_daily_partition_only",
 ])
 def test_minute_preparation_cannot_exempt_unproven_rows(tmp_path, defect):
@@ -92,8 +115,6 @@ def test_minute_preparation_cannot_exempt_unproven_rows(tmp_path, defect):
             daily["volume_hand" if defect == "daily_volume" else "amount_li"] = 1
     elif defect == "minute_precision":
         at_1300.update(volume_shares=1, volume_shares_source="tdx_decoded", volume_shares_sha256="c" * 64)
-    elif defect == "precision_provenance":
-        at_1300.update(volume_shares=0, volume_shares_source="tdx_decoded", volume_shares_sha256="invalid")
     elif defect.startswith("minute_"):
         at_1300["amount_li" if defect == "minute_amount" else "volume_hand"] = None if defect == "minute_null" else 1
     elif defect == "duplicate":
@@ -136,7 +157,7 @@ def test_empty_suspended_source_keeps_formal_na_and_does_not_open_old_daily_part
     assert actual["database_rows"] == actual["final_rows"] == 0
     assert summary["suspended_full_day"] == 1
     assert summary["excluded_zero_turnover_placeholder_rows"] == 0 and providers == ()
-    assert reads == ["kline_daily_raw", "kline_minute_raw"]
+    assert reads == ["kline_daily_raw", "kline_daily_raw", "kline_minute_raw"]
 
 
 def test_tushare_daily_normalization_matches_database_units() -> None:

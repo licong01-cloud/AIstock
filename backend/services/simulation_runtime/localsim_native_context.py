@@ -6,6 +6,12 @@ from dataclasses import dataclass
 from math import isfinite
 from typing import Any
 
+from backend.services.selection_center.canonical_pit_runtime import (
+    CANONICAL_PIT_RUNTIME_LEASE_KEY,
+    CANONICAL_PIT_RUNTIME_PROFILE_KEY,
+    CanonicalPitRuntimeError,
+    SelectionPitRuntimeLease,
+)
 from backend.services.selection_center.runtime_profile import normalize_selection_runtime_config
 from backend.services.simulation_data.contracts import MinuteDataSource
 from backend.services.strategy_package.models import StrategyPackageManifest
@@ -13,12 +19,14 @@ from backend.services.trading_core.errors import RuntimeConfigInvalidError
 from backend.services.trading_core.ledger import FeeModel
 
 from .localsim_runtime_profile import LocalSimRuntimeProfileConfigV1
+from .localsim_file_inputs import frozen_file_binding
 from .models import canonical_json_sha256
 from .successor_models import SimulationAccountStatus, SimulationLedgerScopeKind
 
 
 def selection_config_from_localsim_profile(
     config: LocalSimRuntimeProfileConfigV1, *, manifest_sha256: str | None = None,
+    pit_lease: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Project only selection fields from the already frozen profile."""
     daily = config.daily_strategy
@@ -30,21 +38,26 @@ def selection_config_from_localsim_profile(
             auto_compute=False,
             manual_snapshot_required=True,
         )
-    projected = normalize_selection_runtime_config(
-        {
-            "runtime_profile": {
-                "selection": {
-                    "top_k": daily.top_k,
-                    "daily_strategy_id": daily.strategy_id,
-                    "daily_strategy_params": daily.parameters,
-                },
-                "industry_blacklist": list(dict.fromkeys((*daily.industry_filters, *daily.sector_filters))),
-                "hmm": hmm,
-                "risk_policy": config.risk_policy,
+    payload = {
+        "runtime_profile": {
+            "selection": {
+                "top_k": daily.top_k,
+                "daily_strategy_id": daily.strategy_id,
+                "daily_strategy_params": daily.parameters,
             },
-            "selection_artifact_config": {"auto_generate": True, "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE"},
-        }
-    )
+            "industry_blacklist": list(dict.fromkeys((*daily.industry_filters, *daily.sector_filters))),
+            "hmm": hmm,
+            "risk_policy": config.risk_policy,
+        },
+        "selection_artifact_config": {"auto_generate": True, "pit_mode": "PREVIOUS_TRADING_DAY_CLOSE"},
+    }
+    if config.canonical_pit_authority_profile is not None:
+        payload[CANONICAL_PIT_RUNTIME_PROFILE_KEY] = config.canonical_pit_authority_profile
+    if pit_lease is not None:
+        if config.canonical_pit_authority_profile is None:
+            raise CanonicalPitRuntimeError("legacy LocalSIM profile cannot carry a canonical PIT lease")
+        payload[CANONICAL_PIT_RUNTIME_LEASE_KEY] = SelectionPitRuntimeLease.from_mapping(pit_lease).as_dict()
+    projected = normalize_selection_runtime_config(payload)
     if config.runtime_variant_id is not None:
         if not manifest_sha256:
             raise RuntimeConfigInvalidError("frozen LocalSIM variant requires the release manifest identity")
@@ -98,7 +111,19 @@ def frozen_localsim_profile(release: Any) -> LocalSimRuntimeProfileConfigV1 | No
             "LocalSIM daily strategy identity does not match frozen profile",
             context={"reason_code": "LOCALSIM_FROZEN_DAILY_IDENTITY_MISMATCH"},
         )
-    selection = selection_config_from_localsim_profile(config, manifest_sha256=release.manifest_sha256)
+    pit_lease = metadata.get(CANONICAL_PIT_RUNTIME_LEASE_KEY)
+    from .localsim_pit_migration import POLICY_KEY, require_migrated_selection_projection
+
+    if POLICY_KEY in metadata:
+        require_migrated_selection_projection(
+            selection_config_from_localsim_profile(config, manifest_sha256=release.manifest_sha256), metadata,
+        )
+        return config
+    if config.canonical_pit_authority_profile is not None and pit_lease is None:
+        raise CanonicalPitRuntimeError("canonical LocalSIM release is missing its frozen PIT lease")
+    selection = selection_config_from_localsim_profile(
+        config, manifest_sha256=release.manifest_sha256, pit_lease=pit_lease,
+    )
     if metadata.get("selection_runtime_config") != selection:
         raise RuntimeConfigInvalidError(
             "LocalSIM selection projection does not match frozen profile",
@@ -172,6 +197,7 @@ def load_native_account_context(*, binding: Any, release: Any, repository: Any, 
         initial_capital=float(account.initial_capital),
         frozen_manifest=manifest,
         profile=profile,
+        data_source=MinuteDataSource.DATASET_FILES if frozen_file_binding(release) else MinuteDataSource.DB_HISTORICAL,
     )
 
 

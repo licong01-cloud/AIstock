@@ -13,6 +13,27 @@ _WORKFLOW_BUDGET_NODE = (
     'test_workflow_automation_has_an_honest_production_denominator'
 )
 
+
+@pytest.mark.parametrize("path", [
+    "backend/services/manual_factor_service.py",
+    "scripts/register_manual_factor.py",
+    "backend/tests/test_manual_factor_service_wsl_output.py",
+])
+def test_manual_factor_registration_has_direct_ci_execution(path: str) -> None:
+    # Each path must route independently: a service change cannot conceal an
+    # unmapped CLI or a changed test that the selected nox session never runs.
+    payload = classifier.classify_changed_files([path])
+    assert payload["workflow_gate"] == "passed"
+    assert payload["backend_sessions"] == ["platform_api_backend"]
+    assert payload["unmapped_code_files"] == []
+    assert payload["unexecuted_test_files"] == []
+    targets, error = classifier._selected_nox_test_targets(
+        repo_root=classifier.ROOT, sessions=payload["backend_sessions"],
+    )
+    assert error is None
+    assert "backend/tests/test_manual_factor_service_wsl_output.py" in targets["platform_api_backend"]
+
+
 def _assert_fields(payload: dict, **expected) -> None:
     """Check each explicit field, retaining boolean/None identity contracts."""
     for field, value in expected.items():
@@ -725,7 +746,61 @@ def test_hmm_ui_catalog_matches_nox_directory_and_changed_spec_coverage(tmp_path
     assert payload['classification'] == ('frontend_ci_required' if covered else 'unmapped_code_blocked')
 
 
-def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path) -> None:
+@pytest.mark.parametrize('name', [
+    'qe-evolution-best-loop-ui.spec.ts', 'qe-evolution-read-only.spec.ts',
+    'qe-read-performance.spec.ts', 'unregistered.spec.ts',
+])
+def test_qe_read_contract_exact_mapping_preserves_unknown_block(tmp_path, name):
+    path = f'frontend/tests/qe/{name}'
+    _write_test_file(tmp_path, path)
+    payload = classifier.classify_changed_files([path], repo_root=tmp_path)
+    if name == 'unregistered.spec.ts':
+        assert payload['unexecuted_test_files'] == [path]
+        assert payload['workflow_gate'] == 'blocked'
+    else:
+        assert f'tests/qe/{name}' in payload['frontend_test_targets']
+        assert payload['unexecuted_test_files'] == []
+        assert payload['workflow_gate'] == 'passed'
+        assert payload['backend_required'] is False
+        assert payload['dev_db_required'] is False
+
+
+def test_qe_read_contract_runner_matches_catalog_and_keeps_live_scenario_delegated(monkeypatch):
+    import noxfile
+    import yaml
+
+    calls, directories = [], []
+    owners = classifier.flow.match_changed_files(['frontend/tests/qe-read-contract.config.ts', 'noxfile.py'])
+    assert {item['primary_module'] for item in owners['matched_rules']} == {'validation.runner'}
+    monkeypatch.setattr(noxfile, 'FRONTEND_DIRECT_ENTRYPOINTS', ())
+    keys = ('qe_best_loop_contract_ui', 'qe_terminal_poll_contract_ui', 'qe_read_performance_ui')
+    for key in keys:
+        getattr(noxfile, key)(SimpleNamespace(
+            posargs=[], chdir=directories.append,
+            run=lambda *args, **kwargs: calls.append(args)))
+    assert directories == [noxfile.ROOT / 'frontend'] * 3
+    assert all('--config=tests/qe-read-contract.config.ts' in call for call in calls)
+    plans = classifier.flow.validation_catalog_snapshot().plans
+    targets = [plans[key]['frontend_test_path'] for key in keys]
+    assert [call[4] for call in calls] == targets
+    for key in keys:
+        assert plans[key]['nox_session'] == key
+        assert plans[key]['command_key'] == f'nox_{key}'
+        assert plans[key]['requires_backend'] is False
+        assert plans[key]['writes_database'] is False
+    workflow = yaml.safe_load((noxfile.ROOT / '.github/workflows/test.yml').read_text(encoding='utf-8'))
+    run = next(step['run'] for job in workflow['jobs'].values()
+               for step in job.get('steps', []) if step.get('id') == 'frontend_validation')
+    assert all(f'"$target" == "{target}"' in run for target in targets)
+    assert '--config=tests/qe-read-contract.config.ts "$target"' in run
+    assert '--pass-with-no-tests' not in run
+    config = (noxfile.ROOT / 'frontend/tests/qe-read-contract.config.ts').read_text(encoding='utf-8')
+    assert 'grep: /QE dashboard stops automatic polling when task list has no active task$/' in config
+    assert 'reuseExistingServer: false' in config and 'needsFrontend && !isWorker ?' in config
+    assert 'qe_read_ui' in config  # Live task-detail readback is explicitly not CI acceptance.
+
+
+def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path, monkeypatch) -> None:
     _write_test_file(tmp_path, 'frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts')
     payload = classifier.classify_changed_files(
         [
@@ -736,13 +811,27 @@ def test_paper_v2_frontend_page_and_spec_select_frontend_gate(tmp_path: Path) ->
     )
 
     _assert_fields(payload,
-        classification='unexecuted_test_blocked', workflow_gate='blocked', frontend_required=True,
-        backend_required=False, frontend_test_targets=[], unmapped_code_files=[],
+        classification='frontend_ci_required', workflow_gate='passed', frontend_required=True,
+        backend_required=False, frontend_test_targets=['tests/paper-v2/paper-v2-advisory-ui.spec.ts'], unmapped_code_files=[],
     )
-    assert payload['unexecuted_test_files'] == ['frontend/tests/paper-v2/paper-v2-advisory-ui.spec.ts']
+    assert payload['unexecuted_test_files'] == []
+    assert payload['dev_db_required'] is False
+    import noxfile
+    calls = []
+    monkeypatch.setattr(noxfile, 'FRONTEND_DIRECT_ENTRYPOINTS', ())
+    noxfile.advisory_mocked_ui(SimpleNamespace(run=lambda *args, **kwargs: calls.append(args)))
+    assert len(calls) == 1 and '--config=frontend/tests/advisory-mocked.config.ts' in calls[0]
+    plan = classifier.flow.validation_catalog_snapshot().plans['advisory_mocked_ui']
+    assert plan['frontend_test_path'] == payload['frontend_test_targets'][0]
+    assert plan['requires_backend'] is False and plan['writes_database'] is False
+    config = 'frontend/tests/advisory-mocked.config.ts'
+    _write_test_file(tmp_path, config)
+    assert classifier.classify_changed_files([config], repo_root=tmp_path)['frontend_test_targets'] == payload['frontend_test_targets']
 
 
 @pytest.mark.parametrize('path,targets,unexecuted', [
+    ('frontend/tests/paper-v2/paper-v2-unregistered.spec.ts', [],
+     ['frontend/tests/paper-v2/paper-v2-unregistered.spec.ts']),
     ('frontend/tests/hmm-risk/risk-l1.spec.ts', ['tests/hmm-risk/risk-l1.spec.ts'], []),
     ('frontend/tests/hmm-risk/hmm-risk.spec.ts', ['tests/hmm-risk/risk-l1.spec.ts'],
      ['frontend/tests/hmm-risk/hmm-risk.spec.ts']),
@@ -1807,7 +1896,8 @@ def test_github_workflow_wires_workflow_validation_fast_lane() -> None:
     assert "node node_modules/next/dist/bin/next lint" in frontend_runs
     assert "npx playwright install --with-deps chromium" not in frontend_runs
     assert "FRONTEND_TEST_TARGETS" in frontend_runs
-    assert 'node node_modules/@playwright/test/cli.js test "${module_test_targets[@]}"' in frontend_runs
+    assert 'node node_modules/@playwright/test/cli.js test "${other_test_targets[@]}"' in frontend_runs
+    assert 'node node_modules/@playwright/test/cli.js test --config=tests/advisory-mocked.config.ts' in frontend_runs
     assert "node_modules/.bin" not in frontend_runs
     assert "npm run" not in frontend_runs
     go_runs = str(next(step for step in verdict["steps"] if step.get("id") == "go_validation")["run"])

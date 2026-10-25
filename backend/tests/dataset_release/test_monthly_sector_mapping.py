@@ -6,6 +6,7 @@ import hashlib
 import json
 from types import SimpleNamespace
 
+import pandas as pd
 import pytest
 
 from backend.services.dataset_release.canonical import canonical_json_bytes, digest_named_fields
@@ -188,8 +189,25 @@ def test_monthly_adapter_binds_map_before_freeze(predecessor, monkeypatch):
         artifact_root=predecessor.root, source_catalog=SimpleNamespace(root=predecessor.root),
     )
     context = SimpleNamespace(plan={"predecessor": {"cutoff": "2026-08-31"}, "target_cutoff": "2026-09-30"}, operation_id="dmr_test")
+    # The source catalog is read in the same snapshot, before the adapter
+    # constructs its authority. This contract probe stops before data export.
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def execute(self, sql, params):
+            assert "market.stock_basic" in sql
+            assert params[0] == date(2026, 9, 30)
+
+        def fetchall(self):
+            return [("000001.SZ",)]
+
     with pytest.raises(RuntimeError, match="stop before database payload"):
-        adapter.read(None, MonthlySnapshotIdentity("1-AA-1", "2026-10-06T00:00:00+00:00", "repair"), context)
+        adapter.read(SimpleNamespace(cursor=Cursor),
+            MonthlySnapshotIdentity("1-AA-1", "2026-10-06T00:00:00+00:00", "repair"), context)
     assert seen == [binding]
 
 
@@ -368,7 +386,8 @@ def test_history_supplement_is_bound_to_original_source_and_current_release(pred
         load_frozen_history(None, context_plan=plan, build_inputs={"source_bundle_sha256": "b" * 64})
 
 
-def test_industry_context_recomputes_moneyflow_for_corrected_pit_cohort(predecessor, tmp_path):
+@pytest.mark.parametrize("eligible_codes", [["000001.SZ", "000002.SZ"], [], ["000003.SZ"]])
+def test_industry_context_recomputes_moneyflow_for_all_classified_facts(predecessor, tmp_path, eligible_codes):
     import numpy as np
     import pandas as pd
     from backend.services.dataset_release.monthly_industry_history import IndustryHistoryProjection
@@ -388,21 +407,28 @@ def test_industry_context_recomputes_moneyflow_for_corrected_pit_cohort(predeces
                         "sw2_mf_buy_elg_vol": [90.0, 90.0, 99.0]}, index=index)
     moneyflow = pd.DataFrame({"mf_net_amt": [10_000.0, 20_000.0, 30_000.0],
                              "mf_elg_buy_vol": [100.0, 200.0, 300.0]}, index=index)
-    # Third security is in the provider catalog, but not the frozen strategy PIT population.
-    pit = pd.DataFrame({"ts_code": ["000001.SZ", "000002.SZ"], "eligible_start": [day.date()] * 2,
-                        "eligible_end": [day.date()] * 2, "entry_reason": ["eligible"] * 2, "exit_reason": [None] * 2})
+    # Selection eligibility must not change shared historical industry facts.
+    pit = pd.DataFrame({"ts_code": eligible_codes, "eligible_start": [day.date()] * len(eligible_codes),
+                        "eligible_end": [day.date()] * len(eligible_codes),
+                        "entry_reason": ["eligible"] * len(eligible_codes), "exit_reason": [None] * len(eligible_codes)})
     quotes = pd.DataFrame({"sw2_close": [111.0, 222.0]}, index=pd.MultiIndex.from_tuples(
         [(day, a["l2_code_id"]), (day, b["l2_code_id"])], names=["datetime", "l2_code_id"]))
     actual = rebuild_industry_context(old, projection=projection, quotes=quotes, moneyflow=moneyflow, pit=pit)
     assert actual["sw2_close"].tolist() == [111, 222, 111]
-    assert actual["sw2_mf_net_amt"].tolist() == [1, 2, 1]  # CNY -> native 10k CNY
-    assert actual["sw2_mf_buy_elg_vol"].tolist() == [1, 2, 1]  # shares -> native hands
+    assert actual["sw2_mf_net_amt"].tolist() == [4, 2, 4]  # CNY -> native 10k CNY
+    assert actual["sw2_mf_buy_elg_vol"].tolist() == [4, 2, 4]  # shares -> native hands
     assert actual["l2_code_id"].tolist() == [a["l2_code_id"], b["l2_code_id"], a["l2_code_id"]]
     missing = rebuild_industry_context(old, projection=projection, quotes=quotes.iloc[0:0], moneyflow=moneyflow.iloc[0:0], pit=pit)
     assert np.isnan(missing[["sw2_close", "sw2_mf_net_amt", "sw2_mf_buy_elg_vol"]]).all().all()
+    null_flow = moneyflow.copy()
+    null_flow.loc[[index[0], index[2]], :] = np.nan
+    actual_null = rebuild_industry_context(old, projection=projection, quotes=quotes, moneyflow=null_flow, pit=pit)
+    assert actual_null.sw2_mf_net_amt.isna().tolist() == [True, False, True]
+    assert actual_null.sw2_mf_buy_elg_vol.isna().tolist() == [True, False, True]
+    assert actual_null.sw2_close.tolist() == [111, 222, 111]
 
 
-@pytest.mark.parametrize("case", ["alias", "stopped_quote", "duplicate_quote", "infinite_flow", "wrong_source_hash"])
+@pytest.mark.parametrize("case", ["alias", "outside_selection", "stopped_quote", "duplicate_quote", "infinite_flow", "wrong_source_hash"])
 def test_frozen_industry_context_preserves_alias_absence_and_source_identity(predecessor, tmp_path, case):
     import pandas as pd
     from backend.data_service.security_source_identity import DEFAULT_MANIFEST_PATH, load_security_source_identity_manifest
@@ -438,8 +464,13 @@ def test_frozen_industry_context_preserves_alias_absence_and_source_identity(pre
     path = tmp_path / "moneyflow.h5"
     pd.DataFrame({"mf_net_amt": [float("inf") if case == "infinite_flow" else 20_000.0]}, index=index).to_hdf(
         path, "data", format="table", data_columns=["datetime", "instrument"])
+    class NeverReadSelection:
+        def to_frame(self):
+            raise AssertionError("shared factual source must not inspect selection eligibility")
+
     context = subject.FrozenIndustryContext(cas=cas, source=source, projection=history, moneyflow_path=path,
-        pit=pit, identity=load_security_source_identity_manifest(DEFAULT_MANIFEST_PATH))
+        pit=NeverReadSelection() if case == "outside_selection" else pit,
+        identity=load_security_source_identity_manifest(DEFAULT_MANIFEST_PATH))
     target = pd.DataFrame({"l2_code_id": [-1], "sw2_close": [99.0], "sw2_mf_net_amt": [99.0]},
         index=pd.MultiIndex.from_tuples([(pd.Timestamp(day), "302132.SZ")], names=["datetime", "instrument"]))
     if case in {"duplicate_quote", "infinite_flow", "wrong_source_hash"}:
@@ -464,7 +495,7 @@ def test_unchanged_frozen_history_is_reused_without_historical_rescan(predecesso
     history = subject.IndustryHistoryProjection.build([row], current_map=binding["code_map"], authority_sha256="c" * 64)
     path = predecessor.root / "components/sector_context_candidate_v1/industry_l2_history_authority.json"
     path.write_bytes(canonical_json_bytes({**history.payload, "projection_sha256": history.sha256, "factor_projection_receipt_ref": {},
-        "industry_context_contract": "official_quote_plus_pit_stock_flow_v1"}) + b"\n")
+        "industry_context_contract": "official_quote_plus_classified_fact_stock_flow_v2"}) + b"\n")
     pin = {"path": path.relative_to(predecessor.root).as_posix(), "size": path.stat().st_size,
            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     monkeypatch.setattr(subject, "load_frozen_history", lambda *args, **kwargs: history)
@@ -600,7 +631,7 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
         pending = root.parent / f".{root.name}.industry-history-commit.json"
         resume.record = subject.recover_history_commit(root=root, journal=resume.path, record=resume.record,
                                                        expected_projection=history.sha256)
-        assert pending.exists()
+        assert not pending.exists()
     elif interruption == "legacy_uncommitted":
         materialize = subject.materialize_history_files
         with monkeypatch.context() as legacy:
@@ -655,8 +686,8 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
     assert proof["database_write"] is False
     scratch = (root.parent / proof["files"]["sector_data.h5"]["scratch_relative_path"]).parent
     assert not (factor_root / "factor_checkpoint.json").exists()
-    pending = json.loads((root.parent / f".{root.name}.industry-history-commit.json").read_bytes())
-    assert set(pending["files"]) == {"sector_data.h5", "static_factors.parquet"}
+    assert not (root.parent / f".{root.name}.industry-history-commit.json").exists()
+    assert set(proof["files"]) == {"sector_data.h5", "static_factors.parquet"}
     assert set(resume.record["files"]) == set(record["files"])
     for name in ("sector_data.h5", "static_factors.parquet"):
         assert (scratch / (name + ".before")).read_bytes() == original_bytes[name]
@@ -807,3 +838,214 @@ def test_private_source_seals_raw_134_and_enriches_with_pinned_ids(predecessor, 
         assert len(list(stream)) == 134
     with reader.iter_rows("sector_data", "2026-09-01_2026-09-30") as stream:
         assert list(stream)[0]["l2_code_id"] == last["l2_code_id"]
+
+
+def test_quote_repair_only_fills_missing_facts_and_freezes_provider_response(tmp_path):
+    from backend.services.dataset_release.monthly_quote_repair import repair_quote_partition
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.monthly_industry_facts import QUOTE_FIELDS
+
+    ControlStore.initialize(tmp_path / "control")
+    cas = CASStore(tmp_path / "control")
+    old = {"index_code": "801012.SI", "trade_date": "2026-03-13", **dict.fromkeys(QUOTE_FIELDS, "1.0")}
+    old["amount"] = None
+    calls = []
+    def fetch(**params):
+        calls.append(params)
+        if params["ts_code"] != "801012.SI":
+            return pd.DataFrame()
+        return pd.DataFrame([{"ts_code": "801012.SI", "trade_date": "20260313",
+                              **dict.fromkeys(QUOTE_FIELDS, 1.0), "amount": 2.0}])
+    rows, audit = repair_quote_partition([old], codes=["801012.SI", "801019.SI"],
+        calendar=[date(2026, 3, 13)], catalog={"801012.SI": "1", "801019.SI": "1"},
+        cas=cas, provider=SimpleNamespace(sw_daily=fetch))
+    assert rows[0]["close"] == "1.0" and rows[0]["amount"] == "2.0"
+    assert old["amount"] is None
+    assert audit["repaired_key_count"] == 1 and audit["unresolved_key_count"] == 1
+    assert audit["unresolved_keys"][0]["index_code"] == "801019.SI"
+    assert len(calls) == 2
+    captured = cas.get_json_bounded(audit["provider_requests"][0]["response_ref"], max_bytes=100000)
+    assert captured["endpoint"] == "sw_daily" and captured["database_write"] is False
+    assert captured["request"]["ts_code"] == "801012.SI"
+
+
+@pytest.mark.parametrize("case", ["wrong_code", "wrong_date", "duplicate", "infinite", "negative"])
+def test_quote_repair_rejects_provider_identity_and_numeric_errors(tmp_path, case):
+    from backend.services.dataset_release.monthly_quote_repair import repair_quote_partition
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.monthly_industry_facts import QUOTE_FIELDS
+
+    ControlStore.initialize(tmp_path / "control")
+    row = {"ts_code": "801012.SI", "trade_date": "20260313", **dict.fromkeys(QUOTE_FIELDS, 2.0)}
+    row.update({"ts_code": "801014.SI"} if case == "wrong_code" else
+               {"trade_date": "20260312"} if case == "wrong_date" else
+               {"amount": float("inf")} if case == "infinite" else {"vol": -1} if case == "negative" else {})
+    provider = SimpleNamespace(sw_daily=lambda **_: pd.DataFrame([row, row] if case == "duplicate" else [row]))
+    with pytest.raises(SourceManifestError, match="provider"):
+        repair_quote_partition([], codes=["801012.SI"], calendar=[date(2026, 3, 13)],
+            catalog={"801012.SI": "1"}, cas=CASStore(tmp_path / "control"), provider=provider)
+
+
+@pytest.mark.parametrize("published", ["0", "1"])
+@pytest.mark.parametrize("empty_value", [None, "NaN"])
+def test_quote_repair_uses_catalog_not_inferred_stop_dates(tmp_path, published, empty_value):
+    from backend.services.dataset_release.monthly_quote_repair import repair_quote_partition
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.monthly_industry_facts import QUOTE_FIELDS
+
+    ControlStore.initialize(tmp_path / "control")
+    calls = []
+    def fetch(**params):
+        calls.append(params)
+        return pd.DataFrame()
+    observation = {"index_code": "801011.SI", "trade_date": "2026-04-29", **dict.fromkeys(QUOTE_FIELDS, empty_value)}
+    rows, audit = repair_quote_partition([observation], codes=["801011.SI", "801019.SI"],
+        calendar=[date(2026, 4, 29)], catalog={"801011.SI": "0", "801019.SI": published},
+        cas=CASStore(tmp_path / "control"), provider=SimpleNamespace(sw_daily=fetch))
+    assert rows == [observation] and audit["repaired_key_count"] == 0
+    assert audit["unresolved_keys"] == ([{"index_code": "801019.SI", "trade_date": "2026-04-29",
+                                        "missing_fields": ["pct_change", "vol", "amount"]}] if published == "1" else [])
+    assert [call["ts_code"] for call in calls] == (["801019.SI"] if published == "1" else [])
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_quote_repair_preserves_dated_nonpublished_facts_without_extrapolation(tmp_path, partial):
+    from backend.services.dataset_release.monthly_quote_repair import repair_quote_partition
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    from backend.services.dataset_release.monthly_industry_facts import QUOTE_FIELDS
+    ControlStore.initialize(tmp_path / "control")
+    row = {"index_code": "801011.SI", "trade_date": "2026-04-28", **dict.fromkeys(QUOTE_FIELDS, "1")}
+    if partial:
+        row["vol"] = None
+        with pytest.raises(SourceManifestError, match="observation"):
+            repair_quote_partition([row], codes=["801011.SI"], calendar=[date(2026, 4, 28)],
+                catalog={"801011.SI": "0"}, cas=CASStore(tmp_path / "control"))
+    else:
+        rows, audit = repair_quote_partition([row], codes=["801011.SI"],
+            calendar=[date(2026, 4, 28), date(2026, 4, 29)], catalog={"801011.SI": "0"},
+            cas=CASStore(tmp_path / "control"), provider=SimpleNamespace(sw_daily=lambda **_: pytest.fail("no missing fact")))
+        assert rows == [row] and audit["expected_key_count"] == 1 and audit["unresolved_key_count"] == 0
+
+
+def test_quote_source_refresh_rejects_change_to_existing_finite_fact():
+    from backend.services.dataset_release.monthly_quote_repair import assert_additive_quote_refresh
+    class CAS:
+        def get_json_bounded(self, ref, **_):
+            return {"rows": ref}
+    old = {"index_code": "801012.SI", "trade_date": "2026-03-13", "amount": "1"}
+    def source(rows):
+        return {"partitions": [{"partition_key": "2026-03", "ref": rows}]}
+    assert_additive_quote_refresh(CAS(), source([old]), source([old]))
+    with pytest.raises(SourceManifestError, match="finite"):
+        assert_additive_quote_refresh(CAS(), source([old]), source([{**old, "amount": "2"}]))
+    with pytest.raises(SourceManifestError, match="finite"):
+        assert_additive_quote_refresh(CAS(), source([old]), source([{**old, "amount": None}]))
+
+
+@pytest.mark.parametrize("repair", [False, True])
+def test_source_capture_reports_exact_gaps_before_any_materialization(tmp_path, repair):
+    from backend.services.dataset_release import monthly_industry_facts as subject
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    ControlStore.initialize(tmp_path / "control")
+    cas = CASStore(tmp_path / "control")
+    queries = []
+    class Cursor:
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            pass
+        def execute(self, sql, params):
+            assert sql.startswith("SELECT ")
+            queries.append(sql)
+        def fetchall(self):
+            if "sw_index_classify" in queries[-1]:
+                return [("801012.SI", "SW2021", "L2", "1")]
+            return [(date(2026, 3, 13),)] if "trading_calendar" in queries[-1] else []
+    projection = SimpleNamespace(sha256="a" * 64, payload={"start_date": "2026-03-13", "end_date": "2026-03-13",
+        "entries": [{"taxonomy_version": "SW2021", "canonical_l2_code": "801012.SI"}]})
+    response = pd.DataFrame([{"ts_code": "801012.SI", "trade_date": "20260313", **dict.fromkeys(subject.QUOTE_FIELDS, 2.0)}])
+    source = subject.capture_industry_quote_source(SimpleNamespace(cursor=Cursor), cas=cas, projection=projection,
+        repair_provider=SimpleNamespace(sw_daily=lambda **_: response) if repair else None)
+    assert source["quote_fact_audit"]["repaired_key_count"] == int(repair)
+    assert source["quote_fact_audit"]["unresolved_key_count"] == int(not repair)
+    if not repair:
+        context = subject.FrozenIndustryContext(cas=cas, source=source, projection=projection,
+            moneyflow_path=None, pit=None, identity=None)
+        assert context.source["quote_fact_audit"]["unresolved_key_count"] == 1
+
+
+@pytest.mark.parametrize("bound", [False, True, None])
+def test_retained_context_refresh_requires_exact_source_lineage(monkeypatch, bound):
+    from backend.services.dataset_release import monthly_industry_facts as facts, monthly_industry_history as history
+    from backend.services.dataset_release.monthly_build_resume import MonthlyBuildResumeError
+    prior = {"projection_sha256": "a" * 64, "industry_context_contract": facts.CONTRACT,
+             "context_identity": {"quote_source_sha256": None if bound is None else "b" * 64}}
+    projection = SimpleNamespace(sha256="a" * 64)
+    monkeypatch.setattr(history, "load_frozen_history", lambda *_, **__: projection)
+    monkeypatch.setattr(facts, "load_frozen_industry_quote_source", lambda *_, **__: {"new_source": True})
+    context = SimpleNamespace(plan={"monthly_industry_quote_source": {
+        "supersedes_quote_source_sha256": None if bound is None else "b" * 64 if bound else "c" * 64}})
+    with pytest.raises(MonthlyBuildResumeError, match="durable completed-export journal" if bound else "differs from frozen quote"):
+        history.apply_retained_history(SimpleNamespace(get=lambda _: prior, path=None), context=context,
+            compiled=SimpleNamespace(physical_plan={}), prepare={}, cas=None, profile=None)
+
+
+@pytest.mark.parametrize("fault", [None, "missing", "duplicate", "invalid_publication"])
+def test_quote_source_catalog_uses_only_frozen_codes(predecessor, fault):
+    from backend.services.dataset_release import monthly_industry_facts as subject
+    from backend.services.dataset_release.cas_store import CASStore
+    from backend.services.dataset_release.control_store import ControlStore
+    binding = load_predecessor_sector_mapping(predecessor)
+    rows, _, _ = _facts(binding)
+    codes = [entry["canonical_l2_code"] for entry in binding["code_map"]["entries"]]
+    if fault == "missing":
+        rows = [row for row in rows if row["index_code"] != codes[0]]
+    elif fault == "duplicate":
+        rows.append(dict(rows[0]))
+    elif fault == "invalid_publication":
+        rows[0] = {**rows[0], "is_pub": "2"}
+    queries = []
+
+    class Cursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            pass
+
+        def execute(self, sql, params):
+            assert sql.startswith("SELECT ") and "sw_index_classify" in sql
+            queries.append((sql, params))
+
+        def fetchall(self):
+            sql, params = queries[-1]
+            selected = [row for row in rows if row["index_code"] in params[0]] if "index_code=ANY(%s)" in sql else rows
+            return [tuple(row[key] for key in ("index_code", "src", "level", "is_pub"))
+                    for row in sorted(selected, key=lambda row: row["index_code"])[:132]]
+
+    control = predecessor.root / "control"
+    ControlStore.initialize(control)
+    projection = SimpleNamespace(sha256="a" * 64, payload={"start_date": "2020-09-01", "end_date": "2020-09-30",
+        "entries": [{"taxonomy_version": "SW2021", "canonical_l2_code": code} for code in codes]})
+
+    def capture():
+        return subject.capture_industry_quote_source(SimpleNamespace(cursor=Cursor), cas=CASStore(control),
+                                                     projection=projection)
+
+    if fault == "duplicate":
+        with pytest.raises(SourceManifestError, match="row bound"):
+            capture()
+    elif fault:
+        with pytest.raises(policy.SWL2QuotePolicyError, match="omits" if fault == "missing" else "invalid"):
+            capture()
+    else:
+        source = capture()
+        assert set(source["publication_catalog"]) == set(codes)
+        assert source["quote_fact_audit"]["unresolved_key_count"] == 0
+        assert source["projection_sha256"] == projection.sha256
+    assert len(queries) == 1 and queries[0][1] == (sorted(codes),)

@@ -362,11 +362,16 @@ def test_public_readiness_entry_is_nonblocking_and_has_no_training_side_effect(m
     assert all(thread != main_thread for _, thread in calls)
 
 
-def test_file_reconcile_failure_does_not_mask_database_reconcile(monkeypatch):
+@pytest.mark.parametrize("typed_input_block", [False, True])
+def test_file_reconcile_failure_does_not_mask_database_reconcile(monkeypatch, typed_input_block):
     from backend.routers import hmm_training
 
     class Service:
         def reconcile_coefficient_extensions(self):
+            if typed_input_block:
+                raise ext.CoefficientExtensionError(
+                    "hmm_coefficient_extension_input_unavailable", "file source unavailable"
+                )
             raise RuntimeError("file source unavailable")
 
         def reconcile_daily_coefficient_subscriptions(self):
@@ -375,7 +380,13 @@ def test_file_reconcile_failure_does_not_mask_database_reconcile(monkeypatch):
     monkeypatch.setattr(hmm_training, "HMMTrainingService", Service)
     results = asyncio.run(hmm_training.coefficient_readiness_tick())
     assert results == [
-        {"source_mode": "qe_frozen_file", "status": "BLOCKED", "reason_code": "hmm_coefficient_readiness_failed"},
+        {
+            "source_mode": "qe_frozen_file",
+            "status": "BLOCKED",
+            "reason_code": "hmm_coefficient_extension_input_unavailable"
+            if typed_input_block
+            else "hmm_coefficient_readiness_failed",
+        },
         {"source_mode": "database_daily", "status": "WAITING"},
     ]
 
@@ -397,10 +408,11 @@ def test_shared_completion_binding_survives_missing_legacy_apscheduler(tmp_path,
 
     class Service:
         def reconcile_coefficient_extensions(self):
-            pytest.fail("database completion must not dispatch frozen-file extension")
+            calls.append(("file", get_ident()))
+            return []
 
         def reconcile_daily_coefficient_subscriptions(self):
-            calls.append(get_ident())
+            calls.append(("database", get_ident()))
             return [{"status": "WAITING", "reason_code": "hmm_database_daily_input_unavailable"}]
 
     monkeypatch.setattr(hmm_training, "HMMTrainingService", Service)
@@ -414,8 +426,8 @@ def test_shared_completion_binding_survives_missing_legacy_apscheduler(tmp_path,
         owner._dispatch_completion_callbacks()
         await asyncio.wrap_future(entry.future)
         owner._dispatch_completion_callbacks()
-        assert len(calls) == 1
-        assert calls[0] != get_ident()
+        assert [source for source, _ in calls] == ["file", "database"]
+        assert all(thread != get_ident() for _, thread in calls)
         hmm_training.shutdown_hmm_scheduler()
         assert not owner._completion_callbacks
         assert hmm_training._completion_scheduler is None
@@ -431,10 +443,12 @@ def test_shared_completion_binding_survives_missing_legacy_apscheduler(tmp_path,
     [
         ("BLOCKED", "hmm_coefficient_readiness_failed", False),
         ("BLOCKED", "hmm_daily_subscription_failed", False),
+        ("BLOCKED", "hmm_coefficient_extension_orchestration_failed", False),
         ("BLOCKED", "hmm_database_daily_input_unavailable", True),
         ("BLOCKED", "hmm_daily_job_identity_conflict", True),
         ("BLOCKED", "hmm_daily_subscription_identity_changed", True),
         ("BLOCKED", "another_typed_business_block", True),
+        ("BLOCKED", "hmm_coefficient_extension_failed", True),
         ("WAITING", "hmm_daily_historical_as_known_unavailable", True),
         ("FAILED", "hmm_daily_subscription_failed", True),
         ("FAILED", "hmm_coefficient_readiness_failed", True),
@@ -451,16 +465,19 @@ def test_completion_adapter_retries_only_orchestration_failure(monkeypatch, stat
 
     monkeypatch.setattr(hmm_training, "coefficient_readiness_tick", tick)
     assert asyncio.run(hmm_training._coefficient_completion_callback()) is accepted
-    assert calls == [{"source_modes": ("database_daily",)}]
+    assert calls == [{"source_modes": ("qe_frozen_file", "database_daily")}]
 
 
 @pytest.mark.parametrize("failure_site", ["_database_daily_completion", "get_daily_coefficient_job"])
-def test_same_watermark_retries_internal_database_error_without_reexecuting_job(daily, tmp_path, monkeypatch, failure_site):
+def test_same_watermark_retries_internal_database_error_without_reexecuting_job(
+    daily, tmp_path, monkeypatch, failure_site
+):
     import psycopg2
     from backend.ingestion import tdx_scheduler
     from backend.routers import hmm_training
 
     svc, state, _, _ = daily
+    monkeypatch.setattr(svc, "reconcile_coefficient_extensions", lambda: [])
     monkeypatch.setattr(tdx_scheduler, "DEFAULT_TEST_OUTPUT_DIR", tmp_path)
     owner = tdx_scheduler.TDXScheduler()
     rows = [{"dataset": "sector_data", "trade_date": "2026-10-14", "status": "success", "row_count": 131}]
@@ -535,6 +552,24 @@ def test_enabling_subscription_wakes_owner_without_running_reconcile(monkeypatch
     assert calls == [hmm_training._HMM_COMPLETION_CALLBACK_ID]
     request.enabled = False
     hmm_training.configure_daily_coefficient_subscription("config", request)
+    assert len(calls) == 1
+
+
+def test_enabling_frozen_extension_wakes_existing_owner_without_running_reconcile(monkeypatch):
+    from types import SimpleNamespace
+    from backend.routers import hmm_training
+
+    calls = []
+    owner = SimpleNamespace(request_completion_check=lambda name: calls.append(name) or True)
+    monkeypatch.setattr(hmm_training, "_completion_scheduler", owner)
+    monkeypatch.setattr(hmm_training.service, "configure_coefficient_extension", lambda *args, **kwargs: kwargs)
+    request = hmm_training.CoefficientExtensionRequest(
+        snapshot_id="snapshot", signal_presets=["preset_A"], coefficient_start="2026-05-20", enabled=True
+    )
+    assert hmm_training.configure_coefficient_extension("config", request)["enabled"] is True
+    assert calls == [hmm_training._HMM_COMPLETION_CALLBACK_ID]
+    request.enabled = False
+    hmm_training.configure_coefficient_extension("config", request)
     assert len(calls) == 1
 
 

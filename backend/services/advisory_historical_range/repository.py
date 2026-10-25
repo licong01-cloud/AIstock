@@ -284,6 +284,43 @@ class PostgresHistoricalRangeRepository:
         self._validated_upstream_closures: OrderedDict[tuple, tuple] = OrderedDict()
         self._outcome_subject_identities: OrderedDict[tuple[str, str, str], tuple[str, str, str | None]] = OrderedDict()
 
+    def find_existing_source_planning_batch(self, *, request) -> CreatedHistoricalRangePlanningBatch | None:
+        """Read an exact new-mode retry before any active-profile resolution."""
+        with self._conn_factory() as conn:
+            conn.set_session(isolation_level="REPEATABLE READ", readonly=True, autocommit=False)
+            with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+                cur.execute("""
+                    SELECT batch.* FROM app.advisory_historical_range_request_key AS request_key
+                    JOIN app.advisory_historical_range_batch AS batch ON batch.batch_id = request_key.batch_id
+                    WHERE request_key.client_idempotency_key = %s
+                    """, (request.client_idempotency_key,))
+                row = cur.fetchone()
+                if row is None:
+                    return None
+                if row["user_request_semantic_hash"] != request.user_request_semantic_hash:
+                    raise HistoricalRangeContractError(REASON_IDEMPOTENCY_CONFLICT,
+                        "same client key has different source-mode/user semantics")
+                ref = HistoricalRangeArtifactRefV1.model_validate(row["requirement_plan_ref"])
+                plan = HistoricalRangeSourceRequirementPlanV1.model_validate(
+                    self._artifact_store.load_planning(ref).payload)
+                self._assert_planning_batch_matches(existing=dict(row), plan=plan,
+                    artifacts=HistoricalRangePlanningArtifactBindingsV1(
+                        requirement_plan_ref=ref, artifact_root_identity_hash=self._artifact_store.root_identity_hash))
+                if (plan.request.user_request_semantic_hash != request.user_request_semantic_hash
+                        or row["artifact_root_identity_hash"] != self._artifact_store.root_identity_hash):
+                    raise HistoricalRangeContractError(REASON_IDEMPOTENCY_CONFLICT,
+                        "stored source planning request/root differs from this consumer")
+                from .task_input_sources import validate_program_source_plan
+
+                for program in plan.frozen_programs:
+                    if program.selection_input_source_plan is None:
+                        raise HistoricalRangeContractError(REASON_IDEMPOTENCY_CONFLICT,
+                            "stored source-mode task is missing its frozen source plan")
+                    validate_program_source_plan(program=program, date_plan=plan.date_plan, request=plan.request)
+                result = self._planning_batch_result(cur=cur, batch_id=str(row["batch_id"]), idempotent=True)
+            conn.rollback()
+        return result
+
     def create_planning_batch(
         self,
         *,
@@ -4298,7 +4335,7 @@ class PostgresHistoricalRangeRepository:
                 )
 
     def _validate_outcome_artifact(self, fact: HistoricalRangeOutcomeFactV1) -> None:
-        outcome_artifact = HistoricalRangeOutcomeArtifactV2.model_validate(fact.outcome_json)
+        outcome_artifact = fact.validated_artifact
         range_run_id, resolved_request_hash, subject_day_run_id = self._get_outcome_subject_identity(
             subject_type=fact.subject_type.value,
             subject_id=fact.subject_id,
@@ -5485,7 +5522,7 @@ class PostgresHistoricalRangeRepository:
         self._assert_upstream_snapshot_unchanged()
         if ref.artifact_kind is not self._operation_receipt_kind(operation_type):
             raise ValueError("operation result receipt kind differs from operation type")
-        envelope = self._artifact_store.load(ref)
+        envelope = self._artifact_store.load_readonly(ref)
         if envelope.resolved_request_hash != resolved_request_hash or envelope.day_run_id is not None:
             raise ValueError("operation result artifact differs from the batch operation identity")
         self._load_upstream_closure(
@@ -6374,7 +6411,7 @@ class PostgresHistoricalRangeRepository:
     ) -> HistoricalRangeArtifactEnvelopeV1:
         if ref.artifact_kind is not expected_kind:
             raise ValueError(f"artifact ref must reference {expected_kind.value}")
-        envelope = self._artifact_store.load(ref)
+        envelope = self._artifact_store.load_readonly(ref)
         if envelope.resolved_request_hash != resolved_request_hash:
             raise ValueError("artifact resolved_request_hash differs from the repository request")
         if allow_ancestor_identity:
@@ -6382,7 +6419,7 @@ class PostgresHistoricalRangeRepository:
                 raise ValueError("artifact range/day identity differs from the repository operation")
         elif envelope.range_run_id != range_run_id or envelope.day_run_id != day_run_id:
             raise ValueError("artifact range/day identity differs from the repository operation")
-        if expected_payload is not None and canonicalize(envelope.payload) != canonicalize(expected_payload):
+        if expected_payload is not None and envelope.payload != canonicalize(expected_payload):
             raise ValueError("artifact payload differs from the canonical repository facts")
         upstream_by_identity = {
             (item.artifact_kind, item.semantic_content_hash, item.relative_path): item
@@ -6418,7 +6455,7 @@ class PostgresHistoricalRangeRepository:
         else:
             allowed_day_ids = {None, day_run_id, allow_direct_predecessor_day_run_id}
             for upstream_ref in envelope.upstream_refs:
-                upstream = self._artifact_store.load(upstream_ref)
+                upstream = self._artifact_store.load_readonly(upstream_ref)
                 if upstream.resolved_request_hash != resolved_request_hash:
                     raise ValueError("direct upstream resolved_request_hash differs from its consumer")
                 if range_run_id is not None and upstream.range_run_id not in {None, range_run_id}:
@@ -6459,7 +6496,7 @@ class PostgresHistoricalRangeRepository:
             if predecessor_ref is not None:
                 if predecessor_ref not in envelope.upstream_refs:
                     raise ValueError("typed predecessor receipt must be an exact upstream")
-                predecessor = self._artifact_store.load(predecessor_ref)
+                predecessor = self._artifact_store.load_readonly(predecessor_ref)
                 if (
                     predecessor.artifact_kind is not HistoricalRangeArtifactKind.DAY_RECEIPT
                     or predecessor.resolved_request_hash != resolved_request_hash
@@ -6484,7 +6521,7 @@ class PostgresHistoricalRangeRepository:
                     raise ValueError("sealed upstream artifact changed after closure verification")
                 self._validated_upstream_closures.move_to_end(closure_key)
                 continue
-            upstream = self._artifact_store.load(upstream_ref)
+            upstream = self._artifact_store.load_readonly(upstream_ref)
             if self._upstream_file_stamp(upstream_ref) != stamp:
                 raise ValueError("sealed upstream artifact changed during closure verification")
             if upstream.resolved_request_hash != resolved_request_hash:

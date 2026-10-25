@@ -615,13 +615,35 @@ def _stream_command(
                         archive.addfile(info, handle)
             process.stdin.close()
             returncode = process.wait(timeout=timeout_seconds)
-        except BaseException:
-            process.kill()
-            process.wait()
+        except BaseException as exc:
+            # A rejected receiver closes its pipe before the sender can finish.
+            # Let it flush its diagnostic; never replace that error with a
+            # second broken pipe raised by BufferedWriter.close().
+            try:
+                if process.poll() is None:
+                    try:
+                        process.wait(timeout=1 if isinstance(exc, OSError) else 0)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+            except OSError:
+                pass  # Preserve the primary transfer failure during cleanup.
+            if isinstance(exc, OSError):
+                stderr.seek(0, os.SEEK_END)
+                stderr.seek(max(0, stderr.tell() - 4_000))
+                diagnostic = stderr.read().decode("utf-8", errors="replace").strip()
+                if diagnostic:
+                    raise MonthlyImmutableDeployError(
+                        f"streaming deployment transport failed (exit={process.returncode}): "
+                        f"{diagnostic}"
+                    ) from exc
             raise
         finally:
             if process.stdin is not None and not process.stdin.closed:
-                process.stdin.close()
+                try:
+                    process.stdin.close()
+                except OSError:
+                    pass  # Cleanup must not hide the original exception.
         stdout.seek(0)
         stderr.seek(0)
         return subprocess.CompletedProcess(

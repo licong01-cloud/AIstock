@@ -3815,6 +3815,20 @@ class AutoEvolutionScheduler:
         )
         return new_task_id
 
+    def get_task_status_batch(self, task_ids: list[str]) -> list[dict]:
+        """Read only observed tasks, including their first terminal readback."""
+        ids = list(dict.fromkeys(task_ids))
+        if not ids:
+            return []
+        with get_conn() as conn:
+            with conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(
+                    """SELECT task_id, status, current_loop, max_loops, updated_at
+                       FROM qe_evolution_tasks WHERE task_id = ANY(%s)""",
+                    (ids,),
+                )
+                return [dict(row) for row in cur.fetchall()]
+
     async def get_task_detail(self, task_id: str, detail: str = "summary") -> Optional[Dict[str, Any]]:
         with get_conn() as conn:
             with conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -3987,60 +4001,13 @@ class AutoEvolutionScheduler:
                 task = cur.fetchone()
                 if not task:
                     return None
-                cur.execute("""
-                    SELECT loop_id, task_id, loop_index, action_type,
-                           config_json, metrics_json,
-                           COALESCE(config_json->'factor_list', config_json->'factor_names', config_json->'factors') AS factor_list,
-                           config_json->>'model_id' AS model_id,
-                           config_json->>'strategy_id' AS strategy_id,
-                           config_json->>'label_horizon' AS label_horizon,
-                           config_json->>'execution_algo' AS execution_algo,
-                           COALESCE(metrics_json->>'ic', metrics_json->>'IC') AS ic,
-                           COALESCE(metrics_json->>'icir', metrics_json->>'ICIR') AS icir,
-                           COALESCE(metrics_json->>'rank_ic', metrics_json->>'Rank_IC', metrics_json->>'Rank IC') AS rank_ic,
-                           COALESCE(metrics_json->>'rank_icir', metrics_json->>'Rank_ICIR', metrics_json->>'Rank ICIR') AS rank_icir,
-                           CASE
-                               WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
-                               THEN metrics_json#>>'{enhanced_metrics,absolute_returns,cagr}'
-                               ELSE metrics_json->>'cagr'
-                           END AS cagr,
-                           metrics_json#>>'{enhanced_metrics,absolute_returns,sharpe}' AS sharpe,
-                           (metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL) AS absolute_metrics_present,
-                           COALESCE(
-                               metrics_json->>'annualized_return',
-                               metrics_json->>'1day.excess_return_with_cost.annualized_return'
-                           ) AS annualized_return,
-                           CASE
-                               WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
-                               THEN metrics_json#>>'{enhanced_metrics,absolute_returns,max_drawdown}'
-                               ELSE COALESCE(
-                                   metrics_json->>'max_drawdown',
-                                   metrics_json->>'1day.excess_return_with_cost.max_drawdown'
-                               )
-                           END AS max_drawdown,
-                           CASE
-                               WHEN metrics_json#>'{enhanced_metrics,absolute_returns}' IS NOT NULL
-                               THEN COALESCE(
-                                   metrics_json#>>'{enhanced_metrics,absolute_returns,calmar}',
-                                   metrics_json#>>'{enhanced_metrics,absolute_returns,calmar_ratio}'
-                               )
-                               ELSE COALESCE(metrics_json->>'calmar', metrics_json->>'calmar_ratio')
-                           END AS calmar,
-                           COALESCE(metrics_json->>'topk_return_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_20}') AS topk_return_20,
-                           COALESCE(metrics_json->>'topk_return_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_return_50}') AS topk_return_50,
-                           COALESCE(metrics_json->>'topk_hit_rate_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_hit_rate_20}') AS topk_hit_rate_20,
-                           COALESCE(metrics_json->>'topk_hit_rate_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_hit_rate_50}') AS topk_hit_rate_50,
-                           COALESCE(metrics_json->>'topk_decay', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_decay}') AS topk_decay,
-                           COALESCE(metrics_json->>'within_portfolio_rankic', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,within_portfolio_rankic}') AS within_portfolio_rankic,
-                           COALESCE(metrics_json->>'topk_dispersion_20', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_dispersion_20}') AS topk_dispersion_20,
-                           COALESCE(metrics_json->>'topk_dispersion_50', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_dispersion_50}') AS topk_dispersion_50,
-                           COALESCE(metrics_json->>'topk_quality_status', metrics_json#>>'{enhanced_metrics,prediction_diagnostics,topk_quality_status}') AS topk_quality_status,
-                           is_sota, status,
-                           node_id, experiment_id, created_at, updated_at
-                    FROM qe_evolution_loops
-                    WHERE task_id = %s
-                    ORDER BY loop_index ASC
-                """, (task_id,))
+                from .payload_summary import loop_summary_sql_projection
+                cur.execute(
+                    f"""SELECT {loop_summary_sql_projection()}
+                        FROM qe_evolution_loops
+                        WHERE task_id = %s ORDER BY loop_index ASC""",
+                    (task_id,),
+                )
                 loops = [compact_loop_row(dict(row)) for row in cur.fetchall()]
         result = compact_task_row(dict(task))
         result["loops"] = loops

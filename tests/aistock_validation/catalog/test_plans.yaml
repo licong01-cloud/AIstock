@@ -1,5 +1,25 @@
 schema_version: aistock_validation_plans_v1
 plans:
+  - plan_key: advisory_mocked_ui
+    title: Advisory mocked UI without business services
+    module: advisory.ui
+    level: L2
+    command_key: nox_advisory_mocked_ui
+    nox_session: advisory_mocked_ui
+    ci_lane: frontend
+    frontend_test_path: tests/paper-v2/paper-v2-advisory-ui.spec.ts
+    enabled: true
+    requires_backend: false
+    requires_frontend: true
+    allowed_backend_ports: []
+    allowed_frontend_ports: [3012]
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    mock_api_used: true
+    max_duration_seconds: 600
+    evidence_kinds: [playwright]
   - plan_key: factor_research_backend
     title: Factor research request, candidate and recovery contracts
     module: factor_library.research
@@ -496,7 +516,7 @@ plans:
   - plan_key: validation_center_ui
     title: Validation Center mocked UI regression
     module: validation_center
-    level: L3
+    level: L2
     command_key: nox_validation_center_ui
     nox_session: validation_center_ui
     ci_lane: frontend
@@ -785,6 +805,71 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [typescript, eslint]
+  - plan_key: qe_best_loop_contract_ui
+    title: QE best-loop source-only frontend contract
+    module: qe.single_experiment
+    level: L2
+    command_key: nox_qe_best_loop_contract_ui
+    nox_session: qe_best_loop_contract_ui
+    ci_lane: frontend
+    frontend_test_path: tests/qe/qe-evolution-best-loop-ui.spec.ts
+    change_applicability:
+      include: [frontend/tests/qe/qe-evolution-best-loop-ui.spec.ts]
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    max_duration_seconds: 300
+    evidence_kinds: [playwright]
+  - plan_key: qe_terminal_poll_contract_ui
+    title: QE terminal polling mocked frontend contract; integration remains delegated
+    module: qe.single_experiment
+    level: L2
+    command_key: nox_qe_terminal_poll_contract_ui
+    nox_session: qe_terminal_poll_contract_ui
+    ci_lane: frontend
+    frontend_test_path: tests/qe/qe-evolution-read-only.spec.ts
+    change_applicability:
+      include: [frontend/tests/qe/qe-evolution-read-only.spec.ts]
+    enabled: true
+    requires_backend: false
+    requires_frontend: true
+    allowed_backend_ports: [8012]
+    allowed_frontend_ports: [3012]
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    mock_api_used: true
+    max_duration_seconds: 300
+    evidence_kinds: [playwright]
+  - plan_key: qe_read_performance_ui
+    title: QE read cache and refresh browser-harness contracts; no service
+    module: qe.single_experiment
+    level: L2
+    command_key: nox_qe_read_performance_ui
+    nox_session: qe_read_performance_ui
+    ci_lane: frontend
+    frontend_test_path: tests/qe/qe-read-performance.spec.ts
+    change_applicability:
+      include: [frontend/tests/qe/qe-read-performance.spec.ts]
+    enabled: true
+    requires_backend: false
+    requires_frontend: false
+    allowed_backend_ports: []
+    allowed_frontend_ports: []
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    mock_api_used: true
+    max_duration_seconds: 300
+    evidence_kinds: [playwright]
   - plan_key: qe_experiment_registry_ui
     title: QE experiment registry and progress mocked frontend contract
     module: qe.single_experiment
@@ -1303,6 +1388,60 @@ plans:
     runner_enabled: true
     max_duration_seconds: 300
     evidence_kinds: [pytest, compileall]
+  - plan_key: localsim_control_plane_ui
+    title: LocalSIM workbench and native control plane mocked UI contracts
+    module: simulation.localsim_successor_core
+    level: L2
+    command_key: nox_localsim_control_plane_ui
+    nox_session: localsim_control_plane_ui
+    ci_lane: frontend
+    frontend_test_path: tests/paper-v2/localsim-unified-control-plane.spec.ts
+    enabled: true
+    requires_backend: false
+    requires_frontend: true
+    allowed_backend_ports: [8012]
+    allowed_frontend_ports: [3012]
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    mock_api_used: true
+    max_duration_seconds: 600
+    evidence_kinds: [playwright]
+    change_applicability:
+      include:
+        - frontend/src/app/simulation/localsim/**
+        - frontend/src/lib/simulation/localsim/**
+        - frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts
+        - frontend/tests/paper-v2/localsim-trading-workbench.spec.ts
+      no_match_reason: localsim_change_does_not_touch_the_frontend_control_plane
+  - plan_key: localsim_workbench_ui
+    title: LocalSIM trading workbench mocked UI contracts
+    module: simulation.localsim_successor_core
+    level: L2
+    command_key: nox_localsim_workbench_ui
+    nox_session: localsim_workbench_ui
+    ci_lane: frontend
+    frontend_test_path: tests/paper-v2/localsim-trading-workbench.spec.ts
+    enabled: true
+    requires_backend: false
+    requires_frontend: true
+    allowed_backend_ports: [8012]
+    allowed_frontend_ports: [3012]
+    writes_database: false
+    writes_artifacts: true
+    writes_business_state: false
+    runner_enabled: true
+    mock_api_used: true
+    max_duration_seconds: 600
+    evidence_kinds: [playwright]
+    change_applicability:
+      include:
+        - frontend/src/app/simulation/localsim/**
+        - frontend/src/lib/simulation/localsim/**
+        - frontend/tests/paper-v2/localsim-unified-control-plane.spec.ts
+        - frontend/tests/paper-v2/localsim-trading-workbench.spec.ts
+      no_match_reason: localsim_change_does_not_touch_the_frontend_control_plane
   - plan_key: localsim_successor_core_dev_db
     title: LocalSIM successor account lineage replay DEV PostgreSQL validation
     module: simulation.localsim_successor_core

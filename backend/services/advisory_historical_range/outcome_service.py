@@ -174,6 +174,8 @@ class HistoricalRangeOutcomeApplicationService:
         resolved_request_hash: str,
         worker_id: str,
     ) -> tuple[HistoricalRangeOutcomeRefreshReceiptV1, HistoricalRangeArtifactRefV1]:
+        if request.summary_mode == "ONLY" and self._summary_coordinator is None:
+            raise ValueError("summary-only requires a real summary coordinator")
         operation_request = HistoricalRangeOperationRequestV1(
             operation_id=derive_prefixed_id(
                 "ahrop",
@@ -242,7 +244,7 @@ class HistoricalRangeOutcomeApplicationService:
                 processed_count += 1
 
         try:
-            while True:
+            while request.summary_mode != "ONLY":
                 lease.check()
                 planned = self._planner.plan_slice(
                     request=request,
@@ -343,7 +345,7 @@ class HistoricalRangeOutcomeApplicationService:
                         range_run_id=item.range_run_id,
                         upstream_refs=artifact.direct_upstream_refs,
                     )
-                    self._artifact_store.load(stored.ref)
+                    self._artifact_store.load_readonly(stored.ref)
                     fact = self._projection_builder.build_fact(
                         work_item=item,
                         result=result,
@@ -358,11 +360,13 @@ class HistoricalRangeOutcomeApplicationService:
                 if planned.exhausted:
                     break
                 operation = lease.renew(cursor=cursor, update_cursor=True)
-            if self._summary_coordinator is not None:
+            if self._summary_coordinator is not None and request.summary_mode != "DEFER":
                 for range_run_id in sorted(touched_runs):
                     lease.check()
                     ref = self._summary_coordinator.refresh(range_run_id=range_run_id, assert_active=lease.check)
                     lease.check()
+                    if request.summary_mode == "ONLY" and ref is None:
+                        raise ValueError("summary-only refresh produced no SUMMARY ref")
                     if ref is not None:
                         if ref.artifact_kind is not HistoricalRangeArtifactKind.SUMMARY:
                             raise ValueError("summary coordinator returned a non-SUMMARY ref")
@@ -374,6 +378,7 @@ class HistoricalRangeOutcomeApplicationService:
                 processed_count=processed_count,
                 outcome_refs=tuple(outcome_refs[key] for key in sorted(outcome_refs)),
                 summary_refs=tuple(summary_refs[key] for key in sorted(summary_refs)),
+                summary_deferred=request.summary_mode == "DEFER",
             )
             return self._finish(
                 operation=operation,

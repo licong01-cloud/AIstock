@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from io import BytesIO
+import errno
 import hashlib
 import json
 import os
@@ -12,6 +13,7 @@ from typing import Any, Mapping
 
 import pytest
 
+from backend.services.dataset_release import monthly_immutable_deploy as deploy_transport
 from backend.services.dataset_release.canonical import canonical_json_bytes
 from backend.services.dataset_release.monthly_immutable_deploy import (
     ImmutableStreamingNodeTransport,
@@ -103,6 +105,140 @@ def _archive(files: tuple[ReleaseFile, ...]) -> BytesIO:
                 archive.addfile(info, handle)
     stream.seek(0)
     return stream
+
+
+@pytest.mark.parametrize("error_type", [BrokenPipeError, OSError])
+def test_stream_failure_preserves_receiver_error_and_original_cause(
+    monkeypatch: pytest.MonkeyPatch, error_type: type[OSError]
+) -> None:
+    primary = error_type(errno.EINVAL, "sender write failed")
+
+    class ClosedReceiver(BytesIO):
+        def write(self, value: bytes) -> int:
+            raise primary
+
+        def close(self) -> None:
+            super().close()
+            raise BrokenPipeError(errno.EPIPE, "secondary close failure")
+
+    class RejectedProcess:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.stdin = ClosedReceiver()
+            kwargs["stderr"].write(b"MONTHLY_REMOTE_DEPLOY_ERROR: Permission denied\n")
+            self.returncode = 2
+
+        def poll(self) -> int:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            return self.returncode
+
+        def kill(self) -> None:
+            pytest.fail("receiver has already exited")
+
+    monkeypatch.setattr(deploy_transport.subprocess, "Popen", RejectedProcess)
+    with pytest.raises(MonthlyImmutableDeployError, match="Permission denied") as caught:
+        deploy_transport._stream_command(
+            ("node", "deploy"), request=b"{}", files=(), timeout_seconds=60
+        )
+    assert caught.value.__cause__ is primary
+
+
+def test_stream_failure_reports_real_subprocess_stderr() -> None:
+    command = (
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write('receiver denied staging\\n'); sys.exit(2)",
+    )
+    with pytest.raises(MonthlyImmutableDeployError, match="receiver denied staging"):
+        deploy_transport._stream_command(
+            command, request=b"x" * (2 * 1024 * 1024), files=(), timeout_seconds=60
+        )
+
+
+def test_stream_timeout_retains_timeout_and_reaps_child(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    processes: list[Any] = []
+    primary = subprocess.TimeoutExpired("node", 60)
+
+    class StalledProcess:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.stdin = BytesIO()
+            self.returncode: int | None = None
+            processes.append(self)
+
+        def poll(self) -> int | None:
+            return self.returncode
+
+        def wait(self, timeout: float | None = None) -> int:
+            if self.returncode is None:
+                raise primary
+            return self.returncode
+
+        def kill(self) -> None:
+            self.returncode = -1
+
+    monkeypatch.setattr(deploy_transport.subprocess, "Popen", StalledProcess)
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        deploy_transport._stream_command(
+            ("node", "deploy"), request=b"{}", files=(), timeout_seconds=60
+        )
+    assert caught.value is primary
+    assert processes[0].returncode == -1
+    assert processes[0].stdin.closed
+
+
+def test_stream_sender_failure_without_stderr_is_not_replaced(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    primary = FileNotFoundError(errno.ENOENT, "local source disappeared")
+
+    class MissingSourcePipe(BytesIO):
+        def write(self, value: bytes) -> int:
+            raise primary
+
+        def close(self) -> None:
+            super().close()
+            raise BrokenPipeError(errno.EPIPE, "secondary close failure")
+
+    class ExitedProcess:
+        stdin = MissingSourcePipe()
+        returncode = 1
+
+        def poll(self) -> int:
+            return self.returncode
+
+    monkeypatch.setattr(deploy_transport.subprocess, "Popen", lambda *a, **k: ExitedProcess())
+    with pytest.raises(FileNotFoundError) as caught:
+        deploy_transport._stream_command(
+            ("node", "deploy"), request=b"{}", files=(), timeout_seconds=60
+        )
+    assert caught.value is primary
+
+
+def test_stream_success_keeps_framed_request_and_exact_archive(tmp_path: Path) -> None:
+    files = _files(tmp_path)
+    reader = (
+        "import json,sys,tarfile; "
+        "from backend.services.dataset_release.monthly_remote_deploy import _read_frame; "
+        "request=_read_frame(sys.stdin.buffer); "
+        "archive=tarfile.open(fileobj=sys.stdin.buffer,mode='r|*'); "
+        "rows={item.name: archive.extractfile(item).read().hex() for item in archive}; "
+        "print(json.dumps({'request':request,'files':rows}))"
+    )
+    result = deploy_transport._stream_command(
+        (sys.executable, "-c", reader), request=b"{}", files=files, timeout_seconds=60
+    )
+    assert result.returncode == 0
+    assert not result.stderr
+    assert json.loads(result.stdout) == {
+        "request": {},
+        "files": {
+            item.relative_path: item.source_path.read_bytes().hex()
+            for item in files if item.hardlink_source is None
+        },
+    }
 
 
 def test_remote_endpoint_streams_verifies_and_resumes_exact_tree(tmp_path: Path) -> None:

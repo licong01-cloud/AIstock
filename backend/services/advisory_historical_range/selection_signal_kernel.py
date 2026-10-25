@@ -332,6 +332,19 @@ class SelectionSignalKernel:
                                 "alpha_raw", "hmm_adjusted", "risk_policy_adjusted", "selection_effective")}
                                 for p, trace in computation.stage_trace_by_package.items()},
                             "headers": {p: dict(value.raw.semantic_header) for p, value in prepared.items()}}
+                planned_inputs = {p: context["source_plan_receipt"] for p, context in contexts.items()
+                                  if "source_plan_receipt" in context}
+                if planned_inputs:
+                    from .input_source_plan import digest
+                    for receipt in planned_inputs.values():
+                        route = receipt.get("route", {})
+                        if (receipt.get("source_receipt_hash") != digest({k: v for k, v in receipt.items() if k != "source_receipt_hash"})
+                                or route.get("plan_hash") != request.source_identity
+                                or any(route.get(k) != v for k, v in day.to_dict().items())):
+                            raise ValueError("shared source receipt differs from kernel request identity")
+                    if len(planned_inputs) != len(contexts):
+                        raise ValueError("shared source plan receipt missing for a requested package")
+                    identity["source_plan_receipts"] = planned_inputs
                 semantic_hash = hashlib.sha256(json.dumps(identity, sort_keys=True, default=str).encode()).hexdigest()
                 storage_hash = hashlib.sha256(json.dumps(
                     [request.consumer_scope, request.run_id, day.to_dict(), semantic_hash], sort_keys=True).encode()).hexdigest()

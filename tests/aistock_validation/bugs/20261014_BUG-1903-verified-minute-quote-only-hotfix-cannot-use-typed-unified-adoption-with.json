@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-1903",
-  "closed_at": null,
+  "closed_at": "2026-10-17T13:27:01.339795Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -28,19 +28,19 @@
   "expected": "Expected behavior should be restored.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261014_BUG-1903-verified-minute-quote-only-hotfix-cannot-use-typed-unified-adoption-with.json",
+      "backend/services/dataset_release/monthly_quote_adoption.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py",
-      "backend/services/dataset_release/monthly_quote_adoption.py"
+      "tests/aistock_validation/bugs/20261014_BUG-1903-verified-minute-quote-only-hotfix-cannot-use-typed-unified-adoption-with.json"
     ],
     "added_files": [
       "backend/services/dataset_release/monthly_quote_adoption.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261014_BUG-1903-verified-minute-quote-only-hotfix-cannot-use-typed-unified-adoption-with.json",
+      "backend/services/dataset_release/monthly_quote_adoption.py",
       "backend/services/dataset_release/monthly_unified.py",
       "backend/tests/dataset_release/test_monthly_unified_v2.py",
-      "backend/services/dataset_release/monthly_quote_adoption.py"
+      "tests/aistock_validation/bugs/20261014_BUG-1903-verified-minute-quote-only-hotfix-cannot-use-typed-unified-adoption-with.json"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -114,8 +114,8 @@
   },
   "first_seen_at": "2026-10-14T18:43:05.074928Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "d18efceb9d8f88450ad37d9c190e0c67f82a88a8",
+  "fixed_at": "2026-10-14T19:11:15Z",
   "github_issue_number": 6075,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6075",
   "last_seen_at": "2026-10-14T18:43:05.074928Z",
@@ -123,6 +123,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6078",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -150,9 +151,32 @@
     "planned_target_ids": [
       "worker-scheduler"
     ],
-    "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1903/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1903",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "c2d43795ce153e1ff3b490714e1fe9366546c08a2197a01aaf7cb98f03315891",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "d18efceb9d8f88450ad37d9c190e0c67f82a88a8",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-17T13:16:59.831332Z",
+      "mode": "read_only",
+      "observed_identity": "0f68d56f2259d1e67d81d92d1852c6efdfa6bae7",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "2dc5d2fe6aaf42aa6320ca0da85c39a1ed12a54c4d61fce74cc973dcab918bd1",
+      "receipt_sha256": "72acea95860d33e86c3ffc402042c022e1e861e1ed7e579d73acc74eed5379a5",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "a827a7e1eccbf5ef39d2e1124de4571fe272cfc4a1614795e3f688c4f5c7d613",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
     "provisional": false,
-    "runtime_identity_match": "pending",
+    "runtime_identity_match": true,
     "runtime_impact": "worker_scheduler",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "worker-scheduler",
@@ -162,7 +186,28 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1903",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "646d86547cc0e908",
+    "recorded_at": "2026-10-14T19:11:51.258827Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "2dca917fa25af9ca533b832c3fcce5b48eae82de",
+    "source_merge_commit": "d18efceb9d8f88450ad37d9c190e0c67f82a88a8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6078",
+    "validation_evidence": [
+      "python -m pytest backend/tests/dataset_release/test_monthly_unified_v2.py -q -> 56 passed, 1 skipped"
+    ],
+    "validation_evidence_digest": "7db696492e2e295b7ce5011b4cf73bfcf859dd3b6c5eaebf27c9b9f5c569e32c"
+  },
+  "status": "verified",
   "suspected_modules": [
     "qlib_data"
   ],
@@ -171,6 +216,10 @@
     "fingerprint": "acd71aaf4829a0e63c7d4b9f",
     "source_event_id": "FE-20261014-acd71aaf4829"
   },
+  "validation_evidence": [
+    "python -m pytest backend/tests/dataset_release/test_monthly_unified_v2.py -q -> 56 passed, 1 skipped",
+    "Current runtime identity and business-smoke verified; source validation retained by receipt 646d86547cc0e908"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
