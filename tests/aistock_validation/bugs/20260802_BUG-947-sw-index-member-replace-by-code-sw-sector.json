@@ -8,7 +8,7 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-947",
-  "closed_at": null,
+  "closed_at": "2026-10-25T18:23:26.688122Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
@@ -27,8 +27,18 @@
   "evidence_uris": [],
   "expected": "引擎层去掩盖: _fetch_once 不再依赖 tushare DataApi 的 falsy-Response 行为, 改用直连 HTTP 查询(同一 dataapi 端点), 对 HTTP>=400 与 code!=0 抛 TushareHttpError(含状态码/接口名), 使既有3次重试对真实上游错误生效; 仅 code=0 且 items=[] 认定合法空, 流入现有守卫/no-op 逻辑。sw_daily 等 upsert 数据集对\"本地近N日有行情但该指数全日空\"记 warning 日志(不阻断), 消除静默漏数的不可见性。既有测试全绿, 新增: HTTP 5xx 抛错并重试、code!=0 抛错、合法空保持 no-op、upsert 空载荷告警。",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20260802_BUG-947-sw-index-member-replace-by-code-sw-sector.json"
+    ],
     "added_files": [],
-    "changed_files": [],
+    "changed_files": [
+      "backend/services/tushare_sync_engine.py",
+      "backend/tests/test_tushare_sync_engine.py",
+      "tests/aistock_validation/bugs/20260802_BUG-947-sw-index-member-replace-by-code-sw-sector.json"
+    ],
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [],
       "impacted_modules": [],
@@ -37,6 +47,7 @@
       "suggested_scope": [],
       "unmatched_files": []
     },
+    "planned_files": [],
     "schema_version": "aistock_submit_bug_file_scope_v1",
     "scope_files": []
   },
@@ -71,9 +82,31 @@
     "identity_ref": "http://127.0.0.1:8001/api/v1/runtime-identity",
     "operator_runbook_ref": "docs/operations/qe_governance_restart_checkpoint_20260509.md",
     "persistence_basis": "git_tracked_source",
-    "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
-    "runtime_identity_match": "pending",
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\BUG-947-exact-refreshed-runtime.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-947",
+      "business_smoke_semantic": {
+        "contract_id": "local_data_freshness",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "b0865c04f097ba46c5cfce2db11bc15a2764c3071c4dae8db112f0908284dcfb",
+      "contract_digest": "58c279b580db136070947c49e20a74a2bacfefc85f80aeea267ec32c39dd41d2",
+      "expected_identity": "c7f73e9920498f273a4c08df10d19a456122719e",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-25T18:23:24.136039Z",
+      "mode": "read_only",
+      "observed_identity": "5da386d93f928d9314781f66e40016a72809f8ef",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "e44a5b3f8eee62a8dbc1969e95e2df6f1f0ff5a9e59a85244b0c32b14241acfd",
+      "receipt_sha256": "b9cf19601ca17a8a2e9837ebc69d1c91b36962cf48d1871cbf6ec12bc9f0914d",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "5724187406c39c8154a1a0a39a4ea4408f758eab42eeef76354395fda1aedfd1",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "backend-main"
+    },
+    "runtime_identity_match": true,
     "runtime_impact": "backend",
     "schema_version": "aistock_bug_runtime_contract_v1",
     "target_id": "backend-main",
@@ -81,16 +114,16 @@
       "backend-main"
     ]
   },
-  "schema_version": "aistock_validation_bug_v1",
   "runtime_contract_migration": {
-    "scope": "Executable read-only probes replace prose; original source behavior and tests unchanged.",
-    "factual_readback": "X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/legacy-contract-factual-readback.json",
-    "production_jobs": "sw_index_member 653a648f-5073-44fe-89ef-c7e9ff75a089 success 134/134; sw_daily cfd4e8f5-55ec-4f36-8490-c26fe1c0749c success 155/155; both failed=0.",
     "database_write": false,
-    "process_control": false
+    "factual_readback": "X:/AIstock_temp/DATA_PREPARATION/remaining-20261025/legacy-contract-factual-readback.json",
+    "process_control": false,
+    "production_jobs": "sw_index_member 653a648f-5073-44fe-89ef-c7e9ff75a089 success 134/134; sw_daily cfd4e8f5-55ec-4f36-8490-c26fe1c0749c success 155/155; both failed=0.",
+    "scope": "Executable read-only probes replace prose; original source behavior and tests unchanged."
   },
+  "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "fixed_source_pending_user_restart",
+  "status": "verified",
   "suspected_modules": [
     "aistock_backend"
   ],
@@ -104,7 +137,8 @@
     "nox -s l0 -> passed",
     "nox -s validation_module_registry_l0 -> passed",
     "nox -s data_sync_autonomy_backend -> passed",
-    "PR #3034 CI all green -> passed"
+    "PR #3034 CI all green -> passed",
+    "Original source CI/tests retained; exact refreshed-worktree runtime probe PASS; two metadata reviews and DESIGN-COMPLIANCE-001 preserve original scope without fake closure or new data/service actions."
   ],
   "verification_budget": {
     "budget": "standard",
