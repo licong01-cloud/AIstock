@@ -9,14 +9,30 @@
   ],
   "assigned_agent": null,
   "bug_id": "BUG-2038",
-  "closed_at": null,
+  "closed_at": "2026-10-20T13:06:51Z",
   "closure_requirements": [
     "Fix the observed behavior.",
     "Run required verification plans.",
     "Keep BUG JSON and GitHub Issue synchronized."
   ],
   "created_at": "2026-10-20T12:46:46.484068Z",
+  "data_repair_status": {
+    "dev_fresh_process_readback_equal": true,
+    "dev_negative_sql_guards": "passed",
+    "dev_repeat_inserted_rows": 0,
+    "dev_rows": 8702,
+    "dev_symbols": 20,
+    "production_apply": "pending_specific_authorization",
+    "production_sql_sha256": "7b9250eddca6df2fc76c91e42c0bdf8b995d6dcc64e3c4655cb893f1fbbb3fb2",
+    "release_updated": false
+  },
   "description": "The user-authorized all-history fact audit of September 2026 found 20 retired securities with no market.kline_daily_raw rows. Three independent auxiliary witnesses identify 8696 keys; Tushare daily now returns 8702 real traded rows, so these are not suspension-only absences. Preserve factual population independently of buy PIT. Add a bounded source-pinned historical daily repair operator and direct tests using the existing DEV database first, NULL/new-key-only production semantics, exact units and share precision, idempotent readback and separately authorized production execution. Do not modify consumers, active profile, services, historical candidates or monthly history-scan defaults.",
+  "design_compliance_001": [
+    "No partial dataset success: only repair operator scope is delivered; complete release remains NOT_READY.",
+    "No silent errors: invalid/missing numeric source, conflicting or incomplete readback reject; no fill or estimation.",
+    "No business changes: factual SH/SZ raw rows independent of PIT; no consumer, policy or frozen artifact mutation.",
+    "No new approval platform: existing DEV and exact production authorization boundaries only; direct existing CI routing."
+  ],
   "events": [
     {
       "action": "promote_candidate_to_bug",
@@ -33,22 +49,22 @@
   "expected": "Pinned real historical daily facts can be inserted using the actual two-column raw primary key, tushare_api source label and exact share precision. Existing facts are never overwritten; DEV and fresh-process readback prove 8702 rows and repeat inserts zero. Production apply remains separately authorized and pending. Add only the direct existing local_data CI routing for this operator and test.",
   "file_scope_contract": {
     "actual_changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2038-historical-raw-daily-facts-are-absent-for-retired-securities-despite-ava.json",
-      "noxfile.py",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
       "backend/tests/scripts/test_repair_historical_daily_fact_absence.py",
-      "scripts/repair_historical_daily_fact_absence.py"
+      "noxfile.py",
+      "scripts/repair_historical_daily_fact_absence.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2038-historical-raw-daily-facts-are-absent-for-retired-securities-despite-ava.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "added_files": [
       "scripts/repair_historical_daily_fact_absence.py",
       "backend/tests/scripts/test_repair_historical_daily_fact_absence.py"
     ],
     "changed_files": [
-      "tests/aistock_validation/bugs/20261020_BUG-2038-historical-raw-daily-facts-are-absent-for-retired-securities-despite-ava.json",
-      "noxfile.py",
-      "tests/aistock_validation/catalog/file_ownership.yaml",
       "backend/tests/scripts/test_repair_historical_daily_fact_absence.py",
-      "scripts/repair_historical_daily_fact_absence.py"
+      "noxfile.py",
+      "scripts/repair_historical_daily_fact_absence.py",
+      "tests/aistock_validation/bugs/20261020_BUG-2038-historical-raw-daily-facts-are-absent-for-retired-securities-despite-ava.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
     "changed_files_source": "git_finish",
     "ownership": {
@@ -97,30 +113,9 @@
   },
   "first_seen_at": "2026-10-20T12:46:46.484068Z",
   "fix_branch": null,
-  "fix_commit": null,
+  "fix_commit": "96191b447d6b7243570d3918a698004f5c259dfd",
   "fix_summary": "Bounded pinned daily repair uses actual (ts_code,trade_date) primary key, tushare_api and exact integer price/amount plus whole-share precision. Only new rows; conflicting existing facts reject atomically. Monthly value guards use bpchar security joins. No production apply command is exposed.",
-  "data_repair_status": {
-    "dev_rows": 8702,
-    "dev_symbols": 20,
-    "dev_fresh_process_readback_equal": true,
-    "dev_repeat_inserted_rows": 0,
-    "dev_negative_sql_guards": "passed",
-    "production_apply": "pending_specific_authorization",
-    "production_sql_sha256": "7b9250eddca6df2fc76c91e42c0bdf8b995d6dcc64e3c4655cb893f1fbbb3fb2",
-    "release_updated": false
-  },
-  "review_rounds": [
-    "Round 1: RED import to GREEN unit tests; exact price, shares and amount units plus pinned source identity.",
-    "Round 2: live DEV schema revealed two-column primary key and tushare_api source enum; corrected before successful write; failed transaction rolled back.",
-    "Round 3: actual DEV insert/readback, repeat zero, fresh-process and wrong-database/conflicting-value SQL rejection. Production and publication remain separate."
-  ],
-  "design_compliance_001": [
-    "No partial dataset success: only repair operator scope is delivered; complete release remains NOT_READY.",
-    "No silent errors: invalid/missing numeric source, conflicting or incomplete readback reject; no fill or estimation.",
-    "No business changes: factual SH/SZ raw rows independent of PIT; no consumer, policy or frozen artifact mutation.",
-    "No new approval platform: existing DEV and exact production authorization boundaries only; direct existing CI routing."
-  ],
-  "fixed_at": null,
+  "fixed_at": "2026-10-20T13:06:51Z",
   "github_issue_number": 6495,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6495",
   "last_seen_at": "2026-10-20T12:46:46.484068Z",
@@ -128,6 +123,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6496",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -135,6 +131,11 @@
   "reproduce_command": "n/a",
   "required_verification": [
     "l0"
+  ],
+  "review_rounds": [
+    "Round 1: RED import to GREEN unit tests; exact price, shares and amount units plus pinned source identity.",
+    "Round 2: live DEV schema revealed two-column primary key and tushare_api source enum; corrected before successful write; failed transaction rolled back.",
+    "Round 3: actual DEV insert/readback, repeat zero, fresh-process and wrong-database/conflicting-value SQL rejection. Production and publication remain separate."
   ],
   "risk_area": "bug",
   "runtime_contract": {
@@ -144,6 +145,7 @@
     "persistence_basis": "not_required",
     "planned_target_ids": [],
     "post_restart_effective_gate": "not_required",
+    "post_restart_receipt_ref": null,
     "provisional": false,
     "runtime_identity_match": "not_required",
     "runtime_impact": "none",
@@ -153,7 +155,30 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "source_merge_receipt": {
+    "bug_id": "BUG-2038",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "54ee1753fb03aedd",
+    "recorded_at": "2026-10-20T13:07:56.163814Z",
+    "runtime_contract_digest": "4df999da60cd8921d14e1dad10cfc9aae6898b731f8600555a45daa0bae4c538",
+    "runtime_identity_match": "not_required",
+    "runtime_verification": "not_required",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "bea19614fa4095ae13e2ec4eaf416dbe963e95cd",
+    "source_merge_commit": "96191b447d6b7243570d3918a698004f5c259dfd",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6496",
+    "validation_evidence": [
+      "validation-receipt: id=c8943f9a1488fa88 commit=bea19614fa4095ae13e2ec4eaf416dbe963e95cd kind=pytest plan=direct status=passed command=`pytest backend/tests/scripts/test_repair_historical_daily_fact_absence.py backend/tests/scripts/test_backfill_raw_volume_precision.py -q` result=`27 passed`",
+      "validation-receipt: id=2957f2a448f9989e commit=bea19614fa4095ae13e2ec4eaf416dbe963e95cd kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`",
+      "validation-receipt: id=fe8f88d96331ef4c commit=bea19614fa4095ae13e2ec4eaf416dbe963e95cd kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`"
+    ],
+    "validation_evidence_digest": "616ee40188b603125163fa6ff1f6047b182d9dc3bc3022c65d46d9e55108635d"
+  },
+  "status": "fixed",
   "suspected_modules": [
     "local_data"
   ],
@@ -162,6 +187,11 @@
     "fingerprint": "1bb0fa5b328cf5ffec9a655b",
     "source_event_id": "FE-20261020-1bb0fa5b328c"
   },
+  "validation_evidence": [
+    "validation-receipt: id=c8943f9a1488fa88 commit=bea19614fa4095ae13e2ec4eaf416dbe963e95cd kind=pytest plan=direct status=passed command=`pytest backend/tests/scripts/test_repair_historical_daily_fact_absence.py backend/tests/scripts/test_backfill_raw_volume_precision.py -q` result=`27 passed`",
+    "validation-receipt: id=2957f2a448f9989e commit=bea19614fa4095ae13e2ec4eaf416dbe963e95cd kind=nox plan=validation_module_registry_l0 status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`",
+    "validation-receipt: id=fe8f88d96331ef4c commit=bea19614fa4095ae13e2ec4eaf416dbe963e95cd kind=nox plan=validation_catalog_integrity status=passed command=`python -m nox -s validation_module_registry_l0 validation_catalog_integrity` result=`passed`"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
