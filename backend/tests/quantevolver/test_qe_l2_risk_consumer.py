@@ -1,6 +1,7 @@
 """Focused compose and reader failures; real full-asset validation runs on node1."""
 from copy import deepcopy
 import hashlib
+import json
 from pathlib import Path
 import sys
 
@@ -22,6 +23,9 @@ def study_fixture():
                 "threshold": .20, "start": "2026-04-01", "end": "2026-09-30", "decision_days": 125,
                 "dataset_binding": binding, "assets": {k: {} for k in
                   ("risk", "mapping", "mapping_receipt", "authority", "prediction", "calendar", "pit")}}
+    manifest["release_identity"] = {
+        "dataset_manifest_sha256": "522e8e35896e85fc9289ca2ceca1cd6127f4c7978a72766887c0429dc9b7f410",
+        "frozen_release_generation": "20260930-monthly-v2-unified-correction-4ab0b48642c3"}
     manifest["assets"]["risk"]["sha256"] = APPROVED_RISK_SHA256
     conf = {"qlib_init": {"provider_uri": {"day": "/frozen/day", "1min": "/frozen/minute"}},
             "market": "stock_universe", "task": {"dataset": {"kwargs": {"segments": {"test": ["2026-03-31", "2026-09-30"]}}}},
@@ -100,7 +104,7 @@ def test_manifest_binding_must_agree_with_release_before_io():
     manifest, _, _ = study_fixture()
     manifest["dataset_binding"]["release_id"] = "different"
     manifest["release_identity"] = {"release_id": "frozen"}
-    with pytest.raises(L2ContractError, match="DATASET_BINDING_MISMATCH"):
+    with pytest.raises(L2ContractError, match="LEGACY_ASSET_REBIND_FORBIDDEN"):
         validate_frozen_dataset(manifest)
 
 
@@ -170,3 +174,196 @@ def test_minute_runner_keeps_guards_for_exact_terminal_wrapper():
     assert check(conf)
     conf["port_analysis_config"]["backtest"]["exchange_kwargs"]["freq"] = "day"
     assert not check(conf)
+
+
+@pytest.mark.parametrize("version", ["unreviewed", "", 123, []])
+def test_request_cannot_self_approve_new_asset(version):
+    manifest, _, _ = study_fixture()
+    manifest.update(asset_admission_version=version, asset_admissions={"unreviewed": "self-approved"})
+    manifest["assets"]["risk"]["sha256"] = "9" * 64
+    with pytest.raises(ValueError, match="ADMISSION_UNKNOWN"):
+        extract_study({"qe_l2_study_manifest": manifest})
+
+
+def test_legacy_asset_cannot_be_rebound_to_new_release_before_io():
+    from qe_l2_risk_consumer import L2RiskInputs
+
+    manifest, _, _ = study_fixture()
+    manifest["release_identity"]["dataset_manifest_sha256"] = "d" * 64
+    with pytest.raises(ValueError, match="LEGACY_ASSET_REBIND_FORBIDDEN"):
+        extract_study({"qe_l2_study_manifest": manifest})
+    # The reader checks admission before attempting any nonexistent asset path.
+    manifest.update(schema_version="qe_l2_risk_consumer_v1")
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as folder:
+        path = Path(folder) / "manifest.json"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        with pytest.raises(L2ContractError, match="LEGACY_ASSET_REBIND_FORBIDDEN"):
+            L2RiskInputs(path)
+
+
+def batch_fixture(tmp_path, monkeypatch, *, versioned=True):
+    from scripts import qe_l2_risk_admission as admissions
+    from scripts.run_qe_l2_risk_controlled_study import H1_GENERATION, H1_MANIFEST, SEEDS
+
+    manifest, _, _ = study_fixture()
+    manifest["release_identity"].update(release_id="qe_hmm_full_v2_20260930", cutoff="2026-09-30")
+    batch = None
+    if versioned:
+        manifest.update(asset_admission_version="test-only-new-asset", authority_canonical_sha256="a" * 64)
+        manifest["assets"]["risk"]["sha256"] = "9" * 64
+        manifest["release_identity"].update(dataset_manifest_sha256=H1_MANIFEST, frozen_release_generation=H1_GENERATION)
+        # Simulate a separately source-reviewed admission; requests cannot do this.
+        record = {"risk_sha256": "9" * 64,
+                  "release_identity_sha256": admissions.canonical_sha(manifest["release_identity"]),
+                  "dataset_binding_sha256": admissions.canonical_sha(admissions.physical_binding(manifest["dataset_binding"])),
+                  "authority_canonical_sha256": "a" * 64}
+        monkeypatch.setattr(admissions, "ADMISSIONS", {**admissions.ADMISSIONS, "test-only-new-asset": record})
+        batch = {"schema_version": "qe_l2_controlled_batch_v2", "status": "APPROVED",
+                 "contract": manifest["contract"],
+                 "authorization_scope": "qe_hmm_long_plan_h1", "batch_id": "qe_l2_h1_test_20261025",
+                 "generation": H1_GENERATION, "dataset_manifest_sha256": H1_MANIFEST,
+                 "release_id": "qe_hmm_full_v2_20260930", "cutoff": "2026-09-30",
+                 "asset_admission_version": "test-only-new-asset"}
+    (tmp_path / "user_approval_receipt.json").write_text(json.dumps({
+        "status": "APPROVED", "contract": manifest["contract"]}), encoding="utf-8")
+    assets = []
+    for seed in SEEDS:
+        current = deepcopy(manifest)
+        current["assets"]["prediction"]["sha256"] = hashlib.sha256(str(seed).encode()).hexdigest()
+        assets.append({"seed": seed, "prediction_sha256": current["assets"]["prediction"]["sha256"]})
+        (tmp_path / f"consumer_manifest_seed{seed}.json").write_text(json.dumps(current), encoding="utf-8")
+    (tmp_path / "shared_prediction_receipt.json").write_text(json.dumps({
+        "assets": assets, "dataset_binding": manifest["dataset_binding"]}), encoding="utf-8")
+    if versioned:
+        batch["shared_prediction_receipt_sha256"] = hashlib.sha256((tmp_path / "shared_prediction_receipt.json").read_bytes()).hexdigest()
+        batch["consumer_manifest_sha256"] = {
+            str(seed): hashlib.sha256((tmp_path / f"consumer_manifest_seed{seed}.json").read_bytes()).hexdigest()
+            for seed in SEEDS}
+        (tmp_path / "study_batch_receipt.json").write_text(json.dumps(batch), encoding="utf-8")
+    return batch
+
+
+@pytest.mark.parametrize("field", ["risk", "release", "pit", "authority"])
+def test_reviewed_version_rejects_cross_identity_changes(tmp_path, monkeypatch, field):
+    batch_fixture(tmp_path, monkeypatch)
+    manifest = json.loads((tmp_path / "consumer_manifest_seed42.json").read_text())
+    extract_study({"qe_l2_study_manifest": manifest})
+    if field == "risk":
+        manifest["assets"]["risk"]["sha256"] = "f" * 64
+    elif field == "release":
+        manifest["release_identity"]["cutoff"] = "2026-08-31"
+    elif field == "pit":
+        manifest["dataset_binding"]["selection_pins"]["instruments_sha256"] = "changed"
+    else:
+        manifest["authority_canonical_sha256"] = "changed"
+    with pytest.raises(ValueError, match="ADMISSION_MISMATCH"):
+        extract_study({"qe_l2_study_manifest": manifest})
+
+
+def test_versioned_compose_packages_same_admission_source(tmp_path, monkeypatch):
+    from scripts.qe_l2_risk_admission import validate_admission
+
+    batch_fixture(tmp_path, monkeypatch)
+    manifest = json.loads((tmp_path / "consumer_manifest_seed42.json").read_text())
+    manifest["dataset_binding"]["selection_pins"]["coverage_receipt_sha256"] = "another-window"
+    validate_admission(manifest)
+    _, study = extract_study({"qe_l2_risk_enabled": True, "qe_l2_study_manifest": manifest})
+    _, _, result = study_fixture()
+    output = apply_study(result, study, scripts_dir=Path(__file__).resolve().parents[3] / "scripts")
+    assert output["experiment_files"]["qe_l2_risk_admission.py"] == (
+        Path(__file__).resolve().parents[3] / "scripts/qe_l2_risk_admission.py").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("seeds", [[42, 2024], [42, 2024, 2026, 7], [42, 42, 2026], [2026, 2024, 42]])
+def test_batch_requires_exact_three_ordered_seeds(tmp_path, monkeypatch, seeds):
+    from scripts.run_qe_l2_risk_controlled_study import load_batch_inputs
+
+    batch_fixture(tmp_path, monkeypatch)
+    path = tmp_path / "shared_prediction_receipt.json"
+    shared = json.loads(path.read_text())
+    shared["assets"] = [{"seed": seed} for seed in seeds]
+    path.write_text(json.dumps(shared), encoding="utf-8")
+    with pytest.raises(ValueError, match="SEEDS_CHANGED"):
+        load_batch_inputs(tmp_path)
+    assert not (tmp_path / "composed").exists()
+
+
+def test_batch_rejects_wrong_shared_prediction(tmp_path, monkeypatch):
+    from scripts.run_qe_l2_risk_controlled_study import load_batch_inputs
+
+    batch_fixture(tmp_path, monkeypatch)
+    path = tmp_path / "shared_prediction_receipt.json"
+    shared = json.loads(path.read_text())
+    shared["assets"][1]["prediction_sha256"] = "f" * 64
+    path.write_text(json.dumps(shared), encoding="utf-8")
+    batch_path = tmp_path / "study_batch_receipt.json"
+    batch = json.loads(batch_path.read_text())
+    batch["shared_prediction_receipt_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    batch_path.write_text(json.dumps(batch), encoding="utf-8")
+    with pytest.raises(ValueError, match="SHARED_PREDICTION_IDENTITY_MISMATCH"):
+        load_batch_inputs(tmp_path)
+
+
+def test_batch_rejects_receipt_changed_after_freeze(tmp_path, monkeypatch):
+    from scripts.run_qe_l2_risk_controlled_study import load_batch_inputs
+
+    batch_fixture(tmp_path, monkeypatch)
+    path = tmp_path / "shared_prediction_receipt.json"
+    shared = json.loads(path.read_text())
+    shared["assets"][0]["model_sha256"] = "another-model"
+    path.write_text(json.dumps(shared), encoding="utf-8")
+    with pytest.raises(ValueError, match="BATCH_INPUT_DIGEST_MISMATCH"):
+        load_batch_inputs(tmp_path)
+
+
+@pytest.mark.parametrize("field,value", [("batch_id", "qe_l2_entry_20261023"), ("batch_id", "../escape"),
+    ("status", "PENDING"), ("authorization_scope", "other"), ("generation", "other-active")])
+def test_batch_rejects_old_ids_and_unapproved_identity(tmp_path, monkeypatch, field, value):
+    from scripts.run_qe_l2_risk_controlled_study import load_batch_inputs
+
+    batch = batch_fixture(tmp_path, monkeypatch)
+    batch[field] = value
+    (tmp_path / "study_batch_receipt.json").write_text(json.dumps(batch), encoding="utf-8")
+    with pytest.raises(ValueError, match="BATCH_IDENTITY_INVALID"):
+        load_batch_inputs(tmp_path)
+
+
+def test_active_refresh_stops_pinned_h1_without_switching(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from scripts.run_qe_l2_risk_controlled_study import verify_batch_profile
+
+    batch = batch_fixture(tmp_path, monkeypatch)
+    profile = SimpleNamespace(generation=batch["generation"], release_id=batch["release_id"], cutoff=batch["cutoff"],
+                              raw={"components": {"dataset_manifest_sha256": batch["dataset_manifest_sha256"]}})
+    verify_batch_profile(batch, profile)
+    profile.generation += "-suspendfacts1"
+    with pytest.raises(ValueError, match="APPROVED_PROFILE_IDENTITY_CHANGED"):
+        verify_batch_profile(batch, profile)
+
+
+@pytest.mark.parametrize("versioned", [False, True])
+def test_submit_rechecks_frozen_batch_and_worker_source(tmp_path, monkeypatch, versioned):
+    from scripts.run_qe_l2_risk_controlled_study import load_batch_inputs, verify_batch_plan
+
+    batch_fixture(tmp_path, monkeypatch, versioned=versioned)
+    _, shared, batch = load_batch_inputs(tmp_path)
+    manifest = json.loads((tmp_path / "consumer_manifest_seed42.json").read_text())
+    task = batch["batch_id"] + "_s42_b"
+    plan = {"task_id": task, "experiment_id": hashlib.sha256(task.encode()).hexdigest()[:8], "seed": 42, "arm": "B",
+            "prediction_sha256": shared["assets"][0]["prediction_sha256"], "batch_identity": batch,
+            "custom_params": {"qe_l2_study_manifest": manifest, "qe_l2_risk_enabled": False}}
+    files = {"qe_l2_risk_manifest.json": json.dumps(manifest), "qe_l2_risk_admission.py": (
+        Path(__file__).resolve().parents[3] / "scripts/qe_l2_risk_admission.py").read_text(encoding="utf-8")}
+    assert verify_batch_plan(tmp_path, plan, files) == batch
+    for key, value in [("task_id", "qe_l2_entry_20261023_s42_l"), ("experiment_id", "other"),
+                       ("prediction_sha256", "f" * 64), ("batch_identity", {})]:
+        changed = deepcopy(plan)
+        changed[key] = value
+        with pytest.raises(ValueError, match="BATCH_PLAN_IDENTITY_MISMATCH"):
+            verify_batch_plan(tmp_path, changed, files)
+    if versioned:
+        files["qe_l2_risk_admission.py"] += "\n# unreviewed change"
+        with pytest.raises(ValueError, match="WORKER_ADMISSION_SOURCE_MISMATCH"):
+            verify_batch_plan(tmp_path, plan, files)
