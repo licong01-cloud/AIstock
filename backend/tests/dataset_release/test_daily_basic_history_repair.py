@@ -22,6 +22,49 @@ def test_repair_never_overwrites_existing_values():
         merge_missing_facts(old, pd.concat([source, source]))
 
 
+def test_consumer_causal_windows_include_full_source_product_and_qe_history():
+    from backend.services.dataset_release.daily_basic_history_repair import consumer_causal_windows
+
+    windows = consumer_causal_windows("2026-08-31")
+    assert windows == {
+        "source": ("2020-07-30", "2025-04-30"),
+        "train": ("2022-01-01", "2024-06-30"),
+        "validation": ("2024-07-01", "2025-03-31"),
+        "product_history": ("2020-07-30", "2026-08-31"),
+        "qe_coefficients": ("2024-07-01", "2026-08-28"),
+    }
+    with pytest.raises(ValueError):
+        consumer_causal_windows("2025-04-30")
+
+
+def test_ready_requires_all_declared_windows_not_just_executor_source():
+    from backend.services.dataset_release.daily_basic_history_repair import causal_audit_status, consumer_causal_windows
+
+    audit = {name: {"after": {"expected_keys": 1, "strict_prior_resolved": 1, "unresolved_count": 0}}
+             for name in consumer_causal_windows("2026-08-31")}
+    assert causal_audit_status(audit) == "CANDIDATE_READY"
+    audit["product_history"]["after"]["unresolved_count"] = 1
+    audit["product_history"]["after"]["strict_prior_resolved"] = 0
+    assert causal_audit_status(audit) == "BLOCKED"
+    del audit["product_history"]
+    with pytest.raises(ValueError):
+        causal_audit_status(audit)
+
+
+@pytest.mark.parametrize("count", [-1, False, None, "0"])
+def test_causal_readiness_rejects_invalid_counts_and_empty_denominators(count):
+    from backend.services.dataset_release.daily_basic_history_repair import causal_audit_status, consumer_causal_windows
+
+    audit = {name: {"after": {"expected_keys": 1, "strict_prior_resolved": 1, "unresolved_count": count}}
+             for name in consumer_causal_windows("2026-08-31")}
+    with pytest.raises(ValueError):
+        causal_audit_status(audit)
+    for item in audit.values():
+        item["after"] = {"expected_keys": 0, "strict_prior_resolved": 0, "unresolved_count": 0}
+    with pytest.raises(ValueError):
+        causal_audit_status(audit)
+
+
 def test_causal_audit_rejects_same_day_and_does_not_fill_halts():
     spans = [("000001.SZ", "2024-07-01", "2024-07-03")]
     calendar = ["2024-07-01", "2024-07-02", "2024-07-03"]
@@ -30,6 +73,27 @@ def test_causal_audit_rejects_same_day_and_does_not_fill_halts():
     assert audit["expected_keys"] == 3
     assert audit["strict_prior_resolved"] == 2
     assert audit["unresolved"] == [{"symbol": "000001.SZ", "trade_date": "2024-07-01"}]
+
+
+def test_approved_warmup_and_frozen_suspend_do_not_waive_other_missing_weights():
+    spans = [("000792.SZ", "2021-08-09", "2021-08-12")]
+    calendar = ["2021-08-09", "2021-08-10", "2021-08-11", "2021-08-12"]
+    facts = {"000792.SZ": [(pd.Timestamp("2021-08-10").value, False)]}
+    result = causal_coverage(spans, calendar, facts, start=calendar[0], end=calendar[-1],
+        history_start=calendar[0], approved_warmup_keys=frozenset({("000792.SZ", "2021-08-10")}),
+        not_applicable_keys=frozenset({("000792.SZ", "2021-08-11")}))
+    assert result["explained_warmup"] == 2
+    assert result["not_applicable"] == 1
+    assert result["unresolved"] == [{"symbol": "000792.SZ", "trade_date": "2021-08-12"}]
+    assert result["strict_prior_resolved"] == 0
+
+
+def test_source_window_boundary_does_not_import_outside_window_prior_facts():
+    result = causal_coverage([("000029.SZ", "2020-11-09", "2020-11-09")], ["2020-11-09"],
+        {"000029.SZ": [(pd.Timestamp("2016-09-13").value, True)]},
+        start="2020-07-30", end="2025-04-30", history_start="2020-07-30")
+    assert result["unresolved"] == [{"symbol": "000029.SZ", "trade_date": "2020-11-09"}]
+    assert result["explained_warmup"] == 0
 
 
 @pytest.mark.parametrize("invalid", [float("nan"), float("inf"), 0, -1])

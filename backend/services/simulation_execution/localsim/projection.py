@@ -72,7 +72,14 @@ def derive_local_sim_projection_state_contract(
         if state.is_terminal and state.runtime_status != LocalSimExecutionRuntimeStatus.FILLED
     )
     terminal = not active_states
-    terminal_failure = bool(historical_residual or residual_states or nonfilled_terminal_states)
+    market_residual_states = tuple(
+        state for state in residual_states
+        if state.residual_classification in {"SUSPENDED_AT_CLOSE", "MARKET_STATE_RESIDUAL_AT_CLOSE"}
+    )
+    terminal_failure = bool(
+        historical_residual
+        or any(state not in market_residual_states for state in nonfilled_terminal_states)
+    )
     if active_states:
         final_event_type = "RUN_INTRADAY_PROGRESS"
         final_event_message = "simulation runtime LocalSim minute progress projected"
@@ -96,15 +103,19 @@ def derive_local_sim_projection_state_contract(
             else "PERSISTED_WITH_RESIDUAL"
         )
     else:
-        final_event_type = "RUN_SUCCEEDED"
-        final_event_message = "simulation runtime LocalSim terminal execution projected to Paper v2"
+        final_event_type = "RUN_SUCCEEDED_WITH_MARKET_RESIDUAL" if market_residual_states else "RUN_SUCCEEDED"
+        final_event_message = (
+            "simulation runtime LocalSim closed with explicit market-constrained unfilled quantity"
+            if market_residual_states else "simulation runtime LocalSim terminal execution projected to Paper v2"
+        )
         final_paper_status = RunStatus.SUCCEEDED
         final_status = succeeded_status
-        persistence_status = "PERSISTED"
+        persistence_status = "PERSISTED_WITH_MARKET_RESIDUAL" if market_residual_states else "PERSISTED"
     return {
         "historical_residual": historical_residual,
         "active_states": active_states,
         "residual_states": residual_states,
+        "market_residual_states": market_residual_states,
         "failed_terminal_states": failed_terminal_states,
         "nonfilled_terminal_states": nonfilled_terminal_states,
         "terminal": terminal,
@@ -582,11 +593,9 @@ class LocalSimProjector:
                     "local_sim_economic_hash": outbox.economic_hash,
                 },
             )
-            paper_repository.update_run_status(
-                paper_repository.get_run(run_id),
-                final_paper_status,
-                error=payload.get("paper_error"),
-            )
+            paper_run = paper_repository.get_run(run_id)
+            if paper_run.status != final_paper_status:
+                paper_repository.update_run_status(paper_run, final_paper_status, error=payload.get("paper_error"))
 
         def mark_terminal_projection_staged() -> None:
             nonlocal projection_committed

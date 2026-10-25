@@ -90,6 +90,19 @@ _DB_CREATE_RE = re.compile(
 )
 
 
+def has_owned_wall_clock_trigger(text: str, filename: str, event_type: str) -> bool:
+    """Only the exact automatic event is a cron replacement, never arbitrary dispatch."""
+    return bool(
+        re.search(r"(?m)^  repository_dispatch:\n(?:    #[^\n]*\n)*    types: \["
+                  + re.escape(event_type) + r"\]\s*$", text)
+        and f"AIstock schedule {filename} {{0}}" in text
+        and "github.event.client_payload.cycle_date" in text
+        and "workflow_dispatch:" in text
+        and "scheduled-admission" in text
+        and not re.search(r"(?m)^  (?:schedule|push|pull_request|workflow_run):", text)
+    )
+
+
 def _workflow_job_blocks(text: str) -> list[str]:
     """Return individual top-level GitHub Actions job blocks without a YAML dependency."""
 
@@ -144,6 +157,36 @@ def _workflow_step_blocks(job_block: str) -> list[str]:
     if current:
         blocks.append("".join(current))
     return blocks
+
+
+def has_event_bound_base_preparation(text: str, *, manual: bool) -> bool:
+    """Check preparation step inputs, not unrelated strings elsewhere in a workflow."""
+    mode = "--prepare-manual-merge-base-only" if manual else "--prepare-pr-merge-base-only"
+    steps = [
+        step for job in _workflow_job_blocks(text) for step in _workflow_step_blocks(job)
+        if mode in step
+    ]
+    if len(steps) != 1:
+        return False
+    step = steps[0]
+    expected = {
+        "BASE_REF": "inputs.base_ref" if manual else "github.event.pull_request.base.ref",
+        "BASE_SHA": "inputs.base_sha" if manual else "github.event.pull_request.base.sha",
+        "SOURCE_HEAD_SHA": "github.sha" if manual else "github.event.pull_request.head.sha",
+        "CHECKOUT_REF": "github.ref",
+    }
+    for key, expression in expected.items():
+        match = re.search(rf"(?m)^          {key}:\s*(.+)$", step)
+        if not match or expression not in match.group(1):
+            return False
+    if manual and "github.event_name == 'pull_request'" in step:
+        return False
+    return all(
+        argument in step for argument in (
+            '--base-ref "${BASE_REF}"', '--base-sha "${BASE_SHA}"',
+            '--checkout-ref "${CHECKOUT_REF}"', '--source-head-sha "${SOURCE_HEAD_SHA}"',
+        )
+    )
 
 
 def _checkout_step_blocks(job_block: str) -> list[str]:
@@ -548,10 +591,11 @@ def build_contract_evidence(
             for name in SUPERSEDED_RUN_WORKFLOWS
         ),
         "bounded_pr_base_fetch_retry": all(
-            "--prepare-pr-merge-base-only" in workflow_text.get(name, "")
+            has_event_bound_base_preparation(workflow_text.get(name, ""), manual=name != "test.yml")
             for name in BASE_FETCH_RETRY_WORKFLOWS
         )
-        and "for index in range(max(1, int(attempts)))" in changed_files_text
+        and "for index in range(min(3, max(1, int(attempts))))" in changed_files_text
+        and "timeout=min(fetch_timeout, remaining)" in changed_files_text
         and '"--no-write-fetch-head"' in changed_files_text
         and 'f"--deepen={max(1, int(deepen_by))}"' in changed_files_text
         and '"merge-base"' in changed_files_text
@@ -591,8 +635,7 @@ def build_contract_evidence(
             and '"CodeQL verdict"' not in issue_workflow_text
         ),
         "codeql_daily_nightly_full_scan": bool(
-            "schedule:" in codeql_text
-            and "cron: '27 20 * * *'" in codeql_text
+            has_owned_wall_clock_trigger(codeql_text, "codeql.yml", "aistock_codeql")
             and "workflow_dispatch:" in codeql_text
             and "pull_request:" not in codeql_text
             and not re.search(r"(?m)^  push:\s*$", codeql_text)
@@ -646,7 +689,8 @@ def build_contract_evidence(
             and "CodeQL verdict" not in issue_workflow_text
         ),
         "code_intelligence_refresh_is_scheduled_or_manual_only": (
-            "schedule:" in code_intelligence_refresh_text
+            has_owned_wall_clock_trigger(code_intelligence_refresh_text, "code-intelligence-refresh.yml",
+                                         "aistock_code_intelligence")
             and "workflow_dispatch:" in code_intelligence_refresh_text
             and not re.search(r"(?m)^\s{2}push:\s*$", code_intelligence_refresh_text)
         ),
@@ -660,7 +704,9 @@ def build_contract_evidence(
             and code_intelligence_preflight_precedes_refresh_concurrency(code_intelligence_refresh_text)
         ),
         "nightly_code_intelligence_has_single_scheduled_owner": (
-            "schedule:" in code_intelligence_refresh_text
+            has_owned_wall_clock_trigger(code_intelligence_refresh_text, "code-intelligence-refresh.yml",
+                                         "aistock_code_intelligence")
+            and has_owned_wall_clock_trigger(nightly_text, "nightly.yml", "aistock_nightly")
             and "default: false" in nightly_code_intelligence_input
             and "if: github.event_name == 'workflow_dispatch' && inputs.run_code_intelligence" in nightly_text
             and "if: github.event_name == 'schedule' || inputs.run_code_intelligence" not in nightly_text
@@ -789,6 +835,23 @@ def build_contract_evidence(
             "AISTOCK_DR_OPERATIONAL_LANE: 'existing_authorized_target_only'" in nightly_text
             and "docker run" not in nightly_text.casefold()
             and "docker compose up" not in nightly_text.casefold()
+        ),
+        "nightly_research_is_independent_of_dr_and_preserves_dr_failure": (
+            any(
+                block.startswith("  nightly-l3:")
+                and "needs: [runner-preflight]" in block
+                and "needs.dr-validate" not in block
+                and "needs.dr-snapshot" not in block
+                for block in _workflow_job_blocks(nightly_text)
+            )
+            and any(
+                block.startswith("  full-summary:")
+                and "dr-snapshot, dr-validate, nightly-l3" in block
+                and "if: always()" in block
+                and "needs.dr-snapshot.result == 'failure'" in block
+                and "needs.dr-validate.result == 'failure'" in block
+                for block in _workflow_job_blocks(nightly_text)
+            )
         ),
         "nightly_l3_uses_prebuilt_aistock_ci_and_linked_frontend_dependencies": (
             '--frontend-node-modules-source "${env:AISTOCK_SELF_HOSTED_SOURCE}/frontend/node_modules"' in nightly_text

@@ -27,12 +27,13 @@ _LABEL_FIELDS = {
     "vwap": "$vwap",
 }
 _ALLOWED_LABEL_HORIZONS = {1, 3, 5, 10, 20, 30, 40, 60, 120, 180}
-_LONG_HORIZON_MIN = 30
 
 
 class LongHorizonLabelMaturityPurge(_QlibProcessor):
     """Remove immature learning labels without truncating inference signals.
 
+    The historical class name is retained for frozen workspace compatibility;
+    maturity isolation applies to every supported horizon, including h1/h20.
     Qlib keeps separate inference and learning frames.  This processor is
     deliberately learn-only: it masks the last ``label_horizon + 1`` trading
     observations of each train/valid/test segment, then the following
@@ -53,11 +54,6 @@ class LongHorizonLabelMaturityPurge(_QlibProcessor):
         test_end: str,
     ) -> None:
         self.label_horizon = DynamicFactorsOnlyLoader._normalize_label_horizon(label_horizon)
-        if self.label_horizon < _LONG_HORIZON_MIN:
-            raise ValueError(
-                "LongHorizonLabelMaturityPurge is reserved for label_horizon >= "
-                f"{_LONG_HORIZON_MIN}, got {self.label_horizon}"
-            )
         self.segment_bounds = {
             "train": (self._date(train_start, "train_start"), self._date(train_end, "train_end")),
             "valid": (self._date(valid_start, "valid_start"), self._date(valid_end, "valid_end")),
@@ -124,7 +120,9 @@ class LongHorizonLabelMaturityPurge(_QlibProcessor):
                     f"label_horizon={self.label_horizon}"
                 )
             cutoff = calendar[cutoff_pos]
-            if cutoff < start:
+            # An immature test window can still produce full inference signals.
+            # Only train/valid need mature labels for fitting and model selection.
+            if cutoff < start and name != "test":
                 segment_days = int(((calendar >= start) & (calendar <= end)).sum())
                 raise ValueError(
                     f"{name} segment has {segment_days} trading days, fewer than the "

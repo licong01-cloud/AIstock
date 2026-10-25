@@ -28,9 +28,12 @@ from .data_sync_targets import (
     DataSyncAttemptRecord,
     DataSyncTargetRecord,
     DataSyncTargetRepository,
+    LATE_PUBLICATION_TAIL_DAYS,
+    PUBLICATION_LAG_DAYS,
+    publication_target_date,
 )
 from .tushare_rate_limiter import get_limiter
-from .tushare_dataset_specs import DatasetSpec, QueryMode
+from .tushare_dataset_specs import DAILY_BASIC, DatasetSpec, QueryMode, stk_limit_prices_valid
 
 PIT_SOURCE_DATASETS = {"stock_basic", "stock_st", "stock_st_events"}
 FINANCIAL_EVENT_RAW_DATASETS = {
@@ -51,6 +54,7 @@ ZERO_ROW_VALID_DATASETS = {
 # audit_backed_data_health._status_from_audit validation.
 DAILY_BASIC_COVERAGE_RECEIPT_SCHEMA = "daily_basic_required_field_coverage_v1"
 DAILY_BASIC_REQUIRED_FIELD = "turnover_rate_f"
+DAILY_BASIC_REQUIRED_FIELDS = ("turnover_rate", "turnover_rate_f", "volume_ratio", "total_mv", "circ_mv")
 DAILY_BASIC_REQUIRED_RATIO = 0.95
 
 
@@ -94,6 +98,14 @@ def _daily_basic_required_field_coverage_receipt(
         if _is_finite_number(row.get(DAILY_BASIC_REQUIRED_FIELD))
     )
     ratio = finite_count / row_count if row_count > 0 else 0.0
+    # Same finite-field set as the monthly frozen-source contract. Keep the
+    # legacy single-field receipt for existing health readers, but retry if
+    # any mandatory column is late; nullable valuations are excluded.
+    complete_rows = sum(
+        all(_is_finite_number(row.get(field)) for field in DAILY_BASIC_REQUIRED_FIELDS)
+        and all(float(row[field]) > 0 for field in ("total_mv", "circ_mv"))
+        for row in rows
+    )
     return {
         "schema_version": DAILY_BASIC_COVERAGE_RECEIPT_SCHEMA,
         "field": DAILY_BASIC_REQUIRED_FIELD,
@@ -101,6 +113,23 @@ def _daily_basic_required_field_coverage_receipt(
         "row_count": row_count,
         "ratio": ratio,
         "required_ratio": DAILY_BASIC_REQUIRED_RATIO,
+        "required_fields": list(DAILY_BASIC_REQUIRED_FIELDS),
+        "required_fields_ratio": complete_rows / row_count if row_count else 0.0,
+        # Batch-local observations, not new completeness thresholds. Nullable
+        # valuations may legitimately be NULL; preserve and expose that fact
+        # instead of hiding all columns behind a row-count success receipt.
+        "source_field_observation": {
+            "schema_version": "daily_basic_source_field_observation_v1",
+            "scope": "fetched_batch_only",
+            "threshold_enforced": False,
+            "fields": {
+                column: {
+                    "finite_count": sum(_is_finite_number(row.get(column)) for row in rows),
+                    "non_finite_count": sum(not _is_finite_number(row.get(column)) for row in rows),
+                }
+                for column, kind in DAILY_BASIC.columns.items() if kind == "numeric"
+            },
+        },
     }
 
 
@@ -130,6 +159,49 @@ def _etf_share_size_publication_quality(
         "quality_status": "low_coverage",
         "failure_category": "required_source_field_unpublished",
     }
+
+
+def _stk_limit_publication_quality(
+    rows: List[Dict[str, Any]],
+) -> tuple[Dict[str, Any], Dict[str, Any]]:
+    """Observe this fetched batch, without inventing a stock coverage threshold.
+
+    Individual suspended/unlimited securities may have provider NULLs. A
+    nonempty market batch with no positive pre_close, however, cannot prove
+    publication of the field required by the existing monthly source contract.
+    """
+    positive_count = sum(
+        _is_finite_number(row.get("pre_close")) and float(row["pre_close"]) > 0
+        for row in rows
+    )
+    receipt = {
+        "schema_version": "stk_limit_publication_quality_v1",
+        "scope": "fetched_batch_only",
+        "row_count": len(rows),
+        "pre_close_positive_count": positive_count,
+    }
+    if positive_count:
+        return receipt, {"quality_status": "ok"}
+    return receipt, {
+        "quality_status": "low_coverage",
+        "failure_category": "required_source_field_unpublished",
+    }
+
+
+def _stk_limit_source_prices_valid(reference, upper, lower) -> bool:
+    """Validate raw source facts, not a consumer's executable-limit contract.
+
+    Tushare publishes a zero lower boundary on unlimited sessions (e.g. BJ IPO
+    day). Preserve that fact, never invent a positive lower limit. Consumers
+    retain their separate strict positive-limit / applicability checks.
+    """
+    if stk_limit_prices_valid({"pre_close": reference, "up_limit": upper, "down_limit": lower}):
+        return True
+    return (all(_is_finite_number(value) for value in (reference, upper, lower))
+            and float(reference) > 0 and float(upper) >= float(reference)
+            and float(lower) == 0)
+
+
 _logger = logging.getLogger(__name__)
 
 _DIVIDEND_ECONOMIC_COLUMNS = (
@@ -271,6 +343,21 @@ def _query_tushare_dataapi(
     data = result.get("data") or {}
     columns = list(data.get("fields") or [])
     items = data.get("items") or []
+    if api_name in {"daily_basic", "stk_limit", "etf_share_size", "margin_detail"} and items:
+        # An omitted column is not an explicitly returned provider NULL.
+        # Validate before zip/row.get can fabricate NULLs that the ordinary
+        # upsert would write over existing facts. Other API contracts stay
+        # unchanged; nullable valuations and genuine empty responses remain
+        # valid and use the existing retry/coverage handling.
+        requested = {field.strip() for field in fields.split(",") if field.strip()}
+        if (
+            any(not isinstance(column, str) or not column for column in columns)
+            or len(set(columns)) != len(columns)
+            or not requested.issubset(columns)
+            or not isinstance(items, list)
+            or any(not isinstance(item, (list, tuple)) or len(item) != len(columns) for item in items)
+        ):
+            raise TushareHttpError(f"{api_name} response schema differs from requested fields or row width")
     return [dict(zip(columns, item)) for item in items]
 
 
@@ -440,6 +527,7 @@ class TushareSyncEngine:
         self._tushare_token_cache: Optional[str] = None
         self._refresh_audit = DataRefreshAuditRepository()
         self._target_repo = target_repository
+        self._late_recheck_dates: Dict[str, List[dt.date]] = {}
 
     @property
     def pro(self):
@@ -611,6 +699,13 @@ class TushareSyncEngine:
         )
 
     def _upsert_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]]) -> int:
+        if spec.name == "sw_index_member":
+            from .sw_industry_history_store import store_member_refresh
+
+            return store_member_refresh(conn, rows, lambda accepted: self._upsert_plain_batch(conn, spec, accepted))
+        return self._upsert_plain_batch(conn, spec, rows)
+
+    def _upsert_plain_batch(self, conn, spec: DatasetSpec, rows: List[Dict[str, Any]]) -> int:
         """Upsert rows into target table using execute_values + ON CONFLICT."""
         if not rows:
             return 0
@@ -620,7 +715,15 @@ class TushareSyncEngine:
 
         col_list = ", ".join(col_names)
         conflict_cols = ", ".join(spec.primary_keys)
-        update_set = ", ".join(f"{c}=EXCLUDED.{c}" for c in non_pk)
+        # Late publication retries must not erase finite facts with provider NULLs.
+        # Non-null revisions remain supported; adj_factor and other datasets
+        # retain their own restatement contracts.
+        table = spec.target_table.rsplit(".", 1)[1]
+        update_set = ", ".join(
+            f"{c}=COALESCE(EXCLUDED.{c}, {table}.{c})"
+            if spec.name in LATE_PUBLICATION_TAIL_DAYS else f"{c}=EXCLUDED.{c}"
+            for c in non_pk
+        )
 
         sql = f"INSERT INTO {spec.target_table} ({col_list}) VALUES %s"
         if update_set:
@@ -630,9 +733,18 @@ class TushareSyncEngine:
 
         values = []
         for r in rows:
+            if (spec.name == "stk_limit" and all(r.get(c) is not None for c in
+                    ("pre_close", "up_limit", "down_limit"))
+                    and not _stk_limit_source_prices_valid(r["pre_close"], r["up_limit"], r["down_limit"])):
+                raise ValueError("stk_limit.pre_close/up_limit/down_limit: invalid provider price relation")
             vals = []
             for c in col_names:
                 v = r.get(c)
+                if (spec.name in LATE_PUBLICATION_TAIL_DAYS and col_types[c] == "numeric"
+                        and v is not None and (not _is_finite_number(v)
+                            or (spec.name == "stk_limit" and
+                                (float(v) < 0 or (c != "down_limit" and float(v) == 0))))):
+                    raise ValueError(f"{spec.name}.{c}: non-finite provider fact")
                 if v is not None and col_types[c] == "date":
                     v = _parse_ymd(v)
                 vals.append(v)
@@ -640,8 +752,34 @@ class TushareSyncEngine:
 
         if not values:
             return 0
-        with conn.cursor() as cur:
-            pgx.execute_values(cur, sql, values)
+        sector_dependency = spec.target_table in {"market.sw_daily", "market.moneyflow_ts"}
+        owns_transaction = sector_dependency and conn.autocommit
+        if sector_dependency:
+            # Identical provider retries do not dirty previously verified dates.
+            table = spec.target_table.rsplit(".", 1)[1]
+            old_values = ", ".join(f"{table}.{c}" for c in non_pk)
+            new_values = ", ".join(f"EXCLUDED.{c}" for c in non_pk)
+            sql += f" WHERE ({old_values}) IS DISTINCT FROM ({new_values}) RETURNING trade_date"
+        if owns_transaction:
+            conn.autocommit = False
+        try:
+            with conn.cursor() as cur:
+                changed = pgx.execute_values(cur, sql, values, fetch=True) if sector_dependency else None
+                if not sector_dependency:
+                    pgx.execute_values(cur, sql, values)
+            if sector_dependency:
+                from .sector_data_repair import mark_revision_dates
+
+                mark_revision_dates(conn, [row[0] for row in changed or []], spec.name)
+            if owns_transaction:
+                conn.commit()
+        except Exception:
+            if owns_transaction:
+                conn.rollback()
+            raise
+        finally:
+            if owns_transaction:
+                conn.autocommit = True
         return len(values)
 
     def _replace_code_batch(
@@ -659,6 +797,8 @@ class TushareSyncEngine:
         dual-active PIT pollution). The delete and insert run in a single
         transaction so a failure can never leave the code without rows.
         """
+        if spec.target_table in {"market.sw_index_member", "market.sw_index_classify"}:
+            raise RuntimeError("SW history cannot be refreshed through destructive replacement")
         previous_autocommit = conn.autocommit
         conn.autocommit = False
         try:
@@ -676,15 +816,15 @@ class TushareSyncEngine:
             conn.autocommit = previous_autocommit
         return inserted
 
-    def _count_code_rows(self, conn, spec: DatasetSpec, code_val: str) -> int:
-        """Count local rows for one BY_CODE value (empty-mirror guard)."""
+    def _has_code_rows(self, conn, spec: DatasetSpec, code_val: str) -> bool:
+        """Probe one BY_CODE key; empty-mirror guards do not need a full count."""
         with conn.cursor() as cur:
             cur.execute(
-                f"SELECT COUNT(*) FROM {spec.target_table} WHERE {spec.code_param_name} = %s",
+                f"SELECT EXISTS(SELECT 1 FROM {spec.target_table} WHERE {spec.code_param_name} = %s)",
                 (code_val,),
             )
             row = cur.fetchone()
-        return int(row[0]) if row else 0
+        return bool(row[0]) if row else False
 
     def _validate_rows_for_date(
         self,
@@ -716,11 +856,12 @@ class TushareSyncEngine:
             )
         if spec.query_mode == QueryMode.BY_DATE:
             requested = _to_ymd(trade_date)
-            mismatched = [
-                row.get(spec.date_column)
-                for row in rows[:10]
-                if _to_ymd(_parse_ymd(row.get(spec.date_column)) or dt.date.min) != requested
-            ]
+            mismatched = []
+            for row in rows:
+                if _to_ymd(_parse_ymd(row.get(spec.date_column)) or dt.date.min) != requested:
+                    mismatched.append(row.get(spec.date_column))
+                    if len(mismatched) == 10:
+                        break
             if mismatched:
                 raise RuntimeError(
                     f"{spec.name} provider_contract_error returned date outside request "
@@ -1034,6 +1175,18 @@ class TushareSyncEngine:
         if cursor is not None:
             metadata["safe_audit_cursor_date"] = cursor.isoformat()
             next_start = self._next_sync_date_after(conn, spec, cursor, end_date)
+            tail = LATE_PUBLICATION_TAIL_DAYS.get(spec.name, 0)
+            if tail:
+                # Bound the automatic recheck to recent published trading dates;
+                # no full-history scan on the daily path.
+                dates = self._iter_sync_dates(conn, spec, end_date - dt.timedelta(days=30), end_date)
+                if dates:
+                    next_start = min(next_start, dates[-tail:][0])
+                    metadata["late_publication_recheck"] = True
+                    metadata["late_publication_tail_days"] = tail
+                pending = self._unclosed_publication_dates(conn, spec, end_date)
+                self._late_recheck_dates[spec.name] = pending
+                metadata["unclosed_publication_dates"] = [day.isoformat() for day in pending]
             if next_start > end_date:
                 metadata["audit_reconciled_to_end_date"] = True
             return next_start, metadata
@@ -1042,6 +1195,19 @@ class TushareSyncEngine:
         if initial_start is not None:
             metadata["initial_fill_from_floor"] = initial_start.isoformat()
         return initial_start or end_date, metadata
+
+    @staticmethod
+    def _unclosed_publication_dates(conn, spec, end_date):
+        # A bounded exact-date queue also repairs facts published after the tail.
+        # Do not widen an old target into a contiguous full-history fetch.
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT DISTINCT target_date FROM market.data_sync_targets "
+                "WHERE dataset=%s AND target_date<=%s AND target_date IS NOT NULL "
+                "AND target_status IN ('pending','retry','final_blocked') "
+                "ORDER BY target_date LIMIT 5", (spec.name, end_date),
+            )
+            return [row[0] for row in cur.fetchall()]
 
     def _target_repo_or_none(self) -> DataSyncTargetRepository | None:
         if self._target_repo is not None:
@@ -1170,6 +1336,37 @@ class TushareSyncEngine:
             count += 1
         return count
 
+    def _stk_limit_readback_quality(self, conn, trade_date):
+        """Verify only real, traded A-share keys for this requested day.
+
+        Suspended securities without trades, funds and indices do not become
+        required keys just because stk_limit happens to contain them. The LEFT
+        JOIN also catches absent rows, not only NULLs in returned provider rows.
+        """
+        with conn.cursor() as cur:
+            cur.execute(r"""SELECT DISTINCT k.ts_code,s.pre_close,s.up_limit,s.down_limit
+                FROM market.kline_daily_raw k
+                LEFT JOIN market.stk_limit s ON s.ts_code=k.ts_code AND s.trade_date=k.trade_date
+                WHERE k.trade_date=%s AND k.adjust_type='none' AND k.close_li>0
+                  AND (k.volume_hand>0 OR k.volume_shares>0)
+                  AND (k.ts_code ~ '^(00|30)[0-9]{4}\.SZ$'
+                    OR k.ts_code ~ '^6[0-9]{5}\.SH$'
+                    OR k.ts_code ~ '^[489][0-9]{5}\.BJ$')
+                ORDER BY k.ts_code""", (trade_date,))
+            rows = cur.fetchall()
+        invalid = [code for code, reference, upper, lower in rows
+                   if not _stk_limit_source_prices_valid(reference, upper, lower)]
+        receipt = {"schema_version": "stk_limit_traded_readback_v1", "scope": "requested_date_only",
+                   "trade_date": trade_date.isoformat(), "required_traded_equity_count": len(rows),
+                   "invalid_count": len(invalid), "invalid_sample": invalid[:10],
+                   "source_zero_lower_bound_count": sum(
+                       _is_finite_number(lower) and float(lower) == 0
+                       and _stk_limit_source_prices_valid(reference, upper, lower)
+                       for _, reference, upper, lower in rows)}
+        quality = {"quality_status": "ok"} if not invalid else {
+            "quality_status": "low_coverage", "failure_category": "traded_equity_limit_fact_incomplete"}
+        return receipt, quality
+
     # -- sync strategies ----------------------------------------------------
 
     def _sync_by_date(
@@ -1178,6 +1375,7 @@ class TushareSyncEngine:
         job_id: uuid.UUID,
     ) -> SyncResult:
         days = self._iter_sync_dates(conn, spec, start_date, end_date)
+        days = sorted(set(days).union(self._late_recheck_dates.get(spec.name, [])))
         result = SyncResult(dataset=spec.name, mode="sync", job_id=job_id,
                             total_batches=len(days))
 
@@ -1213,17 +1411,57 @@ class TushareSyncEngine:
                     "tushare_api": spec.tushare_api,
                     "mode": spec.query_mode.value,
                 }
+                if spec.name == "suspend_d":
+                    from backend.data_service.suspension_day_authority import publication_quality as suspension_publication_quality
+                    suspension, suspension_quality = suspension_publication_quality(rows, d)
+                    if suspension_quality["quality_status"] == "low_coverage" or audit_quality["quality_status"] in {"ok", "empty_valid"}:
+                        audit_quality.update(suspension_quality)
+                    audit_metadata["suspension_day_authority"] = suspension
                 if spec.name == "etf_share_size":
                     publication_quality, audit_quality = _etf_share_size_publication_quality(rows)
                     audit_metadata["publication_quality"] = publication_quality
+                if spec.name == "stk_limit":
+                    publication_quality, field_quality = _stk_limit_publication_quality(rows)
+                    audit_metadata["publication_quality"] = publication_quality
+                    # Do not downgrade an existing partial-row coverage failure
+                    # to ok merely because one pre_close is published.
+                    if field_quality["quality_status"] != "ok":
+                        audit_quality.update(field_quality)
+                    readback, readback_quality = self._stk_limit_readback_quality(conn, d)
+                    audit_metadata["traded_equity_readback"] = readback
+                    if readback_quality["quality_status"] != "ok":
+                        audit_quality.update(readback_quality)
                 if spec.name == "daily_basic":
                     # BUG-1425: persist the required-field coverage receipt so
                     # the freshness gate can prove turnover_rate_f coverage
                     # instead of failing closed with
                     # required_field_coverage_unproven.
-                    audit_metadata["required_field_coverage"] = (
-                        _daily_basic_required_field_coverage_receipt(rows)
-                    )
+                    coverage = _daily_basic_required_field_coverage_receipt(rows)
+                    audit_metadata["required_field_coverage"] = coverage
+                    # The existing mandatory-field contract must also drive
+                    # the durable retry queue. A receipt alone leaves a late
+                    # field falsely reconciled after the rolling tail expires.
+                    # Nullable valuation fields have no new threshold here.
+                    if (coverage["required_fields_ratio"] < coverage["required_ratio"]
+                            and audit_quality["quality_status"] in {"ok", "empty_valid"}):
+                        audit_quality.update(
+                            quality_status="low_coverage",
+                            failure_category="required_field_coverage_below_threshold",
+                        )
+                if spec.name == "margin_detail" and rows:
+                    # Independently bind the validated provider response, not a
+                    # subsequent database COUNT or the number written by upsert.
+                    from .dataset_release.canonical import canonical_json_bytes
+                    import hashlib
+                    audit_quality["expected_rows"] = len(rows)
+                    audit_quality["coverage_ratio"] = inserted / len(rows)
+                    audit_metadata["provider_publication"] = {
+                        "source": "tushare_response",
+                        "row_count": len(rows),
+                        "source_rows_sha256": hashlib.sha256(canonical_json_bytes(rows)).hexdigest(),
+                    }
+                    if inserted != len(rows):
+                        audit_quality.update(quality_status="low_coverage", failure_category="provider_persistence_count_differs")
                 if canonicalized_source_revisions:
                     audit_metadata["canonicalized_source_revisions"] = (
                         canonicalized_source_revisions
@@ -1239,9 +1477,10 @@ class TushareSyncEngine:
                     conn=conn,
                     **audit_quality,
                 )
+                quality_ok = audit_quality["quality_status"] in {"ok", "empty_valid"}
                 self._record_sync_attempt(
                     target_id,
-                    "reconciled",
+                    "reconciled" if quality_ok else "retry",
                     job_id=job_id,
                     rows_written=inserted,
                     rows_observed=inserted,
@@ -1249,7 +1488,11 @@ class TushareSyncEngine:
                 )
                 result.inserted_rows += inserted
                 result.canonicalized_source_revisions += canonicalized_source_revisions
-                result.success_batches += 1
+                if quality_ok:
+                    result.success_batches += 1
+                else:
+                    result.failed_batches += 1
+                    result.error = f"{spec.name}/{d}: {audit_quality.get('failure_category', 'quality_incomplete')}"
             except Exception as exc:
                 result.failed_batches += 1
                 self._log(conn, job_id, "error", f"{spec.name} {d} failed: {exc}")
@@ -1585,8 +1828,18 @@ class TushareSyncEngine:
         job_id : attach to an existing ingestion_jobs row (API-created)
         """
         today = dt.date.today()
+        self._late_recheck_dates.pop(spec.name, None)
         if end_date is None:
             end_date = today
+            if spec.name in PUBLICATION_LAG_DAYS:
+                calendar = TradingCalendarStatusService()
+                latest = calendar.latest_trading_day_on_or_before(today)
+                if latest is None:
+                    raise RuntimeError("publication policy requires latest trading calendar")
+                end_date = publication_target_date(
+                    spec.name, latest, dt.datetime.now(ZoneInfo("Asia/Shanghai")),
+                    lambda day: calendar.latest_trading_day_on_or_before(day - dt.timedelta(days=1)),
+                )
 
         cursor_metadata: Dict[str, Any] = {}
 
@@ -1682,25 +1935,34 @@ class TushareSyncEngine:
             )
 
     def _run_stock_universe_pit_post_sync_hook(self, dataset: str) -> Dict[str, Any]:
-        """Mark/rebuild derived ST PIT universe after source-table sync succeeds."""
+        """Maintain the shared canonical PIT after source-table sync succeeds."""
 
         try:
-            from .stock_universe_pit_service import StockUniversePitService
+            from .stock_universe_pit_service import StockUniversePitService, DEFAULT_ST_PIT_START_DATE
 
-            service = StockUniversePitService()
-            marked = service.mark_dirty(
-                reason="tushare_source_sync_success",
-                source_dataset=dataset,
+            service = StockUniversePitService(existing_schema_only=True)
+            plan = service.plan_canonical_pit_universe(
+                start_date=DEFAULT_ST_PIT_START_DATE,
+                end_date=service.resolve_default_end_date(),
             )
-            result: Dict[str, Any] = {"marked_dirty": marked}
-            result["ensure"] = service.ensure_st_pit_universe(
+            if plan.get("coverage_satisfied") is True and plan.get("needs_rebuild") is False:
+                return {"ok": True, "ensure": {"status": "ready", "rebuilt": False,
+                                                "reason": "canonical_already_current"}}
+            # The builder now commits spans and ready state atomically. Do not
+            # invalidate the published view before the replacement is validated.
+            result: Dict[str, Any] = {"published_state_preserved_during_build": True}
+            result["ensure"] = service.ensure_canonical_pit_universe(
+                start_date=DEFAULT_ST_PIT_START_DATE,
                 strict=False,
-                refresh_policy="source_fingerprint",
             )
-            return {"ok": True, **result}
+            ready = result["ensure"].get("status") == "ready"
+            if not ready:
+                _logger.warning("canonical PIT maintenance incomplete after %s: %s", dataset, result["ensure"])
+            return {"ok": ready, **result}
         except Exception as exc:  # noqa: BLE001
             # Source sync success must not be turned into a fake failure. The
-            # strict export / paper paths call ensure_st_pit_universe again.
+            # Online consumers never repair facts. Preserve the derived failure
+            # separately so maintenance can retry without re-fetching the source.
             return {"ok": False, "error": str(exc), "source_dataset": dataset}
 
     # -- BY_CODE batched (分批连接，避免长时间持有) -------------------------
@@ -1737,13 +1999,29 @@ class TushareSyncEngine:
                         if not spec.skip_date_params:
                             params["start_date"] = start_ymd
                             params["end_date"] = end_ymd
-                        rows = self._fetch_from_tushare(spec, params)
+                        if spec.name == "sw_index_member":
+                            # No default is_new=Y: ended records explicitly close
+                            # current memberships without deleting missing history.
+                            rows = []
+                            for is_new in ("Y", "N"):
+                                returned = self._fetch_from_tushare(spec, {**params, "is_new": is_new})
+                                if any(row.get("is_new") != is_new for row in returned):
+                                    raise RuntimeError("SW provider ignored requested current/history identity; local facts preserved")
+                                rows.extend(returned)
+                        else:
+                            rows = self._fetch_from_tushare(spec, params)
                         # Row limit check (e.g. index_daily 8000-row cap)
                         if spec.row_limit > 0 and len(rows) >= spec.row_limit:
                             msg = (f"{spec.name} {spec.code_param_name}={code_val} returned {len(rows)} rows "
                                    f"(>= {spec.row_limit}); narrow date range and rerun")
                             self._log(conn, job_id, "error", msg)
                             raise RuntimeError(msg)
+                        # All empty-response guards ask the same question for
+                        # this code. Probe once and reuse; nonempty responses
+                        # need no local-history query at all.
+                        local_history_exists = not rows and self._has_code_rows(conn, spec, code_val)
+                        if spec.name == "sw_index_member" and local_history_exists:
+                            raise RuntimeError("SW history refresh returned no rows; local facts preserved")
                         # BUG-930: never mirror an empty upstream payload
                         # over local rows; a transient upstream gap would
                         # otherwise wipe the whole code. BUG-941: a code that
@@ -1752,7 +2030,7 @@ class TushareSyncEngine:
                         # 801786.SI that never had members) is a legitimate
                         # no-op mirror and must not fail the batch.
                         if spec.replace_by_code and not rows:
-                            if self._count_code_rows(conn, spec, code_val) == 0:
+                            if not local_history_exists:
                                 self._log(
                                     conn,
                                     job_id,
@@ -1772,7 +2050,7 @@ class TushareSyncEngine:
                         if spec.replace_by_code:
                             inserted = self._replace_code_batch(conn, spec, code_val, rows)
                         else:
-                            if not rows and self._count_code_rows(conn, spec, code_val) > 0:
+                            if not rows and local_history_exists:
                                 # BUG-947: upsert-mode datasets (e.g. sw_daily)
                                 # accept empty payloads silently; with the HTTP
                                 # error unmasking above a genuine empty here is

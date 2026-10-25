@@ -1,0 +1,313 @@
+{
+  "actual": "SourceManifestError industry repair cannot change a published candidate in verified private retained staging.",
+  "allowed_write_scope": [
+    "backend/services/dataset_release/monthly_mature_build_runner.py",
+    "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+    "tests/aistock_validation/bugs/20261018_BUG-1977-monthly-retry-preserves-obsolete-private-packaging-too-late-for-approved.json"
+  ],
+  "assigned_agent": null,
+  "bug_id": "BUG-1977",
+  "closed_at": "2026-10-18T18:25:30.097542Z",
+  "closure_requirements": [
+    "Fix the observed behavior.",
+    "Run required verification plans.",
+    "Keep BUG JSON and GitHub Issue synchronized."
+  ],
+  "created_at": "2026-10-18T18:06:26.671688Z",
+  "description": "Attempt 278 of September operation dmr_63a313d97fd046a38d5a876265565014 failed at the unchanged published-root repair guard because verified private staging retained the obsolete manifest from an earlier packaging attempt. The runner preserved that packaging only after retained corrections and consumer validation. Move the existing preservation call immediately before corrections; preserve all packaging bytes and reuse completed native exports, without relaxing publication protection or adding checks.",
+  "events": [
+    {
+      "action": "promote_candidate_to_bug",
+      "actor": "issue_flow",
+      "note": "Promoted from IC-20261018-2b7c5b2dc3cc",
+      "timestamp": "2026-10-18T18:06:26.671666Z"
+    }
+  ],
+  "evidence_uris": [],
+  "expected": "Preserve obsolete private packaging once before retained corrections, then rebuild packaging with repaired frozen facts; never repeat completed native exports.",
+  "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1977-monthly-retry-preserves-obsolete-private-packaging-too-late-for-approved.json"
+    ],
+    "added_files": [],
+    "changed_files": [
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+      "tests/aistock_validation/bugs/20261018_BUG-1977-monthly-retry-preserves-obsolete-private-packaging-too-late-for-approved.json"
+    ],
+    "changed_files_source": "git_finish",
+    "ownership": {
+      "changed_files": [
+        "backend/services/dataset_release/monthly_mature_build_runner.py",
+        "backend/tests/dataset_release/test_monthly_mature_build_runner.py"
+      ],
+      "impacted_modules": [
+        "qlib_data",
+        "qe.core",
+        "local_data",
+        "platform.api"
+      ],
+      "matched_rules": [
+        {
+          "file": "backend/services/dataset_release/monthly_mature_build_runner.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        },
+        {
+          "file": "backend/tests/dataset_release/test_monthly_mature_build_runner.py",
+          "impact_modules": [
+            "qe.core",
+            "local_data",
+            "platform.api"
+          ],
+          "primary_module": "qlib_data",
+          "risk_level": "critical",
+          "rule_id": "qlib_monthly_dataset_release"
+        }
+      ],
+      "risk_levels": [
+        "critical"
+      ],
+      "suggested_scope": [
+        "backend/services/dataset_release/monthly_mature_build_runner.py",
+        "backend/tests/dataset_release/test_monthly_mature_build_runner.py"
+      ],
+      "unmatched_files": []
+    },
+    "planned_files": [
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py"
+    ],
+    "schema_version": "aistock_submit_bug_file_scope_v1",
+    "scope_files": [
+      "backend/services/dataset_release/monthly_mature_build_runner.py",
+      "backend/tests/dataset_release/test_monthly_mature_build_runner.py"
+    ]
+  },
+  "first_seen_at": "2026-10-18T18:06:26.671688Z",
+  "fix_branch": null,
+  "fix_commit": "43641c3bca15f1acbddfcab24974333bff3ff9d8",
+  "fixed_at": "2026-10-18T18:18:44Z",
+  "github_issue_number": 6325,
+  "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/6325",
+  "last_seen_at": "2026-10-18T18:06:26.671688Z",
+  "module": "qlib_data",
+  "non_goals": [
+    "Do not start, stop, or restart any user backend without explicit per-target approval."
+  ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/6327",
+  "production_backend_dependency_gate": "noop",
+  "production_ddl_gate": "noop",
+  "production_frontend_dependency_gate": "noop",
+  "repository_allocator_persistence": "omitted_from_fix_pr_global_reservation_is_authoritative",
+  "reproduce_command": "rtk pytest backend/tests/dataset_release/test_monthly_mature_build_runner.py::test_retry_reuses_real_native_bin_and_never_calls_writer_again -q",
+  "required_verification": [
+    "l0",
+    "qlib_data_backend"
+  ],
+  "review_results": [
+    "Round 1: reproduced retained-packaging regression RED (1 failed, 1 passed), moved only the existing preservation call, failed node GREEN.",
+    "Round 2: verified completed native writer calls are prohibited on retry, exact daily bytes and mtime are unchanged, predecessor bytes are unchanged, and obsolete manifest/reports bytes are preserved at the existing operation/attempt-scoped destination.",
+    "Round 3: reviewed first-attempt/no-packaging, interrupted-minute, repeated-finalization and published-root guards; final related matrix 134 passed, 1 skipped. No new gate, history scan, database write, publication or process control was introduced.",
+    "DESIGN-COMPLIANCE-001: existing durable runner contract fully retained; no simplified success, placeholder/fallback facts, consumer/model changes or out-of-scope framework. Actual September continuation still requires the user-owned worker restart and the existing API resume; tests are not release readiness."
+  ],
+  "risk_area": "bug",
+  "root_cause": "Retry ordering defect: begin_finalization ran after apply_retained_history, which correctly rejects a manifest-bearing root. Private packaging markers were mistaken for publication before the existing preservation step could run.",
+  "runtime_contract": {
+    "backend_restart_owner": "user",
+    "fresh_process_evidence": [
+      "Fresh Python/pytest process loaded tracked mature runner and actual native writer fixture: RED packaged retry failed; GREEN exact failed node passed; final runner/resume/sector mapping matrix 134 passed, 1 skipped. Retried exports remain byte/mtime identical and obsolete private packaging is preserved before all correction entrypoints. Published-root static repair rejection remains tested.",
+      "python -m ruff check changed runner/tests -> All checks passed; python -m py_compile changed runner/tests -> passed; git diff --check -> passed. No production/source DB access, candidate/profile mutation or process control."
+    ],
+    "inference_basis": "actual_changed_files",
+    "operator_runbook_ref": "docs/operations/monthly_unified_dataset_release_v2_runbook.md",
+    "persistence_basis": "git_tracked_source",
+    "planned_target_ids": [
+      "worker-scheduler"
+    ],
+    "post_restart_effective_gate": "passed",
+    "post_restart_receipt_ref": "F:/Dev/AIstock/tmp/issue_workflow/BUG-1977/post-restart-verify.json",
+    "post_restart_receipt_summary": {
+      "bug_id": "BUG-1977",
+      "business_smoke_semantic": {
+        "contract_id": "monthly_release_worker_supervision",
+        "reason": null,
+        "verdict": "passed"
+      },
+      "catalog_sha256": "481e8092f80d534859ffa2a155ad726734e8c53c3952ec7e59a1541f8da197fb",
+      "contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+      "expected_identity": "43641c3bca15f1acbddfcab24974333bff3ff9d8",
+      "expected_terminal_outcome_digest": null,
+      "generated_at": "2026-10-18T18:25:03.691876Z",
+      "mode": "read_only",
+      "observed_identity": "43641c3bca15f1acbddfcab24974333bff3ff9d8",
+      "post_restart_effective_gate": "passed",
+      "probe_evidence_digest": "3a54e52ac1d27ae4e178c4ddef540e0fd537f8601f1fd8d97a676a72b07b987c",
+      "receipt_sha256": "8c8005c0cf7433da0f3e39117d68507ee190bd2bbce637712ef43d4b1d4c22b3",
+      "response_content_persisted": false,
+      "runtime_identity_proof_digest": "c52ed05cafae7fae13743da563eba2280d6a24cec1d6011b494823de6e7c4b60",
+      "schema_version": "aistock_post_restart_verify_receipt_summary_v1",
+      "target_id": "worker-scheduler"
+    },
+    "provisional": false,
+    "runtime_identity_match": true,
+    "runtime_impact": "worker_scheduler",
+    "schema_version": "aistock_bug_runtime_contract_v1",
+    "target_id": "worker-scheduler",
+    "target_ids": [
+      "worker-scheduler"
+    ]
+  },
+  "schema_version": "aistock_validation_bug_v1",
+  "severity": "P1",
+  "source_merge_receipt": {
+    "bug_id": "BUG-1977",
+    "production_gates": {
+      "production_backend_dependency_gate": "noop",
+      "production_ddl_gate": "noop",
+      "production_frontend_dependency_gate": "noop"
+    },
+    "receipt_id": "d05fc2592b8b740d",
+    "recorded_at": "2026-10-18T18:19:21.103113Z",
+    "runtime_contract_digest": "030e3dda72008edb83703df558ad43b6fa93b39b9343a3cb6f86efaa0a17af9e",
+    "runtime_identity_match": "pending",
+    "runtime_verification": "pending_user_restart",
+    "schema_version": "aistock_source_merge_receipt_v1",
+    "source_head_oid": "04c57d05de45a50d3c58b0766dd0f972c7ff921e",
+    "source_merge_commit": "43641c3bca15f1acbddfcab24974333bff3ff9d8",
+    "source_pr_url": "https://github.com/licong01-cloud/AIstock/pull/6327",
+    "validation_evidence": [
+      "python -m nox -s l0 --reuse-existing-virtualenvs -> passed (0 findings)",
+      "rtk pytest backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_sector_mapping.py -q -> passed (134 passed, 1 skipped); changed-file Ruff compile diff check passed; three reviews passed"
+    ],
+    "validation_evidence_digest": "7e64cde550d8cd68eb00b7130fe367fe35a34a5dbcda387b4214d10c40d229e7"
+  },
+  "status": "verified",
+  "suspected_modules": [
+    "qlib_data"
+  ],
+  "title": "Monthly retry preserves obsolete private packaging too late for approved corrections",
+  "trigger_condition": {
+    "fingerprint": "2b7c5b2dc3cc4fe6e815f198",
+    "source_event_id": "FE-20261018-2b7c5b2dc3cc"
+  },
+  "validation_evidence": [
+    "python -m nox -s l0 --reuse-existing-virtualenvs -> passed (0 findings)",
+    "rtk pytest backend/tests/dataset_release/test_monthly_mature_build_runner.py backend/tests/dataset_release/test_monthly_build_resume.py backend/tests/dataset_release/test_monthly_sector_mapping.py -q -> passed (134 passed, 1 skipped); changed-file Ruff compile diff check passed; three reviews passed",
+    "post-restart-verify --target worker-scheduler --expected-identity 43641c3bca15f1acbddfcab24974333bff3ff9d8 -> passed (runtime identity and native worker smoke); rtk pytest runner/resume/sector mapping -> passed (134 passed 1 skipped)"
+  ],
+  "verification_budget": {
+    "budget": "standard",
+    "ci_premerge_plans": [],
+    "deferred_nightly_verification": {
+      "modules": [
+        "qlib_data"
+      ],
+      "plans": [
+        "qlib_data_backend"
+      ],
+      "required": true,
+      "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+    },
+    "delegated_validation": {
+      "receipt_default": "compact",
+      "skill": "aistock-validation-delegation",
+      "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+    },
+    "external_premerge_plans": [],
+    "local_loop_policy": {
+      "delegate_when": [
+        "local validation or exploration exceeds 30 minutes",
+        "exploration commands exceed the task-card soft limit",
+        "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+        "the relevant small matrix already passed and only non-behavioral edits followed"
+      ],
+      "failure_resume_first": [
+        "pytest <path>::<test_name> -q",
+        "pytest --lf -q",
+        "pytest --ff -x -q"
+      ],
+      "max_final_related_matrix_runs": 1,
+      "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+    },
+    "premerge_gate": [
+      "changed-file lint/compile",
+      "direct fix-point targeted test or API/contract smoke",
+      "git diff --check",
+      "production gates"
+    ],
+    "premerge_required_plans": [
+      "l0"
+    ],
+    "schema_version": "aistock_verification_budget_v1",
+    "target_cost_percent_of_legacy": "30-45%"
+  },
+  "verification_run_id": null,
+  "workflow_efficiency_recommendations": {
+    "batch_candidate": false,
+    "cleanup_fast_candidate": false,
+    "compact_success_output": true,
+    "docs_only_merge_with_related_code": true,
+    "full_json_on_failure_only": true,
+    "recommendations": [
+      "Use compact success output; request full JSON only for failures or diagnostics.",
+      "Run targeted validation first, then final gates once the patch is stable.",
+      "Default BUG validation to the smallest safe pre-merge gate; defer broad UI/API/business-flow suites to nightly."
+    ],
+    "schema_version": "aistock_workflow_efficiency_recommendations_v1",
+    "verification_budget": {
+      "budget": "standard",
+      "ci_premerge_plans": [],
+      "deferred_nightly_verification": {
+        "modules": [
+          "qlib_data"
+        ],
+        "plans": [
+          "qlib_data_backend"
+        ],
+        "required": true,
+        "scope": "deduplicate all merged BUG/PR changes for the day and run deep UI/API/business-flow validation once in nightly or delegated VC/CI runs"
+      },
+      "delegated_validation": {
+        "receipt_default": "compact",
+        "skill": "aistock-validation-delegation",
+        "use_when": "broad UI/API/business-flow, LLM design-drift, or cross-module validation exceeds the local gate"
+      },
+      "external_premerge_plans": [],
+      "local_loop_policy": {
+        "delegate_when": [
+          "local validation or exploration exceeds 30 minutes",
+          "exploration commands exceed the task-card soft limit",
+          "validation needs broad module, UI/API, business-flow, or cross-module coverage",
+          "the relevant small matrix already passed and only non-behavioral edits followed"
+        ],
+        "failure_resume_first": [
+          "pytest <path>::<test_name> -q",
+          "pytest --lf -q",
+          "pytest --ff -x -q"
+        ],
+        "max_final_related_matrix_runs": 1,
+        "no_repeat_rule": "do not rerun broad or full related suites after every edit; rerun failed nodeids first"
+      },
+      "premerge_gate": [
+        "changed-file lint/compile",
+        "direct fix-point targeted test or API/contract smoke",
+        "git diff --check",
+        "production gates"
+      ],
+      "premerge_required_plans": [
+        "l0"
+      ],
+      "schema_version": "aistock_verification_budget_v1",
+      "target_cost_percent_of_legacy": "30-45%"
+    }
+  }
+}

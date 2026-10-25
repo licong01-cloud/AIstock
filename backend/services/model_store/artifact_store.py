@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import re
 import shutil
@@ -24,6 +25,7 @@ STORE_ROOT_ENV = "AISTOCK_PREDICTION_STORE_ROOT"
 METADATA_MAX_BYTES_ENV = "AISTOCK_PREDICTION_STORE_METADATA_MAX_BYTES"
 DEFAULT_METADATA_MAX_BYTES = 512 * 1024 * 1024
 MANIFEST_SCHEMA_VERSION = "aistock_prediction_store_manifest_v1"
+logger = logging.getLogger(__name__)
 
 _SAFE_COMPONENT_RE = re.compile(r"[^A-Za-z0-9_.-]+")
 
@@ -362,6 +364,8 @@ class PredictionArtifactStore:
                     out.write(chunk)
                     hasher.update(chunk)
                     size_bytes += len(chunk)
+                out.flush()
+                os.fsync(out.fileno())
             digest = hasher.hexdigest()
             target = self.blob_path(digest)
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -371,7 +375,22 @@ class PredictionArtifactStore:
                         f"existing blob size mismatch for sha256={digest}: "
                         f"existing={target.stat().st_size} new={size_bytes}"
                     )
-                tmp_path.unlink(missing_ok=True)
+                existing_hasher = hashlib.sha256()
+                with target.open("rb") as existing:
+                    while chunk := existing.read(1024 * 1024):
+                        existing_hasher.update(chunk)
+                existing_digest = existing_hasher.hexdigest()
+                if existing_digest != digest:
+                    # The incoming stream is already hash-verified and fsynced.
+                    # Restore the exact same CAS identity atomically, never use
+                    # the corrupt bytes or silently claim a valid duplicate.
+                    tmp_path.replace(target)
+                    logger.warning(
+                        "prediction_store_blob_repaired sha256=%s previous_sha256=%s size_bytes=%s",
+                        digest, existing_digest, size_bytes,
+                    )
+                else:
+                    tmp_path.unlink(missing_ok=True)
             else:
                 tmp_path.replace(target)
             return digest, size_bytes

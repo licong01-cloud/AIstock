@@ -201,11 +201,12 @@ def _qlib_counts(root: Path, window: Mapping[str, Any]) -> dict[str, int]:
         end_time=end,
         freq="day",
     )
+    # Qlib treats date-only minute bounds as midnight, not a complete day.
     minute = D.features(
         ["000001.SZ"],
         ["$open", "$close", "$volume"],
-        start_time=end,
-        end_time=end,
+        start_time=f"{end} 09:31:00",
+        end_time=f"{end} 15:00:00",
         freq="1min",
     )
     for label, frame in (("daily", daily), ("minute", minute)):

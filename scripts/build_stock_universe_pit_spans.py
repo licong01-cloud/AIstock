@@ -27,7 +27,7 @@ import os
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping
+from typing import Any, Iterable, Mapping, Sequence
 
 import psycopg2
 import psycopg2.extras as pgx
@@ -147,6 +147,19 @@ def _db_config() -> dict[str, Any]:
         "password": os.getenv("TDX_DB_PASSWORD", ""),
         "dbname": os.getenv("TDX_DB_NAME", "aistock"),
     }
+
+
+def _require_existing_tables(conn: Any) -> None:
+    """Validate the DML target without running schema or catalog bootstrap."""
+
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT to_regclass('market.stock_universe_pit_spans'), "
+            "to_regclass('market.stock_universe_pit_events')"
+        )
+        row = cur.fetchone()
+        if not row or len(row) != 2 or any(value is None for value in row):
+            raise RuntimeError("PIT schema contract is missing; schema bootstrap is disabled")
 
 
 def _ensure_tables(conn: Any) -> None:
@@ -871,7 +884,14 @@ def audit_canonical_stock_lifecycle(stocks: Iterable[StockRow]) -> dict[str, Any
         for stock in rows
         if str(stock.list_status or "").upper() == "D" and stock.delist_date is None
     )
-    unresolved = sorted(set(missing_list_date + unsupported_status + delisted_missing_date))
+    invalid_terminal_date = sorted(
+        stock.ts_code
+        for stock in rows
+        if stock.list_date is not None
+        and stock.delist_date is not None
+        and stock.delist_date < stock.list_date
+    )
+    unresolved = sorted(set(missing_list_date + unsupported_status + delisted_missing_date + invalid_terminal_date))
     ledger = {
         "schema_version": "canonical_pit_exception_ledger_v1",
         "stock_count": len(rows),
@@ -881,6 +901,8 @@ def audit_canonical_stock_lifecycle(stocks: Iterable[StockRow]) -> dict[str, Any
         "unsupported_list_status_codes": unsupported_status,
         "delisted_missing_date_count": len(delisted_missing_date),
         "delisted_missing_date_codes": delisted_missing_date,
+        "invalid_terminal_date_count": len(invalid_terminal_date),
+        "invalid_terminal_date_codes": invalid_terminal_date,
         "unresolved_exception_count": len(unresolved),
         "unresolved_exception_codes": unresolved,
         "status": "ready" if not unresolved else "blocked",
@@ -900,8 +922,14 @@ def audit_canonical_terminal_evidence(
     start_date: dt.date | None = None,
     end_date: dt.date | None = None,
 ) -> dict[str, Any]:
-    """Require terminal evidence only for securities exposed in the dataset window."""
+    """Check usable terminal dates; announcement-event records are optional.
 
+    Authoritative stock_basic status/date facts already drive terminal spans.
+    Do not require a second announcement ledger for the same lifecycle fact.
+    Preserve the receipt keys for older readers, not the old evidence gate.
+    """
+
+    rows = list(stocks)
     terminal_codes = {
         event.ts_code
         for event in announcement_events
@@ -911,7 +939,7 @@ def audit_canonical_terminal_evidence(
     }
     pre_window = sorted(
         stock.ts_code
-        for stock in stocks
+        for stock in rows
         if str(stock.list_status or "").upper() == "D"
         and start_date is not None
         and stock.delist_date is not None
@@ -919,7 +947,7 @@ def audit_canonical_terminal_evidence(
     )
     required = sorted(
         stock.ts_code
-        for stock in stocks
+        for stock in rows
         if str(stock.list_status or "").upper() == "P"
         or (
             str(stock.list_status or "").upper() == "D"
@@ -927,19 +955,28 @@ def audit_canonical_terminal_evidence(
             and (end_date is None or (stock.delist_date is not None and stock.delist_date <= end_date))
         )
     )
-    missing = sorted(set(required).difference(terminal_codes))
+    dated_codes = {
+        stock.ts_code
+        for stock in rows
+        if str(stock.list_status or "").upper() in {"D", "P"}
+        and stock.list_date is not None
+        and stock.delist_date is not None
+        and stock.delist_date >= stock.list_date
+    }
+    missing = sorted(set(required).difference(dated_codes, terminal_codes))
     receipt = {
         "required_terminal_security_count": len(required),
         "pre_window_terminal_security_count": len(pre_window),
         "pre_window_terminal_security_codes": pre_window,
         "announcement_terminal_evidence_count": len(set(required).intersection(terminal_codes)),
+        "stock_basic_terminal_date_count": len(set(required).intersection(dated_codes)),
         "missing_terminal_evidence_count": len(missing),
         "missing_terminal_evidence_codes": missing,
         "status": "ready" if not missing else "blocked",
     }
     if missing:
         raise CanonicalPitEvidenceError(
-            "canonical terminal announcement evidence is incomplete: "
+            "canonical terminal effective date is unavailable: "
             f"missing_count={len(missing)} missing_codes={missing}",
             context=receipt,
         )
@@ -1202,6 +1239,84 @@ def _build_spans(
     return spans
 
 
+def _audit_st_span_exclusion(
+    conn: Any,
+    *,
+    spans: Sequence[SpanRow],
+    events: Sequence[EventRow],
+    calendar: TradingCalendar,
+    start_date: dt.date,
+    end_date: dt.date,
+) -> dict[str, Any]:
+    """Check target-month eligibility against independent observed risk state.
+
+    A disappearing snapshot row is not evidence of an ST removal: in particular,
+    a delisting-period rename must not admit the security again. Only the existing
+    typed, publication-as-of restore event may clear a previously observed risk.
+    This is validation only; it neither synthesizes events nor rewrites spans.
+    """
+    audit_start = max(start_date, end_date.replace(day=1))
+    days = tuple(day for day in calendar.days if audit_start <= day <= end_date)
+    by_code: dict[str, list[SpanRow]] = defaultdict(list)
+    for span in spans:
+        if span.eligible_start <= end_date and span.eligible_end >= audit_start:
+            by_code[span.ts_code].append(span)
+    boundary = calendar.before(audit_start) or audit_start
+    snapshots: dict[dt.date, set[str]] = defaultdict(set)
+    if by_code:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT ann_date::date, ts_code
+                  FROM market.stock_st
+                 WHERE ann_date BETWEEN %s AND %s AND ts_code = ANY(%s)
+                 ORDER BY ann_date, ts_code
+                """,
+                (boundary, end_date, sorted(by_code)),
+            )
+            for day, code in cur.fetchall():
+                snapshots[day].add(str(code))
+    risk: set[str] = set()
+    terminal: set[str] = set()
+    ordered_events = sorted(
+        (event for event in events if event.ts_code in by_code),
+        key=lambda event: (event.action_date, 0 if event.terminal else 1 if event.event_kind != "st_restore" else 2),
+    )
+    event_index = 0
+    conflicts: list[dict[str, str]] = []
+    for day in (boundary, *days) if boundary < audit_start else days:
+        while event_index < len(ordered_events) and ordered_events[event_index].action_date <= day:
+            event = ordered_events[event_index]
+            if event.terminal:
+                terminal.add(event.ts_code)
+            elif event.event_kind == "st_negative":
+                risk.add(event.ts_code)
+            elif event.event_kind == "st_restore":
+                risk.discard(event.ts_code)
+            event_index += 1
+        risk.update(snapshots.get(day, ()))
+        if day < audit_start:
+            continue
+        for code in sorted(risk | terminal):
+            if any(span.eligible_start <= day <= span.eligible_end for span in by_code[code]):
+                conflicts.append({"ts_code": code, "trade_date": day.isoformat()})
+    receipt = {
+        "audit_start": audit_start.isoformat(),
+        "audit_end": end_date.isoformat(),
+        "trading_day_count": len(days),
+        "conflict_key_count": len(conflicts),
+        "conflict_symbol_count": len({row["ts_code"] for row in conflicts}),
+        "conflicts": conflicts,
+        "status": "blocked" if conflicts else "ready",
+    }
+    if conflicts:
+        raise CanonicalPitEvidenceError(
+            f"ST/terminal risk state intersects selectable PIT spans: conflict_key_count={len(conflicts)}",
+            context=receipt,
+        )
+    return receipt
+
+
 def _validate(spans: list[SpanRow], events: list[EventRow]) -> dict[str, Any]:
     spans_by_stock: dict[str, list[SpanRow]] = defaultdict(list)
     for span in spans:
@@ -1431,7 +1546,30 @@ def _write_all_txt(path: Path, spans: Iterable[SpanRow]) -> None:
     path.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
 
 
+def _live_source_boundary(calendar: TradingCalendar, end_date: dt.date, raw: str | None) -> dt.date:
+    if raw is None:
+        return end_date
+    source_end = _parse_date(raw)
+    if source_end != calendar.before(end_date):
+        raise ValueError("live PIT source boundary must be the previous trading day")
+    return source_end
+
+
+def _membership_prefix_matches(
+    stored: Iterable[tuple[str, dt.date, dt.date]], spans: Iterable[SpanRow], end_date: dt.date,
+) -> bool:
+    # Compare interval facts, not generated_at/metadata or the artificial
+    # generation_end exit marker. No prices or full daily panel are scanned.
+    old = sorted((str(code).strip(), start, min(end, end_date)) for code, start, end in stored if start <= end_date)
+    new = sorted((span.ts_code, span.eligible_start, min(span.eligible_end, end_date))
+                 for span in spans if span.eligible_start <= end_date)
+    return old == new
+
+
 def build(args: argparse.Namespace) -> dict[str, Any]:
+    existing_schema_only = getattr(args, "existing_schema_only", False)
+    if not isinstance(existing_schema_only, bool):
+        raise ValueError("existing_schema_only must be boolean")
     start_date = _parse_date(args.start_date)
     end_date = _parse_date(args.end_date) or dt.date.today()
     write_mode = getattr(args, "write_mode", "replace") or "replace"
@@ -1468,7 +1606,10 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     canonical_scope = scope == CANONICAL_PIT_SCOPE
 
     with psycopg2.connect(**_db_config()) as conn:
-        _ensure_tables(conn)
+        if existing_schema_only:
+            _require_existing_tables(conn)
+        else:
+            _ensure_tables(conn)
         scope_counts = _load_stock_basic_scope_counts(conn, active_as_of=end_date)
         stocks = _load_stock_basic(conn, active_only=st_only_active, active_as_of=end_date)
         exception_ledger = audit_canonical_stock_lifecycle(stocks) if canonical_scope else None
@@ -1487,6 +1628,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             end_date + dt.timedelta(days=31),
         )
         calendar = TradingCalendar(calendar_days)
+        source_end = _live_source_boundary(calendar, end_date, getattr(args, "live_source_end_date", None))
+        if source_end != end_date and not canonical_scope:
+            raise ValueError("live source projection is only supported for canonical PIT")
         initial_st_events = _load_initial_st_events(
             conn,
             calendar,
@@ -1494,7 +1638,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             active_only=st_only_active,
             active_as_of=end_date,
         )
-        st_events = _load_st_events(conn, calendar, end_date, terminal_as_negative=st_only_active)
+        st_events = _load_st_events(conn, calendar, source_end, terminal_as_negative=st_only_active)
         terminal_events = (
             []
             if st_only_active
@@ -1504,7 +1648,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                 allow_paused_list_date_fallback=not canonical_scope,
             )
         )
-        confirmed_delisting_events = _load_confirmed_delisting_events(conn, calendar, end_date) if canonical_scope else []
+        confirmed_delisting_events = _load_confirmed_delisting_events(conn, calendar, source_end) if canonical_scope else []
         terminal_evidence = (
             audit_canonical_terminal_evidence(
                 stocks,
@@ -1519,12 +1663,18 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             initial_st_events + st_events + terminal_events + confirmed_delisting_events,
             key=lambda e: (e.ts_code, e.action_date, e.event_kind),
         )
+        previous_state = getattr(args, "previous_published_state", None)
+        snapshot_audit_start = start_date
+        if source_end != end_date and previous_state:
+            # Historical continuity has already been published and validated.
+            # Re-audit only the tail between that watermark and completed D-1.
+            snapshot_audit_start = min(source_end, _parse_date(str(previous_state["end_date"])))
         st_snapshot_continuity = (
             _audit_canonical_st_snapshots(
                 conn,
                 calendar=calendar,
-                start_date=start_date,
-                end_date=end_date,
+                start_date=snapshot_audit_start,
+                end_date=source_end,
                 events=st_events + terminal_events + confirmed_delisting_events,
             )
             if canonical_scope
@@ -1541,6 +1691,10 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             calendar=calendar,
         )
         validation = _validate(spans, events)
+        st_span_exclusion = _audit_st_span_exclusion(
+            conn, spans=spans, events=events, calendar=calendar,
+            start_date=start_date, end_date=source_end,
+        )
         event_counts = Counter(event.event_kind for event in events)
         span_counts = Counter(span.exit_reason for span in spans)
         spans_by_code: dict[str, list[SpanRow]] = defaultdict(list)
@@ -1574,6 +1728,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "exception_ledger_status": exception_ledger["status"] if exception_ledger else None,
             "exception_ledger": exception_ledger,
             "st_snapshot_continuity": st_snapshot_continuity,
+            "st_span_exclusion": st_span_exclusion,
             "terminal_evidence": terminal_evidence,
             "delist_pit": not st_only_active,
             "pause_pit": not st_only_active,
@@ -1600,7 +1755,36 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "validation": validation,
             "samples": {"multi_span_instruments": sample_multi_span},
         }
+        if source_end != end_date:
+            st_snapshot_continuity["historical_audit_reused_through"] = snapshot_audit_start.isoformat()
+            summary["live_projection"] = {
+                "source_through": source_end.isoformat(), "coverage_through": end_date.isoformat(),
+                "contract": "previous_completed_trade_day_facts_existing_causal_rules_v1",
+                "synthetic_snapshot_written": False,
+            }
+        if any(int(validation.get(key, 0) or 0) for key in (
+            "invalid_span_count", "overlap_error_count", "event_action_violation_count", "terminal_reentry_violation_count",
+        )):
+            raise RuntimeError(f"PIT validation failed before publication: {validation}")
+        if previous_state and previous_state.get("status") == "ready" and not previous_state.get("dirty"):
+            previous_end = _parse_date(str(previous_state["end_date"]))
+            with conn.cursor() as cur:
+                cur.execute("SELECT ts_code, eligible_start, eligible_end FROM market.stock_universe_pit_spans "
+                            "WHERE universe_key=%s ORDER BY ts_code, eligible_start, eligible_end", (args.universe_key,))
+                prefix_unchanged = _membership_prefix_matches(cur.fetchall(), spans, previous_end)
+            if getattr(args, "live_source_end_date", None) and not prefix_unchanged:
+                raise RuntimeError("live PIT roll would change published historical membership; source repair required")
+            if prefix_unchanged and start_date == _parse_date(str(previous_state["start_date"])):
+                ancestors = list((previous_state.get("last_build_summary") or {}).get("rolling_predecessors", []))
+                predecessor = {"source_digest": previous_state["source_fingerprint_sha256"],
+                               "coverage_start": start_date.isoformat(), "coverage_end": previous_end.isoformat()}
+                if predecessor not in ancestors:
+                    ancestors.append(predecessor)
+                summary["rolling_predecessors"] = ancestors
         if not args.dry_run:
+            from backend.services.sector_data_repair import capture_sector_pit_spans, mark_pit_revision
+
+            previous_sector_pit = capture_sector_pit_spans(conn, args.universe_key)
             if write_mode == "incremental":
                 summary["write_delta"] = _write_incremental_extension(
                     conn,
@@ -1624,6 +1808,15 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
                     "inserted_or_updated_spans": len(spans),
                     "inserted_events": len(events),
                 }
+            # Incremental persistence intentionally retains the historical prefix.
+            # Compare actual stored coverage, not a proposed full reconstruction
+            # whose historical changes were not applied in this transaction.
+            current_sector_pit = capture_sector_pit_spans(conn, args.universe_key)
+            mark_pit_revision(conn, previous_sector_pit, current_sector_pit)
+            publish_state = getattr(args, "publish_state", None)
+            if publish_state is not None:
+                # Spans, events and their ready watermark must be one commit.
+                publish_state(conn, summary)
             conn.commit()
             # Ingestion owns global data-stat refreshes. Calling the catalog-wide
             # refresh here makes a small PIT rebuild scan unrelated large tables
@@ -1657,6 +1850,7 @@ def main() -> None:
     )
     parser.add_argument("--reports-dir", default=str(PROJECT_ROOT / "reports" / "stock_universe_pit"))
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--existing-schema-only", action="store_true", help="Reject missing PIT schema; never bootstrap DDL")
     parser.add_argument("--write-all-txt", action="store_true")
     parser.add_argument("--write-mode", choices=["replace", "incremental"], default="replace")
     parser.add_argument("--incremental-from")

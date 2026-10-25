@@ -5,10 +5,37 @@ import sys
 import time
 from pathlib import Path
 
+import pytest
+
 from scripts import nightly_session_runner as runner
 
 
-def test_run_sessions_checkpoints_each_result_and_continues_after_failure(tmp_path: Path) -> None:
+def test_catalog_budget_is_honored_but_never_exceeds_total_deadline(tmp_path):
+    observed = []
+    def execute(session, timeout, *args):
+        observed.append(timeout)
+        return dict(session=session, result="success", duration_seconds=0)
+    runner.run_sessions(["hmm"], output_json=tmp_path / "r.json", output_md=tmp_path / "r.md",
+                        session_timeout_seconds=1200, total_timeout_seconds=2400,
+                        session_budgets={"hmm": 1800}, executor=execute)
+    assert observed == [1800]
+    runner.run_sessions(["hmm"], output_json=tmp_path / "r.json", output_md=tmp_path / "r.md",
+                        session_timeout_seconds=1200, total_timeout_seconds=60,
+                        session_budgets={"hmm": 1800}, executor=execute)
+    assert 0 < observed[-1] <= 60
+
+
+@pytest.mark.parametrize("budget", [0, -1, True, 1.5, "1800"])
+def test_invalid_catalog_budget_fails_closed(tmp_path, budget):
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps(dict(selected_sessions=["hmm"], changed_files=[],
+                                   session_timeout_seconds={"hmm": budget})))
+    with pytest.raises(ValueError, match="invalid session_timeout_seconds"):
+        runner._load_execution_plan(path)
+
+
+@pytest.mark.parametrize("sessions", [[], ["first", "second", "third"]])
+def test_run_sessions_checkpoints_each_result_and_continues_after_failure(tmp_path: Path, sessions) -> None:
     output_json = tmp_path / "session-results.json"
     output_md = tmp_path / "session-results.md"
     calls: list[str] = []
@@ -37,7 +64,7 @@ def test_run_sessions_checkpoints_each_result_and_continues_after_failure(tmp_pa
         }
 
     results = runner.run_sessions(
-        ["first", "second", "third"],
+        sessions,
         output_json=output_json,
         output_md=output_md,
         session_timeout_seconds=60,
@@ -45,36 +72,16 @@ def test_run_sessions_checkpoints_each_result_and_continues_after_failure(tmp_pa
         executor=fake_executor,
     )
 
-    assert calls == ["first", "second", "third"]
-    assert observed_prerequisites == [[], ["first"], ["first"]]
-    assert [row["result"] for row in results] == ["success", "failure", "success"]
+    assert calls == sessions
+    assert observed_prerequisites == ([[], ["first"], ["first"]] if sessions else [])
+    assert [row["result"] for row in results] == ["failure" if name == "second" else "success" for name in sessions]
     assert json.loads(output_json.read_text(encoding="utf-8")) == results
-    assert "`second` | `failure` | `nonzero_exit`" in output_md.read_text(encoding="utf-8")
-
-
-def test_run_sessions_persists_empty_noop_receipt(tmp_path: Path) -> None:
-    output_json = tmp_path / "session-results.json"
-    output_md = tmp_path / "session-results.md"
-
-    results = runner.run_sessions(
-        [],
-        output_json=output_json,
-        output_md=output_md,
-        session_timeout_seconds=60,
-        total_timeout_seconds=180,
-    )
-
-    assert results == []
-    assert json.loads(output_json.read_text(encoding="utf-8")) == []
     assert "Nightly selected session results" in output_md.read_text(encoding="utf-8")
+    if sessions:
+        assert "`second` | `failure` | `nonzero_exit`" in output_md.read_text(encoding="utf-8")
 
 
 def test_execute_session_returns_explicit_timeout(monkeypatch) -> None:
-    monkeypatch.setattr(
-        runner,
-        "sys",
-        type("FakeSys", (), {"executable": sys.executable})(),
-    )
     original_popen = runner.subprocess.Popen
 
     def sleeping_popen(command, **kwargs):
@@ -101,11 +108,11 @@ def test_execute_session_uses_scope_file_instead_of_long_command_line(monkeypatc
 
     class CompletedProcess:
         def wait(self, timeout: int) -> int:
-            captured["timeout"] = timeout
             return 0
 
     def fake_popen(command, **kwargs):
         captured["command"] = command
+        captured["pytest_addopts"] = kwargs["env"]["PYTEST_ADDOPTS"]
         captured["nightly_runner"] = kwargs["env"][runner.NIGHTLY_RUNNER_ENV]
         captured["completed_sessions"] = [
             item
@@ -124,6 +131,7 @@ def test_execute_session_uses_scope_file_instead_of_long_command_line(monkeypatc
 
     assert captured["command"] == [sys.executable, "-m", "nox", "-s", "l0"]
     assert captured["nightly_runner"] == "1"
+    assert "-x -p scripts.ci_plan_coverage" in captured["pytest_addopts"]
     assert captured["scope"] == paths
     assert captured["completed_sessions"] == ["validation_workflow_automation"]
     assert not captured["scope_path"].exists()  # type: ignore[union-attr]
@@ -131,11 +139,16 @@ def test_execute_session_uses_scope_file_instead_of_long_command_line(monkeypatc
     assert result["completed_prerequisites"] == ["validation_workflow_automation"]
 
 
-def test_invalid_plan_writes_failure_receipt(tmp_path: Path) -> None:
+@pytest.mark.parametrize("payload,reason", [
+    ({}, "selected_sessions"),
+    ({"selected_sessions": ["l0"], "changed_files": []}, "without changed_files"),
+    ({"selected_sessions": ["--version"], "changed_files": []}, "not options"),
+])
+def test_invalid_plan_writes_failure_receipt(tmp_path: Path, payload, reason) -> None:
     plan = tmp_path / "plan.json"
     output_json = tmp_path / "results.json"
     output_md = tmp_path / "results.md"
-    plan.write_text("{}", encoding="utf-8")
+    plan.write_text(json.dumps(payload), encoding="utf-8")
 
     exit_code = runner.main(
         [
@@ -152,6 +165,7 @@ def test_invalid_plan_writes_failure_receipt(tmp_path: Path) -> None:
     payload = json.loads(output_json.read_text(encoding="utf-8"))
     assert payload[0]["result"] == "failure"
     assert payload[0]["failure_kind"] == "invalid_plan"
+    assert reason in payload[0]["error"]
 
 
 def test_execution_plan_passes_changed_files_only_to_change_scoped_l0(tmp_path: Path, monkeypatch) -> None:
@@ -181,21 +195,6 @@ def test_execution_plan_passes_changed_files_only_to_change_scoped_l0(tmp_path: 
         ("l0", ["scripts/nightly_session_runner.py", "backend/tests/test_example.py"]),
         ("validation_module_registry_l0", None),
     ]
-
-
-def test_change_scoped_l0_without_changed_files_is_invalid(tmp_path: Path) -> None:
-    plan = tmp_path / "plan.json"
-    output_json = tmp_path / "results.json"
-    output_md = tmp_path / "results.md"
-    plan.write_text(json.dumps({"selected_sessions": ["l0"], "changed_files": []}), encoding="utf-8")
-
-    exit_code = runner.main(
-        ["--plan", str(plan), "--output-json", str(output_json), "--output-md", str(output_md)]
-    )
-
-    assert exit_code == 2
-    payload = json.loads(output_json.read_text(encoding="utf-8"))
-    assert "change-scoped sessions without changed_files" in payload[0]["error"]
 
 
 def test_nightly_workflow_uses_checkpointed_runner_and_bounds_optional_llm_failures() -> None:

@@ -146,6 +146,38 @@ def test_parse_fields_rejects_unknown_columns() -> None:
         backfill.parse_fields("turnover_rate_f,not_a_column")
 
 
+def test_provider_missing_declared_dividend_column_is_not_legal_null() -> None:
+    class Provider:
+        def daily_basic(self, **_kwargs):
+            return _snapshot(rows=3).drop(columns="dv_ratio")
+
+    with pytest.raises(backfill.DailyBasicBackfillError, match="missing declared columns.*dv_ratio"):
+        backfill.fetch_tushare_snapshot(dt.date(2026, 7, 13), pro=Provider())
+
+
+def test_explicit_nullable_field_audit_preserves_all_provider_nulls() -> None:
+    frame = _snapshot(rows=3)
+    frame["dv_ratio"] = [None, None, None]
+    stats = backfill.validate_snapshot(
+        frame, trade_date=dt.date(2026, 7, 13), fill_fields=("dv_ratio",),
+        min_rows=3, min_non_null_ratio=0.0,
+    )
+    assert stats.non_null == {"dv_ratio": 0}
+
+
+def test_verify_after_rejects_changes_to_existing_finite_values() -> None:
+    frame = _snapshot(rows=1)
+    preview_args = {
+        "stats": backfill.SnapshotStats(row_count=1, non_null={"dv_ratio": 1}),
+        "existing_codes": {"000000.SZ"}, "missing_by_field": {"dv_ratio": 0},
+        "non_null_codes_by_field": {"dv_ratio": {"000000.SZ"}},
+    }
+    before = backfill.DatabasePreview(**preview_args, values_by_field={"dv_ratio": {"000000.SZ": Decimal("2")}})
+    after = backfill.DatabasePreview(**preview_args, values_by_field={"dv_ratio": {"000000.SZ": Decimal("1")}})
+    with pytest.raises(backfill.DailyBasicBackfillError, match="existing finite"):
+        backfill.verify_after(frame, before, after, fields=("dv_ratio",))
+
+
 def test_verify_after_requires_every_provider_non_null_code() -> None:
     frame = _snapshot(rows=3)
     before = backfill.DatabasePreview(

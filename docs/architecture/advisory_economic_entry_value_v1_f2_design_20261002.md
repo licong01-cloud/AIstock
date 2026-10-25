@@ -238,7 +238,9 @@ Advisory独立源码：economic_entry_contracts.py、economic_entry_labels.py、
 
 首轮结论：**NOT_CONFIRMED / NO_MODEL_TAKE，不激活，不回选阈值。** 本轮暴露的首要设计风险是把“入场价止损800bps”引用为“全episode峰值至谷值日级回撤q90≤800bps”的预算；两者语义并不等价。不能据此宣称价格价值不可学，也不能把800提高到刚好放行模型。下一经济研究前先修订风险标签/预算关系：分别描述entry-anchored净下行、peak-to-trough回撤与止损规则；采用明确经济风险口径或相对冻结基线动作的风险增量，预先决定、独立新lineage，旧结果不改判。此项优先于换loss、加模型族或重训其它seed；源码工具可以验收，但当前模型禁止生产绑定。
 
-源码PR #5224已在多轮审核、同步main后57定向测试和当前HEAD必需CI通过后合入；main已ff-only同步并clean，无重启/数据库操作。风险口径只读诊断进一步验证test104条peak>800且entry损失≤800、其中35盈利；这只是标签语义差异，不证明可学或可盈利。下一设计为[风险对齐与每日身份v2](advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md)，目前仅设计审核，未生成v2模型。
+源码PR #5224已在多轮审核、同步main后57定向测试和当前HEAD必需CI通过后合入；main已ff-only同步并clean，无重启/数据库操作。风险口径只读诊断进一步验证test104条peak>800且entry损失≤800、其中35盈利；这只是标签语义差异，不证明可学或可盈利。后续设计为[风险对齐与每日身份v2](advisory_economic_entry_risk_alignment_v2_f2_design_20261002.md)，其进展见下一段，不把旧v1模型改名为v2。
+
+后续v2设计PR #5233已合入，风险标签/模型复用审计及D网格身份内核已实现。真实prepare保留7720条原候选；可执行性新未知31条，其中原train/validation eligible变化22/2，按合同`REUSE_BLOCKED_NO_FIT`，新增研究模型0。不是模型效果负结果，也没有改判v1。下一步须显式新方案同时对齐return/risk拟合eligible，而非静默过滤或放宽旧复用门禁；日常API/UI与经济确认仍未交付。
 
 E4产品身份必须区分训练来源identity与每日预测输入identity。本离线内核按同一历史研究身份绑定消费；不能用该相等检查要求未来每日候选/price source hash等于训练原始数据hash，从而只支持回测。下一产品消费者需独立PredictionInputContext，绑定新的D截止/候选/来源hash，同时显式核对训练scope的package/policy/cost/特征schema/股票池定义及坐标算法版本。预测来源变化不触发重训；scope不兼容则typed unavailable，不自动为新包宣称可用，也不修改QE。
 
