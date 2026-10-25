@@ -72,18 +72,19 @@ def freeze_file_source(*, profile_path=None, binding=None, root_override=None,
                        consumer_scope="ADVISORY", run_id="source-metadata-registration") -> dict:
     """Use the existing authority resolver, no copying and no data generation."""
     from backend.data_service.frozen_dataset import (
-        FrozenDataset, content_pin, freeze_dataset_binding, inside,
+        FrozenDataset, content_pin, freeze_dataset_binding, frozen_component_pins, inside,
     )
     binding = deepcopy(binding) if binding is not None else freeze_dataset_binding(profile_path)
     dataset = FrozenDataset(binding, consumer_scope=consumer_scope, run_id=run_id,
                             root_override=root_override)
     try:
         manifest = json.loads(dataset.file("manifest").read_bytes())
+        components = frozen_component_pins(binding["profile"], manifest)
         names = ("day_meta_export", "minute_meta_export", "factor_meta")
         metadata = {name: json.loads(dataset.file(name).read_bytes()) for name in names}
         # The existing binding omits suspension metadata; pin this small file
         # from the same manifest without modifying the shared data module.
-        pin = manifest["components"].get("suspend_meta")
+        pin = components.get("suspend_meta")
         if not pin:
             raise SourcePlanError("SOURCE_COMPONENT_COVERAGE_MISSING", owner="Data", component="suspend_meta")
         pin = content_pin(dataset.root, pin["path"], expected=pin["sha256"])
@@ -93,11 +94,32 @@ def freeze_file_source(*, profile_path=None, binding=None, root_override=None,
             encoding="utf-8-sig").splitlines() if line.strip()})
         dataset.assert_unchanged()
         return {"binding": binding, "metadata": metadata, "suspend_meta_pin": pin,
-                "sector_coverage": manifest["components"]["sector_membership_spans"],
+                "sector_coverage": components["sector_membership_spans"],
                 "pit_coverage": manifest["st_pit_manifest"],
                 "calendar": [str(v) for v in dataset.calendar], "minute_days": minute_days}
     finally:
         dataset.close()
+
+
+def _pit_coverage(day: dict, manifest: dict) -> list[str]:
+    """Read producer-declared PIT bounds from either published metadata format."""
+    legacy = "pit_ensure" in day
+    if not legacy and not (day.get("source_freeze") is True and day.get("full_history_content_hash") is True):
+        raise SourcePlanError("SOURCE_COMPONENT_COVERAGE_MISSING", owner="Data", component="pit")
+    try:
+        if legacy:
+            # Existing plans keep their original explicitly frozen coverage.
+            start = day["pit_ensure"]["start_date"]
+        else:
+            # Monthly consumer metadata declares its full-window start; its
+            # pinned PIT manifest owns the cutoff. No live pointer is needed.
+            start = day["start"]
+        end = manifest["cutoff_trade_date"]
+        if not isinstance(start, str) or not isinstance(end, str) or _day(start) > _day(end):
+            raise ValueError("invalid PIT coverage")
+    except (KeyError, TypeError, ValueError) as exc:
+        raise SourcePlanError("SOURCE_COMPONENT_COVERAGE_INVALID", owner="Data", component="pit") from exc
+    return [start, end]
 
 
 def _coverage(snapshot: dict, policy: dict) -> dict:
@@ -111,10 +133,11 @@ def _coverage(snapshot: dict, policy: dict) -> dict:
         raise SourcePlanError("SOURCE_PIT_POLICY_MISMATCH", owner="Data", component="factors")
     # Coverage endpoints are producer declarations, not observed last rows:
     # suspension is sparse and cannot use its last event as its coverage end.
+    pit_coverage = _pit_coverage(day, snapshot["pit_coverage"])
     result = {"daily": [day["start"], day["end"]],
               "minute": [minute["start"], minute["end"]],
               "factor": [factors["start"], factors["end"]],
-              "pit": [day["pit_ensure"]["start_date"], snapshot["pit_coverage"]["cutoff_trade_date"]],
+              "pit": pit_coverage,
               "suspend": [meta["suspend_meta"]["start"], meta["suspend_meta"]["end"]],
               "sector": [snapshot["sector_coverage"]["start"], snapshot["sector_coverage"]["end"]]}
     for component, (start, end) in result.items():

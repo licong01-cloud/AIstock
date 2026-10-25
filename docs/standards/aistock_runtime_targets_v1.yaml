@@ -49,6 +49,12 @@ non_runtime_source_paths:
   - scripts/start_aistock_github_runner.ps1
   - scripts/supervise_aistock_github_runner.ps1
 source_role_rules:
+  # Only the fresh-process builder and its tests import this source. The
+  # produced C-013 bundle is consumed as data; activation is a separate action.
+  - rule_id: offline-hmm-observed-industry-authority
+    role: non_runtime
+    source_globs:
+      - backend/services/hmm_risk/observed_industry_authority.py
   # Exact offline sources pending their business PR; do not exempt adjacent versions or API consumers.
   - rule_id: offline-advisory-fixed5-valuation
     role: non_runtime
@@ -83,7 +89,9 @@ targets:
       - scripts/qrun_limit_minute.py
       - aistock_models/**/*.py
       - start_all_ai_stock.bat
+      - start_backend.bat
       - scripts/start_ai_stock.py
+      - scripts/backend_lifecycle.py
       - requirements*.txt
       - pyproject.toml
     production_port: 8001
@@ -97,6 +105,20 @@ targets:
       business_smoke_ref: bug_record.runtime_contract.business_smoke_ref
       database_readback_ref: bug_record.runtime_contract.database_readback_ref
     startup_budget_seconds: 120
+    probe_routes:
+      - route_id: hmm_database_risk_l2_readback
+        # Only the registered source gets these defaults; mixed changes fail closed.
+        source_globs:
+          - backend/services/hmm_risk/risk_l2_database_inference.py
+        probe_mode: http
+        business_smoke_contract_id: hmm_risk_l2_overview
+        operator_runbook_ref: docs/operations/hmm_database_runtime_finish_runbook.md
+        probes:
+          health_ref: http://127.0.0.1:8001/api/v1/health
+          identity_ref: http://127.0.0.1:8001/api/v1/runtime-identity
+          # Existing persisted Risk L2 run, also used by BUG-2065/BUG-2068.
+          business_smoke_ref: http://127.0.0.1:8001/api/v1/hmm-risk/risk-l2/overview?run_id=88341607f8772bcb97d1832cd1941f92971f35d62c1f0c8ed90261a8c8df7d26
+          database_readback_ref: bug_record.runtime_contract.database_readback_ref
   tdx-go-backend:
     runtime_kind: backend
     source_globs:
@@ -249,6 +271,9 @@ targets:
           - backend/services/dataset_release/monthly_industry_history.py
           - backend/services/dataset_release/monthly_mature_build_runner.py
           - backend/services/dataset_release/artifact_ready_build_source.py
+          # New monthly releases own shared BUILD-only fixes as well. The old
+          # direct-v2 worker entry keeps its separate heartbeat route below.
+          - backend/services/dataset_release/build_stage.py
           - backend/services/dataset_release/monthly_unified.py
           - backend/services/dataset_release/monthly_worker.py
           - backend/services/dataset_release/monthly_shared_components.py
@@ -259,6 +284,7 @@ targets:
           - backend/services/dataset_release/monthly_node_probe_runner.py
           - backend/services/dataset_release/monthly_supervised_build.py
           - scripts/dataset_release_candidate_consumer_smoke.py
+          - backend/services/dataset_release/candidate_consumer_smoke.py
           - backend/services/dataset_release/monthly_repair_journal.py
           - backend/services/dataset_release/monthly_postgres_source.py
           - backend/services/dataset_release/monthly_frozen_source_audit.py
@@ -284,7 +310,6 @@ targets:
           - backend/services/dataset_release/a_share_limit_rule.py
           - backend/services/dataset_release/artifact_ready_source.py
           - backend/services/dataset_release/build_processor.py
-          - backend/services/dataset_release/build_stage.py
           - backend/services/dataset_release/candidate_validator.py
           - backend/services/dataset_release/canonical_stock_transformer.py
           - backend/services/dataset_release/factor_materializer.py

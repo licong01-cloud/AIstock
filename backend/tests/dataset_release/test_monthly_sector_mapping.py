@@ -386,7 +386,8 @@ def test_history_supplement_is_bound_to_original_source_and_current_release(pred
         load_frozen_history(None, context_plan=plan, build_inputs={"source_bundle_sha256": "b" * 64})
 
 
-def test_industry_context_recomputes_moneyflow_for_corrected_pit_cohort(predecessor, tmp_path):
+@pytest.mark.parametrize("eligible_codes", [["000001.SZ", "000002.SZ"], [], ["000003.SZ"]])
+def test_industry_context_recomputes_moneyflow_for_all_classified_facts(predecessor, tmp_path, eligible_codes):
     import numpy as np
     import pandas as pd
     from backend.services.dataset_release.monthly_industry_history import IndustryHistoryProjection
@@ -406,21 +407,28 @@ def test_industry_context_recomputes_moneyflow_for_corrected_pit_cohort(predeces
                         "sw2_mf_buy_elg_vol": [90.0, 90.0, 99.0]}, index=index)
     moneyflow = pd.DataFrame({"mf_net_amt": [10_000.0, 20_000.0, 30_000.0],
                              "mf_elg_buy_vol": [100.0, 200.0, 300.0]}, index=index)
-    # Third security is in the provider catalog, but not the frozen strategy PIT population.
-    pit = pd.DataFrame({"ts_code": ["000001.SZ", "000002.SZ"], "eligible_start": [day.date()] * 2,
-                        "eligible_end": [day.date()] * 2, "entry_reason": ["eligible"] * 2, "exit_reason": [None] * 2})
+    # Selection eligibility must not change shared historical industry facts.
+    pit = pd.DataFrame({"ts_code": eligible_codes, "eligible_start": [day.date()] * len(eligible_codes),
+                        "eligible_end": [day.date()] * len(eligible_codes),
+                        "entry_reason": ["eligible"] * len(eligible_codes), "exit_reason": [None] * len(eligible_codes)})
     quotes = pd.DataFrame({"sw2_close": [111.0, 222.0]}, index=pd.MultiIndex.from_tuples(
         [(day, a["l2_code_id"]), (day, b["l2_code_id"])], names=["datetime", "l2_code_id"]))
     actual = rebuild_industry_context(old, projection=projection, quotes=quotes, moneyflow=moneyflow, pit=pit)
     assert actual["sw2_close"].tolist() == [111, 222, 111]
-    assert actual["sw2_mf_net_amt"].tolist() == [1, 2, 1]  # CNY -> native 10k CNY
-    assert actual["sw2_mf_buy_elg_vol"].tolist() == [1, 2, 1]  # shares -> native hands
+    assert actual["sw2_mf_net_amt"].tolist() == [4, 2, 4]  # CNY -> native 10k CNY
+    assert actual["sw2_mf_buy_elg_vol"].tolist() == [4, 2, 4]  # shares -> native hands
     assert actual["l2_code_id"].tolist() == [a["l2_code_id"], b["l2_code_id"], a["l2_code_id"]]
     missing = rebuild_industry_context(old, projection=projection, quotes=quotes.iloc[0:0], moneyflow=moneyflow.iloc[0:0], pit=pit)
     assert np.isnan(missing[["sw2_close", "sw2_mf_net_amt", "sw2_mf_buy_elg_vol"]]).all().all()
+    null_flow = moneyflow.copy()
+    null_flow.loc[[index[0], index[2]], :] = np.nan
+    actual_null = rebuild_industry_context(old, projection=projection, quotes=quotes, moneyflow=null_flow, pit=pit)
+    assert actual_null.sw2_mf_net_amt.isna().tolist() == [True, False, True]
+    assert actual_null.sw2_mf_buy_elg_vol.isna().tolist() == [True, False, True]
+    assert actual_null.sw2_close.tolist() == [111, 222, 111]
 
 
-@pytest.mark.parametrize("case", ["alias", "stopped_quote", "duplicate_quote", "infinite_flow", "wrong_source_hash"])
+@pytest.mark.parametrize("case", ["alias", "outside_selection", "stopped_quote", "duplicate_quote", "infinite_flow", "wrong_source_hash"])
 def test_frozen_industry_context_preserves_alias_absence_and_source_identity(predecessor, tmp_path, case):
     import pandas as pd
     from backend.data_service.security_source_identity import DEFAULT_MANIFEST_PATH, load_security_source_identity_manifest
@@ -456,8 +464,13 @@ def test_frozen_industry_context_preserves_alias_absence_and_source_identity(pre
     path = tmp_path / "moneyflow.h5"
     pd.DataFrame({"mf_net_amt": [float("inf") if case == "infinite_flow" else 20_000.0]}, index=index).to_hdf(
         path, "data", format="table", data_columns=["datetime", "instrument"])
+    class NeverReadSelection:
+        def to_frame(self):
+            raise AssertionError("shared factual source must not inspect selection eligibility")
+
     context = subject.FrozenIndustryContext(cas=cas, source=source, projection=history, moneyflow_path=path,
-        pit=pit, identity=load_security_source_identity_manifest(DEFAULT_MANIFEST_PATH))
+        pit=NeverReadSelection() if case == "outside_selection" else pit,
+        identity=load_security_source_identity_manifest(DEFAULT_MANIFEST_PATH))
     target = pd.DataFrame({"l2_code_id": [-1], "sw2_close": [99.0], "sw2_mf_net_amt": [99.0]},
         index=pd.MultiIndex.from_tuples([(pd.Timestamp(day), "302132.SZ")], names=["datetime", "instrument"]))
     if case in {"duplicate_quote", "infinite_flow", "wrong_source_hash"}:
@@ -482,7 +495,7 @@ def test_unchanged_frozen_history_is_reused_without_historical_rescan(predecesso
     history = subject.IndustryHistoryProjection.build([row], current_map=binding["code_map"], authority_sha256="c" * 64)
     path = predecessor.root / "components/sector_context_candidate_v1/industry_l2_history_authority.json"
     path.write_bytes(canonical_json_bytes({**history.payload, "projection_sha256": history.sha256, "factor_projection_receipt_ref": {},
-        "industry_context_contract": "official_quote_plus_pit_stock_flow_v1"}) + b"\n")
+        "industry_context_contract": "official_quote_plus_classified_fact_stock_flow_v2"}) + b"\n")
     pin = {"path": path.relative_to(predecessor.root).as_posix(), "size": path.stat().st_size,
            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     monkeypatch.setattr(subject, "load_frozen_history", lambda *args, **kwargs: history)
@@ -618,7 +631,7 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
         pending = root.parent / f".{root.name}.industry-history-commit.json"
         resume.record = subject.recover_history_commit(root=root, journal=resume.path, record=resume.record,
                                                        expected_projection=history.sha256)
-        assert pending.exists()
+        assert not pending.exists()
     elif interruption == "legacy_uncommitted":
         materialize = subject.materialize_history_files
         with monkeypatch.context() as legacy:
@@ -673,8 +686,8 @@ def test_native_factor_receipt_survives_real_history_repair_and_retry(predecesso
     assert proof["database_write"] is False
     scratch = (root.parent / proof["files"]["sector_data.h5"]["scratch_relative_path"]).parent
     assert not (factor_root / "factor_checkpoint.json").exists()
-    pending = json.loads((root.parent / f".{root.name}.industry-history-commit.json").read_bytes())
-    assert set(pending["files"]) == {"sector_data.h5", "static_factors.parquet"}
+    assert not (root.parent / f".{root.name}.industry-history-commit.json").exists()
+    assert set(proof["files"]) == {"sector_data.h5", "static_factors.parquet"}
     assert set(resume.record["files"]) == set(record["files"])
     for name in ("sector_data.h5", "static_factors.parquet"):
         assert (scratch / (name + ".before")).read_bytes() == original_bytes[name]

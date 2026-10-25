@@ -21,6 +21,112 @@ def _reset_nox_env_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(noxfile, "_VALIDATION_ENV_LOADED", False)
 
 
+@pytest.mark.parametrize("workers", [4, 6])
+def test_offline_shards_cover_all_files_once_keep_fixtures_and_are_stable(tmp_path, monkeypatch, workers):
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    expected = []
+    for index in range(13):
+        path = tmp_path / "tests" / f"test_{index}.py"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("# fixture\n" * (index + 1), encoding="utf8")
+        expected.append(path.relative_to(tmp_path).as_posix())
+    groups = noxfile._pytest_file_shards(("tests", "tests"), workers=workers)
+    flattened = [path for group in groups for path in group]
+    assert len(groups) == workers and sorted(flattened) == sorted(expected)
+    assert len(flattened) == len(set(flattened))
+    assert groups == noxfile._pytest_file_shards(("tests",), workers=workers)
+    with pytest.raises(RuntimeError, match="no test files"):
+        noxfile._pytest_file_shards(("missing",))
+
+
+@pytest.mark.parametrize("fault", [None, "failed", "empty", "coverage_missing"])
+def test_offline_shards_isolate_receipts_preserve_failures_and_enforce_union_coverage(tmp_path, monkeypatch, fault):
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1")
+    for index in range(4):
+        (tmp_path / f"test_{index}.py").touch()
+    env = {"AISTOCK_TEST_PLAN": "hmm_risk_backend", "OMP_NUM_THREADS": "1",
+           "AISTOCK_TEST_METRICS_RECEIPT": str(tmp_path / "metrics.jsonl"),
+           "AISTOCK_TEST_DIAGNOSTICS_RECEIPT": str(tmp_path / "failures.jsonl")}
+    calls = []
+    def run(command, **kwargs):
+        worker = kwargs["env"]
+        assert command[:3] == [sys.executable, "-m", "pytest"]
+        assert "--cov-fail-under=0" in command and "--cov-branch" in command
+        temporary = Path(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--basetemp=")))
+        assert temporary.parent.parent == tmp_path.parent and temporary.parent.name.startswith("aistock-pytest-")
+        assert not temporary.is_relative_to(tmp_path) and len(str(temporary)) < 240
+        assert all(worker[key] == str(temporary.parent) for key in ("TEMP", "TMP", "TMPDIR"))
+        assert kwargs["cwd"] == tmp_path and worker["OMP_NUM_THREADS"] == "1"
+        Path(worker["AISTOCK_TEST_METRICS_RECEIPT"]).write_text('{"executed_items":1}\n', encoding="utf8")
+        if fault != "coverage_missing":
+            Path(worker["COVERAGE_FILE"]).touch()
+        junit = next(arg.split("=", 1)[1] for arg in command if arg.startswith("--junitxml="))
+        Path(junit).write_text('<testsuites><testsuite tests="1"/></testsuites>', encoding="utf8")
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 1 if fault == "failed" else 5 if fault == "empty" else 0)
+    monkeypatch.setattr(noxfile.subprocess, "run", run)
+    class Session:
+        def error(self, message):
+            raise RuntimeError(message)
+        def run(self, *args, **kwargs):
+            calls.append(args)
+    if fault:
+        with pytest.raises(RuntimeError, match="coverage receipt missing" if fault == "coverage_missing" else "shard failed"):
+            noxfile._run_nightly_pytest_shards(Session(), (".",), ("--cov=sample", "--cov-branch"), env,
+                                               coverage_file=tmp_path / ".coverage")
+        assert len(calls) == 4
+    else:
+        assert noxfile._run_nightly_pytest_shards(Session(), (".",), ("--cov=sample", "--cov-branch"), env,
+                                                  coverage_file=tmp_path / ".coverage")
+        assert len(calls) == 7
+        assert "combine" in calls[4] and "xml" in calls[5] and "--fail-under=70" in calls[6]
+        assert len(noxfile.ElementTree.parse(tmp_path / "junit.xml").getroot()) == 4
+    assert len((tmp_path / "metrics.jsonl").read_text().splitlines()) == 4
+    assert "COVERAGE_FILE" not in env
+
+
+def test_offline_sharding_never_changes_local_or_pr_execution(monkeypatch):
+    monkeypatch.delenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, raising=False)
+    monkeypatch.setattr(noxfile, "_pytest_file_shards", lambda *_: pytest.fail("local run was sharded"))
+    assert noxfile._run_nightly_pytest_shards(object(), (), (), {}) is False
+
+
+def test_advisory_full_shards_keep_roots_workers_numeric_limits_and_X_output_contract(monkeypatch):
+    monkeypatch.setattr(noxfile, "_env", lambda env: env)
+    calls = []
+    monkeypatch.setattr(noxfile, "_run_nightly_pytest_shards", lambda *args, **kwargs: calls.append((args, kwargs)) or True)
+    class Session:
+        name = "advisory_modeling_backend"
+        def run(self, *args, **kwargs):
+            pytest.fail("complete regression escaped its shard runner")
+    roots = ("backend/tests/advisory_modeling", "backend/tests/advisory_model_first")
+    noxfile._run_pytest(Session(), *roots, "-q")
+    args, options = calls[0]
+    assert args[1] == roots and args[2] == ("-q",) and options == {"workers": 6}
+    assert all(args[3][key] == "1" for key in noxfile.HMM_TEST_NUMERIC_ENV)
+    assert noxfile._offline_fixture_parent(Session.name) == (Path("X:/") if os.name == "nt" else Path("/mnt/x"))
+    assert noxfile._offline_fixture_parent("hmm_risk_backend") == noxfile.ROOT.parent
+
+
+def test_offline_shards_real_processes_combine_branch_coverage(tmp_path, monkeypatch):
+    monkeypatch.setattr(noxfile, "ROOT", tmp_path)
+    monkeypatch.setenv(noxfile.NIGHTLY_SESSION_RUNNER_ENV, "1")
+    (tmp_path / "sample.py").write_text("def value(flag):\n    return 1 if flag else 2\n", encoding="utf8")
+    for index in range(2):
+        (tmp_path / f"test_{index}.py").write_text(
+            f"from sample import value\ndef test_value():\n    assert value({bool(index)}) == {1 if index else 2}\n", encoding="utf8")
+    class Session:
+        def error(self, message):
+            pytest.fail(message)
+        def run(self, *args, **kwargs):
+            subprocess.run(args, cwd=tmp_path, env=kwargs["env"], check=True, capture_output=True, text=True, timeout=60)
+    env = {**os.environ, "AISTOCK_TEST_PLAN": "hmm_risk_backend", "PYTHONPATH": str(tmp_path)}
+    assert noxfile._run_nightly_pytest_shards(Session(), (".",), ("--cov=sample", "--cov-branch", "-q"), env,
+                                              coverage_file=tmp_path / ".coverage")
+    assert (tmp_path / "coverage.xml").is_file() and (tmp_path / "junit.xml").is_file()
+
+
 def test_hmm_nightly_diagnostics_keep_plan_identity_and_survive_later_sessions(monkeypatch):
     monkeypatch.setenv("AISTOCK_TEST_DIAGNOSTICS_RECEIPT", "X:/run/test-failures.jsonl")
     monkeypatch.setattr(noxfile, "_env", lambda extra: extra)
@@ -627,6 +733,27 @@ def test_hmm_risk_pr_targets_default_to_smoke_without_classifier_summary(
     monkeypatch.delenv("AISTOCK_CI_CLASSIFIER_SUMMARY", raising=False)
 
     assert noxfile._hmm_risk_pr_test_targets() == list(noxfile.HMM_RISK_PR_SMOKE_TESTS)
+
+
+@pytest.mark.parametrize("changed_files", [
+    ["scripts/hmm_risk/build_observed_industry_authority.py"],
+    ["backend/services/hmm_risk/observed_industry_authority.py"],
+    ["scripts/hmm_risk/build_observed_industry_authority.py",
+     "backend/services/hmm_risk/observed_industry_authority.py",
+     "backend/tests/hmm_risk/test_observed_industry_authority.py"],
+])
+def test_observed_authority_pr_slice_executes_direct_contract_once(monkeypatch, tmp_path, changed_files):
+    direct = "backend/tests/hmm_risk/test_observed_industry_authority.py"
+    _configure_hmm_pr_targets(monkeypatch, tmp_path, changed_files=changed_files,
+                              existing_paths=[*changed_files, direct])
+    assert noxfile._hmm_risk_pr_test_targets() == [*noxfile.HMM_RISK_PR_SMOKE_TESTS, direct]
+
+
+def test_observed_authority_pr_slice_rejects_missing_direct_contract(monkeypatch, tmp_path):
+    cli = "scripts/hmm_risk/build_observed_industry_authority.py"
+    _configure_hmm_pr_targets(monkeypatch, tmp_path, changed_files=[cli], existing_paths=[cli])
+    with pytest.raises(ValueError, match="mapped direct-neighbor test is missing"):
+        noxfile._hmm_risk_pr_test_targets()
 
 
 def test_hmm_risk_pr_targets_map_router_and_schema_to_direct_contracts(

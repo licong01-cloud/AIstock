@@ -152,7 +152,7 @@ def test_frozen_bundle_pins_formal_source_stage_receipt() -> None:
     assert bundle["source_stage_receipt_ref"] == reference.as_dict()
 
 
-@pytest.mark.parametrize("repair_kind", ["deferred", "no_deferral", "absent", "wrong_date", "wrong_predecessor"])
+@pytest.mark.parametrize("repair_kind", ["deferred", "arrived", "no_deferral", "absent", "wrong_date", "wrong_predecessor", "history"])
 def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp_path, monkeypatch, repair_kind):
     from dataclasses import replace
     from backend.services.dataset_release import monthly_postgres_source as source
@@ -171,7 +171,7 @@ def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp
         "schema_version": "aistock_monthly_repair_inputs_v1", "target_cutoff": "2026-09-30",
         "predecessor_manifest_sha256": "a" * 64, "factor_prefixes": {}, "daily_basic_null_repairs": None,
         "deferred_source_dates": ([{"dataset": "margin_detail", "trade_date": "2026-09-30",
-                                   "reason_code": "USER_DEFERRED_COLLECTION"}] if repair_kind in {"deferred", "wrong_date"} else []),
+                                   "reason_code": "USER_DEFERRED_COLLECTION"}] if repair_kind in {"deferred", "arrived", "wrong_date"} else []),
     }
     if repair_kind == "wrong_date":
         repair["deferred_source_dates"][0]["trade_date"] = "2026-09-29"
@@ -194,9 +194,18 @@ def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp
     from backend.services.dataset_release import monthly_build_bridge
     monkeypatch.setattr(monthly_build_bridge, "load_monthly_predecessor_prefix",
                         lambda **_kw: SimpleNamespace(manifest_sha256="a" * 64))
+    from backend.services.dataset_release import monthly_minute_coverage
+    captured_history = {"schema_version": "aistock_monthly_database_minute_correction_v1", "facts": []}
+    def capture_history(**kwargs):
+        assert kwargs["pit"] is frozen.pit_snapshot
+        assert kwargs["connection"] is connection
+        return captured_history if repair_kind == "history" else None
+    monkeypatch.setattr(monthly_minute_coverage, "capture_historical_coverage", capture_history)
 
     def audit(**kwargs):
         expected_sha = deferred_margin_authority(repair, target_cutoff=date(2026, 9, 30))
+        if repair_kind == "arrived":
+            expected_sha = None  # Historical deferral stays pinned, but no longer exempts arrived facts.
         assert kwargs["deferred_margin_authority_sha256"] == expected_sha
         assert kwargs["audit_causal_history"] is False
         gates, artifacts = [], []
@@ -227,12 +236,21 @@ def test_adapter_read_pins_canonical_repair_authority_for_strict_source_seal(tmp
         assert not freeze_calls
         assert not (tmp_path / "monthly").exists()
         return
-    read_set = adapter.read(None, MonthlySnapshotIdentity("1-AA-1", "2026-10-01T00:00:00+00:00", "repair"), context)
+    from unittest.mock import MagicMock
+    connection = MagicMock()
+    connection.cursor.return_value.__enter__.return_value.fetchone.return_value = (repair_kind == "arrived",)
+    read_set = adapter.read(connection, MonthlySnapshotIdentity("1-AA-1", "2026-10-01T00:00:00+00:00", "repair"), context)
     _, hashes = _validated_source_artifacts(read_set.input_artifacts)
     _require_source_provenance(read_set, artifact_hashes=hashes)
     bundle_path = next(item.path for item in read_set.input_artifacts if item.path.name == "frozen-source-bundle.json")
     bundle = json.loads(bundle_path.read_bytes())
     assert bundle["monthly_repair_inputs"] == repair
+    if repair_kind == "history":
+        history_ref = CASRef.from_value(bundle["historical_minute_coverage_ref"])
+        assert hashes[history_ref.relative_path] == history_ref.sha256
+        assert cas.get_json(history_ref) == captured_history
+    else:
+        assert bundle.get("historical_minute_coverage_ref") is None
     if repair is None:
         assert bundle.get("monthly_repair_payload_ref") is None
     else:
@@ -325,7 +343,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
         "source_audit_contract": source.AUDIT_SCHEMA,
     }
     old_identity = digest_named_fields("aistock_monthly_postgres_source_adapter_v1", old_fields)
-    assert adapter.adapter_version == "16"
+    assert adapter.adapter_version == "18"
     assert adapter.contract_sha256 != old_identity
     assert adapter.contract_sha256 == digest_named_fields(
         "aistock_monthly_postgres_source_adapter_v1",
@@ -341,6 +359,7 @@ def test_monthly_adapter_registry_identity_pins_sector_publication_policy(tmp_pa
             "source_quality_policy": "operation_exact_finite_parity_warnings_v1",
             "managed_writer_scope_policy": "bounded_post_cutoff_proven_date_writers_v3",
             "repair_input_provenance_policy": "canonical_repair_payload_cas_pin_v1",
+            "historical_minute_coverage_policy": "fact_catalog_delta_same_snapshot_all_execution_fields_v1",
             "component_preparation_dependency_digest": digest_named_fields(
                 "aistock_monthly_component_dependency_v1",
                 source.component_dependencies(),
@@ -763,6 +782,70 @@ def test_minute_summary_does_not_store_240_rows():
     assert not hasattr(value, "rows")
 
 
+@pytest.mark.parametrize("empty_open,trade_open", [(1.66, 1.67), (7.10, 7.07), (6.76, 6.77)])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_opening_aggregate_uses_first_trade_not_empty_quotes(empty_open, trade_open, reverse):
+    from copy import deepcopy
+
+    data = rows()
+    bars = data["kline_minute_raw"]
+    for bar in bars:
+        bar.update(open_li=round(trade_open * 1000), close_li=round(trade_open * 1000))
+    bars[0].update(open_li=round(empty_open * 1000), close_li=round(empty_open * 1000),
+                   volume_hand=0, amount_li=0)
+    # Both prices remain inside the true daily range. A zero-trade 09:30
+    # quote outside that range must not supply executed opening/extrema.
+    bars.insert(0, {**bars[0], "trade_time": bars[0]["trade_time"].replace(minute=30),
+                    "open_li": 20000, "high_li": 20000, "low_li": 20000, "close_li": 20000})
+    for bar in bars[1:]:
+        bar.update(high_li=11000, low_li=1000)
+    data["kline_daily_raw"][0].update(open_li=round(trade_open * 1000), high_li=11000,
+                                     low_li=1000, close_li=round(trade_open * 1000),
+                                     volume_hand=239, amount_li=2390000)
+    if reverse:
+        bars.reverse()
+    before = deepcopy(data)
+    assert run(data)["minute_price"].status == "PASS"
+    assert data == before
+
+
+@pytest.mark.parametrize("activity", ["volume_hand", "amount_li", "volume_shares"])
+def test_opening_activity_is_not_rounded_to_an_empty_quote(activity):
+    data = rows()
+    first = data["kline_minute_raw"][0]
+    first.update(open_li=9900, low_li=9900, volume_hand=0, amount_li=0)
+    first[activity] = 1
+    if activity == "volume_shares":
+        first.update(volume_shares_source="hf_china_a_share_1min", volume_shares_sha256="a" * 64)
+    summary = MinuteSummary(DAY)
+    for bar in reversed(data["kline_minute_raw"]):
+        summary.add(bar)
+    assert summary.aggregates()["open"] == 9.9
+
+
+def test_zero_trade_closing_quote_and_real_open_conflict_are_preserved():
+    data = rows()
+    data["kline_minute_raw"][-1].update(open_li=10100, high_li=10100, low_li=10100,
+                                       close_li=10100, volume_hand=0, amount_li=0)
+    data["kline_daily_raw"][0].update(high_li=10100, close_li=10100, volume_hand=239, amount_li=2390000)
+    assert run(data)["minute_price"].status == "PASS"
+    data["kline_minute_raw"][0]["low_li"] = 9900
+    data["kline_daily_raw"][0].update(open_li=9900, low_li=9900)
+    assert run(data)["minute_price"].status == "BLOCKED"
+    data["kline_minute_raw"][0].update(volume_hand=0, amount_li=0)
+    data["kline_daily_raw"][0].update(volume_hand=238, amount_li=2380000)
+    # A later transaction also remains a mismatch; no daily-price substitution.
+    assert run(data)["minute_price"].status == "BLOCKED"
+
+
+def test_whole_day_zero_turnover_preserves_existing_quote_contract():
+    data = rows()
+    for bar in data["kline_minute_raw"]:
+        bar.update(volume_hand=0, amount_li=0)
+    data["kline_daily_raw"][0].update(volume_hand=0, amount_li=0)
+    assert run(data)["minute_price"].status == "PASS"
+
+
 def auction_data():
     data = rows()
     auction = {**data["kline_minute_raw"][0],
@@ -1153,7 +1236,7 @@ def test_suspended_placeholder_conflicts_remain_blocked(conflict):
 @pytest.mark.parametrize('files, expected', [
     (['monthly_frozen_source_audit.py'], 'monthly_release_worker_process'),
     (['monthly_frozen_source_audit.py', 'canonical_stock_transformer.py', 'build_stage.py'], 'monthly_release_worker_process'),
-    (['canonical_stock_transformer.py', 'build_stage.py'], 'dataset_release_worker_heartbeat'),
+    (['canonical_stock_transformer.py', 'build_stage.py'], 'monthly_release_worker_process'),
 ])
 def test_monthly_suspend_fix_selects_real_worker_probe(files, expected):
     from pathlib import Path

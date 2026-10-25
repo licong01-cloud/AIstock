@@ -58,6 +58,7 @@ def _selection_code_identity():
         base / "selection_center/tradability.py", base / "selection_center/suspension_provider.py",
         base.parent / "data_service/frozen_dataset.py", base / "advisory_historical_range/inference_inputs.py",
         Path(__file__).with_name("localsim_file_inputs.py"), base / "simulation_data/frozen_file_adapters.py",
+        Path(__file__).with_name("localsim_input_source_plan.py"), base / "advisory_historical_range/input_source_plan.py",
     )
     paths += tuple(base / "strategy_package" / (name + ".py") for name in (
         "selection_computation", "selection_artifact", "selection_signal_preparation", "live_inference", "runtime",
@@ -89,6 +90,21 @@ class LocalSimRawRepository:
                 raise ValueError("native LocalSIM leg populations conflict with the parent input population")
             metadata["universe_members"] = list(baseline["members"])
         metadata["localsim_signal_run"] = {"consumer_scope": "LOCALSIM", "run_id": scope.run_id, "clocks": scope.clocks.to_dict()}
+        if scope.source_plan is not None:
+            if not scope.source_plan_inputs:
+                raise ValueError("LocalSIM planned raw artifact has no actual native input receipts")
+            metadata["localsim_signal_run"].update(source_plan_hash=scope.source_plan["plan_hash"],
+                source_run_id=scope.source_plan["run_id"], native_inputs=deepcopy(scope.source_plan_inputs))
+            provider = metadata.get("provider_metadata", {})
+            native_context = provider.get("selection_native_input_context")
+            normalized = metadata.get("artifact_input_context")
+            if native_context is not None:
+                common = ("requested_trade_date", "effective_trade_date", "score_trade_date", "pit_mode",
+                    "calendar_version", "calendar_hash", "calendar_source", "universe_input_hash",
+                    "window_start_date", "required_window", "window_resolution", "window_lineage_hash")
+                if not isinstance(normalized, dict) or any(native_context.get(k) != normalized.get(k) for k in common):
+                    raise ValueError("LocalSIM normalized context differs from its complete native context")
+            scope.source_plan_inputs.clear()
         dataset = current_file_dataset()
         if dataset is not None:
             metadata["localsim_signal_run"]["file_binding_hash"] = dataset.identity
@@ -192,12 +208,24 @@ class LocalSimKernelComputation:
         source = canonical_json_sha256({p: {"input": a.artifact_input_context_hash,
                                            "revision": a.source_revision_set_hash, "assets": a.asset_closure_hash}
                                        for p, a in scope.artifacts.items()})
+        if scope.source_plan is not None:
+            source = scope.source_plan["plan_hash"]
+        from backend.services.selection_center.canonical_pit_runtime import CANONICAL_PIT_RUNTIME_LEASE_KEY
+        runtime_configs = {}
+        for package_id, profile in request.package_runtime_profiles.items():
+            config = {"runtime_profile": profile.model_dump(mode="json")}
+            # Admission attaches this excluded field to the parsed profile.
+            # Preserve it at the native root boundary when serializing for the
+            # kernel; otherwise ST risk silently falls back to its old default.
+            lease = profile.risk_policy.canonical_pit_runtime_lease
+            if lease is not None:
+                config[CANONICAL_PIT_RUNTIME_LEASE_KEY] = deepcopy(lease)
+            runtime_configs[package_id] = config
         common_request = SelectionSignalRequestV1(
             consumer_scope="LOCALSIM", run_id=scope.run_id, date_plan=(scope.clocks,),
             ordered_package_ids=request.ordered_package_ids,
             manifest_hashes={p: prepared_signals[p].manifest_sha256 for p in request.ordered_package_ids},
-            runtime_configs={p: {"runtime_profile": profile.model_dump(mode="json")}
-                             for p, profile in request.package_runtime_profiles.items()},
+            runtime_configs=runtime_configs,
             package_top_k=request.package_top_k, source_identity=source,
             selection_mode=request.selection_mode.value, package_weights=request.package_weights,
         )
@@ -329,6 +357,8 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
         if kwargs.get("prospective_context") is not None:
             raise ValueError("LocalSIM consumer uses its own daily evidence, not an Advisory prospective writer")
         trade_date = kwargs["trade_date"]
+        from .localsim_input_source_plan import current_source_plan
+        source_plan = current_source_plan()
         config = deepcopy(kwargs.get("runtime_config") or {})
         if dataset is not None:
             profile = config.get("runtime_profile", {})
@@ -347,6 +377,7 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
                                          "ordered_package_ids": kwargs["package_ids"],
                                          "config": config, "mode": kwargs["mode"].value,
                                          "file_binding_hash": dataset.identity if dataset else None,
+                                         **({"source_plan_hash": source_plan["plan_hash"]} if source_plan else {}),
                                          "release": getattr(release, "release_hash", None),
                                           "recovery_evidence": getattr(recovery_evidence, "artifact_hash", None),
                                           "code": dict(_LOADED_SELECTION_CODE_IDENTITY)})
@@ -368,14 +399,33 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
             cutoff = self.parse_selection_cutoff_date(self.selection_artifact_config(clock_config), trade_date=trade_date, strict_before=True)
             from backend.services.advisory_historical_range.selection_signal_kernel import SelectionSignalDayV1
             scope = LocalSimInferenceScope(run_id, root, SelectionSignalDayV1(trade_date, cutoff or trade_date, trade_date), {})
+            if source_plan is not None:
+                from datetime import date
+                from .localsim_input_source_plan import day_route
+                route = day_route(source_plan, trade_date)
+                planned_clocks = SelectionSignalDayV1(*(date.fromisoformat(route[key]) for key in
+                    ("decision_date", "data_cutoff", "target_trade_date")))
+                if cutoff is not None and cutoff != planned_clocks.data_cutoff:
+                    raise ValueError("LocalSIM native C differs from the frozen source plan")
+                scope.clocks, scope.clocks_bound, scope.source_plan = planned_clocks, True, source_plan
+            native_kwargs = kwargs
+            if source_plan is not None:
+                # The public kernel uses DB_HISTORICAL as its historical signal
+                # request role. Physical FILE/DB identity belongs to the frozen
+                # source plan and actual native input receipts. Create artifacts
+                # with that role from the outset; never retag a sealed artifact.
+                expected_source = "DATASET_FILES" if route["source"] == "DATASET_FILES" else "DB_HISTORICAL"
+                if kwargs["data_source"] != expected_source:
+                    raise ValueError("LocalSIM market source differs from its frozen daily route")
+                native_kwargs = {**kwargs, "data_source": "DB_HISTORICAL"}
             if recovery_evidence is not None:
-                artifact = self._recovery_raw(recovery_evidence, kwargs=kwargs, clocks=scope.clocks)
+                artifact = self._recovery_raw(recovery_evidence, kwargs=native_kwargs, clocks=scope.clocks)
                 scope.artifacts[artifact.package_id] = artifact
             token = LOCALSIM_INFERENCE_SCOPE.set(scope)
             _atomic_json(logical_root / "attempt.json", {"identity": identity, "consumer_scope": "LOCALSIM", "run_id": run_id,
                                                         "package_ids": kwargs["package_ids"]})
             try:
-                result = super().run_selection(**kwargs)
+                result = super().run_selection(**native_kwargs)
                 scope.result = result
                 _atomic_json(root / "completion.json", {"consumer_scope": "LOCALSIM", "run_id": run_id, "identity": identity,
                                                         "status": "SIGNAL_COMMITTED", "clocks": scope.clocks.to_dict()})
@@ -384,11 +434,17 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
                 return result
             except Exception as exc:
                 context = getattr(exc, "context", {})
+                source_failure = {}
+                if scope.source_plan is not None:
+                    from backend.services.advisory_historical_range.input_source_plan import gap_receipt
+                    source_failure["source_gap_receipt"] = gap_receipt(exc, stage=scope.stage,
+                        clocks=scope.clocks, plan_hash=scope.source_plan["plan_hash"])
                 _atomic_json(root / "failure.json", {"status": "FAILED", "consumer_scope": "LOCALSIM", "run_id": run_id,
-                                                     "error_type": type(exc).__name__, "reason_code": context.get("reason_code", type(exc).__name__),
+                                                     "error_type": type(exc).__name__, "reason_code": getattr(exc, "reason_code", None)
+                                                         or context.get("reason_code", type(exc).__name__),
                                                      "failed_stage": context.get("failed_stage") or scope.stage,
                                                      "clocks": scope.clocks.to_dict(), "completed_prefix": scope.completed_prefix,
-                                                     "node_completed_prefix": context.get("completed_prefix", [])})
+                                                     "node_completed_prefix": context.get("completed_prefix", []), **source_failure})
                 raise
             finally:
                 LOCALSIM_INFERENCE_SCOPE.reset(token)
@@ -413,6 +469,10 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
         dataset = current_file_dataset()
         if dataset is not None and artifact.metadata.get("localsim_signal_run", {}).get("file_binding_hash") != dataset.identity:
             raise InvalidStateTransitionError("LocalSIM frozen raw file identity differs from this replay")
+        from .localsim_input_source_plan import current_source_plan, validate_artifact_source
+        plan = current_source_plan()
+        if plan is not None:
+            validate_artifact_source(plan, clocks, artifact)
         sealed = StrategyPackageSelectionArtifactRepository._with_digest(artifact)
         if (sealed.artifact_payload_sha256 != artifact.artifact_payload_sha256
                 or artifact.package_id != stored.package_id or artifact.manifest_sha256 != stored.manifest_sha256
@@ -468,8 +528,21 @@ class LocalSimSelectionSignalService(StrategyPackageSelectionService):
             # Original admission rejects a PIT generation change; recovery must
             # not bypass that native guard merely because evidence committed.
             require_canonical_pit_generation_current(projection["runtime_config"], authority_resolver=self.pit_authority_resolver)
-        artifacts = {p: SelectionScoreArtifact.model_validate(dict(v.evidence_payload_json["localsim_signal_run"]["raw_artifact"]))
+        # The immutable evidence envelope freezes JSON arrays as tuples. Decode
+        # its canonical JSON shape so a recovered artifact exactly matches the
+        # freshly committed native artifact, including nested metadata arrays.
+        artifacts = {p: SelectionScoreArtifact.model_validate(v.model_dump(mode="json")["evidence_payload_json"]["localsim_signal_run"]["raw_artifact"])
                      for p, v in evidence.items()}
+        from .localsim_input_source_plan import current_source_plan, day_route, validate_artifact_source
+        plan = current_source_plan()
+        if plan is not None:
+            from datetime import date
+            from backend.services.advisory_historical_range.selection_signal_kernel import SelectionSignalDayV1
+            route = day_route(plan, next(iter(evidence.values())).target_trade_date)
+            clocks = SelectionSignalDayV1(*(date.fromisoformat(route[key]) for key in
+                ("decision_date", "data_cutoff", "target_trade_date")))
+            for artifact in artifacts.values():
+                validate_artifact_source(plan, clocks, artifact)
         package_results = {p: [SelectionCandidate.model_validate(v) for v in rows] for p, rows in projection["package_results"].items()}
         traces = {p: SelectionStageTrace.model_validate(v) for p, v in projection["stage_trace_by_package"].items()}
         # Scheduler binds one package. Aggregate projection is stored by the

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import nullcontext
 from datetime import UTC, date, datetime, time
+import hashlib
 from typing import Any, Callable, Protocol
 from zoneinfo import ZoneInfo
 
@@ -38,6 +39,11 @@ class LocalSimHistoricalReplayDayExecutor:
         self.lifecycle_scheduler = lifecycle_scheduler
 
     def __call__(self, job: LocalSimReplayJobV1, trade_date) -> None:
+        from .localsim_input_source_plan import SOURCE_PLAN_ID, frozen_source_plan, localsim_plan_inputs
+        if job.historical_source_id == SOURCE_PLAN_ID:
+            release = self.lifecycle_scheduler.repository.get_strategy_runtime_release(job.release_id)
+            with localsim_plan_inputs(frozen_source_plan(release, job=job), trade_date=trade_date) as route:
+                return self._run_day(job, trade_date, "DATASET_FILES" if route["source"] == "DATASET_FILES" else "DB_HISTORICAL")
         context = nullcontext()
         source = "DB_HISTORICAL"
         if job.historical_source_id == FILE_SOURCE_ID:
@@ -429,6 +435,24 @@ class LocalSimReplayLifecycleOwner:
     def _create_catchup_successor(
         self, *, job: LocalSimReplayJobV1, latest_completed_trade_date: date, as_of_time: datetime,
     ) -> LocalSimReplayJobV1:
+        from .localsim_input_source_plan import PLAN_KEY, SOURCE_PLAN_ID
+        if job.historical_source_id == SOURCE_PLAN_ID:
+            days = tuple(self.historical_source_authority.calendar.list_trading_days(
+                job.end_trade_date, latest_completed_trade_date))[1:]
+            if not days or days[-1] != latest_completed_trade_date:
+                raise DataUnavailableError("LocalSIM source-plan catch-up calendar is incomplete")
+            account, _base, release, binding = self._build_successor_bundle(
+                job=job, effective_from=days[0], effective_to=days[-1], planned_days=days)
+            plan = release.release_config_json["metadata"][PLAN_KEY]
+            coordinator = LocalSimReplayCoordinator(repository=self.repository,
+                historical_day_runner=LocalSimHistoricalDayRunner(historical_source_id=SOURCE_PLAN_ID,
+                    historical_source_sha256=plan["plan_hash"], run_day=self.historical_day_executor))
+            successor = coordinator.build_job(account=account, release=release, binding=binding,
+                start_trade_date=days[0], end_trade_date=days[-1], historical_source_id=SOURCE_PLAN_ID,
+                historical_source_sha256=plan["plan_hash"], trading_days=days,
+                created_by="localsim_replay_lifecycle_owner")
+            return self.repository.create_replay_catchup_successor(replay_job_id=job.replay_job_id,
+                expected_version=job.version, release=release, binding=binding, successor_job=successor, updated_at=as_of_time)
         source = resolve_replay_source(
             self.historical_source_authority, job=job, release=self.repository.get_release(job.release_id),
             end_trade_date=latest_completed_trade_date,
@@ -460,7 +484,7 @@ class LocalSimReplayLifecycleOwner:
         )
 
     def _build_successor_bundle(
-        self, *, job: LocalSimReplayJobV1, effective_from: date, effective_to: date | None = None,
+        self, *, job: LocalSimReplayJobV1, effective_from: date, effective_to: date | None = None, planned_days=None,
     ):
         account = self.repository.get_account(job.simulation_account_id)
         historical_release = self.repository.get_release(job.release_id)
@@ -470,6 +494,24 @@ class LocalSimReplayLifecycleOwner:
         from .localsim_pit_migration import MIGRATION_KEY, POLICY_KEY, build_pit_successor
 
         historical_metadata = historical_release.release_config_json.get("metadata") or {}
+        def source_metadata(metadata):
+            from .localsim_input_source_plan import (
+                PLAN_KEY, REQUEST_KEY, freeze_replay_plan, freeze_source_calendar, frozen_source_plan,
+            )
+            metadata = dict(metadata)
+            metadata.pop(REQUEST_KEY, None)  # A catch-up is not a retry of account creation.
+            if effective_to is None:
+                metadata.pop(PLAN_KEY, None)
+            elif planned_days is not None:
+                previous = frozen_source_plan(historical_release, job=job)
+                metadata[PLAN_KEY] = freeze_replay_plan(mode=previous["mode"],
+                    run_id="lsinput_" + hashlib.sha256(
+                        f"{job.replay_job_id}:{effective_from}:{effective_to}".encode()).hexdigest()[:32],
+                    manifest=self.product_authority.package_repository.get(account.package_id).current_manifest(),
+                    runtime_config=metadata["selection_runtime_config"],
+                    calendar=freeze_source_calendar(self.historical_source_authority.calendar, effective_to),
+                    trading_days=planned_days)
+            return metadata
         if POLICY_KEY in historical_metadata:
             base_binding = self.repository.get_binding(job.binding_id)
             release, binding = build_pit_successor(
@@ -481,6 +523,7 @@ class LocalSimReplayLifecycleOwner:
                           "origin_plan_sha256": (historical_metadata.get(MIGRATION_KEY, {}).get("plan_sha256")
                               or historical_metadata.get(MIGRATION_KEY, {}).get("origin_plan_sha256"))},
                 predecessor_id=job.replay_job_id if effective_to is not None else None,
+                metadata_transform=source_metadata,
             )
             return account, base_binding, release, binding
         resolved = self.product_authority.resolve_product(
@@ -494,7 +537,7 @@ class LocalSimReplayLifecycleOwner:
             file_binding = frozen_file_binding(historical_release)
             if file_binding is not None:
                 metadata[FILE_BINDING_KEY] = file_binding
-        return self.control.build_successor_release_bundle(
+        kwargs = dict(
             account_id=account.account_id,
             base_release_id=job.release_id,
             base_binding_id=job.binding_id,
@@ -517,6 +560,13 @@ class LocalSimReplayLifecycleOwner:
                 else "automatic_replay_to_live_transition"
             ),
         )
+        bundle = self.control.build_successor_release_bundle(**kwargs)
+        if planned_days is not None:
+            from .localsim_input_source_plan import frozen_source_plan
+            kwargs["release_metadata"] = source_metadata(bundle[2].release_config_json["metadata"])
+            bundle = self.control.build_successor_release_bundle(**kwargs)
+            frozen_source_plan(bundle[2])
+        return bundle
 
     def _coordinator_for_job(self, job: LocalSimReplayJobV1) -> LocalSimReplayCoordinator:
         return LocalSimReplayCoordinator(
