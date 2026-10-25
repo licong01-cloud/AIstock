@@ -34,6 +34,16 @@
   ],
   "expected": "A deterministic read-only audit classifies every listed trading day without positive daily bars against full-day suspend_d and minute evidence, daily rolling and weekly historical scheduler jobs fail closed on unresolved gaps, and no row is auto-filled without authority.",
   "file_scope_contract": {
+    "actual_changed_files": [
+      "backend/ingestion/tdx_scheduler.py",
+      "backend/services/suspend_d_coverage.py",
+      "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/services/test_suspend_d_coverage.py",
+      "noxfile.py",
+      "scripts/audit_suspend_d_coverage.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1559-suspend-d-sparse-intervals-evade-full-market-coverage-audit.json",
+      "tests/aistock_validation/catalog/file_ownership.yaml"
+    ],
     "added_files": [
       "backend/services/suspend_d_coverage.py",
       "scripts/audit_suspend_d_coverage.py",
@@ -41,12 +51,15 @@
     ],
     "changed_files": [
       "backend/ingestion/tdx_scheduler.py",
-      "backend/db/init_tushare_schedules.py",
+      "backend/services/suspend_d_coverage.py",
       "backend/tests/ingestion/test_tdx_scheduler_state_reconciliation.py",
+      "backend/tests/services/test_suspend_d_coverage.py",
       "noxfile.py",
+      "scripts/audit_suspend_d_coverage.py",
+      "tests/aistock_validation/bugs/20260916_BUG-1559-suspend-d-sparse-intervals-evade-full-market-coverage-audit.json",
       "tests/aistock_validation/catalog/file_ownership.yaml"
     ],
-    "changed_files_source": "planned_intake",
+    "changed_files_source": "git_finish",
     "ownership": {
       "changed_files": [
         "backend/ingestion/tdx_scheduler.py",
@@ -199,8 +212,8 @@
   },
   "first_seen_at": "2026-09-16T15:20:03.356883Z",
   "fix_branch": null,
-  "fix_commit": null,
-  "fixed_at": null,
+  "fix_commit": "b49175bcbc43ddca58fc6f220d3dec0dc0eb1874",
+  "fixed_at": "2026-09-16T16:33:20Z",
   "github_issue_number": 4878,
   "github_issue_url": "https://github.com/licong01-cloud/AIstock/issues/4878",
   "last_seen_at": "2026-09-16T15:20:03.356883Z",
@@ -208,6 +221,7 @@
   "non_goals": [
     "Do not start, stop, or restart any user backend without explicit per-target approval."
   ],
+  "pr_url": "https://github.com/licong01-cloud/AIstock/pull/4879",
   "production_backend_dependency_gate": "noop",
   "production_ddl_gate": "noop",
   "production_frontend_dependency_gate": "noop",
@@ -236,6 +250,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
+    "post_restart_receipt_ref": null,
     "provisional": true,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
@@ -247,7 +262,7 @@
   },
   "schema_version": "aistock_validation_bug_v1",
   "severity": "P1",
-  "status": "open",
+  "status": "fixed_source_pending_user_restart",
   "suspected_modules": [
     "local_data"
   ],
@@ -256,6 +271,9 @@
     "fingerprint": "ec718688d74b15207869c9db",
     "source_event_id": "FE-20260916-ec718688d74b"
   },
+  "validation_evidence": [
+    "Source PR current merge identity and source CI SUCCESS independently verified. fresh Python process at implementation HEAD fb73e02cdf5011cc0ee98ad85be6756cb60d81d2 imported backend.services.suspend_d_coverage and backend.ingestion.tdx_scheduler, classified a partial authority gap fail-closed, and resolved the Saturday full-history cadence; python -c fresh process import backend.services.suspend_d_coverage and backend.ingestion.tdx_scheduler at fb73e02cdf5011cc0ee98ad85be6756cb60d81d2 -> passed"
+  ],
   "verification_budget": {
     "budget": "standard",
     "ci_premerge_plans": [],
