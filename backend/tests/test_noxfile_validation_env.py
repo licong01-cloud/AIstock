@@ -21,7 +21,8 @@ def _reset_nox_env_loader(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(noxfile, "_VALIDATION_ENV_LOADED", False)
 
 
-def test_offline_shards_cover_all_files_once_keep_fixtures_and_are_stable(tmp_path, monkeypatch):
+@pytest.mark.parametrize("workers", [4, 6])
+def test_offline_shards_cover_all_files_once_keep_fixtures_and_are_stable(tmp_path, monkeypatch, workers):
     monkeypatch.setattr(noxfile, "ROOT", tmp_path)
     expected = []
     for index in range(13):
@@ -29,11 +30,11 @@ def test_offline_shards_cover_all_files_once_keep_fixtures_and_are_stable(tmp_pa
         path.parent.mkdir(exist_ok=True)
         path.write_text("# fixture\n" * (index + 1), encoding="utf8")
         expected.append(path.relative_to(tmp_path).as_posix())
-    groups = noxfile._pytest_file_shards(("tests", "tests"))
+    groups = noxfile._pytest_file_shards(("tests", "tests"), workers=workers)
     flattened = [path for group in groups for path in group]
-    assert len(groups) == 4 and sorted(flattened) == sorted(expected)
+    assert len(groups) == workers and sorted(flattened) == sorted(expected)
     assert len(flattened) == len(set(flattened))
-    assert groups == noxfile._pytest_file_shards(("tests",))
+    assert groups == noxfile._pytest_file_shards(("tests",), workers=workers)
     with pytest.raises(RuntimeError, match="no test files"):
         noxfile._pytest_file_shards(("missing",))
 
@@ -53,7 +54,8 @@ def test_offline_shards_isolate_receipts_preserve_failures_and_enforce_union_cov
         assert command[:3] == [sys.executable, "-m", "pytest"]
         assert "--cov-fail-under=0" in command and "--cov-branch" in command
         temporary = Path(next(arg.split("=", 1)[1] for arg in command if arg.startswith("--basetemp=")))
-        assert temporary.is_relative_to(tmp_path) and temporary.name.startswith("pytest-")
+        assert temporary.parent.parent == tmp_path.parent and temporary.parent.name.startswith("aistock-pytest-")
+        assert not temporary.is_relative_to(tmp_path) and len(str(temporary)) < 240
         assert kwargs["cwd"] == tmp_path and worker["OMP_NUM_THREADS"] == "1"
         Path(worker["AISTOCK_TEST_METRICS_RECEIPT"]).write_text('{"executed_items":1}\n', encoding="utf8")
         if fault != "coverage_missing":

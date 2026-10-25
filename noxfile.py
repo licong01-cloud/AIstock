@@ -9,6 +9,7 @@ import shlex
 import socket
 import subprocess
 import sys
+from tempfile import TemporaryDirectory
 import time
 from uuid import uuid4
 from xml.etree import ElementTree
@@ -179,7 +180,7 @@ def _run_pytest(session: nox.Session, *args: str) -> None:
             )
     if plan == "advisory_modeling_backend" and selected[:2] == (
         "backend/tests/advisory_modeling", "backend/tests/advisory_model_first"
-    ) and _run_nightly_pytest_shards(session, selected[:2], selected[2:], _env(extra_env)):
+    ) and _run_nightly_pytest_shards(session, selected[:2], selected[2:], _env(extra_env), workers=6):
         return
     session.run(
         "python",
@@ -208,12 +209,12 @@ def _pytest_file_shards(roots: tuple[str, ...], workers: int = 4) -> list[list[s
 
 def _run_nightly_pytest_shards(
     session: nox.Session, roots: tuple[str, ...], args: tuple[str, ...], env: dict[str, str],
-    *, coverage_file: Path | None = None,
+    *, coverage_file: Path | None = None, workers: int = 4,
 ) -> bool:
     if os.environ.get(NIGHTLY_SESSION_RUNNER_ENV) != "1":
         return False
     plan = env["AISTOCK_TEST_PLAN"]
-    groups = _pytest_file_shards(roots)
+    groups = _pytest_file_shards(roots, workers=workers)
     artifact_root = Path(env["AISTOCK_TEST_METRICS_RECEIPT"]).parent if env.get("AISTOCK_TEST_METRICS_RECEIPT") else ROOT / "tmp" / "validation"
     directory = ROOT / artifact_root / "nightly_shards" / plan / uuid4().hex
     directory.mkdir(parents=True)
@@ -228,14 +229,20 @@ def _run_nightly_pytest_shards(
                 worker = destination.with_name(f"{destination.stem}.shard-{directory.name}-{index}{destination.suffix}")
                 worker_env[key] = str(worker)
                 receipts.append((destination, worker))
-        worker_args = [*args, f"--basetemp={directory / f'pytest-{index}'}"]
+        worker_args = list(args)
         if coverage_file is not None:
             worker_env["COVERAGE_FILE"] = str(directory / f".coverage.{index}")
             # Enforce the original threshold on the union, never on a partial shard.
             worker_args.extend(("--cov-report=", "--cov-fail-under=0", f"--junitxml={directory / f'shard-{index}.xml'}"))
         log = directory / f"shard-{index}.log"
         started = time.monotonic()
-        with log.open("w", encoding="utf-8") as output:
+        # A short sibling path satisfies repo-external artifact contracts and
+        # Windows CreateProcess cwd limits. Only this worker's new scratch is cleaned.
+        with TemporaryDirectory(prefix=f"aistock-pytest-{index}-", dir=ROOT.parent) as temporary, log.open("w", encoding="utf-8") as output:
+            temporary_path = Path(temporary).resolve()
+            if temporary_path.parent != ROOT.parent.resolve():
+                raise RuntimeError("offline fixture scratch escaped its owner directory")
+            worker_args.append(f"--basetemp={temporary_path / 'tests'}")
             result = subprocess.run(
                 [sys.executable, "-m", "pytest", *files, *worker_args],
                 cwd=ROOT, env=worker_env, stdout=output, stderr=subprocess.STDOUT, check=False,
