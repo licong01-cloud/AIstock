@@ -250,7 +250,7 @@
     "operator_runbook_ref": "docs/operations/backend_main_runtime_restart_runbook.md",
     "persistence_basis": "git_tracked_source",
     "post_restart_effective_gate": "pending_user_restart",
-    "post_restart_receipt_ref": null,
+    "post_restart_receipt_ref": "X:\\AIstock_temp\\DATA_PREPARATION\\remaining-20261025\\postrestart-BUG-1559-facts-r2.json",
     "provisional": true,
     "runtime_identity_match": "pending",
     "runtime_impact": "backend",
