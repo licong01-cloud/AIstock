@@ -91,6 +91,7 @@ targets:
       - start_all_ai_stock.bat
       - start_backend.bat
       - scripts/start_ai_stock.py
+      - scripts/backend_lifecycle.py
       - requirements*.txt
       - pyproject.toml
     production_port: 8001
